@@ -12,12 +12,10 @@
 #include "chrome/common/extensions/url_pattern.h"
 #include "chrome/common/extensions/url_pattern_set.h"
 #include "chrome/common/web_apps.h"
-#include "content/common/view_types.h"
+#include "content/public/common/view_type.h"
 #include "ipc/ipc_message_macros.h"
 
 #define IPC_MESSAGE_START ExtensionMsgStart
-
-IPC_ENUM_TRAITS(ViewType::Type)
 
 // Parameters structure for ExtensionHostMsg_Request.
 IPC_STRUCT_BEGIN(ExtensionHostMsg_Request_Params)
@@ -27,8 +25,19 @@ IPC_STRUCT_BEGIN(ExtensionHostMsg_Request_Params)
   // List of message arguments.
   IPC_STRUCT_MEMBER(ListValue, arguments)
 
-  // URL of the frame request was sent from.
+  // Extension ID this request was sent from. This can be empty, in the case
+  // where we expose APIs to normal web pages using the extension function
+  // system.
+  IPC_STRUCT_MEMBER(std::string, extension_id)
+
+  // URL of the frame the request was sent from. This isn't necessarily an
+  // extension url. Extension requests can also originate from content scripts,
+  // in which case extension_id will indicate the ID of the associated
+  // extension. Or, they can originate from hosted apps or normal web pages.
   IPC_STRUCT_MEMBER(GURL, source_url)
+
+  // Web security origin of the frame the request was sent from.
+  IPC_STRUCT_MEMBER(string16, source_origin)
 
   // Unique request id to match requests and responses.
   IPC_STRUCT_MEMBER(int, request_id)
@@ -93,15 +102,11 @@ struct ExtensionMsg_Loaded_Params {
   ~ExtensionMsg_Loaded_Params();
   explicit ExtensionMsg_Loaded_Params(const Extension* extension);
 
-  // A copy constructor is needed because this structure can end up getting
-  // copied inside the IPC machinery on gcc <= 4.2.
-  ExtensionMsg_Loaded_Params(const ExtensionMsg_Loaded_Params& other);
-
   // Creates a new extension from the data in this object.
   scoped_refptr<Extension> ConvertToExtension() const;
 
   // The subset of the extension manifest data we send to renderers.
-  scoped_ptr<DictionaryValue> manifest;
+  linked_ptr<DictionaryValue> manifest;
 
   // The location the extension was installed from.
   Extension::Location location;
@@ -109,11 +114,6 @@ struct ExtensionMsg_Loaded_Params {
   // The path the extension was loaded from. This is used in the renderer only
   // to generate the extension ID for extensions that are loaded unpacked.
   FilePath path;
-
-  // The extension's current active permissions.
-  ExtensionAPIPermissionSet apis;
-  URLPatternSet explicit_hosts;
-  URLPatternSet scriptable_hosts;
 
   // We keep this separate so that it can be used in logging.
   std::string id;
@@ -196,9 +196,9 @@ IPC_MESSAGE_CONTROL1(ExtensionMsg_ActivateExtension,
 IPC_MESSAGE_CONTROL1(ExtensionMsg_ActivateApplication,
                      std::string /* extension_id */)
 
-// Notifies the renderer that an extension was loaded in the browser.
+// Notifies the renderer that extensions were loaded in the browser.
 IPC_MESSAGE_CONTROL1(ExtensionMsg_Loaded,
-                     ExtensionMsg_Loaded_Params)
+                     std::vector<ExtensionMsg_Loaded_Params>)
 
 // Notifies the renderer that an extension was unloaded in the browser.
 IPC_MESSAGE_CONTROL1(ExtensionMsg_Unloaded,
@@ -238,7 +238,13 @@ IPC_MESSAGE_CONTROL5(ExtensionMsg_UpdatePermissions,
 
 // Tell the renderer which type this view is.
 IPC_MESSAGE_ROUTED1(ExtensionMsg_NotifyRenderViewType,
-                    ViewType::Type /* view_type */)
+                    content::ViewType /* view_type */)
+
+// Deliver a message sent with ExtensionHostMsg_PostMessage.
+IPC_MESSAGE_CONTROL3(ExtensionMsg_UsingWebRequestAPI,
+                     bool /* adblock */,
+                     bool /* adblock_plus */,
+                     bool /* other_webrequest */)
 
 // Messages sent from the renderer to the browser.
 
@@ -263,6 +269,16 @@ IPC_MESSAGE_CONTROL2(ExtensionHostMsg_AddListener,
 IPC_MESSAGE_CONTROL2(ExtensionHostMsg_RemoveListener,
                      std::string /* extension_id */,
                      std::string /* name */)
+
+// Notify the browser that the extension is idle so it's lazy background page
+// can be closed.
+IPC_MESSAGE_CONTROL1(ExtensionHostMsg_ExtensionIdle,
+                     std::string /* extension_id */)
+
+// Notify the browser that an event has finished being dispatched.
+IPC_MESSAGE_CONTROL1(ExtensionHostMsg_ExtensionEventAck,
+                     std::string /* extension_id */)
+
 
 // Open a channel to all listening contexts owned by the extension with
 // the given ID.  This always returns a valid port ID which can be used for
@@ -325,6 +341,25 @@ IPC_MESSAGE_ROUTED3(ExtensionMsg_InlineWebstoreInstallResponse,
                     int32 /* install id */,
                     bool /* whether the install was successful */,
                     std::string /* error */)
+
+// Sent by the renderer when an App is requesting permission to send server
+// pushed notifications.
+IPC_MESSAGE_ROUTED4(ExtensionHostMsg_GetAppNotifyChannel,
+                    GURL /* requestor_url */,
+                    std::string /* client_id */,
+                    int32 /* return_route_id */,
+                    int32 /* callback_id */)
+
+// Optional Ack message sent to the browser to notify that the response to a
+// function has been processed.
+IPC_MESSAGE_ROUTED1(ExtensionHostMsg_ResponseAck,
+                    int /* request_id */)
+
+// Response to the renderer for the above message.
+IPC_MESSAGE_ROUTED3(ExtensionMsg_GetAppNotifyChannelResponse,
+                    std::string /* channel_id */,
+                    std::string /* error */,
+                    int32 /* callback_id */)
 
 // Deliver a message sent with ExtensionHostMsg_PostMessage.
 IPC_MESSAGE_ROUTED2(ExtensionMsg_DeliverMessage,

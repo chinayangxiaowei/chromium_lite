@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,17 +13,20 @@
 #include <fstream>
 
 #include "base/at_exit.h"
+#include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/path_service.h"
+#include "base/stringprintf.h"
 #include "base/string_number_conversions.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
+#include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
@@ -31,11 +34,15 @@
 #include "chrome/test/webdriver/commands/alert_commands.h"
 #include "chrome/test/webdriver/commands/appcache_status_command.h"
 #include "chrome/test/webdriver/commands/browser_connection_commands.h"
+#include "chrome/test/webdriver/commands/chrome_commands.h"
 #include "chrome/test/webdriver/commands/cookie_commands.h"
 #include "chrome/test/webdriver/commands/create_session.h"
 #include "chrome/test/webdriver/commands/execute_async_script_command.h"
 #include "chrome/test/webdriver/commands/execute_command.h"
 #include "chrome/test/webdriver/commands/find_element_commands.h"
+#include "chrome/test/webdriver/commands/html5_storage_commands.h"
+#include "chrome/test/webdriver/commands/keys_command.h"
+#include "chrome/test/webdriver/commands/log_command.h"
 #include "chrome/test/webdriver/commands/navigate_commands.h"
 #include "chrome/test/webdriver/commands/mouse_commands.h"
 #include "chrome/test/webdriver/commands/screenshot_command.h"
@@ -46,6 +53,7 @@
 #include "chrome/test/webdriver/commands/title_command.h"
 #include "chrome/test/webdriver/commands/url_command.h"
 #include "chrome/test/webdriver/commands/webelement_commands.h"
+#include "chrome/test/webdriver/commands/window_commands.h"
 #include "chrome/test/webdriver/webdriver_dispatch.h"
 #include "chrome/test/webdriver/webdriver_logging.h"
 #include "chrome/test/webdriver/webdriver_session_manager.h"
@@ -63,11 +71,13 @@
 
 namespace webdriver {
 
-void InitCallbacks(struct mg_context* ctx, Dispatcher* dispatcher,
+namespace {
+
+void InitCallbacks(Dispatcher* dispatcher,
                    base::WaitableEvent* shutdown_event,
                    bool forbid_other_requests) {
   dispatcher->AddShutdown("/shutdown", shutdown_event);
-  dispatcher->AddHealthz("/status");
+  dispatcher->AddStatus("/status");
   dispatcher->AddLog("/log");
 
   dispatcher->Add<CreateSession>("/session");
@@ -123,6 +133,7 @@ void InitCallbacks(struct mg_context* ctx, Dispatcher* dispatcher,
                                         "/session/*/execute_async");
   dispatcher->Add<ForwardCommand>(      "/session/*/forward");
   dispatcher->Add<SwitchFrameCommand>(  "/session/*/frame");
+  dispatcher->Add<KeysCommand>(         "/session/*/keys");
   dispatcher->Add<RefreshCommand>(      "/session/*/refresh");
   dispatcher->Add<SourceCommand>(       "/session/*/source");
   dispatcher->Add<TitleCommand>(        "/session/*/title");
@@ -130,9 +141,13 @@ void InitCallbacks(struct mg_context* ctx, Dispatcher* dispatcher,
   dispatcher->Add<WindowCommand>(       "/session/*/window");
   dispatcher->Add<WindowHandleCommand>( "/session/*/window_handle");
   dispatcher->Add<WindowHandlesCommand>("/session/*/window_handles");
+  dispatcher->Add<WindowSizeCommand>(   "/session/*/window/*/size");
+  dispatcher->Add<WindowPositionCommand>(
+                                        "/session/*/window/*/position");
   dispatcher->Add<SetAsyncScriptTimeoutCommand>(
                                         "/session/*/timeouts/async_script");
   dispatcher->Add<ImplicitWaitCommand>( "/session/*/timeouts/implicit_wait");
+  dispatcher->Add<LogCommand>(          "/session/*/log");
 
   // Cookie functions.
   dispatcher->Add<CookieCommand>(     "/session/*/cookie");
@@ -140,6 +155,19 @@ void InitCallbacks(struct mg_context* ctx, Dispatcher* dispatcher,
 
   dispatcher->Add<BrowserConnectionCommand>("/session/*/browser_connection");
   dispatcher->Add<AppCacheStatusCommand>("/session/*/application_cache/status");
+
+  // Chrome-specific commands.
+  dispatcher->Add<ExtensionsCommand>("/session/*/chrome/extensions");
+  dispatcher->Add<ExtensionCommand>("/session/*/chrome/extension/*");
+  dispatcher->Add<ViewsCommand>("/session/*/chrome/views");
+
+  // HTML5 functions.
+  dispatcher->Add<LocalStorageCommand>("/session/*/local_storage");
+  dispatcher->Add<LocalStorageSizeCommand>("/session/*/local_storage/size");
+  dispatcher->Add<LocalStorageKeyCommand>("/session/*/local_storage/key*");
+  dispatcher->Add<SessionStorageCommand>("/session/*/session_storage");
+  dispatcher->Add<SessionStorageSizeCommand>("/session/*/session_storage/size");
+  dispatcher->Add<SessionStorageKeyCommand>("/session/*/session_storage/key*");
 
   // Since the /session/* is a wild card that would match the above URIs, this
   // line MUST be after all other webdriver command callbacks.
@@ -149,36 +177,41 @@ void InitCallbacks(struct mg_context* ctx, Dispatcher* dispatcher,
     dispatcher->ForbidAllOtherRequests();
 }
 
-}  // namespace webdriver
-
-// Configures mongoose according to the given command line flags.
-// Returns true on success.
-bool SetMongooseOptions(struct mg_context* ctx,
-                        const std::string& port,
-                        const std::string& root) {
-  if (!mg_set_option(ctx, "ports", port.c_str())) {
-    std::cout << "ChromeDriver cannot bind to port ("
-              << port.c_str() << ")" << std::endl;
-    return false;
+void* ProcessHttpRequest(mg_event event_raised,
+                         struct mg_connection* connection,
+                         const struct mg_request_info* request_info) {
+  bool handler_result_code = false;
+  if (event_raised == MG_NEW_REQUEST) {
+    handler_result_code =
+        reinterpret_cast<Dispatcher*>(request_info->user_data)->
+            ProcessHttpRequest(connection, request_info);
   }
-  if (root.length())
-    mg_set_option(ctx, "root", root.c_str());
-  // Lower the default idle time to 1 second. Idle time refers to how long a
-  // worker thread will wait for new connections before exiting.
-  // This is so mongoose quits in a reasonable amount of time.
-  mg_set_option(ctx, "idle_time", "1");
-  return true;
+
+  return reinterpret_cast<void*>(handler_result_code);
 }
 
+void MakeMongooseOptions(const std::string& port,
+                         const std::string& root,
+                         int http_threads,
+                         bool enable_keep_alive,
+                         std::vector<std::string>* out_options) {
+  out_options->push_back("listening_ports");
+  out_options->push_back(port);
+  out_options->push_back("enable_keep_alive");
+  out_options->push_back(enable_keep_alive ? "yes" : "no");
+  out_options->push_back("num_threads");
+  out_options->push_back(base::IntToString(http_threads));
+  if (!root.empty()) {
+    out_options->push_back("document_root");
+    out_options->push_back(root);
+  }
+}
 
-// Sets up and runs the Mongoose HTTP server for the JSON over HTTP
-// protcol of webdriver.  The spec is located at:
-// http://code.google.com/p/selenium/wiki/JsonWireProtocol.
-int main(int argc, char *argv[]) {
-  struct mg_context *ctx;
+}  // namespace
+
+int RunChromeDriver() {
   base::AtExitManager exit;
   base::WaitableEvent shutdown_event(false, false);
-  CommandLine::Init(argc, argv);
   CommandLine* cmd_line = CommandLine::ForCurrentProcess();
 
 #if defined(OS_POSIX)
@@ -193,11 +226,15 @@ int main(int argc, char *argv[]) {
 
   // Parse command line flags.
   std::string port = "9515";
+  FilePath log_path;
   std::string root;
   std::string url_base;
-  bool verbose = false;
+  int http_threads = 4;
+  bool enable_keep_alive = true;
   if (cmd_line->HasSwitch("port"))
     port = cmd_line->GetSwitchValueASCII("port");
+  if (cmd_line->HasSwitch("log-path"))
+    log_path = cmd_line->GetSwitchValuePath("log-path");
   // The 'root' flag allows the user to specify a location to serve files from.
   // If it is not given, a callback will be registered to forbid all file
   // requests.
@@ -205,23 +242,49 @@ int main(int argc, char *argv[]) {
     root = cmd_line->GetSwitchValueASCII("root");
   if (cmd_line->HasSwitch("url-base"))
     url_base = cmd_line->GetSwitchValueASCII("url-base");
-  // Whether or not to do verbose logging.
-  if (cmd_line->HasSwitch("verbose"))
-    verbose = true;
+  if (cmd_line->HasSwitch("http-threads")) {
+    if (!base::StringToInt(cmd_line->GetSwitchValueASCII("http-threads"),
+                           &http_threads)) {
+      std::cerr << "'http-threads' option must be an integer";
+      return 1;
+    }
+  }
+  if (cmd_line->HasSwitch("disable-keep-alive"))
+    enable_keep_alive = false;
 
-  webdriver::InitWebDriverLogging(
-      verbose ? logging::LOG_INFO : logging::LOG_WARNING);
+  bool logging_success = InitWebDriverLogging(log_path, kAllLogLevel);
+  std::string chromedriver_info = base::StringPrintf(
+      "ChromeDriver %s", chrome::kChromeVersion);
+  FilePath chromedriver_exe;
+  if (PathService::Get(base::FILE_EXE, &chromedriver_exe)) {
+    chromedriver_info += base::StringPrintf(
+        " %" PRFilePath, chromedriver_exe.value().c_str());
+  }
+  FileLog::Get()->Log(kInfoLogLevel, base::Time::Now(), chromedriver_info);
 
-  webdriver::SessionManager* manager = webdriver::SessionManager::GetInstance();
+
+  SessionManager* manager = SessionManager::GetInstance();
   manager->set_port(port);
   manager->set_url_base(url_base);
+
+  Dispatcher dispatcher(url_base);
+  InitCallbacks(&dispatcher, &shutdown_event, root.empty());
+
+  std::vector<std::string> args;
+  MakeMongooseOptions(port, root, http_threads, enable_keep_alive, &args);
+  scoped_array<const char*> options(new const char*[args.size() + 1]);
+  for (size_t i = 0; i < args.size(); ++i) {
+    options[i] = args[i].c_str();
+  }
+  options[args.size()] = NULL;
 
   // Initialize SHTTPD context.
   // Listen on port 9515 or port specified on command line.
   // TODO(jmikhail) Maybe add port 9516 as a secure connection.
-  ctx = mg_start();
-  if (!SetMongooseOptions(ctx, port, root)) {
-    mg_stop(ctx);
+  struct mg_context* ctx = mg_start(&ProcessHttpRequest,
+                                    &dispatcher,
+                                    options.get());
+  if (ctx == NULL) {
 #if defined(OS_WIN)
     return WSAEADDRINUSE;
 #else
@@ -229,21 +292,27 @@ int main(int argc, char *argv[]) {
 #endif
   }
 
-  webdriver::Dispatcher dispatcher(ctx, url_base);
-  webdriver::InitCallbacks(ctx, &dispatcher, &shutdown_event, root.empty());
-
   // The tests depend on parsing the first line ChromeDriver outputs,
   // so all other logging should happen after this.
   std::cout << "Started ChromeDriver" << std::endl
             << "port=" << port << std::endl
             << "version=" << chrome::kChromeVersion << std::endl;
+  if (logging_success)
+    std::cout << "log=" << FileLog::Get()->path().value() << std::endl;
+  else
+    std::cout << "Log file could not be created" << std::endl;
 
   // Run until we receive command to shutdown.
+  // Don't call mg_stop because mongoose will hang if clients are still
+  // connected when keep-alive is enabled.
   shutdown_event.Wait();
 
-  // We should not reach here since the service should never quit.
-  // TODO(jmikhail): register a listener for SIGTERM and break the
-  // message loop gracefully.
-  mg_stop(ctx);
   return (EXIT_SUCCESS);
+}
+
+}  // namespace webdriver
+
+int main(int argc, char *argv[]) {
+  CommandLine::Init(argc, argv);
+  webdriver::RunChromeDriver();
 }

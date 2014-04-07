@@ -6,13 +6,13 @@
 
 #include "base/environment.h"
 #include "base/file_util.h"
+#include "base/json/json_value_serializer.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "chrome/installer/util/master_preferences_constants.h"
 #include "chrome/installer/util/util_constants.h"
-#include "content/common/json_value_serializer.h"
 #include "googleurl/src/gurl.h"
 
 namespace {
@@ -20,8 +20,8 @@ namespace {
 const char kDistroDict[] = "distribution";
 const char kFirstRunTabs[] = "first_run_tabs";
 
-base::LazyInstance<installer::MasterPreferences> g_master_preferences(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<installer::MasterPreferences> g_master_preferences =
+    LAZY_INSTANCE_INITIALIZER;
 
 bool GetGURLFromValue(const Value* in_value, GURL* out_value) {
   if (!in_value || !out_value)
@@ -80,7 +80,6 @@ namespace installer {
 
 MasterPreferences::MasterPreferences() : distribution_(NULL),
                                          preferences_read_from_file_(false),
-                                         ceee_(false),
                                          chrome_(true),
                                          chrome_frame_(false),
                                          multi_install_(false) {
@@ -90,7 +89,6 @@ MasterPreferences::MasterPreferences() : distribution_(NULL),
 MasterPreferences::MasterPreferences(const CommandLine& cmd_line)
     : distribution_(NULL),
       preferences_read_from_file_(false),
-      ceee_(false),
       chrome_(true),
       chrome_frame_(false),
       multi_install_(false) {
@@ -98,7 +96,7 @@ MasterPreferences::MasterPreferences(const CommandLine& cmd_line)
 }
 
 MasterPreferences::MasterPreferences(const FilePath& prefs_path)
-    : distribution_(NULL), preferences_read_from_file_(false), ceee_(false),
+    : distribution_(NULL), preferences_read_from_file_(false),
       chrome_(true), chrome_frame_(false), multi_install_(false) {
   master_dictionary_.reset(ParseDistributionPreferences(prefs_path));
 
@@ -135,8 +133,8 @@ void MasterPreferences::InitializeFromCommandLine(const CommandLine& cmd_line) {
     const char* cmd_line_switch;
     const char* distribution_switch;
   } translate_switches[] = {
-    { installer::switches::kCeee,
-      installer::master_preferences::kCeee },
+    { installer::switches::kAutoLaunchChrome,
+      installer::master_preferences::kAutoLaunchChrome },
     { installer::switches::kChrome,
       installer::master_preferences::kChrome },
     { installer::switches::kChromeFrame,
@@ -210,12 +208,10 @@ void MasterPreferences::InitializeProductFlags() {
   // Make sure we start out with the correct defaults.
   multi_install_ = false;
   chrome_frame_ = false;
-  ceee_ = false;
   chrome_ = true;
 
   GetBool(installer::master_preferences::kMultiInstall, &multi_install_);
   GetBool(installer::master_preferences::kChromeFrame, &chrome_frame_);
-  GetBool(installer::master_preferences::kCeee, &ceee_);
 
   // When multi-install is specified, the checks are pretty simple (in theory):
   // In order to be installed/uninstalled, each product must have its switch
@@ -224,14 +220,7 @@ void MasterPreferences::InitializeProductFlags() {
   // two products, Chrome and Chrome Frame.  For the time being we need to
   // continue to support this mode where multi-install is not set.
   // So, when multi-install is not set, we continue to support mutually
-  // exclusive installation of Chrome and Chrome Frame in addition to supporting
-  // installation of CEEE with Chrome Frame.
-
-  // Regardless of multi install being present, CEEE always needs CF to
-  // be installed.
-  if (ceee_)
-    chrome_frame_ = true;
-
+  // exclusive installation of Chrome and Chrome Frame.
   if (multi_install_) {
     if (!GetBool(installer::master_preferences::kChrome, &chrome_))
       chrome_ = false;

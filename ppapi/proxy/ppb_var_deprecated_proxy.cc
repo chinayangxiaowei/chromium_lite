@@ -6,19 +6,22 @@
 
 #include <stdlib.h>  // For malloc
 
+#include "base/bind.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "ppapi/c/dev/ppb_var_deprecated.h"
 #include "ppapi/c/pp_var.h"
+#include "ppapi/c/ppb_var.h"
 #include "ppapi/c/ppb_core.h"
 #include "ppapi/proxy/host_dispatcher.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
+#include "ppapi/proxy/plugin_globals.h"
 #include "ppapi/proxy/plugin_resource_tracker.h"
 #include "ppapi/proxy/plugin_var_tracker.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/ppp_class_proxy.h"
 #include "ppapi/proxy/serialized_var.h"
+#include "ppapi/shared_impl/ppb_var_shared.h"
 #include "ppapi/shared_impl/var.h"
 
 namespace ppapi {
@@ -40,8 +43,9 @@ PluginDispatcher* CheckExceptionAndGetDispatcher(const PP_Var& object,
 
   if (object.type == PP_VARTYPE_OBJECT) {
     // Get the dispatcher for the object.
-    PluginDispatcher* dispatcher = PluginResourceTracker::GetInstance()->
-        var_tracker().DispatcherForPluginObject(object);
+    PluginDispatcher* dispatcher =
+        PluginGlobals::Get()->plugin_var_tracker()->
+            DispatcherForPluginObject(object);
     if (dispatcher)
       return dispatcher;
   }
@@ -49,35 +53,13 @@ PluginDispatcher* CheckExceptionAndGetDispatcher(const PP_Var& object,
   // The object is invalid. This means we can't figure out which dispatcher
   // to use, which is OK because the call will fail anyway. Set the exception.
   if (exception) {
-    *exception = StringVar::StringToPPVar(0,
+    *exception = StringVar::StringToPPVar(
         std::string("Attempting to use an invalid object"));
   }
   return NULL;
 }
 
-// PPP_Var_Deprecated plugin ---------------------------------------------------
-
-void AddRefVar(PP_Var var) {
-  PluginResourceTracker::GetInstance()->var_tracker().AddRefVar(var);
-}
-
-void ReleaseVar(PP_Var var) {
-  PluginResourceTracker::GetInstance()->var_tracker().ReleaseVar(var);
-}
-
-PP_Var VarFromUtf8(PP_Module module, const char* data, uint32_t len) {
-  return StringVar::StringToPPVar(module, data, len);
-}
-
-const char* VarToUtf8(PP_Var var, uint32_t* len) {
-  StringVar* str = StringVar::FromPPVar(var);
-  if (str) {
-    *len = static_cast<uint32_t>(str->value().size());
-    return str->value().c_str();
-  }
-  *len = 0;
-  return NULL;
-}
+// PPB_Var_Deprecated plugin ---------------------------------------------------
 
 bool HasProperty(PP_Var var,
                  PP_Var name,
@@ -90,7 +72,7 @@ bool HasProperty(PP_Var var,
   PP_Bool result = PP_FALSE;
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_HasProperty(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         SerializedVarSendInput(dispatcher, name), &se, &result));
   }
@@ -108,7 +90,7 @@ bool HasMethod(PP_Var var,
   PP_Bool result = PP_FALSE;
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_HasMethodDeprecated(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         SerializedVarSendInput(dispatcher, name), &se, &result));
   }
@@ -126,7 +108,7 @@ PP_Var GetProperty(PP_Var var,
   ReceiveSerializedVarReturnValue result;
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_GetProperty(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         SerializedVarSendInput(dispatcher, name), &se, &result));
   }
@@ -149,7 +131,7 @@ void EnumerateProperties(PP_Var var,
   ReceiveSerializedException se(dispatcher, exception);
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_EnumerateProperties(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         out_vector.OutParam(), &se));
   }
@@ -166,7 +148,7 @@ void SetProperty(PP_Var var,
   ReceiveSerializedException se(dispatcher, exception);
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_SetPropertyDeprecated(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         SerializedVarSendInput(dispatcher, name),
         SerializedVarSendInput(dispatcher, value), &se));
@@ -184,7 +166,7 @@ void RemoveProperty(PP_Var var,
   PP_Bool result = PP_FALSE;
   if (!se.IsThrown()) {
     dispatcher->Send(new PpapiHostMsg_PPBVar_DeleteProperty(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, var),
         SerializedVarSendInput(dispatcher, name), &se, &result));
   }
@@ -206,7 +188,7 @@ PP_Var Call(PP_Var object,
     SerializedVarSendInput::ConvertVector(dispatcher, argv, argc, &argv_vect);
 
     dispatcher->Send(new PpapiHostMsg_PPBVar_CallDeprecated(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, object),
         SerializedVarSendInput(dispatcher, method_name), argv_vect,
         &se, &result));
@@ -229,7 +211,7 @@ PP_Var Construct(PP_Var object,
     SerializedVarSendInput::ConvertVector(dispatcher, argv, argc, &argv_vect);
 
     dispatcher->Send(new PpapiHostMsg_PPBVar_Construct(
-        INTERFACE_ID_PPB_VAR_DEPRECATED,
+        API_ID_PPB_VAR_DEPRECATED,
         SerializedVarSendInput(dispatcher, object),
         argv_vect, &se, &result));
   }
@@ -247,7 +229,7 @@ bool IsInstanceOf(PP_Var var,
   int64 class_int = static_cast<int64>(reinterpret_cast<intptr_t>(ppp_class));
   int64 class_data_int = 0;
   dispatcher->Send(new PpapiHostMsg_PPBVar_IsInstanceOfDeprecated(
-      INTERFACE_ID_PPB_VAR_DEPRECATED, SerializedVarSendInput(dispatcher, var),
+      API_ID_PPB_VAR_DEPRECATED, SerializedVarSendInput(dispatcher, var),
       class_int, &class_data_int, &result));
   *ppp_class_data =
       reinterpret_cast<void*>(static_cast<intptr_t>(class_data_int));
@@ -266,40 +248,26 @@ PP_Var CreateObject(PP_Instance instance,
   int64 data_int =
       static_cast<int64>(reinterpret_cast<intptr_t>(ppp_class_data));
   dispatcher->Send(new PpapiHostMsg_PPBVar_CreateObjectDeprecated(
-      INTERFACE_ID_PPB_VAR_DEPRECATED, instance, class_int, data_int,
+      API_ID_PPB_VAR_DEPRECATED, instance, class_int, data_int,
       &result));
   return result.Return(dispatcher);
 }
 
-const PPB_Var_Deprecated var_deprecated_interface = {
-  &AddRefVar,
-  &ReleaseVar,
-  &VarFromUtf8,
-  &VarToUtf8,
-  &HasProperty,
-  &HasMethod,
-  &GetProperty,
-  &EnumerateProperties,
-  &SetProperty,
-  &RemoveProperty,
-  &Call,
-  &Construct,
-  &IsInstanceOf,
-  &CreateObject
-};
-
-InterfaceProxy* CreateVarDeprecatedProxy(Dispatcher* dispatcher,
-                                         const void* target_interface) {
-  return new PPB_Var_Deprecated_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateVarDeprecatedProxy(Dispatcher* dispatcher) {
+  return new PPB_Var_Deprecated_Proxy(dispatcher );
 }
 
 }  // namespace
 
 PPB_Var_Deprecated_Proxy::PPB_Var_Deprecated_Proxy(
-    Dispatcher* dispatcher,
-    const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface),
-      task_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+    Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
+      task_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      ppb_var_impl_(NULL) {
+  if (!dispatcher->IsPlugin()) {
+    ppb_var_impl_ = static_cast<const PPB_Var_Deprecated*>(
+        dispatcher->local_get_interface()(PPB_VAR_DEPRECATED_INTERFACE));
+  }
 }
 
 PPB_Var_Deprecated_Proxy::~PPB_Var_Deprecated_Proxy() {
@@ -307,10 +275,27 @@ PPB_Var_Deprecated_Proxy::~PPB_Var_Deprecated_Proxy() {
 
 // static
 const InterfaceProxy::Info* PPB_Var_Deprecated_Proxy::GetInfo() {
+  static const PPB_Var_Deprecated var_deprecated_interface = {
+    ppapi::PPB_Var_Shared::GetVarInterface1_0()->AddRef,
+    ppapi::PPB_Var_Shared::GetVarInterface1_0()->Release,
+    ppapi::PPB_Var_Shared::GetVarInterface1_0()->VarFromUtf8,
+    ppapi::PPB_Var_Shared::GetVarInterface1_0()->VarToUtf8,
+    &HasProperty,
+    &HasMethod,
+    &GetProperty,
+    &EnumerateProperties,
+    &SetProperty,
+    &RemoveProperty,
+    &Call,
+    &Construct,
+    &IsInstanceOf,
+    &CreateObject
+  };
+
   static const Info info = {
     &var_deprecated_interface,
     PPB_VAR_DEPRECATED_INTERFACE,
-    INTERFACE_ID_PPB_VAR_DEPRECATED,
+    API_ID_PPB_VAR_DEPRECATED,
     false,
     &CreateVarDeprecatedProxy,
   };
@@ -357,10 +342,9 @@ bool PPB_Var_Deprecated_Proxy::OnMessageReceived(const IPC::Message& msg) {
 
 void PPB_Var_Deprecated_Proxy::OnMsgAddRefObject(int64 object_id,
                                                  int* /* unused */) {
-  PP_Var var;
-  var.type = PP_VARTYPE_OBJECT;
+  PP_Var var = { PP_VARTYPE_OBJECT };
   var.value.as_id = object_id;
-  ppb_var_target()->AddRef(var);
+  ppb_var_impl_->AddRef(var);
 }
 
 void PPB_Var_Deprecated_Proxy::OnMsgReleaseObject(int64 object_id) {
@@ -383,8 +367,9 @@ void PPB_Var_Deprecated_Proxy::OnMsgReleaseObject(int64 object_id) {
   // TODO(piman): See if we can fix the IPC code to enforce strict ordering, and
   // then remove this.
   MessageLoop::current()->PostNonNestableTask(FROM_HERE,
-      task_factory_.NewRunnableMethod(
-          &PPB_Var_Deprecated_Proxy::DoReleaseObject, object_id));
+      base::Bind(&PPB_Var_Deprecated_Proxy::DoReleaseObject,
+                 task_factory_.GetWeakPtr(),
+                 object_id));
 }
 
 void PPB_Var_Deprecated_Proxy::OnMsgHasProperty(
@@ -393,7 +378,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgHasProperty(
     SerializedVarOutParam exception,
     PP_Bool* result) {
   SetAllowPluginReentrancy();
-  *result = PP_FromBool(ppb_var_target()->HasProperty(
+  *result = PP_FromBool(ppb_var_impl_->HasProperty(
       var.Get(dispatcher()),
       name.Get(dispatcher()),
       exception.OutParam(dispatcher())));
@@ -405,7 +390,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgHasMethodDeprecated(
     SerializedVarOutParam exception,
     PP_Bool* result) {
   SetAllowPluginReentrancy();
-  *result = PP_FromBool(ppb_var_target()->HasMethod(
+  *result = PP_FromBool(ppb_var_impl_->HasMethod(
       var.Get(dispatcher()),
       name.Get(dispatcher()),
       exception.OutParam(dispatcher())));
@@ -417,7 +402,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgGetProperty(
     SerializedVarOutParam exception,
     SerializedVarReturnValue result) {
   SetAllowPluginReentrancy();
-  result.Return(dispatcher(), ppb_var_target()->GetProperty(
+  result.Return(dispatcher(), ppb_var_impl_->GetProperty(
       var.Get(dispatcher()), name.Get(dispatcher()),
       exception.OutParam(dispatcher())));
 }
@@ -427,7 +412,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgEnumerateProperties(
     SerializedVarVectorOutParam props,
     SerializedVarOutParam exception) {
   SetAllowPluginReentrancy();
-  ppb_var_target()->GetAllPropertyNames(var.Get(dispatcher()),
+  ppb_var_impl_->GetAllPropertyNames(var.Get(dispatcher()),
       props.CountOutParam(), props.ArrayOutParam(dispatcher()),
       exception.OutParam(dispatcher()));
 }
@@ -438,7 +423,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgSetPropertyDeprecated(
     SerializedVarReceiveInput value,
     SerializedVarOutParam exception) {
   SetAllowPluginReentrancy();
-  ppb_var_target()->SetProperty(var.Get(dispatcher()),
+  ppb_var_impl_->SetProperty(var.Get(dispatcher()),
                                 name.Get(dispatcher()),
                                 value.Get(dispatcher()),
                                 exception.OutParam(dispatcher()));
@@ -450,7 +435,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgDeleteProperty(
     SerializedVarOutParam exception,
     PP_Bool* result) {
   SetAllowPluginReentrancy();
-  ppb_var_target()->RemoveProperty(var.Get(dispatcher()),
+  ppb_var_impl_->RemoveProperty(var.Get(dispatcher()),
                                    name.Get(dispatcher()),
                                    exception.OutParam(dispatcher()));
   // This deprecated function doesn't actually return a value, but we re-use
@@ -467,7 +452,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgCallDeprecated(
   SetAllowPluginReentrancy();
   uint32_t arg_count = 0;
   PP_Var* args = arg_vector.Get(dispatcher(), &arg_count);
-  result.Return(dispatcher(), ppb_var_target()->Call(
+  result.Return(dispatcher(), ppb_var_impl_->Call(
       object.Get(dispatcher()),
       method_name.Get(dispatcher()),
       arg_count, args,
@@ -482,7 +467,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgConstruct(
   SetAllowPluginReentrancy();
   uint32_t arg_count = 0;
   PP_Var* args = arg_vector.Get(dispatcher(), &arg_count);
-  result.Return(dispatcher(), ppb_var_target()->Construct(
+  result.Return(dispatcher(), ppb_var_impl_->Construct(
       var.Get(dispatcher()), arg_count, args,
       exception.OutParam(dispatcher())));
 }
@@ -492,7 +477,11 @@ void PPB_Var_Deprecated_Proxy::OnMsgIsInstanceOfDeprecated(
     int64 ppp_class,
     int64* ppp_class_data,
     PP_Bool* result) {
-  // TODO(brettw) write this.
+  SetAllowPluginReentrancy();
+  *result = PPP_Class_Proxy::IsInstanceOf(ppb_var_impl_,
+                                          var.Get(dispatcher()),
+                                          ppp_class,
+                                          ppp_class_data);
 }
 
 void PPB_Var_Deprecated_Proxy::OnMsgCreateObjectDeprecated(
@@ -502,7 +491,7 @@ void PPB_Var_Deprecated_Proxy::OnMsgCreateObjectDeprecated(
     SerializedVarReturnValue result) {
   SetAllowPluginReentrancy();
   result.Return(dispatcher(), PPP_Class_Proxy::CreateProxiedObject(
-      ppb_var_target(), dispatcher(), instance, ppp_class, class_data));
+      ppb_var_impl_, dispatcher(), instance, ppp_class, class_data));
 }
 
 void PPB_Var_Deprecated_Proxy::SetAllowPluginReentrancy() {
@@ -513,10 +502,9 @@ void PPB_Var_Deprecated_Proxy::SetAllowPluginReentrancy() {
 }
 
 void PPB_Var_Deprecated_Proxy::DoReleaseObject(int64 object_id) {
-  PP_Var var;
-  var.type = PP_VARTYPE_OBJECT;
+  PP_Var var = { PP_VARTYPE_OBJECT };
   var.value.as_id = object_id;
-  ppb_var_target()->Release(var);
+  ppb_var_impl_->Release(var);
 }
 
 }  // namespace proxy

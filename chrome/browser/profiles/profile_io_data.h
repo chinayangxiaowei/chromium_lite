@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_PROFILES_PROFILE_IO_DATA_H_
 #pragma once
 
-#include <set>
+#include <string>
+
 #include "base/basictypes.h"
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "base/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
@@ -19,26 +20,30 @@
 #include "content/browser/resource_context.h"
 #include "net/base/cookie_monster.h"
 
-class CommandLine;
+class AudioManager;
 class ChromeAppCacheService;
 class ChromeBlobStorageContext;
+class CookieSettings;
 class DesktopNotificationService;
 class ExtensionInfoMap;
 class HostContentSettingsMap;
-class HostZoomMap;
 class IOThread;
 class Profile;
 class ProtocolHandlerRegistry;
+class TransportSecurityPersister;
 
 namespace fileapi {
 class FileSystemContext;
 }  // namespace fileapi
 
+namespace media_stream {
+class MediaStreamManager;
+}  // namespace media_stream
+
 namespace net {
 class CookieStore;
-class DnsCertProvenanceChecker;
+class FraudulentCertificateReporter;
 class HttpTransactionFactory;
-class NetLog;
 class OriginBoundCertService;
 class ProxyConfigService;
 class ProxyService;
@@ -49,10 +54,6 @@ class TransportSecurityState;
 namespace policy {
 class URLBlacklistManager;
 }  // namespace policy
-
-namespace prerender {
-class PrerenderManager;
-};  // namespace prerender
 
 namespace quota {
 class QuotaManager;
@@ -98,6 +99,7 @@ class ProfileIOData {
   // that profile.
   ExtensionInfoMap* GetExtensionInfoMap() const;
   HostContentSettingsMap* GetHostContentSettingsMap() const;
+  CookieSettings* GetCookieSettings() const;
   DesktopNotificationService* GetNotificationService() const;
 
   BooleanPrefMember* clear_local_state_on_exit()  const {
@@ -110,6 +112,10 @@ class ProfileIOData {
 
   BooleanPrefMember* safe_browsing_enabled() const {
     return &safe_browsing_enabled_;
+  }
+
+  net::TransportSecurityState* transport_security_state() const {
+    return transport_security_state_.get();
   }
 
  protected:
@@ -132,15 +138,17 @@ class ProfileIOData {
     ProfileParams();
     ~ProfileParams();
 
+    FilePath path;
     bool is_incognito;
     bool clear_local_state_on_exit;
     std::string accept_language;
     std::string accept_charset;
     std::string referrer_charset;
     IOThread* io_thread;
+    scoped_refptr<AudioManager> audio_manager;
     scoped_refptr<HostContentSettingsMap> host_content_settings_map;
-    scoped_refptr<HostZoomMap> host_zoom_map;
-    scoped_refptr<net::TransportSecurityState> transport_security_state;
+    scoped_refptr<CookieSettings> cookie_settings;
+    scoped_refptr<content::HostZoomMap> host_zoom_map;
     scoped_refptr<net::SSLConfigService> ssl_config_service;
     scoped_refptr<net::CookieMonster::Delegate> cookie_monster_delegate;
     scoped_refptr<webkit_database::DatabaseTracker> database_tracker;
@@ -150,7 +158,6 @@ class ProfileIOData {
     scoped_refptr<quota::QuotaManager> quota_manager;
     scoped_refptr<ExtensionInfoMap> extension_info_map;
     DesktopNotificationService* notification_service;
-    base::Callback<prerender::PrerenderManager*(void)> prerender_manager_getter;
     scoped_refptr<ProtocolHandlerRegistry> protocol_handler_registry;
     // We need to initialize the ProxyConfigService from the UI thread
     // because on linux it relies on initializing things through gconf,
@@ -160,7 +167,6 @@ class ProfileIOData {
     // ensure it's not accidently used on the IO thread. Before using it on the
     // UI thread, call ProfileManager::IsValidProfile to ensure it's alive.
     void* profile;
-
   };
 
   explicit ProfileIOData(bool is_incognito);
@@ -196,8 +202,8 @@ class ProfileIOData {
     return network_delegate_.get();
   }
 
-  net::DnsCertProvenanceChecker* dns_cert_checker() const {
-    return dns_cert_checker_.get();
+  net::FraudulentCertificateReporter* fraudulent_certificate_reporter() const {
+    return fraudulent_certificate_reporter_.get();
   }
 
   net::ProxyService* proxy_service() const {
@@ -219,7 +225,7 @@ class ProfileIOData {
     virtual ~ResourceContext();
 
    private:
-    virtual void EnsureInitialized() const;
+    virtual void EnsureInitialized() const OVERRIDE;
 
     const ProfileIOData* const io_data_;
   };
@@ -270,8 +276,10 @@ class ProfileIOData {
       chrome_url_data_manager_backend_;
   mutable scoped_ptr<net::OriginBoundCertService> origin_bound_cert_service_;
   mutable scoped_ptr<net::NetworkDelegate> network_delegate_;
-  mutable scoped_ptr<net::DnsCertProvenanceChecker> dns_cert_checker_;
+  mutable scoped_ptr<net::FraudulentCertificateReporter>
+      fraudulent_certificate_reporter_;
   mutable scoped_ptr<net::ProxyService> proxy_service_;
+  mutable scoped_ptr<net::TransportSecurityState> transport_security_state_;
   mutable scoped_ptr<net::URLRequestJobFactory> job_factory_;
 
   // Pointed to by ResourceContext.
@@ -280,16 +288,19 @@ class ProfileIOData {
   mutable scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
   mutable scoped_refptr<fileapi::FileSystemContext> file_system_context_;
   mutable scoped_refptr<quota::QuotaManager> quota_manager_;
-  mutable scoped_refptr<HostZoomMap> host_zoom_map_;
+  mutable scoped_refptr<content::HostZoomMap> host_zoom_map_;
+  mutable scoped_ptr<media_stream::MediaStreamManager> media_stream_manager_;
 
   // TODO(willchan): Remove from ResourceContext.
   mutable scoped_refptr<ExtensionInfoMap> extension_info_map_;
   mutable scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
+  mutable scoped_refptr<CookieSettings> cookie_settings_;
   mutable DesktopNotificationService* notification_service_;
-  mutable base::Callback<prerender::PrerenderManager*(void)>
-      prerender_manager_getter_;
 
   mutable ResourceContext resource_context_;
+
+  mutable scoped_ptr<TransportSecurityPersister>
+      transport_security_persister_;
 
   // These are only valid in between LazyInitialize() and their accessor being
   // called.
@@ -297,6 +308,9 @@ class ProfileIOData {
   mutable scoped_refptr<ChromeURLRequestContext> extensions_request_context_;
   // One AppRequestContext per isolated app.
   mutable AppRequestContextMap app_request_context_map_;
+
+  // TODO(jhawkins): Remove once crbug.com/102004 is fixed.
+  bool initialized_on_UI_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileIOData);
 };

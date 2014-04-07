@@ -6,6 +6,9 @@
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_BROWSER_OPTIONS_HANDLER_H_
 #pragma once
 
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete_controller_delegate.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/pref_member.h"
@@ -28,36 +31,33 @@ class BrowserOptionsHandler : public OptionsPageUIHandler,
   BrowserOptionsHandler();
   virtual ~BrowserOptionsHandler();
 
-  virtual void Initialize();
+  virtual void Initialize() OVERRIDE;
 
   // OptionsPageUIHandler implementation.
-  virtual void GetLocalizedValues(DictionaryValue* localized_strings);
-  virtual void RegisterMessages();
+  virtual void GetLocalizedValues(DictionaryValue* localized_strings) OVERRIDE;
+  virtual void RegisterMessages() OVERRIDE;
 
   // AutocompleteControllerDelegate implementation.
-  virtual void OnResultChanged(bool default_match_changed);
+  virtual void OnResultChanged(bool default_match_changed) OVERRIDE;
 
   // ShellIntegration::DefaultWebClientObserver implementation.
   virtual void SetDefaultWebClientUIState(
-      ShellIntegration::DefaultWebClientUIState state);
+      ShellIntegration::DefaultWebClientUIState state) OVERRIDE;
 
   // TemplateURLServiceObserver implementation.
-  virtual void OnTemplateURLServiceChanged();
+  virtual void OnTemplateURLServiceChanged() OVERRIDE;
 
   // ui::TableModelObserver implementation.
-  virtual void OnModelChanged();
-  virtual void OnItemsChanged(int start, int length);
-  virtual void OnItemsAdded(int start, int length);
-  virtual void OnItemsRemoved(int start, int length);
+  virtual void OnModelChanged() OVERRIDE;
+  virtual void OnItemsChanged(int start, int length) OVERRIDE;
+  virtual void OnItemsAdded(int start, int length) OVERRIDE;
+  virtual void OnItemsRemoved(int start, int length) OVERRIDE;
 
  private:
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
-
-  // Sets the home page to the given string. Called from WebUI.
-  void SetHomePage(const ListValue* args);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Makes this the default browser. Called from WebUI.
   void BecomeDefaultBrowser(const ListValue* args);
@@ -86,13 +86,25 @@ class BrowserOptionsHandler : public OptionsPageUIHandler,
   // Called from WebUI.
   void RequestAutocompleteSuggestions(const ListValue* args);
 
-  // Called when the 'Always show the bookmarks bar' checkbox is toggled.
-  // Notifies any listeners interested in this event.  |args| is ignored.
-  void ToggleShowBookmarksBar(const ListValue* args);
-
   // Enables/disables Instant.
   void EnableInstant(const ListValue* args);
   void DisableInstant(const ListValue* args);
+
+  // Enables/disables auto-launching of Chrome on computer startup.
+  void ToggleAutoLaunch(const ListValue* args);
+
+  // Checks (on the file thread) whether the user is in the auto-launch trial
+  // and whether Chrome is set to auto-launch at login. Gets a reply on the UI
+  // thread (see CheckAutoLaunchCallback). A weak pointer to this is passed in
+  // as a parameter to avoid the need to lock between this function and the
+  // destructor.
+
+  void CheckAutoLaunch(base::WeakPtr<BrowserOptionsHandler> weak_this);
+  // Sets up (on the UI thread) the necessary bindings for toggling auto-launch
+  // (if the user is part of the auto-launch and makes sure the HTML UI knows
+  // whether Chrome will auto-launch at login.
+  void CheckAutoLaunchCallback(bool is_in_auto_launch_group,
+                               bool will_launch_at_login);
 
   // Called to request information about the Instant field trial.
   void GetInstantFieldTrialStatus(const ListValue* args);
@@ -134,6 +146,11 @@ class BrowserOptionsHandler : public OptionsPageUIHandler,
   scoped_ptr<CustomHomePagesTableModel> startup_custom_pages_table_model_;
 
   scoped_ptr<AutocompleteController> autocomplete_controller_;
+
+  // Used to get |weak_ptr_| to self for use on the File thread.
+  base::WeakPtrFactory<BrowserOptionsHandler> weak_ptr_factory_for_file_;
+  // Used to post update tasks to the UI thread.
+  base::WeakPtrFactory<BrowserOptionsHandler> weak_ptr_factory_for_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserOptionsHandler);
 };

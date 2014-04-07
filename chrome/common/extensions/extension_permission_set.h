@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,10 @@
 #include "base/string16.h"
 #include "chrome/common/extensions/url_pattern_set.h"
 
+// TODO(jstritar): Move each class to its own file in extensions/permissions.
+
 class Extension;
-class ExtensionPrefs;
+class ExtensionPermissionsInfo;
 
 // When prompting the user to install or approve permissions, we display
 // messages describing the effects of the permissions rather than listing the
@@ -46,6 +48,9 @@ class ExtensionPermissionMessage {
     kFullAccess,
     kClipboard,
     kTtsEngine,
+    kContentSettings,
+    kAllPageContent,
+    kPrivacy,
     kEnumBoundary
   };
 
@@ -88,10 +93,8 @@ class ExtensionAPIPermission {
     kInvalid = -2,
     kUnknown = -1,
 
-    // Default permission that every extension has implicitly.
-    kDefault,
-
     // Real permissions.
+    kAppNotifications,
     kBackground,
     kBookmark,
     kChromeAuthPrivate,
@@ -110,17 +113,26 @@ class ExtensionAPIPermission {
     kGeolocation,
     kHistory,
     kIdle,
+    kInput,
     kInputMethodPrivate,
     kManagement,
     kMediaPlayerPrivate,
+    kMetricsPrivate,
     kNotification,
-    kPermissions,
+    kPageCapture,
     kPlugin,
+    kPrivacy,
     kProxy,
+    kSocket,
+    kSystemPrivate,
     kTab,
+    kTerminalPrivate,
     kTts,
     kTtsEngine,
     kUnlimitedStorage,
+    kWebNavigation,
+    kWebRequest,
+    kWebRequestBlocking,
     kWebSocketProxyPrivate,
     kWebstorePrivate,
     kEnumBoundary
@@ -129,20 +141,41 @@ class ExtensionAPIPermission {
   enum Flag {
     kFlagNone = 0,
 
-    // Indicates if the permission can be accessed by hosted apps.
-    kFlagHostedApp = 1 << 0,
-
     // Indicates if the permission implies full access (native code).
-    kFlagImpliesFullAccess = 1 << 1,
+    kFlagImpliesFullAccess = 1 << 0,
 
     // Indicates if the permission implies full URL access.
-    kFlagImpliesFullURLAccess = 1 << 2,
+    kFlagImpliesFullURLAccess = 1 << 1,
 
     // Indicates that the permission is private to COMPONENT extensions.
-    kFlagComponentOnly = 1 << 3,
+    // Depcrecated: please use the whitelist.
+    kFlagComponentOnly_Deprecated = 1 << 2,
 
-    // Indicates that the permission supports the optional permissions API.
-    kFlagSupportsOptional = 1 << 4,
+    // Indicates that extensions cannot specify the permission as optional.
+    kFlagCannotBeOptional = 1 << 3
+  };
+
+  // Flags for specifying what extension types can use the permission.
+  enum TypeRestriction {
+    kTypeNone = 0,
+
+    // Extension::TYPE_EXTENSION and Extension::TYPE_USER_SCRIPT
+    kTypeExtension = 1 << 0,
+
+    // Extension::TYPE_HOSTED_APP
+    kTypeHostedApp = 1 << 1,
+
+    // Extension::TYPE_PACKAGED_APP
+    kTypePackagedApp = 1 << 2,
+
+    // Extension::TYPE_PLATFORM_APP
+    kTypePlatformApp = 1 << 3,
+
+    // Supports all types.
+    kTypeAll = (1 << 4) - 1,
+
+    // Convenience flag for all types except hosted apps.
+    kTypeDefault = kTypeAll - kTypeHostedApp,
   };
 
   typedef std::set<ID> IDSet;
@@ -153,6 +186,8 @@ class ExtensionAPIPermission {
   ExtensionPermissionMessage GetMessage() const;
 
   int flags() const { return flags_; }
+
+  int type_restrictions() const { return type_restrictions_; }
 
   ID id() const { return id_; }
 
@@ -174,39 +209,77 @@ class ExtensionAPIPermission {
     return (flags_ & kFlagImpliesFullURLAccess) != 0;
   }
 
-  // Returns true if this permission can be accessed by hosted apps.
-  bool is_hosted_app() const {
-    return (flags_ & kFlagHostedApp) != 0;
-  }
-
   // Returns true if this permission can only be acquired by COMPONENT
   // extensions.
   bool is_component_only() const {
-    return (flags_ & kFlagComponentOnly) != 0;
+    return (flags_ & kFlagComponentOnly_Deprecated) != 0;
+  }
+
+  // Returns true if access to this permission is restricted by a whitelist.
+  bool HasWhitelist() const;
+
+  // Returns true if |extension_id| is whitelisted. The return value is only
+  // relevant if this permission has a whitelist.
+  bool IsWhitelisted(const std::string& extension_id) const;
+
+  // Returns true if regular extensions can specify this permission.
+  bool supports_extensions() const {
+    return (type_restrictions_ & kTypeExtension) != 0;
+  }
+
+  // Returns true if hosted apps can specify this permission.
+  bool supports_hosted_apps() const {
+    return (type_restrictions_ & kTypeHostedApp) != 0;
+  }
+
+  // Returns true if packaged apps can specify this permission.
+  bool supports_packaged_apps() const {
+    return (type_restrictions_ & kTypePackagedApp) != 0;
+  }
+
+  // Returns true if platform apps can specify this permission.
+  bool supports_platform_apps() const {
+    return (type_restrictions_ & kTypePlatformApp) != 0;
   }
 
   // Returns true if this permission can be added and removed via the
   // optional permissions extension API.
   bool supports_optional() const {
-    return (flags_ & kFlagSupportsOptional) != 0;
+    return (flags_ & kFlagCannotBeOptional) == 0;
+  }
+
+  // Returns true if this permissions supports the specified |type|.
+  bool supports_type(TypeRestriction type) const {
+    return (type_restrictions_ & type) != 0;
   }
 
  private:
   // Instances should only be constructed from within ExtensionPermissionsInfo.
   friend class ExtensionPermissionsInfo;
 
+  // Register ALL the permissions!
+  static void RegisterAllPermissions(ExtensionPermissionsInfo* info);
+
+  typedef std::set<std::string> ExtensionWhitelist;
+
   explicit ExtensionAPIPermission(
       ID id,
       const char* name,
       int l10n_message_id,
       ExtensionPermissionMessage::ID message_id,
-      int flags);
+      int flags,
+      int type_restrictions);
+
+  // Adds |extension_id| to the whitelist for this permission.
+  void AddToWhitelist(const std::string& extension_id);
 
   ID id_;
   const char* name_;
   int flags_;
+  int type_restrictions_;
   int l10n_message_id_;
   ExtensionPermissionMessage::ID message_id_;
+  ExtensionWhitelist whitelist_;
 };
 
 typedef std::set<ExtensionAPIPermission::ID> ExtensionAPIPermissionSet;
@@ -232,15 +305,12 @@ class ExtensionPermissionsInfo {
   ExtensionAPIPermissionSet GetAllByName(
       const std::set<std::string>& permission_names);
 
-  // Gets the total number of API permissions available to hosted apps.
-  size_t get_hosted_app_permission_count() {
-    return hosted_app_permission_count_;
-  }
-
   // Gets the total number of API permissions.
   size_t get_permission_count() { return permission_count_; }
 
  private:
+  friend class ExtensionAPIPermission;
+
   ~ExtensionPermissionsInfo();
   ExtensionPermissionsInfo();
 
@@ -248,12 +318,13 @@ class ExtensionPermissionsInfo {
   void RegisterAlias(const char* name, const char* alias);
 
   // Registers a permission with the specified attributes and flags.
-  void RegisterPermission(
+  ExtensionAPIPermission* RegisterPermission(
       ExtensionAPIPermission::ID id,
       const char* name,
       int l10n_message_id,
       ExtensionPermissionMessage::ID message_id,
-      int flags);
+      int flags,
+      int type_restrictions);
 
   // Maps permission ids to permissions.
   typedef std::map<ExtensionAPIPermission::ID, ExtensionAPIPermission*> IDMap;
@@ -318,6 +389,12 @@ class ExtensionPermissionSet
   // Gets the API permissions in this set as a set of strings.
   std::set<std::string> GetAPIsAsStrings() const;
 
+  // Returns whether this namespace has any functions which the extension has
+  // permission to use.  For example, even though the extension may not have
+  // the "tabs" permission, "tabs.create" requires no permissions so
+  // HasAnyAPIPermission("tabs") will return true.
+  bool HasAnyAccessToAPI(const std::string& api_name) const;
+
   // Gets a list of the distinct hosts for displaying to the user.
   // NOTE: do not use this for comparing permissions, since this disgards some
   // information.
@@ -374,7 +451,7 @@ class ExtensionPermissionSet
   const URLPatternSet& scriptable_hosts() const { return scriptable_hosts_; }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(ExtensionPermissionSetTest,
+  FRIEND_TEST_ALL_PREFIXES(ExtensionPermissionsTest,
                            HasLessHostPrivilegesThan);
 
   friend class base::RefCountedThreadSafe<ExtensionPermissionSet>;

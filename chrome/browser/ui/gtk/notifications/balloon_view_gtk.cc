@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
+#include "base/debug/trace_event.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "chrome/browser/extensions/extension_host.h"
@@ -31,9 +33,8 @@
 #include "chrome/common/extensions/extension.h"
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_service.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
@@ -101,7 +102,7 @@ BalloonViewImpl::BalloonViewImpl(BalloonCollection* collection)
     : balloon_(NULL),
       frame_container_(NULL),
       html_container_(NULL),
-      method_factory_(this),
+      weak_factory_(this),
       close_button_(NULL),
       animation_(NULL),
       menu_showing_(false),
@@ -123,8 +124,9 @@ void BalloonViewImpl::Close(bool by_user) {
   } else {
     MessageLoop::current()->PostTask(
         FROM_HERE,
-        method_factory_.NewRunnableMethod(
-            &BalloonViewImpl::DelayedClose, by_user));
+        base::Bind(&BalloonViewImpl::DelayedClose,
+                   weak_factory_.GetWeakPtr(),
+                   by_user));
   }
 }
 
@@ -275,7 +277,7 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   gtk_container_add(GTK_CONTAINER(label_alignment), source_label_);
   gtk_box_pack_start(GTK_BOX(hbox_), label_alignment, FALSE, FALSE, 0);
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
   // Create a button to dismiss the balloon and add it to the toolbar.
   close_button_.reset(new CustomDrawButton(IDR_TAB_CLOSE,
@@ -315,7 +317,7 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   gtk_box_pack_end(GTK_BOX(hbox_), options_alignment, FALSE, FALSE, 0);
 
   notification_registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                              Source<ThemeService>(theme_service_));
+                              content::Source<ThemeService>(theme_service_));
 
   // We don't do InitThemesFor() because it just forces a redraw.
   gtk_util::ActAsRoundedWindow(frame_container_, ui::kGdkBlack, 3,
@@ -339,14 +341,16 @@ void BalloonViewImpl::Show(Balloon* balloon) {
 
   notification_registrar_.Add(this,
       chrome::NOTIFICATION_NOTIFY_BALLOON_DISCONNECTED,
-      Source<Balloon>(balloon));
+      content::Source<Balloon>(balloon));
 }
 
 void BalloonViewImpl::Update() {
   DCHECK(html_contents_.get()) << "BalloonView::Update called before Show";
-  if (html_contents_->render_view_host())
-    html_contents_->render_view_host()->NavigateToURL(
-        balloon_->notification().content_url());
+  if (!html_contents_->web_contents())
+    return;
+  html_contents_->web_contents()->GetController().LoadURL(
+      balloon_->notification().content_url(), content::Referrer(),
+      content::PAGE_TRANSITION_LINK, std::string());
 }
 
 gfx::Point BalloonViewImpl::GetContentsOffset() const {
@@ -383,14 +387,14 @@ gfx::Rect BalloonViewImpl::GetContentsRectangle() const {
 }
 
 void BalloonViewImpl::Observe(int type,
-                              const NotificationSource& source,
-                              const NotificationDetails& details) {
+                              const content::NotificationSource& source,
+                              const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_NOTIFY_BALLOON_DISCONNECTED) {
     // If the renderer process attached to this balloon is disconnected
     // (e.g., because of a crash), we want to close the balloon.
     notification_registrar_.Remove(this,
         chrome::NOTIFICATION_NOTIFY_BALLOON_DISCONNECTED,
-        Source<Balloon>(balloon_));
+        content::Source<Balloon>(balloon_));
     Close(false);
   } else if (type == chrome::NOTIFICATION_BROWSER_THEME_CHANGED) {
     // Since all the buttons change their own properties, and our expose does
@@ -410,19 +414,22 @@ void BalloonViewImpl::OnCloseButton(GtkWidget* widget) {
 // HTML view cut off the roundedness of the notification window.
 gboolean BalloonViewImpl::OnContentsExpose(GtkWidget* sender,
                                            GdkEventExpose* event) {
+  TRACE_EVENT0("ui::gtk", "BalloonViewImpl::OnContentsExpose");
   cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(sender->window));
   gdk_cairo_rectangle(cr, &event->area);
   cairo_clip(cr);
+
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(sender, &allocation);
 
   // According to a discussion on a mailing list I found, these degenerate
   // paths are the officially supported way to draw points in Cairo.
   cairo_set_source_rgb(cr, 0, 0, 0);
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
   cairo_set_line_width(cr, 1.0);
-  cairo_move_to(cr, 0.5, sender->allocation.height - 0.5);
+  cairo_move_to(cr, 0.5, allocation.height - 0.5);
   cairo_close_path(cr);
-  cairo_move_to(cr, sender->allocation.width - 0.5,
-                    sender->allocation.height - 0.5);
+  cairo_move_to(cr, allocation.width - 0.5, allocation.height - 0.5);
   cairo_close_path(cr);
   cairo_stroke(cr);
   cairo_destroy(cr);
@@ -431,6 +438,7 @@ gboolean BalloonViewImpl::OnContentsExpose(GtkWidget* sender,
 }
 
 gboolean BalloonViewImpl::OnExpose(GtkWidget* sender, GdkEventExpose* event) {
+  TRACE_EVENT0("ui::gtk", "BalloonViewImpl::OnExpose");
   cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(sender->window));
   gdk_cairo_rectangle(cr, &event->area);
   cairo_clip(cr);
@@ -470,8 +478,9 @@ void BalloonViewImpl::StoppedShowing() {
   if (pending_close_) {
     MessageLoop::current()->PostTask(
         FROM_HERE,
-        method_factory_.NewRunnableMethod(
-            &BalloonViewImpl::DelayedClose, false));
+        base::Bind(&BalloonViewImpl::DelayedClose,
+                   weak_factory_.GetWeakPtr(),
+                   false));
   }
 }
 

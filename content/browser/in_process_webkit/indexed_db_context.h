@@ -15,8 +15,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "content/browser/browser_thread.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
+#include "webkit/quota/quota_types.h"
 
 class GURL;
 class FilePath;
@@ -35,7 +37,8 @@ class QuotaManagerProxy;
 class SpecialStoragePolicy;
 }
 
-class IndexedDBContext : public base::RefCountedThreadSafe<IndexedDBContext> {
+class CONTENT_EXPORT IndexedDBContext
+    : public base::RefCountedThreadSafe<IndexedDBContext> {
  public:
   IndexedDBContext(WebKitContext* webkit_context,
                    quota::SpecialStoragePolicy* special_storage_policy,
@@ -56,6 +59,11 @@ class IndexedDBContext : public base::RefCountedThreadSafe<IndexedDBContext> {
     clear_local_state_on_exit_ = clear_local_state;
   }
 
+  // Disables the exit-time deletion for all data (also session-only data).
+  void SaveSessionState() {
+    save_session_state_ = true;
+  }
+
   // Deletes all indexed db files for the given origin.
   void DeleteIndexedDBForOrigin(const GURL& origin_url);
 
@@ -73,15 +81,17 @@ class IndexedDBContext : public base::RefCountedThreadSafe<IndexedDBContext> {
 
   quota::QuotaManagerProxy* quota_manager_proxy();
 
-#ifdef UNIT_TEST
   // For unit tests allow to override the |data_path_|.
-  void set_data_path(const FilePath& data_path) { data_path_ = data_path; }
-#endif
+  void set_data_path_for_testing(const FilePath& data_path) {
+    data_path_ = data_path;
+  }
 
  private:
-  FRIEND_TEST(ExtensionServiceTest, ClearExtensionData);
-  FRIEND_TEST(ExtensionServiceTest, ClearAppData);
-  FRIEND_TEST(IndexedDBBrowserTest, ClearLocalState);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionServiceTest, ClearExtensionData);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionServiceTest, ClearAppData);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBBrowserTest, ClearLocalState);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBBrowserTest, ClearSessionOnlyDatabases);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBBrowserTest, SaveSessionState);
   friend class IndexedDBQuotaClientTest;
 
   typedef std::map<GURL, int64> OriginToSizeMap;
@@ -91,6 +101,8 @@ class IndexedDBContext : public base::RefCountedThreadSafe<IndexedDBContext> {
   int64 ReadUsageFromDisk(const GURL& origin_url) const;
   void EnsureDiskUsageCacheInitialized(const GURL& origin_url);
   void QueryDiskAndUpdateQuotaUsage(const GURL& origin_url);
+  void GotUsageAndQuota(const GURL& origin_url, quota::QuotaStatusCode,
+                        int64 usage, int64 quota);
   void GotUpdatedQuota(const GURL& origin_url, int64 usage, int64 quota);
   void QueryAvailableQuota(const GURL& origin_url);
 
@@ -112,6 +124,8 @@ class IndexedDBContext : public base::RefCountedThreadSafe<IndexedDBContext> {
   scoped_ptr<WebKit::WebIDBFactory> idb_factory_;
   FilePath data_path_;
   bool clear_local_state_on_exit_;
+  // If true, nothing (not even session-only data) should be deleted on exit.
+  bool save_session_state_;
   scoped_refptr<quota::SpecialStoragePolicy> special_storage_policy_;
   scoped_refptr<quota::QuotaManagerProxy> quota_manager_proxy_;
   scoped_ptr<std::set<GURL> > origin_set_;

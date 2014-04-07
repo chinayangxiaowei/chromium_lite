@@ -14,6 +14,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/string16.h"
 #include "base/time.h"
+#include "content/common/content_export.h"
 
 class DOMStorageArea;
 class DOMStorageMessageFilter;
@@ -31,7 +32,7 @@ class SpecialStoragePolicy;
 // on the WebKit thread unless noted otherwise.
 //
 // NOTE: Virtual methods facilitate mocking functions for testing.
-class DOMStorageContext {
+class CONTENT_EXPORT DOMStorageContext {
  public:
   DOMStorageContext(WebKitContext* webkit_context,
                     quota::SpecialStoragePolicy* special_storage_policy);
@@ -81,11 +82,6 @@ class DOMStorageContext {
   // are not deleted by this method.
   void DeleteDataModifiedSince(const base::Time& cutoff);
 
-  // Delete any local storage files which are allowed to be stored only until
-  // the end of the session. Protected origins, per the SpecialStoragePolicy,
-  // are not deleted by this method.
-  void DeleteSessionOnlyData();
-
   // Deletes a single local storage file.
   void DeleteLocalStorageFile(const FilePath& file_path);
 
@@ -108,14 +104,19 @@ class DOMStorageContext {
     clear_local_state_on_exit_ = clear_local_state;
   }
 
-#ifdef UNIT_TEST
-  // For unit tests allow to override the |data_path_|.
-  void set_data_path(const FilePath& data_path) { data_path_ = data_path; }
-#endif
+  // Disables the exit-time deletion for all data (also session-only data).
+  void SaveSessionState() {
+    save_session_state_ = true;
+  }
+
+  void set_data_path_for_testing(const FilePath& data_path) {
+    data_path_ = data_path;
+  }
 
  private:
 
   FRIEND_TEST_ALL_PREFIXES(DOMStorageTest, SessionOnly);
+  FRIEND_TEST_ALL_PREFIXES(DOMStorageTest, SaveSessionState);
 
   // Get the local storage instance.  The object is owned by this class.
   DOMStorageNamespace* CreateLocalStorage();
@@ -144,6 +145,9 @@ class DOMStorageContext {
 
   // True if the destructor should delete its files.
   bool clear_local_state_on_exit_;
+
+  // If true, nothing (not even session-only data) should be deleted on exit.
+  bool save_session_state_;
 
   // Path where the browser context data is stored.
   // TODO(pastarmovj): Keep in mind that unlike indexed db data_path_ variable

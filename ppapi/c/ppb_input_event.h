@@ -1,9 +1,9 @@
-/* Copyright (c) 2011 The Chromium Authors. All rights reserved.
+/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-/* From ppb_input_event.idl modified Wed Aug 24 09:43:38 2011. */
+/* From ppb_input_event.idl modified Mon Nov 14 10:36:01 2011. */
 
 #ifndef PPAPI_C_PPB_INPUT_EVENT_H_
 #define PPAPI_C_PPB_INPUT_EVENT_H_
@@ -117,7 +117,31 @@ typedef enum {
    *
    * Register for this event using the PP_INPUTEVENT_CLASS_MOUSE class.
    */
-  PP_INPUTEVENT_TYPE_CONTEXTMENU = 10
+  PP_INPUTEVENT_TYPE_CONTEXTMENU = 10,
+  /**
+   * Notification that an input method composition process has just started.
+   *
+   * Register for this event using the PP_INPUTEVENT_CLASS_IME class.
+   */
+  PP_INPUTEVENT_TYPE_IME_COMPOSITION_START = 11,
+  /**
+   * Notification that the input method composition string is updated.
+   *
+   * Register for this event using the PP_INPUTEVENT_CLASS_IME class.
+   */
+  PP_INPUTEVENT_TYPE_IME_COMPOSITION_UPDATE = 12,
+  /**
+   * Notification that an input method composition process has completed.
+   *
+   * Register for this event using the PP_INPUTEVENT_CLASS_IME class.
+   */
+  PP_INPUTEVENT_TYPE_IME_COMPOSITION_END = 13,
+  /**
+   * Notification that an input method committed a string.
+   *
+   * Register for this event using the PP_INPUTEVENT_CLASS_IME class.
+   */
+  PP_INPUTEVENT_TYPE_IME_TEXT = 14
 } PP_InputEvent_Type;
 PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_InputEvent_Type, 4);
 
@@ -224,7 +248,7 @@ PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_InputEvent_Class, 4);
  * The <code>PPB_InputEvent</code> interface contains pointers to several
  * functions related to generic input events on the browser.
  */
-struct PPB_InputEvent {
+struct PPB_InputEvent_1_0 {
   /**
    * RequestInputEvent() requests that input events corresponding to the given
    * input events are delivered to the instance.
@@ -384,11 +408,13 @@ struct PPB_InputEvent {
   uint32_t (*GetModifiers)(PP_Resource event);
 };
 
+typedef struct PPB_InputEvent_1_0 PPB_InputEvent;
+
 /**
  * The <code>PPB_MouseInputEvent</code> interface contains pointers to several
  * functions related to mouse input events.
  */
-struct PPB_MouseInputEvent {
+struct PPB_MouseInputEvent_1_1 {
   /**
    * Create() creates a mouse input event with the given parameters. Normally
    * you will get a mouse event passed through the
@@ -476,12 +502,14 @@ struct PPB_MouseInputEvent {
    * @return The change in position of the mouse, relative to the previous
    * position.
    *
-   * TODO(yzshen): This feature hasn't been supported yet. The returned value is
-   * always (0, 0) for system-generated mouse events (which are passed through
-   * the <code>HandleInputEvent</code>).
+   * TODO(yzshen): This feature hasn't been fully supported yet. For now,
+   * movement information is provided only if the mouse is locked. If the mouse
+   * is not locked, the returned value is (0, 0).
    */
   struct PP_Point (*GetMovement)(PP_Resource mouse_event);
 };
+
+typedef struct PPB_MouseInputEvent_1_1 PPB_MouseInputEvent;
 
 struct PPB_MouseInputEvent_1_0 {
   PP_Resource (*Create)(PP_Instance instance,
@@ -501,7 +529,7 @@ struct PPB_MouseInputEvent_1_0 {
  * The <code>PPB_WheelIputEvent</code> interface contains pointers to several
  * functions related to wheel input events.
  */
-struct PPB_WheelInputEvent {
+struct PPB_WheelInputEvent_1_0 {
   /**
    * Create() creates a wheel input event with the given parameters. Normally
    * you will get a wheel event passed through the
@@ -605,11 +633,13 @@ struct PPB_WheelInputEvent {
   PP_Bool (*GetScrollByPage)(PP_Resource wheel_event);
 };
 
+typedef struct PPB_WheelInputEvent_1_0 PPB_WheelInputEvent;
+
 /**
  * The <code>PPB_KeyboardInputEvent</code> interface contains pointers to
  * several functions related to keyboard input events.
  */
-struct PPB_KeyboardInputEvent {
+struct PPB_KeyboardInputEvent_1_0 {
   /**
    * Creates a keyboard input event with the given parameters. Normally you
    * will get a keyboard event passed through the HandleInputEvent and will not
@@ -674,6 +704,8 @@ struct PPB_KeyboardInputEvent {
    */
   struct PP_Var (*GetCharacterText)(PP_Resource character_event);
 };
+
+typedef struct PPB_KeyboardInputEvent_1_0 PPB_KeyboardInputEvent;
 /**
  * @}
  */

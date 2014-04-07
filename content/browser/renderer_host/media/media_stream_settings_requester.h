@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,14 @@
 
 #include <string>
 
+#include "content/common/content_export.h"
 #include "content/common/media/media_stream_options.h"
 
 namespace media_stream {
 
 // Implemented by the class requesting media capture device usage.
-class SettingsRequester {
+class CONTENT_EXPORT SettingsRequester {
  public:
-  // Called to get available devices for a certain media type. A call to
-  // |AvailableDevices| with the currently available capture devices is
-  // expected.
-  virtual void GetDevices(const std::string& label,
-                          MediaStreamType stream_type) = 0;
-
   // If no error occurred, this call will deliver the result and the request
   // is considered answered.
   virtual void DevicesAccepted(const std::string& label,

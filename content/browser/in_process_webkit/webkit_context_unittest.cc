@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/browser/browser_thread.h"
+#include "content/browser/browser_thread_impl.h"
 #include "content/browser/in_process_webkit/dom_storage_context.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
 #include "content/test/test_browser_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::BrowserThread;
+using content::BrowserThreadImpl;
 
 class MockDOMStorageContext : public DOMStorageContext {
  public:
@@ -18,7 +21,7 @@ class MockDOMStorageContext : public DOMStorageContext {
 
   virtual void PurgeMemory() {
     EXPECT_FALSE(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    EXPECT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+    EXPECT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
     ++purge_count_;
   }
 
@@ -47,7 +50,8 @@ TEST(WebKitContextTest, PurgeMemory) {
   // Start up a WebKit thread for the WebKitContext to call the
   // DOMStorageContext on.
   MessageLoop message_loop(MessageLoop::TYPE_DEFAULT);
-  BrowserThread webkit_thread(BrowserThread::WEBKIT, &message_loop);
+  BrowserThreadImpl webkit_thread(BrowserThread::WEBKIT_DEPRECATED,
+                                  &message_loop);
 
   {
     // Create the contexts.
@@ -57,7 +61,8 @@ TEST(WebKitContextTest, PurgeMemory) {
             NULL, false, NULL, NULL));
     MockDOMStorageContext* mock_context = new MockDOMStorageContext(
         context.get(), NULL);
-    context->set_dom_storage_context(mock_context);  // Takes ownership.
+    // Takes ownership.
+    context->set_dom_storage_context_for_testing(mock_context);
 
     // Ensure PurgeMemory() calls our mock object on the right thread.
     EXPECT_EQ(0, mock_context->purge_count());

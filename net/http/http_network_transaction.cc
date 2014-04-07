@@ -7,6 +7,8 @@
 #include <set>
 #include <vector>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/memory/scoped_ptr.h"
@@ -39,9 +41,9 @@
 #include "net/http/http_proxy_client_socket_pool.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_request_info.h"
-#include "net/http/http_response_body_drainer.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
+#include "net/http/http_server_properties.h"
 #include "net/http/http_stream_factory.h"
 #include "net/http/http_util.h"
 #include "net/http/url_security_manager.h"
@@ -61,18 +63,18 @@ namespace net {
 namespace {
 
 void ProcessAlternateProtocol(HttpStreamFactory* factory,
-                              HttpAlternateProtocols* alternate_protocols,
+                              HttpServerProperties* http_server_properties,
                               const HttpResponseHeaders& headers,
                               const HostPortPair& http_host_port_pair) {
   std::string alternate_protocol_str;
 
-  if (!headers.EnumerateHeader(NULL, HttpAlternateProtocols::kHeader,
+  if (!headers.EnumerateHeader(NULL, kAlternateProtocolHeader,
                                &alternate_protocol_str)) {
     // Header is not present.
     return;
   }
 
-  factory->ProcessAlternateProtocol(alternate_protocols,
+  factory->ProcessAlternateProtocol(http_server_properties,
                                     alternate_protocol_str,
                                     http_host_port_pair);
 }
@@ -96,9 +98,9 @@ bool IsClientCertificateError(int error) {
 
 HttpNetworkTransaction::HttpNetworkTransaction(HttpNetworkSession* session)
     : pending_auth_target_(HttpAuth::AUTH_NONE),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          io_callback_(this, &HttpNetworkTransaction::OnIOComplete)),
-      user_callback_(NULL),
+      ALLOW_THIS_IN_INITIALIZER_LIST(io_callback_(
+          base::Bind(&HttpNetworkTransaction::OnIOComplete,
+                     base::Unretained(this)))),
       session_(session),
       request_(NULL),
       headers_valid_(false),
@@ -108,9 +110,9 @@ HttpNetworkTransaction::HttpNetworkTransaction(HttpNetworkSession* session)
       next_state_(STATE_NONE),
       establishing_tunnel_(false) {
   session->ssl_config_service()->GetSSLConfig(&server_ssl_config_);
-  if (session->http_stream_factory()->next_protos()) {
+  if (session->http_stream_factory()->has_next_protos()) {
     server_ssl_config_.next_protos =
-        *session->http_stream_factory()->next_protos();
+        session->http_stream_factory()->next_protos();
   }
   proxy_ssl_config_ = server_ssl_config_;
 }
@@ -136,22 +138,15 @@ HttpNetworkTransaction::~HttpNetworkTransaction() {
         stream_->Close(true /* not reusable */);
       } else {
         // Otherwise, we try to drain the response body.
-        // TODO(willchan): Consider moving this response body draining to the
-        // stream implementation.  For SPDY, there's clearly no point.  For
-        // HTTP, it can vary depending on whether or not we're pipelining.  It's
-        // stream dependent, so the different subtypes should be implementing
-        // their solutions.
-        HttpResponseBodyDrainer* drainer =
-          new HttpResponseBodyDrainer(stream_.release());
-        drainer->Start(session_);
-        // |drainer| will delete itself.
+        HttpStream* stream = stream_.release();
+        stream->Drain(session_);
       }
     }
   }
 }
 
 int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
-                                  CompletionCallback* callback,
+                                  const CompletionCallback& callback,
                                   const BoundNetLog& net_log) {
   SIMPLE_STATS_COUNTER("HttpNetworkTransaction.Count");
 
@@ -167,12 +162,12 @@ int HttpNetworkTransaction::Start(const HttpRequestInfo* request_info,
   next_state_ = STATE_CREATE_STREAM;
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
-    user_callback_ = callback;
+    callback_ = callback;
   return rv;
 }
 
 int HttpNetworkTransaction::RestartIgnoringLastError(
-    CompletionCallback* callback) {
+    const CompletionCallback& callback) {
   DCHECK(!stream_.get());
   DCHECK(!stream_request_.get());
   DCHECK_EQ(STATE_NONE, next_state_);
@@ -181,13 +176,12 @@ int HttpNetworkTransaction::RestartIgnoringLastError(
 
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
-    user_callback_ = callback;
+    callback_ = callback;
   return rv;
 }
 
 int HttpNetworkTransaction::RestartWithCertificate(
-    X509Certificate* client_cert,
-    CompletionCallback* callback) {
+    X509Certificate* client_cert, const CompletionCallback& callback) {
   // In HandleCertificateRequest(), we always tear down existing stream
   // requests to force a new connection.  So we shouldn't have one here.
   DCHECK(!stream_request_.get());
@@ -206,14 +200,12 @@ int HttpNetworkTransaction::RestartWithCertificate(
   next_state_ = STATE_CREATE_STREAM;
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
-    user_callback_ = callback;
+    callback_ = callback;
   return rv;
 }
 
 int HttpNetworkTransaction::RestartWithAuth(
-    const string16& username,
-    const string16& password,
-    CompletionCallback* callback) {
+    const AuthCredentials& credentials, const CompletionCallback& callback) {
   HttpAuth::Target target = pending_auth_target_;
   if (target == HttpAuth::AUTH_NONE) {
     NOTREACHED();
@@ -221,9 +213,9 @@ int HttpNetworkTransaction::RestartWithAuth(
   }
   pending_auth_target_ = HttpAuth::AUTH_NONE;
 
-  auth_controllers_[target]->ResetAuth(username, password);
+  auth_controllers_[target]->ResetAuth(credentials);
 
-  DCHECK(user_callback_ == NULL);
+  DCHECK(callback_.is_null());
 
   int rv = OK;
   if (target == HttpAuth::AUTH_PROXY && establishing_tunnel_) {
@@ -233,7 +225,7 @@ int HttpNetworkTransaction::RestartWithAuth(
     DCHECK(stream_request_ != NULL);
     auth_controllers_[target] = NULL;
     ResetStateForRestart();
-    rv = stream_request_->RestartTunnelWithProxyAuth(username, password);
+    rv = stream_request_->RestartTunnelWithProxyAuth(credentials);
   } else {
     // In this case, we've gathered credentials for the server or the proxy
     // but it is not during the tunneling phase.
@@ -243,7 +235,7 @@ int HttpNetworkTransaction::RestartWithAuth(
   }
 
   if (rv == ERR_IO_PENDING)
-    user_callback_ = callback;
+    callback_ = callback;
   return rv;
 }
 
@@ -306,7 +298,7 @@ bool HttpNetworkTransaction::IsReadyToRestartForAuth() {
 }
 
 int HttpNetworkTransaction::Read(IOBuffer* buf, int buf_len,
-                                 CompletionCallback* callback) {
+                                 const CompletionCallback& callback) {
   DCHECK(buf);
   DCHECK_LT(0, buf_len);
 
@@ -340,7 +332,7 @@ int HttpNetworkTransaction::Read(IOBuffer* buf, int buf_len,
   next_state_ = next_state;
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
-    user_callback_ = callback;
+    callback_ = callback;
   return rv;
 }
 
@@ -385,6 +377,8 @@ void HttpNetworkTransaction::OnStreamReady(const SSLConfig& used_ssl_config,
   server_ssl_config_ = used_ssl_config;
   proxy_info_ = used_proxy_info;
   response_.was_npn_negotiated = stream_request_->was_npn_negotiated();
+  response_.npn_negotiated_protocol = SSLClientSocket::NextProtoToString(
+      stream_request_->protocol_negotiated());
   response_.was_fetched_via_spdy = stream_request_->using_spdy();
   response_.was_fetched_via_proxy = !proxy_info_.is_direct();
 
@@ -476,12 +470,12 @@ bool HttpNetworkTransaction::is_https_request() const {
 
 void HttpNetworkTransaction::DoCallback(int rv) {
   DCHECK_NE(rv, ERR_IO_PENDING);
-  DCHECK(user_callback_);
+  DCHECK(!callback_.is_null());
 
   // Since Run may result in Read being called, clear user_callback_ up front.
-  CompletionCallback* c = user_callback_;
-  user_callback_ = NULL;
-  c->Run(rv);
+  CompletionCallback c = callback_;
+  callback_.Reset();
+  c.Run(rv);
 }
 
 void HttpNetworkTransaction::OnIOComplete(int result) {
@@ -622,7 +616,7 @@ int HttpNetworkTransaction::DoCreateStreamComplete(int result) {
 int HttpNetworkTransaction::DoInitStream() {
   DCHECK(stream_.get());
   next_state_ = STATE_INIT_STREAM_COMPLETE;
-  return stream_->InitializeStream(request_, net_log_, &io_callback_);
+  return stream_->InitializeStream(request_, net_log_, io_callback_);
 }
 
 int HttpNetworkTransaction::DoInitStreamComplete(int result) {
@@ -651,7 +645,7 @@ int HttpNetworkTransaction::DoGenerateProxyAuthToken() {
                                session_->http_auth_cache(),
                                session_->http_auth_handler_factory());
   return auth_controllers_[target]->MaybeGenerateAuthToken(request_,
-                                                           &io_callback_,
+                                                           io_callback_,
                                                            net_log_);
 }
 
@@ -674,7 +668,7 @@ int HttpNetworkTransaction::DoGenerateServerAuthToken() {
   if (!ShouldApplyServerAuth())
     return OK;
   return auth_controllers_[target]->MaybeGenerateAuthToken(request_,
-                                                           &io_callback_,
+                                                           io_callback_,
                                                            net_log_);
 }
 
@@ -768,7 +762,7 @@ int HttpNetworkTransaction::DoSendRequest() {
   next_state_ = STATE_SEND_REQUEST_COMPLETE;
 
   return stream_->SendRequest(
-      request_headers_, request_body_.release(), &response_, &io_callback_);
+      request_headers_, request_body_.release(), &response_, io_callback_);
 }
 
 int HttpNetworkTransaction::DoSendRequestComplete(int result) {
@@ -780,7 +774,7 @@ int HttpNetworkTransaction::DoSendRequestComplete(int result) {
 
 int HttpNetworkTransaction::DoReadHeaders() {
   next_state_ = STATE_READ_HEADERS_COMPLETE;
-  return stream_->ReadResponseHeaders(&io_callback_);
+  return stream_->ReadResponseHeaders(io_callback_);
 }
 
 int HttpNetworkTransaction::HandleConnectionClosedBeforeEndOfHeaders() {
@@ -864,7 +858,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   HostPortPair endpoint = HostPortPair(request_->url.HostNoBrackets(),
                                        request_->url.EffectiveIntPort());
   ProcessAlternateProtocol(session_->http_stream_factory(),
-                           session_->mutable_alternate_protocols(),
+                           session_->http_server_properties(),
                            *response_.headers,
                            endpoint);
 
@@ -885,7 +879,7 @@ int HttpNetworkTransaction::DoReadBody() {
   DCHECK(stream_ != NULL);
 
   next_state_ = STATE_READ_BODY_COMPLETE;
-  return stream_->ReadResponseBody(read_buf_, read_buf_len_, &io_callback_);
+  return stream_->ReadResponseBody(read_buf_, read_buf_len_, io_callback_);
 }
 
 int HttpNetworkTransaction::DoReadBodyComplete(int result) {
@@ -1196,10 +1190,30 @@ int HttpNetworkTransaction::HandleIOError(int error) {
     case ERR_CONNECTION_RESET:
     case ERR_CONNECTION_CLOSED:
     case ERR_CONNECTION_ABORTED:
+    // There can be a race between the socket pool checking checking whether a
+    // socket is still connected, receiving the FIN, and sending/reading data
+    // on a reused socket.  If we receive the FIN between the connectedness
+    // check and writing/reading from the socket, we may first learn the socket
+    // is disconnected when we get a ERR_SOCKET_NOT_CONNECTED.  This will most
+    // likely happen when trying to retrieve its IP address.
+    // See http://crbug.com/105824 for more details.
+    case ERR_SOCKET_NOT_CONNECTED:
       if (ShouldResendRequest(error)) {
+        net_log_.AddEvent(
+            NetLog::TYPE_HTTP_TRANSACTION_RESTART_AFTER_ERROR,
+            make_scoped_refptr(new NetLogIntegerParameter("net_error", error)));
         ResetConnectionAndRequestForResend();
         error = OK;
       }
+      break;
+    case ERR_PIPELINE_EVICTION:
+    case ERR_SPDY_PING_FAILED:
+    case ERR_SPDY_SERVER_REFUSED_STREAM:
+      net_log_.AddEvent(
+          NetLog::TYPE_HTTP_TRANSACTION_RESTART_AFTER_ERROR,
+          make_scoped_refptr(new NetLogIntegerParameter("net_error", error)));
+      ResetConnectionAndRequestForResend();
+      error = OK;
       break;
   }
   return error;

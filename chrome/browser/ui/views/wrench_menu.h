@@ -11,8 +11,10 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/bookmarks/base_bookmark_model_observer.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "ui/base/models/menu_model.h"
-#include "views/controls/menu/menu_delegate.h"
+#include "ui/views/controls/menu/menu_delegate.h"
 
 class BookmarkMenuDelegate;
 class Browser;
@@ -26,7 +28,8 @@ class View;
 
 // WrenchMenu adapts the WrenchMenuModel to view's menu related classes.
 class WrenchMenu : public views::MenuDelegate,
-                   public BaseBookmarkModelObserver {
+                   public BaseBookmarkModelObserver,
+                   public content::NotificationObserver {
  public:
   explicit WrenchMenu(Browser* browser);
   virtual ~WrenchMenu();
@@ -37,7 +40,7 @@ class WrenchMenu : public views::MenuDelegate,
   void RunMenu(views::MenuButton* host);
 
   // MenuDelegate overrides:
-  virtual std::wstring GetTooltipText(int id, const gfx::Point& p) OVERRIDE;
+  virtual string16 GetTooltipText(int id, const gfx::Point& p) const OVERRIDE;
   virtual bool IsTriggerableEvent(views::MenuItemView* menu,
                                   const views::MouseEvent& e) OVERRIDE;
   virtual bool GetDropFormats(
@@ -65,11 +68,16 @@ class WrenchMenu : public views::MenuDelegate,
   virtual bool IsItemChecked(int id) const OVERRIDE;
   virtual bool IsCommandEnabled(int id) const OVERRIDE;
   virtual void ExecuteCommand(int id, int mouse_event_flags) OVERRIDE;
-  virtual bool GetAccelerator(int id, views::Accelerator* accelerator) OVERRIDE;
+  virtual bool GetAccelerator(int id, ui::Accelerator* accelerator) OVERRIDE;
   virtual void WillShowMenu(views::MenuItemView* menu) OVERRIDE;
 
   // BaseBookmarkModelObserver overrides:
   virtual void BookmarkModelChanged() OVERRIDE;
+
+  // content::NotificationObserver overrides:
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  private:
   class CutCopyPasteView;
@@ -133,6 +141,8 @@ class WrenchMenu : public views::MenuDelegate,
 
   // ID to use for the items representing bookmarks in the bookmark menu.
   int first_bookmark_command_id_;
+
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(WrenchMenu);
 };

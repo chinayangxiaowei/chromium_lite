@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,19 +7,6 @@
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/shell_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-namespace {
-class BrowserDistributionTest : public testing::Test {
- protected:
-  virtual void SetUp() {
-    // Currently no setup required.
-  }
-
-  virtual void TearDown() {
-    // Currently no tear down required.
-  }
-};
-}  // namespace
 
 // The distribution strings should not be empty. The unit tests are not linking
 // with the chrome resources so we cannot test official build.
@@ -43,10 +30,21 @@ TEST(BrowserDistributionTest, StringsTest) {
 TEST(BrowserDistributionTest, AlternateAndNormalShortcutName) {
   std::wstring normal_name;
   std::wstring alternate_name;
+  std::wstring appended_name_one;
+  std::wstring appended_name_two;
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, &normal_name, false));
-  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, &alternate_name, true));
+  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, false, L"",
+                                               &normal_name));
+  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, true, L"",
+                                               &alternate_name));
+  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, true, L"Sparky",
+                                               &appended_name_one));
+  EXPECT_TRUE(ShellUtil::GetChromeShortcutName(dist, true, L"Sparkles",
+                                               &appended_name_two));
   EXPECT_NE(normal_name, alternate_name);
+  EXPECT_NE(appended_name_one, appended_name_two);
   EXPECT_FALSE(normal_name.empty());
   EXPECT_FALSE(alternate_name.empty());
+  EXPECT_FALSE(appended_name_one.empty());
+  EXPECT_FALSE(appended_name_two.empty());
 }

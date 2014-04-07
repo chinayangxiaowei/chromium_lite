@@ -11,17 +11,17 @@
 #include "ppapi/c/pp_file_info.h"
 #include "ppapi/c/ppb_file_io.h"
 #include "ppapi/c/private/ppb_flash_file.h"
+#include "ppapi/shared_impl/file_type_conversion.h"
 #include "ppapi/shared_impl/time_conversion.h"
 #include "ppapi/thunk/enter.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/file_path.h"
-#include "webkit/plugins/ppapi/file_type_conversions.h"
+#include "webkit/plugins/ppapi/host_globals.h"
 #include "webkit/plugins/ppapi/plugin_delegate.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/ppb_file_ref_impl.h"
 #include "webkit/plugins/ppapi/resource_helper.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
 
 #if defined(OS_WIN)
 #include "base/utf_string_conversions.h"
@@ -63,10 +63,12 @@ int32_t OpenModuleLocalFile(PP_Instance pp_instance,
                             int32_t mode,
                             PP_FileHandle* file) {
   int flags = 0;
-  if (!path || !PepperFileOpenFlagsToPlatformFileFlags(mode, &flags) || !file)
+  if (!path ||
+      !::ppapi::PepperFileOpenFlagsToPlatformFileFlags(mode, &flags) ||
+      !file)
     return PP_ERROR_BADARGUMENT;
 
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
@@ -76,7 +78,7 @@ int32_t OpenModuleLocalFile(PP_Instance pp_instance,
       flags,
       &base_file);
   *file = base_file;
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t RenameModuleLocalFile(PP_Instance pp_instance,
@@ -85,14 +87,14 @@ int32_t RenameModuleLocalFile(PP_Instance pp_instance,
   if (!from_path || !to_path)
     return PP_ERROR_BADARGUMENT;
 
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
   base::PlatformFileError result = instance->delegate()->RenameFile(
       PepperFilePath::MakeModuleLocal(instance->module(), from_path),
       PepperFilePath::MakeModuleLocal(instance->module(), to_path));
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t DeleteModuleLocalFileOrDir(PP_Instance pp_instance,
@@ -101,27 +103,27 @@ int32_t DeleteModuleLocalFileOrDir(PP_Instance pp_instance,
   if (!path)
     return PP_ERROR_BADARGUMENT;
 
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
   base::PlatformFileError result = instance->delegate()->DeleteFileOrDir(
       PepperFilePath::MakeModuleLocal(instance->module(), path),
       PPBoolToBool(recursive));
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t CreateModuleLocalDir(PP_Instance pp_instance, const char* path) {
   if (!path)
     return PP_ERROR_BADARGUMENT;
 
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
   base::PlatformFileError result = instance->delegate()->CreateDir(
       PepperFilePath::MakeModuleLocal(instance->module(), path));
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t QueryModuleLocalFile(PP_Instance pp_instance,
@@ -130,7 +132,7 @@ int32_t QueryModuleLocalFile(PP_Instance pp_instance,
   if (!path || !info)
     return PP_ERROR_BADARGUMENT;
 
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
@@ -149,7 +151,7 @@ int32_t QueryModuleLocalFile(PP_Instance pp_instance,
     else
       info->type = PP_FILETYPE_REGULAR;
   }
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t GetModuleLocalDirContents(PP_Instance pp_instance,
@@ -157,7 +159,7 @@ int32_t GetModuleLocalDirContents(PP_Instance pp_instance,
                                   PP_DirContents_Dev** contents) {
   if (!path || !contents)
     return PP_ERROR_BADARGUMENT;
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance);
   if (!instance)
     return PP_ERROR_FAILED;
 
@@ -168,7 +170,7 @@ int32_t GetModuleLocalDirContents(PP_Instance pp_instance,
       &pepper_contents);
 
   if (result != base::PLATFORM_FILE_OK)
-    return PlatformFileErrorToPepperError(result);
+    return ::ppapi::PlatformFileErrorToPepperError(result);
 
   *contents = new PP_DirContents_Dev;
   size_t count = pepper_contents.size();
@@ -218,7 +220,7 @@ int32_t OpenFileRefFile(PP_Resource file_ref_id,
                         int32_t mode,
                         PP_FileHandle* file) {
   int flags = 0;
-  if (!PepperFileOpenFlagsToPlatformFileFlags(mode, &flags) || !file)
+  if (!::ppapi::PepperFileOpenFlagsToPlatformFileFlags(mode, &flags) || !file)
     return PP_ERROR_BADARGUMENT;
 
   EnterResource<PPB_FileRef_API> enter(file_ref_id, true);
@@ -236,7 +238,7 @@ int32_t OpenFileRefFile(PP_Resource file_ref_id,
       flags,
       &base_file);
   *file = base_file;
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 int32_t QueryFileRefFile(PP_Resource file_ref_id,
@@ -265,7 +267,7 @@ int32_t QueryFileRefFile(PP_Resource file_ref_id,
     else
       info->type = PP_FILETYPE_REGULAR;
   }
-  return PlatformFileErrorToPepperError(result);
+  return ::ppapi::PlatformFileErrorToPepperError(result);
 }
 
 const PPB_Flash_File_FileRef ppb_flash_file_fileref = {

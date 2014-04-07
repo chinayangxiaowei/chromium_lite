@@ -13,18 +13,17 @@
 #include "chrome/common/safe_browsing/safebrowsing_messages.h"
 #include "chrome/renderer/safe_browsing/features.h"
 #include "chrome/renderer/safe_browsing/phishing_classifier.h"
-#include "chrome/renderer/safe_browsing/render_view_fake_resources_test.h"
 #include "chrome/renderer/safe_browsing/scorer.h"
-#include "content/renderer/render_view.h"
+#include "content/public/renderer/render_view.h"
+#include "content/test/render_view_fake_resources_test.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebHistoryItem.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLRequest.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURL.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 
 using ::testing::_;
-using ::testing::DeleteArg;
 using ::testing::InSequence;
 using ::testing::Mock;
 using ::testing::Pointee;
@@ -35,12 +34,12 @@ namespace safe_browsing {
 namespace {
 class MockPhishingClassifier : public PhishingClassifier {
  public:
-  explicit MockPhishingClassifier(RenderView* render_view)
+  explicit MockPhishingClassifier(content::RenderView* render_view)
       : PhishingClassifier(render_view, NULL /* clock */) {}
 
   virtual ~MockPhishingClassifier() {}
 
-  MOCK_METHOD2(BeginClassification, void(const string16*, DoneCallback*));
+  MOCK_METHOD2(BeginClassification, void(const string16*, const DoneCallback&));
   MOCK_METHOD0(CancelPendingClassification, void());
 
  private:
@@ -101,9 +100,9 @@ class PhishingClassifierDelegateTest : public RenderViewFakeResourcesTest {
 
 TEST_F(PhishingClassifierDelegateTest, Navigation) {
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   ASSERT_TRUE(classifier->is_ready());
@@ -119,8 +118,7 @@ TEST_F(PhishingClassifierDelegateTest, Navigation) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-        WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }
@@ -172,8 +170,7 @@ TEST_F(PhishingClassifierDelegateTest, Navigation) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-        WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }
@@ -228,9 +225,9 @@ TEST_F(PhishingClassifierDelegateTest, Navigation) {
 TEST_F(PhishingClassifierDelegateTest, NoScorer) {
   // For this test, we'll create the delegate with no scorer available yet.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   ASSERT_FALSE(classifier->is_ready());
 
   // Queue up a pending classification, cancel it, then queue up another one.
@@ -247,8 +244,7 @@ TEST_F(PhishingClassifierDelegateTest, NoScorer) {
   // Now set a scorer, which should cause a classifier to be created and
   // the classification to proceed.
   page_text = ASCIIToUTF16("dummy2");
-  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-      WillOnce(DeleteArg<1>());
+  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   Mock::VerifyAndClearExpectations(classifier);
@@ -267,9 +263,9 @@ TEST_F(PhishingClassifierDelegateTest, NoScorer_Ref) {
   // Similar to the last test, but navigates within the page before
   // setting the scorer.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   ASSERT_FALSE(classifier->is_ready());
 
   // Queue up a pending classification, cancel it, then queue up another one.
@@ -286,8 +282,7 @@ TEST_F(PhishingClassifierDelegateTest, NoScorer_Ref) {
   // Now set a scorer, which should cause a classifier to be created and
   // the classification to proceed.
   page_text = ASCIIToUTF16("dummy");
-  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-      WillOnce(DeleteArg<1>());
+  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   Mock::VerifyAndClearExpectations(classifier);
@@ -300,9 +295,9 @@ TEST_F(PhishingClassifierDelegateTest, NoStartPhishingDetection) {
   // Tests the behavior when OnStartPhishingDetection has not yet been called
   // when the page load finishes.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   ASSERT_TRUE(classifier->is_ready());
@@ -318,8 +313,7 @@ TEST_F(PhishingClassifierDelegateTest, NoStartPhishingDetection) {
   // Now simulate the StartPhishingDetection IPC.  We expect classification
   // to begin.
   page_text = ASCIIToUTF16("phish");
-  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-      WillOnce(DeleteArg<1>());
+  EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
   OnStartPhishingDetection(delegate, GURL("http://host.com/"));
   Mock::VerifyAndClearExpectations(classifier);
 
@@ -361,8 +355,7 @@ TEST_F(PhishingClassifierDelegateTest, NoStartPhishingDetection) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _))
-        .WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }
@@ -374,9 +367,9 @@ TEST_F(PhishingClassifierDelegateTest, NoStartPhishingDetection) {
 TEST_F(PhishingClassifierDelegateTest, IgnorePreliminaryCapture) {
   // Tests that preliminary PageCaptured notifications are ignored.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   ASSERT_TRUE(classifier->is_ready());
@@ -394,8 +387,7 @@ TEST_F(PhishingClassifierDelegateTest, IgnorePreliminaryCapture) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-        WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }
@@ -408,9 +400,9 @@ TEST_F(PhishingClassifierDelegateTest, DuplicatePageCapture) {
   // Tests that a second PageCaptured notification causes classification to
   // be cancelled.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   ASSERT_TRUE(classifier->is_ready());
@@ -424,8 +416,7 @@ TEST_F(PhishingClassifierDelegateTest, DuplicatePageCapture) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-        WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }
@@ -443,9 +434,9 @@ TEST_F(PhishingClassifierDelegateTest, PhishingDetectionDone) {
   // Tests that a PhishingDetectionDone IPC is sent to the browser
   // whenever we finish classification.
   MockPhishingClassifier* classifier =
-      new StrictMock<MockPhishingClassifier>(view_);
+      new StrictMock<MockPhishingClassifier>(view());
   PhishingClassifierDelegate* delegate =
-      PhishingClassifierDelegate::Create(view_, classifier);
+      PhishingClassifierDelegate::Create(view(), classifier);
   MockScorer scorer;
   delegate->SetPhishingScorer(&scorer);
   ASSERT_TRUE(classifier->is_ready());
@@ -460,8 +451,7 @@ TEST_F(PhishingClassifierDelegateTest, PhishingDetectionDone) {
   {
     InSequence s;
     EXPECT_CALL(*classifier, CancelPendingClassification());
-    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _)).
-        WillOnce(DeleteArg<1>());
+    EXPECT_CALL(*classifier, BeginClassification(Pointee(page_text), _));
     delegate->PageCaptured(&page_text, false);
     Mock::VerifyAndClearExpectations(classifier);
   }

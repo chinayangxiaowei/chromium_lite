@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,29 +8,29 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
-#include "base/values.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/policy/browser_policy_connector.h"
-#include "chrome/browser/policy/cloud_policy_provider.h"
 #include "chrome/browser/policy/enterprise_metrics.h"
 #include "chrome/browser/policy/policy_map.h"
 #include "chrome/browser/policy/proto/cloud_policy.pb.h"
 #include "chrome/browser/policy/proto/device_management_local.pb.h"
 #include "chrome/browser/policy/proto/old_generic_format.pb.h"
-#include "policy/configuration_policy_type.h"
+
+namespace em = enterprise_management;
 
 namespace policy {
 
-// Decodes a CloudPolicySettings object into two maps with mandatory and
-// recommended settings, respectively. The implementation is generated code
-// in policy/cloud_policy_generated.cc.
-void DecodePolicy(const em::CloudPolicySettings& policy,
-                  PolicyMap* mandatory, PolicyMap* recommended);
+// Decodes a CloudPolicySettings object into a PolicyMap. All the policies will
+// be POLICY_SCOPE_USER. The PolicyLevel is decoded from the protobuf.
+// The implementation is generated code in policy/cloud_policy_generated.cc.
+void DecodePolicy(const em::CloudPolicySettings& policy, PolicyMap* map);
 
-UserPolicyCache::UserPolicyCache(const FilePath& backing_file_path)
-    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)) {
+UserPolicyCache::UserPolicyCache(const FilePath& backing_file_path,
+                                 bool wait_for_policy_fetch)
+    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_ptr_factory_(this)),
+      disk_cache_ready_(false),
+      fetch_ready_(!wait_for_policy_fetch) {
   disk_cache_ = new UserPolicyDiskCache(weak_ptr_factory_.GetWeakPtr(),
                                         backing_file_path);
 }
@@ -73,6 +73,14 @@ void UserPolicyCache::SetUnmanaged() {
   disk_cache_->Store(cached_policy);
 }
 
+void UserPolicyCache::SetFetchingDone() {
+  CloudPolicyCacheBase::SetFetchingDone();
+  if (!fetch_ready_)
+    DVLOG(1) << "SetFetchingDone, cache is now fetch_ready_";
+  fetch_ready_ = true;
+  CheckIfReady();
+}
+
 void UserPolicyCache::OnDiskCacheLoaded(
     UserPolicyDiskCache::LoadResult result,
     const em::CachedCloudPolicyResponse& cached_response) {
@@ -90,12 +98,12 @@ void UserPolicyCache::OnDiskCacheLoaded(
   }
 
   // Ready to feed policy up the chain!
-  SetReady();
+  disk_cache_ready_ = true;
+  CheckIfReady();
 }
 
 bool UserPolicyCache::DecodePolicyData(const em::PolicyData& policy_data,
-                                       PolicyMap* mandatory,
-                                       PolicyMap* recommended) {
+                                       PolicyMap* policies) {
   // TODO(jkummerow): Verify policy_data.device_token(). Needs final
   // specification which token we're actually sending / expecting to get back.
   em::CloudPolicySettings policy;
@@ -103,9 +111,14 @@ bool UserPolicyCache::DecodePolicyData(const em::PolicyData& policy_data,
     LOG(WARNING) << "Failed to parse CloudPolicySettings protobuf.";
     return false;
   }
-  DecodePolicy(policy, mandatory, recommended);
-  MaybeDecodeOldstylePolicy(policy_data.policy_value(), mandatory, recommended);
+  DecodePolicy(policy, policies);
+  MaybeDecodeOldstylePolicy(policy_data.policy_value(), policies);
   return true;
+}
+
+void UserPolicyCache::CheckIfReady() {
+  if (!IsReady() && disk_cache_ready_ && fetch_ready_)
+    SetReady();
 }
 
 // Everything below is only needed for supporting old-style GenericNamedValue
@@ -114,29 +127,11 @@ bool UserPolicyCache::DecodePolicyData(const em::PolicyData& policy_data,
 using google::protobuf::RepeatedField;
 using google::protobuf::RepeatedPtrField;
 
-class PolicyMapProxy : public ConfigurationPolicyStoreInterface {
- public:
-  // Does not take ownership of |policy_map|, and callers need to make sure
-  // that |policy_map| outlives this PolicyMapProxy.
-  explicit PolicyMapProxy(PolicyMap* policy_map)
-      : policy_map_(policy_map) {}
-  virtual ~PolicyMapProxy() {}
-  virtual void Apply(ConfigurationPolicyType policy, Value* value) {
-    policy_map_->Set(policy, value);
-  }
-
- private:
-  PolicyMap* policy_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyMapProxy);
-};
-
 void UserPolicyCache::MaybeDecodeOldstylePolicy(
     const std::string& policy_data,
-    PolicyMap* mandatory,
-    PolicyMap* recommended) {
+    PolicyMap* policies) {
   // Return immediately if we already have policy information in the maps.
-  if (!mandatory->empty() || !recommended->empty())
+  if (!policies->empty())
     return;
   em::LegacyChromeSettingsProto policy;
   // Return if the input string doesn't match the protobuf definition.
@@ -158,11 +153,7 @@ void UserPolicyCache::MaybeDecodeOldstylePolicy(
         result.Set(named_value->name(), decoded_value);
     }
   }
-  // Hack: Let one of the providers do the transformation from DictionaryValue
-  // to PolicyMap, since they have the required code anyway.
-  PolicyMapProxy map_proxy(mandatory);
-  g_browser_process->browser_policy_connector()->GetManagedCloudProvider()->
-      ApplyPolicyValueTree(&result, &map_proxy);
+  policies->LoadFrom(&result, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER);
 }
 
 Value* UserPolicyCache::DecodeIntegerValue(

@@ -13,6 +13,10 @@
 #include "base/logging.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if defined(OS_ANDROID)
+#include "base/os_compat_android.h"
+#endif
+
 namespace base {
 
 TEST(DirReaderPosixUnittest, Read) {
@@ -23,10 +27,10 @@ TEST(DirReaderPosixUnittest, Read) {
 
   char kDirTemplate[] = "/tmp/org.chromium.dir-reader-posix-XXXXXX";
   const char* dir = mkdtemp(kDirTemplate);
-  CHECK(dir);
+  ASSERT_TRUE(dir);
 
   const int prev_wd = open(".", O_RDONLY | O_DIRECTORY);
-  CHECK_GE(prev_wd, 0);
+  DCHECK_GE(prev_wd, 0);
 
   PCHECK(chdir(dir) == 0);
 

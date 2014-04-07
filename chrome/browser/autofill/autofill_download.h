@@ -13,23 +13,18 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/scoped_vector.h"
 #include "base/time.h"
 #include "chrome/browser/autofill/autofill_type.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/common/url_fetcher_delegate.h"
 
 class AutofillMetrics;
 class FormStructure;
-class GURL;
 class Profile;
 
-namespace net {
-class URLRequestStatus;
-}
-
 // Handles getting and updating Autofill heuristics.
-class AutofillDownloadManager : public URLFetcher::Delegate {
+class AutofillDownloadManager : public content::URLFetcherDelegate {
  public:
   enum AutofillRequestType {
     REQUEST_QUERY,
@@ -37,38 +32,36 @@ class AutofillDownloadManager : public URLFetcher::Delegate {
   };
 
   // An interface used to notify clients of AutofillDownloadManager.
-  // Notifications are *not* guaranteed to be called.
   class Observer {
    public:
     // Called when field type predictions are successfully received from the
-    // server.
-    // |response_xml| - server response.
+    // server.  |response_xml| contains the server response.
     virtual void OnLoadedServerPredictions(const std::string& response_xml) = 0;
+
+    // These notifications are used to help with testing.
     // Called when heuristic either successfully considered for upload and
     // not send or uploaded.
-    virtual void OnUploadedPossibleFieldTypes() = 0;
+    virtual void OnUploadedPossibleFieldTypes() {}
     // Called when there was an error during the request.
     // |form_signature| - the signature of the requesting form.
     // |request_type| - type of request that failed.
     // |http_error| - HTTP error code.
     virtual void OnServerRequestError(const std::string& form_signature,
                                       AutofillRequestType request_type,
-                                      int http_error) = 0;
+                                      int http_error) {}
+
    protected:
     virtual ~Observer() {}
   };
 
-  // |profile| can be NULL in unit-tests only.
-  explicit AutofillDownloadManager(Profile* profile);
-  virtual ~AutofillDownloadManager();
-
   // |observer| - observer to notify on successful completion or error.
-  void SetObserver(AutofillDownloadManager::Observer* observer);
+  AutofillDownloadManager(Profile* profile, Observer* observer);
+  virtual ~AutofillDownloadManager();
 
   // Starts a query request to Autofill servers. The observer is called with the
   // list of the fields of all requested forms.
   // |forms| - array of forms aggregated in this request.
-  bool StartQueryRequest(const ScopedVector<FormStructure>& forms,
+  bool StartQueryRequest(const std::vector<FormStructure*>& forms,
                          const AutofillMetrics& metric_logger);
 
   // Starts an upload request for the given |form|, unless throttled by the
@@ -82,16 +75,8 @@ class AutofillDownloadManager : public URLFetcher::Delegate {
                           bool form_was_autofilled,
                           const FieldTypeSet& available_field_types);
 
-  // Cancels pending request.
-  // |form_signature| - signature of the form being cancelled. Warning:
-  // for query request if more than one form sent in the request, all other
-  // forms will be cancelled as well.
-  // |request_type| - type of the request.
-  bool CancelRequest(const std::string& form_signature,
-                     AutofillRequestType request_type);
-
  private:
-  friend class AutofillDownloadTestHelper;  // unit-test.
+  friend class AutofillDownloadTest;
   FRIEND_TEST_ALL_PREFIXES(AutofillDownloadTest, QueryAndUploadTest);
 
   struct FormRequestData;
@@ -125,13 +110,8 @@ class AutofillDownloadManager : public URLFetcher::Delegate {
   std::string GetCombinedSignature(
       const std::vector<std::string>& forms_in_query) const;
 
-  // URLFetcher::Delegate implementation:
-  virtual void OnURLFetchComplete(const URLFetcher* source,
-                                  const GURL& url,
-                                  const net::URLRequestStatus& status,
-                                  int response_code,
-                                  const net::ResponseCookies& cookies,
-                                  const std::string& data);
+  // content::URLFetcherDelegate implementation:
+  virtual void OnURLFetchComplete(const content::URLFetcher* source) OVERRIDE;
 
   // Probability of the form upload. Between 0 (no upload) and 1 (upload all).
   // GetPositiveUploadRate() is for matched forms,
@@ -141,14 +121,18 @@ class AutofillDownloadManager : public URLFetcher::Delegate {
   void SetPositiveUploadRate(double rate);
   void SetNegativeUploadRate(double rate);
 
-  // Profile for preference storage.
-  Profile* profile_;
+  // Profile for preference storage.  The pointer value is const, so this can
+  // only be set in the constructor.  Must not be null.
+  Profile* const profile_;  // WEAK
+  // The observer to notify when server predictions are successfully received.
+  // The pointer value is const, so this can only be set in the constructor.
+  // Must not be null.
+  AutofillDownloadManager::Observer* const observer_;  // WEAK
 
   // For each requested form for both query and upload we create a separate
   // request and save its info. As url fetcher is identified by its address
   // we use a map between fetchers and info.
-  std::map<URLFetcher*, FormRequestData> url_fetchers_;
-  AutofillDownloadManager::Observer *observer_;
+  std::map<content::URLFetcher*, FormRequestData> url_fetchers_;
 
   // Cached QUERY requests.
   QueryRequestCache cached_forms_;
@@ -170,4 +154,3 @@ class AutofillDownloadManager : public URLFetcher::Delegate {
 };
 
 #endif  // CHROME_BROWSER_AUTOFILL_AUTOFILL_DOWNLOAD_H_
-

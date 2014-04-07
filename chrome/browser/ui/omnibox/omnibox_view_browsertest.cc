@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #include "chrome/browser/autocomplete/autocomplete_edit.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
+#include "chrome/browser/autocomplete/history_quick_provider.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/history/history.h"
@@ -30,8 +31,8 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/web_contents.h"
 #include "net/base/mock_host_resolver.h"
 #include "ui/base/events.h"
 #include "ui/base/keycodes/keyboard_codes.h"
@@ -42,9 +43,9 @@
 #endif
 
 #if defined(TOOLKIT_VIEWS)
-#include "views/controls/textfield/native_textfield_views.h"
-#include "views/events/event.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/textfield/native_textfield_views.h"
+#include "ui/views/events/event.h"
+#include "ui/views/widget/widget.h"
 #endif
 
 using base::Time;
@@ -146,22 +147,27 @@ const int kCtrlOrCmdMask = ui::EF_CONTROL_DOWN;
 }  // namespace
 
 class OmniboxViewTest : public InProcessBrowserTest,
-                        public NotificationObserver {
+                        public content::NotificationObserver {
  protected:
-  OmniboxViewTest() {
+  OmniboxViewTest()
+      : location_bar_focus_view_id_(VIEW_ID_LOCATION_BAR) {
     set_show_window(true);
+    // TODO(mrossetti): HQP does not yet support DeleteMatch.
+    // http://crbug.com/82335
+    HistoryQuickProvider::set_disabled(true);
   }
 
   virtual void SetUpOnMainThread() {
     ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
     ASSERT_NO_FATAL_FAILURE(SetupComponents());
     browser()->FocusLocationBar();
+    // Use Textfield's view id on pure views. See crbug.com/71144.
 #if defined(TOOLKIT_VIEWS)
     if (views::Widget::IsPureViews())
-      return;
+      location_bar_focus_view_id_ = VIEW_ID_OMNIBOX;
 #endif
     ASSERT_TRUE(ui_test_utils::IsViewFocused(browser(),
-                                             VIEW_ID_LOCATION_BAR));
+                                             location_bar_focus_view_id_));
   }
 
   static void GetOmniboxViewForBrowser(
@@ -203,7 +209,8 @@ class OmniboxViewTest : public InProcessBrowserTest,
                       ui::KeyboardCode key,
                       int modifiers,
                       int type,
-                      const NotificationSource& source) WARN_UNUSED_RESULT {
+                      const content::NotificationSource& source)
+                          WARN_UNUSED_RESULT {
     return ui_test_utils::SendKeyPressAndWait(
         browser, key,
         (modifiers & ui::EF_CONTROL_DOWN) != 0,
@@ -219,12 +226,12 @@ class OmniboxViewTest : public InProcessBrowserTest,
     if (tab_count == expected_tab_count)
       return;
 
-    NotificationRegistrar registrar;
+    content::NotificationRegistrar registrar;
     registrar.Add(this,
                   (tab_count < expected_tab_count ?
                    content::NOTIFICATION_TAB_PARENTED :
                    content::NOTIFICATION_TAB_CLOSED),
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
 
     while (!HasFailure() && browser->tab_count() != expected_tab_count)
       ui_test_utils::RunMessageLoop();
@@ -247,10 +254,10 @@ class OmniboxViewTest : public InProcessBrowserTest,
     if (controller->done())
       return;
 
-    NotificationRegistrar registrar;
+    content::NotificationRegistrar registrar;
     registrar.Add(this,
                   chrome::NOTIFICATION_AUTOCOMPLETE_CONTROLLER_RESULT_READY,
-                  Source<AutocompleteController>(controller));
+                  content::Source<AutocompleteController>(controller));
 
     while (!HasFailure() && !controller->done())
       ui_test_utils::RunMessageLoop();
@@ -264,9 +271,9 @@ class OmniboxViewTest : public InProcessBrowserTest,
     ASSERT_TRUE(model);
 
     if (!model->loaded()) {
-      NotificationRegistrar registrar;
+      content::NotificationRegistrar registrar;
       registrar.Add(this, chrome::NOTIFICATION_TEMPLATE_URL_SERVICE_LOADED,
-                    Source<TemplateURLService>(model));
+                    content::Source<TemplateURLService>(model));
       model->Load();
       ui_test_utils::RunMessageLoop();
     }
@@ -296,9 +303,9 @@ class OmniboxViewTest : public InProcessBrowserTest,
     ASSERT_TRUE(history_service);
 
     if (!history_service->BackendLoaded()) {
-      NotificationRegistrar registrar;
+      content::NotificationRegistrar registrar;
       registrar.Add(this, chrome::NOTIFICATION_HISTORY_LOADED,
-                    Source<Profile>(profile));
+                    content::Source<Profile>(profile));
       ui_test_utils::RunMessageLoop();
     }
 
@@ -306,9 +313,9 @@ class OmniboxViewTest : public InProcessBrowserTest,
     ASSERT_TRUE(bookmark_model);
 
     if (!bookmark_model->IsLoaded()) {
-      NotificationRegistrar registrar;
+      content::NotificationRegistrar registrar;
       registrar.Add(this, chrome::NOTIFICATION_BOOKMARK_MODEL_LOADED,
-                    Source<Profile>(profile));
+                    content::Source<Profile>(profile));
       ui_test_utils::RunMessageLoop();
     }
 
@@ -347,8 +354,8 @@ class OmniboxViewTest : public InProcessBrowserTest,
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     switch (type) {
       case content::NOTIFICATION_TAB_PARENTED:
       case content::NOTIFICATION_TAB_CLOSED:
@@ -418,7 +425,8 @@ class OmniboxViewTest : public InProcessBrowserTest,
     // Try alt-f4 to close the browser.
     ASSERT_TRUE(SendKeyAndWait(
         browser(), ui::VKEY_F4, ui::EF_ALT_DOWN,
-        chrome::NOTIFICATION_BROWSER_CLOSED, Source<Browser>(browser())));
+        chrome::NOTIFICATION_BROWSER_CLOSED,
+        content::Source<Browser>(browser())));
 #endif
   }
 
@@ -439,7 +447,7 @@ class OmniboxViewTest : public InProcessBrowserTest,
     // No BROWSER_CLOSED notification will be sent.
     ASSERT_TRUE(SendKeyAndWait(
         popup, ui::VKEY_W, ui::EF_CONTROL_DOWN,
-        chrome::NOTIFICATION_BROWSER_CLOSED, Source<Browser>(popup)));
+        chrome::NOTIFICATION_BROWSER_CLOSED, content::Source<Browser>(popup)));
 
     // Create another popup.
     popup = CreateBrowserForPopup(browser()->profile());
@@ -467,7 +475,7 @@ class OmniboxViewTest : public InProcessBrowserTest,
     // Try alt-f4 to close the popup.
     ASSERT_TRUE(SendKeyAndWait(
         popup, ui::VKEY_F4, ui::EF_ALT_DOWN,
-        chrome::NOTIFICATION_BROWSER_CLOSED, Source<Browser>(popup)));
+        chrome::NOTIFICATION_BROWSER_CLOSED, content::Source<Browser>(popup)));
 #endif
   }
 
@@ -560,7 +568,7 @@ class OmniboxViewTest : public InProcessBrowserTest,
     // opened.
     ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_RETURN, ui::EF_CONTROL_DOWN));
 
-    GURL url = browser()->GetSelectedTabContents()->GetURL();
+    GURL url = browser()->GetSelectedWebContents()->GetURL();
     EXPECT_STREQ(kDesiredTLDHostname, url.host().c_str());
   }
 
@@ -592,7 +600,7 @@ class OmniboxViewTest : public InProcessBrowserTest,
 
     // Open the default match.
     ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_RETURN, 0));
-    GURL url = browser()->GetSelectedTabContents()->GetURL();
+    GURL url = browser()->GetSelectedWebContents()->GetURL();
     EXPECT_STREQ(kSearchTextURL, url.spec().c_str());
 
     // Test that entering a single character then Enter performs a search.
@@ -609,7 +617,7 @@ class OmniboxViewTest : public InProcessBrowserTest,
 
     // Open the default match.
     ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_RETURN, 0));
-    url = browser()->GetSelectedTabContents()->GetURL();
+    url = browser()->GetSelectedWebContents()->GetURL();
     EXPECT_STREQ(kSearchSingleCharURL, url.spec().c_str());
   }
 
@@ -751,20 +759,10 @@ class OmniboxViewTest : public InProcessBrowserTest,
     ASSERT_EQ(text, omnibox_view->model()->keyword());
     ASSERT_EQ(text, omnibox_view->GetText());
 
-    // Keyword shouldn't be accepted by pasting.
-    // Simulate pasting a whitespace to the end of content.
-    omnibox_view->OnBeforePossibleChange();
-    omnibox_view->model()->on_paste();
-    omnibox_view->SetWindowTextAndCaretPos(
-        text + char16(' '), text.length() + 1);
-    omnibox_view->OnAfterPossibleChange();
-    // Should be still in keyword hint mode.
-    ASSERT_TRUE(omnibox_view->model()->is_keyword_hint());
-    ASSERT_EQ(text, omnibox_view->model()->keyword());
-    ASSERT_EQ(text + char16(' '), omnibox_view->GetText());
-
     // Keyword shouldn't be accepted by pressing space with a trailing
     // whitespace.
+    omnibox_view->SetWindowTextAndCaretPos(
+        text + char16(' '), text.length() + 1);
     ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_SPACE, 0));
     ASSERT_TRUE(omnibox_view->model()->is_keyword_hint());
     ASSERT_EQ(text, omnibox_view->model()->keyword());
@@ -1042,7 +1040,8 @@ class OmniboxViewTest : public InProcessBrowserTest,
     EXPECT_EQ(omnibox_view->GetText().size(), end);
 
     // The location bar should still have focus.
-    ASSERT_TRUE(ui_test_utils::IsViewFocused(browser(), VIEW_ID_LOCATION_BAR));
+    ASSERT_TRUE(ui_test_utils::IsViewFocused(browser(),
+                                             location_bar_focus_view_id_));
 
     // Select all text.
     omnibox_view->SelectAll(true);
@@ -1059,12 +1058,14 @@ class OmniboxViewTest : public InProcessBrowserTest,
     EXPECT_EQ(omnibox_view->GetText().size(), end);
 
     // The location bar should still have focus.
-    ASSERT_TRUE(ui_test_utils::IsViewFocused(browser(), VIEW_ID_LOCATION_BAR));
+    ASSERT_TRUE(ui_test_utils::IsViewFocused(browser(),
+                                             location_bar_focus_view_id_));
 
     // Pressing tab when cursor is at the end should change focus.
     ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_TAB, 0));
 
-    ASSERT_FALSE(ui_test_utils::IsViewFocused(browser(), VIEW_ID_LOCATION_BAR));
+    ASSERT_FALSE(ui_test_utils::IsViewFocused(browser(),
+                                              location_bar_focus_view_id_));
   }
 
   void PersistKeywordModeOnTabSwitch() {
@@ -1117,6 +1118,8 @@ class OmniboxViewTest : public InProcessBrowserTest,
     EXPECT_EQ(old_text, omnibox_view->GetText());
   }
 
+ private:
+  ViewID location_bar_focus_view_id_;
 };
 
 // Test if ctrl-* accelerators are workable in omnibox.
@@ -1330,82 +1333,4 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewTest, FLAKY_PasteReplacingAll) {
   // Inline autocomplete shouldn't be triggered.
   ASSERT_EQ(ASCIIToUTF16("abc"), omnibox_view->GetText());
 }
-#endif
-
-// TODO(beng): enable on windows once it actually works.
-#if defined(TOOLKIT_VIEWS) && !defined(OS_WIN)
-class OmniboxViewViewsTest : public OmniboxViewTest {
- public:
-  OmniboxViewViewsTest() {
-    views::Widget::IsPureViews();
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest,
-                       FLAKY_BrowserAccelerators) {
-  BrowserAcceleratorsTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MAYBE_PopupAccelerators) {
-  PopupAcceleratorsTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, BackspaceInKeywordMode) {
-  BackspaceInKeywordModeTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, Escape) {
-  EscapeTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DesiredTLD) {
-  DesiredTLDTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AltEnter) {
-  AltEnterTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, EnterToSearch) {
-  EnterToSearchTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, EscapeToDefaultMatch) {
-  EscapeToDefaultMatchTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, BasicTextOperations) {
-  BasicTextOperationsTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AcceptKeywordBySpace) {
-  AcceptKeywordBySpaceTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest,
-                       NonSubstitutingKeywordTest) {
-  NonSubstitutingKeywordTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DeleteItem) {
-  DeleteItemTest();
-}
-
-// TODO(suzhe): This test is broken because of broken ViewID support when
-// enabling OmniboxViewViews.
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest,
-                       DISABLED_TabMoveCursorToEnd) {
-  TabMoveCursorToEndTest();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest,
-                       PersistKeywordModeOnTabSwitch) {
-  PersistKeywordModeOnTabSwitch();
-}
-
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest,
-                       CtrlKeyPressedWithInlineAutocompleteTest) {
-  CtrlKeyPressedWithInlineAutocompleteTest();
-}
-
 #endif

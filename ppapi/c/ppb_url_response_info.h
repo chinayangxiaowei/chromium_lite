@@ -1,9 +1,9 @@
-/* Copyright (c) 2011 The Chromium Authors. All rights reserved.
+/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-/* From ppb_url_response_info.idl modified Wed Aug 24 20:53:17 2011. */
+/* From ppb_url_response_info.idl modified Mon Nov 14 10:36:01 2011. */
 
 #ifndef PPAPI_C_PPB_URL_RESPONSE_INFO_H_
 #define PPAPI_C_PPB_URL_RESPONSE_INFO_H_
@@ -41,7 +41,7 @@ typedef enum {
    * <a href="http://www.w3.org/TR/html4/struct/links.html#h-12.4.1">
    * HTML Resolving Relative URIs</a> documentation for further information.
    */
-  PP_URLRESPONSEPROPERTY_URL,
+  PP_URLRESPONSEPROPERTY_URL = 0,
   /**
    * This corresponds to a string (PP_VARTYPE_STRING); the absolute URL returned
    * in the response header's 'Location' field if this is a redirect response,
@@ -49,7 +49,7 @@ typedef enum {
    * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.3">
    * HTTP Status Codes - Redirection</a> documentation for further information.
    */
-  PP_URLRESPONSEPROPERTY_REDIRECTURL,
+  PP_URLRESPONSEPROPERTY_REDIRECTURL = 1,
   /**
    * This corresponds to a string (PP_VARTYPE_STRING); the HTTP method to be
    * used in a new request if this is a redirect response, an empty string
@@ -57,7 +57,7 @@ typedef enum {
    * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.3">
    * HTTP Status Codes - Redirection</a> documentation for further information.
    */
-  PP_URLRESPONSEPROPERTY_REDIRECTMETHOD,
+  PP_URLRESPONSEPROPERTY_REDIRECTMETHOD = 2,
   /**
    * This corresponds to an int32 (PP_VARETYPE_INT32); the status code from the
    * response, e.g., 200 if the request was successful. Refer to the
@@ -65,14 +65,14 @@ typedef enum {
    * HTTP Status Code and Reason Phrase</a> documentation for further
    * information.
    */
-  PP_URLRESPONSEPROPERTY_STATUSCODE,
+  PP_URLRESPONSEPROPERTY_STATUSCODE = 3,
   /**
    * This corresponds to a string (PP_VARTYPE_STRING); the status line
    * from the response. Refer to the
    * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec6.html#sec6.1">
    * HTTP Response Status Line</a> documentation for further information.
    */
-  PP_URLRESPONSEPROPERTY_STATUSLINE,
+  PP_URLRESPONSEPROPERTY_STATUSLINE = 4,
   /**
    * This corresponds to a string(PP_VARTYPE_STRING), a \n-delimited list of
    * header field/value pairs of the form "field: value", returned by the
@@ -80,7 +80,7 @@ typedef enum {
    * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14">
    * HTTP Header Field Definitions</a> documentation for further information.
    */
-  PP_URLRESPONSEPROPERTY_HEADERS
+  PP_URLRESPONSEPROPERTY_HEADERS = 5
 } PP_URLResponseProperty;
 PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_URLResponseProperty, 4);
 /**
@@ -96,7 +96,7 @@ PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_URLResponseProperty, 4);
  * examining URL responses. Refer to <code>PPB_URLLoader</code> for further
  * information.
  */
-struct PPB_URLResponseInfo {
+struct PPB_URLResponseInfo_1_0 {
   /**
    * IsURLResponseInfo() determines if a response is a
    * <code>URLResponseInfo</code>.
@@ -139,6 +139,8 @@ struct PPB_URLResponseInfo {
    */
   PP_Resource (*GetBodyAsFileRef)(PP_Resource response);
 };
+
+typedef struct PPB_URLResponseInfo_1_0 PPB_URLResponseInfo;
 /**
  * @}
  */

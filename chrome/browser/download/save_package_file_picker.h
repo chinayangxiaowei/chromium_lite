@@ -6,21 +6,22 @@
 #define CHROME_BROWSER_DOWNLOAD_SAVE_PACKAGE_FILE_PICKER_H_
 #pragma once
 
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/shell_dialogs.h"
+#include "chrome/browser/ui/select_file_dialog.h"
+#include "content/public/browser/download_manager_delegate.h"
 
 class DownloadPrefs;
-class FilePath;
-class SavePackage;
 
 // Handles showing a dialog to the user to ask for the filename to save a page.
 class SavePackageFilePicker : public SelectFileDialog::Listener {
  public:
-  SavePackageFilePicker(const base::WeakPtr<SavePackage>& save_package,
+  SavePackageFilePicker(content::WebContents* web_contents,
                         const FilePath& suggested_path,
+                        const FilePath::StringType& default_extension,
                         bool can_save_as_complete,
-                        DownloadPrefs* download_prefs);
+                        DownloadPrefs* download_prefs,
+                        content::SaveFilePathPickedCallback callback);
   virtual ~SavePackageFilePicker();
 
   // Used to disable prompting the user for a directory/filename of the saved
@@ -29,10 +30,15 @@ class SavePackageFilePicker : public SelectFileDialog::Listener {
 
  private:
   // SelectFileDialog::Listener implementation.
-  virtual void FileSelected(const FilePath& path, int index, void* params);
-  virtual void FileSelectionCanceled(void* params);
+  virtual void FileSelected(const FilePath& path,
+                            int index,
+                            void* params) OVERRIDE;
+  virtual void FileSelectionCanceled(void* params) OVERRIDE;
 
-  base::WeakPtr<SavePackage> save_package_;
+  // Used to look up the renderer process for this request to get the context.
+  int render_process_id_;
+
+  content::SaveFilePathPickedCallback callback_;
 
   // For managing select file dialogs.
   scoped_refptr<SelectFileDialog> select_file_dialog_;

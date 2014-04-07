@@ -11,6 +11,7 @@ extern "C" {
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/message_loop.h"
 #include "base/process_util.h"
 #include "third_party/mesa/MesaLib/include/GL/osmesa.h"
 #include "ui/base/x/x11_util.h"
@@ -48,7 +49,7 @@ bool GLSurfaceGLX::InitializeOneOff() {
   if (initialized)
     return true;
 
-  g_display = XOpenDisplay(NULL);
+  g_display = base::MessagePumpForUI::GetDefaultXDisplay();
   if (!g_display) {
     LOG(ERROR) << "XOpenDisplay failed.";
     return false;
@@ -73,14 +74,12 @@ bool GLSurfaceGLX::InitializeOneOff() {
   return true;
 }
 
-Display* GLSurfaceGLX::GetDisplay() {
-  return g_display;
-}
-
+// static
 const char* GLSurfaceGLX::GetGLXExtensions() {
   return g_glx_extensions;
 }
 
+// static
 bool GLSurfaceGLX::HasGLXExtension(const char* name) {
   DCHECK(name);
   const char* c_extensions = GetGLXExtensions();
@@ -95,8 +94,13 @@ bool GLSurfaceGLX::HasGLXExtension(const char* name) {
   return extensions.find(delimited_name) != std::string::npos;
 }
 
+// static
 bool GLSurfaceGLX::IsCreateContextRobustnessSupported() {
   return g_glx_create_context_robustness_supported;
+}
+
+void* GLSurfaceGLX::GetDisplay() {
+  return g_display;
 }
 
 NativeViewGLSurfaceGLX::NativeViewGLSurfaceGLX(gfx::PluginWindowHandle window)
@@ -140,6 +144,15 @@ gfx::Size NativeViewGLSurfaceGLX::GetSize() {
 
 void* NativeViewGLSurfaceGLX::GetHandle() {
   return reinterpret_cast<void*>(window_);
+}
+
+std::string NativeViewGLSurfaceGLX::GetExtensions() {
+  std::string extensions = GLSurface::GetExtensions();
+  if (g_GLX_MESA_copy_sub_buffer) {
+    extensions += extensions.empty() ? "" : " ";
+    extensions += "GL_CHROMIUM_post_sub_buffer";
+  }
+  return extensions;
 }
 
 void* NativeViewGLSurfaceGLX::GetConfig() {
@@ -201,6 +214,13 @@ void* NativeViewGLSurfaceGLX::GetConfig() {
   }
 
   return config_;
+}
+
+bool NativeViewGLSurfaceGLX::PostSubBuffer(
+    int x, int y, int width, int height) {
+  DCHECK(g_GLX_MESA_copy_sub_buffer);
+  glXCopySubBufferMESA(g_display, window_, x, y, width, height);
+  return true;
 }
 
 PbufferGLSurfaceGLX::PbufferGLSurfaceGLX(const gfx::Size& size)

@@ -6,18 +6,18 @@
 #define CHROME_BROWSER_AUTOFILL_AUTOFILL_FEEDBACK_INFOBAR_DELEGATE_H_
 #pragma once
 
+#include <string>
+
 #include "base/basictypes.h"
 #include "base/string16.h"
 #include "chrome/browser/tab_contents/link_infobar_delegate.h"
 #include "webkit/glue/window_open_disposition.h"
 
-class TabContents;
-
 // An InfoBar delegate that prompts the user to provide additional feedback for
 // the Autofill developers.
 class AutofillFeedbackInfoBarDelegate : public LinkInfoBarDelegate {
  public:
-  AutofillFeedbackInfoBarDelegate(TabContents* tab_contents,
+  AutofillFeedbackInfoBarDelegate(InfoBarTabHelper* infobar_helper,
                                   const string16& message,
                                   const string16& link_text,
                                   const std::string& feedback_message);
@@ -30,8 +30,6 @@ class AutofillFeedbackInfoBarDelegate : public LinkInfoBarDelegate {
   virtual string16 GetLinkText() const OVERRIDE;
   virtual bool LinkClicked(WindowOpenDisposition disposition) OVERRIDE;
 
-  // The tab for the page with the form of interest.
-  TabContents* const tab_contents_;
   // The non-linked infobar text.
   const string16 message_;
   // The infobar link text.

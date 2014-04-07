@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <set>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/logging.h"
 #include "base/md5.h"
 #include "base/string_util.h"
@@ -25,15 +27,22 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/thumbnail_score.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/tab_contents/navigation_details.h"
-#include "content/browser/tab_contents/navigation_entry.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
+#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_util.h"
+
+using content::BrowserThread;
+using content::NavigationController;
 
 namespace history {
 
@@ -44,7 +53,6 @@ static const size_t kTopSitesNumber = 20;
 // temp_images_ for details.
 static const size_t kMaxTempTopImages = 8;
 
-static const size_t kTopSitesShown = 8;
 static const int kDaysOfHistory = 90;
 // Time from startup to first HistoryService query.
 static const int64 kUpdateIntervalSecs = 15;
@@ -52,22 +60,18 @@ static const int64 kUpdateIntervalSecs = 15;
 static const int64 kMinUpdateIntervalMinutes = 1;
 static const int64 kMaxUpdateIntervalMinutes = 60;
 
-// IDs of the sites we force into top sites.
-static const int kPrepopulatePageIDs[] =
-    { IDS_CHROME_WELCOME_URL, IDS_WEBSTORE_URL };
+// Use 100 quality (highest quality) because we're very sensitive to
+// artifacts for these small sized, highly detailed images.
+static const int kTopSitesImageQuality = 100;
 
-// Favicons of the sites we force into top sites.
-static const char kPrepopulateFaviconURLs[][100] =
-    { "chrome://theme/IDR_PRODUCT_LOGO_16",
-      "chrome://theme/IDR_WEBSTORE_ICON_16" };
-// Same as above, but for NTP4. TODO(estade): remove the above.
-static const char kNewPrepopulateFaviconURLs[][100] =
-    { "chrome://theme/IDR_PRODUCT_LOGO_32",
-      "chrome://theme/IDR_WEBSTORE_ICON_32" };
-
-static const int kPrepopulateTitleIDs[] =
-    { IDS_NEW_TAB_CHROME_WELCOME_PAGE_TITLE,
-      IDS_NEW_TAB_WEBSTORE_PAGE_TITLE };
+const TopSites::PrepopulatedPage kPrepopulatedPages[] = {
+  { IDS_CHROME_WELCOME_URL, IDS_NEW_TAB_CHROME_WELCOME_PAGE_TITLE,
+    IDR_PRODUCT_LOGO_16, IDR_NEWTAB_CHROME_WELCOME_PAGE_THUMBNAIL,
+    SkColorSetRGB(0, 147, 60) },
+  { IDS_WEBSTORE_URL, IDS_EXTENSION_WEB_STORE_TITLE,
+    IDR_WEBSTORE_ICON_16, IDR_NEWTAB_WEBSTORE_THUMBNAIL,
+    SkColorSetRGB(63, 132, 197) }
+};
 
 namespace {
 
@@ -144,11 +148,13 @@ TopSites::TopSites(Profile* profile)
   if (!profile_)
     return;
 
-  if (NotificationService::current()) {
+  if (content::NotificationService::current()) {
     registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
-                   Source<Profile>(profile_));
+                   content::Source<Profile>(profile_));
+    // Listen for any nav commits. We'll ignore those not related to this
+    // profile when we get the notification.
     registrar_.Add(this, content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
   }
 
   // We create update objects here to be sure that dictionaries are created
@@ -175,7 +181,8 @@ void TopSites::Init(const FilePath& db_name) {
   backend_->Init(db_name);
   backend_->GetMostVisitedThumbnails(
       &top_sites_consumer_,
-      NewCallback(this, &TopSites::OnGotMostVisitedThumbnails));
+      base::Bind(&TopSites::OnGotMostVisitedThumbnails,
+                 base::Unretained(this)));
 
   // History may have already finished loading by the time we're created.
   HistoryService* history = profile_->GetHistoryServiceWithoutCreating();
@@ -226,7 +233,7 @@ bool TopSites::SetPageThumbnail(const GURL& url,
 }
 
 void TopSites::GetMostVisitedURLs(CancelableRequestConsumer* consumer,
-                                  GetTopSitesCallback* callback) {
+                                  const GetTopSitesCallback& callback) {
   // WARNING: this may be invoked on any thread.
   scoped_refptr<CancelableRequest<GetTopSitesCallback> > request(
       new CancelableRequest<GetTopSitesCallback>(callback));
@@ -245,14 +252,28 @@ void TopSites::GetMostVisitedURLs(CancelableRequestConsumer* consumer,
 
     filtered_urls = thread_safe_cache_->top_sites();
   }
-  request->ForwardResult(GetTopSitesCallback::TupleType(filtered_urls));
+  request->ForwardResult(filtered_urls);
 }
 
 bool TopSites::GetPageThumbnail(const GURL& url,
-                                scoped_refptr<RefCountedBytes>* bytes) {
+                                scoped_refptr<RefCountedMemory>* bytes) {
   // WARNING: this may be invoked on any thread.
-  base::AutoLock lock(lock_);
-  return thread_safe_cache_->GetPageThumbnail(url, bytes);
+  {
+    base::AutoLock lock(lock_);
+    if (thread_safe_cache_->GetPageThumbnail(url, bytes))
+      return true;
+  }
+
+  // Resource bundle is thread safe.
+  for (size_t i = 0; i < arraysize(kPrepopulatedPages); i++) {
+    if (url.spec() == l10n_util::GetStringUTF8(kPrepopulatedPages[i].url_id)) {
+      *bytes = ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+          kPrepopulatedPages[i].thumbnail_id);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool TopSites::GetPageThumbnailScore(const GURL& url,
@@ -286,7 +307,11 @@ static int IndexOf(const MostVisitedURLList& urls, const GURL& url) {
 
 void TopSites::MigrateFromHistory() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK_EQ(history_state_, HISTORY_LOADING);
+
+  if (history_state_ != HISTORY_LOADING) {
+    // This can happen if history was unloaded then loaded again.
+    return;
+  }
 
   history_state_ = HISTORY_MIGRATING;
   profile_->GetHistoryService(Profile::EXPLICIT_ACCESS)->ScheduleDBTask(
@@ -325,12 +350,12 @@ void TopSites::FinishHistoryMigration(const ThumbnailMigration& data) {
   // we can tell history to finish its part of migration.
   backend_->DoEmptyRequest(
       &top_sites_consumer_,
-      NewCallback(this, &TopSites::OnHistoryMigrationWrittenToDisk));
+      base::Bind(&TopSites::OnHistoryMigrationWrittenToDisk,
+                 base::Unretained(this)));
 }
 
 void TopSites::HistoryLoaded() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK_NE(history_state_, HISTORY_LOADED);
 
   if (history_state_ != HISTORY_MIGRATING) {
     // No migration from history is needed.
@@ -343,6 +368,7 @@ void TopSites::HistoryLoaded() {
       MoveStateToLoaded();
     }
   }
+  // else case can happen if history is unloaded, then loaded again.
 }
 
 void TopSites::SyncWithHistory() {
@@ -527,7 +553,8 @@ CancelableRequestProvider::Handle TopSites::StartQueryForMostVisited() {
         num_results_to_request_from_history(),
         kDaysOfHistory,
         &history_consumer_,
-        NewCallback(this, &TopSites::OnTopSitesAvailableFromHistory));
+        base::Bind(&TopSites::OnTopSitesAvailableFromHistory,
+                   base::Unretained(this)));
   }
   return 0;
 }
@@ -597,7 +624,7 @@ bool TopSites::EncodeBitmap(gfx::Image* bitmap,
     return false;
   *bytes = new RefCountedBytes();
   std::vector<unsigned char> data;
-  if (!gfx::JPEGEncodedDataFromImage(*bitmap, &data))
+  if (!gfx::JPEGEncodedDataFromImage(*bitmap, kTopSitesImageQuality, &data))
     return false;
 
   // As we're going to cache this data, make sure the vector is only as big as
@@ -648,15 +675,12 @@ int TopSites::GetRedirectDistanceForURL(const MostVisitedURL& most_visited,
 // static
 MostVisitedURLList TopSites::GetPrepopulatePages() {
   MostVisitedURLList urls;
-  urls.resize(arraysize(kPrepopulatePageIDs));
-  for (size_t i = 0; i < arraysize(kPrepopulatePageIDs); ++i) {
+  urls.resize(arraysize(kPrepopulatedPages));
+  for (size_t i = 0; i < urls.size(); ++i) {
     MostVisitedURL& url = urls[i];
-    url.url = GURL(l10n_util::GetStringUTF8(kPrepopulatePageIDs[i]));
+    url.url = GURL(l10n_util::GetStringUTF8(kPrepopulatedPages[i].url_id));
     url.redirects.push_back(url.url);
-    url.favicon_url = NewTabUI::NTP4Enabled() ?
-        GURL(kNewPrepopulateFaviconURLs[i]) :
-        GURL(kPrepopulateFaviconURLs[i]);
-    url.title = l10n_util::GetStringUTF16(kPrepopulateTitleIDs[i]);
+    url.title = l10n_util::GetStringUTF16(kPrepopulatedPages[i].title_id);
   }
   return urls;
 }
@@ -715,7 +739,8 @@ void TopSites::ApplyBlacklistAndPinnedURLs(const MostVisitedURLList& urls,
       urls_copy.push_back(urls[i]);
   }
 
-  for (size_t pinned_index = 0; pinned_index < kTopSitesShown; pinned_index++) {
+  for (size_t pinned_index = 0; pinned_index < kTopSitesNumber;
+       pinned_index++) {
     GURL url;
     bool found = GetPinnedURLAtIndex(pinned_index, &url);
     if (!found)
@@ -738,7 +763,7 @@ void TopSites::ApplyBlacklistAndPinnedURLs(const MostVisitedURLList& urls,
 
   // Add non-pinned URLs in the empty spots.
   size_t current_url = 0;  // Index into the remaining URLs in urls_copy.
-  for (size_t i = 0; i < kTopSitesShown && current_url < urls_copy.size();
+  for (size_t i = 0; i < kTopSitesNumber && current_url < urls_copy.size();
        i++) {
     if (i == out->size()) {
       out->push_back(urls_copy[current_url]);
@@ -766,7 +791,7 @@ std::string TopSites::GetURLHash(const GURL& url) {
 }
 
 base::TimeDelta TopSites::GetUpdateDelay() {
-  if (cache_->top_sites().size() <= arraysize(kPrepopulateTitleIDs))
+  if (cache_->top_sites().size() <= arraysize(kPrepopulatedPages))
     return base::TimeDelta::FromSeconds(30);
 
   int64 range = kMaxUpdateIntervalMinutes - kMinUpdateIntervalMinutes;
@@ -784,18 +809,18 @@ void TopSites::ProcessPendingCallbacks(
        i != pending_callbacks.end(); ++i) {
     scoped_refptr<CancelableRequest<GetTopSitesCallback> > request = *i;
     if (!request->canceled())
-      request->ForwardResult(GetTopSitesCallback::TupleType(urls));
+      request->ForwardResult(urls);
   }
 }
 
 void TopSites::Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
   if (!loaded_)
     return;
 
   if (type == chrome::NOTIFICATION_HISTORY_URLS_DELETED) {
-    Details<history::URLsDeletedDetails> deleted_details(details);
+    content::Details<history::URLsDeletedDetails> deleted_details(details);
     if (deleted_details->all_history) {
       SetTopSites(MostVisitedURLList());
       backend_->ResetDatabase();
@@ -821,12 +846,16 @@ void TopSites::Observe(int type,
     }
     StartQueryForMostVisited();
   } else if (type == content::NOTIFICATION_NAV_ENTRY_COMMITTED) {
-    if (!IsFull()) {
+    NavigationController* controller =
+        content::Source<NavigationController>(source).ptr();
+    Profile* profile = Profile::FromBrowserContext(
+        controller->GetWebContents()->GetBrowserContext());
+    if (profile == profile_ && !IsFull()) {
       content::LoadCommittedDetails* load_details =
-          Details<content::LoadCommittedDetails>(details).ptr();
+          content::Details<content::LoadCommittedDetails>(details).ptr();
       if (!load_details)
         return;
-      const GURL& url = load_details->entry->url();
+      const GURL& url = load_details->entry->GetURL();
       if (!cache_->IsKnownURL(url) && HistoryService::CanAddURL(url)) {
         // To avoid slamming history we throttle requests when the url updates.
         // To do otherwise negatively impacts perf tests.
@@ -915,9 +944,10 @@ void TopSites::MoveStateToLoaded() {
 
   ProcessPendingCallbacks(pending_callbacks, filtered_urls);
 
-  NotificationService::current()->Notify(chrome::NOTIFICATION_TOP_SITES_LOADED,
-                                         Source<Profile>(profile_),
-                                         Details<TopSites>(this));
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_TOP_SITES_LOADED,
+      content::Source<Profile>(profile_),
+      content::Details<TopSites>(this));
 }
 
 void TopSites::ResetThreadSafeCache() {
@@ -930,14 +960,13 @@ void TopSites::ResetThreadSafeCache() {
 void TopSites::ResetThreadSafeImageCache() {
   base::AutoLock lock(lock_);
   thread_safe_cache_->SetThumbnails(cache_->images());
-  thread_safe_cache_->RemoveUnreferencedThumbnails();
 }
 
 void TopSites::NotifyTopSitesChanged() {
-  NotificationService::current()->Notify(
+  content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_TOP_SITES_CHANGED,
-      Source<TopSites>(this),
-      NotificationService::NoDetails());
+      content::Source<TopSites>(this),
+      content::NotificationService::NoDetails());
 }
 
 void TopSites::RestartQueryForTopSitesTimer(base::TimeDelta delta) {
@@ -1008,10 +1037,10 @@ void TopSites::OnTopSitesAvailableFromHistory(
   SetTopSites(pages);
 
   // Used only in testing.
-  NotificationService::current()->Notify(
+  content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_TOP_SITES_UPDATED,
-      Source<TopSites>(this),
-      Details<CancelableRequestProvider::Handle>(&handle));
+      content::Source<TopSites>(this),
+      content::Details<CancelableRequestProvider::Handle>(&handle));
 }
 
 }  // namespace history

@@ -11,10 +11,12 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/child_process_security_policy.h"
-#include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/result_codes.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/common/result_codes.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::WebContents;
 
 class ChildProcessSecurityPolicyInProcessBrowserTest
     : public InProcessBrowserTest {
@@ -41,12 +43,12 @@ IN_PROC_BROWSER_TEST_F(ChildProcessSecurityPolicyInProcessBrowserTest, NoLeak) {
   EXPECT_EQ(
       ChildProcessSecurityPolicy::GetInstance()->security_state_.size(), 1U);
 
-  TabContents* tab = browser()->GetTabContentsAt(0);
+  WebContents* tab = browser()->GetWebContentsAt(0);
   ASSERT_TRUE(tab != NULL);
   base::KillProcess(tab->GetRenderProcessHost()->GetHandle(),
                     content::RESULT_CODE_KILLED, true);
 
-  tab->controller().Reload(true);
+  tab->GetController().Reload(true);
   EXPECT_EQ(
       ChildProcessSecurityPolicy::GetInstance()->security_state_.size(), 1U);
 }

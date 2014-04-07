@@ -3,16 +3,18 @@
 // found in the LICENSE file.
 
 #include "base/memory/scoped_vector.h"
+#include "base/message_loop.h"
 #include "base/time.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_origin.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/renderer_host/render_process_host.h"
+#include "content/test/test_browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::BrowserThread;
 
 namespace prerender {
 
@@ -24,8 +26,9 @@ class DummyPrerenderContents : public PrerenderContents {
                          PrerenderTracker* prerender_tracker,
                          const GURL& url,
                          FinalStatus expected_final_status)
-      : PrerenderContents(prerender_manager, prerender_tracker, NULL, url,
-                          GURL(), ORIGIN_LINK_REL_PRERENDER,
+      : PrerenderContents(prerender_manager, prerender_tracker,
+                          NULL, url, content::Referrer(),
+                          ORIGIN_LINK_REL_PRERENDER,
                           PrerenderManager::kNoExperiment),
         has_started_(false),
         expected_final_status_(expected_final_status) {
@@ -36,7 +39,8 @@ class DummyPrerenderContents : public PrerenderContents {
   }
 
   virtual void StartPrerendering(
-      const RenderViewHost* source_render_view_host) OVERRIDE {
+      const RenderViewHost* source_render_view_host,
+      SessionStorageNamespace* session_storage_namespace) OVERRIDE {
     has_started_ = true;
   }
 
@@ -84,6 +88,7 @@ class TestPrerenderManager : public PrerenderManager {
          it != used_prerender_contents_.end(); ++it) {
       (*it)->set_final_status(FINAL_STATUS_USED);
     }
+    DoShutdown();
   }
 
   void AdvanceTime(base::TimeDelta delta) {
@@ -124,11 +129,7 @@ class TestPrerenderManager : public PrerenderManager {
   bool AddSimplePrerender(const GURL& url) {
     return AddPrerenderFromLinkRelPrerender(-1, -1,
                                             url,
-                                            GURL());
-  }
-
-  bool IsPendingEntry(const GURL& url) {
-    return (PrerenderManager::FindPendingEntry(url) != NULL);
+                                            content::Referrer());
   }
 
   void set_rate_limit_enabled(bool enabled) {
@@ -157,7 +158,7 @@ class TestPrerenderManager : public PrerenderManager {
 
   virtual PrerenderContents* CreatePrerenderContents(
       const GURL& url,
-      const GURL& referrer,
+      const content::Referrer& referrer,
       Origin origin,
       uint8 experiment_id) OVERRIDE {
     DCHECK(next_prerender_contents_.get());
@@ -204,13 +205,20 @@ class PrerenderManagerTest : public testing::Test {
 
   // Needed to pass PrerenderManager's DCHECKs.
   MessageLoop message_loop_;
-  BrowserThread ui_thread_;
+  content::TestBrowserThread ui_thread_;
   scoped_ptr<TestPrerenderManager> prerender_manager_;
 };
 
 TEST_F(PrerenderManagerTest, EmptyTest) {
-  GURL url("http://www.google.com/");
-  EXPECT_FALSE(prerender_manager()->MaybeUsePrerenderedPage(NULL, url, false));
+  EXPECT_FALSE(prerender_manager()->MaybeUsePrerenderedPage(
+      NULL,
+      GURL("http://www.google.com/"),
+      GURL()));
+
+  EXPECT_FALSE(prerender_manager()->MaybeUsePrerenderedPage(
+      NULL,
+      GURL("http://www.google.com/search"),
+      GURL("http://www.google.com")));
 }
 
 TEST_F(PrerenderManagerTest, FoundTest) {
@@ -430,7 +438,7 @@ TEST_F(PrerenderManagerTest, PendingPrerenderTest) {
 
   EXPECT_TRUE(prerender_manager()->AddPrerenderFromLinkRelPrerender(
       child_id, route_id,
-      pending_url, url));
+      pending_url, content::Referrer(url, WebKit::WebReferrerPolicyDefault)));
 
   EXPECT_TRUE(prerender_manager()->IsPendingEntry(pending_url));
   EXPECT_TRUE(prerender_contents->has_started());
@@ -438,7 +446,7 @@ TEST_F(PrerenderManagerTest, PendingPrerenderTest) {
 }
 
 // Tests that a PrerenderManager created for a browser session in the control
-// group will not be able to override FINAL_STATUS_CONTROL_GROUP.
+// group works as expected.
 TEST_F(PrerenderManagerTest, ControlGroup) {
   RestorePrerenderMode restore_prerender_mode;
   PrerenderManager::SetMode(
@@ -447,7 +455,7 @@ TEST_F(PrerenderManagerTest, ControlGroup) {
   DummyPrerenderContents* prerender_contents =
       prerender_manager()->CreateNextPrerenderContents(
           url,
-          FINAL_STATUS_CONTROL_GROUP);
+          FINAL_STATUS_MANAGER_SHUTDOWN);
   EXPECT_TRUE(prerender_manager()->AddSimplePrerender(url));
   EXPECT_FALSE(prerender_contents->has_started());
 }
@@ -461,7 +469,7 @@ TEST_F(PrerenderManagerTest, SourceRenderViewClosed) {
       url,
       FINAL_STATUS_MANAGER_SHUTDOWN);
   EXPECT_FALSE(prerender_manager()->AddPrerenderFromLinkRelPrerender(
-      100, 100, url, GURL()));
+      100, 100, url, content::Referrer()));
 }
 
 // Tests that the prerender manager ignores fragment references when matching

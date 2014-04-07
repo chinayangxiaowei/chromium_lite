@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include <string>
 #include <queue>
 
-#include <nacl/nacl_check.h>
+#include "native_client/src/shared/platform/nacl_check.h"
+
+
 
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppb_file_io.h"
@@ -144,7 +146,7 @@ class ReaderStreamAsFile {
   }
 
   void OpenFile() {
-    file_ref_ = new pp::FileRef(response_info_->GetBodyAsFileRef());
+    file_ref_ = new pp::FileRef(loader_.GetResponseInfo().GetBodyAsFileRef());
     CHECK(!file_ref_->is_null());
 
     file_io_ = new  pp::FileIO(instance_);
@@ -183,10 +185,9 @@ class ReaderStreamAsFile {
   static void OpenURLCompleteCallback(void* thiz, int32_t result) {
     ReaderStreamAsFile* reader = static_cast<ReaderStreamAsFile*>(thiz);
 
-    reader->response_info_ =
-      new pp::URLResponseInfo(reader->loader_.GetResponseInfo());
-    CHECK(!reader->response_info_->is_null());
-    int32_t status_code = reader->response_info_->GetStatusCode();
+    pp::URLResponseInfo response_info(reader->loader_.GetResponseInfo());
+    CHECK(!response_info.is_null());
+    int32_t status_code = response_info.GetStatusCode();
     if (status_code != 200) {
       reader->Message("Error: OpenURLCompleteCallback unexpected status code");
       return;

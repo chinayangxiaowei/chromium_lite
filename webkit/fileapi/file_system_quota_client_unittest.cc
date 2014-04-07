@@ -1,10 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/basictypes.h"
 #include "base/file_util.h"
-#include "base/memory/scoped_callback_factory.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
 #include "base/platform_file.h"
@@ -17,9 +17,10 @@
 #include "webkit/fileapi/file_system_types.h"
 #include "webkit/fileapi/file_system_usage_cache.h"
 #include "webkit/fileapi/file_system_util.h"
+#include "webkit/fileapi/mock_file_system_options.h"
 #include "webkit/fileapi/obfuscated_file_util.h"
-#include "webkit/fileapi/sandbox_mount_point_provider.h"
 #include "webkit/fileapi/quota_file_util.h"
+#include "webkit/fileapi/sandbox_mount_point_provider.h"
 #include "webkit/quota/quota_types.h"
 
 namespace fileapi {
@@ -33,19 +34,12 @@ const char kDummyURL3[] = "http://www.bleh";
 const quota::StorageType kTemporary = quota::kStorageTypeTemporary;
 const quota::StorageType kPersistent = quota::kStorageTypePersistent;
 
-class MockFileSystemPathManager : public FileSystemPathManager {
- public:
-  explicit MockFileSystemPathManager(const FilePath& filesystem_path)
-      : FileSystemPathManager(base::MessageLoopProxy::current(),
-                              filesystem_path, NULL, false, true) {}
-};
-
 }  // namespace
 
 class FileSystemQuotaClientTest : public testing::Test {
  public:
   FileSystemQuotaClientTest()
-      : callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      : weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
         additional_callback_count_(0),
         deletion_status_(quota::kQuotaStatusUnknown) {
   }
@@ -57,9 +51,8 @@ class FileSystemQuotaClientTest : public testing::Test {
             base::MessageLoopProxy::current(),
             base::MessageLoopProxy::current(),
             NULL, NULL,
-            FilePath(), false /* is_incognito */,
-            false, true,
-            new MockFileSystemPathManager(data_dir_.path()));
+            data_dir_.path(),
+            CreateDisallowFileAccessOptions());
   }
 
   struct TestFile {
@@ -80,9 +73,10 @@ class FileSystemQuotaClientTest : public testing::Test {
   void GetOriginUsageAsync(FileSystemQuotaClient* quota_client,
                            const std::string& origin_url,
                            quota::StorageType type) {
-    quota_client->GetOriginUsage(GURL(origin_url), type,
-        callback_factory_.NewCallback(
-            &FileSystemQuotaClientTest::OnGetUsage));
+    quota_client->GetOriginUsage(
+        GURL(origin_url), type,
+        base::Bind(&FileSystemQuotaClientTest::OnGetUsage,
+                   weak_factory_.GetWeakPtr()));
   }
 
   int64 GetOriginUsage(FileSystemQuotaClient* quota_client,
@@ -96,9 +90,10 @@ class FileSystemQuotaClientTest : public testing::Test {
   const std::set<GURL>& GetOriginsForType(FileSystemQuotaClient* quota_client,
                                           quota::StorageType type) {
     origins_.clear();
-    quota_client->GetOriginsForType(type,
-        callback_factory_.NewCallback(
-            &FileSystemQuotaClientTest::OnGetOrigins));
+    quota_client->GetOriginsForType(
+        type,
+        base::Bind(&FileSystemQuotaClientTest::OnGetOrigins,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     return origins_;
   }
@@ -107,9 +102,10 @@ class FileSystemQuotaClientTest : public testing::Test {
                                           quota::StorageType type,
                                           const std::string& host) {
     origins_.clear();
-    quota_client->GetOriginsForHost(type, host,
-        callback_factory_.NewCallback(
-            &FileSystemQuotaClientTest::OnGetOrigins));
+    quota_client->GetOriginsForHost(
+        type, host,
+        base::Bind(&FileSystemQuotaClientTest::OnGetOrigins,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     return origins_;
   }
@@ -117,16 +113,17 @@ class FileSystemQuotaClientTest : public testing::Test {
   void RunAdditionalOriginUsageTask(FileSystemQuotaClient* quota_client,
                                     const std::string& origin_url,
                                     quota::StorageType type) {
-    quota_client->GetOriginUsage(GURL(origin_url), type,
-        callback_factory_.NewCallback(
-            &FileSystemQuotaClientTest::OnGetAdditionalUsage));
+    quota_client->GetOriginUsage(
+        GURL(origin_url), type,
+        base::Bind(&FileSystemQuotaClientTest::OnGetAdditionalUsage,
+                   weak_factory_.GetWeakPtr()));
   }
 
   FilePath GetOriginBasePath(const std::string& origin_url,
                              quota::StorageType type) {
     // Note: this test assumes sandbox_provider impl is used for
     // temporary and persistent filesystem.
-    return file_system_context_->path_manager()->sandbox_provider()->
+    return file_system_context_->sandbox_provider()->
         GetBaseDirectoryForOriginAndType(
             GURL(origin_url), QuotaStorageTypeToFileSystemType(type), true);
   }
@@ -147,7 +144,7 @@ class FileSystemQuotaClientTest : public testing::Test {
   bool CreateFileSystemDirectory(const FilePath& path,
                                  const std::string& origin_url,
                                  quota::StorageType type) {
-    FileSystemFileUtil* file_util = file_system_context_->path_manager()->
+    FileSystemFileUtil* file_util = file_system_context_->
         GetFileUtil(QuotaStorageTypeToFileSystemType(type));
 
     scoped_ptr<FileSystemOperationContext> context(
@@ -167,7 +164,7 @@ class FileSystemQuotaClientTest : public testing::Test {
     if (path.empty())
       return false;
 
-    FileSystemFileUtil* file_util = file_system_context_->path_manager()->
+    FileSystemFileUtil* file_util = file_system_context_->
         sandbox_provider()->GetFileUtil();
 
     scoped_ptr<FileSystemOperationContext> context(
@@ -235,8 +232,8 @@ class FileSystemQuotaClientTest : public testing::Test {
     deletion_status_ = quota::kQuotaStatusUnknown;
     quota_client->DeleteOriginData(
         GURL(origin), type,
-        callback_factory_.NewCallback(
-            &FileSystemQuotaClientTest::OnDeleteOrigin));
+        base::Bind(&FileSystemQuotaClientTest::OnDeleteOrigin,
+                   weak_factory_.GetWeakPtr()));
   }
 
   int64 usage() const { return usage_; }
@@ -267,7 +264,7 @@ class FileSystemQuotaClientTest : public testing::Test {
 
   ScopedTempDir data_dir_;
   scoped_refptr<FileSystemContext> file_system_context_;
-  base::ScopedCallbackFactory<FileSystemQuotaClientTest> callback_factory_;
+  base::WeakPtrFactory<FileSystemQuotaClientTest> weak_factory_;
   int64 usage_;
   int additional_callback_count_;
   std::set<GURL> origins_;

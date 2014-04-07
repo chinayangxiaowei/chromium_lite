@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,10 +54,10 @@ class SafeBrowsingResourceHandler : public ResourceHandler,
   virtual bool OnUploadProgress(
       int request_id, uint64 position, uint64 size) OVERRIDE;
   virtual bool OnRequestRedirected(
-      int request_id, const GURL& new_url, ResourceResponse* response,
+      int request_id, const GURL& new_url, content::ResourceResponse* response,
       bool* defer) OVERRIDE;
   virtual bool OnResponseStarted(
-      int request_id, ResourceResponse* response) OVERRIDE;
+      int request_id, content::ResourceResponse* response) OVERRIDE;
   virtual bool OnWillStart(
       int request_id, const GURL& url, bool* defer) OVERRIDE;
   virtual bool OnWillRead(
@@ -73,10 +73,6 @@ class SafeBrowsingResourceHandler : public ResourceHandler,
   // the URL has been classified.
   virtual void OnBrowseUrlCheckResult(
       const GURL& url, SafeBrowsingService::UrlCheckResult result) OVERRIDE;
-
-  // SafeBrowsingService::Client implementation, called on the IO thread when
-  // the user has decided to proceed with the current request, or go back.
-  virtual void OnBlockingPageComplete(bool proceed) OVERRIDE;
 
  private:
   // Describes what phase of the check a handler is in.
@@ -118,6 +114,10 @@ class SafeBrowsingResourceHandler : public ResourceHandler,
   void StartDisplayingBlockingPage(const GURL& url,
                                    SafeBrowsingService::UrlCheckResult result);
 
+  // Called on the IO thread when the user has decided to proceed with the
+  // current request, or go back.
+  void OnBlockingPageComplete(bool proceed);
+
   // Resumes the request, by continuing the deferred action (either starting the
   // request, or following a redirect).
   void ResumeRequest();
@@ -152,7 +152,7 @@ class SafeBrowsingResourceHandler : public ResourceHandler,
   // valid to access these members when defer_state_ != DEFERRED_NONE.
   GURL deferred_url_;
   int deferred_request_id_;
-  scoped_refptr<ResourceResponse> deferred_redirect_response_;
+  scoped_refptr<content::ResourceResponse> deferred_redirect_response_;
 
   scoped_refptr<ResourceHandler> next_handler_;
   int render_process_host_id_;

@@ -1,19 +1,25 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chrome_plugin_service_filter.h"
 
 #include "base/logging.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/plugin_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/plugin_service.h"
-#include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/resource_context.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/plugin_service.h"
+#include "content/public/browser/render_process_host.h"
+#include "webkit/plugins/npapi/plugin_group.h"
 #include "webkit/plugins/npapi/plugin_list.h"
+
+using content::BrowserThread;
+using content::PluginService;
+using webkit::npapi::PluginGroup;
 
 // static
 ChromePluginServiceFilter* ChromePluginServiceFilter::GetInstance() {
@@ -38,23 +44,44 @@ void ChromePluginServiceFilter::OverridePluginForTab(
     int render_process_id,
     int render_view_id,
     const GURL& url,
-    const webkit::WebPluginInfo& plugin) {
+    const string16& plugin_name) {
   OverriddenPlugin overridden_plugin;
   overridden_plugin.render_process_id = render_process_id;
   overridden_plugin.render_view_id = render_view_id;
   overridden_plugin.url = url;
-  overridden_plugin.plugin = plugin;
+  overridden_plugin.plugin_name = plugin_name;
   base::AutoLock auto_lock(lock_);
   overridden_plugins_.push_back(overridden_plugin);
 }
 
-void ChromePluginServiceFilter::RestrictPluginToUrl(const FilePath& plugin_path,
-                                                    const GURL& url) {
+void ChromePluginServiceFilter::RestrictPluginToProfileAndOrigin(
+    const FilePath& plugin_path,
+    Profile* profile,
+    const GURL& origin) {
   base::AutoLock auto_lock(lock_);
-  if (url.is_empty())
-    restricted_plugins_.erase(plugin_path);
-  else
-    restricted_plugins_[plugin_path] = url;
+  restricted_plugins_[plugin_path] =
+      std::make_pair(PluginPrefs::GetForProfile(profile),
+                     origin);
+}
+
+void ChromePluginServiceFilter::UnrestrictPlugin(
+    const FilePath& plugin_path) {
+  base::AutoLock auto_lock(lock_);
+  restricted_plugins_.erase(plugin_path);
+}
+
+void ChromePluginServiceFilter::DisableNPAPIForRenderView(
+    int render_process_id,
+    int render_view_id) {
+  RenderViewInfo render_view(render_process_id, render_view_id);
+  npapi_disabled_render_views_.insert(render_view);
+}
+
+void ChromePluginServiceFilter::ClearDisabledNPAPIForRenderView(
+    int render_process_id,
+    int render_view_id) {
+  RenderViewInfo render_view(render_process_id, render_view_id);
+  npapi_disabled_render_views_.erase(render_view);
 }
 
 bool ChromePluginServiceFilter::ShouldUsePlugin(
@@ -71,10 +98,15 @@ bool ChromePluginServiceFilter::ShouldUsePlugin(
         overridden_plugins_[i].render_view_id == render_view_id &&
         (overridden_plugins_[i].url == url ||
          overridden_plugins_[i].url.is_empty())) {
-      if (overridden_plugins_[i].plugin.path != plugin->path)
-        return false;
-      *plugin = overridden_plugins_[i].plugin;
-      return true;
+
+      bool use = overridden_plugins_[i].plugin_name == plugin->name;
+      if (use &&
+          plugin->name == ASCIIToUTF16(PluginGroup::kAdobeReaderGroupName)) {
+        // If the caller is forcing the Adobe Reader plugin, then don't show the
+        // blocked plugin UI if it's vulnerable.
+        plugin->version = ASCIIToUTF16("11.0.0.0");
+      }
+      return use;
     }
   }
 
@@ -91,10 +123,25 @@ bool ChromePluginServiceFilter::ShouldUsePlugin(
   // Check whether the plugin is restricted to a URL.
   RestrictedPluginMap::const_iterator it =
       restricted_plugins_.find(plugin->path);
-  if (it != restricted_plugins_.end() &&
-      (policy_url.scheme() != it->second.scheme() ||
-       policy_url.host() != it->second.host())) {
-    return false;
+  if (it != restricted_plugins_.end()) {
+    if (it->second.first != plugin_prefs)
+      return false;
+    const GURL& origin = it->second.second;
+    if (!origin.is_empty() &&
+        (policy_url.scheme() != origin.scheme() ||
+         policy_url.host() != origin.host() ||
+         policy_url.port() != origin.port())) {
+      return false;
+    }
+  }
+
+  if (plugin->type == webkit::WebPluginInfo::PLUGIN_TYPE_NPAPI) {
+    // Check if the NPAPI plugin has been disabled for this render view.
+    RenderViewInfo render_view(render_process_id, render_view_id);
+    if (npapi_disabled_render_views_.find(render_view) !=
+        npapi_disabled_render_views_.end()) {
+      return false;
+    }
   }
 
   return true;
@@ -103,21 +150,23 @@ bool ChromePluginServiceFilter::ShouldUsePlugin(
 ChromePluginServiceFilter::ChromePluginServiceFilter() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_CLOSED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
   registrar_.Add(this, chrome::NOTIFICATION_PLUGIN_ENABLE_STATUS_CHANGED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
 }
 
 ChromePluginServiceFilter::~ChromePluginServiceFilter() {
 }
 
-void ChromePluginServiceFilter::Observe(int type,
-                                        const NotificationSource& source,
-                                        const NotificationDetails& details) {
+void ChromePluginServiceFilter::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   switch (type) {
     case content::NOTIFICATION_RENDERER_PROCESS_CLOSED: {
-      int render_process_id = Source<RenderProcessHost>(source).ptr()->id();
+      int render_process_id =
+          content::Source<content::RenderProcessHost>(source).ptr()->GetID();
 
       base::AutoLock auto_lock(lock_);
       for (size_t i = 0; i < overridden_plugins_.size(); ++i) {
@@ -129,7 +178,12 @@ void ChromePluginServiceFilter::Observe(int type,
       break;
     }
     case chrome::NOTIFICATION_PLUGIN_ENABLE_STATUS_CHANGED: {
-      PluginService::GetInstance()->PurgePluginListCache(false);
+      Profile* profile = content::Source<Profile>(source).ptr();
+      PluginService::GetInstance()->PurgePluginListCache(profile, false);
+      if (profile && profile->HasOffTheRecordProfile()) {
+        PluginService::GetInstance()->PurgePluginListCache(
+            profile->GetOffTheRecordProfile(), false);
+      }
       break;
     }
     default: {

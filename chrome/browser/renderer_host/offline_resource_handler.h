@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,6 @@
 #include "net/base/completion_callback.h"
 
 class ChromeAppCacheService;
-class MessageLoop;
 class ResourceDispatcherHost;
 
 namespace net {
@@ -22,8 +21,7 @@ class URLRequest;
 }  // namespace net
 
 // Used to show an offline interstitial page when the network is not available.
-class OfflineResourceHandler : public ResourceHandler,
-                               public chromeos::OfflineLoadPage::Delegate {
+class OfflineResourceHandler : public ResourceHandler {
  public:
   OfflineResourceHandler(ResourceHandler* handler,
                          int host_id,
@@ -34,35 +32,35 @@ class OfflineResourceHandler : public ResourceHandler,
   virtual ~OfflineResourceHandler();
 
   // ResourceHandler implementation:
-  virtual bool OnUploadProgress(int request_id, uint64 position, uint64 size);
+  virtual bool OnUploadProgress(int request_id, uint64 position,
+      uint64 size) OVERRIDE;
   virtual bool OnRequestRedirected(int request_id, const GURL& new_url,
-                           ResourceResponse* response, bool* defer);
-  virtual bool OnResponseStarted(int request_id, ResourceResponse* response);
-  virtual bool OnWillStart(int request_id, const GURL& url, bool* defer);
+      content::ResourceResponse* response, bool* defer) OVERRIDE;
+  virtual bool OnResponseStarted(int request_id,
+      content::ResourceResponse* response) OVERRIDE;
+  virtual bool OnWillStart(int request_id, const GURL& url,
+      bool* defer) OVERRIDE;
   virtual bool OnWillRead(int request_id, net::IOBuffer** buf, int* buf_size,
-                          int min_size);
-  virtual bool OnReadCompleted(int request_id, int* bytes_read);
+      int min_size) OVERRIDE;
+  virtual bool OnReadCompleted(int request_id, int* bytes_read) OVERRIDE;
   virtual bool OnResponseCompleted(int request_id,
                                    const net::URLRequestStatus& status,
-                                   const std::string& security_info);
-  virtual void OnRequestClosed();
-
-  // chromeos::OfflineLoadPage::Delegate
-  virtual void OnBlockingPageComplete(bool proceed);
+                                   const std::string& security_info) OVERRIDE;
+  virtual void OnRequestClosed() OVERRIDE;
 
  private:
-  // Erease the state assocaited with a deferred load request.
+  // OfflineLoadPage callback.
+  void OnBlockingPageComplete(bool proceed);
+
+  // Erase the state associated with a deferred load request.
   void ClearRequestInfo();
   bool IsRemote(const GURL& url) const;
 
   // Resume the deferred load request.
   void Resume();
 
-  // Tells if chrome should show the offline page.
+  // True if chrome should show the offline page.
   bool ShouldShowOfflinePage(const GURL& url) const;
-
-  // Shows the offline interstitinal page in UI thread.
-  void ShowOfflinePage();
 
   // A callback to tell if an appcache exists.
   void OnCanHandleOfflineComplete(int rv);
@@ -79,8 +77,7 @@ class OfflineResourceHandler : public ResourceHandler,
   int deferred_request_id_;
   GURL deferred_url_;
 
-  scoped_refptr<net::CancelableCompletionCallback<OfflineResourceHandler> >
-      appcache_completion_callback_;
+  net::CancelableCompletionCallback appcache_completion_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(OfflineResourceHandler);
 };

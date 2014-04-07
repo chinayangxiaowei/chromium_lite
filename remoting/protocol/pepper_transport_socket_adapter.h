@@ -10,13 +10,13 @@
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/threading/non_thread_safe.h"
+#include "net/base/completion_callback.h"
 #include "net/base/net_log.h"
 #include "net/socket/stream_socket.h"
 #include "ppapi/c/pp_stdint.h"
-#include "ppapi/cpp/completion_callback.h"
+#include "ppapi/utility/completion_callback_factory.h"
 
 namespace pp {
-class Instance;
 class Transport_Dev;
 }  // namespace pp
 
@@ -38,7 +38,7 @@ class PepperTransportSocketAdapter : public base::NonThreadSafe,
     virtual void OnChannelNewLocalCandidate(const std::string& candidate) = 0;
   };
 
-  PepperTransportSocketAdapter(pp::Instance* pp_instance,
+  PepperTransportSocketAdapter(pp::Transport_Dev* transport,
                                const std::string& name,
                                Observer* observer);
   virtual ~PepperTransportSocketAdapter();
@@ -48,16 +48,16 @@ class PepperTransportSocketAdapter : public base::NonThreadSafe,
   // Adds candidate received from the peer.
   void AddRemoteCandidate(const std::string& candidate);
 
-  // net::Socket interface.
+  // net::Socket implementation.
   virtual int Read(net::IOBuffer* buf, int buf_len,
-                   net::CompletionCallback* callback) OVERRIDE;
+                   const net::CompletionCallback& callback) OVERRIDE;
   virtual int Write(net::IOBuffer* buf, int buf_len,
-                    net::CompletionCallback* callback) OVERRIDE;
+                    const net::CompletionCallback& callback) OVERRIDE;
   virtual bool SetReceiveBufferSize(int32 size) OVERRIDE;
   virtual bool SetSendBufferSize(int32 size) OVERRIDE;
 
-  // net::StreamSocket interface.
-  virtual int Connect(net::CompletionCallback* callback) OVERRIDE;
+  // net::StreamSocket implementation.
+  virtual int Connect(const net::CompletionCallback& callback) OVERRIDE;
   virtual void Disconnect() OVERRIDE;
   virtual bool IsConnected() const OVERRIDE;
   virtual bool IsConnectedAndIdle() const OVERRIDE;
@@ -85,15 +85,15 @@ class PepperTransportSocketAdapter : public base::NonThreadSafe,
 
   scoped_ptr<pp::Transport_Dev> transport_;
 
-  net::CompletionCallback* connect_callback_;
+  net::CompletionCallback connect_callback_;
   bool connected_;
 
   bool get_address_pending_;
 
-  net::CompletionCallback* read_callback_;
+  net::CompletionCallback read_callback_;
   scoped_refptr<net::IOBuffer> read_buffer_;
 
-  net::CompletionCallback* write_callback_;
+  net::CompletionCallback write_callback_;
   scoped_refptr<net::IOBuffer> write_buffer_;
 
   net::BoundNetLog net_log_;

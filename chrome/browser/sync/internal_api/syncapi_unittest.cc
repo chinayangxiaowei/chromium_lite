@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,22 +10,27 @@
 #include <map>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
+#include "base/location.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/scoped_temp_dir.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
-#include "base/tracked.h"
+#include "base/test/thread_test_helper.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/password_manager/encryptor.h"
 #include "chrome/browser/sync/engine/model_safe_worker.h"
 #include "chrome/browser/sync/engine/nigori_util.h"
+#include "chrome/browser/sync/engine/polling_constants.h"
 #include "chrome/browser/sync/engine/syncapi_internal.h"
+#include "chrome/browser/sync/internal_api/change_record.h"
 #include "chrome/browser/sync/internal_api/http_post_provider_factory.h"
 #include "chrome/browser/sync/internal_api/http_post_provider_interface.h"
+#include "chrome/browser/sync/internal_api/includes/unrecoverable_error_handler_mock.h"
 #include "chrome/browser/sync/internal_api/read_node.h"
 #include "chrome/browser/sync/internal_api/read_transaction.h"
 #include "chrome/browser/sync/internal_api/sync_manager.h"
@@ -39,17 +44,22 @@
 #include "chrome/browser/sync/notifier/sync_notifier.h"
 #include "chrome/browser/sync/notifier/sync_notifier_observer.h"
 #include "chrome/browser/sync/protocol/bookmark_specifics.pb.h"
+#include "chrome/browser/sync/protocol/encryption.pb.h"
+#include "chrome/browser/sync/protocol/extension_specifics.pb.h"
 #include "chrome/browser/sync/protocol/password_specifics.pb.h"
+#include "chrome/browser/sync/protocol/preference_specifics.pb.h"
 #include "chrome/browser/sync/protocol/proto_value_conversions.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
+#include "chrome/browser/sync/syncable/model_type_test_util.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/syncable/syncable_id.h"
 #include "chrome/browser/sync/test/engine/test_user_share.h"
 #include "chrome/browser/sync/util/cryptographer.h"
+#include "chrome/browser/sync/util/time.h"
 #include "chrome/test/base/values_test_util.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -57,6 +67,7 @@ using browser_sync::Cryptographer;
 using browser_sync::HasArgsAsList;
 using browser_sync::HasDetailsAsDictionary;
 using browser_sync::KeyParams;
+using browser_sync::kNigoriTag;
 using browser_sync::JsArgList;
 using browser_sync::JsBackend;
 using browser_sync::JsEventHandler;
@@ -68,11 +79,14 @@ using browser_sync::ModelSafeWorker;
 using browser_sync::ModelSafeWorkerRegistrar;
 using browser_sync::sessions::SyncSessionSnapshot;
 using browser_sync::WeakHandle;
-using syncable::GetAllRealModelTypes;
+using content::BrowserThread;
+using syncable::IS_DEL;
+using syncable::IS_UNSYNCED;
 using syncable::kEncryptedString;
-using syncable::ModelType;
 using syncable::ModelTypeSet;
-using test::ExpectDictDictionaryValue;
+using syncable::ModelType;
+using syncable::NON_UNIQUE_NAME;
+using syncable::SPECIFICS;
 using test::ExpectDictStringValue;
 using testing::_;
 using testing::AnyNumber;
@@ -93,6 +107,13 @@ void ExpectInt64Value(int64 expected_value,
   int64 val = 0;
   EXPECT_TRUE(base::StringToInt64(int64_str, &val));
   EXPECT_EQ(expected_value, val);
+}
+
+void ExpectTimeValue(const base::Time& expected_value,
+                     const DictionaryValue& value, const std::string& key) {
+  std::string time_str;
+  EXPECT_TRUE(value.GetString(key, &time_str));
+  EXPECT_EQ(browser_sync::GetTimeDebugString(expected_value), time_str);
 }
 
 // Makes a non-folder child of the root node.  Returns the id of the
@@ -169,6 +190,37 @@ int64 MakeServerNodeForType(UserShare* share,
   return entry.Get(syncable::META_HANDLE);
 }
 
+// Simulates creating a "synced" node as a child of the root datatype node.
+int64 MakeServerNode(UserShare* share, ModelType model_type,
+                     const std::string& client_tag,
+                     const std::string& hashed_tag,
+                     const sync_pb::EntitySpecifics& specifics) {
+  syncable::ScopedDirLookup dir(share->dir_manager.get(), share->name);
+  EXPECT_TRUE(dir.good());
+  syncable::WriteTransaction trans(FROM_HERE, syncable::UNITTEST, dir);
+  syncable::Entry root_entry(&trans, syncable::GET_BY_SERVER_TAG,
+                             syncable::ModelTypeToRootTag(model_type));
+  EXPECT_TRUE(root_entry.good());
+  syncable::Id root_id = root_entry.Get(syncable::ID);
+  syncable::Id node_id = syncable::Id::CreateFromServerId(client_tag);
+  syncable::MutableEntry entry(&trans, syncable::CREATE_NEW_UPDATE_ITEM,
+                               node_id);
+  EXPECT_TRUE(entry.good());
+  entry.Put(syncable::BASE_VERSION, 1);
+  entry.Put(syncable::SERVER_VERSION, 1);
+  entry.Put(syncable::IS_UNAPPLIED_UPDATE, false);
+  entry.Put(syncable::SERVER_PARENT_ID, root_id);
+  entry.Put(syncable::PARENT_ID, root_id);
+  entry.Put(syncable::SERVER_IS_DIR, false);
+  entry.Put(syncable::IS_DIR, false);
+  entry.Put(syncable::SERVER_SPECIFICS, specifics);
+  entry.Put(syncable::NON_UNIQUE_NAME, client_tag);
+  entry.Put(syncable::UNIQUE_CLIENT_TAG, hashed_tag);
+  entry.Put(syncable::IS_DEL, false);
+  entry.Put(syncable::SPECIFICS, specifics);
+  return entry.Get(syncable::META_HANDLE);
+}
+
 }  // namespace
 
 class SyncApiTest : public testing::Test {
@@ -182,6 +234,7 @@ class SyncApiTest : public testing::Test {
   }
 
  protected:
+  MessageLoop message_loop_;
   browser_sync::TestUserShare test_user_share_;
 };
 
@@ -512,7 +565,7 @@ void CheckNodeValue(const BaseNode& node, const DictionaryValue& value,
   }
   if (is_detailed) {
     ExpectInt64Value(node.GetParentId(), value, "parentId");
-    ExpectInt64Value(node.GetModificationTime(), value, "modificationTime");
+    ExpectTimeValue(node.GetModificationTime(), value, "modificationTime");
     ExpectInt64Value(node.GetExternalId(), value, "externalId");
     ExpectInt64Value(node.GetPredecessorId(), value, "predecessorId");
     ExpectInt64Value(node.GetSuccessorId(), value, "successorId");
@@ -555,139 +608,15 @@ TEST_F(SyncApiTest, BaseNodeGetDetailsAsValue) {
   }
 }
 
-namespace {
-
-void ExpectChangeRecordActionValue(SyncManager::ChangeRecord::Action
-                                       expected_value,
-                                   const DictionaryValue& value,
-                                   const std::string& key) {
-  std::string str_value;
-  EXPECT_TRUE(value.GetString(key, &str_value));
-  switch (expected_value) {
-    case SyncManager::ChangeRecord::ACTION_ADD:
-      EXPECT_EQ("Add", str_value);
-      break;
-    case SyncManager::ChangeRecord::ACTION_UPDATE:
-      EXPECT_EQ("Update", str_value);
-      break;
-    case SyncManager::ChangeRecord::ACTION_DELETE:
-      EXPECT_EQ("Delete", str_value);
-      break;
-    default:
-      NOTREACHED();
-      break;
-  }
-}
-
-void CheckNonDeleteChangeRecordValue(const SyncManager::ChangeRecord& record,
-                                     const DictionaryValue& value,
-                                     BaseTransaction* trans) {
-  EXPECT_NE(SyncManager::ChangeRecord::ACTION_DELETE, record.action);
-  ExpectChangeRecordActionValue(record.action, value, "action");
-  {
-    ReadNode node(trans);
-    EXPECT_TRUE(node.InitByIdLookup(record.id));
-    scoped_ptr<DictionaryValue> expected_details(node.GetDetailsAsValue());
-    ExpectDictDictionaryValue(*expected_details, value, "node");
-  }
-}
-
-void CheckDeleteChangeRecordValue(const SyncManager::ChangeRecord& record,
-                                  const DictionaryValue& value) {
-  EXPECT_EQ(SyncManager::ChangeRecord::ACTION_DELETE, record.action);
-  ExpectChangeRecordActionValue(record.action, value, "action");
-  DictionaryValue* node_value = NULL;
-  EXPECT_TRUE(value.GetDictionary("node", &node_value));
-  if (node_value) {
-    ExpectInt64Value(record.id, *node_value, "id");
-    scoped_ptr<DictionaryValue> expected_specifics_value(
-        browser_sync::EntitySpecificsToValue(record.specifics));
-    ExpectDictDictionaryValue(*expected_specifics_value,
-                              *node_value, "specifics");
-    scoped_ptr<DictionaryValue> expected_extra_value;
-    if (record.extra.get()) {
-      expected_extra_value.reset(record.extra->ToValue());
-    }
-    Value* extra_value = NULL;
-    EXPECT_EQ(record.extra.get() != NULL,
-              node_value->Get("extra", &extra_value));
-    EXPECT_TRUE(Value::Equals(extra_value, expected_extra_value.get()));
-  }
-}
-
-class MockExtraChangeRecordData
-    : public SyncManager::ExtraPasswordChangeRecordData {
- public:
-  MOCK_CONST_METHOD0(ToValue, DictionaryValue*());
-};
-
-}  // namespace
-
-TEST_F(SyncApiTest, ChangeRecordToValue) {
-  int64 child_id = MakeNode(test_user_share_.user_share(),
-                            syncable::BOOKMARKS, "testtag");
-  sync_pb::EntitySpecifics child_specifics;
-  {
-    ReadTransaction trans(FROM_HERE, test_user_share_.user_share());
-    ReadNode node(&trans);
-    EXPECT_TRUE(node.InitByIdLookup(child_id));
-    child_specifics = node.GetEntry()->Get(syncable::SPECIFICS);
-  }
-
-  // Add
-  {
-    ReadTransaction trans(FROM_HERE, test_user_share_.user_share());
-    SyncManager::ChangeRecord record;
-    record.action = SyncManager::ChangeRecord::ACTION_ADD;
-    record.id = 1;
-    record.specifics = child_specifics;
-    record.extra.reset(new StrictMock<MockExtraChangeRecordData>());
-    scoped_ptr<DictionaryValue> value(record.ToValue(&trans));
-    CheckNonDeleteChangeRecordValue(record, *value, &trans);
-  }
-
-  // Update
-  {
-    ReadTransaction trans(FROM_HERE, test_user_share_.user_share());
-    SyncManager::ChangeRecord record;
-    record.action = SyncManager::ChangeRecord::ACTION_UPDATE;
-    record.id = child_id;
-    record.specifics = child_specifics;
-    record.extra.reset(new StrictMock<MockExtraChangeRecordData>());
-    scoped_ptr<DictionaryValue> value(record.ToValue(&trans));
-    CheckNonDeleteChangeRecordValue(record, *value, &trans);
-  }
-
-  // Delete (no extra)
-  {
-    ReadTransaction trans(FROM_HERE, test_user_share_.user_share());
-    SyncManager::ChangeRecord record;
-    record.action = SyncManager::ChangeRecord::ACTION_DELETE;
-    record.id = child_id + 1;
-    record.specifics = child_specifics;
-    scoped_ptr<DictionaryValue> value(record.ToValue(&trans));
-    CheckDeleteChangeRecordValue(record, *value);
-  }
-
-  // Delete (with extra)
-  {
-    ReadTransaction trans(FROM_HERE, test_user_share_.user_share());
-    SyncManager::ChangeRecord record;
-    record.action = SyncManager::ChangeRecord::ACTION_DELETE;
-    record.id = child_id + 1;
-    record.specifics = child_specifics;
-
-    DictionaryValue extra_value;
-    extra_value.SetString("foo", "bar");
-    scoped_ptr<StrictMock<MockExtraChangeRecordData> > extra(
-        new StrictMock<MockExtraChangeRecordData>());
-    EXPECT_CALL(*extra, ToValue()).Times(2).WillRepeatedly(
-        Invoke(&extra_value, &DictionaryValue::DeepCopy));
-
-    record.extra.reset(extra.release());
-    scoped_ptr<DictionaryValue> value(record.ToValue(&trans));
-    CheckDeleteChangeRecordValue(record, *value);
-  }
+TEST_F(SyncApiTest, EmptyTags) {
+  WriteTransaction trans(FROM_HERE, test_user_share_.user_share());
+  ReadNode root_node(&trans);
+  root_node.InitByRootLookup();
+  WriteNode node(&trans);
+  std::string empty_tag;
+  EXPECT_FALSE(node.InitUniqueByCreation(
+      syncable::TYPED_URLS, root_node, empty_tag));
+  EXPECT_FALSE(node.InitByTagLookup(empty_tag));
 }
 
 namespace {
@@ -702,7 +631,7 @@ class TestHttpPostProviderInterface : public HttpPostProviderInterface {
   virtual void SetPostPayload(const char* content_type,
                               int content_length,
                               const char* content) OVERRIDE {}
-  virtual bool MakeSynchronousPost(int* os_error_code, int* response_code)
+  virtual bool MakeSynchronousPost(int* error_code, int* response_code)
       OVERRIDE {
     return false;
   }
@@ -732,28 +661,25 @@ class TestHttpPostProviderFactory : public HttpPostProviderFactory {
 
 class SyncManagerObserverMock : public SyncManager::Observer {
  public:
-  MOCK_METHOD4(OnChangesApplied,
-               void(ModelType,
-                    const BaseTransaction*,
-                    const SyncManager::ChangeRecord*,
-                    int));  // NOLINT
-  MOCK_METHOD1(OnChangesComplete, void(ModelType));  // NOLINT
   MOCK_METHOD1(OnSyncCycleCompleted,
                void(const SyncSessionSnapshot*));  // NOLINT
   MOCK_METHOD2(OnInitializationComplete,
                void(const WeakHandle<JsBackend>&, bool));  // NOLINT
   MOCK_METHOD1(OnAuthError, void(const GoogleServiceAuthError&));  // NOLINT
-  MOCK_METHOD1(OnPassphraseRequired,
-               void(sync_api::PassphraseRequiredReason));  // NOLINT
-  MOCK_METHOD1(OnPassphraseAccepted, void(const std::string&));  // NOLINT
+  MOCK_METHOD2(OnPassphraseRequired,
+               void(sync_api::PassphraseRequiredReason,
+                    const sync_pb::EncryptedData&));  // NOLINT
+  MOCK_METHOD0(OnPassphraseAccepted, void());  // NOLINT
+  MOCK_METHOD1(OnBootstrapTokenUpdated, void(const std::string&));  // NOLINT
   MOCK_METHOD0(OnStopSyncingPermanently, void());  // NOLINT
   MOCK_METHOD1(OnUpdatedToken, void(const std::string&));  // NOLINT
-  MOCK_METHOD1(OnMigrationNeededForTypes, void(const ModelTypeSet&));
   MOCK_METHOD0(OnClearServerDataFailed, void());  // NOLINT
   MOCK_METHOD0(OnClearServerDataSucceeded, void());  // NOLINT
-  MOCK_METHOD1(OnEncryptionComplete, void(const ModelTypeSet&));  // NOLINT
+  MOCK_METHOD2(OnEncryptedTypesChanged,
+               void(ModelTypeSet, bool));  // NOLINT
+  MOCK_METHOD0(OnEncryptionComplete, void());  // NOLINT
   MOCK_METHOD1(OnActionableError,
-                 void(const browser_sync::SyncProtocolError&));  // NOLINT
+               void(const browser_sync::SyncProtocolError&));  // NOLINT
 };
 
 class SyncNotifierMock : public sync_notifier::SyncNotifier {
@@ -765,15 +691,33 @@ class SyncNotifierMock : public sync_notifier::SyncNotifier {
   MOCK_METHOD2(UpdateCredentials,
                void(const std::string&, const std::string&));
   MOCK_METHOD1(UpdateEnabledTypes,
-               void(const syncable::ModelTypeSet&));
-  MOCK_METHOD1(SendNotification, void(const syncable::ModelTypeSet&));
+               void(syncable::ModelTypeSet));
+  MOCK_METHOD1(SendNotification, void(syncable::ModelTypeSet));
 };
 
+}  // namespace
+
 class SyncManagerTest : public testing::Test,
-                        public ModelSafeWorkerRegistrar {
+                        public ModelSafeWorkerRegistrar,
+                        public SyncManager::ChangeDelegate {
+ public:
+  void EmptyClosure() {}
+
  protected:
+  enum NigoriStatus {
+    DONT_WRITE_NIGORI,
+    WRITE_TO_NIGORI
+  };
+
+  enum EncryptionStatus {
+    UNINITIALIZED,
+    DEFAULT_ENCRYPTION,
+    FULL_ENCRYPTION
+  };
+
   SyncManagerTest()
       : ui_thread_(BrowserThread::UI, &ui_loop_),
+        file_thread_(BrowserThread::FILE),
         sync_notifier_mock_(NULL),
         sync_manager_("Test sync manager"),
         sync_notifier_observer_(NULL),
@@ -786,6 +730,8 @@ class SyncManagerTest : public testing::Test,
   // Test implementation.
   void SetUp() {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+
+    file_thread_.Start();
 
     SyncCredentials credentials;
     credentials.email = "foo@bar.com";
@@ -812,13 +758,15 @@ class SyncManagerTest : public testing::Test,
     EXPECT_FALSE(sync_notifier_observer_);
     EXPECT_FALSE(js_backend_.IsInitialized());
 
+    browser_sync::MockUnrecoverableErrorHandler handler_mock;
     // Takes ownership of |sync_notifier_mock_|.
     sync_manager_.Init(temp_dir_.path(),
                        WeakHandle<JsEventHandler>(),
                        "bogus", 0, false,
-                       new TestHttpPostProviderFactory(), this, "bogus",
+                       new TestHttpPostProviderFactory(), this, this, "bogus",
                        credentials, sync_notifier_mock_, "",
-                       true /* setup_for_test_mode */);
+                       true /* setup_for_test_mode */,
+                       &handler_mock);
 
     EXPECT_TRUE(sync_notifier_observer_);
     EXPECT_TRUE(js_backend_.IsInitialized());
@@ -829,10 +777,6 @@ class SyncManagerTest : public testing::Test,
     GetModelSafeRoutingInfo(&routes);
     for (ModelSafeRoutingInfo::iterator i = routes.begin(); i != routes.end();
          ++i) {
-      EXPECT_CALL(observer_, OnChangesApplied(i->first, _, _, 1))
-          .RetiresOnSaturation();
-      EXPECT_CALL(observer_, OnChangesComplete(i->first))
-          .RetiresOnSaturation();
       type_roots_[i->first] = MakeServerNodeForType(
           sync_manager_.GetUserShare(), i->first);
     }
@@ -841,34 +785,50 @@ class SyncManagerTest : public testing::Test,
 
   void TearDown() {
     sync_manager_.RemoveObserver(&observer_);
-    sync_manager_.Shutdown();
+    sync_manager_.ShutdownOnSyncThread();
     sync_notifier_mock_ = NULL;
     EXPECT_FALSE(sync_notifier_observer_);
     PumpLoop();
   }
 
   // ModelSafeWorkerRegistrar implementation.
-  virtual void GetWorkers(std::vector<ModelSafeWorker*>* out) {
+  virtual void GetWorkers(std::vector<ModelSafeWorker*>* out) OVERRIDE {
     NOTIMPLEMENTED();
     out->clear();
   }
-  virtual void GetModelSafeRoutingInfo(ModelSafeRoutingInfo* out) {
+  virtual void GetModelSafeRoutingInfo(ModelSafeRoutingInfo* out) OVERRIDE {
     (*out)[syncable::NIGORI] = browser_sync::GROUP_PASSIVE;
     (*out)[syncable::BOOKMARKS] = browser_sync::GROUP_PASSIVE;
     (*out)[syncable::THEMES] = browser_sync::GROUP_PASSIVE;
     (*out)[syncable::SESSIONS] = browser_sync::GROUP_PASSIVE;
     (*out)[syncable::PASSWORDS] = browser_sync::GROUP_PASSIVE;
+    (*out)[syncable::PREFERENCES] = browser_sync::GROUP_PASSIVE;
   }
 
+  virtual void OnChangesApplied(
+      syncable::ModelType model_type,
+      const BaseTransaction* trans,
+      const ImmutableChangeRecordList& changes) OVERRIDE {}
+
+  virtual void OnChangesComplete(syncable::ModelType model_type) OVERRIDE {}
+
   // Helper methods.
-  bool SetUpEncryption() {
+  bool SetUpEncryption(NigoriStatus nigori_status,
+                       EncryptionStatus encryption_status) {
     // Mock the Mac Keychain service. The real Keychain can block on user input.
     #if defined(OS_MACOSX)
       Encryptor::UseMockKeychain(true);
     #endif
 
-    // We need to create the nigori node as if it were an applied server update.
     UserShare* share = sync_manager_.GetUserShare();
+    {
+      syncable::ScopedDirLookup dir(share->dir_manager.get(), share->name);
+      if (!dir.good())
+        return false;
+      dir->set_initial_sync_ended_for_type(syncable::NIGORI, true);
+    }
+
+    // We need to create the nigori node as if it were an applied server update.
     int64 nigori_id = GetIdForDataType(syncable::NIGORI);
     if (nigori_id == kInvalidId)
       return false;
@@ -878,13 +838,22 @@ class SyncManagerTest : public testing::Test,
     Cryptographer* cryptographer = trans.GetCryptographer();
     if (!cryptographer)
       return false;
-    KeyParams params = {"localhost", "dummy", "foobar"};
-    cryptographer->AddKey(params);
-    sync_pb::NigoriSpecifics nigori;
-    cryptographer->GetKeys(nigori.mutable_encrypted());
-    WriteNode node(&trans);
-    EXPECT_TRUE(node.InitByIdLookup(nigori_id));
-    node.SetNigoriSpecifics(nigori);
+    if (encryption_status != UNINITIALIZED) {
+      KeyParams params = {"localhost", "dummy", "foobar"};
+      cryptographer->AddKey(params);
+    } else {
+      DCHECK_NE(nigori_status, WRITE_TO_NIGORI);
+    }
+    if (encryption_status == FULL_ENCRYPTION)
+      cryptographer->set_encrypt_everything();
+    if (nigori_status == WRITE_TO_NIGORI) {
+      sync_pb::NigoriSpecifics nigori;
+      cryptographer->GetKeys(nigori.mutable_encrypted());
+      cryptographer->UpdateNigoriFromEncryptedTypes(&nigori);
+      WriteNode node(&trans);
+      EXPECT_TRUE(node.InitByIdLookup(nigori_id));
+      node.SetNigoriSpecifics(nigori);
+    }
     return cryptographer->is_ready();
   }
 
@@ -906,16 +875,12 @@ class SyncManagerTest : public testing::Test,
     sync_notifier_observer_ = NULL;
   }
 
-  void SyncNotifierUpdateEnabledTypes(
-      const syncable::ModelTypeSet& types) {
+  void SyncNotifierUpdateEnabledTypes(syncable::ModelTypeSet types) {
     ModelSafeRoutingInfo routes;
     GetModelSafeRoutingInfo(&routes);
-    syncable::ModelTypeSet expected_types;
-    for (ModelSafeRoutingInfo::const_iterator it = routes.begin();
-         it != routes.end(); ++it) {
-      expected_types.insert(it->first);
-    }
-    EXPECT_EQ(expected_types, types);
+    const syncable::ModelTypeSet expected_types =
+        GetRoutingInfoTypes(routes);
+    EXPECT_TRUE(types.Equals(expected_types));
     ++update_enabled_types_call_count_;
   }
 
@@ -936,11 +901,32 @@ class SyncManagerTest : public testing::Test,
     PumpLoop();
   }
 
+  // Looks up an entry by client tag and resets IS_UNSYNCED value to false.
+  // Returns true if entry was previously unsynced, false if IS_UNSYNCED was
+  // already false.
+  bool ResetUnsyncedEntry(syncable::ModelType type,
+                          const std::string& client_tag) {
+    UserShare* share = sync_manager_.GetUserShare();
+    syncable::ScopedDirLookup dir(share->dir_manager.get(), share->name);
+    EXPECT_TRUE(dir.good());
+    syncable::WriteTransaction trans(FROM_HERE, syncable::UNITTEST, dir);
+    const std::string hash = BaseNode::GenerateSyncableHash(type, client_tag);
+    syncable::MutableEntry entry(&trans, syncable::GET_BY_CLIENT_TAG,
+                                 hash);
+    EXPECT_TRUE(entry.good());
+    if (!entry.Get(IS_UNSYNCED))
+      return false;
+    entry.Put(IS_UNSYNCED, false);
+    return true;
+  }
+
  private:
   // Needed by |ui_thread_|.
   MessageLoopForUI ui_loop_;
   // Needed by |sync_manager_|.
-  BrowserThread ui_thread_;
+  content::TestBrowserThread ui_thread_;
+  // Needed by |sync_manager_|.
+  content::TestBrowserThread file_thread_;
   // Needed by |sync_manager_|.
   ScopedTempDir temp_dir_;
   // Sync Id's for the roots of the enabled datatypes.
@@ -963,8 +949,7 @@ TEST_F(SyncManagerTest, UpdateEnabledTypes) {
 }
 
 TEST_F(SyncManagerTest, DoNotSyncTabsInNigoriNode) {
-  syncable::ModelTypeSet encrypted_types;
-  encrypted_types.insert(syncable::TYPED_URLS);
+  const syncable::ModelTypeSet encrypted_types(syncable::TYPED_URLS);
   sync_manager_.MaybeSetSyncTabsInNigoriNode(encrypted_types);
 
   ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
@@ -974,8 +959,7 @@ TEST_F(SyncManagerTest, DoNotSyncTabsInNigoriNode) {
 }
 
 TEST_F(SyncManagerTest, SyncTabsInNigoriNode) {
-  syncable::ModelTypeSet encrypted_types;
-  encrypted_types.insert(syncable::SESSIONS);
+  const syncable::ModelTypeSet encrypted_types(syncable::SESSIONS);
   sync_manager_.MaybeSetSyncTabsInNigoriNode(encrypted_types);
 
   ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
@@ -1184,7 +1168,7 @@ TEST_F(SyncManagerTest, GetChildNodeIds) {
   ListValue* nodes = NULL;
   ASSERT_TRUE(return_args.Get().GetList(0, &nodes));
   ASSERT_TRUE(nodes);
-  EXPECT_EQ(5u, nodes->GetSize());
+  EXPECT_EQ(6u, nodes->GetSize());
 }
 
 TEST_F(SyncManagerTest, GetChildNodeIdsFailure) {
@@ -1269,31 +1253,28 @@ TEST_F(SyncManagerTest, OnNotificationStateChange) {
 TEST_F(SyncManagerTest, OnIncomingNotification) {
   StrictMock<MockJsEventHandler> event_handler;
 
-  const syncable::ModelTypeBitSet empty_model_types;
-  syncable::ModelTypeBitSet model_types;
-  model_types.set(syncable::BOOKMARKS);
-  model_types.set(syncable::THEMES);
+  const syncable::ModelTypeSet empty_model_types;
+  const syncable::ModelTypeSet model_types(
+      syncable::BOOKMARKS, syncable::THEMES);
 
   // Build expected_args to have a single argument with the string
   // equivalents of model_types.
   DictionaryValue expected_details;
   {
     ListValue* model_type_list = new ListValue();
+    expected_details.SetString("source", "REMOTE_NOTIFICATION");
     expected_details.Set("changedTypes", model_type_list);
-    for (int i = syncable::FIRST_REAL_MODEL_TYPE;
-         i < syncable::MODEL_TYPE_COUNT; ++i) {
-      if (model_types[i]) {
-        model_type_list->Append(
-            Value::CreateStringValue(
-                syncable::ModelTypeToString(
-                    syncable::ModelTypeFromInt(i))));
-      }
+    for (syncable::ModelTypeSet::Iterator it = model_types.First();
+         it.Good(); it.Inc()) {
+      model_type_list->Append(
+          Value::CreateStringValue(
+              syncable::ModelTypeToString(it.Get())));
     }
   }
 
   EXPECT_CALL(event_handler,
               HandleJsEvent("onIncomingNotification",
-                           HasDetailsAsDictionary(expected_details)));
+                            HasDetailsAsDictionary(expected_details)));
 
   sync_manager_.TriggerOnIncomingNotificationForTest(empty_model_types);
   sync_manager_.TriggerOnIncomingNotificationForTest(model_types);
@@ -1310,34 +1291,95 @@ TEST_F(SyncManagerTest, OnIncomingNotification) {
 }
 
 TEST_F(SyncManagerTest, RefreshEncryptionReady) {
-  EXPECT_TRUE(SetUpEncryption());
-  sync_manager_.RefreshEncryption();
-  syncable::ModelTypeSet encrypted_types =
-      sync_manager_.GetEncryptedDataTypes();
-  EXPECT_EQ(1U, encrypted_types.count(syncable::PASSWORDS));
-  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+
+  const syncable::ModelTypeSet encrypted_types =
+      sync_manager_.GetEncryptedDataTypesForTest();
+  EXPECT_TRUE(encrypted_types.Has(syncable::PASSWORDS));
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByIdLookup(GetIdForDataType(syncable::NIGORI)));
+    sync_pb::NigoriSpecifics nigori = node.GetNigoriSpecifics();
+    EXPECT_TRUE(nigori.has_encrypted());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    EXPECT_TRUE(cryptographer->CanDecrypt(nigori.encrypted()));
+  }
 }
 
 // Attempt to refresh encryption when nigori not downloaded.
 TEST_F(SyncManagerTest, RefreshEncryptionNotReady) {
   // Don't set up encryption (no nigori node created).
-  sync_manager_.RefreshEncryption();  // Should fail.
-  syncable::ModelTypeSet encrypted_types =
-      sync_manager_.GetEncryptedDataTypes();
-  EXPECT_EQ(1U, encrypted_types.count(syncable::PASSWORDS));  // Hardcoded.
-  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabled());
+
+  // Should fail.
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+
+  const syncable::ModelTypeSet encrypted_types =
+      sync_manager_.GetEncryptedDataTypesForTest();
+  EXPECT_TRUE(encrypted_types.Has(syncable::PASSWORDS));  // Hardcoded.
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+}
+
+// Attempt to refresh encryption when nigori is empty.
+TEST_F(SyncManagerTest, RefreshEncryptionEmptyNigori) {
+  EXPECT_TRUE(SetUpEncryption(DONT_WRITE_NIGORI, DEFAULT_ENCRYPTION));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+
+  // Should write to nigori.
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+
+  const syncable::ModelTypeSet encrypted_types =
+      sync_manager_.GetEncryptedDataTypesForTest();
+  EXPECT_TRUE(encrypted_types.Has(syncable::PASSWORDS));  // Hardcoded.
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByIdLookup(GetIdForDataType(syncable::NIGORI)));
+    sync_pb::NigoriSpecifics nigori = node.GetNigoriSpecifics();
+    EXPECT_TRUE(nigori.has_encrypted());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    EXPECT_TRUE(cryptographer->CanDecrypt(nigori.encrypted()));
+  }
 }
 
 TEST_F(SyncManagerTest, EncryptDataTypesWithNoData) {
-  EXPECT_TRUE(SetUpEncryption());
-  EXPECT_CALL(observer_, OnEncryptionComplete(GetAllRealModelTypes()));
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
   sync_manager_.EnableEncryptEverything();
-  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabledForTest());
 }
 
 TEST_F(SyncManagerTest, EncryptDataTypesWithData) {
   size_t batch_size = 5;
-  EXPECT_TRUE(SetUpEncryption());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
 
   // Create some unencrypted unsynced data.
   int64 folder = MakeFolderWithParent(sync_manager_.GetUserShare(),
@@ -1365,76 +1407,153 @@ TEST_F(SyncManagerTest, EncryptDataTypesWithData) {
 
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    EXPECT_EQ(Cryptographer::SensitiveTypes(), GetEncryptedTypes(&trans));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::BOOKMARKS,
-                                                   false /* not encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::SESSIONS,
-                                                   false /* not encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::THEMES,
-                                                   false /* not encrypted */));
+    EXPECT_TRUE(GetEncryptedTypes(&trans).Equals(
+        Cryptographer::SensitiveTypes()));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::BOOKMARKS,
+        false /* not encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::SESSIONS,
+        false /* not encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::THEMES,
+        false /* not encrypted */));
   }
 
-  EXPECT_CALL(observer_, OnEncryptionComplete(GetAllRealModelTypes()));
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
   sync_manager_.EnableEncryptEverything();
-  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabledForTest());
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    EXPECT_EQ(GetAllRealModelTypes(), GetEncryptedTypes(&trans));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::BOOKMARKS,
-                                                   true /* is encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::SESSIONS,
-                                                   true /* is encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::THEMES,
-                                                   true /* is encrypted */));
+    EXPECT_TRUE(GetEncryptedTypes(&trans).Equals(
+        syncable::ModelTypeSet::All()));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::BOOKMARKS,
+        true /* is encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::SESSIONS,
+        true /* is encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::THEMES,
+        true /* is encrypted */));
   }
 
   // Trigger's a ReEncryptEverything with new passphrase.
   testing::Mock::VerifyAndClearExpectations(&observer_);
-  EXPECT_CALL(observer_, OnPassphraseAccepted(_)).Times(1);
-  EXPECT_CALL(observer_, OnEncryptionComplete(GetAllRealModelTypes())).Times(1);
-  sync_manager_.SetPassphrase("new_passphrase", true);
-  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", true, true);
+  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabledForTest());
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    EXPECT_EQ(GetAllRealModelTypes(), GetEncryptedTypes(&trans));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::BOOKMARKS,
-                                                   true /* is encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::SESSIONS,
-                                                   true /* is encrypted */));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::THEMES,
-                                                   true /* is encrypted */));
+    EXPECT_TRUE(GetEncryptedTypes(&trans).Equals(
+        syncable::ModelTypeSet::All()));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::BOOKMARKS,
+        true /* is encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::SESSIONS,
+        true /* is encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::THEMES,
+        true /* is encrypted */));
   }
   // Calling EncryptDataTypes with an empty encrypted types should not trigger
   // a reencryption and should just notify immediately.
   // TODO(zea): add logic to ensure nothing was written.
   testing::Mock::VerifyAndClearExpectations(&observer_);
-  EXPECT_CALL(observer_, OnPassphraseAccepted(_)).Times(0);
-  EXPECT_CALL(observer_, OnEncryptionComplete(GetAllRealModelTypes())).Times(1);
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_)).Times(0);
+  EXPECT_CALL(observer_, OnPassphraseAccepted()).Times(0);
+  EXPECT_CALL(observer_, OnEncryptionComplete());
   sync_manager_.EnableEncryptEverything();
 }
 
+// Test that when there are no pending keys and the cryptographer is not
+// initialized, we add a key based on the current GAIA password.
+// (case 1 in SyncManager::SyncInternalSetPassphrase)
+TEST_F(SyncManagerTest, SetInitialGaiaPass) {
+  EXPECT_FALSE(SetUpEncryption(DONT_WRITE_NIGORI, UNINITIALIZED));
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", false, false);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByTagLookup(kNigoriTag));
+    sync_pb::NigoriSpecifics nigori = node.GetNigoriSpecifics();
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    EXPECT_TRUE(cryptographer->CanDecrypt(nigori.encrypted()));
+  }
+}
+
+// Test that when there are no pending keys and we have on the old GAIA
+// password, we update and re-encrypt everything with the new GAIA password.
+// (case 1 in SyncManager::SyncInternalSetPassphrase)
+TEST_F(SyncManagerTest, UpdateGaiaPass) {
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  Cryptographer verifier;
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    std::string bootstrap_token;
+    cryptographer->GetBootstrapToken(&bootstrap_token);
+    verifier.Bootstrap(bootstrap_token);
+  }
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", false, false);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    // Verify the default key has changed.
+    sync_pb::EncryptedData encrypted;
+    cryptographer->GetKeys(&encrypted);
+    EXPECT_FALSE(verifier.CanDecrypt(encrypted));
+  }
+}
+
+// Sets a new explicit passphrase. This should update the bootstrap token
+// and re-encrypt everything.
+// (case 2 in SyncManager::SyncInternalSetPassphrase)
 TEST_F(SyncManagerTest, SetPassphraseWithPassword) {
-  EXPECT_TRUE(SetUpEncryption());
+  Cryptographer verifier;
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
   {
     WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    // Store the default (soon to be old) key.
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    std::string bootstrap_token;
+    cryptographer->GetBootstrapToken(&bootstrap_token);
+    verifier.Bootstrap(bootstrap_token);
+
     ReadNode root_node(&trans);
     root_node.InitByRootLookup();
 
@@ -1445,12 +1564,20 @@ TEST_F(SyncManagerTest, SetPassphraseWithPassword) {
     data.set_password_value("secret");
     password_node.SetPasswordSpecifics(data);
   }
-  EXPECT_CALL(observer_, OnPassphraseAccepted(_));
-  EXPECT_CALL(observer_, OnEncryptionComplete(_));
-  sync_manager_.SetPassphrase("new_passphrase", true);
-  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", true, true);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    // Verify the default key has changed.
+    sync_pb::EncryptedData encrypted;
+    cryptographer->GetKeys(&encrypted);
+    EXPECT_FALSE(verifier.CanDecrypt(encrypted));
+
     ReadNode password_node(&trans);
     EXPECT_TRUE(password_node.InitByClientTagLookup(syncable::PASSWORDS,
                                                     "foo"));
@@ -1460,8 +1587,165 @@ TEST_F(SyncManagerTest, SetPassphraseWithPassword) {
   }
 }
 
+// Manually set the pending keys in the cryptographer/nigori to reflect the data
+// being encrypted with a new (unprovided) GAIA password, then supply the
+// password.
+// (case 3 in SyncManager::SyncInternalSetPassphrase)
+TEST_F(SyncManagerTest, SupplyPendingGAIAPass) {
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  Cryptographer other_cryptographer;
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    std::string bootstrap_token;
+    cryptographer->GetBootstrapToken(&bootstrap_token);
+    other_cryptographer.Bootstrap(bootstrap_token);
+
+    // Now update the nigori to reflect the new keys, and update the
+    // cryptographer to have pending keys.
+    KeyParams params = {"localhost", "dummy", "passphrase2"};
+    other_cryptographer.AddKey(params);
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByTagLookup(kNigoriTag));
+    sync_pb::NigoriSpecifics nigori;
+    other_cryptographer.GetKeys(nigori.mutable_encrypted());
+    cryptographer->Update(nigori);
+    EXPECT_TRUE(cryptographer->has_pending_keys());
+    node.SetNigoriSpecifics(nigori);
+  }
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("passphrase2", false, false);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    // Verify we're encrypting with the new key.
+    sync_pb::EncryptedData encrypted;
+    cryptographer->GetKeys(&encrypted);
+    EXPECT_TRUE(other_cryptographer.CanDecrypt(encrypted));
+  }
+}
+
+// Manually set the pending keys in the cryptographer/nigori to reflect the data
+// being encrypted with an old (unprovided) GAIA password. Attempt to supply
+// the current GAIA password and verify the bootstrap token is updated. Then
+// supply the old GAIA password, and verify we re-encrypt all data with the
+// new GAIA password.
+// (case 4 in SyncManager::SyncInternalSetPassphrase)
+TEST_F(SyncManagerTest, SupplyPendingOldGAIAPass) {
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  Cryptographer other_cryptographer;
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    std::string bootstrap_token;
+    cryptographer->GetBootstrapToken(&bootstrap_token);
+    other_cryptographer.Bootstrap(bootstrap_token);
+
+    // Now update the nigori to reflect the new keys, and update the
+    // cryptographer to have pending keys.
+    KeyParams params = {"localhost", "dummy", "old_gaia"};
+    other_cryptographer.AddKey(params);
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByTagLookup(kNigoriTag));
+    sync_pb::NigoriSpecifics nigori;
+    other_cryptographer.GetKeys(nigori.mutable_encrypted());
+    node.SetNigoriSpecifics(nigori);
+    cryptographer->Update(nigori);
+
+    // other_cryptographer now contains all encryption keys, and is encrypting
+    // with the newest gaia.
+    KeyParams new_params = {"localhost", "dummy", "new_gaia"};
+    other_cryptographer.AddKey(new_params);
+  }
+  // The bootstrap token should have been updated. Save it to ensure it's based
+  // on the new GAIA password.
+  std::string bootstrap_token;
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_))
+      .WillOnce(SaveArg<0>(&bootstrap_token));
+  EXPECT_CALL(observer_, OnPassphraseRequired(_,_));
+  sync_manager_.SetPassphrase("new_gaia", false, false);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  testing::Mock::VerifyAndClearExpectations(&observer_);
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_initialized());
+    EXPECT_FALSE(cryptographer->is_ready());
+    // Verify we're encrypting with the new key, even though we have pending
+    // keys.
+    sync_pb::EncryptedData encrypted;
+    other_cryptographer.GetKeys(&encrypted);
+    EXPECT_TRUE(cryptographer->CanDecrypt(encrypted));
+  }
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("old_gaia", false, true);
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+
+    // Verify we're encrypting with the new key.
+    sync_pb::EncryptedData encrypted;
+    other_cryptographer.GetKeys(&encrypted);
+    EXPECT_TRUE(cryptographer->CanDecrypt(encrypted));
+
+    // Verify the saved bootstrap token is based on the new gaia password.
+    Cryptographer temp_cryptographer;
+    temp_cryptographer.Bootstrap(bootstrap_token);
+    EXPECT_TRUE(temp_cryptographer.CanDecrypt(encrypted));
+  }
+}
+
+// Manually set the pending keys in the cryptographer/nigori to reflect the data
+// being encrypted with an explicit (unprovided) passphrase, then supply the
+// passphrase.
+// (case 5 in SyncManager::SyncInternalSetPassphrase)
+TEST_F(SyncManagerTest, SupplyPendingExplicitPass) {
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  Cryptographer other_cryptographer;
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    std::string bootstrap_token;
+    cryptographer->GetBootstrapToken(&bootstrap_token);
+    other_cryptographer.Bootstrap(bootstrap_token);
+
+    // Now update the nigori to reflect the new keys, and update the
+    // cryptographer to have pending keys.
+    KeyParams params = {"localhost", "dummy", "explicit"};
+    other_cryptographer.AddKey(params);
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByTagLookup(kNigoriTag));
+    sync_pb::NigoriSpecifics nigori;
+    other_cryptographer.GetKeys(nigori.mutable_encrypted());
+    cryptographer->Update(nigori);
+    EXPECT_TRUE(cryptographer->has_pending_keys());
+    nigori.set_using_explicit_passphrase(true);
+    node.SetNigoriSpecifics(nigori);
+  }
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("explicit", true, true);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    // Verify we're encrypting with the new key.
+    sync_pb::EncryptedData encrypted;
+    cryptographer->GetKeys(&encrypted);
+    EXPECT_TRUE(other_cryptographer.CanDecrypt(encrypted));
+  }
+}
+
 TEST_F(SyncManagerTest, SetPassphraseWithEmptyPasswordNode) {
-  EXPECT_TRUE(SetUpEncryption());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
   int64 node_id = 0;
   std::string tag = "foo";
   {
@@ -1474,10 +1758,11 @@ TEST_F(SyncManagerTest, SetPassphraseWithEmptyPasswordNode) {
                                                    root_node, tag));
     node_id = password_node.GetId();
   }
-  EXPECT_CALL(observer_, OnPassphraseAccepted(_));
-  EXPECT_CALL(observer_, OnEncryptionComplete(_));
-  sync_manager_.SetPassphrase("new_passphrase", true);
-  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", true, true);
+  EXPECT_FALSE(sync_manager_.EncryptEverythingEnabledForTest());
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
     ReadNode password_node(&trans);
@@ -1491,11 +1776,23 @@ TEST_F(SyncManagerTest, SetPassphraseWithEmptyPasswordNode) {
   }
 }
 
-}  // namespace
+TEST_F(SyncManagerTest, NudgeDelayTest) {
+  EXPECT_EQ(sync_manager_.GetNudgeDelayTimeDelta(syncable::BOOKMARKS),
+      base::TimeDelta::FromMilliseconds(
+          SyncManager::kDefaultNudgeDelayMilliseconds));
+
+  EXPECT_EQ(sync_manager_.GetNudgeDelayTimeDelta(syncable::AUTOFILL),
+      base::TimeDelta::FromSeconds(
+          browser_sync::kDefaultShortPollIntervalSeconds));
+
+  EXPECT_EQ(sync_manager_.GetNudgeDelayTimeDelta(syncable::PREFERENCES),
+      base::TimeDelta::FromMilliseconds(
+          SyncManager::kPreferencesNudgeDelayMilliseconds));
+}
 
 // Friended by WriteNode, so can't be in an anonymouse namespace.
 TEST_F(SyncManagerTest, EncryptBookmarksWithLegacyData) {
-  EXPECT_TRUE(SetUpEncryption());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
   std::string title;
   SyncAPINameToServerName("Google", &title);
   std::string url = "http://www.google.com";
@@ -1557,23 +1854,29 @@ TEST_F(SyncManagerTest, EncryptBookmarksWithLegacyData) {
 
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::BOOKMARKS,
-                                                   false /* not encrypted */));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::BOOKMARKS,
+        false /* not encrypted */));
   }
 
-  EXPECT_CALL(observer_, OnEncryptionComplete(GetAllRealModelTypes()));
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
   sync_manager_.EnableEncryptEverything();
-  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabled());
+  EXPECT_TRUE(sync_manager_.EncryptEverythingEnabledForTest());
 
   {
     ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
-    EXPECT_EQ(GetAllRealModelTypes(), GetEncryptedTypes(&trans));
-    EXPECT_TRUE(syncable::VerifyDataTypeEncryption(trans.GetWrappedTrans(),
-                                                   trans.GetCryptographer(),
-                                                   syncable::BOOKMARKS,
-                                                   true /* is encrypted */));
+    EXPECT_TRUE(GetEncryptedTypes(&trans).Equals(
+        syncable::ModelTypeSet::All()));
+    EXPECT_TRUE(syncable::VerifyDataTypeEncryptionForTest(
+        trans.GetWrappedTrans(),
+        trans.GetCryptographer(),
+        syncable::BOOKMARKS,
+        true /* is encrypted */));
 
     ReadNode node(&trans);
     EXPECT_TRUE(node.InitByIdLookup(node_id1));
@@ -1590,6 +1893,508 @@ TEST_F(SyncManagerTest, EncryptBookmarksWithLegacyData) {
     EXPECT_EQ(raw_title2, node2.GetTitle());
     EXPECT_EQ(title2, node2.GetBookmarkSpecifics().title());
     EXPECT_EQ(url2, node2.GetBookmarkSpecifics().url());
+  }
+}
+
+// Create a bookmark and set the title/url, then verify the data was properly
+// set. This replicates the unique way bookmarks have of creating sync nodes.
+// See BookmarkChangeProcessor::PlaceSyncNode(..).
+TEST_F(SyncManagerTest, CreateLocalBookmark) {
+  std::string title = "title";
+  GURL url("url");
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode root_node(&trans);
+    root_node.InitByRootLookup();
+    WriteNode node(&trans);
+    ASSERT_TRUE(node.InitByCreation(syncable::BOOKMARKS, root_node, NULL));
+    node.SetIsFolder(false);
+    node.SetTitle(UTF8ToWide(title));
+    node.SetURL(url);
+  }
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode root_node(&trans);
+    root_node.InitByRootLookup();
+    int64 child_id = root_node.GetFirstChildId();
+
+    ReadNode node(&trans);
+    ASSERT_TRUE(node.InitByIdLookup(child_id));
+    EXPECT_FALSE(node.GetIsFolder());
+    EXPECT_EQ(title, node.GetTitle());
+    EXPECT_EQ(url, node.GetURL());
+  }
+}
+
+// Verifies WriteNode::UpdateEntryWithEncryption does not make unnecessary
+// changes.
+TEST_F(SyncManagerTest, UpdateEntryWithEncryption) {
+  std::string client_tag = "title";
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_url("url");
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_title("title");
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::BOOKMARKS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::BOOKMARKS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+  // Manually change to the same data. Should not set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetEntitySpecifics(entity_specifics);
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Encrypt the datatatype, should set is_unsynced.
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, FULL_ENCRYPTION));
+
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    EXPECT_TRUE(cryptographer->CanDecryptUsingDefaultKey(
+        specifics.encrypted()));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Set a new passphrase. Should set is_unsynced.
+  testing::Mock::VerifyAndClearExpectations(&observer_);
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", true, true);
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->is_ready());
+    EXPECT_TRUE(cryptographer->CanDecryptUsingDefaultKey(
+        specifics.encrypted()));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Force a re-encrypt everything. Should not set is_unsynced.
+  testing::Mock::VerifyAndClearExpectations(&observer_);
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    ReadNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->CanDecryptUsingDefaultKey(
+        specifics.encrypted()));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to the same data. Should not set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetEntitySpecifics(entity_specifics);
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_FALSE(node_entry->Get(IS_UNSYNCED));
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->CanDecryptUsingDefaultKey(
+        specifics.encrypted()));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to different data. Should set is_unsynced.
+  {
+    entity_specifics.MutableExtension(sync_pb::bookmark)->set_url("url2");
+    entity_specifics.MutableExtension(sync_pb::bookmark)->set_title("title2");
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetEntitySpecifics(entity_specifics);
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_TRUE(node_entry->Get(IS_UNSYNCED));
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    EXPECT_TRUE(cryptographer->CanDecryptUsingDefaultKey(
+                    specifics.encrypted()));
+  }
+}
+
+// Passwords have their own handling for encryption. Verify it does not result
+// in unnecessary writes via SetEntitySpecifics.
+TEST_F(SyncManagerTest, UpdatePasswordSetEntitySpecificsNoChange) {
+  std::string client_tag = "title";
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  sync_pb::EntitySpecifics entity_specifics;
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    sync_pb::PasswordSpecificsData data;
+    data.set_password_value("secret");
+    cryptographer->Encrypt(
+        data,
+        entity_specifics.MutableExtension(sync_pb::password)->
+            mutable_encrypted());
+  }
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::PASSWORDS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PASSWORDS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+
+  // Manually change to the same data via SetEntitySpecifics. Should not set
+  // is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PASSWORDS, client_tag));
+    node.SetEntitySpecifics(entity_specifics);
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+}
+
+// Passwords have their own handling for encryption. Verify it does not result
+// in unnecessary writes via SetPasswordSpecifics.
+TEST_F(SyncManagerTest, UpdatePasswordSetPasswordSpecifics) {
+  std::string client_tag = "title";
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  sync_pb::EntitySpecifics entity_specifics;
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    sync_pb::PasswordSpecificsData data;
+    data.set_password_value("secret");
+    cryptographer->Encrypt(
+        data,
+        entity_specifics.MutableExtension(sync_pb::password)->
+            mutable_encrypted());
+  }
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::PASSWORDS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PASSWORDS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+
+  // Manually change to the same data via SetPasswordSpecifics. Should not set
+  // is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PASSWORDS, client_tag));
+    node.SetPasswordSpecifics(node.GetPasswordSpecifics());
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+
+  // Manually change to different data. Should set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PASSWORDS, client_tag));
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    sync_pb::PasswordSpecificsData data;
+    data.set_password_value("secret2");
+    cryptographer->Encrypt(
+        data,
+        entity_specifics.MutableExtension(sync_pb::password)->
+            mutable_encrypted());
+    node.SetPasswordSpecifics(data);
+    const syncable::Entry* node_entry = node.GetEntry();
+    EXPECT_TRUE(node_entry->Get(IS_UNSYNCED));
+  }
+}
+
+// Passwords have their own handling for encryption. Verify setting a new
+// passphrase updates the data.
+TEST_F(SyncManagerTest, UpdatePasswordNewPassphrase) {
+  std::string client_tag = "title";
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  sync_pb::EntitySpecifics entity_specifics;
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    sync_pb::PasswordSpecificsData data;
+    data.set_password_value("secret");
+    cryptographer->Encrypt(
+        data,
+        entity_specifics.MutableExtension(sync_pb::password)->
+            mutable_encrypted());
+  }
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::PASSWORDS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PASSWORDS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+
+  // Set a new passphrase. Should set is_unsynced.
+  testing::Mock::VerifyAndClearExpectations(&observer_);
+  EXPECT_CALL(observer_, OnBootstrapTokenUpdated(_));
+  EXPECT_CALL(observer_, OnPassphraseAccepted());
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.SetPassphrase("new_passphrase", true, true);
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+}
+
+// Passwords have their own handling for encryption. Verify it does not result
+// in unnecessary writes via ReencryptEverything.
+TEST_F(SyncManagerTest, UpdatePasswordReencryptEverything) {
+  std::string client_tag = "title";
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, DEFAULT_ENCRYPTION));
+  sync_pb::EntitySpecifics entity_specifics;
+  {
+    ReadTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    Cryptographer* cryptographer = trans.GetCryptographer();
+    sync_pb::PasswordSpecificsData data;
+    data.set_password_value("secret");
+    cryptographer->Encrypt(
+        data,
+        entity_specifics.MutableExtension(sync_pb::password)->
+            mutable_encrypted());
+  }
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::PASSWORDS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PASSWORDS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+
+  // Force a re-encrypt everything. Should not set is_unsynced.
+  testing::Mock::VerifyAndClearExpectations(&observer_);
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PASSWORDS, client_tag));
+}
+
+// Verify SetTitle(..) doesn't unnecessarily set IS_UNSYNCED for bookmarks
+// when we write the same data, but does set it when we write new data.
+TEST_F(SyncManagerTest, SetBookmarkTitle) {
+  std::string client_tag = "title";
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_url("url");
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_title("title");
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::BOOKMARKS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::BOOKMARKS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to the same title. Should not set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetTitle(UTF8ToWide(client_tag));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to new title. Should set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetTitle(UTF8ToWide("title2"));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+}
+
+// Verify SetTitle(..) doesn't unnecessarily set IS_UNSYNCED for encrypted
+// bookmarks when we write the same data, but does set it when we write new
+// data.
+TEST_F(SyncManagerTest, SetBookmarkTitleWithEncryption) {
+  std::string client_tag = "title";
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_url("url");
+  entity_specifics.MutableExtension(sync_pb::bookmark)->set_title("title");
+  MakeServerNode(sync_manager_.GetUserShare(), syncable::BOOKMARKS, client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::BOOKMARKS,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Encrypt the datatatype, should set is_unsynced.
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, FULL_ENCRYPTION));
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to the same title. Should not set is_unsynced.
+  // NON_UNIQUE_NAME should be kEncryptedString.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetTitle(UTF8ToWide(client_tag));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+
+  // Manually change to new title. Should set is_unsynced. NON_UNIQUE_NAME
+  // should still be kEncryptedString.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::BOOKMARKS, client_tag));
+    node.SetTitle(UTF8ToWide("title2"));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::BOOKMARKS, client_tag));
+}
+
+// Verify SetTitle(..) doesn't unnecessarily set IS_UNSYNCED for non-bookmarks
+// when we write the same data, but does set it when we write new data.
+TEST_F(SyncManagerTest, SetNonBookmarkTitle) {
+  std::string client_tag = "title";
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.MutableExtension(sync_pb::preference)->set_name("name");
+  entity_specifics.MutableExtension(sync_pb::preference)->set_value("value");
+  MakeServerNode(sync_manager_.GetUserShare(),
+                 syncable::PREFERENCES,
+                 client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PREFERENCES,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+
+  // Manually change to the same title. Should not set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PREFERENCES, client_tag));
+    node.SetTitle(UTF8ToWide(client_tag));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+
+  // Manually change to new title. Should set is_unsynced.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PREFERENCES, client_tag));
+    node.SetTitle(UTF8ToWide("title2"));
+  }
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+}
+
+// Verify SetTitle(..) doesn't unnecessarily set IS_UNSYNCED for encrypted
+// non-bookmarks when we write the same data or when we write new data
+// data (should remained kEncryptedString).
+TEST_F(SyncManagerTest, SetNonBookmarkTitleWithEncryption) {
+  std::string client_tag = "title";
+  sync_pb::EntitySpecifics entity_specifics;
+  entity_specifics.MutableExtension(sync_pb::preference)->set_name("name");
+  entity_specifics.MutableExtension(sync_pb::preference)->set_value("value");
+  MakeServerNode(sync_manager_.GetUserShare(),
+                 syncable::PREFERENCES,
+                 client_tag,
+                 BaseNode::GenerateSyncableHash(syncable::PREFERENCES,
+                                                client_tag),
+                 entity_specifics);
+  // New node shouldn't start off unsynced.
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+
+  // Encrypt the datatatype, should set is_unsynced.
+  EXPECT_CALL(observer_,
+              OnEncryptedTypesChanged(
+                  HasModelTypes(syncable::ModelTypeSet::All()), true));
+  EXPECT_CALL(observer_, OnEncryptionComplete());
+  EXPECT_TRUE(SetUpEncryption(WRITE_TO_NIGORI, FULL_ENCRYPTION));
+  sync_manager_.RefreshNigori(base::Bind(&SyncManagerTest::EmptyClosure,
+                                         base::Unretained(this)));
+  scoped_refptr<base::ThreadTestHelper> helper(
+      new base::ThreadTestHelper(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
+  ASSERT_TRUE(helper->Run());
+  PumpLoop();
+  EXPECT_TRUE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+
+  // Manually change to the same title. Should not set is_unsynced.
+  // NON_UNIQUE_NAME should be kEncryptedString.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PREFERENCES, client_tag));
+    node.SetTitle(UTF8ToWide(client_tag));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+  }
+  EXPECT_FALSE(ResetUnsyncedEntry(syncable::PREFERENCES, client_tag));
+
+  // Manually change to new title. Should not set is_unsynced because the
+  // NON_UNIQUE_NAME should still be kEncryptedString.
+  {
+    WriteTransaction trans(FROM_HERE, sync_manager_.GetUserShare());
+    WriteNode node(&trans);
+    EXPECT_TRUE(node.InitByClientTagLookup(syncable::PREFERENCES, client_tag));
+    node.SetTitle(UTF8ToWide("title2"));
+    const syncable::Entry* node_entry = node.GetEntry();
+    const sync_pb::EntitySpecifics& specifics = node_entry->Get(SPECIFICS);
+    EXPECT_TRUE(specifics.has_encrypted());
+    EXPECT_EQ(kEncryptedString, node_entry->Get(NON_UNIQUE_NAME));
+    EXPECT_FALSE(node_entry->Get(IS_UNSYNCED));
   }
 }
 

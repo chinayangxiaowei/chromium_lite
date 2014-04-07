@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ typedef WebAccessibility::FloatAttribute FloatAttribute;
 typedef WebAccessibility::IntAttribute IntAttribute;
 typedef WebAccessibility::StringAttribute StringAttribute;
 
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#if (defined(OS_POSIX) && !defined(OS_MACOSX)) || defined(USE_AURA)
 // There's no OS-specific implementation of BrowserAccessibilityManager
 // on Unix, so just instantiate the base class.
 // static
@@ -48,7 +48,7 @@ void BrowserAccessibility::DetachTree(
   parent_ = NULL;
 }
 
-void BrowserAccessibility::Initialize(
+void BrowserAccessibility::PreInitialize(
     BrowserAccessibilityManager* manager,
     BrowserAccessibility* parent,
     int32 child_id,
@@ -76,11 +76,7 @@ void BrowserAccessibility::Initialize(
   cell_ids_ = src.cell_ids;
   unique_cell_ids_ = src.unique_cell_ids;
 
-  Initialize();
-}
-
-void BrowserAccessibility::Initialize() {
-  instance_active_ = true;
+  PreInitialize();
 }
 
 void BrowserAccessibility::AddChild(BrowserAccessibility* child) {
@@ -126,21 +122,29 @@ BrowserAccessibility* BrowserAccessibility::GetNextSibling() {
   return NULL;
 }
 
-gfx::Rect BrowserAccessibility::GetBoundsRect() {
+gfx::Rect BrowserAccessibility::GetLocalBoundsRect() {
   gfx::Rect bounds = location_;
-
-  // Adjust the bounds by the top left corner of the containing view's bounds
-  // in screen coordinates.
-  gfx::Point top_left = manager_->GetViewBounds().origin();
-  bounds.Offset(top_left);
 
   // Adjust top left position by the root document's scroll offset.
   BrowserAccessibility* root = manager_->GetRoot();
   int scroll_x = 0;
   int scroll_y = 0;
-  root->GetIntAttribute(WebAccessibility::ATTR_DOC_SCROLLX, &scroll_x);
-  root->GetIntAttribute(WebAccessibility::ATTR_DOC_SCROLLY, &scroll_y);
+  if (!root->GetIntAttribute(WebAccessibility::ATTR_SCROLL_X, &scroll_x) ||
+      !root->GetIntAttribute(WebAccessibility::ATTR_SCROLL_Y, &scroll_y)) {
+    return bounds;
+  }
   bounds.Offset(-scroll_x, -scroll_y);
+
+  return bounds;
+}
+
+gfx::Rect BrowserAccessibility::GetGlobalBoundsRect() {
+  gfx::Rect bounds = GetLocalBoundsRect();
+
+  // Adjust the bounds by the top left corner of the containing view's bounds
+  // in screen coordinates.
+  gfx::Point top_left = manager_->GetViewBounds().origin();
+  bounds.Offset(top_left);
 
   return bounds;
 }
@@ -151,7 +155,7 @@ BrowserAccessibility* BrowserAccessibility::BrowserAccessibilityForPoint(
   // most tightly encloses the specified point.
   for (int i = children_.size() - 1; i >= 0; --i) {
     BrowserAccessibility* child = children_[i];
-    if (child->GetBoundsRect().Contains(point))
+    if (child->GetGlobalBoundsRect().Contains(point))
       return child->BrowserAccessibilityForPoint(point);
   }
   return this;
@@ -163,6 +167,8 @@ void BrowserAccessibility::InternalAddReference() {
 
 void BrowserAccessibility::InternalReleaseReference(bool recursive) {
   DCHECK_GT(ref_count_, 0);
+  // It is a bug for ref_count_ to be gt 1 when |recursive| is true.
+  DCHECK(!recursive || ref_count_ == 1);
 
   if (recursive || ref_count_ == 1) {
     for (std::vector<BrowserAccessibility*>::iterator iter = children_.begin();
@@ -170,6 +176,10 @@ void BrowserAccessibility::InternalReleaseReference(bool recursive) {
          ++iter) {
       (*iter)->InternalReleaseReference(true);
     }
+    children_.clear();
+    // Force this to be the last ref. As the DCHECK above indicates, this
+    // should always be the case. Make it so defensively.
+    ref_count_ = 1;
   }
 
   ref_count_--;
@@ -177,13 +187,12 @@ void BrowserAccessibility::InternalReleaseReference(bool recursive) {
     // Allow the object to fire a TEXT_REMOVED notification.
     name_.clear();
     value_.clear();
-    SendNodeUpdateEvents();
+    PostInitialize();
 
     manager_->NotifyAccessibilityEvent(
         ViewHostMsg_AccEvent::OBJECT_HIDE, this);
 
     instance_active_ = false;
-    children_.clear();
     manager_->Remove(child_id_, renderer_id_);
     NativeReleaseReference();
   }
@@ -251,7 +260,26 @@ bool BrowserAccessibility::GetHtmlAttribute(
   return false;
 }
 
+bool BrowserAccessibility::HasState(WebAccessibility::State state_enum) const {
+  return (state_ >> state_enum) & 1;
+}
+
 bool BrowserAccessibility::IsEditableText() const {
   return (role_ == WebAccessibility::ROLE_TEXT_FIELD ||
           role_ == WebAccessibility::ROLE_TEXTAREA);
+}
+
+string16 BrowserAccessibility::GetTextRecursive() const {
+  if (!name_.empty()) {
+    return name_;
+  }
+
+  string16 result;
+  for (size_t i = 0; i < children_.size(); ++i)
+    result += children_[i]->GetTextRecursive();
+  return result;
+}
+
+void BrowserAccessibility::PreInitialize() {
+  instance_active_ = true;
 }

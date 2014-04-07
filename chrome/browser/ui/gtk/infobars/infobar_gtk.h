@@ -10,22 +10,27 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/tab_contents/infobar_delegate.h"
-#include "chrome/browser/tab_contents/infobar.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "third_party/skia/include/core/SkPaint.h"
+#include "chrome/browser/infobars/infobar.h"
+#include "chrome/browser/infobars/infobar_delegate.h"
+#include "chrome/browser/ui/gtk/menu_gtk.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/gtk/owned_widget_gtk.h"
 
 class CustomDrawButton;
 class GtkThemeService;
-class InfoBarDelegate;
+
+namespace ui {
+class GtkSignalRegistrar;
+class MenuModel;
+}
 
 class InfoBarGtk : public InfoBar,
-                   public NotificationObserver {
+                   public content::NotificationObserver {
  public:
-  InfoBarGtk(TabContentsWrapper* owner, InfoBarDelegate* delegate);
+  InfoBarGtk(InfoBarTabHelper* owner, InfoBarDelegate* delegate);
   virtual ~InfoBarGtk();
 
   // Get the top level native GTK widget for this infobar.
@@ -54,6 +59,10 @@ class InfoBarGtk : public InfoBar,
   // Spacing after message (and before buttons).
   static const int kEndOfLabelSpacing;
 
+  // Returns the signal registrar for this infobar. All signals representing
+  // user actions on visible widgets must go through this registrar!
+  ui::GtkSignalRegistrar* Signals();
+
   // Creates a label with the appropriate font and color for the current
   // gtk-theme state. It is InfoBarGtk's responsibility to observe browser
   // theme changes and update the label's state.
@@ -71,14 +80,21 @@ class InfoBarGtk : public InfoBar,
                               size_t link_offset,
                               GCallback callback);
 
+  // Shows the menu with |model| with the context of |sender|. InfobarGtk takes
+  // ownership of the model.
+  void ShowMenuWithModel(GtkWidget* sender,
+                         MenuGtk::Delegate* delegate,
+                         ui::MenuModel* model);
+
   // InfoBar:
   virtual void PlatformSpecificShow(bool animate) OVERRIDE;
+  virtual void PlatformSpecificOnCloseSoon() OVERRIDE;
   virtual void PlatformSpecificOnHeightsRecalculated() OVERRIDE;
 
-  // NotificationObserver:
+  // content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // The second highest widget in the hierarchy (after the |widget_|).
   GtkWidget* bg_box_;
@@ -92,7 +108,7 @@ class InfoBarGtk : public InfoBar,
   // The theme provider, used for getting border colors.
   GtkThemeService* theme_service_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
  private:
   CHROMEGTK_CALLBACK_0(InfoBarGtk, void, OnCloseButton);
@@ -107,6 +123,14 @@ class InfoBarGtk : public InfoBar,
   // A GtkExpandedContainer that contains |bg_box_| so we can varry the height
   // of the infobar.
   ui::OwnedWidgetGtk widget_;
+
+  // A list of signals which we clear out once we're closing.
+  scoped_ptr<ui::GtkSignalRegistrar> signals_;
+
+  // The current menu displayed. Can be null. We own this on the base class so
+  // we can cancel the menu while we're closing.
+  scoped_ptr<ui::MenuModel> menu_model_;
+  scoped_ptr<MenuGtk> menu_;
 
   DISALLOW_COPY_AND_ASSIGN(InfoBarGtk);
 };

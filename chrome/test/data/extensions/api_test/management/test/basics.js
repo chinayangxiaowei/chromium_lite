@@ -52,12 +52,15 @@ var tests = [
                 { "description": "a short description" });
       checkItemInList(items, "enabled_app", true, true,
                 { "appLaunchUrl": "http://www.google.com/",
-                  "offlineEnabled": true });
-      checkItemInList(items, "disabled_app", false, true);
+                  "offlineEnabled": true,
+                  "updateUrl": "http://example.com/update.xml" });
+      checkItemInList(items, "disabled_app", false, true,
+                     { "disabledReason": "unknown" });
       checkItemInList(items, "enabled_extension", true, false,
                      { "homepageUrl": "http://example.com/" });
       checkItemInList(items, "disabled_extension", false, false,
-                { "optionsUrl": "chrome-extension://<ID>/pages/options.html" });
+                { "optionsUrl": "chrome-extension://<ID>/pages/options.html",
+                  "disabledReason": "unknown" });
 
       // Check that we got the icons correctly
       var extension = getItemNamed(items, "enabled_extension");
@@ -107,8 +110,7 @@ var tests = [
       chrome.management.getPermissionWarningsById(extension.id,
                                                   callback(function(warnings) {
         chrome.test.assertEq(1, warnings.length);
-        chrome.test.assertEq("Your list of installed apps, extensions, " +
-                             "and themes",
+        chrome.test.assertEq("Your list of apps, extensions, and themes",
                              warnings[0]);
       }));
     }));

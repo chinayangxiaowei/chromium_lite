@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@
 
 namespace dbus {
 
-// Echo, SlowEcho, BrokenMethod.
-const int TestService::kNumMethodsToExport = 3;
+// Echo, SlowEcho, AsyncEcho, BrokenMethod.
+const int TestService::kNumMethodsToExport = 4;
 
 TestService::Options::Options() {
 }
@@ -30,6 +30,7 @@ TestService::TestService(const Options& options)
 }
 
 TestService::~TestService() {
+  Stop();
 }
 
 bool TestService::StartService() {
@@ -72,11 +73,31 @@ void TestService::SendTestSignal(const std::string& message) {
                  message));
 }
 
+void TestService::SendTestSignalFromRoot(const std::string& message) {
+  message_loop()->PostTask(
+      FROM_HERE,
+      base::Bind(&TestService::SendTestSignalFromRootInternal,
+                 base::Unretained(this),
+                 message));
+}
+
 void TestService::SendTestSignalInternal(const std::string& message) {
   dbus::Signal signal("org.chromium.TestInterface", "Test");
   dbus::MessageWriter writer(&signal);
   writer.AppendString(message);
   exported_object_->SendSignal(&signal);
+}
+
+void TestService::SendTestSignalFromRootInternal(const std::string& message) {
+  dbus::Signal signal("org.chromium.TestInterface", "Test");
+  dbus::MessageWriter writer(&signal);
+  writer.AppendString(message);
+
+  // Use "/" just like dbus-send does.
+  ExportedObject* root_object =
+      bus_->GetExportedObject("org.chromium.TestService",
+                              "/");
+  root_object->SendSignal(&signal);
 }
 
 void TestService::OnExported(const std::string& interface_name,
@@ -127,6 +148,15 @@ void TestService::Run(MessageLoop* message_loop) {
 
   exported_object_->ExportMethod(
       "org.chromium.TestInterface",
+      "AsyncEcho",
+      base::Bind(&TestService::AsyncEcho,
+                 base::Unretained(this)),
+      base::Bind(&TestService::OnExported,
+                 base::Unretained(this)));
+  ++num_methods;
+
+  exported_object_->ExportMethod(
+      "org.chromium.TestInterface",
       "BrokenMethod",
       base::Bind(&TestService::BrokenMethod,
                  base::Unretained(this)),
@@ -142,25 +172,44 @@ void TestService::Run(MessageLoop* message_loop) {
   message_loop->Run();
 }
 
-Response* TestService::Echo(MethodCall* method_call) {
+void TestService::Echo(MethodCall* method_call,
+                       dbus::ExportedObject::ResponseSender response_sender) {
   MessageReader reader(method_call);
   std::string text_message;
-  if (!reader.PopString(&text_message))
-    return NULL;
+  if (!reader.PopString(&text_message)) {
+    response_sender.Run(NULL);
+    return;
+  }
 
   Response* response = Response::FromMethodCall(method_call);
   MessageWriter writer(response);
   writer.AppendString(text_message);
-  return response;
+  response_sender.Run(response);
 }
 
-Response* TestService::SlowEcho(MethodCall* method_call) {
-  base::PlatformThread::Sleep(TestTimeouts::tiny_timeout_ms());
-  return Echo(method_call);
+void TestService::SlowEcho(
+    MethodCall* method_call,
+    dbus::ExportedObject::ResponseSender response_sender) {
+  base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
+  Echo(method_call, response_sender);
 }
 
-Response* TestService::BrokenMethod(MethodCall* method_call) {
-  return NULL;
+void TestService::AsyncEcho(
+    MethodCall* method_call,
+    dbus::ExportedObject::ResponseSender response_sender) {
+  // Schedule a call to Echo() to send an asynchronous response after we return.
+  message_loop()->PostDelayedTask(FROM_HERE,
+                                  base::Bind(&TestService::Echo,
+                                             base::Unretained(this),
+                                             method_call,
+                                             response_sender),
+                                  TestTimeouts::tiny_timeout_ms());
+}
+
+void TestService::BrokenMethod(
+    MethodCall* method_call,
+    dbus::ExportedObject::ResponseSender response_sender) {
+  response_sender.Run(NULL);
 }
 
 }  // namespace dbus

@@ -11,6 +11,7 @@
 #include "base/i18n/break_iterator.h"
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/icu_string_conversions.h"
+#include "base/json/json_value_serializer.h"
 #include "base/message_loop.h"
 #include "base/string16.h"
 #include "base/utf_string_conversions.h"
@@ -27,10 +28,11 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/common/json_value_serializer.h"
+#include "content/public/common/url_fetcher.h"
 #include "googleurl/src/url_util.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
+#include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_status.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -243,18 +245,14 @@ void SearchProvider::Stop() {
   default_provider_suggest_text_.clear();
 }
 
-void SearchProvider::OnURLFetchComplete(const URLFetcher* source,
-                                        const GURL& url,
-                                        const net::URLRequestStatus& status,
-                                        int response_code,
-                                        const net::ResponseCookies& cookie,
-                                        const std::string& data) {
+void SearchProvider::OnURLFetchComplete(const content::URLFetcher* source) {
   DCHECK(!done_);
   suggest_results_pending_--;
   DCHECK_GE(suggest_results_pending_, 0);  // Should never go negative.
   const net::HttpResponseHeaders* const response_headers =
-      source->response_headers();
-  std::string json_data(data);
+      source->GetResponseHeaders();
+  std::string json_data;
+  source->GetResponseAsString(&json_data);
   // JSON is supposed to be UTF-8, but some suggest service providers send JSON
   // files in non-UTF-8 encodings.  The actual encoding is usually specified in
   // the Content-Type header field.
@@ -263,7 +261,7 @@ void SearchProvider::OnURLFetchComplete(const URLFetcher* source,
     if (response_headers->GetCharset(&charset)) {
       string16 data_16;
       // TODO(jungshik): Switch to CodePageToUTF8 after it's added.
-      if (base::CodepageToUTF16(data, charset.c_str(),
+      if (base::CodepageToUTF16(json_data, charset.c_str(),
                                 base::OnStringConversionError::FAIL,
                                 &data_16))
         json_data = UTF16ToUTF8(data_16);
@@ -274,7 +272,7 @@ void SearchProvider::OnURLFetchComplete(const URLFetcher* source,
   SuggestResults* suggest_results = is_keyword_results ?
       &keyword_suggest_results_ : &default_suggest_results_;
 
-  if (status.is_success() && response_code == 200) {
+  if (source->GetStatus().is_success() && source->GetResponseCode() == 200) {
     JSONStringValueSerializer deserializer(json_data);
     deserializer.set_allow_trailing_comma(true);
     scoped_ptr<Value> root_val(deserializer.Deserialize(NULL, NULL));
@@ -333,7 +331,7 @@ void SearchProvider::StartOrStopSuggestQuery(bool minimal_changes) {
   // Don't send any queries to the server until some time has elapsed after
   // the last keypress, to avoid flooding the server with requests we are
   // likely to end up throwing away anyway.
-  static const int kQueryDelayMs = 200;
+  const int kQueryDelayMs = 200;
 
   if (!IsQuerySuitableForSuggest()) {
     StopSuggest();
@@ -435,16 +433,21 @@ void SearchProvider::StopSuggest() {
   have_suggest_results_ = false;
 }
 
-URLFetcher* SearchProvider::CreateSuggestFetcher(int id,
-                                                 const TemplateURL& provider,
-                                                 const string16& text) {
+content::URLFetcher* SearchProvider::CreateSuggestFetcher(
+    int id,
+    const TemplateURL& provider,
+    const string16& text) {
   const TemplateURLRef* const suggestions_url = provider.suggestions_url();
   DCHECK(suggestions_url->SupportsReplacement());
-  URLFetcher* fetcher = URLFetcher::Create(id,
-      GURL(suggestions_url->ReplaceSearchTermsUsingProfile(profile_, provider,
-          text, TemplateURLRef::NO_SUGGESTIONS_AVAILABLE, string16())),
-      URLFetcher::GET, this);
-  fetcher->set_request_context(profile_->GetRequestContext());
+  content::URLFetcher* fetcher = content::URLFetcher::Create(
+      id,
+      GURL(suggestions_url->ReplaceSearchTermsUsingProfile(
+          profile_, provider, text, TemplateURLRef::NO_SUGGESTIONS_AVAILABLE,
+          string16())),
+      content::URLFetcher::GET,
+      this);
+  fetcher->SetRequestContext(profile_->GetRequestContext());
+  fetcher->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES);
   fetcher->Start();
   return fetcher;
 }
@@ -490,7 +493,7 @@ bool SearchProvider::ParseSuggestResults(Value* root_val,
       DictionaryValue* dict_val = static_cast<DictionaryValue*>(optional_val);
 
       // Parse Google Suggest specific type extension.
-      static const std::string kGoogleSuggestType("google:suggesttype");
+      const std::string kGoogleSuggestType("google:suggesttype");
       if (dict_val->HasKey(kGoogleSuggestType))
         dict_val->GetList(kGoogleSuggestType, &type_list);
     }
@@ -686,7 +689,8 @@ SearchProvider::ScoredTerms SearchProvider::ScoreHistoryTerms(
     if (!prevent_inline_autocomplete && classifier && (i->term != input_text)) {
       AutocompleteMatch match;
       classifier->Classify(i->term, string16(), false, false, &match, NULL);
-      prevent_inline_autocomplete = match.transition == PageTransition::TYPED;
+      prevent_inline_autocomplete =
+          match.transition == content::PAGE_TRANSITION_TYPED;
     }
 
     int relevance = CalculateRelevanceForHistory(i->time, is_keyword,
@@ -887,8 +891,8 @@ void SearchProvider::AddMatchToMap(const string16& query_string,
       profile_, provider, query_string, accepted_suggestion, input_text));
 
   // Search results don't look like URLs.
-  match.transition =
-      is_keyword ? PageTransition::KEYWORD : PageTransition::GENERATED;
+  match.transition = is_keyword ?
+      content::PAGE_TRANSITION_KEYWORD : content::PAGE_TRANSITION_GENERATED;
 
   // Try to add |match| to |map|.  If a match for |query_string| is already in
   // |map|, replace it if |match| is more relevant.

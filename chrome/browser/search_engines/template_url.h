@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,6 @@ class Profile;
 class SearchTermsData;
 class TemplateURL;
 class WebDataService;
-struct WDKeywordsResult;
 
 // TemplateURL represents the relevant portions of the Open Search Description
 // Document (http://www.opensearch.org/Specifications/OpenSearch).
@@ -169,6 +168,7 @@ class TemplateURLRef {
     GOOGLE_ACCEPTED_SUGGESTION,
     GOOGLE_BASE_URL,
     GOOGLE_BASE_SUGGEST_URL,
+    GOOGLE_INSTANT_ENABLED,
     GOOGLE_INSTANT_FIELD_TRIAL_GROUP,
     GOOGLE_ORIGINAL_QUERY_FOR_SUGGESTION,
     GOOGLE_RLZ,
@@ -514,6 +514,8 @@ class TemplateURL {
   friend class KeywordTableTest;
   friend class SearchHostToURLsMap;
   friend class TemplateURLService;
+  FRIEND_TEST_ALL_PREFIXES(TemplateURLServiceSyncTest,
+                           ResolveSyncKeywordConflict);
 
   // Invalidates cached values on this object and its child TemplateURLRefs.
   void InvalidateCachedValues() const;

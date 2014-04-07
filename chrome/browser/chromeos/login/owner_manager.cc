@@ -7,14 +7,17 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/boot_times_loader.h"
-#include "chrome/browser/chromeos/login/signed_settings_temp_storage.h"
-#include "content/browser/browser_thread.h"
+#include "chrome/browser/chromeos/login/signed_settings_cache.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
+
+using content::BrowserThread;
 
 namespace chromeos {
 
@@ -35,7 +38,7 @@ void OwnerManager::UpdateOwnerKey(const BrowserThread::ID thread_id,
 
   BrowserThread::PostTask(
       thread_id, FROM_HERE,
-      NewRunnableMethod(this, &OwnerManager::CallKeyUpdateDelegate, d));
+      base::Bind(&OwnerManager::CallKeyUpdateDelegate, this, d));
 }
 
 void OwnerManager::LoadOwnerKey() {
@@ -54,10 +57,8 @@ void OwnerManager::LoadOwnerKey() {
   // that we're done with this attempt.
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(this,
-                        &OwnerManager::SendNotification,
-                        result,
-                        NotificationService::NoDetails()));
+      base::Bind(&OwnerManager::SendNotification, this, result,
+                 content::NotificationService::NoDetails()));
 }
 
 bool OwnerManager::EnsurePublicKey() {
@@ -87,9 +88,8 @@ void OwnerManager::Sign(const BrowserThread::ID thread_id,
   if (!(EnsurePublicKey() && EnsurePrivateKey())) {
     BrowserThread::PostTask(
         thread_id, FROM_HERE,
-        NewRunnableMethod(this,
-                          &OwnerManager::CallDelegate,
-                          d, KEY_UNAVAILABLE, std::vector<uint8>()));
+        base::Bind(&OwnerManager::CallDelegate, this, d, KEY_UNAVAILABLE,
+                   std::vector<uint8>()));
     BootTimesLoader::Get()->AddLoginTimeMarker("SignEnd", false);
     return;
   }
@@ -103,9 +103,7 @@ void OwnerManager::Sign(const BrowserThread::ID thread_id,
 
   BrowserThread::PostTask(
       thread_id, FROM_HERE,
-      NewRunnableMethod(this,
-                        &OwnerManager::CallDelegate,
-                        d, return_code, signature));
+      base::Bind(&OwnerManager::CallDelegate, this, d, return_code, signature));
   BootTimesLoader::Get()->AddLoginTimeMarker("SignEnd", false);
 }
 
@@ -119,9 +117,8 @@ void OwnerManager::Verify(const BrowserThread::ID thread_id,
   if (!EnsurePublicKey()) {
     BrowserThread::PostTask(
         thread_id, FROM_HERE,
-        NewRunnableMethod(this,
-                          &OwnerManager::CallDelegate,
-                          d, KEY_UNAVAILABLE, std::vector<uint8>()));
+        base::Bind(&OwnerManager::CallDelegate, this, d, KEY_UNAVAILABLE,
+                   std::vector<uint8>()));
     BootTimesLoader::Get()->AddLoginTimeMarker("VerifyEnd", false);
     return;
   }
@@ -133,17 +130,17 @@ void OwnerManager::Verify(const BrowserThread::ID thread_id,
   }
   BrowserThread::PostTask(
       thread_id, FROM_HERE,
-      NewRunnableMethod(this,
-                        &OwnerManager::CallDelegate,
-                        d, return_code, std::vector<uint8>()));
+      base::Bind(&OwnerManager::CallDelegate, this, d, return_code,
+                 std::vector<uint8>()));
   BootTimesLoader::Get()->AddLoginTimeMarker("VerifyEnd", false);
 }
 
-void OwnerManager::SendNotification(int type,
-                                    const NotificationDetails& details) {
-  NotificationService::current()->Notify(
+void OwnerManager::SendNotification(
+    int type,
+    const content::NotificationDetails& details) {
+  content::NotificationService::current()->Notify(
       type,
-      NotificationService::AllSources(),
+      content::NotificationService::AllSources(),
       details);
 }
 

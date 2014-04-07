@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/gtk/infobars/extension_infobar_gtk.h"
 
+#include "base/debug/trace_event.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/platform_util.h"
@@ -18,12 +19,13 @@
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
 #include "grit/theme_resources.h"
+#include "ui/base/gtk/gtk_signal_registrar.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas_skia.h"
 #include "ui/gfx/gtk_util.h"
 #include "ui/gfx/image/image.h"
 
-ExtensionInfoBarGtk::ExtensionInfoBarGtk(TabContentsWrapper* owner,
+ExtensionInfoBarGtk::ExtensionInfoBarGtk(InfoBarTabHelper* owner,
                                          ExtensionInfoBarDelegate* delegate)
     : InfoBarGtk(owner, delegate),
       tracker_(this),
@@ -69,7 +71,7 @@ void ExtensionInfoBarGtk::OnImageLoaded(
   // TODO(erg): IDR_EXTENSIONS_SECTION should have an IDR_INFOBAR_EXTENSIONS
   // icon of the correct size with real subpixel shading and such.
   SkBitmap* icon = image;
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   if (!image || image->empty())
     icon = rb.GetBitmapNamed(IDR_EXTENSIONS_SECTION);
 
@@ -79,8 +81,8 @@ void ExtensionInfoBarGtk::OnImageLoaded(
   // The margin between the extension icon and the drop-down arrow bitmap.
   static const int kDropArrowLeftMargin = 3;
   scoped_ptr<gfx::CanvasSkia> canvas(new gfx::CanvasSkia(
-      image_size + kDropArrowLeftMargin + drop_image->width(),
-      image_size,
+      gfx::Size(image_size + kDropArrowLeftMargin + drop_image->width(),
+                image_size),
       false));
   canvas->DrawBitmapInt(*icon, 0, 0, icon->width(), icon->height(), 0, 0,
                         image_size, image_size, false);
@@ -132,12 +134,12 @@ void ExtensionInfoBarGtk::BuildWidgets() {
     gtk_container_add(GTK_CONTAINER(alignment_), view_->native_view());
   }
 
-  signals_.Connect(button_, "button-press-event",
-                   G_CALLBACK(&OnButtonPressThunk), this);
-  signals_.Connect(view_->native_view(), "expose-event",
-                   G_CALLBACK(&OnExposeThunk), this);
-  signals_.Connect(view_->native_view(), "size_allocate",
-                   G_CALLBACK(&OnSizeAllocateThunk), this);
+  Signals()->Connect(button_, "button-press-event",
+                     G_CALLBACK(&OnButtonPressThunk), this);
+  Signals()->Connect(view_->native_view(), "expose-event",
+                     G_CALLBACK(&OnExposeThunk), this);
+  Signals()->Connect(view_->native_view(), "size_allocate",
+                     G_CALLBACK(&OnSizeAllocateThunk), this);
 }
 
 void ExtensionInfoBarGtk::StoppedShowing() {
@@ -153,7 +155,7 @@ Browser* ExtensionInfoBarGtk::GetBrowser() {
   return BrowserWindowGtk::GetBrowserWindowForNativeWindow(parent)->browser();
 }
 
-MenuGtk* ExtensionInfoBarGtk::BuildMenu() {
+ui::MenuModel* ExtensionInfoBarGtk::BuildMenuModel() {
   const Extension* extension = delegate_->extension();
   if (!extension->ShowConfigureContextMenus())
     return NULL;
@@ -162,9 +164,7 @@ MenuGtk* ExtensionInfoBarGtk::BuildMenu() {
   if (!browser)
     return NULL;
 
-  menu_model_ = new ExtensionContextMenuModel(extension, browser, NULL);
-  menu_.reset(new MenuGtk(this, menu_model_.get()));
-  return menu_.get();
+  return new ExtensionContextMenuModel(extension, browser, NULL);
 }
 
 void ExtensionInfoBarGtk::OnSizeAllocate(GtkWidget* widget,
@@ -180,19 +180,21 @@ gboolean ExtensionInfoBarGtk::OnButtonPress(GtkWidget* widget,
   if (event->button != 1)
     return FALSE;
 
-  MenuGtk* menu = BuildMenu();
-  if (!menu)
+  ui::MenuModel* model = BuildMenuModel();
+  if (!model)
     return FALSE;
 
   gtk_chrome_button_set_paint_state(GTK_CHROME_BUTTON(widget),
                                     GTK_STATE_ACTIVE);
-  menu->PopupForWidget(widget, event->button, event->time);
+  ShowMenuWithModel(widget, this, model);
 
   return TRUE;
 }
 
 gboolean ExtensionInfoBarGtk::OnExpose(GtkWidget* sender,
                                        GdkEventExpose* event) {
+  TRACE_EVENT0("ui::gtk", "ExtensionInfoBarGtk::OnExpose");
+
   // We also need to draw our infobar arrows over the renderer.
   static_cast<InfoBarContainerGtk*>(container())->
       PaintInfobarBitsOn(sender, event, this);
@@ -200,6 +202,6 @@ gboolean ExtensionInfoBarGtk::OnExpose(GtkWidget* sender,
   return FALSE;
 }
 
-InfoBar* ExtensionInfoBarDelegate::CreateInfoBar(TabContentsWrapper* owner) {
+InfoBar* ExtensionInfoBarDelegate::CreateInfoBar(InfoBarTabHelper* owner) {
   return new ExtensionInfoBarGtk(owner, this);
 }

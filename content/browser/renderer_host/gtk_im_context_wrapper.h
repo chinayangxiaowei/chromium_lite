@@ -46,8 +46,8 @@ class GtkIMContextWrapper {
   void ProcessKeyEvent(GdkEventKey* event);
 
   void UpdateInputMethodState(ui::TextInputType type,
-                              bool can_compose_inline,
-                              const gfx::Rect& caret_rect);
+                              bool can_compose_inline);
+  void UpdateCaretBounds(const gfx::Rect& caret_bounds);
   void OnFocusIn();
   void OnFocusOut();
   bool is_focused() const { return is_focused_; }
@@ -91,6 +91,9 @@ class GtkIMContextWrapper {
   // Real code of "preedit-end" signal handler.
   void HandlePreeditEnd();
 
+  // Real code of "retrieve-surrounding" signal handler.
+  gboolean HandleRetrieveSurrounding(GtkIMContext* context);
+
   // Real code of "realize" signal handler, used for setting im context's client
   // window.
   void HandleHostViewRealize(GtkWidget* widget);
@@ -112,6 +115,8 @@ class GtkIMContextWrapper {
                                         GtkIMContextWrapper* self);
   static void HandlePreeditEndThunk(GtkIMContext* context,
                                     GtkIMContextWrapper* self);
+  static gboolean HandleRetrieveSurroundingThunk(GtkIMContext* context,
+                                                 GtkIMContextWrapper* self);
 
   // Signal handlers connecting to |host_view_|'s native view widget.
   static void HandleHostViewRealizeThunk(GtkWidget* widget,

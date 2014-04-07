@@ -4,6 +4,8 @@
 
 #include "base/values.h"
 
+#include <algorithm>
+
 #include "base/float_util.h"
 #include "base/logging.h"
 #include "base/string_util.h"
@@ -57,6 +59,22 @@ Value* CopyWithoutEmptyChildren(Value* node) {
       return node->DeepCopy();
   }
 }
+
+// A small functor for comparing Values for std::find_if and similar.
+class ValueEquals {
+ public:
+  // Pass the value against which all consecutive calls of the () operator will
+  // compare their argument to. This Value object must not be destroyed while
+  // the ValueEquals is  in use.
+  ValueEquals(const Value* first) : first_(first) { }
+
+  bool operator ()(const Value* second) const {
+    return first_->Equals(second);
+  }
+
+ private:
+  const Value* first_;
+};
 
 }  // namespace
 
@@ -122,6 +140,14 @@ bool Value::GetAsList(ListValue** out_value) {
 }
 
 bool Value::GetAsList(const ListValue** out_value) const {
+  return false;
+}
+
+bool Value::GetAsDictionary(DictionaryValue** out_value) {
+  return false;
+}
+
+bool Value::GetAsDictionary(const DictionaryValue** out_value) const {
   return false;
 }
 
@@ -327,6 +353,18 @@ DictionaryValue::~DictionaryValue() {
   Clear();
 }
 
+bool DictionaryValue::GetAsDictionary(DictionaryValue** out_value) {
+  if (out_value)
+    *out_value = this;
+  return true;
+}
+
+bool DictionaryValue::GetAsDictionary(const DictionaryValue** out_value) const {
+  if (out_value)
+    *out_value = this;
+  return true;
+}
+
 bool DictionaryValue::HasKey(const std::string& key) const {
   DCHECK(IsStringUTF8(key));
   ValueMap::const_iterator current_entry = dictionary_.find(key);
@@ -394,12 +432,13 @@ void DictionaryValue::SetWithoutPathExpansion(const std::string& key,
                                               Value* in_value) {
   // If there's an existing value here, we need to delete it, because
   // we own all our children.
-  if (HasKey(key)) {
-    DCHECK(dictionary_[key] != in_value);  // This would be bogus
-    delete dictionary_[key];
+  std::pair<ValueMap::iterator, bool> ins_res =
+      dictionary_.insert(std::make_pair(key, in_value));
+  if (!ins_res.second) {
+    DCHECK_NE(ins_res.first->second, in_value);  // This would be bogus
+    delete ins_res.first->second;
+    ins_res.first->second = in_value;
   }
-
-  dictionary_[key] = in_value;
 }
 
 bool DictionaryValue::Get(const std::string& path, Value** out_value) const {
@@ -863,6 +902,10 @@ bool ListValue::Insert(size_t index, Value* in_value) {
 
   list_.insert(list_.begin() + index, in_value);
   return true;
+}
+
+ListValue::const_iterator ListValue::Find(const Value& value) const {
+  return std::find_if(list_.begin(), list_.end(), ValueEquals(&value));
 }
 
 bool ListValue::GetAsList(ListValue** out_value) {

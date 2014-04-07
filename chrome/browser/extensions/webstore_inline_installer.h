@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,26 +12,27 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
+#include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/browser/extensions/webstore_install_helper.h"
-#include "content/browser/tab_contents/tab_contents_observer.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/url_fetcher_delegate.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
-class TabContents;
 class SafeWebstoreResponseParser;
 
 // Manages inline installs requested by a page (downloads and parses metadata
 // from the webstore, shows the install UI, starts the download once the user
 // confirms).  Clients must implement the WebstoreInlineInstaller::Delegate
 // interface to be notified when the inline install completes (successfully or
-// not). The client will not be notified if the TabContents that this install
+// not). The client will not be notified if the WebContents that this install
 // request is attached to goes away.
 class WebstoreInlineInstaller
     : public base::RefCountedThreadSafe<WebstoreInlineInstaller>,
       public ExtensionInstallUI::Delegate,
-      public TabContentsObserver,
-      public URLFetcher::Delegate,
+      public content::WebContentsObserver,
+      public content::URLFetcherDelegate,
+      public WebstoreInstaller::Delegate,
       public WebstoreInstallHelper::Delegate {
  public:
   class Delegate {
@@ -41,7 +42,7 @@ class WebstoreInlineInstaller
                                         const std::string& error) = 0;
   };
 
-  WebstoreInlineInstaller(TabContents* tab_contents,
+  WebstoreInlineInstaller(content::WebContents* web_contents,
                           int install_id,
                           std::string webstore_item_id,
                           GURL requestor_url,
@@ -51,6 +52,7 @@ class WebstoreInlineInstaller
  private:
   friend class base::RefCountedThreadSafe<WebstoreInlineInstaller>;
   friend class SafeWebstoreResponseParser;
+  FRIEND_TEST_ALL_PREFIXES(WebstoreInlineInstallerTest, DomainVerification);
 
   virtual ~WebstoreInlineInstaller();
 
@@ -67,8 +69,8 @@ class WebstoreInlineInstaller
   // All flows (whether successful or not) end up in CompleteInstall, which
   // informs our delegate of success/failure.
 
-  // UrlFetcher::Delegate interface implementation.
-  virtual void OnURLFetchComplete(const URLFetcher* source) OVERRIDE;
+  // content::URLFetcherDelegate interface implementation.
+  virtual void OnURLFetchComplete(const content::URLFetcher* source) OVERRIDE;
 
   // Client callbacks for SafeWebstoreResponseParser when parsing is complete.
   void OnWebstoreResponseParseSuccess(DictionaryValue* webstore_data);
@@ -76,9 +78,11 @@ class WebstoreInlineInstaller
 
   // WebstoreInstallHelper::Delegate interface implementation.
   virtual void OnWebstoreParseSuccess(
+      const std::string& id,
       const SkBitmap& icon,
       base::DictionaryValue* parsed_manifest) OVERRIDE;
   virtual void OnWebstoreParseFailure(
+      const std::string& id,
       InstallHelperResultCode result_code,
       const std::string& error_message) OVERRIDE;
 
@@ -86,10 +90,21 @@ class WebstoreInlineInstaller
   virtual void InstallUIProceed() OVERRIDE;
   virtual void InstallUIAbort(bool user_initiated) OVERRIDE;
 
-  // TabContentsObserver interface implementation.
-  virtual void TabContentsDestroyed(TabContents* tab_contents) OVERRIDE;
+  // content::WebContentsObserver interface implementation.
+  virtual void WebContentsDestroyed(
+      content::WebContents* web_contents) OVERRIDE;
+
+  // WebstoreInstaller::Delegate interface implementation.
+  virtual void OnExtensionInstallSuccess(const std::string& id) OVERRIDE;
+  virtual void OnExtensionInstallFailure(const std::string& id,
+                                         const std::string& error) OVERRIDE;
 
   void CompleteInstall(const std::string& error);
+
+  // Checks whether the install is initiated by a page in the verified site
+  // (which is at least a domain, but can also have a port or a path).
+  static bool IsRequestorURLInVerifiedSite(const GURL& requestor_url,
+                                           const std::string& verified_site);
 
   int install_id_;
   std::string id_;
@@ -97,7 +112,7 @@ class WebstoreInlineInstaller
   Delegate* delegate_;
 
   // For fetching webstore JSON data.
-  scoped_ptr<URLFetcher> webstore_data_url_fetcher_;
+  scoped_ptr<content::URLFetcher> webstore_data_url_fetcher_;
 
   // Extracted from the webstore JSON data response.
   std::string localized_name_;

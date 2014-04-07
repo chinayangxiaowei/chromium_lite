@@ -1,10 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <deque>
 #include <stdlib.h>
 
+#include "base/bind.h"
+#include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "media/base/video_frame.h"
 #include "remoting/base/base_mock_objects.h"
@@ -130,8 +132,8 @@ class DecoderTester {
   }
 
   void Reset() {
-    rects_.clear();
-    update_rects_.clear();
+    expected_region_.setEmpty();
+    update_region_.setEmpty();
   }
 
   void ReceivedPacket(VideoPacket* packet) {
@@ -140,7 +142,7 @@ class DecoderTester {
     ASSERT_NE(Decoder::DECODE_ERROR, result);
 
     if (result == Decoder::DECODE_DONE) {
-      decoder_->GetUpdatedRects(&update_rects_);
+      decoder_->GetUpdatedRegion(&update_region_);
     }
   }
 
@@ -153,7 +155,9 @@ class DecoderTester {
   }
 
   void AddRects(const SkIRect* rects, int count) {
-    rects_.insert(rects_.begin() + rects_.size(), rects, rects + count);
+    SkRegion new_rects;
+    new_rects.setRects(rects, count);
+    expected_region_.op(new_rects, SkRegion::kUnion_Op);
   }
 
   void VerifyResults() {
@@ -162,21 +166,17 @@ class DecoderTester {
 
     ASSERT_TRUE(capture_data_.get());
 
-    // Test the content of the update rect.
-    ASSERT_EQ(rects_.size(), update_rects_.size());
-    for (size_t i = 0; i < update_rects_.size(); ++i) {
-      SkIRect &r = rects_[i];
-      gfx::Rect rect(r.fLeft, r.fTop, r.width(), r.height());
-      EXPECT_EQ(rect, update_rects_[i]);
-
+    // Test the content of the update region.
+    EXPECT_EQ(expected_region_, update_region_);
+    for (SkRegion::Iterator i(update_region_); !i.done(); i.next()) {
       EXPECT_EQ(frame_->stride(0), capture_data_->data_planes().strides[0]);
       const int stride = frame_->stride(0);
-      const int offset =  stride * update_rects_[i].y() +
-          kBytesPerPixel * update_rects_[i].x();
+      const int offset =  stride * i.rect().top() +
+          kBytesPerPixel * i.rect().left();
       const uint8* original = capture_data_->data_planes().data[0] + offset;
       const uint8* decoded = frame_->data(0) + offset;
-      const int row_size = kBytesPerPixel * update_rects_[i].width();
-      for (int y = 0; y < update_rects_[i].height(); ++y) {
+      const int row_size = kBytesPerPixel * i.rect().width();
+      for (int y = 0; y < i.rect().height(); ++y) {
         EXPECT_EQ(0, memcmp(original, decoded, row_size))
             << "Row " << y << " is different";
         original += stride;
@@ -187,8 +187,8 @@ class DecoderTester {
 
  private:
   bool strict_;
-  std::deque<SkIRect> rects_;
-  UpdatedRects update_rects_;
+  SkRegion expected_region_;
+  SkRegion update_region_;
   Decoder* decoder_;
   scoped_refptr<media::VideoFrame> frame_;
   scoped_refptr<CaptureData> capture_data_;
@@ -257,7 +257,7 @@ scoped_refptr<CaptureData> PrepareEncodeData(media::VideoFrame::Format format,
   planes.strides[0] = kWidth * kBytesPerPixel;
 
   scoped_refptr<CaptureData> data =
-      new CaptureData(planes, gfx::Size(kWidth, kHeight), format);
+      new CaptureData(planes, SkISize::Make(kWidth, kHeight), format);
   return data;
 }
 
@@ -271,8 +271,8 @@ static void TestEncodingRects(Encoder* encoder,
   }
   tester->AddRects(rects, count);
 
-  encoder->Encode(data, true,
-                  NewCallback(tester, &EncoderTester::DataAvailable));
+  encoder->Encode(data, true, base::Bind(
+      &EncoderTester::DataAvailable, base::Unretained(tester)));
 }
 
 void TestEncoder(Encoder* encoder, bool strict) {
@@ -292,36 +292,32 @@ void TestEncoder(Encoder* encoder, bool strict) {
   TestEncodingRects(encoder, &tester, data, kTestRects + 3, 2);
 }
 
-static void TestEncodingRects(Encoder* encoder,
-                              EncoderTester* encoder_tester,
-                              DecoderTester* decoder_tester,
-                              scoped_refptr<CaptureData> data,
-                              const SkIRect* rects, int count) {
-  data->mutable_dirty_region().setEmpty();
-  for (int i = 0; i < count; ++i) {
-    data->mutable_dirty_region().op(rects[i], SkRegion::kUnion_Op);
-  }
+static void TestEncodeDecodeRects(Encoder* encoder,
+                                  EncoderTester* encoder_tester,
+                                  DecoderTester* decoder_tester,
+                                  scoped_refptr<CaptureData> data,
+                                  const SkIRect* rects, int count) {
+  data->mutable_dirty_region().setRects(rects, count);
   encoder_tester->AddRects(rects, count);
   decoder_tester->AddRects(rects, count);
 
-  // Generate random data for the updated rects.
+  // Generate random data for the updated region.
   srand(0);
   for (int i = 0; i < count; ++i) {
-    const SkIRect& rect = rects[i];
     const int bytes_per_pixel = GetBytesPerPixel(data->pixel_format());
-    const int row_size = bytes_per_pixel * rect.width();
+    const int row_size = bytes_per_pixel * rects[i].width();
     uint8* memory = data->data_planes().data[0] +
-                    data->data_planes().strides[0] * rect.fTop +
-                    bytes_per_pixel * rect.fLeft;
-    for (int y = 0; y < rect.height(); ++y) {
+      data->data_planes().strides[0] * rects[i].top() +
+      bytes_per_pixel * rects[i].left();
+    for (int y = 0; y < rects[i].height(); ++y) {
       for (int x = 0; x < row_size; ++x)
         memory[x] = rand() % 256;
       memory += data->data_planes().strides[0];
     }
   }
 
-  encoder->Encode(data, true,
-                  NewCallback(encoder_tester, &EncoderTester::DataAvailable));
+  encoder->Encode(data, true, base::Bind(&EncoderTester::DataAvailable,
+                                         base::Unretained(encoder_tester)));
   decoder_tester->VerifyResults();
   decoder_tester->Reset();
 }
@@ -342,16 +338,14 @@ void TestEncoderDecoder(Encoder* encoder, Decoder* decoder, bool strict) {
   decoder_tester.set_capture_data(data);
   encoder_tester.set_decoder_tester(&decoder_tester);
 
-  TestEncodingRects(encoder, &encoder_tester, &decoder_tester, data,
-                    kTestRects, 1);
-  TestEncodingRects(encoder, &encoder_tester, &decoder_tester, data,
-                    kTestRects + 1, 1);
-  TestEncodingRects(encoder, &encoder_tester, &decoder_tester, data,
-                    kTestRects + 2, 1);
-  TestEncodingRects(encoder, &encoder_tester, &decoder_tester, data,
-                    kTestRects + 3, 2);
+  TestEncodeDecodeRects(encoder, &encoder_tester, &decoder_tester, data,
+                        kTestRects, 1);
+  TestEncodeDecodeRects(encoder, &encoder_tester, &decoder_tester, data,
+                        kTestRects + 1, 1);
+  TestEncodeDecodeRects(encoder, &encoder_tester, &decoder_tester, data,
+                        kTestRects + 2, 1);
+  TestEncodeDecodeRects(encoder, &encoder_tester, &decoder_tester, data,
+                        kTestRects + 3, 2);
 }
 
 }  // namespace remoting
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(remoting::DecoderTester);

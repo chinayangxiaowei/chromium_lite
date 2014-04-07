@@ -17,19 +17,19 @@
 #include "base/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_about_handler.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/options/advanced_options_handler.h"
 #include "chrome/browser/ui/webui/options/autofill_options_handler.h"
 #include "chrome/browser/ui/webui/options/browser_options_handler.h"
 #include "chrome/browser/ui/webui/options/clear_browser_data_handler.h"
 #include "chrome/browser/ui/webui/options/content_settings_handler.h"
-#include "chrome/browser/ui/webui/options/handler_options_handler.h"
 #include "chrome/browser/ui/webui/options/cookies_view_handler.h"
 #include "chrome/browser/ui/webui/options/core_options_handler.h"
 #include "chrome/browser/ui/webui/options/extension_settings_handler.h"
 #include "chrome/browser/ui/webui/options/font_settings_handler.h"
+#include "chrome/browser/ui/webui/options/handler_options_handler.h"
 #include "chrome/browser/ui/webui/options/import_data_handler.h"
-#include "chrome/browser/ui/webui/options/intents_settings_handler.h"
 #include "chrome/browser/ui/webui/options/language_options_handler.h"
 #include "chrome/browser/ui/webui/options/manage_profile_handler.h"
 #include "chrome/browser/ui/webui/options/options_sync_setup_handler.h"
@@ -38,16 +38,18 @@
 #include "chrome/browser/ui/webui/options/personal_options_handler.h"
 #include "chrome/browser/ui/webui/options/search_engine_manager_handler.h"
 #include "chrome/browser/ui/webui/options/stop_syncing_handler.h"
+#include "chrome/browser/ui/webui/options/web_intents_settings_handler.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/time_format.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_delegate.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/content_notification_types.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -60,6 +62,7 @@
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/ui/webui/options/chromeos/about_page_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/accounts_options_handler.h"
+#include "chrome/browser/ui/webui/options/chromeos/bluetooth_options_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/change_picture_options_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/core_chromeos_options_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/cros_language_options_handler.h"
@@ -79,6 +82,10 @@
 #if defined(USE_NSS)
 #include "chrome/browser/ui/webui/options/certificate_manager_handler.h"
 #endif
+
+using content::UserMetricsAction;
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 static const char kLocalizedStringsFile[] = "strings.js";
 static const char kOptionsBundleJsFile[]  = "options_bundle.js";
@@ -192,8 +199,8 @@ void OptionsPageUIHandler::RegisterTitle(DictionaryValue* localized_strings,
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-OptionsUI::OptionsUI(TabContents* contents)
-    : ChromeWebUI(contents),
+OptionsUI::OptionsUI(content::WebUI* web_ui)
+    : WebUIController(web_ui),
       initialized_handlers_(false) {
   DictionaryValue* localized_strings = new DictionaryValue();
 
@@ -214,7 +221,7 @@ OptionsUI::OptionsUI(TabContents* contents)
   AddOptionsPageUIHandler(localized_strings, new CookiesViewHandler());
   AddOptionsPageUIHandler(localized_strings, new ExtensionSettingsHandler());
   AddOptionsPageUIHandler(localized_strings, new FontSettingsHandler());
-  AddOptionsPageUIHandler(localized_strings, new IntentsSettingsHandler());
+  AddOptionsPageUIHandler(localized_strings, new WebIntentsSettingsHandler());
 #if defined(OS_CHROMEOS)
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::CrosLanguageOptionsHandler());
@@ -228,12 +235,15 @@ OptionsUI::OptionsUI(TabContents* contents)
   AddOptionsPageUIHandler(localized_strings, new SearchEngineManagerHandler());
   AddOptionsPageUIHandler(localized_strings, new ImportDataHandler());
   AddOptionsPageUIHandler(localized_strings, new StopSyncingHandler());
-  AddOptionsPageUIHandler(localized_strings, new OptionsSyncSetupHandler());
+  AddOptionsPageUIHandler(localized_strings, new OptionsSyncSetupHandler(
+      g_browser_process->profile_manager()));
 #if defined(OS_CHROMEOS)
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::AboutPageHandler());
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::AccountsOptionsHandler());
+  AddOptionsPageUIHandler(localized_strings,
+                          new chromeos::BluetoothOptionsHandler());
   AddOptionsPageUIHandler(localized_strings, new InternetOptionsHandler());
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::LanguageChewingHandler());
@@ -247,7 +257,8 @@ OptionsUI::OptionsUI(TabContents* contents)
                           new chromeos::LanguagePinyinHandler());
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::VirtualKeyboardManagerHandler());
-  AddOptionsPageUIHandler(localized_strings, new chromeos::ProxyHandler());
+  AddOptionsPageUIHandler(localized_strings,
+                          new chromeos::ProxyHandler());
   AddOptionsPageUIHandler(localized_strings,
                           new chromeos::ChangePictureOptionsHandler());
   AddOptionsPageUIHandler(localized_strings,
@@ -264,7 +275,7 @@ OptionsUI::OptionsUI(TabContents* contents)
       new OptionsUIHTMLSource(localized_strings);
 
   // Set up the chrome://settings/ source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(html_source);
 
   // Set up the chrome://theme/ source.
@@ -282,27 +293,17 @@ OptionsUI::OptionsUI(TabContents* contents)
 OptionsUI::~OptionsUI() {
   // Uninitialize all registered handlers. The base class owns them and it will
   // eventually delete them. Skip over the generic handler.
-  for (std::vector<WebUIMessageHandler*>::iterator iter = handlers_.begin() + 1;
-       iter != handlers_.end();
-       ++iter) {
-    static_cast<OptionsPageUIHandler*>(*iter)->Uninitialize();
-  }
+  for (size_t i = 0; i < handlers_.size(); ++i)
+   handlers_[i]->Uninitialize();
 }
 
 // Override.
 void OptionsUI::RenderViewCreated(RenderViewHost* render_view_host) {
-  std::string command_line_string;
+  SetCommandLineString(render_view_host);
+}
 
-#if defined(OS_WIN)
-  std::wstring wstr = CommandLine::ForCurrentProcess()->GetCommandLineString();
-  command_line_string = WideToASCII(wstr);
-#else
-  command_line_string =
-      CommandLine::ForCurrentProcess()->GetCommandLineString();
-#endif
-
-  render_view_host->SetWebUIProperty("commandLineString", command_line_string);
-  WebUI::RenderViewCreated(render_view_host);
+void OptionsUI::RenderViewReused(RenderViewHost* render_view_host) {
+  SetCommandLineString(render_view_host);
 }
 
 void OptionsUI::DidBecomeActiveForReusedRenderView() {
@@ -312,9 +313,7 @@ void OptionsUI::DidBecomeActiveForReusedRenderView() {
   // won't fire to initilize the handlers. To make sure initialization always
   // happens, call reinitializeCore (which is a no-op unless the DOM was already
   // initialized).
-  CallJavascriptFunction("OptionsPage.reinitializeCore");
-
-  WebUI::DidBecomeActiveForReusedRenderView();
+  web_ui()->CallJavascriptFunction("OptionsPage.reinitializeCore");
 }
 
 // static
@@ -324,7 +323,8 @@ RefCountedMemory* OptionsUI::GetFaviconResourceBytes() {
 }
 
 void OptionsUI::InitializeHandlers() {
-  DCHECK(!GetProfile()->IsOffTheRecord() || Profile::IsGuestSession());
+  Profile* profile = Profile::FromWebUI(web_ui());
+  DCHECK(!profile->IsOffTheRecord() || Profile::IsGuestSession());
 
   // The reinitialize call from DidBecomeActiveForReusedRenderView end up being
   // delivered after a new web page DOM has been brought up in an existing
@@ -334,11 +334,8 @@ void OptionsUI::InitializeHandlers() {
     return;
   initialized_handlers_ = true;
 
-  std::vector<WebUIMessageHandler*>::iterator iter;
-  // Skip over the generic handler.
-  for (iter = handlers_.begin() + 1; iter != handlers_.end(); ++iter) {
-    (static_cast<OptionsPageUIHandler*>(*iter))->Initialize();
-  }
+  for (size_t i = 0; i < handlers_.size(); ++i)
+    handlers_[i]->Initialize();
 }
 
 void OptionsUI::AddOptionsPageUIHandler(DictionaryValue* localized_strings,
@@ -349,6 +346,21 @@ void OptionsUI::AddOptionsPageUIHandler(DictionaryValue* localized_strings,
   if (handler->IsEnabled()) {
     handler->GetLocalizedValues(localized_strings);
     // Add handler to the list and also pass the ownership.
-    AddMessageHandler(handler.release()->Attach(this));
+    web_ui()->AddMessageHandler(handler.release());
+    handlers_.push_back(handler_raw);
   }
+}
+
+void OptionsUI::SetCommandLineString(RenderViewHost* render_view_host) {
+  std::string command_line_string;
+
+#if defined(OS_WIN)
+  command_line_string =
+      WideToASCII(CommandLine::ForCurrentProcess()->GetCommandLineString());
+#else
+  command_line_string =
+      CommandLine::ForCurrentProcess()->GetCommandLineString();
+#endif
+
+  render_view_host->SetWebUIProperty("commandLineString", command_line_string);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define WEBKIT_PLUGINS_PPAPI_MOCK_PLUGIN_DELEGATE_H_
 
 #include "webkit/plugins/ppapi/plugin_delegate.h"
+
+struct PP_NetAddress_Private;
 
 namespace webkit {
 namespace ppapi {
@@ -15,7 +17,10 @@ class MockPluginDelegate : public PluginDelegate {
   MockPluginDelegate();
   virtual ~MockPluginDelegate();
 
-  virtual void PluginFocusChanged(bool focused);
+  virtual void PluginFocusChanged(PluginInstance* instance, bool focused);
+  virtual void PluginTextInputTypeChanged(PluginInstance* instance);
+  virtual void PluginCaretPositionChanged(PluginInstance* instance);
+  virtual void PluginRequestedCancelComposition(PluginInstance* instance);
   virtual void PluginCrashed(PluginInstance* instance);
   virtual void InstanceCreated(PluginInstance* instance);
   virtual void InstanceDeleted(PluginInstance* instance);
@@ -29,7 +34,11 @@ class MockPluginDelegate : public PluginDelegate {
       media::VideoCapture::EventHandler* handler);
   virtual PlatformAudio* CreateAudio(uint32_t sample_rate,
                                      uint32_t sample_count,
-                                     PlatformAudio::Client* client);
+                                     PlatformAudioCommonClient* client);
+  virtual PlatformAudioInput* CreateAudioInput(
+      uint32_t sample_rate,
+      uint32_t sample_count,
+      PlatformAudioCommonClient* client);
   virtual PpapiBroker* ConnectToPpapiBroker(PPB_Broker_Impl* client);
   virtual void NumberOfFindResultsChanged(int identifier,
                                           int total,
@@ -40,10 +49,10 @@ class MockPluginDelegate : public PluginDelegate {
       WebKit::WebFileChooserCompletion* chooser_completion);
   virtual bool AsyncOpenFile(const FilePath& path,
                              int flags,
-                             AsyncOpenFileCallback* callback);
+                             const AsyncOpenFileCallback& callback);
   virtual bool AsyncOpenFileSystemURL(const GURL& path,
                                       int flags,
-                                      AsyncOpenFileCallback* callback);
+                                      const AsyncOpenFileCallback& callback);
   virtual bool OpenFileSystem(
       const GURL& url,
       fileapi::FileSystemType type,
@@ -69,7 +78,7 @@ class MockPluginDelegate : public PluginDelegate {
       fileapi::FileSystemCallbackDispatcher* dispatcher);
   virtual void QueryAvailableSpace(const GURL& origin,
                                    quota::StorageType type,
-                                   AvailableSpaceCallback* callback);
+                                   const AvailableSpaceCallback& callback);
   virtual void WillUpdateFile(const GURL& file_path);
   virtual void DidUpdateFile(const GURL& file_path, int64_t delta);
   virtual base::PlatformFileError OpenFile(const PepperFilePath& path,
@@ -86,7 +95,6 @@ class MockPluginDelegate : public PluginDelegate {
                                                  DirContents* contents);
   virtual void SyncGetFileSystemPlatformPath(const GURL& url,
                                              FilePath* platform_path);
-  virtual void PublishPolicy(const std::string& policy_json);
   virtual scoped_refptr<base::MessageLoopProxy>
       GetFileThreadMessageLoopProxy();
   virtual int32_t ConnectTcp(
@@ -95,7 +103,31 @@ class MockPluginDelegate : public PluginDelegate {
       uint16_t port);
   virtual int32_t ConnectTcpAddress(
       webkit::ppapi::PPB_Flash_NetConnector_Impl* connector,
-      const struct PP_Flash_NetAddress* addr);
+      const PP_NetAddress_Private* addr);
+  virtual uint32 TCPSocketCreate();
+  virtual void TCPSocketConnect(PPB_TCPSocket_Private_Impl* socket,
+                                uint32 socket_id,
+                                const std::string& host,
+                                uint16_t port);
+  virtual void TCPSocketConnectWithNetAddress(
+      PPB_TCPSocket_Private_Impl* socket,
+      uint32 socket_id,
+      const PP_NetAddress_Private& addr);
+  virtual void TCPSocketSSLHandshake(uint32 socket_id,
+                                     const std::string& server_name,
+                                     uint16_t server_port);
+  virtual void TCPSocketRead(uint32 socket_id, int32_t bytes_to_read);
+  virtual void TCPSocketWrite(uint32 socket_id, const std::string& buffer);
+  virtual void TCPSocketDisconnect(uint32 socket_id);
+  virtual uint32 UDPSocketCreate();
+  virtual void UDPSocketBind(PPB_UDPSocket_Private_Impl* socket,
+                             uint32 socket_id,
+                             const PP_NetAddress_Private& addr);
+  virtual void UDPSocketRecvFrom(uint32 socket_id, int32_t num_bytes);
+  virtual void UDPSocketSendTo(uint32 socket_id,
+                               const std::string& buffer,
+                               const PP_NetAddress_Private& addr);
+  virtual void UDPSocketClose(uint32 socket_id);
   virtual int32_t ShowContextMenu(
       PluginInstance* instance,
       webkit::ppapi::PPB_Flash_Menu_Impl* menu,
@@ -106,18 +138,25 @@ class MockPluginDelegate : public PluginDelegate {
   virtual std::string GetDefaultEncoding();
   virtual void ZoomLimitsChanged(double minimum_factor,
                                  double maximum_factor);
-  virtual void SubscribeToPolicyUpdates(PluginInstance* instance);
   virtual std::string ResolveProxy(const GURL& url);
   virtual void DidStartLoading();
   virtual void DidStopLoading();
   virtual void SetContentRestriction(int restrictions);
   virtual void SaveURLAs(const GURL& url);
-  virtual content::P2PSocketDispatcher* GetP2PSocketDispatcher();
   virtual webkit_glue::P2PTransport* CreateP2PTransport();
   virtual double GetLocalTimeZoneOffset(base::Time t);
   virtual std::string GetFlashCommandLineArgs();
   virtual base::SharedMemory* CreateAnonymousSharedMemory(uint32_t size);
   virtual ::ppapi::Preferences GetPreferences();
+  virtual bool LockMouse(PluginInstance* instance);
+  virtual void UnlockMouse(PluginInstance* instance);
+  virtual bool IsMouseLocked(PluginInstance* instance);
+  virtual void DidChangeCursor(PluginInstance* instance,
+                               const WebKit::WebCursorInfo& cursor);
+  virtual void DidReceiveMouseEvent(PluginInstance* instance);
+  virtual void SampleGamepads(WebKit::WebGamepads* data) OVERRIDE;
+  virtual bool IsInFullscreenMode();
+  virtual bool IsPageVisible() const;
 };
 
 }  // namespace ppapi

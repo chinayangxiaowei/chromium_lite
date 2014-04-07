@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-// TODO(erg): This list has been temporarily annotated by erg while doing work
-// on which headers to pull out.
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/process.h"
@@ -19,12 +17,15 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/common/common_param_traits.h"
+#include "chrome/common/content_settings.h"
+#include "chrome/common/content_settings_pattern.h"
 #include "chrome/common/instant_types.h"
 #include "chrome/common/nacl_types.h"
 #include "chrome/common/search_provider.h"
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/common/translate_errors.h"
-#include "content/common/common_param_traits.h"
+#include "content/public/common/common_param_traits.h"
+#include "content/public/common/webkit_param_traits.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_platform_file.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -50,13 +51,33 @@ enum ViewHostMsg_JavaScriptStressTestControl_Commands {
   kJavaScriptStressTestPrepareStressRun = 1,
 };
 
+// This enum is inside a struct so that we can forward-declare the struct in
+// others headers without having to include this one.
+struct ChromeViewHostMsg_GetPluginInfo_Status {
+  enum Value {
+    kAllowed,
+    kBlocked,
+    kClickToPlay,
+    kDisabled,
+    kNotFound,
+    kOutdatedBlocked,
+    kOutdatedDisallowed,
+    kUnauthorized,
+  };
+
+  ChromeViewHostMsg_GetPluginInfo_Status() : value(kAllowed) {}
+
+  Value value;
+};
+
 namespace IPC {
 
-#if defined(OS_POSIX)
+#if defined(OS_POSIX) && !defined(USE_AURA) && !defined(OS_ANDROID)
 
 // TODO(port): this shouldn't exist. However, the plugin stuff is really using
 // HWNDS (NativeView), and making Windows calls based on them. I've not figured
 // out the deal with plugins yet.
+// TODO(android): a gfx::NativeView is the same as a gfx::NativeWindow.
 template <>
 struct ParamTraits<gfx::NativeView> {
   typedef gfx::NativeView param_type;
@@ -75,11 +96,11 @@ struct ParamTraits<gfx::NativeView> {
   }
 };
 
-#endif  // defined(OS_POSIX)
+#endif  // defined(OS_POSIX) && !defined(USE_AURA) && !defined(OS_ANDROID)
 
 template <>
-struct ParamTraits<ContentSettings> {
-  typedef ContentSettings param_type;
+struct ParamTraits<ContentSettingsPattern> {
+  typedef ContentSettingsPattern param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, void** iter, param_type* r);
   static void Log(const param_type& p, std::string* l);
@@ -91,11 +112,40 @@ struct ParamTraits<ContentSettings> {
 
 #define IPC_MESSAGE_START ChromeMsgStart
 
+IPC_ENUM_TRAITS(ChromeViewHostMsg_GetPluginInfo_Status::Value)
 IPC_ENUM_TRAITS(InstantCompleteBehavior)
 IPC_ENUM_TRAITS(search_provider::OSDDType)
 IPC_ENUM_TRAITS(search_provider::InstallState)
 IPC_ENUM_TRAITS(TranslateErrors::Type)
 IPC_ENUM_TRAITS(WebKit::WebConsoleMessage::Level)
+
+IPC_STRUCT_TRAITS_BEGIN(ChromeViewHostMsg_GetPluginInfo_Status)
+IPC_STRUCT_TRAITS_MEMBER(value)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(ContentSettingsPattern::PatternParts)
+  IPC_STRUCT_TRAITS_MEMBER(scheme)
+  IPC_STRUCT_TRAITS_MEMBER(is_scheme_wildcard)
+  IPC_STRUCT_TRAITS_MEMBER(host)
+  IPC_STRUCT_TRAITS_MEMBER(has_domain_wildcard)
+  IPC_STRUCT_TRAITS_MEMBER(port)
+  IPC_STRUCT_TRAITS_MEMBER(is_port_wildcard)
+  IPC_STRUCT_TRAITS_MEMBER(path)
+  IPC_STRUCT_TRAITS_MEMBER(is_path_wildcard)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(ContentSettingPatternSource)
+  IPC_STRUCT_TRAITS_MEMBER(primary_pattern)
+  IPC_STRUCT_TRAITS_MEMBER(secondary_pattern)
+  IPC_STRUCT_TRAITS_MEMBER(setting)
+  IPC_STRUCT_TRAITS_MEMBER(source)
+  IPC_STRUCT_TRAITS_MEMBER(incognito)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(RendererContentSettingRules)
+  IPC_STRUCT_TRAITS_MEMBER(image_rules)
+  IPC_STRUCT_TRAITS_MEMBER(script_rules)
+IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(ThumbnailScore)
   IPC_STRUCT_TRAITS_MEMBER(boring_score)
@@ -138,7 +188,8 @@ IPC_MESSAGE_CONTROL3(ChromeViewMsg_SetCacheCapacities,
                      size_t /* capacity */)
 
 // Tells the renderer to clear the cache.
-IPC_MESSAGE_CONTROL0(ChromeViewMsg_ClearCache)
+IPC_MESSAGE_CONTROL1(ChromeViewMsg_ClearCache,
+                     bool /* on_navigation */)
 
 // Tells the renderer to dump as much memory as it can, perhaps because we
 // have memory pressure or the renderer is (or will be) paged out.  This
@@ -174,24 +225,9 @@ IPC_MESSAGE_CONTROL1(ChromeViewMsg_VisitedLink_Add, std::vector<uint64>)
 // re-calculated.
 IPC_MESSAGE_CONTROL0(ChromeViewMsg_VisitedLink_Reset)
 
-// Set the content settings for a particular url that the renderer is in the
-// process of loading.  This will be stored, to be used if the load commits
-// and ignored otherwise.
-IPC_MESSAGE_ROUTED2(ChromeViewMsg_SetContentSettingsForLoadingURL,
-                    GURL /* url */,
-                    ContentSettings /* content_settings */)
-
-// Set the content settings for a particular url, so all render views
-// displaying this host url update their content settings to match.
-IPC_MESSAGE_CONTROL2(ChromeViewMsg_SetContentSettingsForCurrentURL,
-                     GURL /* url */,
-                     ContentSettings /* content_settings */)
-
-// Set the content settings for a particular url that the renderer is in the
-// process of loading.  This will be stored, to be used if the load commits
-// and ignored otherwise.
-IPC_MESSAGE_CONTROL1(ChromeViewMsg_SetDefaultContentSettings,
-                     ContentSettings /* content_settings */)
+// Set the content setting rules stored by the renderer.
+IPC_MESSAGE_CONTROL1(ChromeViewMsg_SetContentSettingRules,
+                     RendererContentSettingRules /* rules */)
 
 // Tells the render view to load all blocked plugins.
 IPC_MESSAGE_ROUTED0(ChromeViewMsg_LoadBlockedPlugins)
@@ -251,6 +287,11 @@ IPC_MESSAGE_ROUTED4(ChromeViewMsg_DetermineIfPageSupportsInstant,
                     int /* selection_start */,
                     int /* selection_end */)
 
+// Toggles visual muting of the render view area. This is on when a constrained
+// window is showing.
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_SetVisuallyDeemphasized,
+                    bool /* deemphazied */)
+
 // Tells the renderer to translate the page contents from one language to
 // another.
 IPC_MESSAGE_ROUTED4(ChromeViewMsg_TranslatePage,
@@ -285,6 +326,10 @@ IPC_MESSAGE_ROUTED1(ChromeViewMsg_SetAllowDisplayingInsecureContent,
 IPC_MESSAGE_ROUTED1(ChromeViewMsg_SetAllowRunningInsecureContent,
                     bool /* allowed */)
 
+// Tells renderer to always enforce mixed content blocking for this host.
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_AddStrictSecurityHost,
+                    std::string /* host */)
+
 // Sent when the profile changes the kSafeBrowsingEnabled preference.
 IPC_MESSAGE_ROUTED1(ChromeViewMsg_SetClientSidePhishingDetection,
                     bool /* enable_phishing_detection */)
@@ -300,6 +345,12 @@ IPC_MESSAGE_ROUTED1(ChromeViewMsg_StartFrameSniffer,
 IPC_MESSAGE_ROUTED2(ChromeViewMsg_JavaScriptStressTestControl,
                     int /* cmd */,
                     int /* param */)
+
+// Asks the renderer to send back FPS.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_GetFPS)
+
+// Tells the view it is displaying an interstitial page.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_SetAsInterstitial)
 
 //-----------------------------------------------------------------------------
 // TabContents messages
@@ -341,7 +392,7 @@ IPC_SYNC_MESSAGE_CONTROL4_1(ChromeViewHostMsg_AllowDOMStorage,
                             int /* render_view_id */,
                             GURL /* origin_url */,
                             GURL /* top origin url */,
-                            DOMStorageType /* type */,
+                            bool /* if true local storage, otherwise session */,
                             bool /* allowed */)
 
 // Sent by the renderer process to check whether access to FileSystem is
@@ -361,24 +412,58 @@ IPC_SYNC_MESSAGE_CONTROL4_1(ChromeViewHostMsg_AllowIndexedDB,
                             string16 /* database name */,
                             bool /* allowed */)
 
-// Gets the content setting for a plugin.
-// If |setting| is set to CONTENT_SETTING_BLOCK, the plug-in is
-// blocked by the content settings for |policy_url|. It still
-// appears in navigator.plugins in Javascript though, and can be
-// loaded via click-to-play.
-//
-// If |setting| is set to CONTENT_SETTING_ALLOW, the domain is
-// explicitly white-listed for the plug-in, or the user has chosen
-// not to block nonsandboxed plugins.
-//
-// If |setting| is set to CONTENT_SETTING_DEFAULT, the plug-in is
-// neither blocked nor white-listed, which means that it's allowed
-// by default and can still be blocked if it's non-sandboxed.
-//
-IPC_SYNC_MESSAGE_CONTROL2_1(ChromeViewHostMsg_GetPluginContentSetting,
-                            GURL /* policy_url */,
-                            std::string  /* resource */,
-                            ContentSetting /* setting */)
+// Return information about a plugin for the given URL and MIME type.
+// In contrast to ViewHostMsg_GetPluginInfo in content/, this IPC call knows
+// about specific reasons why a plug-in can't be used, for example because it's
+// disabled.
+IPC_SYNC_MESSAGE_CONTROL4_3(ChromeViewHostMsg_GetPluginInfo,
+                            int /* render_view_id */,
+                            GURL /* url */,
+                            GURL /* top origin url */,
+                            std::string /* mime_type */,
+                            ChromeViewHostMsg_GetPluginInfo_Status /* status */,
+                            webkit::WebPluginInfo /* plugin */,
+                            std::string /* actual_mime_type */)
+
+#if defined(ENABLE_PLUGIN_INSTALLATION)
+// Tells the browser to search for a plug-in that can handle the given MIME
+// type. The result will be sent asynchronously to the routing ID
+// |placeholder_id|.
+IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_FindMissingPlugin,
+                    int /* placeholder_id */,
+                    std::string /* mime_type */)
+
+// Notifies the browser that a missing plug-in placeholder has been removed, so
+// the corresponding MissingPluginHost can be deleted.
+IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_RemoveMissingPluginHost,
+                    int /* placeholder_id */)
+
+// Notifies a missing plug-in placeholder that a plug-in with name |plugin_name|
+// has been found.
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_FoundMissingPlugin,
+                    string16 /* plugin_name */)
+
+// Notifies a missing plug-in placeholder that no plug-in has been found.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_DidNotFindMissingPlugin)
+
+// Notifies a missing plug-in placeholder that we have started downloading
+// the plug-in.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_StartedDownloadingPlugin)
+
+// Notifies a missing plug-in placeholder that we have finished downloading
+// the plug-in.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_FinishedDownloadingPlugin)
+
+// Notifies a missing plug-in placeholder that there was an error downloading
+// the plug-in.
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_ErrorDownloadingPlugin,
+                    std::string /* message */)
+#endif  // defined(ENABLE_PLUGIN_INSTALLATION)
+
+// Tells the browser to open chrome://plugins in a new tab. We use a separate
+// message because renderer processes aren't allowed to directly navigate to
+// chrome:// URLs.
+IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_OpenAboutPlugins)
 
 // Specifies the URL as the first parameter (a wstring) and thumbnail as
 // binary data as the second parameter.
@@ -456,22 +541,6 @@ IPC_MESSAGE_CONTROL2(ChromeViewHostMsg_V8HeapStats,
 IPC_MESSAGE_CONTROL1(ChromeViewHostMsg_DnsPrefetch,
                      std::vector<std::string> /* hostnames */)
 
-// Requests the plugin policies.
-//
-// |outdated_policy| determines what to do about outdated plugins.
-// |authorize_policy| determines what to do about plugins that require
-// authorization to run.
-//
-// Both values can be ALLOW or ASK. |outdated_policy| can also be BLOCK.
-// Anything else is an error.
-// ALLOW means that the plugin should just run, as a normal plugin.
-// BLOCK means that the plugin should not run nor be allowed to run at all.
-// ASK means that the plugin should be initially blocked and the user should
-// be asked whether he wants to run the plugin.
-IPC_SYNC_MESSAGE_CONTROL0_2(ChromeViewHostMsg_GetPluginPolicies,
-                            ContentSetting   /* outdated_policy */,
-                            ContentSetting   /* authorize_policy */)
-
 // Notifies when a plugin couldn't be loaded because it's outdated.
 IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_BlockedOutdatedPlugin,
                     string16, /* name */
@@ -508,10 +577,10 @@ IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_CancelPrerenderForPrinting)
 // Sent by the renderer to check if a URL has permission to trigger a clipboard
 // read/write operation from the DOM.
 IPC_SYNC_MESSAGE_ROUTED1_1(ChromeViewHostMsg_CanTriggerClipboardRead,
-                           GURL /* url */,
+                           GURL /* origin */,
                            bool /* allowed */)
 IPC_SYNC_MESSAGE_ROUTED1_1(ChromeViewHostMsg_CanTriggerClipboardWrite,
-                           GURL /* url */,
+                           GURL /* origin */,
                            bool /* allowed */)
 
 // Sent when the renderer was prevented from displaying insecure content in
@@ -521,6 +590,10 @@ IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_DidBlockDisplayingInsecureContent)
 // Sent when the renderer was prevented from running insecure content in
 // a secure origin by a security policy.  The page may appear incomplete.
 IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_DidBlockRunningInsecureContent)
+
+// Message sent from renderer to the browser when the element that is focused
+// and currently accepts keyboard input inside the webpage has been touched.
+IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_FocusedEditableNodeTouched)
 
 // Suggest results -----------------------------------------------------------
 
@@ -540,6 +613,9 @@ IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_PDFHasUnsupportedFeature)
 IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_FrameLoadingError,
                     int /* error */)
 
+// This message indicates the monitored frame loading had completed.
+IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_FrameLoadingCompleted)
+
 // The following messages are used to set and get cookies for ChromeFrame
 // processes.
 // Used to set a cookie. The cookie is set asynchronously, but will be
@@ -555,3 +631,8 @@ IPC_SYNC_MESSAGE_ROUTED2_1(ChromeViewHostMsg_GetCookies,
                            GURL /* url */,
                            GURL /* first_party_for_cookies */,
                            std::string /* cookies */)
+
+// Provide the browser process with current renderer framerate.
+IPC_MESSAGE_CONTROL2(ChromeViewHostMsg_FPS,
+                     int /* routing id */,
+                     float /* frames per second */)

@@ -8,91 +8,91 @@
 
 #include "base/logging.h"
 #include "base/string_number_conversions.h"
-#include "remoting/jingle_glue/iq_request.h"
 #include "remoting/jingle_glue/xmpp_proxy.h"
 #include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
 
 namespace remoting {
 
-JavascriptSignalStrategy::JavascriptSignalStrategy(const std::string& your_jid)
-    : your_jid_(your_jid),
-      listener_(NULL),
+JavascriptSignalStrategy::JavascriptSignalStrategy(const std::string& local_jid)
+    : local_jid_(local_jid),
       last_id_(0) {
 }
 
 JavascriptSignalStrategy::~JavascriptSignalStrategy() {
-  DCHECK(listener_ == NULL);
-  Close();
+  DCHECK_EQ(listeners_.size(), 0U);
+  Disconnect();
 }
 
 void JavascriptSignalStrategy::AttachXmppProxy(
     scoped_refptr<XmppProxy> xmpp_proxy) {
+  DCHECK(CalledOnValidThread());
   xmpp_proxy_ = xmpp_proxy;
+}
+
+void JavascriptSignalStrategy::Connect() {
+  DCHECK(CalledOnValidThread());
+
   xmpp_proxy_->AttachCallback(AsWeakPtr());
+  FOR_EACH_OBSERVER(Listener, listeners_,
+                    OnSignalStrategyStateChange(CONNECTED));
 }
 
-void JavascriptSignalStrategy::Init(StatusObserver* observer) {
+void JavascriptSignalStrategy::Disconnect() {
   DCHECK(CalledOnValidThread());
 
-  // Blast through each state since for a JavascriptSignalStrategy, we're
-  // already connected.
-  //
-  // TODO(ajwong): Clarify the status API contract to see if we have to actually
-  // walk through each state.
-  observer->OnStateChange(StatusObserver::START);
-  observer->OnStateChange(StatusObserver::CONNECTING);
-  observer->OnJidChange(your_jid_);
-  observer->OnStateChange(StatusObserver::CONNECTED);
-}
-
-void JavascriptSignalStrategy::Close() {
-  DCHECK(CalledOnValidThread());
-
-  if (xmpp_proxy_) {
+  if (xmpp_proxy_)
     xmpp_proxy_->DetachCallback();
-    xmpp_proxy_ = NULL;
-  }
+  FOR_EACH_OBSERVER(Listener, listeners_,
+                    OnSignalStrategyStateChange(DISCONNECTED));
 }
 
-void JavascriptSignalStrategy::SetListener(Listener* listener) {
-  DCHECK(CalledOnValidThread());
-
-  // Don't overwrite an listener without explicitly going
-  // through "NULL" first.
-  DCHECK(listener_ == NULL || listener == NULL);
-  listener_ = listener;
+SignalStrategy::State JavascriptSignalStrategy::GetState() const {
+  // TODO(sergeyu): Extend XmppProxy to provide status of the
+  // connection.
+  return CONNECTED;
 }
 
-void JavascriptSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
-  DCHECK(CalledOnValidThread());
+std::string JavascriptSignalStrategy::GetLocalJid() const {
+  return local_jid_;
+}
 
+void JavascriptSignalStrategy::AddListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.AddObserver(listener);
+}
+
+void JavascriptSignalStrategy::RemoveListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.RemoveObserver(listener);
+}
+
+bool JavascriptSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
+  DCHECK(CalledOnValidThread());
   xmpp_proxy_->SendIq(stanza->Str());
   delete stanza;
+  return true;
 }
 
 std::string JavascriptSignalStrategy::GetNextId() {
+  DCHECK(CalledOnValidThread());
   ++last_id_;
   return base::IntToString(last_id_);
 }
 
-IqRequest* JavascriptSignalStrategy::CreateIqRequest() {
-  DCHECK(CalledOnValidThread());
-
-  return new JavascriptIqRequest(this, &iq_registry_);
-}
-
 void JavascriptSignalStrategy::OnIq(const std::string& stanza_str) {
+  DCHECK(CalledOnValidThread());
   scoped_ptr<buzz::XmlElement> stanza(buzz::XmlElement::ForStr(stanza_str));
-
   if (!stanza.get()) {
     LOG(WARNING) << "Malformed XMPP stanza received: " << stanza_str;
     return;
   }
 
-  if (listener_ && listener_->OnIncomingStanza(stanza.get()))
-    return;
-
-  iq_registry_.OnIncomingStanza(stanza.get());
+  ObserverListBase<Listener>::Iterator it(listeners_);
+  Listener* listener;
+  while ((listener = it.GetNext()) != NULL) {
+    if (listener->OnSignalStrategyIncomingStanza(stanza.get()))
+      break;
+  }
 }
 
 }  // namespace remoting

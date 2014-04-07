@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 // gpu/command_buffer/build_gles2_cmd_buffer.py
 // DO NOT EDIT!
 
-// These functions emluate GLES2 over command buffers.
+// These functions emulate GLES2 over command buffers.
 #ifndef GPU_COMMAND_BUFFER_CLIENT_GLES2_C_LIB_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_CLIENT_GLES2_C_LIB_AUTOGEN_H_
 
@@ -514,6 +514,12 @@ void GLES2RenderbufferStorageMultisampleEXT(
   gles2::GetGLContext()->RenderbufferStorageMultisampleEXT(
       target, samples, internalformat, width, height);
 }
+void GLES2TexStorage2DEXT(
+    GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width,
+    GLsizei height) {
+  gles2::GetGLContext()->TexStorage2DEXT(
+      target, levels, internalFormat, width, height);
+}
 void GLES2SwapBuffers() {
   gles2::GetGLContext()->SwapBuffers();
 }
@@ -574,6 +580,26 @@ void GLES2GetMultipleIntegervCHROMIUM(
 void GLES2GetProgramInfoCHROMIUM(
     GLuint program, GLsizei bufsize, GLsizei* size, void* info) {
   gles2::GetGLContext()->GetProgramInfoCHROMIUM(program, bufsize, size, info);
+}
+GLuint GLES2CreateStreamTextureCHROMIUM(GLuint texture) {
+  return gles2::GetGLContext()->CreateStreamTextureCHROMIUM(texture);
+}
+void GLES2DestroyStreamTextureCHROMIUM(GLuint texture) {
+  gles2::GetGLContext()->DestroyStreamTextureCHROMIUM(texture);
+}
+void GLES2GetTranslatedShaderSourceANGLE(
+    GLuint shader, GLsizei bufsize, GLsizei* length, char* source) {
+  gles2::GetGLContext()->GetTranslatedShaderSourceANGLE(
+      shader, bufsize, length, source);
+}
+void GLES2PostSubBufferCHROMIUM(GLint x, GLint y, GLint width, GLint height) {
+  gles2::GetGLContext()->PostSubBufferCHROMIUM(x, y, width, height);
+}
+void GLES2TexImageIOSurface2DCHROMIUM(
+    GLenum target, GLsizei width, GLsizei height, GLuint ioSurfaceId,
+    GLuint plane) {
+  gles2::GetGLContext()->TexImageIOSurface2DCHROMIUM(
+      target, width, height, ioSurfaceId, plane);
 }
 
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_C_LIB_AUTOGEN_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,13 @@
 namespace extension_event_names {
 
 // Tabs.
+extern const char kOnTabActivated[];
+extern const char kOnTabActiveChanged[];
 extern const char kOnTabAttached[];
 extern const char kOnTabCreated[];
 extern const char kOnTabDetached[];
+extern const char kOnTabHighlightChanged[];
+extern const char kOnTabHighlighted[];
 extern const char kOnTabMoved[];
 extern const char kOnTabRemoved[];
 extern const char kOnTabSelectionChanged[];
@@ -37,6 +41,17 @@ extern const char kOnFileBrowserMountCompleted[];
 
 // InputMethod.
 extern const char kOnInputMethodChanged[];
+
+// Downloads.
+extern const char kOnDownloadCreated[];
+extern const char kOnDownloadChanged[];
+extern const char kOnDownloadErased[];
+
+// Settings.
+extern const char kOnSettingsChanged[];
+
+// TerminalPrivate.
+extern const char kOnTerminalProcessOutput[];
 
 };  // namespace extension_event_names
 

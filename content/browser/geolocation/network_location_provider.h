@@ -12,14 +12,18 @@
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/string16.h"
 #include "base/threading/thread.h"
 #include "content/browser/geolocation/device_data_provider.h"
 #include "content/browser/geolocation/location_provider.h"
 #include "content/browser/geolocation/network_location_request.h"
+#include "content/common/content_export.h"
 #include "content/common/geoposition.h"
 
-class URLFetcherProtectEntry;
+namespace content {
+class AccessTokenStore;
+}
 
 class NetworkLocationProvider
     : public LocationProviderBase,
@@ -28,7 +32,7 @@ class NetworkLocationProvider
       public NetworkLocationRequest::ListenerInterface {
  public:
   // Cache of recently resolved locations. Public for tests.
-  class PositionCache {
+  class CONTENT_EXPORT PositionCache {
    public:
     // The maximum size of the cache of positions for previously requested
     // device data.
@@ -64,18 +68,18 @@ class NetworkLocationProvider
     CacheAgeList cache_age_list_;  // Oldest first.
   };
 
-  NetworkLocationProvider(AccessTokenStore* access_token_store,
+  NetworkLocationProvider(content::AccessTokenStore* access_token_store,
                           net::URLRequestContextGetter* context,
                           const GURL& url,
                           const string16& access_token);
   virtual ~NetworkLocationProvider();
 
   // LocationProviderBase implementation
-  virtual bool StartProvider(bool high_accuracy);
-  virtual void StopProvider();
-  virtual void GetPosition(Geoposition *position);
-  virtual void UpdatePosition();
-  virtual void OnPermissionGranted(const GURL& requesting_frame);
+  virtual bool StartProvider(bool high_accuracy) OVERRIDE;
+  virtual void StopProvider() OVERRIDE;
+  virtual void GetPosition(Geoposition *position) OVERRIDE;
+  virtual void UpdatePosition() OVERRIDE;
+  virtual void OnPermissionGranted(const GURL& requesting_frame) OVERRIDE;
 
  private:
   // Satisfies a position request from cache or network.
@@ -87,17 +91,17 @@ class NetworkLocationProvider
   bool IsStarted() const;
 
   // DeviceDataProvider::ListenerInterface implementation.
-  virtual void DeviceDataUpdateAvailable(RadioDataProvider* provider);
-  virtual void DeviceDataUpdateAvailable(WifiDataProvider* provider);
+  virtual void DeviceDataUpdateAvailable(RadioDataProvider* provider) OVERRIDE;
+  virtual void DeviceDataUpdateAvailable(WifiDataProvider* provider) OVERRIDE;
 
   // NetworkLocationRequest::ListenerInterface implementation.
   virtual void LocationResponseAvailable(const Geoposition& position,
                                          bool server_error,
                                          const string16& access_token,
                                          const RadioData& radio_data,
-                                         const WifiData& wifi_data);
+                                         const WifiData& wifi_data) OVERRIDE;
 
-  scoped_refptr<AccessTokenStore> access_token_store_;
+  scoped_refptr<content::AccessTokenStore> access_token_store_;
 
   // The device data providers, acquired via global factories.
   RadioDataProvider* radio_data_provider_;
@@ -126,7 +130,7 @@ class NetworkLocationProvider
   // The network location request object, and the url it uses.
   scoped_ptr<NetworkLocationRequest> request_;
 
-  ScopedRunnableMethodFactory<NetworkLocationProvider> delayed_start_task_;
+  base::WeakPtrFactory<NetworkLocationProvider> weak_factory_;
   // The cache of positions.
   scoped_ptr<PositionCache> position_cache_;
 

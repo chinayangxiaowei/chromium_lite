@@ -10,22 +10,19 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/string16.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "ui/gfx/image/image.h"
 
 class AvatarMenuModelObserver;
 class Browser;
 class ProfileInfoInterface;
 
-namespace gfx {
-class Image;
-}
-
 // This class is the model for the menu-like interface that appears when the
 // avatar icon is clicked in the browser window frame. This class will notify
 // its observer when the backend data changes, and the controller/view for this
 // model should forward actions back to it in response to user events.
-class AvatarMenuModel : public NotificationObserver {
+class AvatarMenuModel : public content::NotificationObserver {
  public:
   // Represents an item in the menu.
   struct Item {
@@ -33,7 +30,7 @@ class AvatarMenuModel : public NotificationObserver {
     ~Item();
 
     // The icon to be displayed next to the item.
-    const gfx::Image& icon;
+    gfx::Image icon;
 
     // Whether or not the current browser is using this profile.
     bool active;
@@ -49,7 +46,7 @@ class AvatarMenuModel : public NotificationObserver {
   };
 
   // Constructor. No parameters can be NULL in practice. |browser| can be NULL
-  // for unit tests, but no actions should be executed.
+  // and a new one will be created if an action requires it.
   AvatarMenuModel(ProfileInfoInterface* profile_cache,
                   AvatarMenuModelObserver* observer,
                   Browser* browser);
@@ -69,13 +66,23 @@ class AvatarMenuModel : public NotificationObserver {
   // Gets the number of profiles.
   size_t GetNumberOfItems();
 
+  // Returns the index of the active profile.
+  size_t GetActiveProfileIndex();
+
   // Gets the an Item at a specified index.
   const Item& GetItemAt(size_t index);
 
-  // NotificationObserver:
+  // This model is also used for the always-present Mac system menubar. As the
+  // last active browser changes, the model needs to update accordingly.
+  void set_browser(Browser* browser) { browser_ = browser; }
+
+  // content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  // True if avatar menu should be displayed.
+  static bool ShouldShowAvatarMenu();
 
  private:
   // Rebuilds the menu from the cache and notifies the |observer_|.
@@ -97,7 +104,7 @@ class AvatarMenuModel : public NotificationObserver {
   std::vector<Item*> items_;
 
   // Listens for notifications from the ProfileInfoCache.
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(AvatarMenuModel);
 };

@@ -1,10 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <math.h>
 
 #include "base/basictypes.h"
+#include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
@@ -17,11 +18,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/metrics/thread_watcher.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
+using content::BrowserThread;
 
 enum State {
   INITIALIZED,        // Created ThreadWatch object.
@@ -68,9 +71,9 @@ class CustomThreadWatcher : public ThreadWatcher {
                       const std::string thread_name,
                       const TimeDelta& sleep_time,
                       const TimeDelta& unresponsive_time)
-      : ThreadWatcher(thread_id, thread_name, sleep_time, unresponsive_time,
-                      ThreadWatcherList::kUnresponsiveCount, true,
-                      ThreadWatcherList::kLiveThreadsThreshold),
+      : ThreadWatcher(WatchingParams(thread_id, thread_name, sleep_time,
+                      unresponsive_time, ThreadWatcherList::kUnresponsiveCount,
+                      true, ThreadWatcherList::kLiveThreadsThreshold)),
         state_changed_(&custom_lock_),
         thread_watcher_state_(INITIALIZED),
         wait_state_(UNINITIALIZED),
@@ -137,12 +140,11 @@ class CustomThreadWatcher : public ThreadWatcher {
     ThreadWatcher::OnPongMessage(ping_sequence_number);
   }
 
-  bool OnCheckResponsiveness(uint64 ping_sequence_number) {
-    bool responsive =
-        ThreadWatcher::OnCheckResponsiveness(ping_sequence_number);
+  void OnCheckResponsiveness(uint64 ping_sequence_number) {
+    ThreadWatcher::OnCheckResponsiveness(ping_sequence_number);
     {
       base::AutoLock auto_lock(custom_lock_);
-      if (responsive) {
+      if (responsive_) {
         ++success_response_;
         check_response_state_ = SUCCESSFUL;
       } else {
@@ -153,7 +155,6 @@ class CustomThreadWatcher : public ThreadWatcher {
     // Broadcast to indicate we have checked responsiveness of the thread that
     // is watched.
     state_changed_.Broadcast();
-    return responsive;
   }
 
   void WaitForWaitStateChange(TimeDelta wait_time, WaitState expected_state) {
@@ -229,8 +230,6 @@ class CustomThreadWatcher : public ThreadWatcher {
   }
 };
 
-DISABLE_RUNNABLE_METHOD_REFCOUNT(CustomThreadWatcher);
-
 class ThreadWatcherTest : public ::testing::Test {
  public:
   static const TimeDelta kSleepTime;
@@ -249,8 +248,9 @@ class ThreadWatcherTest : public ::testing::Test {
   ThreadWatcherTest()
       : setup_complete_(&lock_),
         initialized_(false) {
-    webkit_thread_.reset(new BrowserThread(BrowserThread::WEBKIT));
-    io_thread_.reset(new BrowserThread(BrowserThread::IO));
+    webkit_thread_.reset(new content::TestBrowserThread(
+        BrowserThread::WEBKIT_DEPRECATED));
+    io_thread_.reset(new content::TestBrowserThread(BrowserThread::IO));
     watchdog_thread_.reset(new WatchDogThread());
     webkit_thread_->Start();
     io_thread_->Start();
@@ -258,7 +258,7 @@ class ThreadWatcherTest : public ::testing::Test {
 
     WatchDogThread::PostTask(
         FROM_HERE,
-        NewRunnableMethod(this, &ThreadWatcherTest::SetUpObjects));
+        base::Bind(&ThreadWatcherTest::SetUpObjects, base::Unretained(this)));
 
     WaitForSetUp(TimeDelta::FromMinutes(1));
   }
@@ -310,14 +310,10 @@ class ThreadWatcherTest : public ::testing::Test {
   base::Lock lock_;
   base::ConditionVariable setup_complete_;
   bool initialized_;
-  scoped_ptr<BrowserThread> webkit_thread_;
-  scoped_ptr<BrowserThread> io_thread_;
+  scoped_ptr<content::TestBrowserThread> webkit_thread_;
+  scoped_ptr<content::TestBrowserThread> io_thread_;
   scoped_ptr<WatchDogThread> watchdog_thread_;
 };
-
-// DISABLE_RUNNABLE_METHOD_REFCOUNT is a convenience macro for disabling
-// refcounting of ThreadWatcherTest classes.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(ThreadWatcherTest);
 
 // Define static constants.
 const TimeDelta ThreadWatcherTest::kSleepTime =
@@ -327,7 +323,7 @@ const TimeDelta ThreadWatcherTest::kUnresponsiveTime =
 const BrowserThread::ID ThreadWatcherTest::io_thread_id = BrowserThread::IO;
 const std::string ThreadWatcherTest::io_thread_name = "IO";
 const BrowserThread::ID ThreadWatcherTest::webkit_thread_id =
-    BrowserThread::WEBKIT;
+    BrowserThread::WEBKIT_DEPRECATED;
 const std::string ThreadWatcherTest::webkit_thread_name = "WEBKIT";
 const std::string ThreadWatcherTest::crash_on_hang_seconds = "24";
 const std::string ThreadWatcherTest::crash_on_hang_threads = "IO,UI";
@@ -400,7 +396,8 @@ TEST_F(ThreadWatcherTest, ThreadResponding) {
   // Activate watching IO thread.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   // Activate would have started ping/pong messaging. Expect atleast one
   // ping/pong messaging sequence to happen.
@@ -421,7 +418,8 @@ TEST_F(ThreadWatcherTest, ThreadResponding) {
   // DeActivate thread watching for shutdown.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+      base::Unretained(io_watcher_)));
 }
 
 // This test posts a task on watched thread that takes very long time (this is
@@ -431,18 +429,20 @@ TEST_F(ThreadWatcherTest, ThreadResponding) {
 TEST_F(ThreadWatcherTest, ThreadNotResponding) {
   // Simulate hanging of watched thread by making the watched thread wait for a
   // very long time by posting a task on watched thread that keeps it busy.
+  // It is safe to use base::Unretained because test is waiting for the method
+  // to finish.
   BrowserThread::PostTask(
       io_thread_id,
       FROM_HERE,
-      NewRunnableMethod(
-          io_watcher_,
-          &CustomThreadWatcher::VeryLongMethod,
-          kUnresponsiveTime * 10));
+      base::Bind(&CustomThreadWatcher::VeryLongMethod,
+                 base::Unretained(io_watcher_),
+                 kUnresponsiveTime * 10));
 
   // Activate thread watching.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   // Verify watched thread is not responding for ping messages.
   io_watcher_->WaitForCheckResponse(
@@ -453,7 +453,8 @@ TEST_F(ThreadWatcherTest, ThreadNotResponding) {
   // DeActivate thread watching for shutdown.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   // Wait for the io_watcher_'s VeryLongMethod to finish.
   io_watcher_->WaitForWaitStateChange(kUnresponsiveTime * 10, ALL_DONE);
@@ -464,13 +465,14 @@ TEST_F(ThreadWatcherTest, MultipleThreadsResponding) {
   // Check for WEBKIT thread to perform ping/pong messaging.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(
-          webkit_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(webkit_watcher_)));
 
   // Check for IO thread to perform ping/pong messaging.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   // Verify WEBKIT thread is responding with ping/pong messaging.
   webkit_watcher_->WaitForCheckResponse(
@@ -493,36 +495,39 @@ TEST_F(ThreadWatcherTest, MultipleThreadsResponding) {
   // DeActivate thread watching for shutdown.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(
-          webkit_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+                 base::Unretained(webkit_watcher_)));
 }
 
 // Test watching of multiple threads with one of the threads not responding.
 TEST_F(ThreadWatcherTest, MultipleThreadsNotResponding) {
   // Simulate hanging of watched thread by making the watched thread wait for a
   // very long time by posting a task on watched thread that keeps it busy.
+  // It is safe ot use base::Unretained because test is waiting for the method
+  // to finish.
   BrowserThread::PostTask(
       io_thread_id,
       FROM_HERE,
-      NewRunnableMethod(
-          io_watcher_,
-          &CustomThreadWatcher::VeryLongMethod,
-          kUnresponsiveTime * 10));
+      base::Bind(&CustomThreadWatcher::VeryLongMethod,
+                 base::Unretained(io_watcher_),
+                 kUnresponsiveTime * 10));
 
   // Activate watching of WEBKIT thread.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(
-          webkit_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(webkit_watcher_)));
 
   // Activate watching of IO thread.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::ActivateThreadWatching));
+      base::Bind(&ThreadWatcher::ActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
 
   // Verify WEBKIT thread is responding with ping/pong messaging.
   webkit_watcher_->WaitForCheckResponse(
@@ -539,11 +544,12 @@ TEST_F(ThreadWatcherTest, MultipleThreadsNotResponding) {
   // DeActivate thread watching for shutdown.
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(io_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+                 base::Unretained(io_watcher_)));
   WatchDogThread::PostTask(
       FROM_HERE,
-      NewRunnableMethod(
-          webkit_watcher_, &ThreadWatcher::DeActivateThreadWatching));
+      base::Bind(&ThreadWatcher::DeActivateThreadWatching,
+                 base::Unretained(webkit_watcher_)));
 
   // Wait for the io_watcher_'s VeryLongMethod to finish.
   io_watcher_->WaitForWaitStateChange(kUnresponsiveTime * 10, ALL_DONE);

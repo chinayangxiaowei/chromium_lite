@@ -13,8 +13,8 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_switches.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 
 class MagicIframeBrowserTest : public InProcessBrowserTest {
  public:
@@ -43,7 +43,7 @@ IN_PROC_BROWSER_TEST_F(MagicIframeBrowserTest, TransferIframeCloseWindow) {
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url, 3);
   std::string result;
   ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-      browser()->GetSelectedTabContents()->render_view_host(), L"",
+      browser()->GetSelectedWebContents()->GetRenderViewHost(), L"",
       L"window.domAutomationController.send(getLog())", &result));
   ASSERT_NE(result.find("DONE"), std::string::npos) << result;
 }

@@ -4,27 +4,28 @@
 
 #include "content/browser/in_process_webkit/indexed_db_context.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/message_loop_proxy.h"
 #include "base/string_util.h"
-#include "base/task.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/in_process_webkit/indexed_db_quota_client.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
-#include "content/common/content_switches.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCString.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_switches.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebCString.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBDatabase.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebIDBFactory.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
 #include "webkit/database/database_util.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/quota/quota_manager.h"
 #include "webkit/quota/special_storage_policy.h"
 
+using content::BrowserThread;
 using webkit_database::DatabaseUtil;
 using WebKit::WebIDBDatabase;
 using WebKit::WebIDBFactory;
@@ -36,7 +37,7 @@ void GetAllOriginsAndPaths(
     const FilePath& indexeddb_path,
     std::vector<GURL>* origins,
     std::vector<FilePath>* file_paths) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   if (indexeddb_path.empty())
     return;
   file_util::FileEnumerator file_enumerator(indexeddb_path,
@@ -54,10 +55,13 @@ void GetAllOriginsAndPaths(
   }
 }
 
+// If clear_all_databases is true, deletes all databases not protected by
+// special storage policy. Otherwise deletes session-only databases.
 void ClearLocalState(
     const FilePath& indexeddb_path,
+    bool clear_all_databases,
     scoped_refptr<quota::SpecialStoragePolicy> special_storage_policy) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   std::vector<GURL> origins;
   std::vector<FilePath> file_paths;
   GetAllOriginsAndPaths(indexeddb_path, &origins, &file_paths);
@@ -65,7 +69,12 @@ void ClearLocalState(
   std::vector<FilePath>::const_iterator file_path_iter = file_paths.begin();
   for (std::vector<GURL>::const_iterator iter = origins.begin();
        iter != origins.end(); ++iter, ++file_path_iter) {
-    if (special_storage_policy->IsStorageProtected(*iter))
+    if (!clear_all_databases &&
+        !special_storage_policy->IsStorageSessionOnly(*iter)) {
+      continue;
+    }
+    if (special_storage_policy.get() &&
+        special_storage_policy->IsStorageProtected(*iter))
       continue;
     file_util::Delete(*file_path_iter, true);
   }
@@ -79,47 +88,13 @@ const FilePath::CharType IndexedDBContext::kIndexedDBDirectory[] =
 const FilePath::CharType IndexedDBContext::kIndexedDBExtension[] =
     FILE_PATH_LITERAL(".leveldb");
 
-class IndexedDBContext::IndexedDBGetUsageAndQuotaCallback :
-    public quota::QuotaManager::GetUsageAndQuotaCallback {
- public:
-  IndexedDBGetUsageAndQuotaCallback(IndexedDBContext* context,
-                                    const GURL& origin_url)
-      : context_(context),
-        origin_url_(origin_url) {
-  }
-
-  void Run(quota::QuotaStatusCode status, int64 usage, int64 quota) {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-    DCHECK(status == quota::kQuotaStatusOk || status == quota::kQuotaErrorAbort)
-        << "status was " << status;
-    if (status == quota::kQuotaErrorAbort) {
-      // We seem to no longer care to wait around for the answer.
-      return;
-    }
-    BrowserThread::PostTask(BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableMethod(context_.get(),
-                          &IndexedDBContext::GotUpdatedQuota,
-                          origin_url_,
-                          usage,
-                          quota));
-  }
-
-  virtual void RunWithParams(
-        const Tuple3<quota::QuotaStatusCode, int64, int64>& params) {
-    Run(params.a, params.b, params.c);
-  }
-
- private:
-  scoped_refptr<IndexedDBContext> context_;
-  const GURL origin_url_;
-};
-
 IndexedDBContext::IndexedDBContext(
     WebKitContext* webkit_context,
     quota::SpecialStoragePolicy* special_storage_policy,
     quota::QuotaManagerProxy* quota_manager_proxy,
     base::MessageLoopProxy* webkit_thread_loop)
     : clear_local_state_on_exit_(false),
+      save_session_state_(false),
       special_storage_policy_(special_storage_policy),
       quota_manager_proxy_(quota_manager_proxy) {
   if (!webkit_context->is_incognito())
@@ -133,20 +108,36 @@ IndexedDBContext::IndexedDBContext(
 
 IndexedDBContext::~IndexedDBContext() {
   WebKit::WebIDBFactory* factory = idb_factory_.release();
-  if (factory)
-    BrowserThread::DeleteSoon(BrowserThread::WEBKIT, FROM_HERE, factory);
-
-  if (clear_local_state_on_exit_ && !data_path_.empty()) {
-    // No WEBKIT thread here means we are running in a unit test where no clean
-    // up is needed.
-    BrowserThread::PostTask(BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableFunction(&ClearLocalState, data_path_,
-                            special_storage_policy_));
+  if (factory) {
+    if (!BrowserThread::DeleteSoon(BrowserThread::WEBKIT_DEPRECATED,
+                                   FROM_HERE, factory))
+      delete factory;
   }
+
+  if (data_path_.empty())
+    return;
+
+  if (save_session_state_)
+    return;
+
+  bool has_session_only_databases =
+      special_storage_policy_.get() &&
+      special_storage_policy_->HasSessionOnlyOrigins();
+
+  // Clearning only session-only databases, and there are none.
+  if (!clear_local_state_on_exit_ && !has_session_only_databases)
+    return;
+
+  // No WEBKIT thread here means we are running in a unit test where no clean
+  // up is needed.
+  BrowserThread::PostTask(
+      BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+      base::Bind(&ClearLocalState, data_path_, clear_local_state_on_exit_,
+                 special_storage_policy_));
 }
 
 WebIDBFactory* IndexedDBContext::GetIDBFactory() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   if (!idb_factory_.get()) {
     // Prime our cache of origins with existing databases so we can
     // detect when dbs are newly created.
@@ -157,7 +148,7 @@ WebIDBFactory* IndexedDBContext::GetIDBFactory() {
 }
 
 void IndexedDBContext::DeleteIndexedDBForOrigin(const GURL& origin_url) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   if (data_path_.empty() || !IsInOriginSet(origin_url))
     return;
   // TODO(michaeln): When asked to delete an origin with open connections,
@@ -177,7 +168,7 @@ void IndexedDBContext::DeleteIndexedDBForOrigin(const GURL& origin_url) {
 }
 
 void IndexedDBContext::GetAllOrigins(std::vector<GURL>* origins) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   std::set<GURL>* origins_set = GetOriginSet();
   for (std::set<GURL>::const_iterator iter = origins_set->begin();
        iter != origins_set->end(); ++iter) {
@@ -296,30 +287,45 @@ void IndexedDBContext::QueryDiskAndUpdateQuotaUsage(const GURL& origin_url) {
   }
 }
 
+void IndexedDBContext::GotUsageAndQuota(const GURL& origin_url,
+                                        quota::QuotaStatusCode status,
+                                        int64 usage, int64 quota) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  DCHECK(status == quota::kQuotaStatusOk || status == quota::kQuotaErrorAbort)
+      << "status was " << status;
+  if (status == quota::kQuotaErrorAbort) {
+    // We seem to no longer care to wait around for the answer.
+    return;
+  }
+  BrowserThread::PostTask(
+      BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+      base::Bind(&IndexedDBContext::GotUpdatedQuota, this, origin_url, usage,
+                 quota));
+}
+
 void IndexedDBContext::GotUpdatedQuota(const GURL& origin_url, int64 usage,
                                        int64 quota) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
   space_available_map_[origin_url] = quota - usage;
 }
 
 void IndexedDBContext::QueryAvailableQuota(const GURL& origin_url) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
     if (quota_manager_proxy())
-      BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-          NewRunnableMethod(this, &IndexedDBContext::QueryAvailableQuota,
-                            origin_url));
+      BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE,
+          base::Bind(&IndexedDBContext::QueryAvailableQuota, this, origin_url));
     return;
   }
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   if (!quota_manager_proxy()->quota_manager())
     return;
-  IndexedDBGetUsageAndQuotaCallback* callback =
-      new IndexedDBGetUsageAndQuotaCallback(this, origin_url);
   quota_manager_proxy()->quota_manager()->GetUsageAndQuota(
       origin_url,
       quota::kStorageTypeTemporary,
-      callback);
+      base::Bind(&IndexedDBContext::GotUsageAndQuota,
+                 this, origin_url));
 }
 
 std::set<GURL>* IndexedDBContext::GetOriginSet() {

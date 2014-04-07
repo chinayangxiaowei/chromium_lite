@@ -8,9 +8,12 @@
 #include "base/string_split.h"
 #include "base/values.h"
 #include "chrome/browser/sync/engine/syncproto.h"
+#include "chrome/browser/sync/protocol/app_notification_specifics.pb.h"
+#include "chrome/browser/sync/protocol/app_setting_specifics.pb.h"
 #include "chrome/browser/sync/protocol/app_specifics.pb.h"
 #include "chrome/browser/sync/protocol/autofill_specifics.pb.h"
 #include "chrome/browser/sync/protocol/bookmark_specifics.pb.h"
+#include "chrome/browser/sync/protocol/extension_setting_specifics.pb.h"
 #include "chrome/browser/sync/protocol/extension_specifics.pb.h"
 #include "chrome/browser/sync/protocol/nigori_specifics.pb.h"
 #include "chrome/browser/sync/protocol/password_specifics.pb.h"
@@ -61,6 +64,15 @@ void AddDefaultExtensionValue(syncable::ModelType datatype,
       break;
     case APPS:
       specifics->MutableExtension(sync_pb::app);
+      break;
+    case APP_SETTINGS:
+      specifics->MutableExtension(sync_pb::app_setting);
+      break;
+    case EXTENSION_SETTINGS:
+      specifics->MutableExtension(sync_pb::extension_setting);
+      break;
+    case APP_NOTIFICATIONS:
+      specifics->MutableExtension(sync_pb::app_notification);
       break;
     default:
       NOTREACHED() << "No known extension for model type.";
@@ -114,6 +126,15 @@ int GetExtensionFieldNumberFromModelType(ModelType model_type) {
       break;
     case APPS:
       return sync_pb::kAppFieldNumber;
+      break;
+    case APP_SETTINGS:
+      return sync_pb::kAppSettingFieldNumber;
+      break;
+    case EXTENSION_SETTINGS:
+      return sync_pb::kExtensionSettingFieldNumber;
+      break;
+    case APP_NOTIFICATIONS:
+      return sync_pb::kAppNotificationFieldNumber;
       break;
     default:
       NOTREACHED() << "No known extension for model type.";
@@ -192,6 +213,15 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
   if (specifics.HasExtension(sync_pb::session))
     return SESSIONS;
 
+  if (specifics.HasExtension(sync_pb::app_setting))
+    return APP_SETTINGS;
+
+  if (specifics.HasExtension(sync_pb::extension_setting))
+    return EXTENSION_SETTINGS;
+
+  if (specifics.HasExtension(sync_pb::app_notification))
+    return APP_NOTIFICATIONS;
+
   return UNSPECIFIED;
 }
 
@@ -199,8 +229,15 @@ bool ShouldMaintainPosition(ModelType model_type) {
   return model_type == BOOKMARKS;
 }
 
-std::string ModelTypeToString(ModelType model_type) {
+const char* ModelTypeToString(ModelType model_type) {
+  // This is used in serialization routines as well as for displaying debug
+  // information.  Do not attempt to change these string values unless you know
+  // what you're doing.
   switch (model_type) {
+    case TOP_LEVEL_FOLDER:
+      return "Top Level Folder";
+    case UNSPECIFIED:
+      return "Unspecified";
     case BOOKMARKS:
       return "Bookmarks";
     case PREFERENCES:
@@ -225,6 +262,12 @@ std::string ModelTypeToString(ModelType model_type) {
       return "Apps";
     case AUTOFILL_PROFILE:
       return "Autofill Profiles";
+    case APP_SETTINGS:
+      return "App settings";
+    case EXTENSION_SETTINGS:
+      return "Extension settings";
+    case APP_NOTIFICATIONS:
+      return "App Notifications";
     default:
       break;
   }
@@ -242,17 +285,6 @@ StringValue* ModelTypeToValue(ModelType model_type) {
   }
   NOTREACHED();
   return Value::CreateStringValue("");
-}
-
-std::string ModelTypeSetToString(const ModelTypeSet& model_types) {
-  std::string result;
-  for (ModelTypeSet::const_iterator iter = model_types.begin();
-       iter != model_types.end();) {
-    result += ModelTypeToString(*iter);
-    if (++iter != model_types.end())
-      result += ", ";
-  }
-  return result;
 }
 
 ModelType ModelTypeFromValue(const Value& value) {
@@ -295,58 +327,34 @@ ModelType ModelTypeFromString(const std::string& model_type_string) {
     return SESSIONS;
   else if (model_type_string == "Apps")
     return APPS;
+  else if (model_type_string == "App settings")
+    return APP_SETTINGS;
+  else if (model_type_string == "Extension settings")
+    return EXTENSION_SETTINGS;
+  else if (model_type_string == "App Notifications")
+    return APP_NOTIFICATIONS;
   else
     NOTREACHED() << "No known model type corresponding to "
                  << model_type_string << ".";
   return UNSPECIFIED;
 }
 
-std::string ModelTypeBitSetToString(const ModelTypeBitSet& model_types) {
+std::string ModelTypeSetToString(ModelTypeSet model_types) {
   std::string result;
-  for (int i = FIRST_REAL_MODEL_TYPE; i < MODEL_TYPE_COUNT; ++i) {
-    if (model_types[i]) {
-      if (!result.empty()) {
-        result += ", ";
-      }
-      result += ModelTypeToString(ModelTypeFromInt(i));
+  for (ModelTypeSet::Iterator it = model_types.First(); it.Good(); it.Inc()) {
+    if (!result.empty()) {
+      result += ", ";
     }
+    result += ModelTypeToString(it.Get());
   }
   return result;
 }
 
-ModelTypeBitSet ModelTypeBitSetFromSet(const ModelTypeSet& set) {
-  ModelTypeBitSet bitset;
-  for (ModelTypeSet::const_iterator iter = set.begin(); iter != set.end();
-       ++iter) {
-    bitset.set(*iter);
-  }
-  return bitset;
-}
-
-ListValue* ModelTypeBitSetToValue(const ModelTypeBitSet& model_types) {
+base::ListValue* ModelTypeSetToValue(ModelTypeSet model_types) {
   ListValue* value = new ListValue();
-  for (int i = FIRST_REAL_MODEL_TYPE; i < MODEL_TYPE_COUNT; ++i) {
-    if (model_types[i]) {
-      value->Append(
-          Value::CreateStringValue(ModelTypeToString(ModelTypeFromInt(i))));
-    }
-  }
-  return value;
-}
-
-ModelTypeBitSet ModelTypeBitSetFromValue(const base::ListValue& value) {
-  ModelTypeBitSet result;
-  for (ListValue::const_iterator i = value.begin(); i != value.end(); ++i) {
-    result.set(ModelTypeFromValue(**i));
-  }
-  return result;
-}
-
-ListValue* ModelTypeSetToValue(const ModelTypeSet& model_types) {
-  ListValue* value = new ListValue();
-  for (ModelTypeSet::const_iterator i = model_types.begin();
-       i != model_types.end(); ++i) {
-    value->Append(Value::CreateStringValue(ModelTypeToString(*i)));
+  for (ModelTypeSet::Iterator it = model_types.First(); it.Good(); it.Inc()) {
+    value->Append(
+        Value::CreateStringValue(ModelTypeToString(it.Get())));
   }
   return value;
 }
@@ -354,7 +362,7 @@ ListValue* ModelTypeSetToValue(const ModelTypeSet& model_types) {
 ModelTypeSet ModelTypeSetFromValue(const base::ListValue& value) {
   ModelTypeSet result;
   for (ListValue::const_iterator i = value.begin(); i != value.end(); ++i) {
-    result.insert(ModelTypeFromValue(**i));
+    result.Put(ModelTypeFromValue(**i));
   }
   return result;
 }
@@ -387,6 +395,12 @@ std::string ModelTypeToRootTag(ModelType type) {
       return "google_chrome_apps";
     case AUTOFILL_PROFILE:
       return "google_chrome_autofill_profiles";
+    case APP_SETTINGS:
+      return "google_chrome_app_settings";
+    case EXTENSION_SETTINGS:
+      return "google_chrome_extension_settings";
+    case APP_NOTIFICATIONS:
+      return "google_chrome_app_notifications";
     default:
       break;
   }
@@ -450,6 +464,18 @@ void PostTimeToTypeHistogram(ModelType model_type, base::TimeDelta time) {
         SYNC_FREQ_HISTOGRAM("Sync.FreqApps", time);
         return;
     }
+    case APP_SETTINGS: {
+        SYNC_FREQ_HISTOGRAM("Sync.FreqAppSettings", time);
+        return;
+    }
+    case EXTENSION_SETTINGS: {
+        SYNC_FREQ_HISTOGRAM("Sync.FreqExtensionSettings", time);
+        return;
+    }
+    case APP_NOTIFICATIONS: {
+        SYNC_FREQ_HISTOGRAM("Sync.FreqAppNotifications", time);
+        return;
+    }
     default:
       LOG(ERROR) << "No known extension for model type.";
   }
@@ -467,11 +493,14 @@ const char kAutofillNotificationType[] = "AUTOFILL";
 const char kThemeNotificationType[] = "THEME";
 const char kTypedUrlNotificationType[] = "TYPED_URL";
 const char kExtensionNotificationType[] = "EXTENSION";
+const char kExtensionSettingNotificationType[] = "EXTENSION_SETTING";
 const char kNigoriNotificationType[] = "NIGORI";
+const char kAppSettingNotificationType[] = "APP_SETTING";
 const char kAppNotificationType[] = "APP";
 const char kSearchEngineNotificationType[] = "SEARCH_ENGINE";
 const char kSessionNotificationType[] = "SESSION";
 const char kAutofillProfileNotificationType[] = "AUTOFILL_PROFILE";
+const char kAppNotificationNotificationType[] = "APP_NOTIFICATION";
 }  // namespace
 
 bool RealModelTypeToNotificationType(ModelType model_type,
@@ -501,6 +530,9 @@ bool RealModelTypeToNotificationType(ModelType model_type,
     case NIGORI:
       *notification_type = kNigoriNotificationType;
       return true;
+    case APP_SETTINGS:
+      *notification_type = kAppNotificationType;
+      return true;
     case APPS:
       *notification_type = kAppNotificationType;
       return true;
@@ -512,6 +544,12 @@ bool RealModelTypeToNotificationType(ModelType model_type,
       return true;
     case AUTOFILL_PROFILE:
       *notification_type = kAutofillProfileNotificationType;
+      return true;
+    case EXTENSION_SETTINGS:
+      *notification_type = kExtensionSettingNotificationType;
+      return true;
+    case APP_NOTIFICATIONS:
+      *notification_type = kAppNotificationNotificationType;
       return true;
     default:
       break;
@@ -558,17 +596,19 @@ bool NotificationTypeToRealModelType(const std::string& notification_type,
   } else if (notification_type == kAutofillProfileNotificationType) {
     *model_type = AUTOFILL_PROFILE;
     return true;
+  } else if (notification_type == kAppSettingNotificationType) {
+    *model_type = APP_SETTINGS;
+    return true;
+  } else if (notification_type == kExtensionSettingNotificationType) {
+    *model_type = EXTENSION_SETTINGS;
+    return true;
+  } else if (notification_type == kAppNotificationNotificationType) {
+    *model_type = APP_NOTIFICATIONS;
+    return true;
+  } else {
+    *model_type = UNSPECIFIED;
+    return false;
   }
-  *model_type = UNSPECIFIED;
-  return false;
-}
-
-ModelTypeSet GetAllRealModelTypes() {
-  ModelTypeSet all_types;
-  for (int i = FIRST_REAL_MODEL_TYPE; i < MODEL_TYPE_COUNT; ++i) {
-    all_types.insert(ModelTypeFromInt(i));
-  }
-  return all_types;
 }
 
 bool IsRealDataType(ModelType model_type) {

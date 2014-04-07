@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -16,6 +16,7 @@ class ChromeosPrefsTest(pyauto.PyUITest):
   # Defined in src/chrome/browser/chromeos/login/user_manager.cc
   k_logged_in_users = 'LoggedInUsers'
   k_user_images = 'UserImages'
+  k_image_path_node_name = 'path'
 
   def testAllUserImage(self):
     """Verify changing all available default user images in Change picture."""
@@ -53,7 +54,8 @@ class ChromeosPrefsTest(pyauto.PyUITest):
     for i in range(2):
       current_user_images = self.GetLocalStatePrefsInfo().Prefs(
           ChromeosPrefsTest.k_user_images)
-      current_image_path = current_user_images.get(logged_in_user)
+      current_image_path = current_user_images.get(logged_in_user).get(
+          ChromeosPrefsTest.k_image_path_node_name)
       self.assertTrue(expected_photo_name in current_image_path,
                       msg='Captured user photo was not set in preferences.')
       self.assertTrue(os.path.isfile(current_image_path),

@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/webui/options/cookies_view_handler.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browsing_data_appcache_helper.h"
@@ -15,6 +17,7 @@
 #include "chrome/browser/browsing_data_local_storage_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/cookies_tree_model_util.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -76,14 +79,18 @@ void CookiesViewHandler::GetLocalizedValues(
 }
 
 void CookiesViewHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("updateCookieSearchResults",
-      NewCallback(this, &CookiesViewHandler::UpdateSearchResults));
-  web_ui_->RegisterMessageCallback("removeAllCookies",
-      NewCallback(this, &CookiesViewHandler::RemoveAll));
-  web_ui_->RegisterMessageCallback("removeCookie",
-      NewCallback(this, &CookiesViewHandler::Remove));
-  web_ui_->RegisterMessageCallback("loadCookie",
-      NewCallback(this, &CookiesViewHandler::LoadChildren));
+  web_ui()->RegisterMessageCallback("updateCookieSearchResults",
+      base::Bind(&CookiesViewHandler::UpdateSearchResults,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("removeAllCookies",
+      base::Bind(&CookiesViewHandler::RemoveAll,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("removeCookie",
+      base::Bind(&CookiesViewHandler::Remove,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("loadCookie",
+      base::Bind(&CookiesViewHandler::LoadChildren,
+                 base::Unretained(this)));
 }
 
 void CookiesViewHandler::TreeNodesAdded(ui::TreeModel* model,
@@ -107,7 +114,7 @@ void CookiesViewHandler::TreeNodesAdded(ui::TreeModel* model,
           cookies_tree_model_util::GetTreeNodeId(parent_node)));
   args.Append(Value::CreateIntegerValue(start));
   args.Append(children);
-  web_ui_->CallJavascriptFunction("CookiesView.onTreeItemAdded", args);
+  web_ui()->CallJavascriptFunction("CookiesView.onTreeItemAdded", args);
 }
 
 void CookiesViewHandler::TreeNodesRemoved(ui::TreeModel* model,
@@ -125,7 +132,7 @@ void CookiesViewHandler::TreeNodesRemoved(ui::TreeModel* model,
           cookies_tree_model_->AsNode(parent))));
   args.Append(Value::CreateIntegerValue(start));
   args.Append(Value::CreateIntegerValue(count));
-  web_ui_->CallJavascriptFunction("CookiesView.onTreeItemRemoved", args);
+  web_ui()->CallJavascriptFunction("CookiesView.onTreeItemRemoved", args);
 }
 
 void CookiesViewHandler::TreeModelBeginBatch(CookiesTreeModel* model) {
@@ -142,7 +149,7 @@ void CookiesViewHandler::TreeModelEndBatch(CookiesTreeModel* model) {
 
 void CookiesViewHandler::EnsureCookiesTreeModelCreated() {
   if (!cookies_tree_model_.get()) {
-    Profile* profile = Profile::FromWebUI(web_ui_);
+    Profile* profile = Profile::FromWebUI(web_ui());
     cookies_tree_model_.reset(new CookiesTreeModel(
         new BrowsingDataCookieHelper(profile),
         new BrowsingDataDatabaseHelper(profile),
@@ -212,5 +219,5 @@ void CookiesViewHandler::SendChildren(CookieTreeNode* parent) {
       Value::CreateStringValue(cookies_tree_model_util::GetTreeNodeId(parent)));
   args.Append(children);
 
-  web_ui_->CallJavascriptFunction("CookiesView.loadChildren", args);
+  web_ui()->CallJavascriptFunction("CookiesView.loadChildren", args);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,7 +31,15 @@
 #include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/time.h"
+
+#if defined(OS_CHROMEOS)
+#include <sys/ioctl.h>
+#endif
+
+#if defined(OS_FREEBSD)
+#include <sys/event.h>
+#include <sys/ucontext.h>
+#endif
 
 #if defined(OS_MACOSX)
 #include <crt_externs.h>
@@ -131,7 +139,7 @@ void StackDumpSignalHandler(int signal, siginfo_t* info, ucontext_t* context) {
   if (debug::BeingDebugged())
     debug::BreakDebugger();
 
-  LOG(ERROR) << "Received signal " << signal;
+  DLOG(ERROR) << "Received signal " << signal;
   debug::StackTrace().PrintBacktrace();
 
   // TODO(shess): Port to Linux.
@@ -296,7 +304,7 @@ bool KillProcess(ProcessHandle process_id, int exit_code, bool wait) {
 bool KillProcessGroup(ProcessHandle process_group_id) {
   bool result = kill(-1 * process_group_id, SIGKILL) == 0;
   if (!result)
-    PLOG(ERROR) << "Unable to terminate process group " << process_group_id;
+    DPLOG(ERROR) << "Unable to terminate process group " << process_group_id;
   return result;
 }
 
@@ -565,11 +573,11 @@ bool LaunchProcess(const std::vector<std::string>& argv,
     // synchronize means "return from LaunchProcess but don't let the child
     // run until LaunchSynchronize is called". These two options are highly
     // incompatible.
-    CHECK(!options.wait);
+    DCHECK(!options.wait);
 
     // Create the pipe used for synchronization.
     if (HANDLE_EINTR(pipe(synchronization_pipe_fds)) != 0) {
-      PLOG(ERROR) << "pipe";
+      DPLOG(ERROR) << "pipe";
       return false;
     }
 
@@ -594,7 +602,7 @@ bool LaunchProcess(const std::vector<std::string>& argv,
   }
 
   if (pid < 0) {
-    PLOG(ERROR) << "fork";
+    DPLOG(ERROR) << "fork";
     return false;
   } else if (pid == 0) {
     // Child process
@@ -630,6 +638,24 @@ bool LaunchProcess(const std::vector<std::string>& argv,
       }
     }
 
+    if (options.maximize_rlimits) {
+      // Some resource limits need to be maximal in this child.
+      std::set<int>::const_iterator resource;
+      for (resource = options.maximize_rlimits->begin();
+           resource != options.maximize_rlimits->end();
+           ++resource) {
+        struct rlimit limit;
+        if (getrlimit(*resource, &limit) < 0) {
+          RAW_LOG(WARNING, "getrlimit failed");
+        } else if (limit.rlim_cur < limit.rlim_max) {
+          limit.rlim_cur = limit.rlim_max;
+          if (setrlimit(*resource, &limit) < 0) {
+            RAW_LOG(WARNING, "setrlimit failed");
+          }
+        }
+      }
+    }
+
 #if defined(OS_MACOSX)
     RestoreDefaultExceptionHandler();
 #endif  // defined(OS_MACOSX)
@@ -654,6 +680,20 @@ bool LaunchProcess(const std::vector<std::string>& argv,
 
     // DANGER: no calls to malloc are allowed from now on:
     // http://crbug.com/36678
+
+#if defined(OS_CHROMEOS)
+    if (options.ctrl_terminal_fd >= 0) {
+      // Set process' controlling terminal.
+      if (HANDLE_EINTR(setsid()) != -1) {
+        if (HANDLE_EINTR(
+                ioctl(options.ctrl_terminal_fd, TIOCSCTTY, NULL)) == -1) {
+          RAW_LOG(WARNING, "ioctl(TIOCSCTTY), ctrl terminal not set");
+        }
+      } else {
+        RAW_LOG(WARNING, "setsid failed, ctrl terminal not set");
+      }
+    }
+#endif  // defined(OS_CHROMEOS)
 
     if (options.fds_to_remap) {
       for (file_handle_mapping_vector::const_iterator
@@ -749,7 +789,7 @@ void LaunchSynchronize(LaunchSynchronizationHandle handle) {
 
   // Write a '\0' character to the pipe.
   if (HANDLE_EINTR(write(synchronization_fd, "", 1)) != 1) {
-    PLOG(ERROR) << "write";
+    DPLOG(ERROR) << "write";
   }
 }
 #endif  // defined(OS_MACOSX)
@@ -789,7 +829,7 @@ TerminationStatus GetTerminationStatus(ProcessHandle handle, int* exit_code) {
   int status = 0;
   const pid_t result = HANDLE_EINTR(waitpid(handle, &status, WNOHANG));
   if (result == -1) {
-    PLOG(ERROR) << "waitpid(" << handle << ")";
+    DPLOG(ERROR) << "waitpid(" << handle << ")";
     if (exit_code)
       *exit_code = 0;
     return TERMINATION_STATUS_NORMAL_TERMINATION;
@@ -874,7 +914,7 @@ static bool WaitForSingleNonChildProcess(ProcessHandle handle,
 
   int kq = kqueue();
   if (kq == -1) {
-    PLOG(ERROR) << "kqueue";
+    DPLOG(ERROR) << "kqueue";
     return false;
   }
   file_util::ScopedFD kq_closer(&kq);
@@ -888,7 +928,7 @@ static bool WaitForSingleNonChildProcess(ProcessHandle handle,
       return true;
     }
 
-    PLOG(ERROR) << "kevent (setup " << handle << ")";
+    DPLOG(ERROR) << "kevent (setup " << handle << ")";
     return false;
   }
 
@@ -928,11 +968,11 @@ static bool WaitForSingleNonChildProcess(ProcessHandle handle,
   }
 
   if (result < 0) {
-    PLOG(ERROR) << "kevent (wait " << handle << ")";
+    DPLOG(ERROR) << "kevent (wait " << handle << ")";
     return false;
   } else if (result > 1) {
-    LOG(ERROR) << "kevent (wait " << handle << "): unexpected result "
-               << result;
+    DLOG(ERROR) << "kevent (wait " << handle << "): unexpected result "
+                << result;
     return false;
   } else if (result == 0) {
     // Timed out.
@@ -944,10 +984,10 @@ static bool WaitForSingleNonChildProcess(ProcessHandle handle,
   if (event.filter != EVFILT_PROC ||
       (event.fflags & NOTE_EXIT) == 0 ||
       event.ident != static_cast<uintptr_t>(handle)) {
-    LOG(ERROR) << "kevent (wait " << handle
-               << "): unexpected event: filter=" << event.filter
-               << ", fflags=" << event.fflags
-               << ", ident=" << event.ident;
+    DLOG(ERROR) << "kevent (wait " << handle
+                << "): unexpected event: filter=" << event.filter
+                << ", fflags=" << event.fflags
+                << ", ident=" << event.ident;
     return false;
   }
 
@@ -1174,7 +1214,7 @@ bool WaitForProcessesToExit(const FilePath::StringType& executable_name,
       result = true;
       break;
     }
-    base::PlatformThread::Sleep(100);
+    base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(100));
   } while ((end_time - base::Time::Now()) > base::TimeDelta());
 
   return result;
@@ -1191,5 +1231,102 @@ bool CleanupProcesses(const FilePath::StringType& executable_name,
     KillProcesses(executable_name, exit_code, filter);
   return exited_cleanly;
 }
+
+#if !defined(OS_MACOSX)
+
+namespace {
+
+// Return true if the given child is dead. This will also reap the process.
+// Doesn't block.
+static bool IsChildDead(pid_t child) {
+  const pid_t result = HANDLE_EINTR(waitpid(child, NULL, WNOHANG));
+  if (result == -1) {
+    DPLOG(ERROR) << "waitpid(" << child << ")";
+    NOTREACHED();
+  } else if (result > 0) {
+    // The child has died.
+    return true;
+  }
+
+  return false;
+}
+
+// A thread class which waits for the given child to exit and reaps it.
+// If the child doesn't exit within a couple of seconds, kill it.
+class BackgroundReaper : public PlatformThread::Delegate {
+ public:
+  BackgroundReaper(pid_t child, unsigned timeout)
+      : child_(child),
+        timeout_(timeout) {
+  }
+
+  void ThreadMain() {
+    WaitForChildToDie();
+    delete this;
+  }
+
+  void WaitForChildToDie() {
+    // Wait forever case.
+    if (timeout_ == 0) {
+      pid_t r = HANDLE_EINTR(waitpid(child_, NULL, 0));
+      if (r != child_) {
+        DPLOG(ERROR) << "While waiting for " << child_
+                     << " to terminate, we got the following result: " << r;
+      }
+      return;
+    }
+
+    // There's no good way to wait for a specific child to exit in a timed
+    // fashion. (No kqueue on Linux), so we just loop and sleep.
+
+    // Wait for 2 * timeout_ 500 milliseconds intervals.
+    for (unsigned i = 0; i < 2 * timeout_; ++i) {
+      PlatformThread::Sleep(TimeDelta::FromMilliseconds(500));
+      if (IsChildDead(child_))
+        return;
+    }
+
+    if (kill(child_, SIGKILL) == 0) {
+      // SIGKILL is uncatchable. Since the signal was delivered, we can
+      // just wait for the process to die now in a blocking manner.
+      if (HANDLE_EINTR(waitpid(child_, NULL, 0)) < 0)
+        DPLOG(WARNING) << "waitpid";
+    } else {
+      DLOG(ERROR) << "While waiting for " << child_ << " to terminate we"
+                  << " failed to deliver a SIGKILL signal (" << errno << ").";
+    }
+  }
+
+ private:
+  const pid_t child_;
+  // Number of seconds to wait, if 0 then wait forever and do not attempt to
+  // kill |child_|.
+  const unsigned timeout_;
+
+  DISALLOW_COPY_AND_ASSIGN(BackgroundReaper);
+};
+
+}  // namespace
+
+void EnsureProcessTerminated(ProcessHandle process) {
+  // If the child is already dead, then there's nothing to do.
+  if (IsChildDead(process))
+    return;
+
+  const unsigned timeout = 2;  // seconds
+  BackgroundReaper* reaper = new BackgroundReaper(process, timeout);
+  PlatformThread::CreateNonJoinable(0, reaper);
+}
+
+void EnsureProcessGetsReaped(ProcessHandle process) {
+  // If the child is already dead, then there's nothing to do.
+  if (IsChildDead(process))
+    return;
+
+  BackgroundReaper* reaper = new BackgroundReaper(process, 0);
+  PlatformThread::CreateNonJoinable(0, reaper);
+}
+
+#endif  // !defined(OS_MACOSX)
 
 }  // namespace base

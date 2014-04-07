@@ -10,8 +10,11 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/browser/download/download_item.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/download_item.h"
+#include "content/public/browser/notification_service.h"
+
+using content::BrowserThread;
+using content::DownloadItem;
 
 namespace download_crx_util {
 
@@ -53,30 +56,27 @@ scoped_refptr<CrxInstaller> OpenChromeExtension(
 
   ExtensionService* service = profile->GetExtensionService();
   CHECK(service);
-  NotificationService* nservice = NotificationService::current();
-  GURL nonconst_download_url = download_item.GetURL();
-  nservice->Notify(chrome::NOTIFICATION_EXTENSION_READY_FOR_INSTALL,
-                   Source<DownloadManager>(profile->GetDownloadManager()),
-                   Details<GURL>(&nonconst_download_url));
 
   scoped_refptr<CrxInstaller> installer(
-      service->MakeCrxInstaller(CreateExtensionInstallUI(profile)));
+      CrxInstaller::Create(service, CreateExtensionInstallUI(profile)));
   installer->set_delete_source(true);
 
   if (UserScript::IsURLUserScript(download_item.GetURL(),
-                                  download_item.mime_type())) {
-    installer->InstallUserScript(download_item.full_path(),
+                                  download_item.GetMimeType())) {
+    installer->InstallUserScript(download_item.GetFullPath(),
                                  download_item.GetURL());
   } else {
     bool is_gallery_download = service->IsDownloadFromGallery(
-        download_item.GetURL(), download_item.referrer_url());
-    installer->set_original_mime_type(download_item.original_mime_type());
+        download_item.GetURL(), download_item.GetReferrerUrl());
+    installer->set_original_mime_type(download_item.GetOriginalMimeType());
     installer->set_apps_require_extension_mime_type(true);
-    installer->set_original_url(download_item.GetURL());
+    installer->set_download_url(download_item.GetURL());
     installer->set_is_gallery_install(is_gallery_download);
+    if (is_gallery_download)
+      installer->set_original_download_url(download_item.GetOriginalUrl());
     installer->set_allow_silent_install(is_gallery_download);
     installer->set_install_cause(extension_misc::INSTALL_CAUSE_USER_DOWNLOAD);
-    installer->InstallCrx(download_item.full_path());
+    installer->InstallCrx(download_item.GetFullPath());
   }
 
   return installer;

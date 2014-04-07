@@ -1,7 +1,7 @@
 /*
- * Copyright 2011 The Native Client Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can
- * be found in the LICENSE file.
+ * Copyright (c) 2011 The Chromium Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
  */
 
 #include "native_client/src/shared/ppapi_proxy/plugin_instance_data.h"
@@ -43,13 +43,11 @@ void PluginInstanceData::DidDestroy(PP_Instance id) {
 }
 
 // static
-void PluginInstanceData::DidChangeView(PP_Instance id,
-                                       PP_Rect position,
-                                       PP_Rect clip) {
+bool PluginInstanceData::IsFullscreen(PP_Instance id) {
   PluginInstanceData* instance = FromPP(id);
-  if (instance) {
-    instance->set_position(position);
-  }
+  if (instance)
+    return instance->last_view_data_.is_fullscreen;
+  return false;
 }
 
 }  // namespace ppapi_proxy

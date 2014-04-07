@@ -4,6 +4,7 @@
 
 #include "chrome/browser/importer/importer_list.h"
 
+#include "base/bind.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/importer/firefox_importer_utils.h"
 #include "chrome/browser/importer/importer_bridge.h"
@@ -19,6 +20,8 @@
 #include "base/mac/foundation_util.h"
 #include "chrome/browser/importer/safari_importer.h"
 #endif
+
+using content::BrowserThread;
 
 namespace {
 
@@ -91,8 +94,9 @@ void DetectFirefoxProfiles(std::vector<importer::SourceProfile*>* profiles) {
 }
 
 void DetectGoogleToolbarProfiles(
-    std::vector<importer::SourceProfile*>* profiles) {
-  if (FirstRun::IsChromeFirstRun())
+    std::vector<importer::SourceProfile*>* profiles,
+    scoped_refptr<net::URLRequestContextGetter> request_context_getter) {
+  if (first_run::IsChromeFirstRun())
     return;
 
   importer::SourceProfile* google_toolbar = new importer::SourceProfile;
@@ -102,16 +106,19 @@ void DetectGoogleToolbarProfiles(
   google_toolbar->source_path.clear();
   google_toolbar->app_path.clear();
   google_toolbar->services_supported = importer::FAVORITES;
+  google_toolbar->request_context_getter = request_context_getter;
   profiles->push_back(google_toolbar);
 }
 
 }  // namespace
 
-ImporterList::ImporterList()
+ImporterList::ImporterList(
+    net::URLRequestContextGetter* request_context_getter)
     : source_thread_id_(BrowserThread::UI),
       observer_(NULL),
       is_observed_(false),
       source_profiles_loaded_(false) {
+ request_context_getter_ = make_scoped_refptr(request_context_getter);
 }
 
 void ImporterList::DetectSourceProfiles(
@@ -120,12 +127,13 @@ void ImporterList::DetectSourceProfiles(
   observer_ = observer;
   is_observed_ = true;
 
-  BrowserThread::GetCurrentThreadIdentifier(&source_thread_id_);
+  bool res = BrowserThread::GetCurrentThreadIdentifier(&source_thread_id_);
+  DCHECK(res);
 
   BrowserThread::PostTask(
       BrowserThread::FILE,
       FROM_HERE,
-      NewRunnableMethod(this, &ImporterList::DetectSourceProfilesWorker));
+      base::Bind(&ImporterList::DetectSourceProfilesWorker, this));
 }
 
 void ImporterList::SetObserver(importer::ImporterListObserver* observer) {
@@ -177,7 +185,7 @@ void ImporterList::DetectSourceProfilesWorker() {
     DetectFirefoxProfiles(&profiles);
   }
   // TODO(brg) : Current UI requires win_util.
-  DetectGoogleToolbarProfiles(&profiles);
+  DetectGoogleToolbarProfiles(&profiles, request_context_getter_);
 #elif defined(OS_MACOSX)
   if (ShellIntegration::IsFirefoxDefaultBrowser()) {
     DetectFirefoxProfiles(&profiles);
@@ -196,7 +204,7 @@ void ImporterList::DetectSourceProfilesWorker() {
     BrowserThread::PostTask(
         source_thread_id_,
         FROM_HERE,
-        NewRunnableMethod(this, &ImporterList::SourceProfilesLoaded, profiles));
+        base::Bind(&ImporterList::SourceProfilesLoaded, this, profiles));
   } else {
     source_profiles_->assign(profiles.begin(), profiles.end());
     source_profiles_loaded_ = true;

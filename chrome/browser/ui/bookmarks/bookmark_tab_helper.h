@@ -6,17 +6,17 @@
 #define CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_
 #pragma once
 
-#include "content/browser/tab_contents/tab_contents_observer.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 
 class BookmarkTabHelperDelegate;
 class TabContentsWrapper;
 struct BookmarkNodeData;
 
 // Per-tab class to manage bookmarks.
-class BookmarkTabHelper : public NotificationObserver,
-                          public TabContentsObserver {
+class BookmarkTabHelper : public content::NotificationObserver,
+                          public content::WebContentsObserver {
  public:
   // BookmarkDrag --------------------------------------------------------------
   // Interface for forwarding bookmark drag and drop to extenstions.
@@ -42,15 +42,15 @@ class BookmarkTabHelper : public NotificationObserver,
   // Returns true if the bookmark bar should be shown detached.
   bool ShouldShowBookmarkBar();
 
-  // TabContentsObserver overrides:
-  virtual void DidNavigateMainFramePostCommit(
+  // content::WebContentsObserver overrides:
+  virtual void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const ViewHostMsg_FrameNavigate_Params& params) OVERRIDE;
+      const content::FrameNavigateParams& params) OVERRIDE;
 
-  // NotificationObserver overrides:
+  // content::NotificationObserver overrides:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // It is up to callers to call SetBookmarkDragDelegate(NULL) when
   // |bookmark_drag| is deleted since this class does not take ownership of
@@ -70,7 +70,7 @@ class BookmarkTabHelper : public NotificationObserver,
   bool is_starred_;
 
   // Registers and unregisters us for notifications.
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Owning TabContentsWrapper.
   TabContentsWrapper* tab_contents_wrapper_;

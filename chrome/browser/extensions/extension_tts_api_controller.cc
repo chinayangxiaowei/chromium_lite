@@ -20,6 +20,11 @@
 
 namespace constants = extension_tts_api_constants;
 
+namespace {
+
+// A value to be used to indicate that there is no char index available.
+const int kInvalidCharIndex = -1;
+
 namespace events {
 const char kOnEvent[] = "tts.onEvent";
 };  // namespace events
@@ -48,6 +53,7 @@ std::string TtsEventTypeToString(TtsEventType event_type) {
   }
 }
 
+}  // namespace
 
 //
 // UtteranceContinuousParameters
@@ -104,7 +110,8 @@ void Utterance::OnTtsEvent(TtsEventType event_type,
 
   ListValue args;
   DictionaryValue* event = new DictionaryValue();
-  event->SetInteger(constants::kCharIndexKey, char_index);
+  if (char_index != kInvalidCharIndex)
+    event->SetInteger(constants::kCharIndexKey, char_index);
   event->SetString(constants::kEventTypeKey, event_type_string);
   if (event_type == TTS_EVENT_ERROR) {
     event->SetString(constants::kErrorMessageKey, error_message);
@@ -150,7 +157,9 @@ ExtensionTtsController::~ExtensionTtsController() {
     current_utterance_->Finish();
     delete current_utterance_;
   }
-  ClearUtteranceQueue();
+
+  // Clear any queued utterances too.
+  ClearUtteranceQueue(false);  // Don't sent events.
 }
 
 void ExtensionTtsController::SpeakOrEnqueue(Utterance* utterance) {
@@ -191,7 +200,8 @@ void ExtensionTtsController::SpeakNow(Utterance* utterance) {
       utterance->lang(),
       utterance->continuous_parameters());
   if (!success) {
-    utterance->OnTtsEvent(TTS_EVENT_ERROR, -1, GetPlatformImpl()->error());
+    utterance->OnTtsEvent(TTS_EVENT_ERROR, kInvalidCharIndex,
+                          GetPlatformImpl()->error());
     delete utterance;
     return;
   }
@@ -207,9 +217,10 @@ void ExtensionTtsController::Stop() {
   }
 
   if (current_utterance_)
-    current_utterance_->OnTtsEvent(TTS_EVENT_INTERRUPTED, -1, std::string());
+    current_utterance_->OnTtsEvent(TTS_EVENT_INTERRUPTED, kInvalidCharIndex,
+                                   std::string());
   FinishCurrentUtterance();
-  ClearUtteranceQueue();
+  ClearUtteranceQueue(true);  // Send events.
 }
 
 void ExtensionTtsController::OnTtsEvent(int utterance_id,
@@ -279,7 +290,8 @@ bool ExtensionTtsController::IsSpeaking() const {
 void ExtensionTtsController::FinishCurrentUtterance() {
   if (current_utterance_) {
     if (!current_utterance_->finished())
-      current_utterance_->OnTtsEvent(TTS_EVENT_INTERRUPTED, -1, std::string());
+      current_utterance_->OnTtsEvent(TTS_EVENT_INTERRUPTED, kInvalidCharIndex,
+                                     std::string());
     delete current_utterance_;
     current_utterance_ = NULL;
   }
@@ -295,11 +307,15 @@ void ExtensionTtsController::SpeakNextUtterance() {
   }
 }
 
-void ExtensionTtsController::ClearUtteranceQueue() {
+void ExtensionTtsController::ClearUtteranceQueue(bool send_events) {
   while (!utterance_queue_.empty()) {
     Utterance* utterance = utterance_queue_.front();
     utterance_queue_.pop();
-    utterance->OnTtsEvent(TTS_EVENT_CANCELLED, -1, std::string());
+    if (send_events)
+      utterance->OnTtsEvent(TTS_EVENT_CANCELLED, kInvalidCharIndex,
+                            std::string());
+    else
+      utterance->Finish();
     delete utterance;
   }
 }

@@ -13,15 +13,14 @@
 #include <vector>
 #endif
 
-#include "third_party/skia/include/core/SkPreConfig.h"
-#include "third_party/skia/include/core/SkDevice.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkDevice.h"
+#include "third_party/skia/include/core/SkPreConfig.h"
 
 class SkMatrix;
+class SkMetaData;
 class SkPath;
 class SkRegion;
-
-struct SkIRect;
 
 #if defined(OS_LINUX) || defined(OS_OPENBSD) || defined(OS_FREEBSD) \
     || defined(OS_SUN)
@@ -46,6 +45,10 @@ typedef cairo_rectangle_t PlatformRect;
 #elif defined(OS_MACOSX)
 typedef CGContextRef PlatformSurface;
 typedef CGRect PlatformRect;
+#elif defined(ANDROID)
+// TODO(tonyg): FIX TYPES!
+typedef void* PlatformSurface;
+typedef void* PlatformRect;
 #endif
 
 // The following routines provide accessor points for the functionality
@@ -68,10 +71,21 @@ SK_API PlatformDevice* GetPlatformDevice(SkDevice* device);
 #if defined(OS_WIN)
 // Initializes the default settings and colors in a device context.
 SK_API void InitializeDC(HDC context);
-#elif defined (OS_MACOSX)
+#elif defined(OS_MACOSX)
 // Returns the CGContext that backing the SkDevice.  Forwards to the bound
 // PlatformDevice.  Returns NULL if no PlatformDevice is bound.
 SK_API CGContextRef GetBitmapContext(SkDevice* device);
+#endif
+
+// Following routines are used in print preview workflow to mark the draft mode
+// metafile and preview metafile.
+SK_API SkMetaData& getMetaData(const SkCanvas& canvas);
+SK_API void SetIsDraftMode(const SkCanvas& canvas, bool draft_mode);
+SK_API bool IsDraftMode(const SkCanvas& canvas);
+
+#if defined(OS_MACOSX) || defined(OS_WIN)
+SK_API void SetIsPreviewMetafile(const SkCanvas& canvas, bool is_preview);
+SK_API bool IsPreviewMetafile(const SkCanvas& canvas);
 #endif
 
 // A SkDevice is basically a wrapper around SkBitmap that provides a surface for
@@ -163,4 +177,4 @@ class SK_API PlatformDevice {
 
 }  // namespace skia
 
-#endif
+#endif  // SKIA_EXT_PLATFORM_DEVICE_H_

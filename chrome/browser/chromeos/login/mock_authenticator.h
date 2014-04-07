@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/chromeos/login/authenticator.h"
-#include "chrome/browser/chromeos/login/background_view.h"
 #include "chrome/browser/chromeos/login/login_utils.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class Profile;
@@ -31,48 +32,39 @@ class MockAuthenticator : public Authenticator {
         expected_password_(expected_password) {
   }
 
-  virtual bool CompleteLogin(Profile* profile,
+  virtual void CompleteLogin(Profile* profile,
                              const std::string& username,
-                             const std::string& password);
+                             const std::string& password) OVERRIDE;
 
-  // Returns true after posting task to UI thread to call OnLoginSuccess().
-  // This is called on the FILE thread now, so we need to do this.
-  virtual bool AuthenticateToLogin(Profile* profile,
+  virtual void AuthenticateToLogin(Profile* profile,
                                    const std::string& username,
                                    const std::string& password,
                                    const std::string& login_token,
-                                   const std::string& login_captcha);
+                                   const std::string& login_captcha) OVERRIDE;
 
-  virtual bool AuthenticateToUnlock(const std::string& username,
-                                    const std::string& password);
+  virtual void AuthenticateToUnlock(const std::string& username,
+                                    const std::string& password) OVERRIDE;
 
-  virtual void LoginOffTheRecord();
+  virtual void LoginOffTheRecord() OVERRIDE;
 
   virtual void OnLoginSuccess(
       const GaiaAuthConsumer::ClientLoginResult& credentials,
-      bool request_pending);
+      bool request_pending) OVERRIDE;
 
-  virtual void OnLoginFailure(const LoginFailure& failure);
+  virtual void OnLoginFailure(const LoginFailure& failure) OVERRIDE;
 
   virtual void RecoverEncryptedData(
       const std::string& old_password,
-      const GaiaAuthConsumer::ClientLoginResult& credentials) {}
+      const GaiaAuthConsumer::ClientLoginResult& credentials) OVERRIDE {}
 
   virtual void ResyncEncryptedData(
-      const GaiaAuthConsumer::ClientLoginResult& credentials) {}
+      const GaiaAuthConsumer::ClientLoginResult& credentials) OVERRIDE {}
 
   virtual void RetryAuth(Profile* profile,
                          const std::string& username,
                          const std::string& password,
                          const std::string& login_token,
-                         const std::string& login_captcha) {}
-
-  virtual std::string EncryptToken(const std::string& token);
-
-  virtual std::string DecryptToken(const std::string& encrypted_token);
-
-  virtual void VerifyOAuth1AccessToken(const std::string& oauth1_access_token,
-                                       const std::string& oauth1_secret) {}
+                         const std::string& login_captcha) OVERRIDE {}
 
  private:
   std::string expected_username_;
@@ -87,52 +79,51 @@ class MockLoginUtils : public LoginUtils {
                  const std::string& expected_password);
   virtual ~MockLoginUtils();
 
-  virtual bool ShouldWaitForWifi();
-
   virtual void PrepareProfile(const std::string& username,
+                              const std::string& display_email,
                               const std::string& password,
                               const GaiaAuthConsumer::ClientLoginResult& res,
                               bool pending_requests,
                               bool using_oauth,
                               bool has_cookies,
-                              Delegate* delegate);
+                              Delegate* delegate) OVERRIDE;
 
-  virtual void DelegateDeleted(Delegate* delegate);
+  virtual void DelegateDeleted(Delegate* delegate) OVERRIDE;
 
-  virtual void CompleteOffTheRecordLogin(const GURL& start_url) {}
+  virtual void CompleteOffTheRecordLogin(const GURL& start_url) OVERRIDE {}
 
-  virtual void SetFirstLoginPrefs(PrefService* prefs) {}
+  virtual void SetFirstLoginPrefs(PrefService* prefs) OVERRIDE {}
 
-  virtual Authenticator* CreateAuthenticator(LoginStatusConsumer* consumer);
+  virtual scoped_refptr<Authenticator> CreateAuthenticator(
+      LoginStatusConsumer* consumer) OVERRIDE;
 
-  virtual void PrewarmAuthentication() {}
+  virtual void PrewarmAuthentication() OVERRIDE {}
 
-  virtual void FetchCookies(
+  virtual void RestoreAuthenticationSession(Profile* profile) OVERRIDE {}
+
+  virtual void StartTokenServices(Profile* profile) OVERRIDE {}
+
+  virtual void StartSignedInServices(
       Profile* profile,
-      const GaiaAuthConsumer::ClientLoginResult& credentials) {}
-
-  virtual void StartTokenServices(Profile* profile) {}
-
-  virtual void StartSync(
-      Profile* profile,
-      const GaiaAuthConsumer::ClientLoginResult& credentials) {}
-
-  virtual void SetBackgroundView(BackgroundView* background_view);
-
-  virtual BackgroundView* GetBackgroundView();
+      const GaiaAuthConsumer::ClientLoginResult& credentials) OVERRIDE {}
 
   virtual std::string GetOffTheRecordCommandLine(
       const GURL& start_url,
       const CommandLine& base_command_line,
-      CommandLine* command_line);
+      CommandLine* command_line) OVERRIDE;
 
-  virtual bool TransferDefaultCookies(Profile* default_profile,
-                                      Profile* new_profile);
+  virtual void TransferDefaultCookies(Profile* default_profile,
+                                      Profile* new_profile) OVERRIDE;
+
+  virtual void TransferDefaultAuthCache(Profile* default_profile,
+                                        Profile* new_profile) OVERRIDE;
+
+  virtual void StopBackgroundFetchers() OVERRIDE;
+
  private:
   std::string expected_username_;
   std::string expected_password_;
   std::string auth_token_;
-  chromeos::BackgroundView* background_view_;
 
   DISALLOW_COPY_AND_ASSIGN(MockLoginUtils);
 };

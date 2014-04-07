@@ -8,11 +8,13 @@
 
 #include "base/auto_reset.h"
 #include "base/logging.h"
+#include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/profiles/profile.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_all_tabs_controller.h"
+#import "chrome/browser/ui/cocoa/bookmarks/bookmark_cell_single_line.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_editor_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_tree_browser_cell.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
@@ -60,11 +62,11 @@
 
 // static; implemented for each platform.  Update this function for new
 // classes derived from BookmarkEditorBaseController.
-void BookmarkEditor::Show(gfx::NativeWindow parent_hwnd,
-                          Profile* profile,
-                          const BookmarkNode* parent,
-                          const EditDetails& details,
-                          Configuration configuration) {
+void BookmarkEditor::ShowNative(gfx::NativeWindow parent_hwnd,
+                                Profile* profile,
+                                const BookmarkNode* parent,
+                                const EditDetails& details,
+                                Configuration configuration) {
   BookmarkEditorBaseController* controller = nil;
   if (details.type == EditDetails::NEW_FOLDER) {
     controller = [[BookmarkAllTabsController alloc]
@@ -168,7 +170,7 @@ class BookmarkEditorBaseControllerBridge : public BookmarkModelObserver {
                    profile:(Profile*)profile
                     parent:(const BookmarkNode*)parent
              configuration:(BookmarkEditor::Configuration)configuration {
-  NSString* nibpath = [base::mac::MainAppBundle()
+  NSString* nibpath = [base::mac::FrameworkBundle()
                         pathForResource:nibName
                                  ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibpath owner:self])) {
@@ -564,6 +566,15 @@ class BookmarkEditorBaseControllerBridge : public BookmarkModelObserver {
     [self setTableSelectionPath:selection];
     NSInteger row = [folderTreeView_ selectedRow];
     DCHECK(row >= 0);
+
+    // Put the cell into single-line mode before putting it into edit mode.
+    // TODO(kushi.p): Remove this when the project hits a 10.6+ only state.
+    NSCell* folderCell = [folderTreeView_ preparedCellAtColumn:0 row:row];
+    if ([folderCell
+          respondsToSelector:@selector(setUsesSingleLineMode:)]) {
+      [folderCell setUsesSingleLineMode:YES];
+    }
+
     [folderTreeView_ editColumn:0 row:row withEvent:nil select:YES];
   }
 }

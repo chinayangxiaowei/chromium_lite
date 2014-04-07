@@ -1,10 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PREFS_VALUE_MAP_PREF_STORE_H_
 #define CHROME_BROWSER_PREFS_VALUE_MAP_PREF_STORE_H_
 #pragma once
+
+#include <map>
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/observer_list.h"
@@ -23,9 +26,10 @@ class ValueMapPrefStore : public PrefStore {
 
   // PrefStore overrides:
   virtual ReadResult GetValue(const std::string& key,
-                              const base::Value** value) const;
-  virtual void AddObserver(PrefStore::Observer* observer);
-  virtual void RemoveObserver(PrefStore::Observer* observer);
+                              const base::Value** value) const OVERRIDE;
+  virtual void AddObserver(PrefStore::Observer* observer) OVERRIDE;
+  virtual void RemoveObserver(PrefStore::Observer* observer) OVERRIDE;
+  virtual size_t NumberOfObservers() const OVERRIDE;
 
   iterator begin();
   iterator end();

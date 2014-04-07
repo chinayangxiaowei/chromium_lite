@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -57,12 +57,11 @@ cr.define('cr.ui', function() {
     oobe.NetworkScreen.register();
     oobe.EulaScreen.register();
     oobe.UpdateScreen.register();
-    oobe.EnrollmentScreen.register();
     oobe.OAuthEnrollmentScreen.register();
     login.AccountPickerScreen.register();
     login.GaiaSigninScreen.register();
     oobe.UserImageScreen.register();
-    login.OfflineMessageScreen.register();
+    login.ErrorMessageScreen.register();
 
     cr.ui.Bubble.decorate($('bubble'));
     login.HeaderBar.decorate($('login-header-bar'));
@@ -105,7 +104,7 @@ cr.define('cr.ui', function() {
 
   /**
    * Enables/disables continue button.
-   * @param {bool} enable Should the button be enabled?
+   * @param {boolean} enable Should the button be enabled?
    */
   Oobe.enableContinueButton = function(enable) {
     $('continue-button').disabled = !enable;
@@ -113,7 +112,7 @@ cr.define('cr.ui', function() {
 
   /**
    * Sets usage statistics checkbox.
-   * @param {bool} checked Is the checkbox checked?
+   * @param {boolean} checked Is the checkbox checked?
    */
   Oobe.setUsageStats = function(checked) {
     $('usage-stats').checked = checked;
@@ -150,7 +149,7 @@ cr.define('cr.ui', function() {
 
   /**
    * Shows or hides update curtain.
-   * @param {bool} enable Are curtains shown?
+   * @param {boolean} enable Are curtains shown?
    */
   Oobe.showUpdateCurtain = function(enable) {
     $('update-screen-curtain').hidden = !enable;
@@ -165,7 +164,7 @@ cr.define('cr.ui', function() {
     $('tpm-busy').hidden = true;
     $('tpm-password').textContent = password;
     $('tpm-password').hidden = false;
-  }
+  };
 
   /**
    * Reloads content of the page (localized strings, options of the select
@@ -181,20 +180,25 @@ cr.define('cr.ui', function() {
     Oobe.setupSelect($('language-select'), data.languageList, '');
     Oobe.setupSelect($('keyboard-select'), data.inputMethodsList, '');
 
-    // Update headers & buttons.
-    Oobe.updateHeadersAndButtons();
-
-    // Trigger network drop-down to reload its state
-    // so that strings are reloaded.
-    cr.ui.DropDown.refresh();
-  }
+    // Update localized content of the screens.
+    Oobe.updateLocalizedContent();
+  };
 
   /**
-   * Updates headers and buttons of the screens.
+   * Updates version label visibilty.
+   * @param {boolean} show True if version label should be visible.
+   */
+  Oobe.showVersion = function(show) {
+    Oobe.getInstance().showVersion(show);
+  };
+
+  /**
+   * Updates localized content of the screens.
    * Should be executed on language change.
    */
-  Oobe.updateHeadersAndButtons = function() {
-    Oobe.getInstance().updateHeadersAndButtons_();
+  Oobe.updateLocalizedContent = function() {
+    // Buttons, headers and links.
+    Oobe.getInstance().updateLocalizedContent_();
   };
 
   /**
@@ -213,6 +217,13 @@ cr.define('cr.ui', function() {
   };
 
   /**
+   * Disables signin UI.
+   */
+  Oobe.disableSigninUI = function() {
+    DisplayManager.disableSigninUI();
+  };
+
+  /**
    * Shows signin UI.
    * @param {string} opt_email An optional email for signin UI.
    */
@@ -222,9 +233,11 @@ cr.define('cr.ui', function() {
 
   /**
    * Resets sign-in input fields.
+   * @param {boolean} forceOnline Whether online sign-in should be forced.
+   * If |forceOnline| is false previously used sign-in type will be used.
    */
-  Oobe.resetSigninUI = function() {
-    DisplayManager.resetSigninUI();
+  Oobe.resetSigninUI = function(forceOnline) {
+    DisplayManager.resetSigninUI(forceOnline);
   };
 
   /**

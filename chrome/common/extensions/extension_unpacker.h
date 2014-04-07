@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/tuple.h"
+#include "chrome/common/extensions/extension.h"
 
 class SkBitmap;
 
@@ -27,7 +28,10 @@ class ExtensionUnpacker {
  public:
   typedef std::vector< Tuple2<SkBitmap, FilePath> > DecodedImages;
 
-  explicit ExtensionUnpacker(const FilePath& extension_path);
+  ExtensionUnpacker(const FilePath& extension_path,
+                    const std::string& extension_id,
+                    Extension::Location location,
+                    int creation_flags);
   ~ExtensionUnpacker();
 
   // Install the extension file at |extension_path|.  Returns true on success.
@@ -56,7 +60,7 @@ class ExtensionUnpacker {
   static bool ReadMessageCatalogsFromFile(const FilePath& extension_path,
                                           base::DictionaryValue* catalogs);
 
-  const std::string& error_message() { return error_message_; }
+  const string16& error_message() { return error_message_; }
   base::DictionaryValue* parsed_manifest() {
     return parsed_manifest_.get();
   }
@@ -85,6 +89,15 @@ class ExtensionUnpacker {
   // The extension to unpack.
   FilePath extension_path_;
 
+  // The extension ID if known.
+  std::string extension_id_;
+
+  // The location to use for the created extension.
+  Extension::Location location_;
+
+  // The creation flags to use with the created extension.
+  int creation_flags_;
+
   // The place we unpacked the extension to.
   FilePath temp_install_dir_;
 
@@ -100,7 +113,7 @@ class ExtensionUnpacker {
   scoped_ptr<base::DictionaryValue> parsed_catalogs_;
 
   // The last error message that was set.  Empty if there were no errors.
-  std::string error_message_;
+  string16 error_message_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionUnpacker);
 };

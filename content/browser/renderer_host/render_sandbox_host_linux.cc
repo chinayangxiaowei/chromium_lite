@@ -29,11 +29,11 @@
 #include "content/common/font_config_ipc_linux.h"
 #include "content/common/sandbox_methods_linux.h"
 #include "content/common/unix_domain_socket_posix.h"
+#include "content/common/webkitplatformsupport_impl.h"
 #include "skia/ext/SkFontHost_fontconfig_direct.h"
 #include "third_party/npapi/bindings/npapi_extensions.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/gtk/WebFontInfo.h"
-#include "webkit/glue/webkitplatformsupport_impl.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/linux/WebFontInfo.h"
 
 using WebKit::WebCString;
 using WebKit::WebFontInfo;
@@ -58,12 +58,6 @@ class SandboxIPCProcess  {
       : lifeline_fd_(lifeline_fd),
         browser_socket_(browser_socket),
         font_config_(new FontConfigDirect()) {
-    base::InjectiveMultimap multimap;
-    multimap.push_back(base::InjectionArc(0, lifeline_fd, false));
-    multimap.push_back(base::InjectionArc(0, browser_socket, false));
-
-    base::CloseSuperfluousFds(multimap);
-
     if (!sandbox_cmd.empty()) {
       sandbox_cmd_.push_back(sandbox_cmd);
       sandbox_cmd_.push_back(base::kFindInodeSwitch);
@@ -267,16 +261,20 @@ class SandboxIPCProcess  {
     if (!pickle.ReadString(&iter, &preferred_locale))
       return;
 
-    WebCString family = WebFontInfo::familyForChars(chars.get(),
-                                                    num_chars,
-                                                    preferred_locale.c_str());
+    WebKit::WebFontFamily family;
+    WebFontInfo::familyForChars(chars.get(),
+                                num_chars,
+                                preferred_locale.c_str(),
+                                &family);
 
     Pickle reply;
-    if (family.data()) {
-      reply.WriteString(family.data());
+    if (family.name.data()) {
+      reply.WriteString(family.name.data());
     } else {
       reply.WriteString("");
     }
+    reply.WriteBool(family.isBold);
+    reply.WriteBool(family.isItalic);
     SendRendererReply(fds, reply, -1);
   }
 
@@ -369,12 +367,14 @@ class SandboxIPCProcess  {
 
   void HandleMakeSharedMemorySegment(int fd, const Pickle& pickle, void* iter,
                                      std::vector<int>& fds) {
-    uint32_t shm_size;
-    if (!pickle.ReadUInt32(&iter, &shm_size))
+    base::SharedMemoryCreateOptions options;
+    if (!pickle.ReadUInt32(&iter, &options.size))
+      return;
+    if (!pickle.ReadBool(&iter, &options.executable))
       return;
     int shm_fd = -1;
     base::SharedMemory shm;
-    if (shm.CreateAnonymous(shm_size))
+    if (shm.Create(options))
       shm_fd = shm.handle().fd;
     Pickle reply;
     SendRendererReply(fds, reply, shm_fd);
@@ -643,9 +643,9 @@ class SandboxIPCProcess  {
 
   const int lifeline_fd_;
   const int browser_socket_;
-  FontConfigDirect* const font_config_;
+  scoped_ptr<FontConfigDirect> font_config_;
   std::vector<std::string> sandbox_cmd_;
-  scoped_ptr<webkit_glue::WebKitPlatformSupportImpl> webkit_platform_support_;
+  scoped_ptr<content::WebKitPlatformSupportImpl> webkit_platform_support_;
 };
 
 SandboxIPCProcess::~SandboxIPCProcess() {
@@ -656,8 +656,8 @@ SandboxIPCProcess::~SandboxIPCProcess() {
 void SandboxIPCProcess::EnsureWebKitInitialized() {
   if (webkit_platform_support_.get())
     return;
-  webkit_platform_support_.reset(new webkit_glue::WebKitPlatformSupportImpl);
-  WebKit::initialize(webkit_platform_support_.get());
+  webkit_platform_support_.reset(new content::WebKitPlatformSupportImpl);
+  WebKit::initializeWithoutV8(webkit_platform_support_.get());
 }
 
 // -----------------------------------------------------------------------------
@@ -705,6 +705,11 @@ void RenderSandboxHostLinux::Init(const std::string& sandbox_path) {
 
   pid_ = fork();
   if (pid_ == 0) {
+    if (HANDLE_EINTR(close(fds[0])) < 0)
+      DPLOG(ERROR) << "close";
+    if (HANDLE_EINTR(close(pipefds[1])) < 0)
+      DPLOG(ERROR) << "close";
+
     SandboxIPCProcess handler(child_lifeline_fd, browser_socket, sandbox_path);
     handler.Run();
     _exit(0);

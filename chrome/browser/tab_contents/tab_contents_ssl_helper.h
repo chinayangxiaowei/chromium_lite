@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 #include <map>
 
 #include "base/memory/linked_ptr.h"
-#include "content/browser/renderer_host/render_view_host_delegate.h"
+#include "base/memory/ref_counted.h"
+#include "content/public/browser/render_view_host_delegate.h"
 
 class SSLAddCertHandler;
 class SSLClientAuthHandler;
@@ -19,9 +20,6 @@ class TabContentsSSLHelper {
  public:
   explicit TabContentsSSLHelper(TabContentsWrapper* tab_contents);
   virtual ~TabContentsSSLHelper();
-
-  // Selects the client certificate to submit and returns it to the |handler|.
-  void SelectClientCertificate(scoped_refptr<SSLClientAuthHandler> handler);
 
   // Called when |handler| encounters an error in verifying a received client
   // certificate. Note that, because CAs often will not send us intermediate
@@ -49,12 +47,12 @@ class TabContentsSSLHelper {
   void OnAddClientCertificateFinished(
       scoped_refptr<SSLAddCertHandler> handler);
 
- private:
   // Displays a dialog for selecting a client certificate and returns it to
   // the |handler|.
   void ShowClientCertificateRequestDialog(
       scoped_refptr<SSLClientAuthHandler> handler);
 
+ private:
   TabContentsWrapper* tab_contents_;
 
   class SSLAddCertData;

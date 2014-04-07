@@ -10,6 +10,7 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
@@ -20,11 +21,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/global_error_service.h"
+#include "chrome/browser/ui/global_error_service_factory.h"
 #include "chrome/browser/ui/gtk/accelerators_gtk.h"
 #include "chrome/browser/ui/gtk/back_forward_button_gtk.h"
+#include "chrome/browser/ui/gtk/bookmarks/bookmark_sub_menu_model_gtk.h"
 #include "chrome/browser/ui/gtk/browser_actions_toolbar_gtk.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
-#include "chrome/browser/ui/gtk/cairo_cached_surface.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_button.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
@@ -39,20 +42,26 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
+#include "ui/base/accelerators/accelerator_gtk.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/models/accelerator_gtk.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas_skia_paint.h"
 #include "ui/gfx/gtk_util.h"
+#include "ui/gfx/image/cairo_cached_surface.h"
 #include "ui/gfx/skbitmap_operations.h"
+
+using content::HostZoomMap;
+using content::UserMetricsAction;
+using content::WebContents;
 
 namespace {
 
@@ -87,9 +96,11 @@ BrowserToolbarGtk::BrowserToolbarGtk(Browser* browser, BrowserWindowGtk* window)
     : toolbar_(NULL),
       location_bar_(new LocationBarViewGtk(browser)),
       model_(browser->toolbar_model()),
-      wrench_menu_model_(this, browser),
+      is_wrench_menu_model_valid_(true),
       browser_(browser),
       window_(window) {
+  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_));
+
   browser_->command_updater()->AddCommandObserver(IDC_BACK, this);
   browser_->command_updater()->AddCommandObserver(IDC_FORWARD, this);
   browser_->command_updater()->AddCommandObserver(IDC_HOME, this);
@@ -97,7 +108,10 @@ BrowserToolbarGtk::BrowserToolbarGtk(Browser* browser, BrowserWindowGtk* window)
 
   registrar_.Add(this,
                  chrome::NOTIFICATION_UPGRADE_RECOMMENDED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
+  registrar_.Add(this,
+                 chrome::NOTIFICATION_GLOBAL_ERRORS_CHANGED,
+                 content::Source<Profile>(browser_->profile()));
 }
 
 BrowserToolbarGtk::~BrowserToolbarGtk() {
@@ -116,7 +130,7 @@ void BrowserToolbarGtk::Init(GtkWindow* top_level_window) {
   theme_service_ = GtkThemeService::GetFrom(profile);
   registrar_.Add(this,
                  chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 Source<ThemeService>(theme_service_));
+                 content::Source<ThemeService>(theme_service_));
 
   offscreen_entry_.Own(gtk_entry_new());
 
@@ -215,9 +229,12 @@ void BrowserToolbarGtk::Init(GtkWindow* top_level_window) {
   gtk_container_add(GTK_CONTAINER(wrench_box), wrench_button);
   gtk_box_pack_start(GTK_BOX(toolbar_), wrench_box, FALSE, FALSE, 4);
 
-  wrench_menu_.reset(new MenuGtk(this, &wrench_menu_model_));
+  wrench_menu_.reset(new MenuGtk(this, wrench_menu_model_.get()));
+  // The bookmark menu model needs to be able to force the wrench menu to close.
+  wrench_menu_model_->bookmark_sub_menu_model()->SetMenuGtk(wrench_menu_.get());
+
   registrar_.Add(this, content::NOTIFICATION_ZOOM_LEVEL_CHANGED,
-      Source<HostZoomMap>(profile->GetHostZoomMap()));
+      content::Source<HostZoomMap>(profile->GetHostZoomMap()));
 
   if (ShouldOnlyShowLocation()) {
     gtk_widget_show(event_box_);
@@ -273,8 +290,12 @@ void BrowserToolbarGtk::UpdateForBookmarkBarVisibility(
 
 void BrowserToolbarGtk::ShowAppMenu() {
   wrench_menu_->Cancel();
+
+  if (!is_wrench_menu_model_valid_)
+    RebuildWrenchMenu();
+
   wrench_menu_button_->SetPaintOverride(GTK_STATE_ACTIVE);
-  UserMetrics::RecordAction(UserMetricsAction("ShowAppMenu"));
+  content::RecordAction(UserMetricsAction("ShowAppMenu"));
   wrench_menu_->PopupAsFromKeyEvent(wrench_menu_button_->widget());
 }
 
@@ -323,7 +344,8 @@ GtkIconSet* BrowserToolbarGtk::GetIconSetForId(int idr) {
 // Always show images because we desire that some icons always show
 // regardless of the system setting.
 bool BrowserToolbarGtk::AlwaysShowIconForCmd(int command_id) const {
-  return command_id == IDC_UPGRADE_DIALOG;
+  return command_id == IDC_UPGRADE_DIALOG ||
+      BookmarkSubMenuModel::IsBookmarkItemCommandId(command_id);
 }
 
 // ui::AcceleratorProvider
@@ -338,13 +360,13 @@ bool BrowserToolbarGtk::GetAcceleratorForCommandId(
   return !!accelerator_gtk;
 }
 
-// NotificationObserver --------------------------------------------------------
+// content::NotificationObserver -----------------------------------------------
 
 void BrowserToolbarGtk::Observe(int type,
-                                const NotificationSource& source,
-                                const NotificationDetails& details) {
+                                const content::NotificationSource& source,
+                                const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_PREF_CHANGED) {
-    NotifyPrefChanged(Details<std::string>(details).ptr());
+    NotifyPrefChanged(content::Details<std::string>(details).ptr());
   } else if (type == chrome::NOTIFICATION_BROWSER_THEME_CHANGED) {
     // Update the spacing around the menu buttons
     bool use_gtk = theme_service_->UsingNativeTheme();
@@ -381,6 +403,9 @@ void BrowserToolbarGtk::Observe(int type,
   } else if (type == chrome::NOTIFICATION_UPGRADE_RECOMMENDED) {
     // Redraw the wrench menu to update the badge.
     gtk_widget_queue_draw(wrench_menu_button_->widget());
+  } else if (type == chrome::NOTIFICATION_GLOBAL_ERRORS_CHANGED) {
+    is_wrench_menu_model_valid_ = false;
+    gtk_widget_queue_draw(wrench_menu_button_->widget());
   } else if (type == content::NOTIFICATION_ZOOM_LEVEL_CHANGED) {
     // If our zoom level changed, we need to tell the menu to update its state,
     // since the menu could still be open.
@@ -392,7 +417,7 @@ void BrowserToolbarGtk::Observe(int type,
 
 // BrowserToolbarGtk, public ---------------------------------------------------
 
-void BrowserToolbarGtk::UpdateTabContents(TabContents* contents,
+void BrowserToolbarGtk::UpdateWebContents(WebContents* contents,
                                           bool should_restore_state) {
   location_bar_->Update(should_restore_state ? contents : NULL);
 
@@ -441,6 +466,8 @@ bool BrowserToolbarGtk::UpdateRoundedness() {
 
 gboolean BrowserToolbarGtk::OnAlignmentExpose(GtkWidget* widget,
                                               GdkEventExpose* e) {
+  TRACE_EVENT0("ui::gtk", "BrowserToolbarGtk::OnAlignmentExpose");
+
   // We may need to update the roundedness of the toolbar's top corners. In
   // this case, don't draw; we'll be called again soon enough.
   if (UpdateRoundedness())
@@ -468,25 +495,27 @@ gboolean BrowserToolbarGtk::OnAlignmentExpose(GtkWidget* widget,
   // between the edge of the toolbar and where we anchor the corner images.
   const int kShadowThickness = 2;
 
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(widget, &allocation);
   gfx::Rect area(e->area);
-  gfx::Rect right(widget->allocation.x + widget->allocation.width -
-                      kCornerWidth,
-                  widget->allocation.y - kShadowThickness,
+  gfx::Rect right(allocation.x + allocation.width - kCornerWidth,
+                  allocation.y - kShadowThickness,
                   kCornerWidth,
-                  widget->allocation.height + kShadowThickness);
-  gfx::Rect left(widget->allocation.x - kShadowThickness,
-                 widget->allocation.y - kShadowThickness,
+                  allocation.height + kShadowThickness);
+  gfx::Rect left(allocation.x - kShadowThickness,
+                 allocation.y - kShadowThickness,
                  kCornerWidth,
-                 widget->allocation.height + kShadowThickness);
+                 allocation.height + kShadowThickness);
 
   if (window_->ShouldDrawContentDropShadow()) {
     // Leave room to draw rounded corners.
     area = area.Subtract(right).Subtract(left);
   }
 
-  CairoCachedSurface* background = theme_service_->GetSurfaceNamed(
-      IDR_THEME_TOOLBAR, widget);
-  background->SetSource(cr, tabstrip_origin.x(), tabstrip_origin.y());
+  const gfx::Image* background =
+      theme_service_->GetImageNamed(IDR_THEME_TOOLBAR);
+  background->ToCairo()->SetSource(
+      cr, widget, tabstrip_origin.x(), tabstrip_origin.y());
   cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_REPEAT);
   cairo_rectangle(cr, area.x(), area.y(), area.width(), area.height());
   cairo_fill(cr);
@@ -505,21 +534,21 @@ gboolean BrowserToolbarGtk::OnAlignmentExpose(GtkWidget* widget,
     cairo_surface_t* target = cairo_surface_create_similar(
         cairo_get_target(cr),
         CAIRO_CONTENT_COLOR_ALPHA,
-        widget->allocation.x + widget->allocation.width,
-        widget->allocation.y + widget->allocation.height);
+        allocation.x + allocation.width,
+        allocation.y + allocation.height);
     cairo_t* copy_cr = cairo_create(target);
+
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
     cairo_set_operator(copy_cr, CAIRO_OPERATOR_SOURCE);
     if (draw_left_corner) {
-      CairoCachedSurface* left_corner = theme_service_->GetSurfaceNamed(
-          IDR_CONTENT_TOP_LEFT_CORNER_MASK, widget);
-      left_corner->SetSource(copy_cr, left.x(), left.y());
+      rb.GetNativeImageNamed(IDR_CONTENT_TOP_LEFT_CORNER_MASK).ToCairo()->
+          SetSource(copy_cr, widget, left.x(), left.y());
       cairo_paint(copy_cr);
     }
     if (draw_right_corner) {
-      CairoCachedSurface* right_corner = theme_service_->GetSurfaceNamed(
-          IDR_CONTENT_TOP_RIGHT_CORNER_MASK, widget);
-      right_corner->SetSource(copy_cr, right.x(), right.y());
+      rb.GetNativeImageNamed(IDR_CONTENT_TOP_RIGHT_CORNER_MASK).ToCairo()->
+          SetSource(copy_cr, widget, right.x(), right.y());
       // We fill a path rather than just painting because we don't want to
       // overwrite the left corner.
       cairo_rectangle(copy_cr, right.x(), right.y(),
@@ -529,7 +558,8 @@ gboolean BrowserToolbarGtk::OnAlignmentExpose(GtkWidget* widget,
 
     // Draw the background. CAIRO_OPERATOR_IN uses the existing pixel data as
     // an alpha mask.
-    background->SetSource(copy_cr, tabstrip_origin.x(), tabstrip_origin.y());
+    background->ToCairo()->SetSource(copy_cr, widget,
+                                     tabstrip_origin.x(), tabstrip_origin.y());
     cairo_set_operator(copy_cr, CAIRO_OPERATOR_IN);
     cairo_pattern_set_extend(cairo_get_source(copy_cr), CAIRO_EXTEND_REPEAT);
     cairo_paint(copy_cr);
@@ -548,10 +578,13 @@ gboolean BrowserToolbarGtk::OnAlignmentExpose(GtkWidget* widget,
 
 gboolean BrowserToolbarGtk::OnLocationHboxExpose(GtkWidget* location_hbox,
                                                  GdkEventExpose* e) {
+  TRACE_EVENT0("ui::gtk", "BrowserToolbarGtk::OnLocationHboxExpose");
   if (theme_service_->UsingNativeTheme()) {
+    GtkAllocation allocation;
+    gtk_widget_get_allocation(location_hbox, &allocation);
     gtk_util::DrawTextEntryBackground(offscreen_entry_.get(),
                                       location_hbox, &e->area,
-                                      &location_hbox->allocation);
+                                      &allocation);
   }
 
   return FALSE;
@@ -573,6 +606,9 @@ gboolean BrowserToolbarGtk::OnMenuButtonPressEvent(GtkWidget* button,
                                                    GdkEventButton* event) {
   if (event->button != 1)
     return FALSE;
+
+  if (!is_wrench_menu_model_valid_)
+    RebuildWrenchMenu();
 
   wrench_menu_button_->SetPaintOverride(GTK_STATE_ACTIVE);
   wrench_menu_->PopupForWidget(button, event->button, event->time);
@@ -617,26 +653,38 @@ bool BrowserToolbarGtk::ShouldOnlyShowLocation() const {
   return !browser_->is_type_tabbed();
 }
 
+void BrowserToolbarGtk::RebuildWrenchMenu() {
+  wrench_menu_model_.reset(new WrenchMenuModel(this, browser_));
+  wrench_menu_.reset(new MenuGtk(this, wrench_menu_model_.get()));
+  is_wrench_menu_model_valid_ = true;
+}
+
 gboolean BrowserToolbarGtk::OnWrenchMenuButtonExpose(GtkWidget* sender,
                                                      GdkEventExpose* expose) {
-  const SkBitmap* badge = NULL;
+  TRACE_EVENT0("ui::gtk", "BrowserToolbarGtk::OnWrenchMenuButtonExpose");
+  int resource_id = 0;
   if (UpgradeDetector::GetInstance()->notify_upgrade()) {
-    badge = theme_service_->GetBitmapNamed(
-        UpgradeDetector::GetInstance()->GetIconResourceID(
-            UpgradeDetector::UPGRADE_ICON_TYPE_BADGE));
+    resource_id = UpgradeDetector::GetInstance()->GetIconResourceID(
+            UpgradeDetector::UPGRADE_ICON_TYPE_BADGE);
   } else {
-    return FALSE;
+    resource_id = GlobalErrorServiceFactory::GetForProfile(
+        browser_->profile())->GetFirstBadgeResourceID();
   }
 
+  if (!resource_id)
+    return FALSE;
+
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(sender, &allocation);
+
   // Draw the chrome app menu icon onto the canvas.
+  const SkBitmap* badge = theme_service_->GetBitmapNamed(resource_id);
   gfx::CanvasSkiaPaint canvas(expose, false);
-  int x_offset = base::i18n::IsRTL() ? 0 :
-      sender->allocation.width - badge->width();
+  int x_offset = base::i18n::IsRTL() ? 0 : allocation.width - badge->width();
   int y_offset = 0;
-  canvas.DrawBitmapInt(
-      *badge,
-      sender->allocation.x + x_offset,
-      sender->allocation.y + y_offset);
+  canvas.DrawBitmapInt(*badge,
+                       allocation.x + x_offset,
+                       allocation.y + y_offset);
 
   return FALSE;
 }

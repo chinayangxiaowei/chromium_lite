@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,50 @@
 
 #include "webkit/glue/webthread_impl.h"
 
-#include "base/task.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/message_loop.h"
+#include "base/threading/platform_thread.h"
 
 namespace webkit_glue {
 
-class TaskAdapter : public Task {
+WebThreadBase::WebThreadBase() { }
+WebThreadBase::~WebThreadBase() { }
+
+class WebThreadBase::TaskObserverAdapter : public MessageLoop::TaskObserver {
 public:
-  TaskAdapter(WebKit::WebThread::Task* task) : task_(task) { }
-  virtual void Run() {
-    task_->run();
+  TaskObserverAdapter(WebThread::TaskObserver* observer)
+      : observer_(observer) { }
+
+  // WebThread::TaskObserver does not have a willProcessTask method.
+  virtual void WillProcessTask(base::TimeTicks) OVERRIDE { }
+
+  virtual void DidProcessTask(base::TimeTicks) OVERRIDE {
+    observer_->didProcessTask();
   }
+
 private:
-  scoped_ptr<WebKit::WebThread::Task> task_;
+  WebThread::TaskObserver* observer_;
 };
+
+void WebThreadBase::addTaskObserver(TaskObserver* observer) {
+  CHECK(IsCurrentThread());
+  std::pair<TaskObserverMap::iterator, bool> result = task_observer_map_.insert(
+      std::make_pair(observer, static_cast<TaskObserverAdapter*>(NULL)));
+  if (result.second)
+    result.first->second = new TaskObserverAdapter(observer);
+  MessageLoop::current()->AddTaskObserver(result.first->second);
+}
+
+void WebThreadBase::removeTaskObserver(TaskObserver* observer) {
+  CHECK(IsCurrentThread());
+  TaskObserverMap::iterator iter = task_observer_map_.find(observer);
+  if (iter == task_observer_map_.end())
+    return;
+  MessageLoop::current()->RemoveTaskObserver(iter->second);
+  delete iter->second;
+  task_observer_map_.erase(iter);
+}
 
 WebThreadImpl::WebThreadImpl(const char* name)
     : thread_(new base::Thread(name)) {
@@ -28,22 +58,73 @@ WebThreadImpl::WebThreadImpl(const char* name)
 }
 
 void WebThreadImpl::postTask(Task* task) {
-  thread_->message_loop()->PostTask(FROM_HERE,
-                                    new TaskAdapter(task));
+  thread_->message_loop()->PostTask(
+      FROM_HERE, base::Bind(&WebKit::WebThread::Task::run, base::Owned(task)));
 }
-#ifdef WEBTHREAD_HAS_LONGLONG_CHANGE
+
 void WebThreadImpl::postDelayedTask(
     Task* task, long long delay_ms) {
-#else
-void WebThreadImpl::postDelayedTask(
-    Task* task, int64 delay_ms) {
-#endif
   thread_->message_loop()->PostDelayedTask(
-      FROM_HERE, new TaskAdapter(task), delay_ms);
+      FROM_HERE,
+      base::Bind(&WebKit::WebThread::Task::run, base::Owned(task)),
+      base::TimeDelta::FromMilliseconds(delay_ms));
+}
+
+void WebThreadImpl::enterRunLoop() {
+  CHECK(IsCurrentThread());
+  CHECK(!thread_->message_loop()->is_running()); // We don't support nesting.
+  thread_->message_loop()->Run();
+}
+
+void WebThreadImpl::exitRunLoop() {
+  CHECK(IsCurrentThread());
+  CHECK(thread_->message_loop()->is_running());
+  thread_->message_loop()->Quit();
+}
+
+bool WebThreadImpl::IsCurrentThread() const {
+  return thread_->thread_id() == base::PlatformThread::CurrentId();
 }
 
 WebThreadImpl::~WebThreadImpl() {
   thread_->Stop();
+}
+
+WebThreadImplForMessageLoop::WebThreadImplForMessageLoop(
+    base::MessageLoopProxy* message_loop)
+    : message_loop_(message_loop) {
+}
+
+void WebThreadImplForMessageLoop::postTask(Task* task) {
+  message_loop_->PostTask(
+      FROM_HERE, base::Bind(&WebKit::WebThread::Task::run, base::Owned(task)));
+}
+
+void WebThreadImplForMessageLoop::postDelayedTask(
+    Task* task, long long delay_ms) {
+  message_loop_->PostDelayedTask(
+      FROM_HERE,
+      base::Bind(&WebKit::WebThread::Task::run, base::Owned(task)),
+      delay_ms);
+}
+
+void WebThreadImplForMessageLoop::enterRunLoop() {
+  CHECK(IsCurrentThread());
+  CHECK(!MessageLoop::current()->is_running()); // We don't support nesting.
+  MessageLoop::current()->Run();
+}
+
+void WebThreadImplForMessageLoop::exitRunLoop() {
+  CHECK(IsCurrentThread());
+  CHECK(MessageLoop::current()->is_running());
+  MessageLoop::current()->Quit();
+}
+
+bool WebThreadImplForMessageLoop::IsCurrentThread() const {
+  return message_loop_->BelongsToCurrentThread();
+}
+
+WebThreadImplForMessageLoop::~WebThreadImplForMessageLoop() {
 }
 
 }

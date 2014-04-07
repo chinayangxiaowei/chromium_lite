@@ -570,6 +570,17 @@ void MessageWriter::AppendArrayOfBytes(const uint8* values, size_t length) {
   CloseContainer(&array_writer);
 }
 
+void MessageWriter::AppendArrayOfStrings(
+    const std::vector<std::string>& strings) {
+  DCHECK(!container_is_open_);
+  MessageWriter array_writer(message_);
+  OpenArray("s", &array_writer);
+  for (size_t i = 0; i < strings.size(); ++i) {
+    array_writer.AppendString(strings[i]);
+  }
+  CloseContainer(&array_writer);
+}
+
 void MessageWriter::AppendArrayOfObjectPaths(
     const std::vector<std::string>& object_paths) {
   DCHECK(!container_is_open_);
@@ -744,6 +755,12 @@ bool MessageReader::PopArrayOfBytes(uint8** bytes, size_t* length) {
   MessageReader array_reader(message_);
   if (!PopArray(&array_reader))
       return false;
+  // An empty array is allowed.
+  if (!array_reader.HasMoreData()) {
+    *length = 0;
+    *bytes = NULL;
+    return true;
+  }
   if (!array_reader.CheckDataType(DBUS_TYPE_BYTE))
     return false;
   int int_length = 0;
@@ -751,7 +768,21 @@ bool MessageReader::PopArrayOfBytes(uint8** bytes, size_t* length) {
                                     bytes,
                                     &int_length);
   *length = static_cast<int>(int_length);
-  return bytes != NULL;
+  return true;
+}
+
+bool MessageReader::PopArrayOfStrings(
+    std::vector<std::string> *strings) {
+  MessageReader array_reader(message_);
+  if (!PopArray(&array_reader))
+      return false;
+  while (array_reader.HasMoreData()) {
+    std::string string;
+    if (!array_reader.PopString(&string))
+      return false;
+    strings->push_back(string);
+  }
+  return true;
 }
 
 bool MessageReader::PopArrayOfObjectPaths(

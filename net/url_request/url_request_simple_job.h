@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "net/base/net_export.h"
 #include "net/url_request/url_request_job.h"
 
@@ -20,10 +20,12 @@ class NET_EXPORT URLRequestSimpleJob : public URLRequestJob {
  public:
   explicit URLRequestSimpleJob(URLRequest* request);
 
-  virtual void Start();
-  virtual bool ReadRawData(IOBuffer* buf, int buf_size, int *bytes_read);
-  virtual bool GetMimeType(std::string* mime_type) const;
-  virtual bool GetCharset(std::string* charset);
+  virtual void Start() OVERRIDE;
+  virtual bool ReadRawData(IOBuffer* buf,
+                           int buf_size,
+                           int *bytes_read) OVERRIDE;
+  virtual bool GetMimeType(std::string* mime_type) const OVERRIDE;
+  virtual bool GetCharset(std::string* charset) OVERRIDE;
 
  protected:
   virtual ~URLRequestSimpleJob();
@@ -41,7 +43,7 @@ class NET_EXPORT URLRequestSimpleJob : public URLRequestJob {
   std::string charset_;
   std::string data_;
   int data_offset_;
-  ScopedRunnableMethodFactory<URLRequestSimpleJob> method_factory_;
+  base::WeakPtrFactory<URLRequestSimpleJob> weak_factory_;
 };
 
 }  // namespace net

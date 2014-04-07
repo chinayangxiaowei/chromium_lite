@@ -10,34 +10,44 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_forward.h"
 #include "base/file_path.h"
+#include "base/location.h"
+#include "base/message_loop_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "chrome/browser/search_engines/template_url_id.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "sql/init_status.h"
 
+class AutocompleteSyncableService;
 class AutofillChange;
 class AutofillProfile;
+class AutofillProfileSyncableService;
 class CreditCard;
 class GURL;
 #if defined(OS_WIN)
 struct IE7PasswordInfo;
 #endif
 class MessageLoop;
+class Profile;
 class SkBitmap;
-class Task;
 class TemplateURL;
 class WebDatabase;
-struct WebIntentData;
 
 namespace base {
 class Thread;
 }
 
-namespace webkit_glue {
+namespace webkit {
+namespace forms {
 struct FormField;
 struct PasswordForm;
+}
+}
+
+namespace webkit_glue {
+struct WebIntentServiceData;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -102,6 +112,11 @@ struct WDKeywordsResult {
   int64 default_search_provider_id;
   // Version of the built-in keywords. A value of 0 indicates a first run.
   int builtin_keyword_version;
+  // Backup of the default search provider. NULL if the backup is invalid.
+  TemplateURL* default_search_provider_backup;
+  // Indicates if default search provider has been changed by something
+  // other than user's action in the browser.
+  bool did_default_search_provider_change;
 };
 
 //
@@ -164,8 +179,8 @@ template <class T> class WDObjectResult : public WDTypedResult {
 class WebDataServiceConsumer;
 
 class WebDataService
-    : public base::RefCountedThreadSafe<WebDataService,
-                                        BrowserThread::DeleteOnUIThread> {
+    : public base::RefCountedThreadSafe<
+          WebDataService, content::BrowserThread::DeleteOnUIThread> {
  public:
   // All requests return an opaque handle of the following type.
   typedef int Handle;
@@ -186,8 +201,12 @@ class WebDataService
     virtual ~WebDataRequest();
 
     Handle GetHandle() const;
-    WebDataServiceConsumer* GetConsumer() const;
-    bool IsCancelled() const;
+
+    // Retrieves the |consumer_| set in the constructor.  If the request was
+    // cancelled via the |Cancel()| method then |true| is returned and
+    // |*consumer| is set to NULL.  The |consumer| parameter may be set to NULL
+    // if only the return value is desired.
+    bool IsCancelled(WebDataServiceConsumer** consumer) const;
 
     // This can be invoked from any thread. From this point we assume that
     // our consumer_ reference is invalid.
@@ -206,8 +225,13 @@ class WebDataService
     scoped_refptr<WebDataService> service_;
     MessageLoop* message_loop_;
     Handle handle_;
-    bool canceled_;
+
+    // A lock to protect against simultaneous cancellations of the request.
+    // Cancellation affects both the |cancelled_| flag and |consumer_|.
+    mutable base::Lock cancel_lock_;
+    bool cancelled_;
     WebDataServiceConsumer* consumer_;
+
     WDTypedResult* result_;
 
     DISALLOW_COPY_AND_ASSIGN(WebDataRequest);
@@ -262,6 +286,13 @@ class WebDataService
   };
 
   WebDataService();
+
+  // Notifies listeners on the UI thread that multiple changes have been made to
+  // to Autofill records of the database.
+  // NOTE: This method is intended to be called from the DB thread.  It
+  // it asynchronously notifies listeners on the UI thread.
+  // |web_data_service| may be NULL for testing purposes.
+  static void NotifyOfMultipleAutofillChanges(WebDataService* web_data_service);
 
   // Initializes the web data service. Returns false on failure
   // Takes the path of the profile directory as its argument.
@@ -340,19 +371,24 @@ class WebDataService
   //
   //////////////////////////////////////////////////////////////////////////////
 
-  // Adds a web intent provider registration.
-  void AddWebIntent(const WebIntentData& intent);
+  // Adds a web intent service registration.
+  void AddWebIntentService(const webkit_glue::WebIntentServiceData& service);
 
-  // Removes a web intent provider registration.
-  void RemoveWebIntent(const WebIntentData& intent);
+  // Removes a web intent service registration.
+  void RemoveWebIntentService(const webkit_glue::WebIntentServiceData& service);
 
-  // Get all web intent providers registered for the specified |action|.
+  // Get all web intent services registered for the specified |action|.
   // |consumer| must not be NULL.
-  Handle GetWebIntents(const string16& action,
-                       WebDataServiceConsumer* consumer);
+  Handle GetWebIntentServices(const string16& action,
+                              WebDataServiceConsumer* consumer);
 
-  // Get all web intent providers registered. |consumer| must not be NULL.
-  Handle GetAllWebIntents(WebDataServiceConsumer* consumer);
+  // Get all web intent services registered using the specified |service_url|.
+  // |consumer| must not be NULL.
+  Handle GetWebIntentServicesForURL(const string16& service_url,
+                                    WebDataServiceConsumer* consumer);
+
+  // Get all web intent services registered. |consumer| must not be NULL.
+  Handle GetAllWebIntentServices(WebDataServiceConsumer* consumer);
 
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -368,7 +404,7 @@ class WebDataService
   void RemoveAllTokens();
 
   // Null on failure. Success is WDResult<std::vector<std::string> >
-  Handle GetAllTokens(WebDataServiceConsumer* consumer);
+  virtual Handle GetAllTokens(WebDataServiceConsumer* consumer);
 
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -380,13 +416,13 @@ class WebDataService
   //////////////////////////////////////////////////////////////////////////////
 
   // Adds |form| to the list of remembered password forms.
-  void AddLogin(const webkit_glue::PasswordForm& form);
+  void AddLogin(const webkit::forms::PasswordForm& form);
 
   // Updates the remembered password form.
-  void UpdateLogin(const webkit_glue::PasswordForm& form);
+  void UpdateLogin(const webkit::forms::PasswordForm& form);
 
   // Removes |form| from the list of remembered password forms.
-  void RemoveLogin(const webkit_glue::PasswordForm& form);
+  void RemoveLogin(const webkit::forms::PasswordForm& form);
 
   // Removes all logins created in the specified daterange
   void RemoveLoginsCreatedBetween(const base::Time& delete_begin,
@@ -399,7 +435,7 @@ class WebDataService
   // |consumer| will be notified when the request is done. The result is of
   // type WDResult<std::vector<PasswordForm*>>.
   // The result will be null on failure. The |consumer| owns all PasswordForm's.
-  Handle GetLogins(const webkit_glue::PasswordForm& form,
+  Handle GetLogins(const webkit::forms::PasswordForm& form,
                    WebDataServiceConsumer* consumer);
 
   // Gets the complete list of password forms that have not been blacklisted and
@@ -437,7 +473,8 @@ class WebDataService
   //////////////////////////////////////////////////////////////////////////////
 
   // Schedules a task to add form fields to the web database.
-  virtual void AddFormFields(const std::vector<webkit_glue::FormField>& fields);
+  virtual void AddFormFields(
+      const std::vector<webkit::forms::FormField>& fields);
 
   // Initiates the request for a vector of values which have been entered in
   // form input fields named |name|.  The method OnWebDataServiceRequestDone of
@@ -495,6 +532,16 @@ class WebDataService
       const base::Time& delete_begin,
       const base::Time& delete_end);
 
+  // Returns the syncable service for Autofill addresses and credit cards stored
+  // in this table. The returned service is owned by |this| object.
+  virtual AutofillProfileSyncableService*
+      GetAutofillProfileSyncableService() const;
+
+  // Returns the syncable service for field autocomplete stored in this table.
+  // The returned service is owned by |this| object.
+  virtual AutocompleteSyncableService*
+      GetAutocompleteSyncableService() const;
+
   // Testing
 #ifdef UNIT_TEST
   void set_failed_init(bool value) { failed_init_ = value; }
@@ -523,9 +570,9 @@ class WebDataService
   //
   //////////////////////////////////////////////////////////////////////////////
  private:
-  friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
-  friend class DeleteTask<WebDataService>;
-  friend class ShutdownTask;
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::UI>;
+  friend class base::DeleteHelper<WebDataService>;
 
   typedef GenericRequest2<std::vector<const TemplateURL*>,
                           std::vector<TemplateURL*> > SetKeywordsRequest;
@@ -536,17 +583,24 @@ class WebDataService
   // Initialize the database, if it hasn't already been initialized.
   void InitializeDatabaseIfNecessary();
 
+  // Initialize any syncable services.
+  void InitializeSyncableServices();
+
   // The notification method.
   void NotifyDatabaseLoadedOnUIThread();
 
   // Commit any pending transaction and deletes the database.
   void ShutdownDatabase();
 
+  // Deletes the syncable services.
+  void ShutdownSyncableServices();
+
   // Commit the current transaction and creates a new one.
   void Commit();
 
   // Schedule a task on our worker thread.
-  void ScheduleTask(Task* t);
+  void ScheduleTask(const tracked_objects::Location& from_here,
+                    const base::Closure& task);
 
   // Schedule a commit if one is not already pending.
   void ScheduleCommit();
@@ -581,10 +635,13 @@ class WebDataService
   // Web Intents.
   //
   //////////////////////////////////////////////////////////////////////////////
-  void AddWebIntentImpl(GenericRequest<WebIntentData>* request);
-  void RemoveWebIntentImpl(GenericRequest<WebIntentData>* request);
-  void GetWebIntentsImpl(GenericRequest<string16>* request);
-  void GetAllWebIntentsImpl(GenericRequest<std::string>* request);
+  void AddWebIntentServiceImpl(
+      GenericRequest<webkit_glue::WebIntentServiceData>* request);
+  void RemoveWebIntentServiceImpl(
+      GenericRequest<webkit_glue::WebIntentServiceData>* request);
+  void GetWebIntentServicesImpl(GenericRequest<string16>* request);
+  void GetWebIntentServicesForURLImpl(GenericRequest<string16>* request);
+  void GetAllWebIntentServicesImpl(GenericRequest<std::string>* request);
 
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -602,12 +659,12 @@ class WebDataService
   // Password manager.
   //
   //////////////////////////////////////////////////////////////////////////////
-  void AddLoginImpl(GenericRequest<webkit_glue::PasswordForm>* request);
-  void UpdateLoginImpl(GenericRequest<webkit_glue::PasswordForm>* request);
-  void RemoveLoginImpl(GenericRequest<webkit_glue::PasswordForm>* request);
+  void AddLoginImpl(GenericRequest<webkit::forms::PasswordForm>* request);
+  void UpdateLoginImpl(GenericRequest<webkit::forms::PasswordForm>* request);
+  void RemoveLoginImpl(GenericRequest<webkit::forms::PasswordForm>* request);
   void RemoveLoginsCreatedBetweenImpl(
       GenericRequest2<base::Time, base::Time>* request);
-  void GetLoginsImpl(GenericRequest<webkit_glue::PasswordForm>* request);
+  void GetLoginsImpl(GenericRequest<webkit::forms::PasswordForm>* request);
   void GetAutofillableLoginsImpl(WebDataRequest* request);
   void GetBlacklistLoginsImpl(WebDataRequest* request);
 #if defined(OS_WIN)
@@ -622,7 +679,7 @@ class WebDataService
   //
   //////////////////////////////////////////////////////////////////////////////
   void AddFormElementsImpl(
-      GenericRequest<std::vector<webkit_glue::FormField> >* request);
+      GenericRequest<std::vector<webkit::forms::FormField> >* request);
   void GetFormValuesForElementNameImpl(WebDataRequest* request,
       const string16& name, const string16& prefix, int limit);
   void RemoveFormElementsAddedBetweenImpl(
@@ -647,8 +704,17 @@ class WebDataService
   // The path with which to initialize the database.
   FilePath path_;
 
-  // Our database.
+  // Our database.  We own the |db_|, but don't use a |scoped_ptr| because the
+  // |db_| lifetime must be managed on the database thread.
   WebDatabase* db_;
+
+  // Syncable services for the database data.  We own the services, but don't
+  // use |scoped_ptr|s because the lifetimes must be managed on the database
+  // thread.
+  // Currently only Autocomplete and Autofill profiles use the new Sync API, but
+  // all the database data should migrate to this API over time.
+  AutocompleteSyncableService* autocomplete_syncable_service_;
+  AutofillProfileSyncableService* autofill_profile_syncable_service_;
 
   // Whether the database failed to initialize.  We use this to avoid
   // continually trying to reinit.

@@ -2,16 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/callback.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/automation/ui_controls.h"
 #include "chrome/test/base/view_event_test_base.h"
-#include "views/controls/button/menu_button.h"
-#include "views/controls/menu/menu_controller.h"
-#include "views/controls/menu/menu_item_view.h"
-#include "views/controls/menu/menu_runner.h"
-#include "views/controls/menu/submenu_view.h"
-#include "views/controls/menu/view_menu_delegate.h"
-#include "views/widget/root_view.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/menu/menu_controller.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/controls/menu/view_menu_delegate.h"
+#include "ui/views/widget/root_view.h"
+#include "ui/views/widget/widget.h"
 
 // This is a convenience base class for all tests to provide some
 // common functionality.  It sets up a MenuButton and a MenuItemView
@@ -43,7 +45,8 @@ class MenuItemViewTestBase : public ViewEventTestBase,
   // ViewEventTestBase implementation.
 
   virtual void SetUp() OVERRIDE {
-    button_ = new views::MenuButton(NULL, L"Menu Test", this, true);
+    button_ = new views::MenuButton(
+        NULL, ASCIIToUTF16("Menu Test"), this, true);
     menu_ = new views::MenuItemView(this);
     BuildMenu(menu_);
     menu_runner_.reset(new views::MenuRunner(menu_));
@@ -80,7 +83,7 @@ class MenuItemViewTestBase : public ViewEventTestBase,
 
  protected:
   // Generate a mouse click on the specified view and post a new task.
-  virtual void Click(views::View* view, Task* next) {
+  virtual void Click(views::View* view, const base::Closure& next) {
     ui_controls::MoveMouseToCenterAndPress(
         view,
         ui_controls::LEFT,
@@ -116,10 +119,10 @@ class MenuItemViewTestBasic : public MenuItemViewTestBase {
 
   // MenuItemViewTestBase implementation
   virtual void BuildMenu(views::MenuItemView* menu) OVERRIDE {
-    menu->AppendMenuItemWithLabel(1, L"item 1");
-    menu->AppendMenuItemWithLabel(2, L"item 2");
+    menu->AppendMenuItemWithLabel(1, ASCIIToUTF16("item 1"));
+    menu->AppendMenuItemWithLabel(2, ASCIIToUTF16("item 2"));
     menu->AppendSeparator();
-    menu->AppendMenuItemWithLabel(3, L"item 3");
+    menu->AppendMenuItemWithLabel(3, ASCIIToUTF16("item 3"));
   }
 
   // ViewEventTestBase implementation
@@ -180,8 +183,8 @@ class MenuItemViewTestInsert : public MenuItemViewTestBase {
 
   // MenuItemViewTestBase implementation
   virtual void BuildMenu(views::MenuItemView* menu) OVERRIDE {
-    menu->AppendMenuItemWithLabel(1, L"item 1");
-    menu->AppendMenuItemWithLabel(2, L"item 2");
+    menu->AppendMenuItemWithLabel(1, ASCIIToUTF16("item 1"));
+    menu->AppendMenuItemWithLabel(2, ASCIIToUTF16("item 2"));
   }
 
   // ViewEventTestBase implementation
@@ -198,8 +201,10 @@ class MenuItemViewTestInsert : public MenuItemViewTestBase {
     ASSERT_TRUE(submenu->IsShowing());
     ASSERT_EQ(2, submenu->GetMenuItemCount());
 
-    inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX, 1000,
-                                          L"inserted item", SkBitmap(),
+    inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX,
+                                          1000,
+                                          ASCIIToUTF16("inserted item"),
+                                          SkBitmap(),
                                           views::MenuItemView::NORMAL);
     ASSERT_TRUE(inserted_item_);
     menu_->ChildrenChanged();
@@ -271,10 +276,10 @@ class MenuItemViewTestInsertWithSubmenu : public MenuItemViewTestBase {
 
   // MenuItemViewTestBase implementation
   virtual void BuildMenu(views::MenuItemView* menu) OVERRIDE {
-    submenu_ = menu->AppendSubMenu(1, L"My Submenu");
-    submenu_->AppendMenuItemWithLabel(101, L"submenu item 1");
-    submenu_->AppendMenuItemWithLabel(101, L"submenu item 2");
-    menu->AppendMenuItemWithLabel(2, L"item 2");
+    submenu_ = menu->AppendSubMenu(1, ASCIIToUTF16("My Submenu"));
+    submenu_->AppendMenuItemWithLabel(101, ASCIIToUTF16("submenu item 1"));
+    submenu_->AppendMenuItemWithLabel(101, ASCIIToUTF16("submenu item 2"));
+    menu->AppendMenuItemWithLabel(2, ASCIIToUTF16("item 2"));
   }
 
   // ViewEventTestBase implementation
@@ -291,8 +296,10 @@ class MenuItemViewTestInsertWithSubmenu : public MenuItemViewTestBase {
 
   // Insert item at INSERT_INDEX.
   void Step2() {
-    inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX, 1000,
-                                          L"inserted item", SkBitmap(),
+    inserted_item_ = menu_->AddMenuItemAt(INSERT_INDEX,
+                                          1000,
+                                          ASCIIToUTF16("inserted item"),
+                                          SkBitmap(),
                                           views::MenuItemView::NORMAL);
     ASSERT_TRUE(inserted_item_);
     menu_->ChildrenChanged();
@@ -336,9 +343,9 @@ class MenuItemViewTestRemove : public MenuItemViewTestBase {
 
   // MenuItemViewTestBase implementation
   virtual void BuildMenu(views::MenuItemView* menu) OVERRIDE {
-    menu->AppendMenuItemWithLabel(1, L"item 1");
-    menu->AppendMenuItemWithLabel(2, L"item 2");
-    menu->AppendMenuItemWithLabel(3, L"item 3");
+    menu->AppendMenuItemWithLabel(1, ASCIIToUTF16("item 1"));
+    menu->AppendMenuItemWithLabel(2, ASCIIToUTF16("item 2"));
+    menu->AppendMenuItemWithLabel(3, ASCIIToUTF16("item 3"));
   }
 
   // ViewEventTestBase implementation
@@ -418,10 +425,10 @@ class MenuItemViewTestRemoveWithSubmenu : public MenuItemViewTestBase {
 
   // MenuItemViewTestBase implementation
   virtual void BuildMenu(views::MenuItemView* menu) OVERRIDE {
-    menu->AppendMenuItemWithLabel(1, L"item 1");
-    submenu_ = menu->AppendSubMenu(2, L"My Submenu");
-    submenu_->AppendMenuItemWithLabel(101, L"submenu item 1");
-    submenu_->AppendMenuItemWithLabel(102, L"submenu item 2");
+    menu->AppendMenuItemWithLabel(1, ASCIIToUTF16("item 1"));
+    submenu_ = menu->AppendSubMenu(2, ASCIIToUTF16("My Submenu"));
+    submenu_->AppendMenuItemWithLabel(101, ASCIIToUTF16("submenu item 1"));
+    submenu_->AppendMenuItemWithLabel(102, ASCIIToUTF16("submenu item 2"));
   }
 
   // ViewEventTestBase implementation

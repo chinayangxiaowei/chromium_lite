@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,17 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/string16.h"
-#include "content/browser/tab_contents/tab_contents_observer.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "printing/printed_pages_source.h"
 
-class RenderViewHost;
 class TabContentsWrapper;
 struct PrintHostMsg_DidPrintPage_Params;
+
+namespace content {
+class RenderProcessHost;
+}
 
 namespace printing {
 
@@ -26,16 +29,12 @@ class PrintViewManagerObserver;
 
 // Manages the print commands in relation to a TabContents. TabContents
 // delegates a few printing related commands to this instance.
-class PrintViewManager : public NotificationObserver,
+class PrintViewManager : public content::NotificationObserver,
                          public PrintedPagesSource,
-                         public TabContentsObserver {
+                         public content::WebContentsObserver {
  public:
   explicit PrintViewManager(TabContentsWrapper* tab);
   virtual ~PrintViewManager();
-
-  // Override the title for this PrintViewManager's PrintJobs using the title
-  // in |tab_contents|.
-  void OverrideTitle(TabContents* tab_contents);
 
   // Prints the current document immediately. Since the rendering is
   // asynchronous, the actual printing will not be completed on the return of
@@ -57,6 +56,14 @@ class PrintViewManager : public NotificationObserver,
   // print preview is impossible at the moment.
   bool PrintPreviewNow();
 
+  // Notify PrintViewManager that print preview is starting in the renderer for
+  // a particular WebNode.
+  void PrintPreviewForWebNode();
+
+  // Notify PrintViewManager that print preview has finished. Unfreeze the
+  // renderer in the case of scripted print preview.
+  void PrintPreviewDone();
+
   // Handles cancelled preview printing request.
   void PreviewPrintingRequestCancelled();
 
@@ -65,28 +72,30 @@ class PrintViewManager : public NotificationObserver,
   // must be NULL if |observer| is non-NULL.
   void set_observer(PrintViewManagerObserver* observer);
 
-  // Reset |is_title_overridden_| to false.
-  void ResetTitleOverride();
-
   // PrintedPagesSource implementation.
-  virtual string16 RenderSourceName();
-  virtual GURL RenderSourceUrl();
+  virtual string16 RenderSourceName() OVERRIDE;
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
-  // TabContentsObserver implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message);
+  // content::WebContentsObserver implementation.
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
   // Terminates or cancels the print job if one was pending.
-  virtual void RenderViewGone();
+  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
 
   // Cancels the print job.
-  virtual void StopNavigation();
+  virtual void StopNavigation() OVERRIDE;
 
  private:
+  enum PrintPreviewState {
+    NOT_PREVIEWING,
+    USER_INITIATED_PREVIEW,
+    SCRIPTED_PREVIEW,
+  };
+
   // IPC Message handlers.
   void OnDidGetPrintedPagesCount(int cookie, int number_pages);
   void OnDidGetDocumentCookie(int cookie);
@@ -94,12 +103,16 @@ class PrintViewManager : public NotificationObserver,
   void OnDidPrintPage(const PrintHostMsg_DidPrintPage_Params& params);
   void OnPrintingFailed(int cookie);
 
+  void OnScriptedPrintPreview(bool source_is_modifiable,
+                              IPC::Message* reply_msg);
+  void OnScriptedPrintPreviewReply(IPC::Message* reply_msg);
+
   // Processes a NOTIFY_PRINT_JOB_EVENT notification.
   void OnNotifyPrintJobEvent(const JobEventDetails& event_details);
 
   // Requests the RenderView to render all the missing pages for the print job.
-  // No-op if no print job is pending. Returns true if at least one page has been
-  // requested to the renderer.
+  // No-op if no print job is pending. Returns true if at least one page has
+  // been requested to the renderer.
   bool RenderAllMissingPagesNow();
 
   // Quits the current message loop if these conditions hold true: a document is
@@ -148,7 +161,7 @@ class PrintViewManager : public NotificationObserver,
   // TabContentsWrapper we're associated with.
   TabContentsWrapper* tab_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Manages the low-level talk to the printer.
   scoped_refptr<PrintJob> print_job_;
@@ -169,16 +182,18 @@ class PrintViewManager : public NotificationObserver,
   bool expecting_first_page_;
 #endif
 
-  // Title override.
-  bool is_title_overridden_;
-  string16 overridden_title_;
-
   // Weak pointer to an observer that is notified when the print dialog is
   // shown.
   PrintViewManagerObserver* observer_;
 
   // The document cookie of the current PrinterQuery.
   int cookie_;
+
+  // Current state of print preview for this view.
+  PrintPreviewState print_preview_state_;
+
+  // Keeps track of the pending callback during scripted print preview.
+  content::RenderProcessHost* scripted_print_preview_rph_;
 
   DISALLOW_COPY_AND_ASSIGN(PrintViewManager);
 };

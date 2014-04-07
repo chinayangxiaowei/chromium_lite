@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,12 +15,19 @@
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/protocol/sync_protocol_error.h"
 #include "chrome/browser/sync/syncable/model_type.h"
+#include "chrome/common/net/gaia/google_service_auth_error.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 class ProfileSyncServiceMock : public ProfileSyncService {
  public:
+  // no-arg constructor provided so TestingProfile can use NiceMock.
   ProfileSyncServiceMock();
+  explicit ProfileSyncServiceMock(Profile* profile);
   virtual ~ProfileSyncServiceMock();
+
+  // A utility used by sync tests to create a TestingProfile with a Google
+  // Services username stored in a (Testing)PrefService.
+  static Profile* MakeSignedInTestingProfile();
 
   MOCK_METHOD0(DisableForUser, void());
   MOCK_METHOD2(OnBackendInitialized,
@@ -38,6 +45,7 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_METHOD2(OnUnrecoverableError,
                void(const tracked_objects::Location& location,
                const std::string& message));
+  MOCK_CONST_METHOD0(GetUserShare, sync_api::UserShare*());
   MOCK_METHOD3(ActivateDataType,
                void(syncable::ModelType, browser_sync::ModelSafeGroup,
                     browser_sync::ChangeProcessor*));
@@ -50,20 +58,26 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_CONST_METHOD0(HasSyncSetupCompleted, bool());
 
   MOCK_METHOD1(ChangePreferredDataTypes,
-               void(const syncable::ModelTypeSet& preferred_types));
-  MOCK_CONST_METHOD1(GetPreferredDataTypes,
-                     void(syncable::ModelTypeSet* preferred_types));
-  MOCK_CONST_METHOD1(GetRegisteredDataTypes,
-                     void(syncable::ModelTypeSet* registered_types));
+               void(syncable::ModelTypeSet preferred_types));
+  MOCK_CONST_METHOD0(GetPreferredDataTypes, syncable::ModelTypeSet());
+  MOCK_CONST_METHOD0(GetRegisteredDataTypes, syncable::ModelTypeSet());
   MOCK_CONST_METHOD0(GetLastSessionSnapshot,
                      const browser_sync::sessions::SyncSessionSnapshot*());
 
+  MOCK_CONST_METHOD0(UIShouldDepictAuthInProgress, bool());
   MOCK_METHOD0(QueryDetailedSyncStatus,
                browser_sync::SyncBackendHost::Status());
+  MOCK_CONST_METHOD0(GetAuthError, const GoogleServiceAuthError&());
+  MOCK_CONST_METHOD0(SetupInProgress, bool());
   MOCK_CONST_METHOD0(GetLastSyncedTimeString, string16());
   MOCK_CONST_METHOD0(unrecoverable_error_detected, bool());
   MOCK_METHOD1(OnActionableError, void(
       const browser_sync::SyncProtocolError&));
+
+  MOCK_CONST_METHOD0(IsPassphraseRequired, bool());
+  MOCK_CONST_METHOD0(IsPassphraseRequiredForDecryption, bool());
+
+  MOCK_METHOD0(ShowErrorUI, void());
 };
 
 #endif  // CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_MOCK_H_

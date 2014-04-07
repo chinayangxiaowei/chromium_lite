@@ -4,23 +4,28 @@
 
 #include <map>
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/memory/scoped_callback_factory.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
-#include "chrome/test/base/testing_profile.h"
+#include "base/scoped_temp_dir.h"
+#include "content/browser/browser_thread_impl.h"
 #include "content/browser/in_process_webkit/indexed_db_context.h"
 #include "content/browser/in_process_webkit/indexed_db_quota_client.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
+#include "content/test/test_browser_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/database/database_util.h"
+
+using content::BrowserThread;
 
 // Declared to shorten the line lengths.
 static const quota::StorageType kTemp = quota::kStorageTypeTemporary;
 static const quota::StorageType kPerm = quota::kStorageTypePersistent;
 
 using namespace webkit_database;
+using content::BrowserThreadImpl;
 
 // Base class for our test fixtures.
 class IndexedDBQuotaClientTest : public testing::Test {
@@ -34,12 +39,12 @@ class IndexedDBQuotaClientTest : public testing::Test {
         kOriginB("http://host:8000"),
         kOriginOther("http://other"),
         usage_(0),
-        callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+        weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
         message_loop_(MessageLoop::TYPE_IO),
-        webkit_thread_(BrowserThread::WEBKIT, &message_loop_),
+        webkit_thread_(BrowserThread::WEBKIT_DEPRECATED, &message_loop_),
         io_thread_(BrowserThread::IO, &message_loop_) {
-    TestingProfile profile;
-    idb_context_ = profile.GetWebKitContext()->indexed_db_context();
+    TestBrowserContext browser_context;
+    idb_context_ = browser_context.GetWebKitContext()->indexed_db_context();
     setup_temp_dir();
   }
   void setup_temp_dir() {
@@ -47,13 +52,14 @@ class IndexedDBQuotaClientTest : public testing::Test {
     FilePath indexeddb_dir = temp_dir_.path().Append(
         IndexedDBContext::kIndexedDBDirectory);
     ASSERT_TRUE(file_util::CreateDirectory(indexeddb_dir));
-    idb_context()->set_data_path(indexeddb_dir);
+    idb_context()->set_data_path_for_testing(indexeddb_dir);
   }
 
   ~IndexedDBQuotaClientTest() {
-    // IndexedDBContext needs to be destructed on BrowserThread::WEBKIT, which
-    // is also a member variable of this class.  Cause IndexedDBContext's
-    // destruction now to ensure that it doesn't outlive BrowserThread::WEBKIT.
+    // IndexedDBContext needs to be destructed on
+    // BrowserThread::WEBKIT_DEPRECATED, which is also a member variable of this
+    // class.  Cause IndexedDBContext's destruction now to ensure that it
+    // doesn't outlive BrowserThread::WEBKIT_DEPRECATED.
     idb_context_ = NULL;
     MessageLoop::current()->RunAllPending();
   }
@@ -63,9 +69,10 @@ class IndexedDBQuotaClientTest : public testing::Test {
       const GURL& origin,
       quota::StorageType type) {
     usage_ = -1;
-    client->GetOriginUsage(origin, type,
-        callback_factory_.NewCallback(
-            &IndexedDBQuotaClientTest::OnGetOriginUsageComplete));
+    client->GetOriginUsage(
+        origin, type,
+        base::Bind(&IndexedDBQuotaClientTest::OnGetOriginUsageComplete,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     EXPECT_GT(usage_, -1);
     return usage_;
@@ -76,9 +83,10 @@ class IndexedDBQuotaClientTest : public testing::Test {
       quota::StorageType type) {
     origins_.clear();
     type_ = quota::kStorageTypeTemporary;
-    client->GetOriginsForType(type,
-        callback_factory_.NewCallback(
-            &IndexedDBQuotaClientTest::OnGetOriginsComplete));
+    client->GetOriginsForType(
+        type,
+        base::Bind(&IndexedDBQuotaClientTest::OnGetOriginsComplete,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     return origins_;
   }
@@ -89,9 +97,10 @@ class IndexedDBQuotaClientTest : public testing::Test {
       const std::string& host) {
     origins_.clear();
     type_ = quota::kStorageTypeTemporary;
-    client->GetOriginsForHost(type, host,
-        callback_factory_.NewCallback(
-            &IndexedDBQuotaClientTest::OnGetOriginsComplete));
+    client->GetOriginsForHost(
+        type, host,
+        base::Bind(&IndexedDBQuotaClientTest::OnGetOriginsComplete,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     return origins_;
   }
@@ -99,8 +108,10 @@ class IndexedDBQuotaClientTest : public testing::Test {
   quota::QuotaStatusCode DeleteOrigin(quota::QuotaClient* client,
                                       const GURL& origin_url) {
     delete_status_ = quota::kQuotaStatusUnknown;
-    client->DeleteOriginData(origin_url, kTemp, callback_factory_.NewCallback(
-        &IndexedDBQuotaClientTest::OnDeleteOriginComplete));
+    client->DeleteOriginData(
+        origin_url, kTemp,
+        base::Bind(&IndexedDBQuotaClientTest::OnDeleteOriginComplete,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
     return delete_status_;
   }
@@ -132,7 +143,7 @@ class IndexedDBQuotaClientTest : public testing::Test {
   void OnGetOriginsComplete(const std::set<GURL>& origins,
       quota::StorageType type) {
     origins_ = origins;
-    type_ = type_;
+    type_ = type;
   }
 
   void OnDeleteOriginComplete(quota::QuotaStatusCode code) {
@@ -144,10 +155,10 @@ class IndexedDBQuotaClientTest : public testing::Test {
   std::set<GURL> origins_;
   quota::StorageType type_;
   scoped_refptr<IndexedDBContext> idb_context_;
-  base::ScopedCallbackFactory<IndexedDBQuotaClientTest> callback_factory_;
+  base::WeakPtrFactory<IndexedDBQuotaClientTest> weak_factory_;
   MessageLoop message_loop_;
-  BrowserThread webkit_thread_;
-  BrowserThread io_thread_;
+  BrowserThreadImpl webkit_thread_;
+  BrowserThreadImpl io_thread_;
   quota::QuotaStatusCode delete_status_;
 };
 

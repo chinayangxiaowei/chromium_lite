@@ -10,6 +10,7 @@
 
 #include "base/threading/thread.h"
 #include "content/browser/geolocation/geolocation_observer.h"
+#include "content/common/content_export.h"
 #include "content/common/geoposition.h"
 #include "googleurl/src/gurl.h"
 
@@ -23,7 +24,8 @@ struct DefaultSingletonTraits;
 // observers which will be notified of location updates. Underlying location
 // arbitrator will only be enabled whilst there is at least one observer
 // registered.
-class GeolocationProvider : public base::Thread, public GeolocationObserver {
+class CONTENT_EXPORT GeolocationProvider
+    : public base::Thread, public GeolocationObserver {
  public:
   GeolocationProvider();
 
@@ -45,7 +47,7 @@ class GeolocationProvider : public base::Thread, public GeolocationObserver {
   bool HasPermissionBeenGranted() const;
 
   // GeolocationObserver
-  virtual void OnLocationUpdate(const Geoposition& position);
+  virtual void OnLocationUpdate(const Geoposition& position) OVERRIDE;
 
   // Gets a pointer to the singleton instance of the location relayer, which
   // is in turn bound to the browser's global context objects. Ownership is NOT
@@ -81,8 +83,8 @@ class GeolocationProvider : public base::Thread, public GeolocationObserver {
   void NotifyObservers(const Geoposition& position);
 
   // Thread
-  virtual void Init();
-  virtual void CleanUp();
+  virtual void Init() OVERRIDE;
+  virtual void CleanUp() OVERRIDE;
 
   scoped_refptr<base::MessageLoopProxy> client_loop_;
 

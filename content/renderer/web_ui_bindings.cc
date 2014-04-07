@@ -4,13 +4,15 @@
 
 #include "content/renderer/web_ui_bindings.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
 #include "base/values.h"
 #include "content/common/view_messages.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURL.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURL.h"
 
 namespace {
 
@@ -43,22 +45,22 @@ Value* CreateValueFromCppVariant(const CppVariant& value) {
 
 }  // namespace
 
-DOMBoundBrowserObject::DOMBoundBrowserObject()
-    : sender_(NULL),
-      routing_id_(0) {
+DOMBoundBrowserObject::DOMBoundBrowserObject() {
 }
 
 DOMBoundBrowserObject::~DOMBoundBrowserObject() {
   STLDeleteContainerPointers(properties_.begin(), properties_.end());
 }
 
-WebUIBindings::WebUIBindings() {
-  BindMethod("send", &WebUIBindings::send);
+WebUIBindings::WebUIBindings(IPC::Message::Sender* sender, int routing_id)
+    : sender_(sender), routing_id_(routing_id) {
+  BindCallback("send", base::Bind(&WebUIBindings::Send,
+                                  base::Unretained(this)));
 }
 
 WebUIBindings::~WebUIBindings() {}
 
-void WebUIBindings::send(const CppArgumentList& args, CppVariant* result) {
+void WebUIBindings::Send(const CppArgumentList& args, CppVariant* result) {
   // We expect at least a string message identifier, and optionally take
   // an object parameter.  If we get anything else we bail.
   if (args.size() < 1 || args.size() > 2)
@@ -89,15 +91,15 @@ void WebUIBindings::send(const CppArgumentList& args, CppVariant* result) {
     source_url = frame->document().url();
 
   // Send the message up to the browser.
-  sender()->Send(new ViewHostMsg_WebUISend(
-      routing_id(),
+  sender_->Send(new ViewHostMsg_WebUISend(
+      routing_id_,
       source_url,
       message,
       *(static_cast<ListValue*>(content.get()))));
 }
 
 void DOMBoundBrowserObject::SetProperty(const std::string& name,
-                                const std::string& value) {
+                                        const std::string& value) {
   CppVariant* cpp_value = new CppVariant;
   cpp_value->Set(value);
   BindProperty(name, cpp_value);

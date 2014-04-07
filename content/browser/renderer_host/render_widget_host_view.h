@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,10 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
+#include "base/callback_forward.h"
+#include "content/common/content_export.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
@@ -21,26 +24,25 @@
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/range/range.h"
 #include "ui/gfx/native_widget_types.h"
-#include "ui/gfx/rect.h"
 #include "ui/gfx/surface/transport_dib.h"
 
-namespace gfx {
-class Rect;
-class Size;
-}
-namespace IPC {
-class Message;
-}
+struct GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params;
+struct GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params;
 
 class BackingStore;
-class RenderProcessHost;
+class BrowserAccessibilityManager;
 class RenderWidgetHost;
 class WebCursor;
 struct NativeWebKeyboardEvent;
 struct ViewHostMsg_AccessibilityNotification_Params;
 
-namespace webkit_glue {
-struct WebAccessibility;
+namespace content {
+class RenderProcessHost;
+}
+
+namespace gfx {
+class Rect;
+class Size;
 }
 
 namespace webkit {
@@ -49,7 +51,7 @@ struct WebPluginGeometry;
 }
 }
 
-#if defined(OS_POSIX)
+#if defined(OS_POSIX) || defined(USE_AURA)
 namespace WebKit {
 struct WebScreenInfo;
 }
@@ -64,19 +66,25 @@ struct WebScreenInfo;
 // changes.
 class RenderWidgetHostView {
  public:
-  virtual ~RenderWidgetHostView();
+  CONTENT_EXPORT virtual ~RenderWidgetHostView();
 
   // Platform-specific creator. Use this to construct new RenderWidgetHostViews
   // rather than using RenderWidgetHostViewWin & friends.
   //
   // This function must NOT size it, because the RenderView in the renderer
-  // wounldn't have been created yet. The widget would set its "waiting for
+  // wouldn't have been created yet. The widget would set its "waiting for
   // resize ack" flag, and the ack would never come becasue no RenderView
   // received it.
   //
   // The RenderWidgetHost must already be created (because we can't know if it's
   // going to be a regular RenderWidgetHost or a RenderViewHost (a subclass).
-  static RenderWidgetHostView* CreateViewForWidget(RenderWidgetHost* widget);
+  CONTENT_EXPORT static RenderWidgetHostView* CreateViewForWidget(
+      RenderWidgetHost* widget);
+
+  // Initialize this object for use as a drawing area.  |parent_view| may be
+  // left as NULL on platforms where a parent view is not required to initialize
+  // a child window.
+  virtual void InitAsChild(gfx::NativeView parent_view) = 0;
 
   // Perform all the initialization steps necessary for this object to represent
   // a popup (such as a <select> dropdown), then shows the popup at |pos|.
@@ -109,6 +117,7 @@ class RenderWidgetHostView {
   // renderer in IPC messages.
   virtual gfx::NativeView GetNativeView() const = 0;
   virtual gfx::NativeViewId GetNativeViewId() const = 0;
+  virtual gfx::NativeViewAccessible GetNativeViewAccessible() = 0;
 
   // Moves all plugin windows as described in the given list.
   virtual void MovePluginWindows(
@@ -119,7 +128,7 @@ class RenderWidgetHostView {
   virtual void Blur() = 0;
 
   // Returns true if the View currently has the focus.
-  virtual bool HasFocus() = 0;
+  virtual bool HasFocus() const = 0;
 
   // Shows/hides the view.  These must always be called together in pairs.
   // It is not legal to call Hide() multiple times in a row.
@@ -139,9 +148,8 @@ class RenderWidgetHostView {
   virtual void SetIsLoading(bool is_loading) = 0;
 
   // Updates the state of the input method attached to the view.
-  virtual void ImeUpdateTextInputState(ui::TextInputType type,
-                                       bool can_compose_inline,
-                                       const gfx::Rect& caret_rect) = 0;
+  virtual void TextInputStateChanged(ui::TextInputType type,
+                                     bool can_compose_inline) = 0;
 
   // Cancel the ongoing composition of the input method attached to the view.
   virtual void ImeCancelComposition() = 0;
@@ -180,15 +188,18 @@ class RenderWidgetHostView {
 
   // Tells the View that the tooltip text for the current mouse position over
   // the page has changed.
-  virtual void SetTooltipText(const std::wstring& tooltip_text) = 0;
+  virtual void SetTooltipText(const string16& tooltip_text) = 0;
 
-  // Notifies the View that the renderer text selection has changed. |start|
-  // and |end| are the visual end points of the selection in the coordinate
-  // system of the render view.
-  virtual void SelectionChanged(const std::string& text,
-                                const ui::Range& range,
-                                const gfx::Point& start,
-                                const gfx::Point& end) {}
+  // Notifies the View that the renderer text selection has changed.
+  CONTENT_EXPORT virtual void SelectionChanged(const string16& text,
+                                               size_t offset,
+                                               const ui::Range& range);
+
+  // Notifies the View that the renderer selection bounds has changed.
+  // |start_rect| and |end_rect| are the bounds end of the selection in the
+  // coordinate system of the render view.
+  virtual void SelectionBoundsChanged(const gfx::Rect& start_rect,
+                                      const gfx::Rect& end_rect) {}
 
   // Tells the View whether the context menu is showing. This is used on Linux
   // to suppress updates to webkit focus for the duration of the show.
@@ -196,6 +207,22 @@ class RenderWidgetHostView {
 
   // Allocate a backing store for this view
   virtual BackingStore* AllocBackingStore(const gfx::Size& size) = 0;
+
+  // Called when accelerated compositing state changes.
+  virtual void OnAcceleratedCompositingStateChange() = 0;
+  // |params.window| and |params.surface_id| indicate which accelerated
+  // surface's buffers swapped. |params.renderer_id| and |params.route_id|
+  // are used to formulate a reply to the GPU process to prevent it from getting
+  // too far ahead. They may all be zero, in which case no flow control is
+  // enforced; this case is currently used for accelerated plugins.
+  virtual void AcceleratedSurfaceBuffersSwapped(
+      const GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params& params,
+      int gpu_host_id) = 0;
+  // Similar to above, except |params.(x|y|width|height)| define the region
+  // of the surface that changed.
+  virtual void AcceleratedSurfacePostSubBuffer(
+      const GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params& params,
+      int gpu_host_id) = 0;
 
 #if defined(OS_MACOSX)
   // Tells the view whether or not to accept first responder status.  If |flag|
@@ -252,61 +279,50 @@ class RenderWidgetHostView {
       int32 width,
       int32 height,
       TransportDIB::Handle transport_dib) = 0;
-  // |window| and |surface_id| indicate which accelerated surface's
-  // buffers swapped. |renderer_id|, |route_id| and
-  // |swap_buffers_count| are used to formulate a reply to the GPU
-  // process to prevent it from getting too far ahead. They may all be
-  // zero, in which case no flow control is enforced; this case is
-  // currently used for accelerated plugins.
-  virtual void AcceleratedSurfaceBuffersSwapped(
-      gfx::PluginWindowHandle window,
-      uint64 surface_id,
-      int renderer_id,
-      int32 route_id,
-      int gpu_host_id,
-      uint64 swap_buffers_count) = 0;
-  virtual void GpuRenderingStateDidChange() = 0;
 #endif
 
-#if defined(TOUCH_UI)
-  virtual void AcceleratedSurfaceSetIOSurface(
-      int32 width, int32 height, uint64 surface_id) = 0;
-  virtual void AcceleratedSurfaceBuffersSwapped(uint64 surface_id) = 0;
+#if defined(UI_COMPOSITOR_IMAGE_TRANSPORT)
+  virtual void AcceleratedSurfaceNew(
+      int32 width,
+      int32 height,
+      uint64* surface_id,
+      TransportDIB::Handle* surface_handle) = 0;
   virtual void AcceleratedSurfaceRelease(uint64 surface_id) = 0;
 #endif
 
 #if defined(TOOLKIT_USES_GTK)
   virtual void CreatePluginContainer(gfx::PluginWindowHandle id) = 0;
   virtual void DestroyPluginContainer(gfx::PluginWindowHandle id) = 0;
-  virtual void AcceleratedCompositingActivated(bool activated) = 0;
 #endif
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   virtual void WillWmDestroy() = 0;
-  virtual void ShowCompositorHostWindow(bool show) = 0;
 #endif
 
-#if defined(OS_POSIX)
-  static void GetDefaultScreenInfo(WebKit::WebScreenInfo* results);
+#if defined(OS_POSIX) || defined(USE_AURA)
+  CONTENT_EXPORT static void GetDefaultScreenInfo(
+      WebKit::WebScreenInfo* results);
   virtual void GetScreenInfo(WebKit::WebScreenInfo* results) = 0;
   virtual gfx::Rect GetRootWindowBounds() = 0;
 #endif
 
   virtual gfx::PluginWindowHandle GetCompositingSurface() = 0;
 
-  // Toggles visual muting of the render view area. This is on when a
-  // constrained window is showing, for example. |color| is the shade of
-  // the overlay that covers the render view. If |animate| is true, the overlay
-  // gradually fades in; otherwise it takes effect immediately. To remove the
-  // fade effect, pass a NULL value for |color|. In this case, |animate| is
-  // ignored.
-  virtual void SetVisuallyDeemphasized(const SkColor* color, bool animate) = 0;
-
   virtual void UnhandledWheelEvent(const WebKit::WebMouseWheelEvent& event) = 0;
+
+  // Because the associated remote WebKit instance can asynchronously
+  // prevent-default on a dispatched touch event, the touch events are queued in
+  // the GestureRecognizer until invocation of ProcessTouchAck releases it to be
+  // processed (when |processed| is false) or ignored (when |processed| is true)
+  virtual void ProcessTouchAck(bool processed) = 0;
 
   virtual void SetHasHorizontalScrollbar(bool has_horizontal_scrollbar) = 0;
   virtual void SetScrollOffsetPinning(
       bool is_pinned_to_left, bool is_pinned_to_right) = 0;
+
+  // Return value indicates whether the mouse is locked successfully or not.
+  virtual bool LockMouse() = 0;
+  virtual void UnlockMouse() = 0;
 
   void set_popup_type(WebKit::WebPopupType popup_type) {
     popup_type_ = popup_type;
@@ -315,23 +331,21 @@ class RenderWidgetHostView {
 
   // Subclasses should override this method to do what is appropriate to set
   // the custom background for their platform.
-  virtual void SetBackground(const SkBitmap& background);
+  CONTENT_EXPORT virtual void SetBackground(const SkBitmap& background);
   const SkBitmap& background() const { return background_; }
 
   virtual void OnAccessibilityNotifications(
       const std::vector<ViewHostMsg_AccessibilityNotification_Params>& params) {
   }
 
-  gfx::Rect reserved_contents_rect() const {
-    return reserved_rect_;
-  }
-  void set_reserved_contents_rect(const gfx::Rect& reserved_rect) {
-    reserved_rect_ = reserved_rect;
-  }
+  BrowserAccessibilityManager* GetBrowserAccessibilityManager() const;
+  void SetBrowserAccessibilityManager(BrowserAccessibilityManager* manager);
+
+  bool mouse_locked() const { return mouse_locked_; }
 
  protected:
   // Interface class only, do not construct.
-  RenderWidgetHostView() : popup_type_(WebKit::WebPopupTypeNone) {}
+  CONTENT_EXPORT RenderWidgetHostView();
 
   // Whether this view is a popup and what kind of popup it is (select,
   // autofill...).
@@ -341,11 +355,27 @@ class RenderWidgetHostView {
   // horizontally. Can be null, in which case we fall back to painting white.
   SkBitmap background_;
 
-  // The current reserved area in view coordinates where contents should not be
-  // rendered to draw the resize corner, sidebar mini tabs etc.
-  gfx::Rect reserved_rect_;
+  // While the mouse is locked, the cursor is hidden from the user. Mouse events
+  // are still generated. However, the position they report is the last known
+  // mouse position just as mouse lock was entered; the movement they report
+  // indicates what the change in position of the mouse would be had it not been
+  // locked.
+  bool mouse_locked_;
+
+  // A buffer containing the text inside and around the current selection range.
+  string16 selection_text_;
+
+  // The offset of the text stored in |selection_text_| relative to the start of
+  // the web page.
+  size_t selection_text_offset_;
+
+  // The current selection range relative to the start of the web page.
+  ui::Range selection_range_;
 
  private:
+  // Manager of the tree representation of the WebKit render tree.
+  scoped_ptr<BrowserAccessibilityManager> browser_accessibility_manager_;
+
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostView);
 };
 

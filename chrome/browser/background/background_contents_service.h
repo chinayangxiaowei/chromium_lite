@@ -7,21 +7,20 @@
 #pragma once
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/task.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/tab_contents/background_contents.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/window_container_type.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/common/window_container_type.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class CommandLine;
-class NotificationDelegate;
 class PrefService;
 class Profile;
 class TabContents;
@@ -44,7 +43,7 @@ struct BackgroundContentsOpenedDetails;
 // It is also responsible for tracking the association between
 // BackgroundContents and their parent app, and shutting them down when the
 // parent app is unloaded.
-class BackgroundContentsService : private NotificationObserver,
+class BackgroundContentsService : private content::NotificationObserver,
                                   public BackgroundContents::Delegate,
                                   public ProfileKeyedService {
  public:
@@ -58,13 +57,11 @@ class BackgroundContentsService : private NotificationObserver,
   // Returns all currently opened BackgroundContents (used by the task manager).
   std::vector<BackgroundContents*> GetBackgroundContents() const;
 
-  static void RegisterUserPrefs(PrefService* prefs);
-
   // BackgroundContents::Delegate implementation.
-  virtual void AddTabContents(TabContents* new_contents,
+  virtual void AddWebContents(content::WebContents* new_contents,
                               WindowOpenDisposition disposition,
                               const gfx::Rect& initial_pos,
-                              bool user_gesture);
+                              bool user_gesture) OVERRIDE;
 
   // Gets the parent application id for the passed BackgroundContents. Returns
   // an empty string if no parent application found (e.g. passed
@@ -77,7 +74,7 @@ class BackgroundContentsService : private NotificationObserver,
   // A BACKGROUND_CONTENTS_OPENED notification will be generated with the passed
   // |frame_name| and |application_id| values, using the passed |profile| as the
   // Source..
-  BackgroundContents* CreateBackgroundContents(SiteInstance* site,
+  BackgroundContents* CreateBackgroundContents(content::SiteInstance* site,
                                                int route_id,
                                                Profile* profile,
                                                const string16& frame_name,
@@ -107,10 +104,10 @@ class BackgroundContentsService : private NotificationObserver,
   // Registers for various notifications.
   void StartObserving(Profile* profile);
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Loads all registered BackgroundContents at startup.
   void LoadBackgroundContentsFromPrefs(Profile* profile);
@@ -159,7 +156,7 @@ class BackgroundContentsService : private NotificationObserver,
   // PrefService used to store list of background pages (or NULL if this is
   // running under an incognito profile).
   PrefService* prefs_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Information we track about each BackgroundContents.
   struct BackgroundContentsInfo {

@@ -4,6 +4,7 @@
 
 #include "content/browser/renderer_host/p2p/socket_host_udp.h"
 
+#include "base/bind.h"
 #include "content/common/p2p_messages.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -18,15 +19,23 @@ const int kReadBufferSize = 65536;
 
 namespace content {
 
+P2PSocketHostUdp::PendingPacket::PendingPacket(
+    const net::IPEndPoint& to, const std::vector<char>& content)
+    : to(to),
+      data(new net::IOBuffer(content.size())),
+      size(content.size()) {
+  memcpy(data->data(), &content[0], size);
+}
+
+P2PSocketHostUdp::PendingPacket::~PendingPacket() {
+}
+
 P2PSocketHostUdp::P2PSocketHostUdp(IPC::Message::Sender* message_sender,
                                    int routing_id, int id)
     : P2PSocketHost(message_sender, routing_id, id),
       socket_(new net::UDPServerSocket(NULL, net::NetLog::Source())),
-      send_pending_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          recv_callback_(this, &P2PSocketHostUdp::OnRecv)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          send_callback_(this, &P2PSocketHostUdp::OnSend)) {
+      send_queue_bytes_(0),
+      send_pending_(false) {
 }
 
 P2PSocketHostUdp::~P2PSocketHostUdp() {
@@ -55,7 +64,6 @@ bool P2PSocketHostUdp::Init(const net::IPEndPoint& local_address,
     OnError();
     return false;
   }
-
   VLOG(1) << "Local address: " << address.ToString();
 
   state_ = STATE_OPEN;
@@ -70,6 +78,7 @@ bool P2PSocketHostUdp::Init(const net::IPEndPoint& local_address,
 
 void P2PSocketHostUdp::OnError() {
   socket_.reset();
+  send_queue_.clear();
 
   if (state_ == STATE_UNINITIALIZED || state_ == STATE_OPEN)
     message_sender_->Send(new P2PMsg_OnError(routing_id_, id_));
@@ -81,7 +90,8 @@ void P2PSocketHostUdp::DoRead() {
   int result;
   do {
     result = socket_->RecvFrom(recv_buffer_, kReadBufferSize, &recv_address_,
-                               &recv_callback_);
+                               base::Bind(&P2PSocketHostUdp::OnRecv,
+                                          base::Unretained(this)));
     DidCompleteRead(result);
   } while (result > 0);
 }
@@ -128,12 +138,6 @@ void P2PSocketHostUdp::Send(const net::IPEndPoint& to,
     return;
   }
 
-  if (send_pending_) {
-    // Silently drop packet if previous send hasn't finished.
-    VLOG(1) << "Dropping UDP packet.";
-    return;
-  }
-
   if (connected_peers_.find(to) == connected_peers_.end()) {
     P2PSocketHost::StunMessageType type;
     bool stun = GetStunPacketType(&*data.begin(), data.size(), &type);
@@ -145,9 +149,24 @@ void P2PSocketHostUdp::Send(const net::IPEndPoint& to,
     }
   }
 
-  scoped_refptr<net::IOBuffer> buffer = new net::IOBuffer(data.size());
-  memcpy(buffer->data(), &data[0], data.size());
-  int result = socket_->SendTo(buffer, data.size(), to, &send_callback_);
+  if (send_pending_) {
+    if (send_queue_bytes_ + static_cast<int>(data.size()) >
+        kMaxSendBufferSize) {
+      LOG(WARNING) << "Send buffer is full. Dropping a packet.";
+      return;
+    }
+    send_queue_.push_back(PendingPacket(to, data));
+    send_queue_bytes_ += data.size();
+  } else {
+    PendingPacket packet(to, data);
+    DoSend(packet);
+  }
+}
+
+void P2PSocketHostUdp::DoSend(const PendingPacket& packet) {
+  int result = socket_->SendTo(packet.data, packet.size, packet.to,
+                               base::Bind(&P2PSocketHostUdp::OnSend,
+                                          base::Unretained(this)));
   if (result == net::ERR_IO_PENDING) {
     send_pending_ = true;
   } else if (result < 0) {
@@ -161,8 +180,16 @@ void P2PSocketHostUdp::OnSend(int result) {
   DCHECK_NE(result, net::ERR_IO_PENDING);
 
   send_pending_ = false;
-  if (result < 0)
+  if (result < 0) {
     OnError();
+    return;
+  }
+
+  while (!send_queue_.empty() && !send_pending_) {
+    DoSend(send_queue_.front());
+    send_queue_bytes_ -= send_queue_.front().size;
+    send_queue_.pop_front();
+  }
 }
 
 P2PSocketHost* P2PSocketHostUdp::AcceptIncomingTcpConnection(

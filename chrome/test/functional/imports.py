@@ -1,5 +1,4 @@
-#!/usr/bin/python
-
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -84,30 +83,17 @@ class ImportsTest(pyauto.PyUITest):
 
     Creates |dir| if it doesn't exist.
     """
+    if not os.path.isdir(dir):
+      os.makedirs(dir)
     zf = zipfile.ZipFile(profile_zip)
-    # Make base.
-    pushd = os.getcwd()
-    try:
-      if not os.path.isdir(dir):
-        os.mkdir(dir)
-      os.chdir(dir)
-      # Extract files.
-      for info in zf.infolist():
-        name = info.filename
-        if name.endswith('/'):  # It's a directory.
-          if not os.path.isdir(name):
-            os.makedirs(name)
-        else:  # It's a file.
-          dir = os.path.dirname(name)
-          if dir and not os.path.isdir(dir):
-            os.makedirs(dir)
-          out = open(name, 'wb')
-          out.write(zf.read(name))
-          out.close()
-        # Set permissions.
-        os.chmod(name, 0777)
-    finally:
-      os.chdir(pushd)
+    for name in zf.namelist():
+      full_path = os.path.join(dir, name)
+      if name.endswith('/'):
+        if not os.path.isdir(full_path):
+          os.makedirs(full_path)
+      else:
+        zf.extract(name, dir)
+      os.chmod(full_path, 0777)
 
   def _SwapFirefoxProfile(self):
     """Swaps the test Firefox profile with the original one."""

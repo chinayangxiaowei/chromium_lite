@@ -49,9 +49,20 @@ void SessionWithID::ExecuteGet(Response* const response) {
   temp_value->SetString("platform", "unknown");
 #endif
 
-  temp_value->SetBoolean("cssSelectorsEnabled", true);
   temp_value->SetBoolean("javascriptEnabled", true);
   temp_value->SetBoolean("takesScreenshot", true);
+  temp_value->SetBoolean("handlesAlerts", true);
+  temp_value->SetBoolean("databaseEnabled", false);
+  temp_value->SetBoolean("locationContextEnabled", false);
+  temp_value->SetBoolean("applicationCacheEnabled", false);
+  temp_value->SetBoolean("browserConnectionEnabled", false);
+  temp_value->SetBoolean("cssSelectorsEnabled", true);
+  temp_value->SetBoolean("webStorageEnabled", false);
+  temp_value->SetBoolean("rotatable", false);
+  temp_value->SetBoolean("acceptSslCerts", false);
+  // Even when ChromeDriver does not OS-events, the input simulation produces
+  // the same effect for most purposes (except IME).
+  temp_value->SetBoolean("nativeEvents", true);
 
   // Custom non-standard session info.
   temp_value->SetWithoutPathExpansion(
@@ -59,7 +70,7 @@ void SessionWithID::ExecuteGet(Response* const response) {
       Value::CreateStringValue(chrome::kChromeVersion));
   temp_value->SetWithoutPathExpansion(
       "chrome.nativeEvents",
-      Value::CreateBooleanValue(session_->options().use_native_events));
+      Value::CreateBooleanValue(session_->capabilities().native_events));
 
   response->SetValue(temp_value);
 }
@@ -67,6 +78,10 @@ void SessionWithID::ExecuteGet(Response* const response) {
 void SessionWithID::ExecuteDelete(Response* const response) {
   // Session manages its own lifetime, so do not call delete.
   session_->Terminate();
+}
+
+bool SessionWithID::ShouldRunPreAndPostCommandHandlers() {
+  return false;
 }
 
 }  // namespace webdriver

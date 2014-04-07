@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_WEBDATA_AUTOFILL_TABLE_H_
 #pragma once
 
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/string16.h"
 #include "chrome/browser/webdata/web_database_table.h"
@@ -22,8 +23,10 @@ namespace base {
 class Time;
 }
 
-namespace webkit_glue {
+namespace webkit {
+namespace forms {
 struct FormField;
+}
 }
 
 // This class manages the various autofill tables within the SQLite database
@@ -87,9 +90,11 @@ struct FormField;
 //                      associated with a profile.
 //
 //   guid               The guid string that identifies the profile to which
-//                      the phone or fax number belongs.
-//   type               An integer constant designating either phone or fax type
-//                      of the number.
+//                      the phone number belongs.
+//   type               An integer constant designating either phone type of the
+//                      number.
+//                      TODO(jhawkins): Remove the type column and migrate the
+//                      database.
 //   number
 //
 // autofill_profiles_trash
@@ -114,22 +119,21 @@ struct FormField;
 //
 class AutofillTable : public WebDatabaseTable {
  public:
-  AutofillTable(sql::Connection* db, sql::MetaTable* meta_table)
-      : WebDatabaseTable(db, meta_table) {}
-  virtual ~AutofillTable() {}
-  virtual bool Init();
-  virtual bool IsSyncable();
+  AutofillTable(sql::Connection* db, sql::MetaTable* meta_table);
+  virtual ~AutofillTable();
+  virtual bool Init() OVERRIDE;
+  virtual bool IsSyncable() OVERRIDE;
 
   // Records the form elements in |elements| in the database in the
   // autofill table.  A list of all added and updated autofill entries
   // is returned in the changes out parameter.
-  bool AddFormFieldValues(const std::vector<webkit_glue::FormField>& elements,
+  bool AddFormFieldValues(const std::vector<webkit::forms::FormField>& elements,
                           std::vector<AutofillChange>* changes);
 
   // Records a single form element in the database in the autofill table. A list
   // of all added and updated autofill entries is returned in the changes out
   // parameter.
-  bool AddFormFieldValue(const webkit_glue::FormField& element,
+  bool AddFormFieldValue(const webkit::forms::FormField& element,
                          std::vector<AutofillChange>* changes);
 
   // Retrieves a vector of all values which have been recorded in the autofill
@@ -165,7 +169,7 @@ class AutofillTable : public WebDatabaseTable {
   // Gets the pair_id and count entries from name and value specified in
   // |element|.  Sets *pair_id and *count to 0 if there is no such row in
   // the table.
-  bool GetIDAndCountOfFormElement(const webkit_glue::FormField& element,
+  bool GetIDAndCountOfFormElement(const webkit::forms::FormField& element,
                                   int64* pair_id,
                                   int* count);
 
@@ -177,7 +181,8 @@ class AutofillTable : public WebDatabaseTable {
 
   // Adds a new row to the autofill table with name and value given in
   // |element|.  Sets *pair_id to the pair_id of the new row.
-  bool InsertFormElement(const webkit_glue::FormField& element, int64* pair_id);
+  bool InsertFormElement(const webkit::forms::FormField& element,
+                         int64* pair_id);
 
   // Adds a new row to the autofill_dates table.
   bool InsertPairIDAndDate(int64 pair_id, const base::Time& date_created);
@@ -241,7 +246,10 @@ class AutofillTable : public WebDatabaseTable {
 
   // Removes rows from autofill_profiles and credit_cards if they were created
   // on or after |delete_begin| and strictly before |delete_end|.  Returns lists
-  // of deleted guids in |profile_guids| and |credit_card_guids|.
+  // of deleted guids in |profile_guids| and |credit_card_guids|. Return value
+  // is true if all rows were successfully removed. Returns false on database
+  // error. In that case, the output vector state is undefined, and may be
+  // partially filled.
   bool RemoveAutofillProfilesAndCreditCardsModifiedBetween(
       const base::Time& delete_begin,
       const base::Time& delete_end,
@@ -278,6 +286,9 @@ class AutofillTable : public WebDatabaseTable {
   bool MigrateToVersion35GreatBritainCountryCodes();
   bool MigrateToVersion37MergeAndCullOlderProfiles();
 
+  // Max data length saved in the table;
+  static const size_t kMaxDataLength;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(AutofillTableTest, Autofill);
   FRIEND_TEST_ALL_PREFIXES(AutofillTableTest, Autofill_AddChanges);
@@ -303,10 +314,10 @@ class AutofillTable : public WebDatabaseTable {
   // Methods for adding autofill entries at a specified time.  For
   // testing only.
   bool AddFormFieldValuesTime(
-      const std::vector<webkit_glue::FormField>& elements,
+      const std::vector<webkit::forms::FormField>& elements,
       std::vector<AutofillChange>* changes,
       base::Time time);
-  bool AddFormFieldValueTime(const webkit_glue::FormField& element,
+  bool AddFormFieldValueTime(const webkit::forms::FormField& element,
                              std::vector<AutofillChange>* changes,
                              base::Time time);
 

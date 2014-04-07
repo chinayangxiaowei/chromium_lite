@@ -32,6 +32,7 @@ void UITestSuite::Shutdown() {
 #if defined(OS_WIN)
   if (crash_service_)
     base::KillProcess(crash_service_, 0, false);
+  job_handle_.Close();
 #endif
   ChromeTestSuite::Shutdown();
 }
@@ -45,6 +46,17 @@ void UITestSuite::LoadCrashService() {
   if (base::GetProcessCount(L"crash_service.exe", NULL))
     return;
 
+  job_handle_.Set(CreateJobObject(NULL, NULL));
+  if (!job_handle_.IsValid()) {
+    LOG(ERROR) << "Could not create JobObject.";
+    return;
+  }
+
+  if (!base::SetJobObjectAsKillOnJobClose(job_handle_.Get())) {
+    LOG(ERROR) << "Could not SetInformationJobObject.";
+    return;
+  }
+
   FilePath exe_dir;
   if (!PathService::Get(base::DIR_EXE, &exe_dir)) {
     LOG(ERROR) << "Failed to get path to DIR_EXE, "
@@ -52,6 +64,8 @@ void UITestSuite::LoadCrashService() {
     return;
   }
 
+  base::LaunchOptions launch_options;
+  launch_options.job_handle = job_handle_.Get();
   FilePath crash_service = exe_dir.Append(L"crash_service.exe");
   if (!base::LaunchProcess(crash_service.value(), base::LaunchOptions(),
                            &crash_service_)) {

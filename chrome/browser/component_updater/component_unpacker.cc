@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/file_util.h"
+#include "base/json/json_value_serializer.h"
 #include "base/memory/scoped_handle.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
@@ -15,7 +16,6 @@
 #include "chrome/browser/component_updater/component_updater_service.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/zip.h"
-#include "content/common/json_value_serializer.h"
 #include "crypto/secure_hash.h"
 #include "crypto/signature_verifier.h"
 
@@ -186,7 +186,7 @@ ComponentUnpacker::ComponentUnpacker(const std::vector<uint8>& pk_hash,
     error_ = kUzipPathError;
     return;
   }
-  if (!Unzip(path, unpack_path_)) {
+  if (!zip::Unzip(path, unpack_path_)) {
     error_ = kUnzipFailed;
     return;
   }

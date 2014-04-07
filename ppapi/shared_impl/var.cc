@@ -10,14 +10,14 @@
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "ppapi/c/pp_var.h"
-#include "ppapi/shared_impl/tracker_base.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
 #include "ppapi/shared_impl/var_tracker.h"
 
 namespace ppapi {
 
 // Var -------------------------------------------------------------------------
 
-Var::Var(PP_Module module) : pp_module_(module), var_id_(0) {
+Var::Var() : var_id_(0) {
 }
 
 Var::~Var() {
@@ -65,6 +65,10 @@ StringVar* Var::AsStringVar() {
   return NULL;
 }
 
+ArrayBufferVar* Var::AsArrayBufferVar() {
+  return NULL;
+}
+
 NPObjectVar* Var::AsNPObjectVar() {
   return NULL;
 }
@@ -73,12 +77,24 @@ ProxyObjectVar* Var::AsProxyObjectVar() {
   return NULL;
 }
 
+PP_Var Var::GetPPVar() {
+  int32 id = GetOrCreateVarID();
+  if (!id)
+    return PP_MakeNull();
+
+  PP_Var result;
+  result.type = GetType();
+  result.padding = 0;
+  result.value.as_id = id;
+  return result;
+}
+
 int32 Var::GetExistingVarID() const {
   return var_id_;
 }
 
 int32 Var::GetOrCreateVarID() {
-  VarTracker* tracker = TrackerBase::Get()->GetVarTracker();
+  VarTracker* tracker = PpapiGlobals::Get()->GetVarTracker();
   if (var_id_) {
     if (!tracker->AddRefVar(var_id_))
       return 0;
@@ -97,14 +113,12 @@ void Var::AssignVarID(int32 id) {
 
 // StringVar -------------------------------------------------------------------
 
-StringVar::StringVar(PP_Module module, const std::string& str)
-    : Var(module),
-      value_(str) {
+StringVar::StringVar(const std::string& str)
+    : value_(str) {
 }
 
-StringVar::StringVar(PP_Module module, const char* str, uint32 len)
-    : Var(module),
-      value_(str, len) {
+StringVar::StringVar(const char* str, uint32 len)
+    : value_(str, len) {
 }
 
 StringVar::~StringVar() {
@@ -114,30 +128,18 @@ StringVar* StringVar::AsStringVar() {
   return this;
 }
 
-PP_Var StringVar::GetPPVar() {
-  int32 id = GetOrCreateVarID();
-  if (!id)
-    return PP_MakeNull();
-
-  PP_Var result;
-  result.type = PP_VARTYPE_STRING;
-  result.value.as_id = id;
-  return result;
-}
-
 PP_VarType StringVar::GetType() const {
   return PP_VARTYPE_STRING;
 }
 
 // static
-PP_Var StringVar::StringToPPVar(PP_Module module, const std::string& var) {
-  return StringToPPVar(module, var.c_str(), var.size());
+PP_Var StringVar::StringToPPVar(const std::string& var) {
+  return StringToPPVar(var.c_str(), var.size());
 }
 
 // static
-PP_Var StringVar::StringToPPVar(PP_Module module,
-                                const char* data, uint32 len) {
-  scoped_refptr<StringVar> str(new StringVar(module, data, len));
+PP_Var StringVar::StringToPPVar(const char* data, uint32 len) {
+  scoped_refptr<StringVar> str(new StringVar(data, len));
   if (!str || !IsStringUTF8(str->value()))
     return PP_MakeNull();
   return str->GetPPVar();
@@ -148,10 +150,37 @@ StringVar* StringVar::FromPPVar(PP_Var var) {
   if (var.type != PP_VARTYPE_STRING)
     return NULL;
   scoped_refptr<Var> var_object(
-      TrackerBase::Get()->GetVarTracker()->GetVar(var));
+      PpapiGlobals::Get()->GetVarTracker()->GetVar(var));
   if (!var_object)
     return NULL;
   return var_object->AsStringVar();
+}
+
+// ArrayBufferVar --------------------------------------------------------------
+
+ArrayBufferVar::ArrayBufferVar() {
+}
+
+ArrayBufferVar::~ArrayBufferVar() {
+}
+
+ArrayBufferVar* ArrayBufferVar::AsArrayBufferVar() {
+  return this;
+}
+
+PP_VarType ArrayBufferVar::GetType() const {
+  return PP_VARTYPE_ARRAY_BUFFER;
+}
+
+// static
+ArrayBufferVar* ArrayBufferVar::FromPPVar(PP_Var var) {
+  if (var.type != PP_VARTYPE_ARRAY_BUFFER)
+    return NULL;
+  scoped_refptr<Var> var_object(
+      PpapiGlobals::Get()->GetVarTracker()->GetVar(var));
+  if (!var_object)
+    return NULL;
+  return var_object->AsArrayBufferVar();
 }
 
 }  // namespace ppapi

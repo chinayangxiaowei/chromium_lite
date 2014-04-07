@@ -42,6 +42,9 @@ class PrefValueMap {
   // Clears the map.
   void Clear();
 
+  // Swaps the contents of two maps.
+  void Swap(PrefValueMap* other);
+
   iterator begin();
   iterator end();
   const_iterator begin() const;
@@ -50,6 +53,9 @@ class PrefValueMap {
   // Gets a boolean value for |key| and stores it in |value|. Returns true if
   // the value was found and of the proper type.
   bool GetBoolean(const std::string& key, bool* value) const;
+
+  // Sets the value for |key| to the boolean |value|.
+  void SetBoolean(const std::string& key, bool value);
 
   // Gets a string value for |key| and stores it in |value|. Returns true if
   // the value was found and of the proper type.

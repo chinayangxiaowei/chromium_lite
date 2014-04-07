@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 The Native Client Authors. All rights reserved.
+ * Copyright (c) 2011 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -97,6 +97,9 @@ void SrpcClient::GetMethods() {
                                                &name,
                                                &input_types,
                                                &output_types);
+    if (!retval) {
+      return;
+    }
     if (!IsValidIdentifierString(name, NULL)) {
       // If name is not an ECMAScript identifier, do not enter it into the
       // methods_ table.
@@ -160,6 +163,11 @@ bool SrpcClient::Invoke(uintptr_t method_id,
 
   PLUGIN_PRINTF(("SrpcClient::Invoke (return 1)\n"));
   return true;
+}
+
+void SrpcClient::AttachService(NaClSrpcService* service, void* instance_data) {
+  srpc_channel_.server = service;
+  srpc_channel_.server_instance_data = instance_data;
 }
 
 }  // namespace plugin

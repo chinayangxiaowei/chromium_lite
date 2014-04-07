@@ -23,8 +23,8 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/tools/profiles/thumbnail-inl.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -55,12 +55,14 @@ class HistoryBackendTestDelegate : public HistoryBackend::Delegate {
  public:
   explicit HistoryBackendTestDelegate(HistoryBackendTest* test) : test_(test) {}
 
-  virtual void NotifyProfileError(sql::InitStatus init_status) OVERRIDE {}
-  virtual void SetInMemoryBackend(InMemoryHistoryBackend* backend) OVERRIDE;
+  virtual void NotifyProfileError(int backend_id,
+                                  sql::InitStatus init_status) OVERRIDE {}
+  virtual void SetInMemoryBackend(int backend_id,
+                                  InMemoryHistoryBackend* backend) OVERRIDE;
   virtual void BroadcastNotifications(int type,
                                       HistoryDetails* details) OVERRIDE;
-  virtual void DBLoaded() OVERRIDE;
-  virtual void StartTopSitesMigration() OVERRIDE;
+  virtual void DBLoaded(int backend_id) OVERRIDE;
+  virtual void StartTopSitesMigration(int backend_id) OVERRIDE;
 
  private:
   // Not owned by us.
@@ -90,7 +92,8 @@ class HistoryBackendTest : public testing::Test {
     scoped_refptr<history::HistoryAddPageArgs> request(
         new history::HistoryAddPageArgs(
             redirects.back(), Time::Now(), scope, page_id, GURL(),
-            redirects, PageTransition::LINK, history::SOURCE_BROWSED, true));
+            redirects, content::PAGE_TRANSITION_LINK, history::SOURCE_BROWSED,
+            true));
     backend_->AddPage(request);
   }
 
@@ -110,7 +113,7 @@ class HistoryBackendTest : public testing::Test {
       redirects.push_back(url2);
     scoped_refptr<HistoryAddPageArgs> request(
         new HistoryAddPageArgs(url2, base::Time(), dummy_scope, 0, url1,
-            redirects, PageTransition::CLIENT_REDIRECT,
+            redirects, content::PAGE_TRANSITION_CLIENT_REDIRECT,
             history::SOURCE_BROWSED, did_replace));
     backend_->AddPage(request);
 
@@ -155,6 +158,7 @@ class HistoryBackendTest : public testing::Test {
                                            &test_dir_))
       return;
     backend_ = new HistoryBackend(test_dir_,
+                                  0,
                                   new HistoryBackendTestDelegate(this),
                                   &bookmark_model_);
     backend_->Init(std::string(), false);
@@ -167,15 +171,15 @@ class HistoryBackendTest : public testing::Test {
     file_util::Delete(test_dir_, true);
   }
 
-  void SetInMemoryBackend(InMemoryHistoryBackend* backend) {
+  void SetInMemoryBackend(int backend_id, InMemoryHistoryBackend* backend) {
     mem_backend_.reset(backend);
   }
 
   void BroadcastNotifications(int type,
                                       HistoryDetails* details) {
     // Send the notifications directly to the in-memory database.
-    Details<HistoryDetails> det(details);
-    mem_backend_->Observe(type, Source<HistoryBackendTest>(NULL), det);
+    content::Details<HistoryDetails> det(details);
+    mem_backend_->Observe(type, content::Source<HistoryBackendTest>(NULL), det);
 
     // The backend passes ownership of the details pointer to us.
     delete details;
@@ -185,9 +189,9 @@ class HistoryBackendTest : public testing::Test {
   FilePath test_dir_;
 };
 
-void HistoryBackendTestDelegate::SetInMemoryBackend(
+void HistoryBackendTestDelegate::SetInMemoryBackend(int backend_id,
     InMemoryHistoryBackend* backend) {
-  test_->SetInMemoryBackend(backend);
+  test_->SetInMemoryBackend(backend_id, backend);
 }
 
 void HistoryBackendTestDelegate::BroadcastNotifications(
@@ -196,11 +200,11 @@ void HistoryBackendTestDelegate::BroadcastNotifications(
   test_->BroadcastNotifications(type, details);
 }
 
-void HistoryBackendTestDelegate::DBLoaded() {
+void HistoryBackendTestDelegate::DBLoaded(int backend_id) {
   test_->loaded_ = true;
 }
 
-void HistoryBackendTestDelegate::StartTopSitesMigration() {
+void HistoryBackendTestDelegate::StartTopSitesMigration(int backend_id) {
   test_->backend_->MigrateThumbnailsDatabase();
 }
 
@@ -349,6 +353,61 @@ TEST_F(HistoryBackendTest, DeleteAll) {
   EXPECT_EQ(0U, text_matches.size());
 }
 
+// Checks that adding a visit, then calling DeleteAll, and then trying to add
+// data for the visited page works.  This can happen when clearing the history
+// immediately after visiting a page.
+TEST_F(HistoryBackendTest, DeleteAllThenAddData) {
+  ASSERT_TRUE(backend_.get());
+
+  Time visit_time = Time::Now();
+  GURL url("http://www.google.com/");
+  scoped_refptr<HistoryAddPageArgs> request(
+      new HistoryAddPageArgs(url, visit_time, NULL, 0, GURL(),
+                             history::RedirectList(),
+                             content::PAGE_TRANSITION_KEYWORD_GENERATED,
+                             history::SOURCE_BROWSED, false));
+  backend_->AddPage(request);
+
+  // Check that a row was added.
+  URLRow outrow;
+  EXPECT_TRUE(backend_->db_->GetRowForURL(url, &outrow));
+
+  // Check that the visit was added.
+  VisitVector all_visits;
+  backend_->db_->GetAllVisitsInRange(Time(), Time(), 0, &all_visits);
+  ASSERT_EQ(1U, all_visits.size());
+
+  // Clear all history.
+  backend_->DeleteAllHistory();
+
+  // The row should be deleted.
+  EXPECT_FALSE(backend_->db_->GetRowForURL(url, &outrow));
+
+  // The visit should be deleted.
+  backend_->db_->GetAllVisitsInRange(Time(), Time(), 0, &all_visits);
+  ASSERT_EQ(0U, all_visits.size());
+
+  // Try and set the full text index.
+  backend_->SetPageTitle(url, UTF8ToUTF16("Title"));
+  backend_->SetPageContents(url, UTF8ToUTF16("Body"));
+
+  // The row should still be deleted.
+  EXPECT_FALSE(backend_->db_->GetRowForURL(url, &outrow));
+
+  // The visit should still be deleted.
+  backend_->db_->GetAllVisitsInRange(Time(), Time(), 0, &all_visits);
+  ASSERT_EQ(0U, all_visits.size());
+
+  // The full text database should have no data.
+  std::vector<TextDatabase::Match> text_matches;
+  Time first_time_searched;
+  backend_->text_database_->GetTextMatches(UTF8ToUTF16("Body"),
+                                           QueryOptions(),
+                                           &text_matches,
+                                           &first_time_searched);
+  EXPECT_EQ(0U, text_matches.size());
+}
+
 TEST_F(HistoryBackendTest, URLsNoLongerBookmarked) {
   GURL favicon_url1("http://www.google.com/favicon.ico");
   GURL favicon_url2("http://news.google.com/favicon.ico");
@@ -457,7 +516,7 @@ TEST_F(HistoryBackendTest, KeywordGenerated) {
   scoped_refptr<HistoryAddPageArgs> request(
       new HistoryAddPageArgs(url, visit_time, NULL, 0, GURL(),
                              history::RedirectList(),
-                             PageTransition::KEYWORD_GENERATED,
+                             content::PAGE_TRANSITION_KEYWORD_GENERATED,
                              history::SOURCE_BROWSED, false));
   backend_->AddPage(request);
 
@@ -507,19 +566,19 @@ TEST_F(HistoryBackendTest, ClientRedirect) {
   // Initial transition to page A.
   GURL url_a("http://google.com/a");
   AddClientRedirect(GURL(), url_a, false, &transition1, &transition2);
-  EXPECT_TRUE(transition2 & PageTransition::CHAIN_END);
+  EXPECT_TRUE(transition2 & content::PAGE_TRANSITION_CHAIN_END);
 
   // User initiated redirect to page B.
   GURL url_b("http://google.com/b");
   AddClientRedirect(url_a, url_b, false, &transition1, &transition2);
-  EXPECT_TRUE(transition1 & PageTransition::CHAIN_END);
-  EXPECT_TRUE(transition2 & PageTransition::CHAIN_END);
+  EXPECT_TRUE(transition1 & content::PAGE_TRANSITION_CHAIN_END);
+  EXPECT_TRUE(transition2 & content::PAGE_TRANSITION_CHAIN_END);
 
   // Non-user initiated redirect to page C.
   GURL url_c("http://google.com/c");
   AddClientRedirect(url_b, url_c, true, &transition1, &transition2);
-  EXPECT_FALSE(transition1 & PageTransition::CHAIN_END);
-  EXPECT_TRUE(transition2 & PageTransition::CHAIN_END);
+  EXPECT_FALSE(transition1 & content::PAGE_TRANSITION_CHAIN_END);
+  EXPECT_TRUE(transition2 & content::PAGE_TRANSITION_CHAIN_END);
 }
 
 TEST_F(HistoryBackendTest, ImportedFaviconsTest) {
@@ -599,8 +658,9 @@ TEST_F(HistoryBackendTest, StripUsernamePasswordTest) {
 
   // Visit the url with username, password.
   backend_->AddPageVisit(url, base::Time::Now(), 0,
-    PageTransition::GetQualifier(PageTransition::TYPED),
-    history::SOURCE_BROWSED);
+      content::PageTransitionFromInt(
+          content::PageTransitionGetQualifier(content::PAGE_TRANSITION_TYPED)),
+      history::SOURCE_BROWSED);
 
   // Fetch the row information about stripped url from history db.
   VisitVector visits;
@@ -620,13 +680,16 @@ TEST_F(HistoryBackendTest, AddPageVisitSource) {
   backend_->DeleteAllHistory();
 
   // Assume visiting the url from an externsion.
-  backend_->AddPageVisit(url, base::Time::Now(), 0, PageTransition::TYPED,
-                         history::SOURCE_EXTENSION);
+  backend_->AddPageVisit(
+      url, base::Time::Now(), 0, content::PAGE_TRANSITION_TYPED,
+      history::SOURCE_EXTENSION);
   // Assume the url is imported from Firefox.
-  backend_->AddPageVisit(url, base::Time::Now(), 0, PageTransition::TYPED,
+  backend_->AddPageVisit(url, base::Time::Now(), 0,
+                         content::PAGE_TRANSITION_TYPED,
                          history::SOURCE_FIREFOX_IMPORTED);
   // Assume this url is also synced.
-  backend_->AddPageVisit(url, base::Time::Now(), 0, PageTransition::TYPED,
+  backend_->AddPageVisit(url, base::Time::Now(), 0,
+                         content::PAGE_TRANSITION_TYPED,
                          history::SOURCE_SYNCED);
 
   // Fetch the row information about the url from history db.
@@ -637,7 +700,7 @@ TEST_F(HistoryBackendTest, AddPageVisitSource) {
   // Check if all the visits to the url are stored in database.
   ASSERT_EQ(3U, visits.size());
   VisitSourceMap visit_sources;
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(3U, visit_sources.size());
   int sources = 0;
   for (int i = 0; i < 3; i++) {
@@ -666,21 +729,21 @@ TEST_F(HistoryBackendTest, AddPageArgsSource) {
   scoped_refptr<HistoryAddPageArgs> request1(
       new HistoryAddPageArgs(url, base::Time::Now(), NULL, 0, GURL(),
                              history::RedirectList(),
-                             PageTransition::KEYWORD_GENERATED,
+                             content::PAGE_TRANSITION_KEYWORD_GENERATED,
                              history::SOURCE_BROWSED, false));
   backend_->AddPage(request1);
   // Assume this page is synced.
   scoped_refptr<HistoryAddPageArgs> request2(
       new HistoryAddPageArgs(url, base::Time::Now(), NULL, 0, GURL(),
                              history::RedirectList(),
-                             PageTransition::LINK,
+                             content::PAGE_TRANSITION_LINK,
                              history::SOURCE_SYNCED, false));
   backend_->AddPage(request2);
   // Assume this page is browsed again.
   scoped_refptr<HistoryAddPageArgs> request3(
       new HistoryAddPageArgs(url, base::Time::Now(), NULL, 0, GURL(),
                              history::RedirectList(),
-                             PageTransition::TYPED,
+                             content::PAGE_TRANSITION_TYPED,
                              history::SOURCE_BROWSED, false));
   backend_->AddPage(request3);
 
@@ -691,7 +754,7 @@ TEST_F(HistoryBackendTest, AddPageArgsSource) {
   ASSERT_TRUE(backend_->db()->GetVisitsForURL(id, &visits));
   ASSERT_EQ(3U, visits.size());
   VisitSourceMap visit_sources;
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(1U, visit_sources.size());
   EXPECT_EQ(history::SOURCE_SYNCED, visit_sources.begin()->second);
 }
@@ -702,16 +765,19 @@ TEST_F(HistoryBackendTest, AddVisitsSource) {
   GURL url1("http://www.cnn.com");
   std::vector<VisitInfo> visits1, visits2;
   visits1.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(5), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(5),
+      content::PAGE_TRANSITION_LINK));
   visits1.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(1), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(1),
+      content::PAGE_TRANSITION_LINK));
   visits1.push_back(VisitInfo(
-      Time::Now(), PageTransition::LINK));
+      Time::Now(), content::PAGE_TRANSITION_LINK));
 
   GURL url2("http://www.example.com");
   visits2.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(10), PageTransition::LINK));
-  visits2.push_back(VisitInfo(Time::Now(), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(10),
+      content::PAGE_TRANSITION_LINK));
+  visits2.push_back(VisitInfo(Time::Now(), content::PAGE_TRANSITION_LINK));
 
   // Clear all history.
   backend_->DeleteAllHistory();
@@ -727,14 +793,14 @@ TEST_F(HistoryBackendTest, AddVisitsSource) {
   ASSERT_TRUE(backend_->db()->GetVisitsForURL(id, &visits));
   ASSERT_EQ(3U, visits.size());
   VisitSourceMap visit_sources;
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(3U, visit_sources.size());
   for (int i = 0; i < 3; i++)
     EXPECT_EQ(history::SOURCE_IE_IMPORTED, visit_sources[visits[i].visit_id]);
   id = backend_->db()->GetRowForURL(url2, &row);
   ASSERT_TRUE(backend_->db()->GetVisitsForURL(id, &visits));
   ASSERT_EQ(2U, visits.size());
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(2U, visit_sources.size());
   for (int i = 0; i < 2; i++)
     EXPECT_EQ(history::SOURCE_SYNCED, visit_sources[visits[i].visit_id]);
@@ -746,11 +812,13 @@ TEST_F(HistoryBackendTest, GetMostRecentVisits) {
   GURL url1("http://www.cnn.com");
   std::vector<VisitInfo> visits1;
   visits1.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(5), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(5),
+      content::PAGE_TRANSITION_LINK));
   visits1.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(1), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(1),
+      content::PAGE_TRANSITION_LINK));
   visits1.push_back(VisitInfo(
-      Time::Now(), PageTransition::LINK));
+      Time::Now(), content::PAGE_TRANSITION_LINK));
 
   // Clear all history.
   backend_->DeleteAllHistory();
@@ -775,11 +843,14 @@ TEST_F(HistoryBackendTest, RemoveVisitsTransitions) {
 
   GURL url1("http://www.cnn.com");
   VisitInfo typed_visit(
-      Time::Now() - base::TimeDelta::FromDays(6), PageTransition::TYPED);
+      Time::Now() - base::TimeDelta::FromDays(6),
+      content::PAGE_TRANSITION_TYPED);
   VisitInfo reload_visit(
-      Time::Now() - base::TimeDelta::FromDays(5), PageTransition::RELOAD);
+      Time::Now() - base::TimeDelta::FromDays(5),
+      content::PAGE_TRANSITION_RELOAD);
   VisitInfo link_visit(
-      Time::Now() - base::TimeDelta::FromDays(4), PageTransition::LINK);
+      Time::Now() - base::TimeDelta::FromDays(4),
+      content::PAGE_TRANSITION_LINK);
   std::vector<VisitInfo> visits_to_add;
   visits_to_add.push_back(typed_visit);
   visits_to_add.push_back(reload_visit);
@@ -825,13 +896,16 @@ TEST_F(HistoryBackendTest, RemoveVisitsSource) {
   GURL url1("http://www.cnn.com");
   std::vector<VisitInfo> visits1, visits2;
   visits1.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(5), PageTransition::LINK));
-  visits1.push_back(VisitInfo(Time::Now(), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(5),
+      content::PAGE_TRANSITION_LINK));
+  visits1.push_back(VisitInfo(Time::Now(),
+    content::PAGE_TRANSITION_LINK));
 
   GURL url2("http://www.example.com");
   visits2.push_back(VisitInfo(
-      Time::Now() - base::TimeDelta::FromDays(10), PageTransition::LINK));
-  visits2.push_back(VisitInfo(Time::Now(), PageTransition::LINK));
+      Time::Now() - base::TimeDelta::FromDays(10),
+      content::PAGE_TRANSITION_LINK));
+  visits2.push_back(VisitInfo(Time::Now(), content::PAGE_TRANSITION_LINK));
 
   // Clear all history.
   backend_->DeleteAllHistory();
@@ -851,12 +925,12 @@ TEST_F(HistoryBackendTest, RemoveVisitsSource) {
 
   // Now check only url2's source in visit_source table.
   VisitSourceMap visit_sources;
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(0U, visit_sources.size());
   id = backend_->db()->GetRowForURL(url2, &row);
   ASSERT_TRUE(backend_->db()->GetVisitsForURL(id, &visits));
   ASSERT_EQ(2U, visits.size());
-  backend_->db_->GetVisitsSource(visits, &visit_sources);
+  ASSERT_TRUE(backend_->GetVisitsSource(visits, &visit_sources));
   ASSERT_EQ(2U, visit_sources.size());
   for (int i = 0; i < 2; i++)
     EXPECT_EQ(history::SOURCE_SYNCED, visit_sources[visits[i].visit_id]);
@@ -882,6 +956,7 @@ TEST_F(HistoryBackendTest, MigrationVisitSource) {
   ASSERT_TRUE(file_util::CopyFile(old_history_path, new_history_file));
 
   backend_ = new HistoryBackend(new_history_path,
+                                0,
                                 new HistoryBackendTestDelegate(this),
                                 &bookmark_model_);
   backend_->Init(std::string(), false);
@@ -1015,4 +1090,79 @@ TEST_F(HistoryBackendTest, AddOrUpdateIconMapping) {
   EXPECT_EQ(1u, icon_mapping.size());
 }
 
+TEST_F(HistoryBackendTest, GetFaviconForURL) {
+  // This test will add a fav icon and touch icon for the same URL
+  // and check the behaviour of backend's GetFaviconForURL implementation.
+  const GURL url("http://www.google.com/");
+  const GURL icon_url("http://www.google.com/icon");
+  std::vector<unsigned char> data(blob1, blob1 + sizeof(blob1));
+  scoped_refptr<RefCountedBytes> bytes(new RefCountedBytes(data));
+  // Used for testing the icon data after getting from DB
+  std::string blob_data(bytes->front(),
+                        bytes->front() + bytes->size());
+
+  // Add a favicon
+  backend_->SetFavicon(
+      url, icon_url, bytes.get(), FAVICON);
+  EXPECT_TRUE(backend_->thumbnail_db_->GetIconMappingForPageURL(
+      url, FAVICON, NULL));
+
+  // Add a touch_icon
+  backend_->SetFavicon(
+      url, icon_url, bytes.get(), TOUCH_ICON);
+  EXPECT_TRUE(backend_->thumbnail_db_->GetIconMappingForPageURL(
+      url, TOUCH_ICON, NULL));
+
+  // Test the Fav icon for this URL.
+  FaviconData favicon;
+  ASSERT_TRUE(backend_->GetFaviconFromDB(url, FAVICON, &favicon));
+  std::string favicon_data(
+      favicon.image_data->front(),
+      favicon.image_data->front() + favicon.image_data->size());
+
+  EXPECT_EQ(FAVICON, favicon.icon_type);
+  EXPECT_EQ(icon_url, favicon.icon_url);
+  EXPECT_EQ(blob_data, favicon_data);
+
+  // Test the touch icon for this URL.
+  ASSERT_TRUE(backend_->GetFaviconFromDB(url, TOUCH_ICON, &favicon));
+  std::string touchicon_data(
+      favicon.image_data->front(),
+      favicon.image_data->front() + favicon.image_data->size());
+
+  EXPECT_EQ(TOUCH_ICON, favicon.icon_type);
+  EXPECT_EQ(icon_url, favicon.icon_url);
+  EXPECT_EQ(blob_data, touchicon_data);
+}
+
+TEST_F(HistoryBackendTest, CloneFaviconIsRestrictedToSameDomain) {
+  const GURL url("http://www.google.com/");
+  const GURL icon_url("http://www.google.com/icon");
+  const GURL same_domain_url("http://www.google.com/subdir/index.html");
+  const GURL foreign_domain_url("http://www.not-google.com/");
+
+  // Add a favicon
+  std::vector<unsigned char> data(blob1, blob1 + sizeof(blob1));
+  scoped_refptr<RefCountedBytes> bytes(new RefCountedBytes(data));
+  backend_->SetFavicon(
+      url, icon_url, bytes.get(), FAVICON);
+  EXPECT_TRUE(backend_->thumbnail_db_->GetIconMappingForPageURL(
+      url, FAVICON, NULL));
+
+  // Validate starting state.
+  FaviconData favicon;
+  EXPECT_TRUE(backend_->GetFaviconFromDB(url, FAVICON, &favicon));
+  EXPECT_FALSE(backend_->GetFaviconFromDB(same_domain_url, FAVICON, &favicon));
+  EXPECT_FALSE(backend_->GetFaviconFromDB(foreign_domain_url,
+                                          FAVICON, &favicon));
+
+  // Same-domain cloning should work.
+  backend_->CloneFavicon(url, same_domain_url);
+  EXPECT_TRUE(backend_->GetFaviconFromDB(same_domain_url, FAVICON, &favicon));
+
+  // Foreign-domain cloning is forbidden.
+  backend_->CloneFavicon(url, foreign_domain_url);
+  EXPECT_FALSE(backend_->GetFaviconFromDB(foreign_domain_url,
+                                          FAVICON, &favicon));
+}
 }  // namespace history

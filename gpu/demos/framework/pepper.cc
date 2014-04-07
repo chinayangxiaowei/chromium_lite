@@ -13,6 +13,7 @@
 #include "ppapi/cpp/rect.h"
 #include "ppapi/cpp/size.h"
 #include "ppapi/lib/gl/gles2/gl2ext_ppapi.h"
+#include "ppapi/utility/completion_callback_factory.h"
 
 namespace gpu {
 namespace demos {
@@ -88,7 +89,7 @@ class PluginInstance : public pp::Instance {
         PP_GRAPHICS3DATTRIB_HEIGHT, size_.height(),
         PP_GRAPHICS3DATTRIB_NONE
     };
-    context_ = pp::Graphics3D(*this, pp::Graphics3D(), attribs);
+    context_ = pp::Graphics3D(this, attribs);
     if (context_.is_null())
       return;
 

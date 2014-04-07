@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_controller.h"
 
+#include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "base/metrics/histogram.h"
 #include "base/sys_string_conversions.h"
@@ -41,9 +42,9 @@
 #import "chrome/browser/ui/cocoa/view_resizer.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_view.h"
-#include "content/browser/user_metrics.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
@@ -52,6 +53,11 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/mac/nsimage_cache.h"
+
+using content::OpenURLParams;
+using content::Referrer;
+using content::UserMetricsAction;
+using content::WebContents;
 
 // Bookmark bar state changing and animations
 //
@@ -228,7 +234,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
              delegate:(id<BookmarkBarControllerDelegate>)delegate
        resizeDelegate:(id<ViewResizer>)resizeDelegate {
   if ((self = [super initWithNibName:@"BookmarkBar"
-                              bundle:base::mac::MainAppBundle()])) {
+                              bundle:base::mac::FrameworkBundle()])) {
     // Initialize to an invalid state.
     visualState_ = bookmarks::kInvalidState;
     lastVisualState_ = bookmarks::kInvalidState;
@@ -537,11 +543,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 }
 
 - (BOOL)canEditBookmark:(const BookmarkNode*)node {
-  // Don't allow edit/delete of the bar node, or of "Other Bookmarks"
-  if (node == nil ||
-      node == bookmarkModel_->bookmark_bar_node() ||
-      node == bookmarkModel_->other_node() ||
-      node == bookmarkModel_->synced_node())
+  // Don't allow edit/delete of the permanent nodes.
+  if (node == nil || bookmarkModel_->is_permanent_node(node))
     return NO;
   return YES;
 }
@@ -693,22 +696,16 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     return;
   }
 
-#if defined(WEBUI_DIALOGS)
-  browser_->OpenBookmarkManagerEditNode(node->id());
-#else
-  // There is no real need to jump to a platform-common routine at
-  // this point (which just jumps back to objc) other than consistency
-  // across platforms.
+  // This jumps to a platform-common routine at this point (which may just
+  // jump back to objc or may use the WebUI dialog).
   //
   // TODO(jrg): identify when we NO_TREE.  I can see it in the code
   // for the other platforms but can't find a way to trigger it in the
   // UI.
   BookmarkEditor::Show([[self view] window],
                        browser_->profile(),
-                       node->parent(),
-                       BookmarkEditor::EditDetails(node),
+                       BookmarkEditor::EditDetails::EditNode(node),
                        BookmarkEditor::SHOW_TREE);
-#endif
 }
 
 - (IBAction)cutBookmark:(id)sender {
@@ -759,7 +756,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
   if (node) {
     [self openAll:node disposition:NEW_FOREGROUND_TAB];
-    UserMetrics::RecordAction(UserMetricsAction("OpenAllBookmarks"));
+    content::RecordAction(UserMetricsAction("OpenAllBookmarks"));
   }
 }
 
@@ -767,7 +764,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
   if (node) {
     [self openAll:node disposition:NEW_WINDOW];
-    UserMetrics::RecordAction(UserMetricsAction("OpenAllBookmarksNewWindow"));
+    content::RecordAction(UserMetricsAction("OpenAllBookmarksNewWindow"));
   }
 }
 
@@ -775,7 +772,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
   if (node) {
     [self openAll:node disposition:OFF_THE_RECORD];
-    UserMetrics::RecordAction(
+    content::RecordAction(
         UserMetricsAction("OpenAllBookmarksIncognitoWindow"));
   }
 }
@@ -786,15 +783,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* parent = [self nodeFromMenuItem:sender];
   if (!parent)
     parent = bookmarkModel_->bookmark_bar_node();
-#if defined(WEBUI_DIALOGS)
-  browser_->OpenBookmarkManagerAddNodeIn(parent->id());
-#else
   BookmarkEditor::Show([[self view] window],
                        browser_->profile(),
-                       parent,
-                       BookmarkEditor::EditDetails(),
+                       BookmarkEditor::EditDetails::AddNodeInFolder(parent, -1),
                        BookmarkEditor::SHOW_TREE);
-#endif
 }
 
 // Might be called from the context menu over the bar OR over a
@@ -810,7 +802,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   BookmarkNode::Type type = senderNode->type();
   if (type == BookmarkNode::BOOKMARK_BAR ||
       type == BookmarkNode::OTHER_NODE ||
-      type == BookmarkNode::SYNCED ||
+      type == BookmarkNode::MOBILE ||
       type == BookmarkNode::FOLDER) {
     parent = senderNode;
     newIndex = parent->child_count();
@@ -930,9 +922,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 // "click outside" these windows to detect when they logically lose
 // focus.
 - (void)watchForExitEvent:(BOOL)watch {
-  CrApplication* app = static_cast<CrApplication*>([NSApplication
-                                                    sharedApplication]);
-  DCHECK([app isKindOfClass:[CrApplication class]]);
+  BrowserCrApplication* app = static_cast<BrowserCrApplication*>(
+      [BrowserCrApplication sharedApplication]);
   if (watch) {
     if (!watchingForExitEvent_) {
       [app addEventHook:self];
@@ -1122,7 +1113,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 // Actually open the URL.  This is the last chance for a unit test to
 // override.
 - (void)openURL:(GURL)url disposition:(WindowOpenDisposition)disposition {
-  browser_->OpenURL(url, GURL(), disposition, PageTransition::AUTO_BOOKMARK);
+  OpenURLParams params(
+      url, Referrer(), disposition, content::PAGE_TRANSITION_AUTO_BOOKMARK,
+      false);
+  browser_->OpenURL(params);
 }
 
 - (void)clearMenuTagMap {
@@ -2291,8 +2285,8 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 #pragma mark BookmarkBarToolbarViewController Protocol
 
 - (int)currentTabContentsHeight {
-  TabContents* tc = browser_->GetSelectedTabContents();
-  return tc ? tc->view()->GetContainerSize().height() : 0;
+  WebContents* wc = browser_->GetSelectedWebContents();
+  return wc ? wc->GetView()->GetContainerSize().height() : 0;
 }
 
 - (ui::ThemeProvider*)themeProvider {
@@ -2454,6 +2448,16 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 }
 
 - (void)draggingExited:(id<NSDraggingInfo>)info {
+  // Only close the folder menu if the user dragged up past the BMB. If the user
+  // dragged to below the BMB, they might be trying to drop a link into the open
+  // folder menu.
+  // TODO(asvitkine): Need a way to close the menu if the user dragged below but
+  //                  not into the menu.
+  NSRect bounds = [[self view] bounds];
+  NSPoint origin = [[self view] convertPoint:bounds.origin toView:nil];
+  if ([info draggingLocation].y > origin.y + bounds.size.height)
+    [self closeFolderAndStopTrackingMenus];
+
   // NOT the same as a cancel --> we may have moved the mouse into the submenu.
   if (hoverButton_) {
     [NSObject cancelPreviousPerformRequestsWithTarget:[hoverButton_ target]];

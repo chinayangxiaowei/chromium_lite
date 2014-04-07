@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 #pragma once
 
 #include <usp10.h>
+
+#include <vector>
 
 #include "base/memory/scoped_ptr.h"
 #include "ui/gfx/render_text.h"
@@ -17,6 +19,7 @@ namespace internal {
 
 struct TextRun {
   TextRun();
+  ~TextRun();
 
   ui::Range range;
   Font font;
@@ -24,7 +27,11 @@ struct TextRun {
   //            Otherwise, this breaks the glyph shaping process.
   //            See the example at: http://www.catch22.net/tuts/neatpad/12.
   SkColor foreground;
+  // A gfx::Font::FontStyle flag to specify bold and italic styles.
+  int font_style;
   bool strike;
+  bool diagonal_strike;
+  bool underline;
 
   int width;
   // The cumulative widths of preceding runs.
@@ -40,6 +47,7 @@ struct TextRun {
   scoped_array<int> advance_widths;
   scoped_array<GOFFSET> offsets;
   ABC abc_widths;
+  SCRIPT_CACHE script_cache;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TextRun);
@@ -54,58 +62,47 @@ class RenderTextWin : public RenderText {
   virtual ~RenderTextWin();
 
   // Overridden from RenderText:
-  virtual void SetText(const string16& text) OVERRIDE;
-  virtual void SetDisplayRect(const Rect& r) OVERRIDE;
-  virtual void ApplyStyleRange(StyleRange style_range) OVERRIDE;
-  virtual void ApplyDefaultStyle() OVERRIDE;
+  virtual base::i18n::TextDirection GetTextDirection() OVERRIDE;
   virtual int GetStringWidth() OVERRIDE;
-  virtual void Draw(Canvas* canvas) OVERRIDE;
   virtual SelectionModel FindCursorPosition(const Point& point) OVERRIDE;
   virtual Rect GetCursorBounds(const SelectionModel& selection,
                                bool insert_mode) OVERRIDE;
 
  protected:
   // Overridden from RenderText:
-  virtual SelectionModel GetLeftSelectionModel(const SelectionModel& current,
-                                               BreakType break_type) OVERRIDE;
-  virtual SelectionModel GetRightSelectionModel(const SelectionModel& current,
-                                                BreakType break_type) OVERRIDE;
-  virtual SelectionModel LeftEndSelectionModel() OVERRIDE;
-  virtual SelectionModel RightEndSelectionModel() OVERRIDE;
-  virtual size_t GetIndexOfPreviousGrapheme(size_t position) OVERRIDE;
+  virtual SelectionModel AdjacentCharSelectionModel(
+      const SelectionModel& selection,
+      VisualCursorDirection direction) OVERRIDE;
+  virtual SelectionModel AdjacentWordSelectionModel(
+      const SelectionModel& selection,
+      VisualCursorDirection direction) OVERRIDE;
+  virtual SelectionModel EdgeSelectionModel(
+      VisualCursorDirection direction) OVERRIDE;
   virtual std::vector<Rect> GetSubstringBounds(size_t from, size_t to) OVERRIDE;
+  virtual void SetSelectionModel(const SelectionModel& model) OVERRIDE;
+  virtual bool IsCursorablePosition(size_t position) OVERRIDE;
+  virtual void UpdateLayout() OVERRIDE;
+  virtual void EnsureLayout() OVERRIDE;
+  virtual void DrawVisualText(Canvas* canvas) OVERRIDE;
 
  private:
+  virtual size_t IndexOfAdjacentGrapheme(
+      size_t index,
+      LogicalCursorDirection direction) OVERRIDE;
+
   void ItemizeLogicalText();
-  void LayoutVisualText(HDC hdc);
+  void LayoutVisualText();
 
   // Return the run index that contains the argument; or the length of the
   // |runs_| vector if argument exceeds the text length or width.
   size_t GetRunContainingPosition(size_t position) const;
   size_t GetRunContainingPoint(const Point& point) const;
 
-  // Return an index belonging to the |next| or previous logical grapheme.
-  // The return value is bounded by 0 and the text length, inclusive.
-  size_t IndexOfAdjacentGrapheme(size_t index, bool next) const;
-
   // Given a |run|, returns the SelectionModel that contains the logical first
   // or last caret position inside (not at a boundary of) the run.
   // The returned value represents a cursor/caret position without a selection.
-  SelectionModel FirstSelectionModelInsideRun(internal::TextRun*) const;
-  SelectionModel LastSelectionModelInsideRun(internal::TextRun*) const;
-
-  // Get the selection model visually left/right of |selection| by one grapheme.
-  // The returned value represents a cursor/caret position without a selection.
-  SelectionModel LeftSelectionModel(const SelectionModel& selection);
-  SelectionModel RightSelectionModel(const SelectionModel& selection);
-
-  // Draw the text, cursor, and selection.
-  void DrawSelection(Canvas* canvas);
-  void DrawVisualText(Canvas* canvas);
-  void DrawCursor(Canvas* canvas);
-
-  bool text_is_dirty_;
-  bool style_is_dirty_;
+  SelectionModel FirstSelectionModelInsideRun(internal::TextRun* run);
+  SelectionModel LastSelectionModelInsideRun(internal::TextRun* run);
 
   // National Language Support native digit and digit substitution settings.
   SCRIPT_DIGITSUBSTITUTE digit_substitute_;
@@ -113,17 +110,17 @@ class RenderTextWin : public RenderText {
   SCRIPT_CONTROL script_control_;
   SCRIPT_STATE script_state_;
 
-  SCRIPT_CACHE script_cache_;
-
   std::vector<internal::TextRun*> runs_;
   int string_width_;
 
   scoped_array<int> visual_to_logical_;
   scoped_array<int> logical_to_visual_;
 
+  bool needs_layout_;
+
   DISALLOW_COPY_AND_ASSIGN(RenderTextWin);
 };
 
-}  // namespace gfx;
+}  // namespace gfx
 
 #endif  // UI_GFX_RENDER_TEXT_WIN_H_

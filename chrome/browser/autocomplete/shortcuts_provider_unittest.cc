@@ -1,8 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autocomplete/shortcuts_provider.h"
+
+#include <math.h>
 
 #include <algorithm>
 #include <functional>
@@ -18,19 +20,23 @@
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/in_memory_url_index.h"
+#include "chrome/browser/history/shortcuts_backend.h"
 #include "chrome/browser/history/url_database.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
 using base::TimeDelta;
 
+using content::BrowserThread;
+
 namespace {
 
 struct TestShortcutInfo {
+  std::string guid;
   std::string url;
   std::string title;  // The text that orginally was searched for.
   std::string contents;
@@ -40,62 +46,79 @@ struct TestShortcutInfo {
   int typed_count;
   int days_from_now;
 } shortcut_test_db[] = {
-  { "http://www.google.com/", "goog",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E0",
+    "http://www.google.com/", "goog",
     "Google", "0,1,4,0", "Google", "0,3,4,1", 100, 1 },
-  { "http://slashdot.org/", "slash",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E1",
+    "http://slashdot.org/", "slash",
     "slashdot.org", "0,3,5,1",
     "Slashdot - News for nerds, stuff that matters", "0,2,5,0", 100, 0},
-  { "http://slashdot.org/", "news",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E2",
+    "http://slashdot.org/", "news",
     "slashdot.org", "0,1",
     "Slashdot - News for nerds, stuff that matters", "0,0,11,2,15,0", 5, 0},
-  { "http://sports.yahoo.com/", "news",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E3",
+    "http://sports.yahoo.com/", "news",
     "sports.yahoo.com", "0,1",
     "Yahoo! Sports - Sports News, Scores, Rumors, Fantasy Games, and more",
     "0,0,23,2,27,0", 5, 2},
-  { "http://www.cnn.com/index.html", "news weather",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E4",
+    "http://www.cnn.com/index.html", "news weather",
     "www.cnn.com/index.html", "0,1",
     "CNN.com - Breaking News, U.S., World, Weather, Entertainment & Video",
     "0,0,19,2,23,0,38,2,45,0", 10, 1},
-  { "http://sports.yahoo.com/", "nhl scores",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E5",
+    "http://sports.yahoo.com/", "nhl scores",
     "sports.yahoo.com", "0,1",
     "Yahoo! Sports - Sports News, Scores, Rumors, Fantasy Games, and more",
     "0,0,29,2,35,0", 10, 1},
-  { "http://www.nhl.com/scores/index.html", "nhl scores",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E6",
+    "http://www.nhl.com/scores/index.html", "nhl scores",
     "www.nhl.com/scores/index.html", "0,1,4,3,7,1",
     "January 13, 2010 - NHL.com - Scores", "0,0,19,2,22,0,29,2,35,0", 1, 5},
-  { "http://www.testsite.com/a.html", "just",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E7",
+    "http://www.testsite.com/a.html", "just",
     "www.testsite.com/a.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 1, 5},
-  { "http://www.testsite.com/b.html", "just",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E8",
+    "http://www.testsite.com/b.html", "just",
     "www.testsite.com/b.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 2, 5},
-  { "http://www.testsite.com/c.html", "just",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880E9",
+    "http://www.testsite.com/c.html", "just",
     "www.testsite.com/c.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 1, 8},
-  { "http://www.testsite.com/d.html", "just a",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880EA",
+    "http://www.testsite.com/d.html", "just a",
     "www.testsite.com/d.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 1, 12},
-  { "http://www.testsite.com/e.html", "just a t",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880EB",
+    "http://www.testsite.com/e.html", "just a t",
     "www.testsite.com/e.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 1, 12},
-  { "http://www.testsite.com/f.html", "just a te",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880EC",
+    "http://www.testsite.com/f.html", "just a te",
     "www.testsite.com/f.html", "0,1",
     "Test - site - just a test", "0,0,14,2,18,0", 1, 12},
-  { "http://www.daysagotest.com/a.html", "ago",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880ED",
+    "http://www.daysagotest.com/a.html", "ago",
     "www.daysagotest.com/a.html", "0,1,8,3,11,1",
     "Test - site", "0,0", 1, 1},
-  { "http://www.daysagotest.com/b.html", "ago",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880EE",
+    "http://www.daysagotest.com/b.html", "ago",
     "www.daysagotest.com/b.html", "0,1,8,3,11,1",
     "Test - site", "0,0", 1, 2},
-  { "http://www.daysagotest.com/c.html", "ago",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880EF",
+    "http://www.daysagotest.com/c.html", "ago",
     "www.daysagotest.com/c.html", "0,1,8,3,11,1",
     "Test - site", "0,0", 1, 3},
-  { "http://www.daysagotest.com/d.html", "ago",
+  { "BD85DBA2-8C29-49F9-84AE-48E1E90880F0",
+    "http://www.daysagotest.com/d.html", "ago",
     "www.daysagotest.com/d.html", "0,1,8,3,11,1",
     "Test - site", "0,0", 1, 4},
 };
 
-}  // end namespace
+}  // namespace
 
 class ShortcutsProviderTest : public testing::Test,
                               public ACProviderListener {
@@ -132,13 +155,14 @@ class ShortcutsProviderTest : public testing::Test,
                std::string expected_top_result);
 
   MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
 
   scoped_ptr<TestingProfile> profile_;
 
   ACMatches ac_matches_;  // The resulting matches after running RunTest.
 
+  scoped_refptr<history::ShortcutsBackend> mock_backend_;
   scoped_refptr<ShortcutsProvider> provider_;
 };
 
@@ -154,6 +178,9 @@ void ShortcutsProviderTest::SetUp() {
   profile_.reset(new TestingProfile());
   profile_->CreateHistoryService(true, false);
   provider_ = new ShortcutsProvider(this, profile_.get());
+  mock_backend_ = new history::ShortcutsBackend(FilePath(), profile_.get());
+  mock_backend_->Init();
+  provider_->set_shortcuts_backend(mock_backend_.get());
   FillData();
 }
 
@@ -163,7 +190,7 @@ void ShortcutsProviderTest::TearDown() {
 
 void ShortcutsProviderTest::FillData() {
   DCHECK(provider_.get());
-  provider_->shortcuts_map_.clear();
+  mock_backend_->DeleteAllShortcuts();
   for (size_t i = 0; i < arraysize(shortcut_test_db); ++i) {
     const TestShortcutInfo& cur = shortcut_test_db[i];
     const GURL current_url(cur.url);
@@ -177,8 +204,8 @@ void ShortcutsProviderTest::FillData() {
         shortcuts_provider::SpansFromString(
             ASCIIToUTF16(cur.description_class)));
     shortcut.last_access_time = visit_time;
-    provider_->shortcuts_map_.insert(std::make_pair(ASCIIToUTF16(cur.title),
-                                                    shortcut));
+    shortcut.id = cur.guid;
+    mock_backend_->AddShortcut(shortcut);
   }
 }
 
@@ -500,54 +527,72 @@ TEST_F(ShortcutsProviderTest, CalculateScore) {
                                         ASCIIToUTF16("A test"),
                                         spans_description);
 
-  // Yes, these tests could fail if CalculateScore() takes a lot of time,
-  // but even for the last test the time to change score by 1 is around
-  // two minutes, so if it fails because of timing we've got some problems.
-
   // Maximal score.
   shortcut.last_access_time = Time::Now();
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut),
-            ShortcutsProvider::kMaxScore);
+  const int kMaxScore = ShortcutsProvider::CalculateScore(
+      ASCIIToUTF16("test"), shortcut);
 
   // Score decreases as percent of the match is decreased.
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("tes"), shortcut),
-            (ShortcutsProvider::kMaxScore / 4) * 3);
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("te"), shortcut),
-            ShortcutsProvider::kMaxScore / 2);
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("t"), shortcut),
-            ShortcutsProvider::kMaxScore / 4);
+  int score_three_quarters =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("tes"), shortcut);
+  EXPECT_LT(score_three_quarters, kMaxScore);
+  int score_one_half =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("te"), shortcut);
+  EXPECT_LT(score_one_half, score_three_quarters);
+  int score_one_quarter =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("t"), shortcut);
+  EXPECT_LT(score_one_quarter, score_one_half);
 
-  // Should decay twice in a week.
+  // Should decay with time - one week.
   shortcut.last_access_time = Time::Now() - TimeDelta::FromDays(7);
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut),
-            ShortcutsProvider::kMaxScore / 2);
+  int score_week_old =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut);
+  EXPECT_LT(score_week_old, kMaxScore);
 
-  // Should decay four times in two weeks.
+  // Should decay more in two weeks.
   shortcut.last_access_time = Time::Now() - TimeDelta::FromDays(14);
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut),
-            ShortcutsProvider::kMaxScore / 4);
+  int score_two_weeks_old =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut);
+  EXPECT_LT(score_two_weeks_old, score_week_old);
 
-  // But not if it was activly clicked on. 6 hits slow decaying power twice.
-  shortcut.number_of_hits = 6;
+  // But not if it was activly clicked on. 2 hits slow decaying power.
+  shortcut.number_of_hits = 2;
   shortcut.last_access_time = Time::Now() - TimeDelta::FromDays(14);
-  EXPECT_EQ(ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut),
-            ShortcutsProvider::kMaxScore / 2);
+  int score_popular_two_weeks_old =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut);
+  EXPECT_LT(score_two_weeks_old, score_popular_two_weeks_old);
+  // But still decayed.
+  EXPECT_LT(score_popular_two_weeks_old, kMaxScore);
+
+  // 3 hits slow decaying power even more.
+  shortcut.number_of_hits = 3;
+  shortcut.last_access_time = Time::Now() - TimeDelta::FromDays(14);
+  int score_more_popular_two_weeks_old =
+      ShortcutsProvider::CalculateScore(ASCIIToUTF16("test"), shortcut);
+  EXPECT_LT(score_two_weeks_old, score_more_popular_two_weeks_old);
+  EXPECT_LT(score_popular_two_weeks_old, score_more_popular_two_weeks_old);
+  // But still decayed.
+  EXPECT_LT(score_more_popular_two_weeks_old, kMaxScore);
 }
 
 TEST_F(ShortcutsProviderTest, DeleteMatch) {
   TestShortcutInfo shortcuts_to_test_delete[3] = {
-    { "http://www.deletetest.com/1.html", "delete",
+    { "BD85DBA2-8C29-49F9-84AE-48E1E90880F1",
+      "http://www.deletetest.com/1.html", "delete",
       "http://www.deletetest.com/1.html", "0,2",
       "Erase this shortcut!", "0,0", 1, 1},
-    { "http://www.deletetest.com/1.html", "erase",
+    { "BD85DBA2-8C29-49F9-84AE-48E1E90880F2",
+      "http://www.deletetest.com/1.html", "erase",
       "http://www.deletetest.com/1.html", "0,2",
       "Erase this shortcut!", "0,0", 1, 1},
-    { "http://www.deletetest.com/2.html", "delete",
+    { "BD85DBA2-8C29-49F9-84AE-48E1E90880F3",
+      "http://www.deletetest.com/2.html", "delete",
       "http://www.deletetest.com/2.html", "0,2",
       "Erase this shortcut!", "0,0", 1, 1},
   };
 
-  size_t original_shortcuts_count = provider_->shortcuts_map_.size();
+  size_t original_shortcuts_count =
+      provider_->shortcuts_backend_->shortcuts_map().size();
 
   for (size_t i = 0; i < arraysize(shortcuts_to_test_delete); ++i) {
     const TestShortcutInfo& cur = shortcuts_to_test_delete[i];
@@ -562,15 +607,18 @@ TEST_F(ShortcutsProviderTest, DeleteMatch) {
         shortcuts_provider::SpansFromString(
             ASCIIToUTF16(cur.description_class)));
     shortcut.last_access_time = visit_time;
-    provider_->shortcuts_map_.insert(std::make_pair(ASCIIToUTF16(cur.title),
-                                                    shortcut));
+    shortcut.id = cur.guid;
+    mock_backend_->AddShortcut(shortcut);
   }
 
-  EXPECT_EQ(original_shortcuts_count + 3, provider_->shortcuts_map_.size());
-  EXPECT_FALSE(provider_->shortcuts_map_.end() ==
-               provider_->shortcuts_map_.find(ASCIIToUTF16("delete")));
-  EXPECT_FALSE(provider_->shortcuts_map_.end() ==
-               provider_->shortcuts_map_.find(ASCIIToUTF16("erase")));
+  EXPECT_EQ(original_shortcuts_count + 3,
+            provider_->shortcuts_backend_->shortcuts_map().size());
+  EXPECT_FALSE(provider_->shortcuts_backend_->shortcuts_map().end() ==
+               provider_->shortcuts_backend_->shortcuts_map().find(
+                   ASCIIToUTF16("delete")));
+  EXPECT_FALSE(provider_->shortcuts_backend_->shortcuts_map().end() ==
+               provider_->shortcuts_backend_->shortcuts_map().find(
+                   ASCIIToUTF16("erase")));
 
   AutocompleteMatch match(provider_, 1200, true,
                           AutocompleteMatch::HISTORY_TITLE);
@@ -583,18 +631,23 @@ TEST_F(ShortcutsProviderTest, DeleteMatch) {
 
   // |shortcuts_to_test_delete[0]| and |shortcuts_to_test_delete[1]| should be
   // deleted, but not |shortcuts_to_test_delete[2]| as it has different url.
-  EXPECT_EQ(original_shortcuts_count + 1, provider_->shortcuts_map_.size());
-  EXPECT_FALSE(provider_->shortcuts_map_.end() ==
-               provider_->shortcuts_map_.find(ASCIIToUTF16("delete")));
-  EXPECT_TRUE(provider_->shortcuts_map_.end() ==
-              provider_->shortcuts_map_.find(ASCIIToUTF16("erase")));
+  EXPECT_EQ(original_shortcuts_count + 1,
+            provider_->shortcuts_backend_->shortcuts_map().size());
+  EXPECT_FALSE(provider_->shortcuts_backend_->shortcuts_map().end() ==
+               provider_->shortcuts_backend_->shortcuts_map().find(
+                   ASCIIToUTF16("delete")));
+  EXPECT_TRUE(provider_->shortcuts_backend_->shortcuts_map().end() ==
+              provider_->shortcuts_backend_->shortcuts_map().find(
+                  ASCIIToUTF16("erase")));
 
   match.destination_url = GURL(shortcuts_to_test_delete[2].url);
   match.contents = ASCIIToUTF16(shortcuts_to_test_delete[2].contents);
   match.description = ASCIIToUTF16(shortcuts_to_test_delete[2].description);
 
   provider_->DeleteMatch(match);
-  EXPECT_EQ(original_shortcuts_count, provider_->shortcuts_map_.size());
-  EXPECT_TRUE(provider_->shortcuts_map_.end() ==
-              provider_->shortcuts_map_.find(ASCIIToUTF16("delete")));
+  EXPECT_EQ(original_shortcuts_count,
+            provider_->shortcuts_backend_->shortcuts_map().size());
+  EXPECT_TRUE(provider_->shortcuts_backend_->shortcuts_map().end() ==
+              provider_->shortcuts_backend_->shortcuts_map().find(
+                  ASCIIToUTF16("delete")));
 }

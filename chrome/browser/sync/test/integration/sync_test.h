@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,12 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
 #include "base/process_util.h"
+#include "chrome/browser/sync/protocol/sync_protocol_error.h"
 #include "chrome/browser/sync/syncable/model_type.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/test/test_server.h"
@@ -24,7 +26,7 @@ class CommandLine;
 class Profile;
 class ProfileSyncServiceHarness;
 class FakeURLFetcherFactory;
-class URLFetcherFactory;
+class URLFetcherImplFactory;
 
 namespace net {
 class ProxyConfig;
@@ -50,11 +52,7 @@ class SyncTest : public InProcessBrowserTest {
     // Tests where three or more client profiles are synced with the server.
     // Typically, these tests create client side races and verify that sync
     // works.
-    MULTIPLE_CLIENT,
-
-    // Tests where several client profiles are synced with the server. Only used
-    // by stress tests.
-    MANY_CLIENT
+    MULTIPLE_CLIENT
   };
 
   // The type of server we're running against.
@@ -155,7 +153,7 @@ class SyncTest : public InProcessBrowserTest {
   // Trigger a notification to be sent to all clients.  This operation
   // is available only if ServerSupportsNotificationControl() returned
   // true.
-  void TriggerNotification(const syncable::ModelTypeSet& changed_types);
+  void TriggerNotification(syncable::ModelTypeSet changed_types);
 
   // Returns true if the server being used supports injecting errors.
   bool ServerSupportsErrorTriggering() const;
@@ -163,7 +161,7 @@ class SyncTest : public InProcessBrowserTest {
   // Triggers a migration for one or more datatypes, and waits
   // for the server to complete it.  This operation is available
   // only if ServerSupportsErrorTriggering() returned true.
-  void TriggerMigrationDoneError(const syncable::ModelTypeSet& model_types);
+  void TriggerMigrationDoneError(syncable::ModelTypeSet model_types);
 
   // Triggers the server to set its birthday to a random value thereby
   // the server would return a birthday error on next sync.
@@ -173,8 +171,19 @@ class SyncTest : public InProcessBrowserTest {
   // this state until shut down.
   void TriggerTransientError();
 
+  // Triggers an auth error on the server, simulating the case when the gaia
+  // password is changed at another location. Note the server will stay in
+  // this state until shut down.
+  void TriggerAuthError();
+
+  // Triggers a sync error on the server.
+  void TriggerSyncError(const browser_sync::SyncProtocolError& error);
+
   // Triggers setting the sync_tabs field of the nigori node.
   void TriggerSetSyncTabs();
+
+  // Returns the number of default items that every client syncs.
+  int NumberOfDefaultSyncItems() const;
 
  protected:
   // Add custom switches needed for running the test.
@@ -273,8 +282,8 @@ class SyncTest : public InProcessBrowserTest {
 
   // Collection of sync profiles used by a test. A sync profile maintains sync
   // data contained within its own subdirectory under the chrome user data
-  // directory.
-  ScopedVector<Profile> profiles_;
+  // directory. Profiles are owned by the ProfileManager.
+  std::vector<Profile*> profiles_;
 
   // Collection of pointers to the browser objects used by a test. One browser
   // instance is created for each sync profile. Browser object lifetime is
@@ -289,7 +298,7 @@ class SyncTest : public InProcessBrowserTest {
   // Sync profile against which changes to individual profiles are verified. We
   // don't need a corresponding verifier sync client because the contents of the
   // verifier profile are strictly local, and are not meant to be synced.
-  scoped_ptr<Profile> verifier_;
+  Profile* verifier_;
 
   // Indicates whether changes to a profile should also change the verifier
   // profile or not.
@@ -306,12 +315,14 @@ class SyncTest : public InProcessBrowserTest {
   // Fake URLFetcher factory used to mock out GAIA signin.
   scoped_ptr<FakeURLFetcherFactory> fake_factory_;
 
-  // The URLFetcherFactory instance used to instantiate |fake_factory_|.
-  scoped_ptr<URLFetcherFactory> factory_;
+  // The URLFetcherImplFactory instance used to instantiate |fake_factory_|.
+  scoped_ptr<URLFetcherImplFactory> factory_;
+
+  // Number of default entries (as determined by the existing entries at setup
+  // time on client 0).
+  size_t number_of_default_sync_items_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncTest);
 };
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(SyncTest);
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_SYNC_TEST_H_

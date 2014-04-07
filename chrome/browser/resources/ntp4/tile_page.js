@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,19 @@ cr.define('ntp4', function() {
       ntp4.enterRearrangeMode();
     else
       ntp4.leaveRearrangeMode();
+  }
+
+  /**
+   * Changes the current dropEffect of a drag. This modifies the native cursor
+   * and serves as an indicator of what we should do at the end of the drag as
+   * well as give indication to the user if a drop would succeed if they let go.
+   * @param {DataTransfer} dataTransfer A dataTransfer object from a drag event.
+   * @param {string} effect A drop effect to change to (i.e. copy, move, none).
+   */
+  function setCurrentDropEffect(dataTransfer, effect) {
+    dataTransfer.dropEffect = effect;
+    if (currentlyDraggingTile)
+      currentlyDraggingTile.lastDropEffect = dataTransfer.dropEffect;
   }
 
   /**
@@ -112,7 +125,7 @@ cr.define('ntp4', function() {
 
       this.classList.add('dragging');
       // offsetLeft is mirrored in RTL. Un-mirror it.
-      var offsetLeft = ntp4.isRTL() ?
+      var offsetLeft = isRTL() ?
           this.parentNode.clientWidth - this.offsetLeft :
           this.offsetLeft;
       this.dragOffsetX = e.x - offsetLeft - this.parentNode.offsetLeft;
@@ -161,8 +174,8 @@ cr.define('ntp4', function() {
       } else if (tilePage) {
         // TODO(dbeam): Until we fix dropEffect to the correct behavior it will
         // differ on windows - crbug.com/39399.  That's why we use the custom
-        // tilePage.lastDropEffect_ instead of e.dataTransfer.dropEffect.
-        if (tilePage.selected && tilePage.lastDropEffect_ != 'copy') {
+        // this.lastDropEffect instead of e.dataTransfer.dropEffect.
+        if (tilePage.selected && this.lastDropEffect != 'copy') {
           // The drag clone can still be hidden from the last drag move event.
           this.dragClone.hidden = false;
           // The tile's contents may have moved following the respositioning;
@@ -187,11 +200,13 @@ cr.define('ntp4', function() {
           // previous class (currently: .placing) sets up a transition.
           // http://dev.w3.org/csswg/css3-transitions/#starting
           window.setTimeout(function() {
-            this.dragClone.classList.add('dropped-on-other-page');
+            if (this.dragClone)
+              this.dragClone.classList.add('dropped-on-other-page');
           }.bind(this), 0);
         }
       }
 
+      delete this.lastDropEffect;
       this.landedOnTrash = false;
     },
 
@@ -218,7 +233,7 @@ cr.define('ntp4', function() {
       this.appendChild(clone);
       this.doppleganger_ = clone;
 
-      if (ntp4.isRTL())
+      if (isRTL())
         x *= -1;
 
       this.doppleganger_.style.WebkitTransform = 'translate(' + x + 'px, ' +
@@ -277,9 +292,13 @@ cr.define('ntp4', function() {
 
     /**
      * Called when an app is removed from Chrome. Animates its disappearance.
+     * @param {boolean=} opt_animate Whether the animation should be animated.
      */
-    doRemove: function() {
-      this.firstChild.classList.add('removing-tile-contents');
+    doRemove: function(opt_animate) {
+      if (opt_animate)
+        this.firstChild.classList.add('removing-tile-contents');
+      else
+        this.tilePage.removeTile(this, false);
     },
 
     /**
@@ -290,7 +309,7 @@ cr.define('ntp4', function() {
       if (this.firstChild.classList.contains('new-tile-contents'))
         this.firstChild.classList.remove('new-tile-contents');
       if (this.firstChild.classList.contains('removing-tile-contents'))
-        this.tilePage.removeTile(this);
+        this.tilePage.removeTile(this, true);
     },
   };
 
@@ -412,6 +431,12 @@ cr.define('ntp4', function() {
 
       // Ordered list of our tiles.
       this.tileElements_ = this.tileGrid_.getElementsByClassName('tile real');
+      // Ordered list of the elements which want to accept keyboard focus. These
+      // elements will not be a part of the normal tab order; the tile grid
+      // initially gets focused and then these elements can be focused via the
+      // arrow keys.
+      this.focusableElements_ =
+          this.tileGrid_.getElementsByClassName('focusable');
 
       // These are properties used in updateTopMargin.
       this.animatedTopMarginPx_ = 0;
@@ -426,11 +451,15 @@ cr.define('ntp4', function() {
       this.addEventListener('mousewheel', this.onMouseWheel_);
       this.content_.addEventListener('scroll', this.onScroll_.bind(this));
 
-      this.dragWrapper_ = new DragWrapper(this.tileGrid_, this);
+      this.dragWrapper_ = new cr.ui.DragWrapper(this.tileGrid_, this);
 
-      $('page-list').addEventListener(
-          CardSlider.EventType.CARD_CHANGED,
-          this.onCardChanged.bind(this));
+      this.addEventListener('cardselected', this.handleCardSelection_);
+      this.addEventListener('carddeselected', this.handleCardDeselection_);
+      this.addEventListener('focus', this.handleFocus_);
+      this.addEventListener('keydown', this.handleKeyDown_);
+      this.addEventListener('mousedown', this.handleMouseDown_);
+
+      this.focusElementIndex_ = -1;
     },
 
     get tiles() {
@@ -474,10 +503,25 @@ cr.define('ntp4', function() {
     },
 
     /**
+     * Removes the tilePage from the DOM and cleans up event handlers.
+     */
+    remove: function() {
+      // This checks arguments.length as most remove functions have a boolean
+      // |opt_animate| argument, but that's not necesarilly applicable to
+      // removing a tilePage. Selecting a different card in an animated way and
+      // deleting the card afterward is probably a better choice.
+      assert(typeof arguments[0] != 'boolean',
+             'This function takes no |opt_animate| argument.');
+      this.tearDown_();
+      this.parentNode.removeChild(this);
+    },
+
+    /**
      * Cleans up resources that are no longer needed after this TilePage
      * instance is removed from the DOM.
+     * @private
      */
-    tearDown: function() {
+    tearDown_: function() {
       this.eventTracker.removeAll();
     },
 
@@ -495,42 +539,78 @@ cr.define('ntp4', function() {
      * Adds the given element to the tile grid.
      * @param {Node} tileElement The tile object/node to insert.
      * @param {number} index The location in the tile grid to insert it at.
-     * @param {?boolean} animate If true, the tile in question will be animated
-     *     (other tiles, if they must reposition, do not animate).
+     * @param {boolean=} opt_animate If true, the tile in question will be
+     *     animated (other tiles, if they must reposition, do not animate).
      * @protected
      */
-    addTileAt: function(tileElement, index, animate) {
+    addTileAt: function(tileElement, index, opt_animate) {
       this.classList.remove('animating-tile-page');
-      if (animate)
+      if (opt_animate)
         tileElement.classList.add('new-tile-contents');
+
+      // Make sure the index is positive and either in the the bounds of
+      // this.tileElements_ or at the end (meaning append).
+      assert(index >= 0 && index <= this.tileElements_.length);
+
       var wrapperDiv = new Tile(tileElement);
-      if (index == this.tileElements_.length) {
-        this.tileGrid_.appendChild(wrapperDiv);
-      } else {
-        this.tileGrid_.insertBefore(wrapperDiv,
-                                    this.tileElements_[index]);
-      }
+      // If is out of the bounds of the tile element list, .insertBefore() will
+      // act just like appendChild().
+      this.tileGrid_.insertBefore(wrapperDiv, this.tileElements_[index]);
       this.calculateLayoutValues_();
       this.heightChanged_();
 
       this.positionTile_(index);
+      this.fireAddedEvent(wrapperDiv, index, !!opt_animate);
     },
 
     /**
-     * Removes the given tile and animates the respositioning of the other
-     * tiles.
-     * @param {HTMLElement} tile The tile to remove from |tileGrid_|.
-     * @param {?boolean} animate If true, tiles will animate.
+     * Notify interested subscribers that a tile has been removed from this
+     * page.
+     * @param {Tile} tile The newly added tile.
+     * @param {number} index The index of the tile that was added.
+     * @param {boolean} wasAnimated Whether the removal was animated.
      */
-    removeTile: function(tile, animate) {
-      if (animate)
+    fireAddedEvent: function(tile, index, wasAnimated) {
+      var e = document.createEvent('Event');
+      e.initEvent('tilePage:tile_added', true, true);
+      e.addedIndex = index;
+      e.addedTile = tile;
+      e.wasAnimated = wasAnimated;
+      this.dispatchEvent(e);
+    },
+
+    /**
+     * Removes the given tile and animates the repositioning of the other tiles.
+     * @param {boolean=} opt_animate Whether the removal should be animated.
+     * @param {boolean=} opt_dontNotify Whether a page should be removed if the
+     *     last tile is removed from it.
+     */
+    removeTile: function(tile, opt_animate, opt_dontNotify) {
+      if (opt_animate)
         this.classList.add('animating-tile-page');
       var index = tile.index;
       tile.parentNode.removeChild(tile);
       this.calculateLayoutValues_();
-      for (var i = index; i < this.tileElements_.length; i++) {
-        this.positionTile_(i);
-      }
+      this.cleanupDrag();
+
+      if (!opt_dontNotify)
+        this.fireRemovedEvent(tile, index, !!opt_animate);
+    },
+
+    /**
+     * Notify interested subscribers that a tile has been removed from this
+     * page.
+     * @param {Tile} tile The tile that was removed.
+     * @param {number} oldIndex Where the tile was positioned before removal.
+     * @param {boolean} wasAnimated Whether the removal was animated.
+     */
+    fireRemovedEvent: function(tile, oldIndex, wasAnimated) {
+      var e = document.createEvent('Event');
+      e.initEvent('tilePage:tile_removed', true, true);
+      e.removedIndex = oldIndex;
+      e.removedTile = tile;
+      e.wasAnimated = wasAnimated;
+      this.dispatchEvent(e);
     },
 
     /**
@@ -538,6 +618,143 @@ cr.define('ntp4', function() {
      */
     removeAllTiles: function() {
       this.tileGrid_.innerHTML = '';
+    },
+
+    /**
+     * Called when the page is selected (in the card selector).
+     * @param {Event} e A custom cardselected event.
+     * @private
+     */
+    handleCardSelection_: function(e) {
+      this.tabIndex = 1;
+
+      // When we are selected, we re-calculate the layout values. (See comment
+      // in doDrop.)
+      this.calculateLayoutValues_();
+    },
+
+    /**
+     * Called when the page loses selection (in the card selector).
+     * @param {Event} e A custom carddeselected event.
+     * @private
+     */
+    handleCardDeselection_: function(e) {
+      this.tabIndex = -1;
+      if (this.currentFocusElement_)
+        this.currentFocusElement_.tabIndex = -1;
+    },
+
+    /**
+     * When we get focus, pass it on to the focus element.
+     * @param {Event} e The focus event.
+     * @private
+     */
+    handleFocus_: function(e) {
+      if (this.focusableElements_.length == 0)
+        return;
+
+      this.updateFocusElement_();
+    },
+
+    /**
+     * Since we are doing custom focus handling, we have to manually
+     * set focusability on click (as well as keyboard nav above).
+     * @param {Event} e The focus event.
+     * @private
+     */
+    handleMouseDown_: function(e) {
+      var focusable = findAncestorByClass(e.target, 'focusable');
+      if (focusable) {
+        this.focusElementIndex_ =
+            Array.prototype.indexOf.call(this.focusableElements_,
+                                         focusable);
+        this.updateFocusElement_();
+      } else {
+        // This prevents the tile page from getting focus when the user clicks
+        // inside the grid but outside of any tile.
+        e.preventDefault();
+      }
+    },
+
+    /**
+     * Handle arrow key focus nav.
+     * @param {Event} e The focus event.
+     * @private
+     */
+    handleKeyDown_: function(e) {
+      // We only handle up, down, left, right without control keys.
+      if (e.metaKey || e.shiftKey || e.altKey || e.ctrlKey)
+        return;
+
+      // Wrap the given index to |this.focusableElements_|.
+      var wrap = function(idx) {
+        return (idx + this.focusableElements_.length) %
+            this.focusableElements_.length;
+      }.bind(this);
+
+      switch (e.keyIdentifier) {
+        case 'Right':
+        case 'Left':
+          var direction = e.keyIdentifier == 'Right' ? 1 : -1;
+          this.focusElementIndex_ = wrap(this.focusElementIndex_ + direction);
+          break;
+        case 'Up':
+        case 'Down':
+          // Look through all focusable elements. Find the first one that is
+          // in the same column.
+          var direction = e.keyIdentifier == 'Up' ? -1 : 1;
+          var currentIndex =
+              Array.prototype.indexOf.call(this.focusableElements_,
+                                           this.currentFocusElement_);
+          var newFocusIdx = wrap(currentIndex + direction)
+          var tile = this.currentFocusElement_.parentNode;
+          for (;; newFocusIdx = wrap(newFocusIdx + direction)) {
+            var newTile = this.focusableElements_[newFocusIdx].parentNode;
+            var rowTiles = this.layoutValues_.numRowTiles;
+            if ((newTile.index - tile.index) % rowTiles == 0)
+              break;
+          }
+
+          this.focusElementIndex_ = newFocusIdx;
+          break;
+
+        default:
+          return;
+      }
+
+      this.updateFocusElement_();
+
+      e.preventDefault();
+      e.stopPropagation();
+    },
+
+    /**
+     * Focuses the element for |this.focusElementIndex_|. Makes the current
+     * focus element, if any, no longer eligible for focus.
+     * @private
+     */
+    updateFocusElement_: function() {
+      this.focusElementIndex_ = Math.min(this.focusableElements_.length - 1,
+                                         this.focusElementIndex_);
+      this.focusElementIndex_ = Math.max(0, this.focusElementIndex_);
+
+      var newFocusElement = this.focusableElements_[this.focusElementIndex_];
+      var lastFocusElement = this.currentFocusElement_;
+      if (lastFocusElement && lastFocusElement != newFocusElement)
+        lastFocusElement.tabIndex = -1;
+
+      newFocusElement.tabIndex = 1;
+      newFocusElement.focus();
+      this.tabIndex = -1;
+    },
+
+    /**
+     * The current focus element is that element which is eligible for focus.
+     * @type {HTMLElement} The node.
+     * @private
+     */
+    get currentFocusElement_() {
+      return this.querySelector('.focusable[tabindex="1"]');
     },
 
     /**
@@ -669,7 +886,7 @@ cr.define('ntp4', function() {
       if (col < 0 || col >= layout.numRowTiles)
         return -1;
 
-      if (ntp4.isRTL())
+      if (isRTL())
         col = layout.numRowTiles - 1 - col;
 
       var row = Math.floor((y - gridClientRect.top) / layout.rowHeight);
@@ -709,7 +926,14 @@ cr.define('ntp4', function() {
       }
 
       var leftMargin = this.layoutValues_.leftMargin;
-      var fadeDistance = Math.min(leftMargin, 20);
+      // The fade distance is the space between tiles.
+      var fadeDistance = (this.gridValues_.tileSpacingFraction *
+          this.layoutValues_.tileWidth);
+      fadeDistance = Math.min(leftMargin, fadeDistance);
+      // On Skia we don't use any fade because it works very poorly. See
+      // http://crbug.com/99373
+      if (!cr.isMac)
+        fadeDistance = 1;
       var gradient =
           '-webkit-linear-gradient(left,' +
               'transparent, ' +
@@ -731,9 +955,9 @@ cr.define('ntp4', function() {
           (this.isCurrentDragTarget && !this.withinPageDrag_ ? 1 : 0);
       var numRows = Math.ceil(numTiles / layout.numRowTiles);
       var usedHeight = layout.rowHeight * numRows;
-      // 100 matches the top padding of tile-page.
+      // 60 matches the top padding of tile-page (which acts as the minimum).
       var newMargin = document.documentElement.clientHeight / 3 -
-          usedHeight / 2 - 100 - this.content_.offsetTop;
+          usedHeight / 3 - 60;
       newMargin = Math.max(newMargin, 0);
 
       // |newMargin| is the final margin we actually want to show. However,
@@ -879,17 +1103,6 @@ cr.define('ntp4', function() {
       return width;
     },
 
-    /**
-     * Handle for CARD_CHANGED.
-     * @param {Event} e The card slider event.
-     */
-    onCardChanged: function(e) {
-      // When we are selected, we re-calculate the layout values. (See comment
-      // in doDrop.)
-      if (e.cardSlider.currentCardValue == this)
-        this.calculateLayoutValues_();
-    },
-
     /** Dragging **/
 
     get isCurrentDragTarget() {
@@ -940,8 +1153,6 @@ cr.define('ntp4', function() {
       if (newDragIndex < 0 || newDragIndex >= this.tileElements_.length)
         newDragIndex = this.dragItemIndex_;
       this.updateDropIndicator_(newDragIndex);
-
-      this.lastDropEffect_ = e.dataTransfer.dropEffect;
     },
 
     /**
@@ -989,7 +1200,8 @@ cr.define('ntp4', function() {
         return;
 
       this.addDragData(null, this.tileElements_.length);
-      originalPage.cleanupDrag();
+      if (originalPage)
+        originalPage.cleanupDrag();
     },
 
     /**
@@ -1003,7 +1215,7 @@ cr.define('ntp4', function() {
 
     /**
      * Reposition all the tiles (possibly ignoring one).
-     * @param {Node} ignoreNode An optional node to ignore.
+     * @param {?Node} ignoreNode An optional node to ignore.
      * @private
      */
     repositionTiles_: function(ignoreNode) {
@@ -1080,6 +1292,7 @@ cr.define('ntp4', function() {
 
   return {
     getCurrentlyDraggingTile: getCurrentlyDraggingTile,
+    setCurrentDropEffect: setCurrentDropEffect,
     TilePage: TilePage,
   };
 });

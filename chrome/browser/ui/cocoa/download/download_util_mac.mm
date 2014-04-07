@@ -8,10 +8,12 @@
 
 #include "base/sys_string_conversions.h"
 #import "chrome/browser/ui/cocoa/dock_icon.h"
-#include "content/browser/download/download_item.h"
-#include "content/browser/download/download_manager.h"
+#include "content/public/browser/download_item.h"
+#include "content/public/browser/download_manager.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/native_widget_types.h"
+
+using content::DownloadItem;
 
 namespace download_util {
 
@@ -41,7 +43,7 @@ void DragDownload(const DownloadItem* download,
                   gfx::Image* icon,
                   gfx::NativeView view) {
   NSPasteboard* pasteboard = [NSPasteboard pasteboardWithName:NSDragPboard];
-  AddFileToPasteboard(pasteboard, download->full_path());
+  AddFileToPasteboard(pasteboard, download->GetFullPath());
 
   // Synthesize a drag event, since we don't have access to the actual event
   // that initiated a drag (possibly consumed by the Web UI, for example).

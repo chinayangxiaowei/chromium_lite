@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,22 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
+#include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_service.h"
-#include "content/common/view_messages.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/stop_find_action.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFindOptions.h"
 
 using WebKit::WebFindOptions;
+using content::WebContents;
 
 // static
 int FindTabHelper::find_request_id_counter_ = -1;
 
-FindTabHelper::FindTabHelper(TabContents* tab_contents)
-    : TabContentsObserver(tab_contents),
+FindTabHelper::FindTabHelper(WebContents* web_contents)
+    : content::WebContentsObserver(web_contents),
       find_ui_active_(false),
       find_op_aborted_(false),
       current_find_request_id_(find_request_id_counter_++),
@@ -39,9 +41,9 @@ void FindTabHelper::StartFinding(string16 search_string,
   // shortcut so unless we have something to search for we return early.
   if (search_string.empty() && find_text_.empty()) {
     Profile* profile =
-        Profile::FromBrowserContext(tab_contents()->browser_context());
+        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
     string16 last_search_prepopulate_text =
-        FindBarState::GetLastPrepopulateText(profile);
+        FindBarStateFactory::GetLastPrepopulateText(profile);
 
     // Try the last thing we searched for on this tab, then the last thing
     // searched for on any tab.
@@ -76,17 +78,16 @@ void FindTabHelper::StartFinding(string16 search_string,
 
   // Keep track of what the last search was across the tabs.
   Profile* profile =
-      Profile::FromBrowserContext(tab_contents()->browser_context());
-  FindBarState* find_bar_state = profile->GetFindBarState();
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  FindBarState* find_bar_state = FindBarStateFactory::GetForProfile(profile);
   find_bar_state->set_last_prepopulate_text(find_text_);
 
   WebFindOptions options;
   options.forward = forward_direction;
   options.matchCase = case_sensitive;
   options.findNext = find_next;
-  tab_contents()->render_view_host()->Send(new ViewMsg_Find(
-      tab_contents()->render_view_host()->routing_id(),
-      current_find_request_id_, find_text_, options));
+  web_contents()->GetRenderViewHost()->Find(current_find_request_id_,
+                                            find_text_, options);
 }
 
 void FindTabHelper::StopFinding(
@@ -105,23 +106,22 @@ void FindTabHelper::StopFinding(
   find_op_aborted_ = true;
   last_search_result_ = FindNotificationDetails();
 
-  ViewMsg_StopFinding_Params params;
+  content::StopFindAction action;
   switch (selection_action) {
     case FindBarController::kClearSelection:
-      params.action = ViewMsg_StopFinding_Params::kClearSelection;
+      action = content::STOP_FIND_ACTION_CLEAR_SELECTION;
       break;
     case FindBarController::kKeepSelection:
-      params.action = ViewMsg_StopFinding_Params::kKeepSelection;
+      action = content::STOP_FIND_ACTION_KEEP_SELECTION;
       break;
     case FindBarController::kActivateSelection:
-      params.action = ViewMsg_StopFinding_Params::kActivateSelection;
+      action = content::STOP_FIND_ACTION_ACTIVATE_SELECTION;
       break;
     default:
       NOTREACHED();
-      params.action = ViewMsg_StopFinding_Params::kKeepSelection;
+      action = content::STOP_FIND_ACTION_KEEP_SELECTION;
   }
-  tab_contents()->render_view_host()->Send(new ViewMsg_StopFinding(
-      tab_contents()->render_view_host()->routing_id(), params));
+  web_contents()->GetRenderViewHost()->StopFinding(action);
 }
 
 void FindTabHelper::HandleFindReply(int request_id,
@@ -148,17 +148,9 @@ void FindTabHelper::HandleFindReply(int request_id,
     last_search_result_ = FindNotificationDetails(
         request_id, number_of_matches, selection, active_match_ordinal,
         final_update);
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_FIND_RESULT_AVAILABLE,
-        Source<TabContents>(tab_contents()),
-        Details<FindNotificationDetails>(&last_search_result_));
+        content::Source<WebContents>(web_contents()),
+        content::Details<FindNotificationDetails>(&last_search_result_));
   }
-
-  // Send a notification to the renderer that we are ready to receive more
-  // results from the scoping effort of the Find operation. The FindInPage
-  // scoping is asynchronous and periodically sends results back up to the
-  // browser using IPC. In an effort to not spam the browser we have the
-  // browser send an ACK for each FindReply message and have the renderer
-  // queue up the latest status message while waiting for this ACK.
-  Send(new ViewMsg_FindReplyACK(routing_id()));
 }

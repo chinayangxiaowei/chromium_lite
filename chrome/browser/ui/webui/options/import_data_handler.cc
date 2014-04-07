@@ -7,7 +7,8 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/callback.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/string_number_conversions.h"
@@ -19,11 +20,13 @@
 #include "chrome/browser/importer/importer_host.h"
 #include "chrome/browser/importer/importer_list.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
-ImportDataHandler::ImportDataHandler() : importer_host_(NULL) {
+ImportDataHandler::ImportDataHandler() : importer_host_(NULL),
+                                         import_did_succeed_(false) {
 }
 
 ImportDataHandler::~ImportDataHandler() {
@@ -57,13 +60,14 @@ void ImportDataHandler::GetLocalizedValues(DictionaryValue* localized_strings) {
 }
 
 void ImportDataHandler::Initialize() {
-  importer_list_ = new ImporterList;
+  Profile* profile = Profile::FromWebUI(web_ui());
+  importer_list_ = new ImporterList(profile->GetRequestContext());
   importer_list_->DetectSourceProfiles(this);
 }
 
 void ImportDataHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback(
-      "importData", NewCallback(this, &ImportDataHandler::ImportData));
+  web_ui()->RegisterMessageCallback("importData",
+      base::Bind(&ImportDataHandler::ImportData, base::Unretained(this)));
 }
 
 void ImportDataHandler::ImportData(const ListValue* args) {
@@ -97,8 +101,8 @@ void ImportDataHandler::ImportData(const ListValue* args) {
   uint16 import_services = (selected_items & supported_items);
   if (import_services) {
     base::FundamentalValue state(true);
-    web_ui_->CallJavascriptFunction("ImportDataOverlay.setImportingState",
-                                    state);
+    web_ui()->CallJavascriptFunction("ImportDataOverlay.setImportingState",
+                                     state);
     import_did_succeed_ = false;
 
     // TODO(csilv): Out-of-process import has only been qualified on MacOS X,
@@ -111,7 +115,7 @@ void ImportDataHandler::ImportData(const ListValue* args) {
     importer_host_ = new ImporterHost;
 #endif
     importer_host_->SetObserver(this);
-    Profile* profile = Profile::FromWebUI(web_ui_);
+    Profile* profile = Profile::FromWebUI(web_ui());
     importer_host_->StartImportSettings(source_profile, profile,
                                         import_services,
                                         new ProfileWriter(profile), false);
@@ -143,8 +147,8 @@ void ImportDataHandler::OnSourceProfilesLoaded() {
     browser_profiles.Append(browser_profile);
   }
 
-  web_ui_->CallJavascriptFunction("ImportDataOverlay.updateSupportedBrowsers",
-                                  browser_profiles);
+  web_ui()->CallJavascriptFunction("ImportDataOverlay.updateSupportedBrowsers",
+                                   browser_profiles);
 }
 
 void ImportDataHandler::ImportStarted() {
@@ -164,11 +168,11 @@ void ImportDataHandler::ImportEnded() {
   importer_host_ = NULL;
 
   if (import_did_succeed_) {
-    web_ui_->CallJavascriptFunction("ImportDataOverlay.confirmSuccess");
+    web_ui()->CallJavascriptFunction("ImportDataOverlay.confirmSuccess");
   } else {
     base::FundamentalValue state(false);
-    web_ui_->CallJavascriptFunction("ImportDataOverlay.setImportingState",
-                                    state);
-    web_ui_->CallJavascriptFunction("ImportDataOverlay.dismiss");
+    web_ui()->CallJavascriptFunction("ImportDataOverlay.setImportingState",
+                                     state);
+    web_ui()->CallJavascriptFunction("ImportDataOverlay.dismiss");
   }
 }

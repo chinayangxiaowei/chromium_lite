@@ -1,11 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/plugins/ppapi/ppb_graphics_3d_impl.h"
 
+#include "base/bind.h"
 #include "base/message_loop.h"
 #include "gpu/command_buffer/client/gles2_implementation.h"
+#include "ppapi/c/ppp_graphics_3d.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/resource_helper.h"
@@ -51,11 +53,10 @@ PP_Graphics3DTrustedState PPStateFromGPUState(
 }  // namespace.
 
 PPB_Graphics3D_Impl::PPB_Graphics3D_Impl(PP_Instance instance)
-    : Resource(instance),
+    : PPB_Graphics3D_Shared(instance),
       bound_to_instance_(false),
       commit_pending_(false),
-      callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-      method_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
 }
 
 PPB_Graphics3D_Impl::~PPB_Graphics3D_Impl() {
@@ -83,18 +84,13 @@ PP_Resource PPB_Graphics3D_Impl::CreateRaw(PP_Instance instance,
   return graphics_3d->GetReference();
 }
 
-PPB_Graphics3D_API* PPB_Graphics3D_Impl::AsPPB_Graphics3D_API() {
-  return this;
+PP_Bool PPB_Graphics3D_Impl::InitCommandBuffer() {
+  return PP_FromBool(GetCommandBuffer()->Initialize());
 }
 
-PP_Bool PPB_Graphics3D_Impl::InitCommandBuffer(int32_t size) {
-  return PP_FromBool(GetCommandBuffer()->Initialize(size));
-}
-
-PP_Bool PPB_Graphics3D_Impl::GetRingBuffer(int* shm_handle,
-                                           uint32_t* shm_size) {
-  gpu::Buffer buffer = GetCommandBuffer()->GetRingBuffer();
-  return ShmToHandle(buffer.shared_memory, buffer.size, shm_handle, shm_size);
+PP_Bool PPB_Graphics3D_Impl::SetGetBuffer(int32_t transfer_buffer_id) {
+  GetCommandBuffer()->SetGetBuffer(transfer_buffer_id);
+  return PP_TRUE;
 }
 
 PP_Graphics3DTrustedState PPB_Graphics3D_Impl::GetState() {
@@ -144,14 +140,17 @@ unsigned int PPB_Graphics3D_Impl::GetBackingTextureId() {
   return platform_context_->GetBackingTextureId();
 }
 
-void PPB_Graphics3D_Impl::ViewInitiatedPaint() {
+void PPB_Graphics3D_Impl::ViewWillInitiatePaint() {
 }
 
-void PPB_Graphics3D_Impl::ViewFlushedPaint() {
+void PPB_Graphics3D_Impl::ViewInitiatedPaint() {
   commit_pending_ = false;
 
   if (HasPendingSwap())
     SwapBuffersACK(PP_OK);
+}
+
+void PPB_Graphics3D_Impl::ViewFlushedPaint() {
 }
 
 gpu::CommandBuffer* PPB_Graphics3D_Impl::GetCommandBuffer() {
@@ -165,8 +164,22 @@ int32 PPB_Graphics3D_Impl::DoSwapBuffers() {
   if (gles2_impl())
     gles2_impl()->SwapBuffers();
 
-  platform_context_->Echo(method_factory_.NewRunnableMethod(
-      &PPB_Graphics3D_Impl::OnSwapBuffers));
+  if (bound_to_instance_) {
+    // If we are bound to the instance, we need to ask the compositor
+    // to commit our backing texture so that the graphics appears on the page.
+    // When the backing texture will be committed we get notified via
+    // ViewFlushedPaint().
+    //
+    // Don't need to check for NULL from GetPluginInstance since when we're
+    // bound, we know our instance is valid.
+    ResourceHelper::GetPluginInstance(this)->CommitBackingTexture();
+    commit_pending_ = true;
+  } else {
+    // Wait for the command to complete on the GPU to allow for throttling.
+    platform_context_->Echo(base::Bind(&PPB_Graphics3D_Impl::OnSwapBuffers,
+                                       weak_ptr_factory_.GetWeakPtr()));
+  }
+
 
   return PP_OK_COMPLETIONPENDING;
 }
@@ -177,7 +190,7 @@ bool PPB_Graphics3D_Impl::Init(PP_Resource share_context,
     return false;
 
   gpu::CommandBuffer* command_buffer = GetCommandBuffer();
-  if (!command_buffer->Initialize(kCommandBufferSize))
+  if (!command_buffer->Initialize())
     return false;
 
   return CreateGLES2Impl(kCommandBufferSize, kTransferBufferSize);
@@ -202,22 +215,13 @@ bool PPB_Graphics3D_Impl::InitRaw(PP_Resource share_context,
     return false;
 
   platform_context_->SetContextLostCallback(
-      callback_factory_.NewCallback(&PPB_Graphics3D_Impl::OnContextLost));
+      base::Bind(&PPB_Graphics3D_Impl::OnContextLost,
+                 weak_ptr_factory_.GetWeakPtr()));
   return true;
 }
 
 void PPB_Graphics3D_Impl::OnSwapBuffers() {
-  if (bound_to_instance_) {
-    // If we are bound to the instance, we need to ask the compositor
-    // to commit our backing texture so that the graphics appears on the page.
-    // When the backing texture will be committed we get notified via
-    // ViewFlushedPaint().
-    //
-    // Don't need to check for NULL from GetPluginInstance since when we're
-    // bound, we know our instance is valid.
-    ResourceHelper::GetPluginInstance(this)->CommitBackingTexture();
-    commit_pending_ = true;
-  } else if (HasPendingSwap()) {
+  if (HasPendingSwap()) {
     // If we're off-screen, no need to trigger and wait for compositing.
     // Just send the swap-buffers ACK to the plugin immediately.
     commit_pending_ = false;
@@ -233,8 +237,8 @@ void PPB_Graphics3D_Impl::OnContextLost() {
 
   // Send context lost to plugin. This may have been caused by a PPAPI call, so
   // avoid re-entering.
-  MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
-      this, &PPB_Graphics3D_Impl::SendContextLost));
+  MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+      &PPB_Graphics3D_Impl::SendContextLost, weak_ptr_factory_.GetWeakPtr()));
 }
 
 void PPB_Graphics3D_Impl::SendContextLost() {

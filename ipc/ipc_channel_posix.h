@@ -57,7 +57,9 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   void Close();
   void set_listener(Listener* listener) { listener_ = listener; }
   bool Send(Message* message);
-  int GetClientFileDescriptor() const;
+  int GetClientFileDescriptor();
+  int TakeClientFileDescriptor();
+  void CloseClientFileDescriptor();
   bool AcceptsConnections() const;
   bool HasAcceptedConnection() const;
   bool GetClientEuid(uid_t* client_euid) const;
@@ -80,8 +82,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   bool IsHelloMessage(const Message* m) const;
 
   // MessageLoopForIO::Watcher implementation.
-  virtual void OnFileCanReadWithoutBlocking(int fd);
-  virtual void OnFileCanWriteWithoutBlocking(int fd);
+  virtual void OnFileCanReadWithoutBlocking(int fd) OVERRIDE;
+  virtual void OnFileCanWriteWithoutBlocking(int fd) OVERRIDE;
 
   Mode mode_;
 
@@ -109,6 +111,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   // For a server, the client end of our socketpair() -- the other end of our
   // pipe_ that is passed to the client.
   int client_pipe_;
+  base::Lock client_pipe_lock_;  // Lock that protects |client_pipe_|.
 
 #if defined(IPC_USES_READWRITE)
   // Linux/BSD use a dedicated socketpair() for passing file descriptors.

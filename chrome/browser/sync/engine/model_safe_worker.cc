@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,7 +34,7 @@ syncable::ModelTypeSet GetRoutingInfoTypes(
   syncable::ModelTypeSet types;
   for (ModelSafeRoutingInfo::const_iterator it = routing_info.begin();
        it != routing_info.end(); ++it) {
-    types.insert(it->first);
+    types.Put(it->first);
   }
   return types;
 }
@@ -43,9 +43,6 @@ ModelSafeGroup GetGroupForModelType(const syncable::ModelType type,
                                     const ModelSafeRoutingInfo& routes) {
   ModelSafeRoutingInfo::const_iterator it = routes.find(type);
   if (it == routes.end()) {
-    // TODO(tim): We shouldn't end up here for TOP_LEVEL_FOLDER, but an issue
-    // with the server's PermanentItemPopulator is causing TLF updates in
-    // some cases.  See bug 36735.
     if (type != syncable::UNSPECIFIED && type != syncable::TOP_LEVEL_FOLDER)
       LOG(WARNING) << "Entry does not belong to active ModelSafeGroup!";
     return GROUP_PASSIVE;
@@ -59,6 +56,8 @@ std::string ModelSafeGroupToString(ModelSafeGroup group) {
       return "GROUP_UI";
     case GROUP_DB:
       return "GROUP_DB";
+    case GROUP_FILE:
+      return "GROUP_FILE";
     case GROUP_HISTORY:
       return "GROUP_HISTORY";
     case GROUP_PASSIVE:
@@ -71,16 +70,6 @@ std::string ModelSafeGroupToString(ModelSafeGroup group) {
   }
 }
 
-ModelSafeWorker::ModelSafeWorker() {}
-
 ModelSafeWorker::~ModelSafeWorker() {}
-
-void ModelSafeWorker::DoWorkAndWaitUntilDone(Callback0::Type* work) {
-  work->Run();  // For GROUP_PASSIVE, we do the work on the current thread.
-}
-
-ModelSafeGroup ModelSafeWorker::GetModelSafeGroup() {
-  return GROUP_PASSIVE;
-}
 
 }  // namespace browser_sync

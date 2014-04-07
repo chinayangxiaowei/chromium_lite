@@ -8,20 +8,22 @@
 #include "chrome/browser/autofill/autofill_profile.h"
 #include "chrome/browser/autofill/autofill_type.h"
 #include "chrome/browser/autofill/personal_data_manager.h"
+#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/autofill/personal_data_manager_observer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/profile_sync_test_util.h"
-#include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
+#include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/webdata/autofill_entry.h"
 #include "chrome/browser/webdata/autofill_table.h"
 #include "chrome/browser/webdata/web_database.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/thread_observer_helper.h"
-#include "webkit/glue/form_field.h"
+#include "webkit/forms/form_field.h"
 
 using base::WaitableEvent;
+using content::BrowserThread;
 using sync_datatype_helper::test;
 using testing::_;
 
@@ -39,7 +41,7 @@ class GetAllAutofillEntries
     BrowserThread::PostTask(
         BrowserThread::DB,
         FROM_HERE,
-        NewRunnableMethod(this, &GetAllAutofillEntries::Run));
+        base::Bind(&GetAllAutofillEntries::Run, this));
     done_event_.Wait();
   }
 
@@ -71,10 +73,10 @@ class AutofillDBThreadObserverHelper : public DBThreadObserverHelper {
   virtual void RegisterObservers() {
     registrar_.Add(&observer_,
                    chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
     registrar_.Add(&observer_,
                    chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
   }
 };
 
@@ -96,7 +98,7 @@ AutofillProfile CreateAutofillProfile(ProfileType type) {
           "Marion", "Mitchell", "Morrison",
           "johnwayne@me.xyz", "Fox",
           "123 Zoo St.", "unit 5", "Hollywood", "CA",
-          "91601", "US", "12345678910", "01987654321");
+          "91601", "US", "12345678910");
       break;
     case PROFILE_HOMER:
       autofill_test::SetProfileInfoWithGuid(&profile,
@@ -104,19 +106,19 @@ AutofillProfile CreateAutofillProfile(ProfileType type) {
           "Homer", "J.", "Simpson",
           "homer@abc.com", "SNPP",
           "1 Main St", "PO Box 1", "Springfield", "MA",
-          "94101", "US", "14155551212", "14155551313");
+          "94101", "US", "14155551212");
       break;
     case PROFILE_FRASIER:
       autofill_test::SetProfileInfoWithGuid(&profile,
           "9A5E6872-6198-4688-BF75-0016E781BB0A",
           "Frasier", "Winslow", "Crane",
           "", "randomness", "", "Apt. 4", "Seattle", "WA",
-          "99121", "US", "0000000000", "ABCDEFGHIJK");
+          "99121", "US", "0000000000");
       break;
     case PROFILE_NULL:
       autofill_test::SetProfileInfoWithGuid(&profile,
           "FE461507-7E13-4198-8E66-74C7DB6D8322",
-          "", "", "", "", "", "", "", "", "", "", "", "", "");
+          "", "", "", "", "", "", "", "", "", "", "", "");
       break;
   }
   return profile;
@@ -127,15 +129,15 @@ WebDataService* GetWebDataService(int index) {
 }
 
 PersonalDataManager* GetPersonalDataManager(int index) {
-  return test()->GetProfile(index)->GetPersonalDataManager();
+  return PersonalDataManagerFactory::GetForProfile(test()->GetProfile(index));
 }
 
 void AddKeys(int profile, const std::set<AutofillKey>& keys) {
-  std::vector<webkit_glue::FormField> form_fields;
+  std::vector<webkit::forms::FormField> form_fields;
   for (std::set<AutofillKey>::const_iterator i = keys.begin();
        i != keys.end();
        ++i) {
-    webkit_glue::FormField field;
+    webkit::forms::FormField field;
     field.name = i->name();
     field.value = i->value();
     form_fields.push_back(field);
@@ -215,9 +217,9 @@ void RemoveProfile(int profile, const std::string& guid) {
 }
 
 void UpdateProfile(int profile,
-                                   const std::string& guid,
-                                   const AutofillType& type,
-                                   const string16& value) {
+                   const std::string& guid,
+                   const AutofillType& type,
+                   const string16& value) {
   const std::vector<AutofillProfile*>& all_profiles = GetAllProfiles(profile);
   std::vector<AutofillProfile> profiles;
   for (size_t i = 0; i < all_profiles.size(); ++i) {

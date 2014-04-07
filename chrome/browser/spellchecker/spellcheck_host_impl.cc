@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,36 @@
 
 #include <set>
 
+#include "base/bind.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/string_split.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_host_metrics.h"
+#include "chrome/browser/spellchecker/spellcheck_platform_mac.h"
 #include "chrome/browser/spellchecker/spellcheck_profile_provider.h"
-#include "chrome/browser/spellchecker/spellchecker_platform_engine.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/spellcheck_common.h"
 #include "chrome/common/spellcheck_messages.h"
-#include "content/browser/renderer_host/render_process_host.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/common/url_fetcher.h"
 #include "googleurl/src/gurl.h"
+#include "net/base/load_flags.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "third_party/hunspell/google/bdict.h"
 #include "ui/base/l10n/l10n_util.h"
-#if defined(OS_MACOSX)
-#include "base/metrics/histogram.h"
-#endif
+
+using content::BrowserThread;
 
 namespace {
 
@@ -42,32 +47,6 @@ FilePath GetFirstChoiceFilePath(const std::string& language) {
   return SpellCheckCommon::GetVersionedFileName(language, dict_dir);
 }
 
-#if defined(OS_MACOSX)
-// Collect metrics on how often Hunspell is used on OS X vs the native
-// spellchecker.
-void RecordSpellCheckStats(bool native_spellchecker_used,
-                           const std::string& language) {
-  static std::set<std::string> languages_seen;
-
-  // Only count a language code once for each session..
-  if (languages_seen.find(language) != languages_seen.end()) {
-    return;
-  }
-  languages_seen.insert(language);
-
-  enum {
-    SPELLCHECK_OSX_NATIVE_SPELLCHECKER_USED = 0,
-    SPELLCHECK_HUNSPELL_USED = 1
-  };
-
-  bool engine_used = native_spellchecker_used ?
-                         SPELLCHECK_OSX_NATIVE_SPELLCHECKER_USED :
-                         SPELLCHECK_HUNSPELL_USED;
-
-  UMA_HISTOGRAM_COUNTS("SpellCheck.OSXEngineUsed", engine_used);
-}
-#endif
-
 #if defined(OS_WIN)
 FilePath GetFallbackFilePath(const FilePath& first_choice) {
   FilePath dict_dir;
@@ -75,6 +54,11 @@ FilePath GetFallbackFilePath(const FilePath& first_choice) {
   return dict_dir.Append(first_choice.BaseName());
 }
 #endif
+
+void CloseDictionary(base::PlatformFile file) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  base::ClosePlatformFile(file);
+}
 
 }  // namespace
 
@@ -85,12 +69,14 @@ SpellCheckHostImpl::SpellCheckHostImpl(
     net::URLRequestContextGetter* request_context_getter,
     SpellCheckHostMetrics* metrics)
     : profile_(profile),
+      dictionary_saved_(false),
       language_(language),
       file_(base::kInvalidPlatformFileValue),
       tried_to_download_(false),
       use_platform_spellchecker_(false),
       request_context_getter_(request_context_getter),
-      metrics_(metrics) {
+      metrics_(metrics),
+      weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
   DCHECK(profile_);
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
@@ -99,36 +85,41 @@ SpellCheckHostImpl::SpellCheckHostImpl(
   custom_dictionary_file_ =
       personal_file_directory.Append(chrome::kCustomDictionaryFileName);
 
-  registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_CREATED,
-                 NotificationService::AllSources());
+  registrar_.Add(weak_ptr_factory_.GetWeakPtr(),
+                 content::NOTIFICATION_RENDERER_PROCESS_CREATED,
+                 content::NotificationService::AllSources());
 }
 
 SpellCheckHostImpl::~SpellCheckHostImpl() {
-  if (file_ != base::kInvalidPlatformFileValue)
-    base::ClosePlatformFile(file_);
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  if (file_ != base::kInvalidPlatformFileValue) {
+    BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
+                            base::Bind(&CloseDictionary, file_));
+    file_ = base::kInvalidPlatformFileValue;
+  }
 }
 
 void SpellCheckHostImpl::Initialize() {
-  if (SpellCheckerPlatform::SpellCheckerAvailable() &&
-      SpellCheckerPlatform::PlatformSupportsLanguage(language_)) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
 #if defined(OS_MACOSX)
-    RecordSpellCheckStats(true, language_);
-#endif
+  if (spellcheck_mac::SpellCheckerAvailable() &&
+      spellcheck_mac::PlatformSupportsLanguage(language_)) {
     use_platform_spellchecker_ = true;
-    SpellCheckerPlatform::SetLanguage(language_);
+    spellcheck_mac::SetLanguage(language_);
     MessageLoop::current()->PostTask(FROM_HERE,
-        NewRunnableMethod(this,
-            &SpellCheckHostImpl::InformProfileOfInitialization));
+        base::Bind(&SpellCheckHostImpl::InformProfileOfInitialization,
+                   weak_ptr_factory_.GetWeakPtr()));
     return;
   }
+#endif  // OS_MACOSX
 
-#if defined(OS_MACOSX)
-  RecordSpellCheckStats(false, language_);
-#endif
-
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this,
-                        &SpellCheckHostImpl::InitializeDictionaryLocation));
+  BrowserThread::PostTaskAndReply(BrowserThread::FILE, FROM_HERE,
+      base::Bind(&SpellCheckHostImpl::InitializeDictionaryLocation,
+                 base::Unretained(this)),
+      base::Bind(&SpellCheckHostImpl::InitializeDictionaryLocationComplete,
+                 weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SpellCheckHostImpl::UnsetProfile() {
@@ -140,12 +131,17 @@ void SpellCheckHostImpl::UnsetProfile() {
   registrar_.RemoveAll();
 }
 
-void SpellCheckHostImpl::InitForRenderer(RenderProcessHost* process) {
+void SpellCheckHostImpl::InitForRenderer(content::RenderProcessHost* process) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  Profile* profile = Profile::FromBrowserContext(process->browser_context());
+  // Bug 103693: SpellCheckHostImpl and SpellCheckProfile should not
+  // depend on Profile interface.
+  Profile* profile = Profile::FromBrowserContext(process->GetBrowserContext());
+  if (SpellCheckFactory::GetHostForProfile(profile) != this)
+    return;
+
   PrefService* prefs = profile->GetPrefs();
-  IPC::PlatformFileForTransit file;
+  IPC::PlatformFileForTransit file = IPC::InvalidPlatformFileForTransit();
 
   if (GetDictionaryFile() != base::kInvalidPlatformFileValue) {
 #if defined(OS_POSIX)
@@ -173,13 +169,12 @@ void SpellCheckHostImpl::AddWord(const std::string& word) {
 
   if (profile_)
     profile_->CustomWordAddedLocally(word);
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this,
-          &SpellCheckHostImpl::WriteWordToCustomDictionary, word));
-  for (RenderProcessHost::iterator i(RenderProcessHost::AllHostsIterator());
-       !i.IsAtEnd(); i.Advance()) {
-    i.GetCurrentValue()->Send(new SpellCheckMsg_WordAdded(word));
-  }
+
+  BrowserThread::PostTaskAndReply(BrowserThread::FILE, FROM_HERE,
+      base::Bind(&SpellCheckHostImpl::WriteWordToCustomDictionary,
+                 base::Unretained(this), word),
+      base::Bind(&SpellCheckHostImpl::AddWordComplete,
+                 weak_ptr_factory_.GetWeakPtr(), word));
 }
 
 void SpellCheckHostImpl::InitializeDictionaryLocation() {
@@ -199,12 +194,6 @@ void SpellCheckHostImpl::InitializeDictionaryLocation() {
     bdict_file_path_ = fallback;
   }
 #endif
-
-  InitializeInternal();
-}
-
-void SpellCheckHostImpl::InitializeInternal() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   if (!profile_)
     return;
@@ -227,38 +216,33 @@ void SpellCheckHostImpl::InitializeInternal() {
   // File didn't exist. Download it.
   if (file_ == base::kInvalidPlatformFileValue && !tried_to_download_ &&
       request_context_getter_) {
-    // We download from the ui thread because we need to know that
-    // |request_context_getter_| is still valid before initiating the download.
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &SpellCheckHostImpl::DownloadDictionary));
+    // Return this function so InitializeDictionaryLocationComplete() can start
+    // downloading the dictionary.
     return;
   }
 
   request_context_getter_ = NULL;
 
-  scoped_ptr<CustomWordList> custom_words(new CustomWordList());
-  if (file_ != base::kInvalidPlatformFileValue) {
-    // Load custom dictionary.
-    std::string contents;
-    file_util::ReadFileToString(custom_dictionary_file_, &contents);
-    CustomWordList list_of_words;
-    base::SplitString(contents, '\n', &list_of_words);
-    for (size_t i = 0; i < list_of_words.size(); ++i)
-      custom_words->push_back(list_of_words[i]);
-  }
-
-  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(
-          this,
-          &SpellCheckHostImpl::InformProfileOfInitializationWithCustomWords,
-          custom_words.release()));
+  custom_words_.reset(new CustomWordList());
+  if (file_ != base::kInvalidPlatformFileValue)
+    LoadCustomDictionary(custom_words_.get());
 }
 
-void SpellCheckHostImpl::InitializeOnFileThread() {
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
-
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this, &SpellCheckHostImpl::Initialize));
+void SpellCheckHostImpl::InitializeDictionaryLocationComplete() {
+  if (file_ == base::kInvalidPlatformFileValue && !tried_to_download_ &&
+      request_context_getter_) {
+    // We download from the ui thread because we need to know that
+    // |request_context_getter_| is still valid before initiating the download.
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+        base::Bind(&SpellCheckHostImpl::DownloadDictionary,
+                   weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+        base::Bind(
+            &SpellCheckHostImpl::InformProfileOfInitializationWithCustomWords,
+            weak_ptr_factory_.GetWeakPtr(),
+            custom_words_.release()));
+  }
 }
 
 void SpellCheckHostImpl::InformProfileOfInitialization() {
@@ -275,9 +259,10 @@ void SpellCheckHostImpl::InformProfileOfInitializationWithCustomWords(
   if (profile_)
     profile_->SpellCheckHostInitialized(custom_words);
 
-  for (RenderProcessHost::iterator i(RenderProcessHost::AllHostsIterator());
+  for (content::RenderProcessHost::iterator i(
+          content::RenderProcessHost::AllHostsIterator());
        !i.IsAtEnd(); i.Advance()) {
-    RenderProcessHost* process = i.GetCurrentValue();
+    content::RenderProcessHost* process = i.GetCurrentValue();
     if (process)
       InitForRenderer(process);
   }
@@ -285,11 +270,7 @@ void SpellCheckHostImpl::InformProfileOfInitializationWithCustomWords(
 
 void SpellCheckHostImpl::DownloadDictionary() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-
-  if (!request_context_getter_) {
-    InitializeOnFileThread();
-    return;
-  }
+  DCHECK(request_context_getter_);
 
   // Determine URL of file to download.
   static const char kDownloadServerUrl[] =
@@ -301,61 +282,81 @@ void SpellCheckHostImpl::DownloadDictionary() {
   }
   GURL url = GURL(std::string(kDownloadServerUrl) +
                   StringToLowerASCII(bdict_file));
-  fetcher_.reset(new URLFetcher(url, URLFetcher::GET, this));
-  fetcher_->set_request_context(request_context_getter_);
+  fetcher_.reset(content::URLFetcher::Create(url, content::URLFetcher::GET,
+                                weak_ptr_factory_.GetWeakPtr()));
+  fetcher_->SetRequestContext(request_context_getter_);
+  fetcher_->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES);
   tried_to_download_ = true;
   fetcher_->Start();
   request_context_getter_ = NULL;
 }
 
+void SpellCheckHostImpl::LoadCustomDictionary(CustomWordList* custom_words) {
+  if (!custom_words)
+    return;
+
+  // Load custom dictionary for profile.
+  if (profile_)
+    profile_->LoadCustomDictionary(custom_words);
+
+  // Load custom dictionary.
+  std::string contents;
+  file_util::ReadFileToString(custom_dictionary_file_, &contents);
+  if (contents.empty())
+    return;
+
+  CustomWordList list_of_words;
+  base::SplitString(contents, '\n', &list_of_words);
+  for (size_t i = 0; i < list_of_words.size(); ++i) {
+    if (list_of_words[i] != "")
+      custom_words->push_back(list_of_words[i]);
+  }
+}
+
 void SpellCheckHostImpl::WriteWordToCustomDictionary(const std::string& word) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
-  // Stored in UTF-8.
-  std::string word_to_add(word + "\n");
-  FILE* f = file_util::OpenFile(custom_dictionary_file_, "a+");
-  if (f)
-    fputs(word_to_add.c_str(), f);
-  file_util::CloseFile(f);
+  if (profile_)
+    profile_->WriteWordToCustomDictionary(word);
 }
 
-void SpellCheckHostImpl::OnURLFetchComplete(const URLFetcher* source,
-                                            const GURL& url,
-                                            const net::URLRequestStatus& status,
-                                            int response_code,
-                                            const net::ResponseCookies& cookies,
-                                            const std::string& data) {
+void SpellCheckHostImpl::OnURLFetchComplete(const content::URLFetcher* source) {
   DCHECK(source);
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  fetcher_.reset();
+  scoped_ptr<content::URLFetcher> fetcher_destructor(fetcher_.release());
 
-  if ((response_code / 100) != 2) {
+  if ((source->GetResponseCode() / 100) != 2) {
     // Initialize will not try to download the file a second time.
     LOG(ERROR) << "Failure to download dictionary.";
-    InitializeOnFileThread();
     return;
   }
 
   // Basic sanity check on the dictionary.
   // There's the small chance that we might see a 200 status code for a body
   // that represents some form of failure.
+  std::string data;
+  source->GetResponseAsString(&data);
   if (data.size() < 4 || data[0] != 'B' || data[1] != 'D' || data[2] != 'i' ||
       data[3] != 'c') {
     LOG(ERROR) << "Failure to download dictionary.";
-    InitializeOnFileThread();
     return;
   }
 
   data_ = data;
-  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this, &SpellCheckHostImpl::SaveDictionaryData));
+  dictionary_saved_ = false;
+  BrowserThread::PostTaskAndReply(BrowserThread::FILE, FROM_HERE,
+      base::Bind(&SpellCheckHostImpl::SaveDictionaryData,
+                 base::Unretained(this)),
+      base::Bind(&SpellCheckHostImpl::SaveDictionaryDataComplete,
+                 weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SpellCheckHostImpl::Observe(int type,
-                                 const NotificationSource& source,
-                                 const NotificationDetails& details) {
+                                 const content::NotificationSource& source,
+                                 const content::NotificationDetails& details) {
   DCHECK(type == content::NOTIFICATION_RENDERER_PROCESS_CREATED);
-  RenderProcessHost* process = Source<RenderProcessHost>(source).ptr();
+  content::RenderProcessHost* process =
+      content::Source<content::RenderProcessHost>(source).ptr();
   InitForRenderer(process);
 }
 
@@ -369,9 +370,7 @@ void SpellCheckHostImpl::SaveDictionaryData() {
     metrics_->RecordDictionaryCorruptionStats(!verified);
   if (!verified) {
     LOG(ERROR) << "Failure to verify the downloaded dictionary.";
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(this,
-                          &SpellCheckHostImpl::InformProfileOfInitialization));
+    // Let PostTaskAndReply caller send to InformProfileOfInitialization
     return;
   }
 
@@ -393,16 +392,24 @@ void SpellCheckHostImpl::SaveDictionaryData() {
       LOG(ERROR) << "Failure to save dictionary.";
       file_util::Delete(bdict_file_path_, false);
       // To avoid trying to load a partially saved dictionary, shortcut the
-      // Initialize() call.
-      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-          NewRunnableMethod(this,
-              &SpellCheckHostImpl::InformProfileOfInitialization));
+      // Initialize() call. Let PostTaskAndReply caller send to
+      // InformProfileOfInitialization through SaveDictionaryDataComplete()
       return;
     }
   }
 
   data_.clear();
-  Initialize();
+  dictionary_saved_ = true;
+}
+
+void SpellCheckHostImpl::SaveDictionaryDataComplete() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  if (dictionary_saved_) {
+    Initialize();
+  } else {
+    InformProfileOfInitialization();
+  }
 }
 
 bool SpellCheckHostImpl::VerifyBDict(const FilePath& path) const {
@@ -438,4 +445,14 @@ const std::string& SpellCheckHostImpl::GetLanguage() const {
 
 bool SpellCheckHostImpl::IsUsingPlatformChecker() const {
   return use_platform_spellchecker_;
+}
+
+void SpellCheckHostImpl::AddWordComplete(const std::string& word) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  for (content::RenderProcessHost::iterator i(
+          content::RenderProcessHost::AllHostsIterator());
+       !i.IsAtEnd(); i.Advance()) {
+    i.GetCurrentValue()->Send(new SpellCheckMsg_WordAdded(word));
+  }
 }

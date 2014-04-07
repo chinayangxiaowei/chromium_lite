@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -37,8 +37,7 @@ class ExecuteJavascriptTest(PyUITest):
     """Test we can inject JavaScript into an extension."""
     dir_path = os.path.abspath(
         os.path.join(self.DataDir(), 'extensions', 'js_injection_background'))
-    ext_id = self.InstallExtension(dir_path, False);
-    self.assertTrue(ext_id, msg='Failed to install extension: %s.' % dir_path)
+    ext_id = self.InstallExtension(dir_path)
 
     # Verify extension is enabled.
     extension = self._GetExtensionInfoById(self.GetExtensionsInfo(), ext_id)
@@ -46,28 +45,26 @@ class ExecuteJavascriptTest(PyUITest):
                     msg='Extension was disabled by default')
 
     # Get the background page's view.
-    info = self.GetBrowserInfo()['extension_views']
-    view = [x for x in info if
-            x['extension_id'] == ext_id and
-            x['view_type'] == 'EXTENSION_BACKGROUND_PAGE']
-    self.assertEqual(1, len(view),
-                     msg='problematic background view: view = %s.' % view)
-    background_view = view[0]
+    background_view = self.WaitUntilExtensionViewLoaded(
+        view_type='EXTENSION_BACKGROUND_PAGE')
+    self.assertTrue(background_view,
+                    msg='problematic background view: views = %s.' %
+                    self.GetBrowserInfo()['extension_views'])
 
     # Get values from background page's DOM
     v = self.ExecuteJavascriptInRenderView(
         'window.domAutomationController.send('
-        'document.getElementById("myinput").nodeName)', background_view['view'])
+        'document.getElementById("myinput").nodeName)', background_view)
     self.assertEqual(v, 'INPUT',
                      msg='Incorrect value returned (v = %s).' % v)
     v = self.ExecuteJavascriptInRenderView(
-        'window.domAutomationController.send(bool_var)', background_view['view'])
+        'window.domAutomationController.send(bool_var)', background_view)
     self.assertEqual(v, True, msg='Incorrect value returned (v = %s).' % v)
     v = self.ExecuteJavascriptInRenderView(
-        'window.domAutomationController.send(int_var)', background_view['view'])
+        'window.domAutomationController.send(int_var)', background_view)
     self.assertEqual(v, 42, msg='Incorrect value returned (v = %s).' % v)
     v = self.ExecuteJavascriptInRenderView(
-        'window.domAutomationController.send(str_var)', background_view['view'])
+        'window.domAutomationController.send(str_var)', background_view)
     self.assertEqual(v, 'foo', msg='Incorrect value returned (v = %s).' % v)
 
 

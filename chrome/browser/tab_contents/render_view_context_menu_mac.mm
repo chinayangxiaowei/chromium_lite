@@ -5,14 +5,16 @@
 #include "chrome/browser/tab_contents/render_view_context_menu_mac.h"
 
 #include "base/compiler_specific.h"
+#import "base/mac/scoped_sending_event.h"
 #include "base/memory/scoped_nsobject.h"
 #include "base/message_loop.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/menu_controller.h"
-#import "content/common/chrome_application_mac.h"
 #include "grit/generated_resources.h"
+
+using content::WebContents;
 
 namespace {
 
@@ -47,7 +49,7 @@ NSMenuItem* GetMenuItemByID(ui::MenuModel* model,
 // Relies on the tag being set to the command id.
 
 RenderViewContextMenuMac::RenderViewContextMenuMac(
-    TabContents* web_contents,
+    WebContents* web_contents,
     const ContextMenuParams& params,
     NSView* parent_view)
     : RenderViewContextMenu(web_contents, params),
@@ -88,7 +90,7 @@ void RenderViewContextMenuMac::PlatformInit() {
     // setting flags in -[CrApplication sendEvent:], but since
     // web-content menus are initiated by IPC message the setup has to
     // be done manually.
-    chrome_application_mac::ScopedSendingEvent sendingEventScoper;
+    base::mac::ScopedSendingEvent sendingEventScoper;
 
     // Show the menu.
     [NSMenu popUpContextMenu:[menuController_ menu]
@@ -143,6 +145,7 @@ void RenderViewContextMenuMac::LookUpInDictionary() {
 
 void RenderViewContextMenuMac::UpdateMenuItem(int command_id,
                                               bool enabled,
+                                              bool hidden,
                                               const string16& title) {
   NSMenuItem* item = GetMenuItemByID(&menu_model_, [menuController_ menu],
                                      command_id);
@@ -152,5 +155,6 @@ void RenderViewContextMenuMac::UpdateMenuItem(int command_id,
   // Update the returned NSMenuItem directly so we can update it immediately.
   [item setEnabled:enabled];
   [item setTitle:SysUTF16ToNSString(title)];
+  [item setHidden:hidden];
   [[item menu] itemChanged:item];
 }

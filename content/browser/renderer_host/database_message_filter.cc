@@ -6,16 +6,17 @@
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/platform_file.h"
 #include "base/string_util.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/user_metrics.h"
 #include "content/common/database_messages.h"
-#include "content/common/result_codes.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/common/result_codes.h"
 #include "googleurl/src/gurl.h"
-#include "third_party/sqlite/sqlite3.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
+#include "third_party/sqlite/sqlite3.h"
 #include "webkit/database/database_util.h"
 #include "webkit/database/vfs_backend.h"
 #include "webkit/quota/quota_manager.h"
@@ -24,6 +25,9 @@
 #include "base/file_descriptor_posix.h"
 #endif
 
+using content::BrowserMessageFilter;
+using content::BrowserThread;
+using content::UserMetricsAction;
 using quota::QuotaManager;
 using quota::QuotaManagerProxy;
 using quota::QuotaStatusCode;
@@ -33,32 +37,6 @@ using webkit_database::DatabaseUtil;
 using webkit_database::VfsBackend;
 
 namespace {
-
-class MyGetUsageAndQuotaCallback
-    : public QuotaManager::GetUsageAndQuotaCallback  {
- public:
-  MyGetUsageAndQuotaCallback(
-      DatabaseMessageFilter* sender, IPC::Message* reply_msg)
-      : sender_(sender), reply_msg_(reply_msg) {}
-
-  virtual void RunWithParams(
-        const Tuple3<QuotaStatusCode, int64, int64>& params) {
-    Run(params.a, params.b, params.c);
-  }
-
-  void Run(QuotaStatusCode status, int64 usage, int64 quota) {
-    int64 available = 0;
-    if ((status == quota::kQuotaStatusOk) && (usage < quota))
-      available = quota - usage;
-    DatabaseHostMsg_GetSpaceAvailable::WriteReplyParams(
-        reply_msg_.get(), available);
-    sender_->Send(reply_msg_.release());
-  }
-
- private:
-  scoped_refptr<DatabaseMessageFilter> sender_;
-  scoped_ptr<IPC::Message> reply_msg_;
-};
 
 const int kNumDeleteRetries = 2;
 const int kDelayDeleteRetryMs = 100;
@@ -78,7 +56,7 @@ void DatabaseMessageFilter::OnChannelClosing() {
     observer_added_ = false;
     BrowserThread::PostTask(
         BrowserThread::FILE, FROM_HERE,
-        NewRunnableMethod(this, &DatabaseMessageFilter::RemoveObserver));
+        base::Bind(&DatabaseMessageFilter::RemoveObserver, this));
   }
 }
 
@@ -109,7 +87,7 @@ void DatabaseMessageFilter::OverrideThreadForMessage(
     observer_added_ = true;
     BrowserThread::PostTask(
         BrowserThread::FILE, FROM_HERE,
-        NewRunnableMethod(this, &DatabaseMessageFilter::AddObserver));
+        base::Bind(&DatabaseMessageFilter::AddObserver, this));
   }
 }
 
@@ -144,8 +122,6 @@ void DatabaseMessageFilter::OnDatabaseOpenFile(const string16& vfs_file_name,
                                                IPC::Message* reply_msg) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   base::PlatformFile file_handle = base::kInvalidPlatformFileValue;
-  IPC::PlatformFileForTransit target_handle =
-      IPC::InvalidPlatformFileForTransit();
   string16 origin_identifier;
   string16 database_name;
 
@@ -184,7 +160,7 @@ void DatabaseMessageFilter::OnDatabaseOpenFile(const string16& vfs_file_name,
   // database tracker.
   bool auto_close = !db_tracker_->HasSavedIncognitoFileHandle(vfs_file_name);
   DCHECK_NE(base::kInvalidPlatformFileValue, file_handle);
-  target_handle =
+  IPC::PlatformFileForTransit target_handle =
       IPC::GetFileHandleForProcess(file_handle, peer_handle(), auto_close);
 
   DatabaseHostMsg_OpenFile::WriteReplyParams(reply_msg, target_handle);
@@ -232,12 +208,8 @@ void DatabaseMessageFilter::DatabaseDeleteFile(const string16& vfs_file_name,
       // If the file could not be deleted, try again.
       BrowserThread::PostDelayedTask(
           BrowserThread::FILE, FROM_HERE,
-          NewRunnableMethod(this,
-                            &DatabaseMessageFilter::DatabaseDeleteFile,
-                            vfs_file_name,
-                            sync_dir,
-                            reply_msg,
-                            reschedule_count - 1),
+          base::Bind(&DatabaseMessageFilter::DatabaseDeleteFile, this,
+                     vfs_file_name, sync_dir, reply_msg, reschedule_count - 1),
           kDelayDeleteRetryMs);
       return;
     }
@@ -293,7 +265,20 @@ void DatabaseMessageFilter::OnDatabaseGetSpaceAvailable(
   quota_manager->GetUsageAndQuota(
       DatabaseUtil::GetOriginFromIdentifier(origin_identifier),
       quota::kStorageTypeTemporary,
-      new MyGetUsageAndQuotaCallback(this, reply_msg));
+      base::Bind(&DatabaseMessageFilter::OnDatabaseGetUsageAndQuota,
+                 this, reply_msg));
+}
+
+void DatabaseMessageFilter::OnDatabaseGetUsageAndQuota(
+    IPC::Message* reply_msg,
+    quota::QuotaStatusCode status,
+    int64 usage,
+    int64 quota) {
+  int64 available = 0;
+  if ((status == quota::kQuotaStatusOk) && (usage < quota))
+    available = quota - usage;
+  DatabaseHostMsg_GetSpaceAvailable::WriteReplyParams(reply_msg, available);
+  Send(reply_msg);
 }
 
 void DatabaseMessageFilter::OnDatabaseOpened(const string16& origin_identifier,
@@ -315,7 +300,7 @@ void DatabaseMessageFilter::OnDatabaseModified(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   if (!database_connections_.IsDatabaseOpened(
           origin_identifier, database_name)) {
-    UserMetrics::RecordAction(UserMetricsAction("BadMessageTerminate_DBMF"));
+    content::RecordAction(UserMetricsAction("BadMessageTerminate_DBMF"));
     BadMessageReceived();
     return;
   }
@@ -328,7 +313,7 @@ void DatabaseMessageFilter::OnDatabaseClosed(const string16& origin_identifier,
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   if (!database_connections_.IsDatabaseOpened(
           origin_identifier, database_name)) {
-    UserMetrics::RecordAction(UserMetricsAction("BadMessageTerminate_DBMF"));
+    content::RecordAction(UserMetricsAction("BadMessageTerminate_DBMF"));
     BadMessageReceived();
     return;
   }

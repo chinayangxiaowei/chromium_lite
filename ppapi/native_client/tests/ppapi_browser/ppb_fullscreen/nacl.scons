@@ -8,6 +8,8 @@
 Import('env')
 
 env.Prepend(CPPDEFINES=['XP_UNIX'])
+env.Replace(TEST_DIR='${SOURCE_ROOT}/ppapi/native_client/tests/ppapi_browser/' +
+                     'ppb_fullscreen')
 
 nexe = 'ppapi_ppb_fullscreen_%s' % env.get('TARGET_FULLARCH')
 env.Alias('ppapi_ppb_fullscreen${PROGSUFFIX}',
@@ -25,15 +27,27 @@ ppapi_ppb_url_request_info_nexe = env.ComponentProgram(
 
 env.Publish(nexe, 'run',
             ['ppapi_ppb_fullscreen.html',
-             'ppapi_ppb_fullscreen.nmf',
              'ppapi_ppb_fullscreen.js'])
 
 node = env.PPAPIBrowserTester('ppapi_ppb_fullscreen_browser_test.out',
+                              nmfs=['${TEST_DIR}/ppapi_ppb_fullscreen.nmf'],
                               url='ppapi_ppb_fullscreen.html',
                               files=env.ExtractPublishedFiles(nexe),
                               browser_flags=['--enable-pepper-testing'])
 
-env.AddNodeToTestSuite(node,
-                       ['chrome_browser_tests'],
-                       'run_ppapi_ppb_fullscreen_browser_test',
-                       is_broken=env.PPAPIBrowserTesterIsBroken())
+# Fatal Error on Mac:
+# ERROR:render_widget_host_view_mac.mm(344)] Not implemented reached in virtual
+# void RenderWidgetHost ViewMac::InitAsFullscreen(RenderWidgetHostView *)Full
+# screen not implemented on Mac
+env.AddNodeToTestSuite(
+    node,
+    ['chrome_browser_tests'],
+    'run_ppapi_ppb_fullscreen_browser_test',
+    # New PPB_Fullscreen_Dev implementation only allows transitions to
+    # fullscreen after a user gesture. Until PPB_Testing has the capabilities
+    # to trigger those, we cannot test this automatically.
+    # The test can still be run manually. Once it pauses at
+    # TestSetFullscreenTrue, click on the purple square to generate a user
+    # gesture needed to trigger fullscreen testing.
+    #is_broken=(env.PPAPIBrowserTesterIsBroken() or env.Bit('host_mac')))
+    is_broken=True)

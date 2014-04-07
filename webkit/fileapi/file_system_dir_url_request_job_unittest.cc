@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -16,6 +16,7 @@
 
 #include "base/file_path.h"
 #include "base/format_macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop.h"
 #include "base/platform_file.h"
 #include "base/scoped_temp_dir.h"
@@ -31,7 +32,7 @@
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_file_util.h"
 #include "webkit/fileapi/file_system_operation_context.h"
-#include "webkit/fileapi/file_system_path_manager.h"
+#include "webkit/fileapi/mock_file_system_options.h"
 #include "webkit/fileapi/sandbox_mount_point_provider.h"
 #include "webkit/quota/mock_special_storage_policy.h"
 
@@ -48,10 +49,10 @@ class FileSystemDirURLRequestJobTest : public testing::Test {
  protected:
   FileSystemDirURLRequestJobTest()
     : message_loop_(MessageLoop::TYPE_IO),  // simulate an IO thread
-      ALLOW_THIS_IN_INITIALIZER_LIST(callback_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   }
 
-  virtual void SetUp() {
+  virtual void SetUp() OVERRIDE {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     file_thread_proxy_ = base::MessageLoopProxy::current();
@@ -59,26 +60,23 @@ class FileSystemDirURLRequestJobTest : public testing::Test {
     special_storage_policy_ = new quota::MockSpecialStoragePolicy;
     file_system_context_ =
         new FileSystemContext(
-            base::MessageLoopProxy::current(),
+            file_thread_proxy_,
             base::MessageLoopProxy::current(),
             special_storage_policy_, NULL,
-            FilePath(), false /* is_incognito */,
-            false, true,
-            new FileSystemPathManager(
-                    file_thread_proxy_, temp_dir_.path(),
-                    NULL, false, false));
+            temp_dir_.path(),
+            CreateAllowFileAccessOptions());
 
-    file_system_context_->path_manager()->ValidateFileSystemRootAndGetURL(
+    file_system_context_->sandbox_provider()->ValidateFileSystemRoot(
         GURL("http://remote/"), kFileSystemTypeTemporary, true,  // create
-        callback_factory_.NewCallback(
-            &FileSystemDirURLRequestJobTest::OnGetRootPath));
+        base::Bind(&FileSystemDirURLRequestJobTest::OnValidateFileSystem,
+                   weak_factory_.GetWeakPtr()));
     MessageLoop::current()->RunAllPending();
 
     net::URLRequest::Deprecated::RegisterProtocolFactory(
         "filesystem", &FileSystemDirURLRequestJobFactory);
   }
 
-  virtual void TearDown() {
+  virtual void TearDown() OVERRIDE {
     // NOTE: order matters, request must die before delegate
     request_.reset(NULL);
     delegate_.reset(NULL);
@@ -86,10 +84,8 @@ class FileSystemDirURLRequestJobTest : public testing::Test {
     net::URLRequest::Deprecated::RegisterProtocolFactory("filesystem", NULL);
   }
 
-  void OnGetRootPath(bool success, const FilePath& root_path,
-                     const std::string& name) {
-    ASSERT_TRUE(success);
-    root_path_ = root_path;
+  void OnValidateFileSystem(base::PlatformFileError result) {
+    ASSERT_EQ(base::PLATFORM_FILE_OK, result);
   }
 
   void TestRequestHelper(const GURL& url, bool run_to_completion) {
@@ -201,8 +197,7 @@ class FileSystemDirURLRequestJobTest : public testing::Test {
   }
 
   FileSystemFileUtil* file_util() {
-    return file_system_context_->path_manager()->sandbox_provider()->
-        GetFileUtil();
+    return file_system_context_->sandbox_provider()->GetFileUtil();
   }
 
   // Put the message loop at the top, so that it's the last thing deleted.
@@ -212,12 +207,11 @@ class FileSystemDirURLRequestJobTest : public testing::Test {
   scoped_refptr<base::MessageLoopProxy> file_thread_proxy_;
 
   ScopedTempDir temp_dir_;
-  FilePath root_path_;
   scoped_ptr<net::URLRequest> request_;
   scoped_ptr<TestDelegate> delegate_;
   scoped_refptr<quota::MockSpecialStoragePolicy> special_storage_policy_;
   scoped_refptr<FileSystemContext> file_system_context_;
-  base::ScopedCallbackFactory<FileSystemDirURLRequestJobTest> callback_factory_;
+  base::WeakPtrFactory<FileSystemDirURLRequestJobTest> weak_factory_;
 
   static net::URLRequestJob* job_;
 };
@@ -264,38 +258,28 @@ TEST_F(FileSystemDirURLRequestJobTest, InvalidURL) {
   ASSERT_FALSE(request_->is_pending());
   EXPECT_TRUE(delegate_->request_failed());
   ASSERT_FALSE(request_->status().is_success());
-  EXPECT_EQ(net::ERR_INVALID_URL, request_->status().os_error());
+  EXPECT_EQ(net::ERR_INVALID_URL, request_->status().error());
 }
 
 TEST_F(FileSystemDirURLRequestJobTest, NoSuchRoot) {
   TestRequest(GURL("filesystem:http://remote/persistent/somedir/"));
   ASSERT_FALSE(request_->is_pending());
   ASSERT_FALSE(request_->status().is_success());
-  EXPECT_EQ(net::ERR_FILE_NOT_FOUND, request_->status().os_error());
+  EXPECT_EQ(net::ERR_FILE_NOT_FOUND, request_->status().error());
 }
 
 TEST_F(FileSystemDirURLRequestJobTest, NoSuchDirectory) {
   TestRequest(CreateFileSystemURL("somedir/"));
   ASSERT_FALSE(request_->is_pending());
   ASSERT_FALSE(request_->status().is_success());
-  EXPECT_EQ(net::ERR_FILE_NOT_FOUND, request_->status().os_error());
+  EXPECT_EQ(net::ERR_FILE_NOT_FOUND, request_->status().error());
 }
-
-class QuitNowTask : public Task {
- public:
-  virtual void Run() {
-    MessageLoop::current()->QuitNow();
-  }
-};
 
 TEST_F(FileSystemDirURLRequestJobTest, Cancel) {
   CreateDirectory("foo");
   TestRequestNoRun(CreateFileSystemURL("foo/"));
   // Run StartAsync() and only StartAsync().
-  MessageLoop::current()->PostTask(FROM_HERE, new QuitNowTask);
-  MessageLoop::current()->Run();
-
-  request_.reset();
+  MessageLoop::current()->DeleteSoon(FROM_HERE, request_.release());
   MessageLoop::current()->RunAllPending();
   // If we get here, success! we didn't crash!
 }

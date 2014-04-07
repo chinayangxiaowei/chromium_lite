@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -14,8 +14,10 @@
 
 #include "base/command_line.h"
 #include "base/file_path.h"
+#include "base/json/json_value_serializer.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
+#include "base/process_util.h"
 #include "base/rand_util.h"
 #include "base/string_number_conversions.h"
 #include "base/string_split.h"
@@ -37,7 +39,6 @@
 #include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/wmi.h"
-#include "content/common/json_value_serializer.h"
 
 #include "installer_util_strings.h"  // NOLINT
 
@@ -99,8 +100,12 @@ int GetDirectoryWriteTimeInHours(const wchar_t* path) {
   if (INVALID_HANDLE_VALUE == file)
     return -1;
   FILETIME time;
-  if (!::GetFileTime(file, NULL, NULL, &time))
+  if (!::GetFileTime(file, NULL, NULL, &time)) {
+    ::CloseHandle(file);
     return -1;
+  }
+
+  ::CloseHandle(file);
   return FileTimeToHours(time);
 }
 
@@ -402,9 +407,10 @@ std::wstring GoogleChromeDistribution::GetAppGuid() {
 }
 
 std::wstring GoogleChromeDistribution::GetApplicationName() {
-  const std::wstring& product_name =
-      installer::GetLocalizedString(IDS_PRODUCT_NAME_BASE);
-  return product_name;
+  // I'd really like to return L ## PRODUCT_FULLNAME_STRING; but that's no good
+  // since it'd be "Chromium" in a non-Chrome build, which isn't at all what I
+  // want.  Sigh.
+  return L"Google Chrome";
 }
 
 std::wstring GoogleChromeDistribution::GetAlternateApplicationName() {
@@ -459,8 +465,7 @@ std::wstring GoogleChromeDistribution::GetStatsServerURL() {
 }
 
 std::string GoogleChromeDistribution::GetNetworkStatsServer() const {
-  // TODO(rtenneti): Return the network stats server name.
-  return "";
+  return "chrome.googleechotest.com";
 }
 
 std::wstring GoogleChromeDistribution::GetDistributionData(HKEY root_key) {
@@ -596,24 +601,30 @@ bool GoogleChromeDistribution::GetExperimentDetails(
                             // of headings (below).
     int headings[kMax];     // A list of IDs per experiment. 0 == no heading.
   } kExperimentFlavors[] = {
-    // First in this order are the brand specific ones.
-    {L"en-US", kSkype, 1, L'Z', L'A', 1, { kSkype1, 0, 0, 0 } },
-    // And then we have catch-alls, like en-US (all brands).
-    {L"en-US", kAll,   1, L'T', L'V', 4, { kEnUs1, kEnUs2, kEnUs3, kEnUs4} },
-    // Japan has two experiments, same IDs as en-US but translated differently.
-    {L"jp",    kAll,   1, L'T', L'V', 2, { kEnUs1, kEnUs2, 0, 0} },
+    // This list should be ordered most-specific rule first (catch-all, like all
+    // brands or all locales should be last).
+
+    // The experiment with the more compact bubble. This one is a bit special
+    // because it is split into two: CAxx is regular style bubble and CBxx is
+    // compact style bubble. See |compact_bubble| below.
+    {L"en-US", kBrief, 1, L'C', L'A', 2, { kEnUs3, kEnUs3, 0, 0 } },
+
+    // Catch-all rules.
+    {kAll, kAll, 1, L'B', L'A', 1, {kEnUs3, 0, 0, 0} },
   };
 
   std::wstring locale;
   std::wstring brand;
 
   if (!GoogleUpdateSettings::GetLanguage(&locale))
-    locale = L"en-US";
+    locale = ASCIIToWide("en-US");
   if (!GoogleUpdateSettings::GetBrand(&brand))
+    brand = ASCIIToWide("");  // Could still be viable for catch-all rules.
+  if (brand == kEnterprise)
     return false;
 
   for (int i = 0; i < arraysize(kExperimentFlavors); ++i) {
-    // A maximum of four flavors is supported at the moment.
+    // A maximum of four flavors are supported at the moment.
     DCHECK_LE(kExperimentFlavors[i].flavors, kMax);
     DCHECK_GT(kExperimentFlavors[i].flavors, 0);
     // Make sure each experiment has valid headings.
@@ -629,7 +640,7 @@ bool GoogleChromeDistribution::GetExperimentDetails(
            kExperimentFlavors[i].flavors - 1 <= 'Z');
 
     if (kExperimentFlavors[i].locale != locale &&
-        kExperimentFlavors[i].locale != L"*")
+        kExperimentFlavors[i].locale != ASCIIToWide("*"))
       continue;
 
     std::vector<std::wstring> brand_codes;
@@ -650,6 +661,7 @@ bool GoogleChromeDistribution::GetExperimentDetails(
       experiment->prefix.resize(2);
       experiment->prefix[0] = kExperimentFlavors[i].prefix1;
       experiment->prefix[1] = kExperimentFlavors[i].prefix2 + flavor;
+      experiment->compact_bubble = (brand == kBrief) && (flavor == 1);
       return true;
     }
   }

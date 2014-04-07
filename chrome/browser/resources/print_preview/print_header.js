@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@ cr.define('print_preview', function() {
     this.cancelButton_ = $('cancel-button');
     this.summary_ = $('print-summary');
     this.printButton_.focus();
+    this.addEventListeners_();
   }
 
   cr.addSingletonGetter(PrintHeader);
@@ -35,29 +36,70 @@ cr.define('print_preview', function() {
     /**
      * Adding event listeners where necessary. Listeners take care of changing
      * their behavior depending on the current state, no need to remove them.
+     * @private
      */
-    addEventListeners: function() {
+    addEventListeners_: function() {
       this.cancelButton_.onclick = function() {
-        chrome.send('closePrintPreviewTab');
-      };
-      this.printButton_.onclick = this.onPrintButtonClicked_.bind(this);
-      document.addEventListener('updateSummary',
+        this.disableCancelButton();
+        closePrintPreviewTab();
+      }.bind(this);
+      this.printButton_.onclick = this.onPrintRequested.bind(this);
+      document.addEventListener(customEvents.UPDATE_SUMMARY,
                                 this.updateSummary_.bind(this));
-      document.addEventListener('updatePrintButton',
+      document.addEventListener(customEvents.UPDATE_PRINT_BUTTON,
                                 this.updatePrintButton_.bind(this));
+      document.addEventListener(customEvents.PDF_GENERATION_ERROR,
+                                this.onPDFGenerationError_.bind(this));
+      document.addEventListener(customEvents.PRINTER_CAPABILITIES_UPDATED,
+                                this.onPrinterCapabilitiesUpdated_.bind(this));
     },
 
     /**
-     * Listener executing whenever |this.printButton_| is clicked.
+     * Enables the cancel button and attaches its keydown event listener.
+     */
+    enableCancelButton: function() {
+      window.onkeydown = onKeyDown;
+      this.cancelButton_.disabled = false;
+    },
+
+    /**
+     * Executes when a |customEvents.PDF_GENERATION_ERROR| event occurs.
      * @private
      */
-    onPrintButtonClicked_: function() {
+    onPDFGenerationError_: function() {
+      this.printButton_.disabled = true;
+    },
+
+    /**
+     * Executes when a |customEvents.PRINTER_CAPABILITIES_UPDATED| event occurs.
+     * @private
+     */
+    onPrinterCapabilitiesUpdated_: function() {
+      getSelectedPrinterName() == PRINT_TO_PDF ?
+          this.printButton.textContent = localStrings.getString('saveButton') :
+          this.printButton.textContent = localStrings.getString('printButton');
+    },
+
+    /**
+     * Disables the cancel button and removes its keydown event listener.
+     */
+    disableCancelButton: function() {
+      window.onkeydown = null;
+      this.cancelButton_.disabled = true;
+    },
+
+    /**
+     * Listener executing whenever the print button is clicked or user presses
+     * the enter button while focus is in the pages field.
+     */
+    onPrintRequested: function() {
       var printToPDF = getSelectedPrinterName() == PRINT_TO_PDF;
       if (!printToPDF) {
         this.printButton_.classList.add('loading');
         this.cancelButton_.classList.add('loading');
         this.summary_.innerHTML = localStrings.getString('printing');
       }
+      this.disableCancelButton();
       requestToPrintDocument();
     },
 
@@ -88,8 +130,16 @@ cr.define('print_preview', function() {
         return;
       }
 
+      if (!marginSettings.areMarginSettingsValid()) {
+        this.summary_.innerHTML = '';
+        return;
+      }
+
       var pageSet = pageSettings.selectedPagesSet;
       var numOfSheets = pageSet.length;
+      if (numOfSheets == 0)
+        return;
+
       var summaryLabel =
           localStrings.getString('printPreviewSheetsLabelSingular');
       var numOfPagesText = '';
@@ -103,7 +153,7 @@ cr.define('print_preview', function() {
       numOfSheets *= copies;
 
       if (numOfSheets > 1) {
-        summaryLabel =  printToPDF ? pagesLabel :
+        summaryLabel = printToPDF ? pagesLabel :
             localStrings.getString('printPreviewSheetsLabelPlural');
       }
 
@@ -123,10 +173,10 @@ cr.define('print_preview', function() {
       // Removing extra spaces from within the string.
       html = html.replace(/\s{2,}/g, ' ');
       this.summary_.innerHTML = html;
-    },
+    }
   };
 
   return {
-    PrintHeader: PrintHeader,
+    PrintHeader: PrintHeader
   };
 });

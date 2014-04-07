@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
+#include "remoting/jingle_glue/signal_strategy.h"
 #include "remoting/protocol/content_description.h"
 #include "remoting/protocol/jingle_session.h"
 #include "remoting/protocol/session_manager.h"
@@ -16,54 +17,41 @@
 #include "third_party/libjingle/source/talk/p2p/base/sessionclient.h"
 
 namespace cricket {
+class HttpPortAllocator;
 class PortAllocator;
 class SessionManager;
 }  // namespace cricket
 
 namespace remoting {
 
-class HostResolverFactory;
-class HttpPortAllocator;
 class JingleInfoRequest;
 class JingleSignalingConnector;
-class PortAllocatorSessionFactory;
 
 namespace protocol {
 
 // This class implements SessionClient for Chromoting sessions. It acts as a
 // server that accepts chromoting connections and can also make new connections
 // to other hosts.
-class JingleSessionManager
-    : public SessionManager,
-      public cricket::SessionClient {
+class JingleSessionManager : public SessionManager,
+                             public cricket::SessionClient,
+                             public SignalStrategy::Listener {
  public:
   virtual ~JingleSessionManager();
 
-  static JingleSessionManager* CreateNotSandboxed(
-      base::MessageLoopProxy* message_loop);
-  static JingleSessionManager* CreateSandboxed(
-      base::MessageLoopProxy* message_loop,
-      talk_base::NetworkManager* network_manager,
-      talk_base::PacketSocketFactory* socket_factory,
-      HostResolverFactory* host_resolver_factory,
-      PortAllocatorSessionFactory* port_allocator_session_factory);
+  JingleSessionManager(base::MessageLoopProxy* message_loop);
 
   // SessionManager interface.
-  virtual void Init(const std::string& local_jid,
-                    SignalStrategy* signal_strategy,
-                    Listener* listener,
-                    crypto::RSAPrivateKey* private_key,
-                    const std::string& certificate,
-                    bool allow_nat_traversal) OVERRIDE;
-  virtual Session* Connect(
+  virtual void Init(SignalStrategy* signal_strategy,
+                    SessionManager::Listener* listener,
+                    const NetworkSettings& network_settings) OVERRIDE;
+  virtual scoped_ptr<Session> Connect(
       const std::string& host_jid,
-      const std::string& host_public_key,
-      const std::string& client_token,
-      CandidateSessionConfig* config,
-      Session::StateChangeCallback* state_change_callback) OVERRIDE;
+      scoped_ptr<Authenticator> authenticator,
+      scoped_ptr<CandidateSessionConfig> config,
+      const Session::StateChangeCallback& state_change_callback) OVERRIDE;
   virtual void Close() OVERRIDE;
-
-  void set_allow_local_ips(bool allow_local_ips);
+  virtual void set_authenticator_factory(
+      scoped_ptr<AuthenticatorFactory> authenticator_factory) OVERRIDE;
 
   // cricket::SessionClient interface.
   virtual void OnSessionCreate(cricket::Session* cricket_session,
@@ -79,20 +67,23 @@ class JingleSessionManager
                             buzz::XmlElement** elem,
                             cricket::WriteError* error) OVERRIDE;
 
+  // SignalStrategy::Listener interface.
+  virtual void OnSignalStrategyStateChange(
+      SignalStrategy::State state) OVERRIDE;
+
  private:
   friend class JingleSession;
 
-  JingleSessionManager(
-      base::MessageLoopProxy* message_loop,
-      talk_base::NetworkManager* network_manager,
-      talk_base::PacketSocketFactory* socket_factory,
-      HostResolverFactory* host_resolver_factory,
-      PortAllocatorSessionFactory* port_allocator_session_factory);
+  // Called by JingleSession when a new connection is initiated.
+  SessionManager::IncomingSessionResponse AcceptConnection(
+      JingleSession* jingle_session);
 
-  // Called by JingleSession when a new connection is
-  // initiated. Returns true if session is accepted.
-  bool AcceptConnection(JingleSession* jingle_session,
-                        cricket::Session* cricket_session);
+  // Creates authenticator for incoming session. Returns NULL if
+  // authenticator cannot be created, e.g. if |auth_message| is
+  // invalid.
+  scoped_ptr<Authenticator> CreateAuthenticator(
+      const std::string& jid,
+      const buzz::XmlElement* auth_message);
 
   // Called by JingleSession when it is being destroyed.
   void SessionDestroyed(JingleSession* jingle_session);
@@ -103,33 +94,20 @@ class JingleSessionManager
       const std::vector<std::string>& relay_hosts,
       const std::vector<talk_base::SocketAddress>& stun_hosts);
 
-  // Creates session description for outgoing session.
-  static cricket::SessionDescription* CreateClientSessionDescription(
-      const CandidateSessionConfig* candidate_config,
-      const std::string& auth_token);
-  // Creates session description for incoming session.
-  static cricket::SessionDescription* CreateHostSessionDescription(
-      const CandidateSessionConfig* candidate_config,
-      const std::string& certificate);
-
   scoped_refptr<base::MessageLoopProxy> message_loop_;
 
   scoped_ptr<talk_base::NetworkManager> network_manager_;
   scoped_ptr<talk_base::PacketSocketFactory> socket_factory_;
-  scoped_ptr<HostResolverFactory> host_resolver_factory_;
-  scoped_ptr<PortAllocatorSessionFactory> port_allocator_session_factory_;
 
-  std::string local_jid_;  // Full jid for the local side of the session.
   SignalStrategy* signal_strategy_;
-  Listener* listener_;
-  std::string certificate_;
-  scoped_ptr<crypto::RSAPrivateKey> private_key_;
+  scoped_ptr<AuthenticatorFactory> authenticator_factory_;
+  SessionManager::Listener* listener_;
   bool allow_nat_traversal_;
 
-  bool allow_local_ips_;
+  bool ready_;
 
   scoped_ptr<cricket::PortAllocator> port_allocator_;
-  remoting::HttpPortAllocator* http_port_allocator_;
+  cricket::HttpPortAllocator* http_port_allocator_;
   scoped_ptr<cricket::SessionManager> cricket_session_manager_;
   scoped_ptr<JingleInfoRequest> jingle_info_request_;
   scoped_ptr<JingleSignalingConnector> jingle_signaling_connector_;
@@ -137,8 +115,6 @@ class JingleSessionManager
   bool closed_;
 
   std::list<JingleSession*> sessions_;
-
-  ScopedRunnableMethodFactory<JingleSessionManager> task_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(JingleSessionManager);
 };

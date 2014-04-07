@@ -1,3 +1,8 @@
+/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
 /* Styles common to WebUI pages that share the options pages style */
 body {
   cursor: default;
@@ -15,7 +20,7 @@ a:active {
 #navbar-content-title {
   -webkit-padding-end: 24px;
   -webkit-user-select: none;
-  color: #53637d;
+  color: #333;
   cursor: pointer;
   font-size: 200%;
   font-weight: normal;
@@ -41,8 +46,7 @@ a:active {
 
 #navbar-container {
   -webkit-border-end: 1px solid #c6c9ce;
-  background: -webkit-linear-gradient(rgba(234, 238, 243, 0.2), #eaeef3),
-              -webkit-linear-gradient(left, #eaeef3, #eaeef3 97%, #d3d7db);
+  background-color: #f1f1f1;
   position: fixed;
   bottom: 0;
   /* We set both left and right for the sake of RTL. */
@@ -51,11 +55,6 @@ a:active {
   top: 0;
   width: 216px;
   z-index: 2;
-}
-
-html[dir='rtl'] #navbar-container {
-  background: -webkit-linear-gradient(rgba(234, 238, 243, 0), #EAEEF3),
-              -webkit-linear-gradient(right, #EAEEF3, #EAEEF3 97%, #D3D7DB);
 }
 
 html.hide-menu #navbar-container {
@@ -72,7 +71,7 @@ html.hide-menu #navbar-container {
 .navbar-item {
   border-bottom: 1px solid transparent;
   border-top: 1px solid transparent;
-  color: #426dc9;
+  color: #333;
   cursor: pointer;
   display: block;
   font-size: 105%;
@@ -89,8 +88,8 @@ html.hide-menu #navbar-container {
 }
 
 .navbar-item-selected {
-  -webkit-box-shadow: 0px 1px 0px #f7f7f7;
-  background: -webkit-linear-gradient(left, #bbcee9, #bbcee9 97%, #aabedc);
+  -webkit-box-shadow: 0 1px 0 #f7f7f7;
+  background-color: #bbcee9;
   border-bottom: 1px solid #8faad9;
   border-top: 1px solid #8faad9;
   color: black;
@@ -125,11 +124,6 @@ html.hide-menu #mainview {
   padding: 0 24px;
 }
 
-div.checkbox,
-div.radio {
-  margin: 5px 0;
-}
-
 div.disabled {
   color: #888;
 }
@@ -145,39 +139,7 @@ input:not([type]) {
   padding: 3px;
 }
 
-/* CHECKBOX, RADIO */
-input[type=checkbox],
-input[type=radio] {
-  margin-left: 0;
-  margin-right: 0;
-  position: relative;
-  top: 1px;
-}
-
-/* Checkbox and radio buttons have different sizes on different platforms. The
- * following rules have platform specific tweaks.
- * TODO(arv): Test the vertical position on Linux and CrOS as well.
- */
-
-label > input[type=checkbox],
-label > input[type=radio] {
-  margin-top: 1px;
-}
-
-html[os=mac] label > input[type=checkbox],
-html[os=mac] label > input[type=radio] {
-  margin-top: 2px;
-}
-
-html[os=chromeos] label > input[type=checkbox],
-html[os=chromeos] label > input[type=radio] {
-  top: 2px;
-}
-
-/* This will 'disable' the label associated with any input whose next sibling is
- * the span containing the label (usually a checkbox or radio).
- */
-label > input[disabled] ~ span {
+input[type='text']:disabled {
   color: #888;
 }
 
@@ -194,8 +156,8 @@ html[dir='rtl'] .weakrtl {
  * on some), the class needs to be on the enclosing div.
  */
 html[dir='rtl'] div.weakrtl input {
-    direction: ltr;
-    text-align: right;
+  direction: ltr;
+  text-align: right;
 }
 
 html[dir='rtl'] .favicon-cell.weakrtl {
@@ -228,7 +190,7 @@ html[dir='rtl'] .weakrtl input::-webkit-input-placeholder {
   -webkit-padding-end: 24px;
   -webkit-user-select: none;
   border-bottom: 1px solid #eeeeee;
-  color: #53637d;
+  color: #333;
   font-size: 200%;
   font-weight: normal;
   margin: 0;
@@ -236,5 +198,3 @@ html[dir='rtl'] .weakrtl input::-webkit-input-placeholder {
   padding-top: 13px;
   text-shadow: white 0 1px 2px;
 }
-
-

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,16 @@
 #include "chrome/browser/sync/engine/net/server_connection_manager.h"
 #include "chrome/browser/sync/engine/syncer.h"
 #include "chrome/browser/sync/engine/syncer_types.h"
-#include "chrome/browser/sync/engine/syncer_util.h"
 #include "chrome/browser/sync/protocol/service_constants.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
+#include "chrome/browser/sync/protocol/sync_enums.pb.h"
 #include "chrome/browser/sync/protocol/sync_protocol_error.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
 #include "chrome/browser/sync/syncable/model_type.h"
 #include "chrome/browser/sync/syncable/syncable-inl.h"
 #include "chrome/browser/sync/syncable/syncable.h"
+#include "chrome/browser/sync/util/time.h"
 
 using browser_sync::SyncProtocolErrorType;
 using std::string;
@@ -31,7 +32,6 @@ using syncable::IS_UNSYNCED;
 using syncable::MTIME;
 using syncable::PARENT_ID;
 using syncable::ScopedDirLookup;
-using syncable::SyncName;
 
 namespace browser_sync {
 using sessions::SyncSession;
@@ -39,7 +39,8 @@ using sessions::SyncSession;
 namespace {
 
 // Time to backoff syncing after receiving a throttled response.
-static const int kSyncDelayAfterThrottled = 2 * 60 * 60;  // 2 hours
+const int kSyncDelayAfterThrottled = 2 * 60 * 60;  // 2 hours
+
 void LogResponseProfilingData(const ClientToServerResponse& response) {
   if (response.has_profiling_data()) {
     stringstream response_trace;
@@ -76,7 +77,29 @@ void LogResponseProfilingData(const ClientToServerResponse& response) {
       response_trace << " total time: "
                      << response.profiling_data().total_request_time() << "ms";
     }
-    VLOG(1) << response_trace.str();
+    DVLOG(1) << response_trace.str();
+  }
+}
+
+SyncerError ServerConnectionErrorAsSyncerError(
+    const HttpResponse::ServerConnectionCode server_status) {
+  switch (server_status) {
+    case HttpResponse::CONNECTION_UNAVAILABLE:
+      return NETWORK_CONNECTION_UNAVAILABLE;
+    case HttpResponse::IO_ERROR:
+      return NETWORK_IO_ERROR;
+    case HttpResponse::SYNC_SERVER_ERROR:
+      // FIXME what does this mean?
+      return SYNC_SERVER_ERROR;
+    case HttpResponse::SYNC_AUTH_ERROR:
+      return SYNC_AUTH_ERROR;
+    case HttpResponse::RETRY:
+      return SERVER_RETURN_TRANSIENT_ERROR;
+    case HttpResponse::SERVER_CONNECTION_OK:
+    case HttpResponse::NONE:
+    default:
+      NOTREACHED();
+      return UNSET;
   }
 }
 
@@ -90,11 +113,12 @@ void SyncerProtoUtil::HandleMigrationDoneResponse(
       << "MIGRATION_DONE but no types specified.";
   syncable::ModelTypeSet to_migrate;
   for (int i = 0; i < response->migrated_data_type_id_size(); i++) {
-    to_migrate.insert(syncable::GetModelTypeFromExtensionFieldNumber(
+    to_migrate.Put(syncable::GetModelTypeFromExtensionFieldNumber(
         response->migrated_data_type_id(i)));
   }
   // TODO(akalin): This should be a set union.
-  session->status_controller()->set_types_needing_local_migration(to_migrate);
+  session->mutable_status_controller()->
+      set_types_needing_local_migration(to_migrate);
 }
 
 // static
@@ -109,7 +133,7 @@ bool SyncerProtoUtil::VerifyResponseBirthday(syncable::Directory* dir,
       return false;
     }
 
-    VLOG(1) << "New store birthday: " << response->store_birthday();
+    DVLOG(1) << "New store birthday: " << response->store_birthday();
     dir->set_store_birthday(response->store_birthday());
     return true;
   }
@@ -140,7 +164,6 @@ bool SyncerProtoUtil::PostAndProcessHeaders(ServerConnectionManager* scm,
                                             sessions::SyncSession* session,
                                             const ClientToServerMessage& msg,
                                             ClientToServerResponse* response) {
-
   ServerConnectionManager::PostBufferParams params;
   msg.SerializeToString(&params.buffer_in);
 
@@ -161,9 +184,9 @@ bool SyncerProtoUtil::PostAndProcessHeaders(ServerConnectionManager* scm,
   if (response->ParseFromString(params.buffer_out)) {
     // TODO(tim): This is an egregious layering violation (bug 35060).
     switch (response->error_code()) {
-      case ClientToServerResponse::ACCESS_DENIED:
-      case ClientToServerResponse::AUTH_INVALID:
-      case ClientToServerResponse::USER_NOT_ACTIVATED:
+      case sync_pb::SyncEnums::ACCESS_DENIED:
+      case sync_pb::SyncEnums::AUTH_INVALID:
+      case sync_pb::SyncEnums::USER_NOT_ACTIVATED:
         // Fires on ScopedServerStatusWatcher
         params.response.server_status = HttpResponse::SYNC_AUTH_ERROR;
         return false;
@@ -189,6 +212,20 @@ base::TimeDelta SyncerProtoUtil::GetThrottleDelay(
   return throttle_delay;
 }
 
+void SyncerProtoUtil::HandleThrottleError(
+    const SyncProtocolError& error,
+    const base::TimeTicks& throttled_until,
+    sessions::SyncSessionContext* context,
+    sessions::SyncSession::Delegate* delegate) {
+  DCHECK_EQ(error.error_type, browser_sync::THROTTLED);
+  if (error.error_data_types.Empty()) {
+    // No datatypes indicates the client should be completely throttled.
+    delegate->OnSilencedUntil(throttled_until);
+  } else {
+     context->SetUnthrottleTime(error.error_data_types, throttled_until);
+  }
+}
+
 namespace {
 
 // Helper function for an assertion in PostClientToServerMessage.
@@ -204,25 +241,25 @@ bool IsVeryFirstGetUpdates(const ClientToServerMessage& message) {
 }
 
 SyncProtocolErrorType ConvertSyncProtocolErrorTypePBToLocalType(
-    const sync_pb::ClientToServerResponse::ErrorType& error_type) {
+    const sync_pb::SyncEnums::ErrorType& error_type) {
   switch (error_type) {
-    case ClientToServerResponse::SUCCESS:
+    case sync_pb::SyncEnums::SUCCESS:
       return browser_sync::SYNC_SUCCESS;
-    case ClientToServerResponse::NOT_MY_BIRTHDAY:
+    case sync_pb::SyncEnums::NOT_MY_BIRTHDAY:
       return browser_sync::NOT_MY_BIRTHDAY;
-    case ClientToServerResponse::THROTTLED:
+    case sync_pb::SyncEnums::THROTTLED:
       return browser_sync::THROTTLED;
-    case ClientToServerResponse::CLEAR_PENDING:
+    case sync_pb::SyncEnums::CLEAR_PENDING:
       return browser_sync::CLEAR_PENDING;
-    case ClientToServerResponse::TRANSIENT_ERROR:
+    case sync_pb::SyncEnums::TRANSIENT_ERROR:
       return browser_sync::TRANSIENT_ERROR;
-    case ClientToServerResponse::MIGRATION_DONE:
+    case sync_pb::SyncEnums::MIGRATION_DONE:
       return browser_sync::MIGRATION_DONE;
-    case ClientToServerResponse::UNKNOWN:
+    case sync_pb::SyncEnums::UNKNOWN:
       return browser_sync::UNKNOWN_ERROR;
-    case ClientToServerResponse::USER_NOT_ACTIVATED:
-    case ClientToServerResponse::AUTH_INVALID:
-    case ClientToServerResponse::ACCESS_DENIED:
+    case sync_pb::SyncEnums::USER_NOT_ACTIVATED:
+    case sync_pb::SyncEnums::AUTH_INVALID:
+    case sync_pb::SyncEnums::ACCESS_DENIED:
       return browser_sync::INVALID_CREDENTIAL;
     default:
       NOTREACHED();
@@ -260,16 +297,27 @@ browser_sync::SyncProtocolError ConvertErrorPBToLocalType(
   sync_protocol_error.url = error.url();
   sync_protocol_error.action = ConvertClientActionPBToLocalClientAction(
       error.action());
+
+  if (error.error_data_type_ids_size() > 0) {
+    // THROTTLED is currently the only error code that uses |error_data_types|.
+    DCHECK_EQ(error.error_type(), sync_pb::SyncEnums::THROTTLED);
+    for (int i = 0; i < error.error_data_type_ids_size(); ++i) {
+      sync_protocol_error.error_data_types.Put(
+          syncable::GetModelTypeFromExtensionFieldNumber(
+              error.error_data_type_ids(i)));
+    }
+  }
+
   return sync_protocol_error;
 }
 
 // TODO(lipalani) : Rename these function names as per the CR for issue 7740067.
 browser_sync::SyncProtocolError ConvertLegacyErrorCodeToNewError(
-    const sync_pb::ClientToServerResponse::ErrorType& error_type) {
+    const sync_pb::SyncEnums::ErrorType& error_type) {
   browser_sync::SyncProtocolError error;
   error.error_type = ConvertSyncProtocolErrorTypePBToLocalType(error_type);
-  if (error_type == ClientToServerResponse::CLEAR_PENDING ||
-      error_type == ClientToServerResponse::NOT_MY_BIRTHDAY) {
+  if (error_type == sync_pb::SyncEnums::CLEAR_PENDING ||
+      error_type == sync_pb::SyncEnums::NOT_MY_BIRTHDAY) {
       error.action = browser_sync::DISABLE_SYNC_ON_CLIENT;
   }  // There is no other action we can compute for legacy server.
   return error;
@@ -278,7 +326,7 @@ browser_sync::SyncProtocolError ConvertLegacyErrorCodeToNewError(
 }  // namespace
 
 // static
-bool SyncerProtoUtil::PostClientToServerMessage(
+SyncerError SyncerProtoUtil::PostClientToServerMessage(
     const ClientToServerMessage& msg,
     ClientToServerResponse* response,
     SyncSession* session) {
@@ -292,11 +340,20 @@ bool SyncerProtoUtil::PostClientToServerMessage(
   ScopedDirLookup dir(session->context()->directory_manager(),
       session->context()->account_name());
   if (!dir.good())
-    return false;
+    return DIRECTORY_LOOKUP_FAILED;
 
   if (!PostAndProcessHeaders(session->context()->connection_manager(), session,
-                             msg, response))
-    return false;
+                             msg, response)) {
+    // There was an error establishing communication with the server.
+    // We can not proceed beyond this point.
+    const browser_sync::HttpResponse::ServerConnectionCode server_status =
+        session->context()->connection_manager()->server_status();
+
+    DCHECK_NE(server_status, browser_sync::HttpResponse::NONE);
+    DCHECK_NE(server_status, browser_sync::HttpResponse::SERVER_CONNECTION_OK);
+
+    return ServerConnectionErrorAsSyncerError(server_status);
+  }
 
   browser_sync::SyncProtocolError sync_protocol_error;
 
@@ -315,7 +372,7 @@ bool SyncerProtoUtil::PostClientToServerMessage(
   }
 
   // Now set the error into the status so the layers above us could read it.
-  sessions::StatusController* status = session->status_controller();
+  sessions::StatusController* status = session->mutable_status_controller();
   status->set_sync_protocol_error(sync_protocol_error);
 
   // Inform the delegate of the error we got.
@@ -327,26 +384,29 @@ bool SyncerProtoUtil::PostClientToServerMessage(
     case browser_sync::UNKNOWN_ERROR:
       LOG(WARNING) << "Sync protocol out-of-date. The server is using a more "
                    << "recent version.";
-      return false;
+      return SERVER_RETURN_UNKNOWN_ERROR;
     case browser_sync::SYNC_SUCCESS:
       LogResponseProfilingData(*response);
-      return true;
+      return SYNCER_OK;
     case browser_sync::THROTTLED:
       LOG(WARNING) << "Client silenced by server.";
-      session->delegate()->OnSilencedUntil(base::TimeTicks::Now() +
-          GetThrottleDelay(*response));
-      return false;
+      HandleThrottleError(sync_protocol_error,
+                          base::TimeTicks::Now() + GetThrottleDelay(*response),
+                          session->context(),
+                          session->delegate());
+      return SERVER_RETURN_THROTTLED;
     case browser_sync::TRANSIENT_ERROR:
-      return false;
+      return SERVER_RETURN_TRANSIENT_ERROR;
     case browser_sync::MIGRATION_DONE:
       HandleMigrationDoneResponse(response, session);
-      return false;
+      return SERVER_RETURN_MIGRATION_DONE;
     case browser_sync::CLEAR_PENDING:
+      return SERVER_RETURN_CLEAR_PENDING;
     case browser_sync::NOT_MY_BIRTHDAY:
-      return false;
+      return SERVER_RETURN_NOT_MY_BIRTHDAY;
     default:
       NOTREACHED();
-      return false;
+      return UNSET;
   }
 }
 
@@ -364,7 +424,7 @@ bool SyncerProtoUtil::Compare(const syncable::Entry& local_entry,
 
   if (local_entry.Get(IS_DEL) && server_entry.deleted())
     return true;
-  if (!ClientAndServerTimeMatch(local_entry.Get(CTIME), server_entry.ctime())) {
+  if (local_entry.Get(CTIME) != ProtoTimeToTime(server_entry.ctime())) {
     LOG(WARNING) << "ctime mismatch";
     return false;
   }
@@ -389,8 +449,7 @@ bool SyncerProtoUtil::Compare(const syncable::Entry& local_entry,
     return false;
   }
   if (!local_entry.Get(IS_DIR) &&
-      !ClientAndServerTimeMatch(local_entry.Get(MTIME),
-                                server_entry.mtime())) {
+      (local_entry.Get(MTIME) != ProtoTimeToTime(server_entry.mtime()))) {
     LOG(WARNING) << "mtime mismatch";
     return false;
   }
@@ -438,18 +497,22 @@ const std::string& SyncerProtoUtil::NameFromCommitEntryResponse(
 
 std::string SyncerProtoUtil::SyncEntityDebugString(
     const sync_pb::SyncEntity& entry) {
+  const std::string& mtime_str =
+      GetTimeDebugString(ProtoTimeToTime(entry.mtime()));
+  const std::string& ctime_str =
+      GetTimeDebugString(ProtoTimeToTime(entry.ctime()));
   return base::StringPrintf(
       "id: %s, parent_id: %s, "
       "version: %"PRId64"d, "
-      "mtime: %" PRId64"d (client: %" PRId64"d), "
-      "ctime: %" PRId64"d (client: %" PRId64"d), "
+      "mtime: %" PRId64"d (%s), "
+      "ctime: %" PRId64"d (%s), "
       "name: %s, sync_timestamp: %" PRId64"d, "
       "%s ",
       entry.id_string().c_str(),
       entry.parent_id_string().c_str(),
       entry.version(),
-      entry.mtime(), ServerTimeToClientTime(entry.mtime()),
-      entry.ctime(), ServerTimeToClientTime(entry.ctime()),
+      entry.mtime(), mtime_str.c_str(),
+      entry.ctime(), ctime_str.c_str(),
       entry.name().c_str(), entry.sync_timestamp(),
       entry.deleted() ? "deleted, ":"");
 }

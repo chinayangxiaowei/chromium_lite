@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,19 @@ const char kAuxiliaryTextVisibleKey[] = "auxiliaryTextVisible";
 const char kCandidateIdKey[] = "candidateID";
 const char kCandidateKey[] = "candidate";
 const char kCandidatesKey[] = "candidates";
+const char kCheckedKey[] = "checked";
 const char kContextIdKey[] = "contextID";
+const char kCursorKey[] = "cursor";
 const char kCursorVisibleKey[] = "cursorVisible";
+const char kEnabledKey[] = "enabled";
 const char kEndKey[] = "end";
 const char kEngineIdKey[] = "engineID";
 const char kIdKey[] = "id";
+const char kItemsKey[] = "items";
+const char kKeyKey[] = "key";
 const char kLabelKey[] = "label";
 const char kPageSizeKey[] = "pageSize";
+const char kParentIdKey[] = "parentId";
 const char kPropertiesKey[] = "properties";
 const char kSegmentsKey[] = "segments";
 const char kSelectionEndKey[] = "selectionEnd";

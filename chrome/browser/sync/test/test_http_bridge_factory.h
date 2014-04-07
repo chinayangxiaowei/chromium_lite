@@ -25,7 +25,7 @@ class TestHttpBridge : public sync_api::HttpPostProviderInterface {
                               int content_length,
                               const char* content) OVERRIDE {}
 
-  virtual bool MakeSynchronousPost(int* os_error_code,
+  virtual bool MakeSynchronousPost(int* error_code,
                                    int* response_code) OVERRIDE;
 
   virtual int GetResponseContentLength() const OVERRIDE;
@@ -35,7 +35,7 @@ class TestHttpBridge : public sync_api::HttpPostProviderInterface {
   virtual const std::string GetResponseHeaderValue(
       const std::string&) const OVERRIDE;
 
-  virtual void Abort();
+  virtual void Abort() OVERRIDE;
   // End sync_api::HttpPostProviderInterface implementation.
 };
 

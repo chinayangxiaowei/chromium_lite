@@ -1,9 +1,9 @@
-/* Copyright (c) 2011 The Chromium Authors. All rights reserved.
+/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-/* From pp_file_info.idl modified Sat Jul 16 16:50:26 2011. */
+/* From pp_file_info.idl modified Mon Nov 14 10:36:01 2011. */
 
 #ifndef PPAPI_C_PP_FILE_INFO_H_
 #define PPAPI_C_PP_FILE_INFO_H_
@@ -27,11 +27,11 @@
  */
 typedef enum {
   /** A regular file type */
-  PP_FILETYPE_REGULAR,
+  PP_FILETYPE_REGULAR = 0,
   /** A directory */
-  PP_FILETYPE_DIRECTORY,
+  PP_FILETYPE_DIRECTORY = 1,
   /** A catch-all for unidentified types */
-  PP_FILETYPE_OTHER
+  PP_FILETYPE_OTHER = 2
 } PP_FileType;
 PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_FileType, 4);
 
@@ -42,11 +42,11 @@ typedef enum {
   /** For identified invalid return values */
   PP_FILESYSTEMTYPE_INVALID = 0,
   /** For external file system types */
-  PP_FILESYSTEMTYPE_EXTERNAL,
+  PP_FILESYSTEMTYPE_EXTERNAL = 1,
   /** For local persistant file system types */
-  PP_FILESYSTEMTYPE_LOCALPERSISTENT,
+  PP_FILESYSTEMTYPE_LOCALPERSISTENT = 2,
   /** For local temporary file system types */
-  PP_FILESYSTEMTYPE_LOCALTEMPORARY
+  PP_FILESYSTEMTYPE_LOCALTEMPORARY = 3
 } PP_FileSystemType;
 PP_COMPILE_ASSERT_SIZE_IN_BYTES(PP_FileSystemType, 4);
 /**

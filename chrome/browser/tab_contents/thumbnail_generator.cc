@@ -16,10 +16,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/thumbnail_score.h"
 #include "content/browser/renderer_host/backing_store.h"
-#include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
 #include "googleurl/src/gurl.h"
 #include "skia/ext/image_operations.h"
 #include "skia/ext/platform_canvas.h"
@@ -27,10 +29,6 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/skbitmap_operations.h"
-
-#if defined(OS_WIN)
-#include "content/common/section_util_win.h"
-#endif
 
 // Overview
 // --------
@@ -52,6 +50,8 @@
 //
 // We'll likely revise the algorithm to improve quality of thumbnails this
 // service generates.
+
+using content::WebContents;
 
 namespace {
 
@@ -130,7 +130,7 @@ SkBitmap GetBitmapForBackingStore(
 }  // namespace
 
 struct ThumbnailGenerator::AsyncRequestInfo {
-  scoped_ptr<ThumbnailReadyCallback> callback;
+  ThumbnailReadyCallback callback;
   scoped_ptr<TransportDIB> thumbnail_dib;
   RenderWidgetHost* renderer;  // Not owned.
 };
@@ -147,8 +147,8 @@ ThumbnailGenerator::ThumbnailGenerator()
 ThumbnailGenerator::~ThumbnailGenerator() {
 }
 
-void ThumbnailGenerator::StartThumbnailing(TabContents* tab_contents) {
-  TabContentsObserver::Observe(tab_contents);
+void ThumbnailGenerator::StartThumbnailing(WebContents* web_contents) {
+  content::WebContentsObserver::Observe(web_contents);
 
   if (registrar_.IsEmpty()) {
     // Even though we deal in RenderWidgetHosts, we only care about its
@@ -156,15 +156,16 @@ void ThumbnailGenerator::StartThumbnailing(TabContents* tab_contents) {
     // for RenderViewHosts that aren't in tabs, or RenderWidgetHosts that
     // aren't views like select popups.
     registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CREATED_FOR_TAB,
-                   Source<TabContents>(tab_contents));
-    registrar_.Add(this, content::NOTIFICATION_TAB_CONTENTS_DISCONNECTED,
-                   Source<TabContents>(tab_contents));
+                   content::Source<WebContents>(web_contents));
+    registrar_.Add(this, content::NOTIFICATION_WEB_CONTENTS_DISCONNECTED,
+                   content::Source<WebContents>(web_contents));
   }
 }
 
 void ThumbnailGenerator::MonitorRenderer(RenderWidgetHost* renderer,
                                          bool monitor) {
-  Source<RenderWidgetHost> renderer_source = Source<RenderWidgetHost>(renderer);
+  content::Source<RenderWidgetHost> renderer_source =
+      content::Source<RenderWidgetHost>(renderer);
   bool currently_monitored =
       registrar_.IsRegistered(
         this,
@@ -195,11 +196,9 @@ void ThumbnailGenerator::MonitorRenderer(RenderWidgetHost* renderer,
 
 void ThumbnailGenerator::AskForSnapshot(RenderWidgetHost* renderer,
                                         bool prefer_backing_store,
-                                        ThumbnailReadyCallback* callback,
+                                        const ThumbnailReadyCallback& callback,
                                         gfx::Size page_size,
                                         gfx::Size desired_size) {
-  scoped_ptr<ThumbnailReadyCallback> callback_deleter(callback);
-
   if (prefer_backing_store) {
     BackingStore* backing_store = renderer->GetBackingStore(false);
     if (backing_store) {
@@ -210,7 +209,7 @@ void ThumbnailGenerator::AskForSnapshot(RenderWidgetHost* renderer,
                                                     desired_size.height(),
                                                     kNoOptions,
                                                     NULL);
-      callback->Run(first_try);
+      callback.Run(first_try);
 
       return;
     }
@@ -236,10 +235,11 @@ void ThumbnailGenerator::AskForSnapshot(RenderWidgetHost* renderer,
   // Duplicate the handle to the DIB here because the renderer process does not
   // have permission. The duplicated handle is owned by the renderer process,
   // which is responsible for closing it.
-  TransportDIB::Handle renderer_dib_handle = chrome::GetSectionForProcess(
-      thumbnail_dib->handle(),
-      renderer->process()->GetHandle(),
-      false);
+  TransportDIB::Handle renderer_dib_handle;
+  DuplicateHandle(GetCurrentProcess(), thumbnail_dib->handle(),
+                  renderer->process()->GetHandle(), &renderer_dib_handle,
+                  STANDARD_RIGHTS_REQUIRED | FILE_MAP_READ | FILE_MAP_WRITE,
+                  FALSE, 0);
   if (!renderer_dib_handle) {
     LOG(WARNING) << "Could not duplicate dib handle for renderer";
     return;
@@ -249,7 +249,7 @@ void ThumbnailGenerator::AskForSnapshot(RenderWidgetHost* renderer,
 #endif
 
   linked_ptr<AsyncRequestInfo> request_info(new AsyncRequestInfo);
-  request_info->callback.reset(callback_deleter.release());
+  request_info->callback = callback;
   request_info->thumbnail_dib.reset(thumbnail_dib.release());
   request_info->renderer = renderer;
   ThumbnailCallbackMap::value_type new_value(sequence_num, request_info);
@@ -318,7 +318,7 @@ void ThumbnailGenerator::WidgetDidReceivePaintAtSizeAck(
     // TODO: Figure out a way to avoid this copy?
     non_owned_bitmap.copyTo(&result, SkBitmap::kARGB_8888_Config);
 
-    item->second->callback->Run(result);
+    item->second->callback.Run(result);
 
     // We're done with the callback, and with the DIB, so delete both.
     callback_map_.erase(item);
@@ -326,33 +326,35 @@ void ThumbnailGenerator::WidgetDidReceivePaintAtSizeAck(
 }
 
 void ThumbnailGenerator::Observe(int type,
-                                 const NotificationSource& source,
-                                 const NotificationDetails& details) {
+                                 const content::NotificationSource& source,
+                                 const content::NotificationDetails& details) {
   switch (type) {
     case content::NOTIFICATION_RENDER_VIEW_HOST_CREATED_FOR_TAB: {
       // Install our observer for all new RVHs.
-      RenderViewHost* renderer = Details<RenderViewHost>(details).ptr();
+      RenderViewHost* renderer =
+          content::Details<RenderViewHost>(details).ptr();
       MonitorRenderer(renderer, true);
       break;
     }
 
     case content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED:
-      if (!*Details<bool>(details).ptr())
-        WidgetHidden(Source<RenderWidgetHost>(source).ptr());
+      if (!*content::Details<bool>(details).ptr())
+        WidgetHidden(content::Source<RenderWidgetHost>(source).ptr());
       break;
 
     case content::NOTIFICATION_RENDER_WIDGET_HOST_DID_RECEIVE_PAINT_AT_SIZE_ACK: {
       RenderWidgetHost::PaintAtSizeAckDetails* size_ack_details =
-          Details<RenderWidgetHost::PaintAtSizeAckDetails>(details).ptr();
+          content::Details<RenderWidgetHost::PaintAtSizeAckDetails>(details).
+              ptr();
       WidgetDidReceivePaintAtSizeAck(
-          Source<RenderWidgetHost>(source).ptr(),
+          content::Source<RenderWidgetHost>(source).ptr(),
           size_ack_details->tag,
           size_ack_details->size);
       break;
     }
 
-    case content::NOTIFICATION_TAB_CONTENTS_DISCONNECTED:
-      TabContentsDisconnected(Source<TabContents>(source).ptr());
+    case content::NOTIFICATION_WEB_CONTENTS_DISCONNECTED:
+      WebContentsDisconnected(content::Source<WebContents>(source).ptr());
       break;
 
     default:
@@ -361,20 +363,20 @@ void ThumbnailGenerator::Observe(int type,
 }
 
 void ThumbnailGenerator::WidgetHidden(RenderWidgetHost* widget) {
-  // tab_contents_ can be NULL, if StartThumbnailing() is not called, but
+  // web_contents() can be NULL, if StartThumbnailing() is not called, but
   // MonitorRenderer() is called. The use case is found in
   // chrome/test/base/ui_test_utils.cc.
-  if (!tab_contents())
+  if (!web_contents())
     return;
-  UpdateThumbnailIfNecessary(tab_contents());
+  UpdateThumbnailIfNecessary(web_contents());
 }
 
-void ThumbnailGenerator::TabContentsDisconnected(TabContents* contents) {
+void ThumbnailGenerator::WebContentsDisconnected(WebContents* contents) {
   // Go through the existing callbacks, and find any that have the
   // same renderer as this TabContents and remove them so they don't
   // hang around.
   ThumbnailCallbackMap::iterator iterator = callback_map_.begin();
-  RenderWidgetHost* renderer = contents->render_view_host();
+  RenderWidgetHost* renderer = contents->GetRenderViewHost();
   while (iterator != callback_map_.end()) {
     if (iterator->second->renderer == renderer) {
       ThumbnailCallbackMap::iterator nuked = iterator;
@@ -447,10 +449,10 @@ SkBitmap ThumbnailGenerator::GetClippedBitmap(const SkBitmap& bitmap,
 }
 
 void ThumbnailGenerator::UpdateThumbnailIfNecessary(
-    TabContents* tab_contents) {
-  const GURL& url = tab_contents->GetURL();
+    WebContents* web_contents) {
+  const GURL& url = web_contents->GetURL();
   Profile* profile =
-      Profile::FromBrowserContext(tab_contents->browser_context());
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
   history::TopSites* top_sites = profile->GetTopSites();
   // Skip if we don't need to update the thumbnail.
   if (!ShouldUpdateThumbnail(profile, top_sites, url))
@@ -459,7 +461,7 @@ void ThumbnailGenerator::UpdateThumbnailIfNecessary(
   const int options = ThumbnailGenerator::kClippedThumbnail;
   ThumbnailGenerator::ClipResult clip_result = ThumbnailGenerator::kNotClipped;
   SkBitmap thumbnail = GetThumbnailForRendererWithOptions(
-      tab_contents->render_view_host(), options, &clip_result);
+      web_contents->GetRenderViewHost(), options, &clip_result);
   // Failed to generate a thumbnail. Maybe the tab is in the background?
   if (thumbnail.isNull())
     return;
@@ -467,12 +469,12 @@ void ThumbnailGenerator::UpdateThumbnailIfNecessary(
   // Compute the thumbnail score.
   ThumbnailScore score;
   score.at_top =
-      (tab_contents->render_view_host()->last_scroll_offset().y() == 0);
+      (web_contents->GetRenderViewHost()->last_scroll_offset().y() == 0);
   score.boring_score = ThumbnailGenerator::CalculateBoringScore(&thumbnail);
   score.good_clipping =
       (clip_result == ThumbnailGenerator::kTallerThanWide ||
        clip_result == ThumbnailGenerator::kNotClipped);
-  score.load_completed = (!load_interrupted_ && !tab_contents->IsLoading());
+  score.load_completed = (!load_interrupted_ && !web_contents->IsLoading());
 
   gfx::Image image(new SkBitmap(thumbnail));
   top_sites->SetPageThumbnail(url, &image, score);

@@ -9,20 +9,23 @@
 #include <gtk/gtk.h>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/gtk/owned_widget_gtk.h"
 
-class RenderViewHost;
 class StatusBubbleGtk;
-class TabContents;
 class TabContentsWrapper;
+
+namespace content {
+class WebContents;
+}
 
 typedef struct _GtkFloatingContainer GtkFloatingContainer;
 
-class TabContentsContainerGtk : public NotificationObserver,
+class TabContentsContainerGtk : public content::NotificationObserver,
                                 public ViewIDUtil::Delegate {
  public:
   explicit TabContentsContainerGtk(StatusBubbleGtk* status_bubble);
@@ -45,21 +48,21 @@ class TabContentsContainerGtk : public NotificationObserver,
   // Remove the tab from the hierarchy.
   void DetachTab(TabContentsWrapper* tab);
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   GtkWidget* widget() { return floating_.get(); }
 
   // ViewIDUtil::Delegate implementation ---------------------------------------
-  virtual GtkWidget* GetWidgetForViewID(ViewID id);
+  virtual GtkWidget* GetWidgetForViewID(ViewID id) OVERRIDE;
 
  private:
-  // Called when a TabContents is destroyed. This gives us a chance to clean
-  // up our internal state if the TabContents is somehow destroyed before we
+  // Called when a WebContents is destroyed. This gives us a chance to clean
+  // up our internal state if the WebContents is somehow destroyed before we
   // get notified.
-  void TabContentsDestroyed(TabContents* contents);
+  void WebContentsDestroyed(content::WebContents* contents);
 
   // Handler for |floating_|'s "set-floating-position" signal. During this
   // callback, we manually set the position of the status bubble.
@@ -81,7 +84,7 @@ class TabContentsContainerGtk : public NotificationObserver,
   CHROMEGTK_CALLBACK_1(TabContentsContainerGtk, gboolean, OnFocus,
                        GtkDirectionType);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // The TabContentsWrapper for the currently selected tab. This will be showing
   // unless there is a preview contents.

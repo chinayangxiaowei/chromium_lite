@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,6 @@
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bubble_controller.h"
 #import "chrome/browser/ui/cocoa/browser_command_executor.h"
 #import "chrome/browser/ui/cocoa/fullscreen_exit_bubble_controller.h"
-#import "chrome/browser/ui/cocoa/tab_contents/tab_contents_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_window_controller.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
@@ -28,7 +27,7 @@
 #import "chrome/browser/ui/cocoa/view_resizer.h"
 #include "ui/gfx/rect.h"
 
-@class AvatarButton;
+@class AvatarButtonController;
 class Browser;
 class BrowserWindow;
 class BrowserWindowCocoa;
@@ -42,19 +41,20 @@ class ConstrainedWindowMac;
 class LocationBarViewMac;
 @class PresentationModeController;
 @class PreviewableContentsController;
-@class SidebarController;
 class StatusBubbleMac;
-class TabContents;
 @class TabStripController;
 @class TabStripView;
 @class ToolbarController;
+
+namespace content {
+class WebContents;
+}
 
 @interface BrowserWindowController :
   TabWindowController<NSUserInterfaceValidations,
                       BookmarkBarControllerDelegate,
                       BrowserCommandExecutor,
                       ViewResizer,
-                      TabContentsControllerDelegate,
                       TabStripControllerDelegate> {
  @private
   // The ordering of these members is important as it determines the order in
@@ -71,7 +71,6 @@ class TabContents;
   scoped_nsobject<DownloadShelfController> downloadShelfController_;
   scoped_nsobject<BookmarkBarController> bookmarkBarController_;
   scoped_nsobject<DevToolsController> devToolsController_;
-  scoped_nsobject<SidebarController> sidebarController_;
   scoped_nsobject<PreviewableContentsController> previewableContentsController_;
   scoped_nsobject<PresentationModeController> presentationModeController_;
   scoped_nsobject<FullscreenExitBubbleController>
@@ -99,21 +98,15 @@ class TabContents;
   // NO on growth.
   BOOL isShrinkingFromZoomed_;
 
-  // Touch event data for two-finger gestures. Only available on Lion or higher
-  // with two-finger gestures enabled in the Trackpad preferences. This will
-  // contain the NSTouch objects from |-beginGestureWithEvent:| keyed by the
-  // touch's |identity|.
-  scoped_nsobject<NSMutableDictionary> twoFingerGestureTouches_;
-
   // The raw accumulated zoom value and the actual zoom increments made for an
   // an in-progress pinch gesture.
   CGFloat totalMagnifyGestureAmount_;
   NSInteger currentZoomStepDelta_;
 
-  // The view that shows the incognito badge or the multi-profile avatar icon.
-  // Nil if neither is present. Needed to access the view to move it to/from the
-  // fullscreen window.
-  scoped_nsobject<AvatarButton> avatarButton_;
+  // The view controller that manages the incognito badge or the multi-profile
+  // avatar icon. The view is always in the view hierarchy, but will be hidden
+  // unless it's appropriate to show it.
+  scoped_nsobject<AvatarButtonController> avatarButtonController_;
 
   // The view that shows the presentation mode toggle when in Lion fullscreen
   // mode.  Nil if not in fullscreen mode or not on Lion.
@@ -137,6 +130,10 @@ class TabContents;
   // exiting presentation mode.
   BOOL enteredPresentationModeFromFullscreen_;
 
+  // True between -windowWillEnterFullScreen and -windowDidEnterFullScreen.
+  // Only used on Lion.
+  BOOL enteringFullscreen_;
+
   // The size of the original (non-fullscreen) window.  This is saved just
   // before entering fullscreen mode and is only valid when |-isFullscreen|
   // returns YES.
@@ -155,6 +152,12 @@ class TabContents;
   // Bar visibility locks and releases only result (when appropriate) in changes
   // in visible state when the following is |YES|.
   BOOL barVisibilityUpdatesEnabled_;
+
+  // When going fullscreen for a tab, we need to store the URL and the
+  // fullscreen type, since we can't show the bubble until
+  // -windowDidEnterFullScreen: gets called.
+  GURL fullscreenUrl_;
+  FullscreenExitBubbleType fullscreenBubbleType_;
 }
 
 // A convenience class method which gets the |BrowserWindowController| for a
@@ -199,15 +202,22 @@ class TabContents;
 // Access the Profile object that backs this Browser.
 - (Profile*)profile;
 
+// Access the avatar button controller.
+- (AvatarButtonController*)avatarButtonController;
+
 // Updates the toolbar (and transitively the location bar) with the states of
 // the specified |tab|.  If |shouldRestore| is true, we're switching
 // (back?) to this tab and should restore any previous location bar state
 // (such as user editing) as well.
-- (void)updateToolbarWithContents:(TabContents*)tab
+- (void)updateToolbarWithContents:(content::WebContents*)tab
                shouldRestoreState:(BOOL)shouldRestore;
 
 // Sets whether or not the current page in the frontmost tab is bookmarked.
 - (void)setStarredState:(BOOL)isStarred;
+
+// Return the rect, in WebKit coordinates (flipped), of the window's grow box
+// in the coordinate system of the content area of the currently selected tab.
+- (NSRect)selectedTabGrowBoxRect;
 
 // Called to tell the selected tab to update its loading state.
 // |force| is set if the update is due to changing tabs, as opposed to
@@ -279,11 +289,10 @@ class TabContents;
 - (BOOL)canAttachConstrainedWindow;
 
 // Shows or hides the docked web inspector depending on |contents|'s state.
-- (void)updateDevToolsForContents:(TabContents*)contents;
+- (void)updateDevToolsForContents:(content::WebContents*)contents;
 
-// Displays the active sidebar linked to the |contents| or hides sidebar UI,
-// if there's no such sidebar.
-- (void)updateSidebarForContents:(TabContents*)contents;
+// Specifies whether devtools should dock to right.
+- (void)setDevToolsDockToRight:(bool)dock_to_right;
 
 // Gets the current theme provider.
 - (ui::ThemeProvider*)themeProvider;
@@ -297,13 +306,8 @@ class TabContents;
 // Return the point to which a bubble window's arrow should point.
 - (NSPoint)bookmarkBubblePoint;
 
-// Call when the user changes the tab strip display mode, enabling or
-// disabling vertical tabs for this browser. Re-flows the contents of the
-// browser.
-- (void)toggleTabStripDisplayMode;
-
 // Shows or hides the Instant preview contents.
-- (void)showInstant:(TabContents*)previewContents;
+- (void)showInstant:(content::WebContents*)previewContents;
 - (void)hideInstant;
 - (void)commitInstant;
 
@@ -366,7 +370,14 @@ class TabContents;
 
 // Enters (or exits) fullscreen mode.  This method is safe to call on all OS
 // versions.
-- (void)setFullscreen:(BOOL)fullscreen;
+- (void)enterFullscreenForURL:(const GURL&)url
+                   bubbleType:(FullscreenExitBubbleType)bubbleType;
+- (void)exitFullscreen;
+
+// Updates the contents of the fullscreen exit bubble with |url| and
+// |bubbleType|.
+- (void)updateFullscreenExitBubbleURL:(const GURL&)url
+                           bubbleType:(FullscreenExitBubbleType)bubbleType;
 
 // Returns fullscreen state.  This method is safe to call on all OS versions.
 - (BOOL)isFullscreen;
@@ -379,7 +390,9 @@ class TabContents;
 // Enters (or exits) presentation mode.  Also enters fullscreen mode if this
 // window is not already fullscreen.  This method is safe to call on all OS
 // versions.
-- (void)setPresentationMode:(BOOL)presentationMode;
+- (void)enterPresentationModeForURL:(const GURL&)url
+                         bubbleType:(FullscreenExitBubbleType)bubbleType;
+- (void)exitPresentationMode;
 
 // Returns presentation mode state.  This method is safe to call on all OS
 // versions.
@@ -440,7 +453,8 @@ class TabContents;
 // partially offscreen, its height is not adjusted at all.  This function
 // prefers to grow the window down, but will grow up if needed.  Calls to this
 // function should be followed by a call to |layoutSubviews|.
-- (void)adjustWindowHeightBy:(CGFloat)deltaH;
+// Returns if the window height was changed.
+- (BOOL)adjustWindowHeightBy:(CGFloat)deltaH;
 
 // Return an autoreleased NSWindow suitable for fullscreen use.
 - (NSWindow*)createFullscreenWindow;
@@ -453,6 +467,9 @@ class TabContents;
 // |source| rect doesn't fit into |target|.
 - (NSSize)overflowFrom:(NSRect)source
                     to:(NSRect)target;
+
+// The fullscreen exit bubble controller, or nil if the bubble isn't showing.
+- (FullscreenExitBubbleController*)fullscreenExitBubbleController;
 @end  // @interface BrowserWindowController (TestingAPI)
 
 

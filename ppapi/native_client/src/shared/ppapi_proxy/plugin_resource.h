@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,8 @@ namespace ppapi_proxy {
   F(PluginGraphics2D) \
   F(PluginGraphics3D) \
   F(PluginImageData) \
-  F(PluginInputEvent)
+  F(PluginInputEvent) \
+  F(PluginView)
 
 // Forward declaration of PluginResource classes.
 #define DECLARE_RESOURCE_CLASS(RESOURCE) class RESOURCE;

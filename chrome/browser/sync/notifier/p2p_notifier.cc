@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -65,7 +65,7 @@ P2PNotificationData::P2PNotificationData() : target_(NOTIFY_SELF) {}
 P2PNotificationData::P2PNotificationData(
     const std::string& sender_id,
     P2PNotificationTarget target,
-    const syncable::ModelTypeSet& changed_types)
+    syncable::ModelTypeSet changed_types)
     : sender_id_(sender_id),
       target_(target),
       changed_types_(changed_types) {}
@@ -86,7 +86,7 @@ bool P2PNotificationData::IsTargeted(const std::string& id) const {
   }
 }
 
-const syncable::ModelTypeSet& P2PNotificationData::GetChangedTypes() const {
+syncable::ModelTypeSet P2PNotificationData::GetChangedTypes() const {
   return changed_types_;
 }
 
@@ -94,7 +94,7 @@ bool P2PNotificationData::Equals(const P2PNotificationData& other) const {
   return
       (sender_id_ == other.sender_id_) &&
       (target_ == other.target_) &&
-      (changed_types_ == other.changed_types_);
+      changed_types_.Equals(other.changed_types_);
 }
 
 std::string P2PNotificationData::ToString() const {
@@ -142,12 +142,16 @@ bool P2PNotificationData::ResetFromString(const std::string& str) {
   return true;
 }
 
-P2PNotifier::P2PNotifier(notifier::TalkMediator* talk_mediator)
+P2PNotifier::P2PNotifier(notifier::TalkMediator* talk_mediator,
+                         P2PNotificationTarget send_notification_target)
     : talk_mediator_(talk_mediator),
       logged_in_(false),
       notifications_enabled_(false),
+      send_notification_target_(send_notification_target),
       parent_message_loop_proxy_(
           base::MessageLoopProxy::current()) {
+  DCHECK(send_notification_target_ == NOTIFY_OTHERS ||
+         send_notification_target_ == NOTIFY_ALL);
   talk_mediator_->SetDelegate(this);
 }
 
@@ -208,13 +212,10 @@ void P2PNotifier::UpdateCredentials(
 }
 
 void P2PNotifier::UpdateEnabledTypes(
-    const syncable::ModelTypeSet& enabled_types) {
+    syncable::ModelTypeSet enabled_types) {
   DCHECK(parent_message_loop_proxy_->BelongsToCurrentThread());
-  syncable::ModelTypeSet new_enabled_types;
-  std::set_difference(enabled_types.begin(), enabled_types.end(),
-                      enabled_types_.begin(), enabled_types_.end(),
-                      std::inserter(new_enabled_types,
-                                    new_enabled_types.end()));
+  const syncable::ModelTypeSet new_enabled_types =
+      Difference(enabled_types, enabled_types_);
   enabled_types_ = enabled_types;
   const P2PNotificationData notification_data(
       unique_id_, NOTIFY_SELF, new_enabled_types);
@@ -222,10 +223,10 @@ void P2PNotifier::UpdateEnabledTypes(
 }
 
 void P2PNotifier::SendNotification(
-    const syncable::ModelTypeSet& changed_types) {
+    syncable::ModelTypeSet changed_types) {
   DCHECK(parent_message_loop_proxy_->BelongsToCurrentThread());
   const P2PNotificationData notification_data(
-      unique_id_, NOTIFY_OTHERS, changed_types);
+      unique_id_, send_notification_target_, changed_types);
   SendNotificationData(notification_data);
 }
 
@@ -245,13 +246,13 @@ void P2PNotifier::OnNotificationStateChange(bool notifications_enabled) {
 void P2PNotifier::OnIncomingNotification(
     const notifier::Notification& notification) {
   DCHECK(parent_message_loop_proxy_->BelongsToCurrentThread());
-  VLOG(1) << "Received notification " << notification.ToString();
+  DVLOG(1) << "Received notification " << notification.ToString();
   if (!logged_in_) {
-    VLOG(1) << "Not logged in yet -- not emitting notification";
+    DVLOG(1) << "Not logged in yet -- not emitting notification";
     return;
   }
   if (!notifications_enabled_) {
-    VLOG(1) << "Notifications not enabled -- not emitting notification";
+    DVLOG(1) << "Notifications not enabled -- not emitting notification";
     return;
   }
   if (notification.channel != kSyncP2PNotificationChannel) {
@@ -266,20 +267,19 @@ void P2PNotifier::OnIncomingNotification(
         P2PNotificationData(unique_id_, NOTIFY_ALL, enabled_types_);
   }
   if (!notification_data.IsTargeted(unique_id_)) {
-    VLOG(1) << "Not a target of the notification -- "
-            << "not emitting notification";
+    DVLOG(1) << "Not a target of the notification -- "
+             << "not emitting notification";
     return;
   }
-  if (notification_data.GetChangedTypes().empty()) {
-    VLOG(1) << "No changed types -- not emitting notification";
+  if (notification_data.GetChangedTypes().Empty()) {
+    DVLOG(1) << "No changed types -- not emitting notification";
     return;
   }
   const syncable::ModelTypePayloadMap& type_payloads =
-      syncable::ModelTypePayloadMapFromBitSet(
-          syncable::ModelTypeBitSetFromSet(
-              notification_data.GetChangedTypes()), std::string());
+      syncable::ModelTypePayloadMapFromEnumSet(
+          notification_data.GetChangedTypes(), std::string());
   FOR_EACH_OBSERVER(SyncNotifierObserver, observer_list_,
-                    OnIncomingNotification(type_payloads));
+                    OnIncomingNotification(type_payloads, REMOTE_NOTIFICATION));
 }
 
 void P2PNotifier::OnOutgoingNotification() {}
@@ -295,7 +295,7 @@ void P2PNotifier::SendNotificationData(
   notifier::Notification notification;
   notification.channel = kSyncP2PNotificationChannel;
   notification.data = notification_data.ToString();
-  VLOG(1) << "Sending XMPP notification: " << notification.ToString();
+  DVLOG(1) << "Sending XMPP notification: " << notification.ToString();
   talk_mediator_->SendNotification(notification);
 }
 

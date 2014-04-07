@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,11 @@ namespace prerender {
 // NOTE: New values need to be appended, since they are used in histograms.
 enum Origin {
   ORIGIN_LINK_REL_PRERENDER = 0,
-  ORIGIN_OMNIBOX = 1,
+  // Obsolete: ORIGIN_OMNIBOX_ORIGINAL = 1,
   ORIGIN_GWS_PRERENDER = 2,
+  // Obsolete: ORIGIN_OMNIBOX_CONSERVATIVE = 3,
+  // Obsolete: ORIGIN_OMNIBOX_EXACT = 4,
+  ORIGIN_OMNIBOX = 5,
   ORIGIN_MAX
 };
 

@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -68,6 +68,14 @@ class FlashTest(pyauto.PyUITest):
     self.NavigateToURL(flash_url)
     flash_process_id1 = self._GetFlashProcessesInfo()[0]['pid']
     self.Kill(flash_process_id1)
+
+    def _GotFlashProcess(pid):
+      flash_processes = self._GetFlashProcessesInfo()
+      return len(flash_processes) == 1 and flash_processes[0]['pid'] == pid
+
+    self.assertTrue(self.WaitUntil(
+        lambda: not _GotFlashProcess(flash_process_id1)),
+        msg='Flash process did not go away after killing.')
     self.ReloadActiveTab()
     flash_processes = self._GetFlashProcessesInfo()
     self.assertEqual(1, len(flash_processes))
@@ -93,23 +101,8 @@ class FlashTest(pyauto.PyUITest):
     # Verify shockwave flash process not present.
     self._AssertFlashProcessNotPresent()
 
-  def testYouTubeVideo(self):
-    """Verify able to watch youtube.com."""
-    youtube_url = 'http://www.youtube.com/watch?v=0QRO3gKj3qw'
-    # Verify no flash process is present.
-    self._AssertFlashProcessNotPresent()
-    # Play YouTube video.
-    self.NavigateToURL(youtube_url)
-    self._AssertFlashProcessPresent()
-
   def testFlashIncognitoMode(self):
     """Verify we can play flash on an incognito window."""
-    if self.IsMac():
-      # On Mac 10.5, flash files loaded too quickly after firing browser ends
-      # up getting downloaded, which seems to indicate that the plugin hasn't
-      # been registered yet.
-      # Hack to register Flash plugin on Mac 10.5.  crbug.com/94123
-      self.GetPluginsInfo()
     # Verify no flash process is currently running
     self._AssertFlashProcessNotPresent()
     flash_url = self.GetFileURLForDataPath('plugin', 'flash.swf')

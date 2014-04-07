@@ -19,9 +19,11 @@
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/synchronization/lock.h"
+#include "chrome/browser/sync/internal_api/includes/unrecoverable_error_handler.h"
 #include "chrome/browser/sync/syncable/dir_open_result.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/util/cryptographer.h"
+#include "chrome/browser/sync/util/weak_handle.h"
 
 namespace sync_api { class BaseTransaction; }
 namespace syncable { class BaseTransaction; }
@@ -45,8 +47,12 @@ class DirectoryManager {
   // common case.  Does not take ownership of |delegate|, which must
   // be non-NULL.  Starts sending events to |delegate| if the returned
   // result is true.  Note that events to |delegate| may be sent from
-  // *any* thread.
-  bool Open(const std::string& name, DirectoryChangeDelegate* delegate);
+  // *any* thread.  |transaction_observer| must be initialized.
+  bool Open(const std::string& name, DirectoryChangeDelegate* delegate,
+            browser_sync::UnrecoverableErrorHandler*
+                unrecoverable_error_handler,
+            const browser_sync::WeakHandle<TransactionObserver>&
+                transaction_observer);
 
   // Marks a directory as closed and stops sending events to the
   // delegate.  It might take a while until all the file handles and
@@ -74,8 +80,14 @@ class DirectoryManager {
     return cryptographer_.get();
   }
 
-  DirOpenResult OpenImpl(const std::string& name, const FilePath& path,
-                         DirectoryChangeDelegate* delegate, bool* was_open);
+  DirOpenResult OpenImpl(
+      const std::string& name, const FilePath& path,
+      DirectoryChangeDelegate* delegate,
+      browser_sync::UnrecoverableErrorHandler*
+          unrecoverable_error_handler,
+      const browser_sync::WeakHandle<TransactionObserver>&
+          transaction_observer,
+      bool* was_open);
 
   // Helpers for friend class ScopedDirLookup:
   friend class ScopedDirLookup;

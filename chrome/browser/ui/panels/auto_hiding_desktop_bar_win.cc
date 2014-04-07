@@ -7,7 +7,7 @@
 #include <shellapi.h>
 
 #include "base/logging.h"
-#include "views/widget/monitor_win.h"
+#include "ui/views/widget/monitor_win.h"
 
 namespace {
 // The thickness of the area of an auto-hiding taskbar that is still visible
@@ -19,7 +19,8 @@ const int kCheckTaskbarPollingIntervalMs = 500;
 }  // namespace
 
 AutoHidingDesktopBarWin::AutoHidingDesktopBarWin(Observer* observer)
-    : observer_(observer) {
+    : observer_(observer),
+      monitor_(NULL) {
   DCHECK(observer);
   memset(taskbars_, 0, sizeof(taskbars_));
 }

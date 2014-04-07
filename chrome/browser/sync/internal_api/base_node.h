@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -73,8 +73,8 @@ class BaseNode {
   // different ID value.
   virtual int64 GetId() const;
 
-  // Returns the modification time of the object (in TimeTicks internal format).
-  int64 GetModificationTime() const;
+  // Returns the modification time of the object.
+  const base::Time& GetModificationTime() const;
 
   // Nodes are hierarchically arranged into a single-rooted tree.
   // InitByRootLookup on ReadNode allows access to the root. GetParentId is
@@ -156,17 +156,20 @@ class BaseNode {
   // Returns the local external ID associated with the node.
   int64 GetExternalId() const;
 
+  // Returns true iff this node has children.
+  bool HasChildren() const;
+
   // Return the ID of the node immediately before this in the sibling order.
   // For the first node in the ordering, return 0.
   int64 GetPredecessorId() const;
 
   // Return the ID of the node immediately after this in the sibling order.
   // For the last node in the ordering, return 0.
-  virtual int64 GetSuccessorId() const;
+  int64 GetSuccessorId() const;
 
   // Return the ID of the first child of this node.  If this node has no
   // children, return 0.
-  virtual int64 GetFirstChildId() const;
+  int64 GetFirstChildId() const;
 
   // These virtual accessors provide access to data members of derived classes.
   virtual const syncable::Entry* GetEntry() const = 0;
@@ -205,6 +208,21 @@ class BaseNode {
   void SetUnencryptedSpecifics(const sync_pb::EntitySpecifics& specifics);
 
  private:
+  // Have to friend the test class as well to allow member functions to access
+  // protected/private BaseNode methods.
+  friend class SyncManagerTest;
+  FRIEND_TEST_ALL_PREFIXES(SyncApiTest, GenerateSyncableHash);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, UpdateEntryWithEncryption);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest,
+                           UpdatePasswordSetEntitySpecificsNoChange);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, UpdatePasswordSetPasswordSpecifics);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, UpdatePasswordNewPassphrase);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, UpdatePasswordReencryptEverything);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, SetBookmarkTitle);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, SetBookmarkTitleWithEncryption);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, SetNonBookmarkTitle);
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, SetNonBookmarkTitleWithEncryption);
+
   void* operator new(size_t size);  // Node is meant for stack use only.
 
   // A holder for the unencrypted data stored in an encrypted node.
@@ -212,9 +230,6 @@ class BaseNode {
 
   // Same as |unencrypted_data_|, but for legacy password encryption.
   scoped_ptr<sync_pb::PasswordSpecificsData> password_data_;
-
-  friend class SyncApiTest;
-  FRIEND_TEST_ALL_PREFIXES(SyncApiTest, GenerateSyncableHash);
 
   DISALLOW_COPY_AND_ASSIGN(BaseNode);
 };

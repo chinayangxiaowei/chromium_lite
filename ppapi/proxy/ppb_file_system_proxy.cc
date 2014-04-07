@@ -1,11 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ppapi/proxy/ppb_file_system_proxy.h"
 
+#include "base/bind.h"
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppb_file_system.h"
 #include "ppapi/proxy/enter_proxy.h"
@@ -13,6 +13,7 @@
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/serialized_var.h"
+#include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/ppb_file_system_api.h"
 #include "ppapi/thunk/resource_creation_api.h"
@@ -27,9 +28,8 @@ namespace proxy {
 
 namespace {
 
-InterfaceProxy* CreateFileSystemProxy(Dispatcher* dispatcher,
-                                      const void* target_interface) {
-  return new PPB_FileSystem_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateFileSystemProxy(Dispatcher* dispatcher) {
+  return new PPB_FileSystem_Proxy(dispatcher);
 }
 
 }  // namespace
@@ -56,7 +56,7 @@ class FileSystem : public Resource, public PPB_FileSystem_API {
  private:
   PP_FileSystemType type_;
   bool called_open_;
-  PP_CompletionCallback current_open_callback_;
+  scoped_refptr<TrackedCallback> current_open_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(FileSystem);
 };
@@ -65,22 +65,10 @@ FileSystem::FileSystem(const HostResource& host_resource,
                        PP_FileSystemType type)
     : Resource(host_resource),
       type_(type),
-      called_open_(false),
-      current_open_callback_(PP_MakeCompletionCallback(NULL, NULL)) {
+      called_open_(false) {
 }
 
-// TODO(brettw) this logic is duplicated with some other resource objects
-// like FileChooser. It would be nice to look at all of the different resources
-// that need callback tracking and design something that they can all re-use.
 FileSystem::~FileSystem() {
-  // Ensure the callback is always fired.
-  if (current_open_callback_.func) {
-    // TODO(brettw) the callbacks at this level should be refactored with a
-    // more automatic tracking system like we have in the renderer.
-    MessageLoop::current()->PostTask(FROM_HERE, NewRunnableFunction(
-        current_open_callback_.func, current_open_callback_.user_data,
-        static_cast<int32_t>(PP_ERROR_ABORTED)));
-  }
 }
 
 PPB_FileSystem_API* FileSystem::AsPPB_FileSystem_API() {
@@ -89,16 +77,16 @@ PPB_FileSystem_API* FileSystem::AsPPB_FileSystem_API() {
 
 int32_t FileSystem::Open(int64_t expected_size,
                          PP_CompletionCallback callback) {
-  if (current_open_callback_.func)
+  if (TrackedCallback::IsPending(current_open_callback_))
     return PP_ERROR_INPROGRESS;
   if (called_open_)
     return PP_ERROR_FAILED;
 
-  current_open_callback_ = callback;
+  current_open_callback_ = new TrackedCallback(this, callback);
   called_open_ = true;
   PluginDispatcher::GetForResource(this)->Send(
       new PpapiHostMsg_PPBFileSystem_Open(
-          INTERFACE_ID_PPB_FILE_SYSTEM, host_resource(), expected_size));
+          API_ID_PPB_FILE_SYSTEM, host_resource(), expected_size));
   return PP_OK_COMPLETIONPENDING;
 }
 
@@ -107,12 +95,11 @@ PP_FileSystemType FileSystem::GetType() {
 }
 
 void FileSystem::OpenComplete(int32_t result) {
-  PP_RunAndClearCompletionCallback(&current_open_callback_, result);
+  TrackedCallback::ClearAndRun(&current_open_callback_, result);
 }
 
-PPB_FileSystem_Proxy::PPB_FileSystem_Proxy(Dispatcher* dispatcher,
-                                           const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface),
+PPB_FileSystem_Proxy::PPB_FileSystem_Proxy(Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
       callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
 }
 
@@ -121,9 +108,9 @@ PPB_FileSystem_Proxy::~PPB_FileSystem_Proxy() {
 
 const InterfaceProxy::Info* PPB_FileSystem_Proxy::GetInfo() {
   static const Info info = {
-    thunk::GetPPB_FileSystem_Thunk(),
-    PPB_FILESYSTEM_INTERFACE,
-    INTERFACE_ID_PPB_FILE_SYSTEM,
+    thunk::GetPPB_FileSystem_1_0_Thunk(),
+    PPB_FILESYSTEM_INTERFACE_1_0,
+    API_ID_PPB_FILE_SYSTEM,
     false,
     &CreateFileSystemProxy,
   };
@@ -140,7 +127,7 @@ PP_Resource PPB_FileSystem_Proxy::CreateProxyResource(
 
   HostResource result;
   dispatcher->Send(new PpapiHostMsg_PPBFileSystem_Create(
-      INTERFACE_ID_PPB_FILE_SYSTEM, instance, type, &result));
+      API_ID_PPB_FILE_SYSTEM, instance, type, &result));
   if (result.is_null())
     return 0;
   return (new FileSystem(result, type))->GetReference();
@@ -160,7 +147,7 @@ bool PPB_FileSystem_Proxy::OnMessageReceived(const IPC::Message& msg) {
 void PPB_FileSystem_Proxy::OnMsgCreate(PP_Instance instance,
                                        int type,
                                        HostResource* result) {
-  EnterFunctionNoLock<ResourceCreationAPI> enter(instance, true);
+  thunk::EnterResourceCreation enter(instance);
   if (enter.failed())
     return;
   PP_Resource resource = enter.functions()->CreateFileSystem(
@@ -191,7 +178,7 @@ void PPB_FileSystem_Proxy::OpenCompleteInHost(
     int32_t result,
     const HostResource& host_resource) {
   dispatcher()->Send(new PpapiMsg_PPBFileSystem_OpenComplete(
-      INTERFACE_ID_PPB_FILE_SYSTEM, host_resource, result));
+      API_ID_PPB_FILE_SYSTEM, host_resource, result));
 }
 
 }  // namespace proxy

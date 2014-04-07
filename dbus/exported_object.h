@@ -6,19 +6,17 @@
 #define DBUS_EXPORTED_OBJECT_H_
 #pragma once
 
-#include <string>
-#include <map>
-#include <utility>
-
 #include <dbus/dbus.h>
+
+#include <map>
+#include <string>
+#include <utility>
 
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/time.h"
-
-class MessageLoop;
 
 namespace dbus {
 
@@ -40,9 +38,15 @@ class ExportedObject : public base::RefCountedThreadSafe<ExportedObject> {
                  const std::string& service_name,
                  const std::string& object_path);
 
+  // Called to send a response from an exported method. Response* is the
+  // response message. Callers should pass a NULL Response* in the event
+  // of an error that prevents the sending of a response.
+  typedef base::Callback<void (Response*)> ResponseSender;
+
   // Called when an exported method is called. MethodCall* is the request
-  // message.
-  typedef base::Callback<Response* (MethodCall*)> MethodCallCallback;
+  // message. ResponseSender is the callback that should be used to send a
+  // response.
+  typedef base::Callback<void (MethodCall*, ResponseSender)> MethodCallCallback;
 
   // Called when method exporting is done.
   // Parameters:
@@ -108,7 +112,7 @@ class ExportedObject : public base::RefCountedThreadSafe<ExportedObject> {
 
   // Helper function for SendSignal().
   void SendSignalInternal(base::TimeTicks start_time,
-                          void* signal_message);
+                          DBusMessage* signal_message);
 
   // Registers this object to the bus.
   // Returns true on success, or the object is already registered.
@@ -123,7 +127,21 @@ class ExportedObject : public base::RefCountedThreadSafe<ExportedObject> {
 
   // Runs the method. Helper function for HandleMessage().
   void RunMethod(MethodCallCallback method_call_callback,
-                 MethodCall* method_call);
+                 MethodCall* method_call,
+                 base::TimeTicks start_time);
+
+  // Callback invoked by service provider to send a response to a method call.
+  // Can be called immediately from a MethodCallCallback to implement a
+  // synchronous service or called later to implement an asynchronous service.
+  void SendResponse(base::TimeTicks start_time,
+                    MethodCall* method_call,
+                    Response* response);
+
+  // Called on completion of the method run from SendResponse().
+  // Takes ownership of |method_call| and |response|.
+  void OnMethodCompleted(MethodCall* method_call,
+                         Response* response,
+                         base::TimeTicks start_time);
 
   // Called when the object is unregistered.
   void OnUnregistered(DBusConnection* connection);
@@ -137,12 +155,10 @@ class ExportedObject : public base::RefCountedThreadSafe<ExportedObject> {
   static void OnUnregisteredThunk(DBusConnection* connection,
                                   void* user_data);
 
-  Bus* bus_;
+  scoped_refptr<Bus> bus_;
   std::string service_name_;
   std::string object_path_;
   bool object_is_registered_;
-  dbus::Response* response_from_method_;
-  base::WaitableEvent on_method_is_called_;
 
   // The method table where keys are absolute method names (i.e. interface
   // name + method name), and values are the corresponding callbacks.

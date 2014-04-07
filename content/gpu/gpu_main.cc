@@ -14,17 +14,16 @@
 #include "base/threading/platform_thread.h"
 #include "base/win/scoped_com_initializer.h"
 #include "build/build_config.h"
-#include "content/common/content_switches.h"
 #include "content/common/gpu/gpu_config.h"
-#include "content/common/main_function_params.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/main_function_params.h"
 #include "content/gpu/gpu_child_thread.h"
 #include "content/gpu/gpu_process.h"
 #include "ui/gfx/gl/gl_surface.h"
 #include "ui/gfx/gl/gl_switches.h"
 
-#if defined(OS_MACOSX)
-#include "content/common/chrome_application_mac.h"
-#elif defined(OS_WIN)
+#if defined(OS_WIN)
+#include "content/common/gpu/media/dxva_video_decode_accelerator.h"
 #include "sandbox/src/sandbox.h"
 #endif
 
@@ -32,13 +31,33 @@
 #include "ui/base/x/x11_util.h"
 #endif
 
+#if defined(TOOLKIT_USES_GTK)
+#include "ui/gfx/gtk_util.h"
+#endif
+
 // Main function for starting the Gpu process.
-int GpuMain(const MainFunctionParams& parameters) {
+int GpuMain(const content::MainFunctionParams& parameters) {
   base::Time start_time = base::Time::Now();
 
-  const CommandLine& command_line = parameters.command_line_;
+  const CommandLine& command_line = parameters.command_line;
   if (command_line.HasSwitch(switches::kGpuStartupDialog)) {
     ChildProcess::WaitForDebugger("Gpu");
+  }
+
+  if (!command_line.HasSwitch(switches::kSingleProcess)) {
+#if defined(OS_WIN)
+    // Prevent Windows from displaying a modal dialog on failures like not being
+    // able to load a DLL.
+    SetErrorMode(
+        SEM_FAILCRITICALERRORS |
+        SEM_NOGPFAULTERRORBOX |
+        SEM_NOOPENFILEERRORBOX);
+#elif defined(USE_X11)
+    ui::SetDefaultX11ErrorHandlers();
+#endif
+#if defined(TOOLKIT_USES_GTK)
+    gfx::GtkInitFromCommandLine(*CommandLine::ForCurrentProcess());
+#endif
   }
 
   // Initialization of the OpenGL bindings may fail, in which case we
@@ -56,24 +75,26 @@ int GpuMain(const MainFunctionParams& parameters) {
   // watchdog because this can take a lot of time and the GPU watchdog might
   // terminate the GPU process.
   if (!gfx::GLSurface::InitializeOneOff()) {
-    LOG(INFO) << "GLContext::InitializeOneOff failed";
+    LOG(INFO) << "gfx::GLSurface::InitializeOneOff failed";
     dead_on_arrival = true;
   }
 
   base::win::ScopedCOMInitializer com_initializer;
 
 #if defined(OS_WIN)
+  // Cause advapi32 to load before the sandbox is turned on.
+  unsigned int dummy_rand;
+  rand_s(&dummy_rand);
+
   sandbox::TargetServices* target_services =
-      parameters.sandbox_info_.TargetServices();
+      parameters.sandbox_info->target_services;
+  // Initialize H/W video decoding stuff which fails in the sandbox.
+  DXVAVideoDecodeAccelerator::PreSandboxInitialization();
   // For windows, if the target_services interface is not zero, the process
   // is sandboxed and we must call LowerToken() before rendering untrusted
   // content.
   if (target_services)
     target_services->LowerToken();
-#endif
-
-#if defined(OS_MACOSX)
-  chrome_application_mac::RegisterCrApp();
 #endif
 
   MessageLoop::Type message_loop_type = MessageLoop::TYPE_UI;
@@ -91,19 +112,6 @@ int GpuMain(const MainFunctionParams& parameters) {
 
   MessageLoop main_message_loop(message_loop_type);
   base::PlatformThread::SetName("CrGpuMain");
-
-  if (!command_line.HasSwitch(switches::kSingleProcess)) {
-#if defined(OS_WIN)
-    // Prevent Windows from displaying a modal dialog on failures like not being
-    // able to load a DLL.
-    SetErrorMode(
-        SEM_FAILCRITICALERRORS |
-        SEM_NOGPFAULTERRORBOX |
-        SEM_NOOPENFILEERRORBOX);
-#elif defined(USE_X11)
-    ui::SetDefaultX11ErrorHandlers();
-#endif
-  }
 
   GpuProcess gpu_process;
 

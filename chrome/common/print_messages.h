@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/shared_memory.h"
 #include "ipc/ipc_message_macros.h"
 #include "printing/page_size_margins.h"
+#include "printing/print_job_constants.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
 
@@ -26,7 +27,8 @@ struct PrintMsg_Print_Params {
   void Reset();
 
   gfx::Size page_size;
-  gfx::Size printable_size;
+  gfx::Size content_size;
+  gfx::Rect printable_area;
   int margin_top;
   int margin_left;
   double dpi;
@@ -39,6 +41,7 @@ struct PrintMsg_Print_Params {
   std::string preview_ui_addr;
   int preview_request_id;
   bool is_first_request;
+  bool print_to_pdf;
   bool display_header_footer;
   string16 date;
   string16 title;
@@ -60,6 +63,8 @@ struct PrintMsg_PrintPages_Params {
 
 #define IPC_MESSAGE_START PrintMsgStart
 
+IPC_ENUM_TRAITS(printing::MarginType)
+
 // Parameters for a render request.
 IPC_STRUCT_TRAITS_BEGIN(PrintMsg_Print_Params)
   // Physical size of the page, including non-printable margins,
@@ -67,7 +72,10 @@ IPC_STRUCT_TRAITS_BEGIN(PrintMsg_Print_Params)
   IPC_STRUCT_TRAITS_MEMBER(page_size)
 
   // In pixels according to dpi_x and dpi_y.
-  IPC_STRUCT_TRAITS_MEMBER(printable_size)
+  IPC_STRUCT_TRAITS_MEMBER(content_size)
+
+  // Physical printable area of the page in pixels according to dpi.
+  IPC_STRUCT_TRAITS_MEMBER(printable_area)
 
   // The y-offset of the printable area, in pixels according to dpi.
   IPC_STRUCT_TRAITS_MEMBER(margin_top)
@@ -106,6 +114,9 @@ IPC_STRUCT_TRAITS_BEGIN(PrintMsg_Print_Params)
 
   // True if this is the first preview request.
   IPC_STRUCT_TRAITS_MEMBER(is_first_request)
+
+  // True if print to pdf is requested.
+  IPC_STRUCT_TRAITS_MEMBER(print_to_pdf)
 
   // Specifies if the header and footer should be rendered.
   IPC_STRUCT_TRAITS_MEMBER(display_header_footer)
@@ -230,19 +241,15 @@ IPC_STRUCT_BEGIN(PrintHostMsg_DidPrintPage_Params)
 
   // The printable area the page author specified.
   IPC_STRUCT_MEMBER(gfx::Rect, content_area)
-
-  // True if the page has visible overlays.
-  IPC_STRUCT_MEMBER(bool, has_visible_overlays)
 IPC_STRUCT_END()
 
 // Parameters for the IPC message ViewHostMsg_ScriptedPrint
 IPC_STRUCT_BEGIN(PrintHostMsg_ScriptedPrint_Params)
-  IPC_STRUCT_MEMBER(int, routing_id)
   IPC_STRUCT_MEMBER(gfx::NativeViewId, host_window_id)
   IPC_STRUCT_MEMBER(int, cookie)
   IPC_STRUCT_MEMBER(int, expected_pages_count)
   IPC_STRUCT_MEMBER(bool, has_selection)
-  IPC_STRUCT_MEMBER(bool, use_overlays)
+  IPC_STRUCT_MEMBER(printing::MarginType, margin_type)
 IPC_STRUCT_END()
 
 
@@ -344,7 +351,13 @@ IPC_MESSAGE_CONTROL1(PrintHostMsg_TempFileForPrintingWritten,
 #endif
 
 // Asks the browser to do print preview.
-IPC_MESSAGE_ROUTED0(PrintHostMsg_RequestPrintPreview)
+// |is_modifiable| is set to true when the request is for a web page, and false
+// for a PDF.
+// |webnode_only| is set to true if the document being printed is a specific
+// WebNode, and false if the document is a full WebFrame.
+IPC_MESSAGE_ROUTED2(PrintHostMsg_RequestPrintPreview,
+                    bool /* is_modifiable */,
+                    bool /* webnode_only */)
 
 // Notify the browser the number of pages in the print preview document.
 IPC_MESSAGE_ROUTED1(PrintHostMsg_DidGetPreviewPageCount,
@@ -352,8 +365,11 @@ IPC_MESSAGE_ROUTED1(PrintHostMsg_DidGetPreviewPageCount,
 
 // Notify the browser of the default page layout according to the currently
 // selected printer and page size.
-IPC_MESSAGE_ROUTED1(PrintHostMsg_DidGetDefaultPageLayout,
-                    printing::PageSizeMargins /* page layout in points */)
+// |has_custom_page_size_style| is true when the printing frame has a custom
+// page size css otherwise false.
+IPC_MESSAGE_ROUTED2(PrintHostMsg_DidGetDefaultPageLayout,
+                    printing::PageSizeMargins /* page layout in points */,
+                    bool /* has custom page size style */)
 
 // Notify the browser a print preview page has been rendered.
 IPC_MESSAGE_ROUTED1(PrintHostMsg_DidPreviewPage,
@@ -388,3 +404,8 @@ IPC_MESSAGE_ROUTED1(PrintHostMsg_PrintPreviewCancelled,
 // driver is bogus).
 IPC_MESSAGE_ROUTED1(PrintHostMsg_PrintPreviewInvalidPrinterSettings,
                     int /* document cookie */)
+
+// Run a nested message loop in the renderer until print preview for
+// window.print() finishes.
+IPC_SYNC_MESSAGE_ROUTED1_0(PrintHostMsg_ScriptedPrintPreview,
+                           bool /* is_modifiable */)

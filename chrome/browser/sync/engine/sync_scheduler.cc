@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 #include <algorithm>
 #include <cstring>
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/rand_util.h"
-#include "base/tracked.h"
 #include "chrome/browser/sync/engine/syncer.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
 #include "chrome/browser/sync/protocol/proto_enum_conversions.h"
@@ -25,8 +26,9 @@ namespace browser_sync {
 using sessions::SyncSession;
 using sessions::SyncSessionSnapshot;
 using sessions::SyncSourceInfo;
+using syncable::ModelTypeSet;
+using syncable::ModelTypeSetToString;
 using syncable::ModelTypePayloadMap;
-using syncable::ModelTypeBitSet;
 using sync_pb::GetUpdatesCallerInfo;
 
 namespace {
@@ -131,6 +133,8 @@ GetUpdatesCallerInfo::GetUpdatesSource GetUpdatesFromNudgeSource(
       return GetUpdatesCallerInfo::LOCAL;
     case NUDGE_SOURCE_CONTINUATION:
       return GetUpdatesCallerInfo::SYNC_CYCLE_CONTINUATION;
+    case NUDGE_SOURCE_LOCAL_REFRESH:
+      return GetUpdatesCallerInfo::DATATYPE_REFRESH;
     case NUDGE_SOURCE_UNKNOWN:
       return GetUpdatesCallerInfo::UNKNOWN;
     default:
@@ -147,10 +151,10 @@ SyncScheduler::WaitInterval::WaitInterval(Mode mode, TimeDelta length)
 
 #define SLOG(severity) LOG(severity) << name_ << ": "
 
-#define SVLOG(verbose_level) VLOG(verbose_level) << name_ << ": "
+#define SDVLOG(verbose_level) DVLOG(verbose_level) << name_ << ": "
 
-#define SVLOG_LOC(from_here, verbose_level)             \
-  VLOG_LOC(from_here, verbose_level) << name_ << ": "
+#define SDVLOG_LOC(from_here, verbose_level)             \
+  DVLOG_LOC(from_here, verbose_level) << name_ << ": "
 
 namespace {
 
@@ -174,7 +178,10 @@ bool IsConfigRelatedUpdateSourceValue(
 SyncScheduler::SyncScheduler(const std::string& name,
                              sessions::SyncSessionContext* context,
                              Syncer* syncer)
-    : method_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_ptr_factory_for_weak_handle_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      weak_handle_this_(MakeWeakHandle(
+          weak_ptr_factory_for_weak_handle_.GetWeakPtr())),
       name_(name),
       sync_loop_(MessageLoop::current()),
       started_(false),
@@ -185,7 +192,10 @@ SyncScheduler::SyncScheduler(const std::string& name,
       sessions_commit_delay_(
           TimeDelta::FromSeconds(kDefaultSessionsCommitDelaySeconds)),
       mode_(NORMAL_MODE),
-      server_connection_ok_(false),
+      // Start with assuming everything is fine with the connection.
+      // At the end of the sync cycle we would have the correct status.
+      server_connection_ok_(true),
+      connection_code_(HttpResponse::SERVER_CONNECTION_OK),
       delay_provider_(new DelayProvider()),
       syncer_(syncer),
       session_context_(context) {
@@ -194,60 +204,90 @@ SyncScheduler::SyncScheduler(const std::string& name,
 
 SyncScheduler::~SyncScheduler() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  Stop();
+  StopImpl(base::Closure());
 }
 
-void SyncScheduler::CheckServerConnectionManagerStatus(
+void SyncScheduler::OnCredentialsUpdated() {
+  DCHECK_EQ(MessageLoop::current(), sync_loop_);
+
+  // TODO(lipalani): crbug.com/106262. One issue here is that if after
+  // the auth error we happened to do gettime and it succeeded then
+  // the |connection_code_| would be briefly OK however it would revert
+  // back to SYNC_AUTH_ERROR at the end of the sync cycle. The
+  // referenced bug explores the option of removing gettime calls
+  // altogethere
+  if (HttpResponse::SYNC_AUTH_ERROR == connection_code_) {
+    OnServerConnectionErrorFixed();
+  }
+}
+
+void SyncScheduler::OnConnectionStatusChange() {
+  if (HttpResponse::CONNECTION_UNAVAILABLE  == connection_code_) {
+    // Optimistically assume that the connection is fixed and try
+    // connecting.
+    OnServerConnectionErrorFixed();
+  }
+}
+
+void SyncScheduler::OnServerConnectionErrorFixed() {
+  DCHECK(!server_connection_ok_);
+  connection_code_ = HttpResponse::SERVER_CONNECTION_OK;
+  server_connection_ok_ = true;
+  PostTask(FROM_HERE, "DoCanaryJob",
+           base::Bind(&SyncScheduler::DoCanaryJob,
+                      weak_ptr_factory_.GetWeakPtr()));
+
+}
+
+void SyncScheduler::UpdateServerConnectionManagerStatus(
     HttpResponse::ServerConnectionCode code) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "New server connection code: "
-           << HttpResponse::GetServerConnectionCodeString(code);
+  SDVLOG(2) << "New server connection code: "
+            << HttpResponse::GetServerConnectionCodeString(code);
   bool old_server_connection_ok = server_connection_ok_;
+
+  connection_code_ = code;
 
   // Note, be careful when adding cases here because if the SyncScheduler
   // thinks there is no valid connection as determined by this method, it
   // will drop out of *all* forward progress sync loops (it won't poll and it
   // will queue up Talk notifications but not actually call SyncShare) until
   // some external action causes a ServerConnectionManager to broadcast that
-  // a valid connection has been re-established.
+  // a valid connection has been re-established
   if (HttpResponse::CONNECTION_UNAVAILABLE == code ||
       HttpResponse::SYNC_AUTH_ERROR == code) {
     server_connection_ok_ = false;
-    SVLOG(2) << "Sync auth error or unavailable connection: "
-             << "server connection is down";
+    SDVLOG(2) << "Sync auth error or unavailable connection: "
+              << "server connection is down";
   } else if (HttpResponse::SERVER_CONNECTION_OK == code) {
     server_connection_ok_ = true;
-    SVLOG(2) << "Sync server connection is ok: "
-             << "server connection is up, doing canary job";
-    DoCanaryJob();
+    SDVLOG(2) << "Sync server connection is ok: "
+              << "server connection is up, doing canary job";
   }
 
   if (old_server_connection_ok != server_connection_ok_) {
     const char* transition =
         server_connection_ok_ ? "down -> up" : "up -> down";
-    SVLOG(2) << "Server connection changed: " << transition;
+    SDVLOG(2) << "Server connection changed: " << transition;
   }
 }
 
-void SyncScheduler::Start(Mode mode, ModeChangeCallback* callback) {
+void SyncScheduler::Start(Mode mode, const base::Closure& callback) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   std::string thread_name = MessageLoop::current()->thread_name();
   if (thread_name.empty())
     thread_name = "<Main thread>";
-  SVLOG(2) << "Start called from thread "
-           << thread_name << " with mode " << GetModeString(mode);
+  SDVLOG(2) << "Start called from thread "
+            << thread_name << " with mode " << GetModeString(mode);
   if (!started_) {
-    WatchConnectionManager();
+    started_ = true;
     PostTask(FROM_HERE, "SendInitialSnapshot",
-             method_factory_.NewRunnableMethod(
-                 &SyncScheduler::SendInitialSnapshot));
+             base::Bind(&SyncScheduler::SendInitialSnapshot,
+                        weak_ptr_factory_.GetWeakPtr()));
   }
-  started_ = true;
-  // TODO(sync): This will leak if StartImpl is never run.  Fix this.
-  // Might be easiest to just use base::Callback.
   PostTask(FROM_HERE, "StartImpl",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::StartImpl, mode, callback));
+           base::Bind(&SyncScheduler::StartImpl,
+                      weak_ptr_factory_.GetWeakPtr(), mode, callback));
 }
 
 void SyncScheduler::SendInitialSnapshot() {
@@ -261,29 +301,18 @@ void SyncScheduler::SendInitialSnapshot() {
   session_context_->NotifyListeners(event);
 }
 
-void SyncScheduler::WatchConnectionManager() {
+void SyncScheduler::StartImpl(Mode mode, const base::Closure& callback) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  ServerConnectionManager* scm = session_context_->connection_manager();
-  PostTask(FROM_HERE, "CheckServerConnectionManagerStatus",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::CheckServerConnectionManagerStatus,
-               scm->server_status()));
-  scm->AddListener(this);
-}
+  SDVLOG(2) << "In StartImpl with mode " << GetModeString(mode);
 
-void SyncScheduler::StartImpl(Mode mode, ModeChangeCallback* callback) {
-  DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "In StartImpl with mode " << GetModeString(mode);
-
-  scoped_ptr<ModeChangeCallback> scoped_callback(callback);
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   DCHECK(!session_context_->account_name().empty());
   DCHECK(syncer_.get());
   Mode old_mode = mode_;
   mode_ = mode;
   AdjustPolling(NULL);  // Will kick start poll timer if needed.
-  if (scoped_callback.get())
-    scoped_callback->Run();
+  if (!callback.is_null())
+    callback.Run();
 
   if (old_mode != mode_) {
     // We just changed our mode. See if there are any pending jobs that we could
@@ -299,10 +328,10 @@ SyncScheduler::JobProcessDecision SyncScheduler::DecideWhileInWaitInterval(
   DCHECK_NE(job.purpose, SyncSessionJob::CLEAR_USER_DATA);
   DCHECK_NE(job.purpose, SyncSessionJob::CLEANUP_DISABLED_TYPES);
 
-  SVLOG(2) << "DecideWhileInWaitInterval with WaitInterval mode "
-           << WaitInterval::GetModeString(wait_interval_->mode)
-           << (wait_interval_->had_nudge ? " (had nudge)" : "")
-           << (job.is_canary_job ? " (canary)" : "");
+  SDVLOG(2) << "DecideWhileInWaitInterval with WaitInterval mode "
+            << WaitInterval::GetModeString(wait_interval_->mode)
+            << (wait_interval_->had_nudge ? " (had nudge)" : "")
+            << (job.is_canary_job ? " (canary)" : "");
 
   if (job.purpose == SyncSessionJob::POLL)
     return DROP;
@@ -334,6 +363,23 @@ SyncScheduler::JobProcessDecision SyncScheduler::DecideOnJob(
       job.purpose == SyncSessionJob::CLEANUP_DISABLED_TYPES)
     return CONTINUE;
 
+  // See if our type is throttled.
+  syncable::ModelTypeSet throttled_types =
+      session_context_->GetThrottledTypes();
+  if (job.purpose == SyncSessionJob::NUDGE &&
+      job.session->source().updates_source == GetUpdatesCallerInfo::LOCAL) {
+    syncable::ModelTypeSet requested_types;
+    for (ModelTypePayloadMap::const_iterator i =
+         job.session->source().types.begin();
+         i != job.session->source().types.end();
+         ++i) {
+      requested_types.Put(i->first);
+    }
+
+    if (!requested_types.Empty() && throttled_types.HasAll(requested_types))
+      return SAVE;
+  }
+
   if (wait_interval_.get())
     return DecideWhileInWaitInterval(job);
 
@@ -352,14 +398,14 @@ SyncScheduler::JobProcessDecision SyncScheduler::DecideOnJob(
 
   // Freshness condition
   if (job.scheduled_start < last_sync_session_end_time_) {
-    SVLOG(2) << "Dropping job because of freshness";
+    SDVLOG(2) << "Dropping job because of freshness";
     return DROP;
   }
 
   if (server_connection_ok_)
     return CONTINUE;
 
-  SVLOG(2) << "Bad server connection. Using that to decide on job.";
+  SDVLOG(2) << "Bad server connection. Using that to decide on job.";
   return job.purpose == SyncSessionJob::NUDGE ? SAVE : DROP;
 }
 
@@ -367,7 +413,7 @@ void SyncScheduler::InitOrCoalescePendingJob(const SyncSessionJob& job) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   DCHECK(job.purpose != SyncSessionJob::CONFIGURATION);
   if (pending_nudge_.get() == NULL) {
-    SVLOG(2) << "Creating a pending nudge job";
+    SDVLOG(2) << "Creating a pending nudge job";
     SyncSession* s = job.session.get();
     scoped_ptr<SyncSession> session(new SyncSession(s->context(),
         s->delegate(), s->source(), s->routing_info(), s->workers()));
@@ -379,7 +425,7 @@ void SyncScheduler::InitOrCoalescePendingJob(const SyncSessionJob& job) {
     return;
   }
 
-  SVLOG(2) << "Coalescing a pending nudge";
+  SDVLOG(2) << "Coalescing a pending nudge";
   pending_nudge_->session->Coalesce(*(job.session.get()));
   pending_nudge_->scheduled_start = job.scheduled_start;
 
@@ -389,11 +435,13 @@ void SyncScheduler::InitOrCoalescePendingJob(const SyncSessionJob& job) {
 
 bool SyncScheduler::ShouldRunJob(const SyncSessionJob& job) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
+  DCHECK(started_);
+
   JobProcessDecision decision = DecideOnJob(job);
-  SVLOG(2) << "Should run "
-           << SyncSessionJob::GetPurposeString(job.purpose)
-           << " job in mode " << GetModeString(mode_)
-           << ": " << GetDecisionString(decision);
+  SDVLOG(2) << "Should run "
+            << SyncSessionJob::GetPurposeString(job.purpose)
+            << " job in mode " << GetModeString(mode_)
+            << ": " << GetDecisionString(decision);
   if (decision != SAVE)
     return decision == CONTINUE;
 
@@ -410,10 +458,10 @@ void SyncScheduler::SaveJob(const SyncSessionJob& job) {
   // TODO(sync): Should we also check that job.purpose !=
   // CLEANUP_DISABLED_TYPES?  (See http://crbug.com/90868.)
   if (job.purpose == SyncSessionJob::NUDGE) {
-    SVLOG(2) << "Saving a nudge job";
+    SDVLOG(2) << "Saving a nudge job";
     InitOrCoalescePendingJob(job);
   } else if (job.purpose == SyncSessionJob::CONFIGURATION){
-    SVLOG(2) << "Saving a configuration job";
+    SDVLOG(2) << "Saving a configuration job";
     DCHECK(wait_interval_.get());
     DCHECK(mode_ == CONFIGURATION_MODE);
 
@@ -441,36 +489,41 @@ struct ModelSafeWorkerGroupIs {
 void SyncScheduler::ScheduleClearUserData() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   PostTask(FROM_HERE, "ScheduleClearUserDataImpl",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::ScheduleClearUserDataImpl));
+           base::Bind(&SyncScheduler::ScheduleClearUserDataImpl,
+                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 // TODO(sync): Remove the *Impl methods for the other Schedule*
 // functions, too.
 void SyncScheduler::ScheduleCleanupDisabledTypes() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  ScheduleSyncSessionJob(
-      TimeDelta::FromSeconds(0), SyncSessionJob::CLEANUP_DISABLED_TYPES,
-      CreateSyncSession(SyncSourceInfo()), FROM_HERE);
+  SyncSessionJob job(SyncSessionJob::CLEANUP_DISABLED_TYPES, TimeTicks::Now(),
+                     make_linked_ptr(CreateSyncSession(SyncSourceInfo())),
+                     false,
+                     FROM_HERE);
+  ScheduleSyncSessionJob(job);
 }
 
 void SyncScheduler::ScheduleNudge(
     const TimeDelta& delay,
-    NudgeSource source, const ModelTypeBitSet& types,
+    NudgeSource source, ModelTypeSet types,
     const tracked_objects::Location& nudge_location) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG_LOC(nudge_location, 2)
+  SDVLOG_LOC(nudge_location, 2)
       << "Nudge scheduled with delay " << delay.InMilliseconds() << " ms, "
       << "source " << GetNudgeSourceString(source) << ", "
-      << "types " << syncable::ModelTypeBitSetToString(types);
+      << "types " << ModelTypeSetToString(types);
 
   ModelTypePayloadMap types_with_payloads =
-      syncable::ModelTypePayloadMapFromBitSet(types, std::string());
+      syncable::ModelTypePayloadMapFromEnumSet(types, std::string());
   PostTask(nudge_location, "ScheduleNudgeImpl",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::ScheduleNudgeImpl, delay,
-               GetUpdatesFromNudgeSource(source), types_with_payloads, false,
-               nudge_location));
+           base::Bind(&SyncScheduler::ScheduleNudgeImpl,
+                      weak_ptr_factory_.GetWeakPtr(),
+                      delay,
+                      GetUpdatesFromNudgeSource(source),
+                      types_with_payloads,
+                      false,
+                      nudge_location));
 }
 
 void SyncScheduler::ScheduleNudgeWithPayloads(
@@ -478,24 +531,30 @@ void SyncScheduler::ScheduleNudgeWithPayloads(
     NudgeSource source, const ModelTypePayloadMap& types_with_payloads,
     const tracked_objects::Location& nudge_location) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG_LOC(nudge_location, 2)
+  SDVLOG_LOC(nudge_location, 2)
       << "Nudge scheduled with delay " << delay.InMilliseconds() << " ms, "
       << "source " << GetNudgeSourceString(source) << ", "
       << "payloads "
       << syncable::ModelTypePayloadMapToString(types_with_payloads);
 
   PostTask(nudge_location, "ScheduleNudgeImpl",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::ScheduleNudgeImpl, delay,
-               GetUpdatesFromNudgeSource(source), types_with_payloads, false,
-               nudge_location));
+           base::Bind(&SyncScheduler::ScheduleNudgeImpl,
+                      weak_ptr_factory_.GetWeakPtr(),
+                      delay,
+                      GetUpdatesFromNudgeSource(source),
+                      types_with_payloads,
+                      false,
+                      nudge_location));
 }
 
 void SyncScheduler::ScheduleClearUserDataImpl() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  ScheduleSyncSessionJob(
-      TimeDelta::FromSeconds(0), SyncSessionJob::CLEAR_USER_DATA,
-      CreateSyncSession(SyncSourceInfo()), FROM_HERE);
+  SyncSessionJob job(SyncSessionJob::CLEAR_USER_DATA, TimeTicks::Now(),
+                     make_linked_ptr(CreateSyncSession(SyncSourceInfo())),
+                     false,
+                     FROM_HERE);
+
+  ScheduleSyncSessionJob(job);
 }
 
 void SyncScheduler::ScheduleNudgeImpl(
@@ -505,7 +564,7 @@ void SyncScheduler::ScheduleNudgeImpl(
     bool is_canary_job, const tracked_objects::Location& nudge_location) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
 
-  SVLOG_LOC(nudge_location, 2)
+  SDVLOG_LOC(nudge_location, 2)
       << "In ScheduleNudgeImpl with delay "
       << delay.InMilliseconds() << " ms, "
       << "source " << GetUpdatesSourceString(source) << ", "
@@ -526,34 +585,32 @@ void SyncScheduler::ScheduleNudgeImpl(
 
   if (pending_nudge_.get()) {
     if (IsBackingOff() && delay > TimeDelta::FromSeconds(1)) {
-      SVLOG(2) << "Dropping the nudge because we are in backoff";
+      SDVLOG(2) << "Dropping the nudge because we are in backoff";
       return;
     }
 
-    SVLOG(2) << "Coalescing pending nudge";
+    SDVLOG(2) << "Coalescing pending nudge";
     pending_nudge_->session->Coalesce(*(job.session.get()));
 
-    if (!IsBackingOff()) {
-      SVLOG(2) << "Dropping a nudge because"
-               << " we are not in backoff and the job was coalesced";
-      return;
-    } else {
-      SVLOG(2) << "Rescheduling pending nudge";
-      SyncSession* s = pending_nudge_->session.get();
-      job.session.reset(new SyncSession(s->context(), s->delegate(),
-          s->source(), s->routing_info(), s->workers()));
-      pending_nudge_.reset();
-    }
+    SDVLOG(2) << "Rescheduling pending nudge";
+    SyncSession* s = pending_nudge_->session.get();
+    job.session.reset(new SyncSession(s->context(), s->delegate(),
+        s->source(), s->routing_info(), s->workers()));
+
+    // Choose the start time as the earliest of the 2.
+    job.scheduled_start = std::min(job.scheduled_start,
+                                   pending_nudge_->scheduled_start);
+    pending_nudge_.reset();
   }
 
-  // TODO(lipalani) - pass the job itself to ScheduleSyncSessionJob.
-  ScheduleSyncSessionJob(delay, SyncSessionJob::NUDGE, job.session.release(),
-      nudge_location);
+  // TODO(zea): Consider adding separate throttling/backoff for datatype
+  // refresh requests.
+  ScheduleSyncSessionJob(job);
 }
 
 // Helper to extract the routing info and workers corresponding to types in
 // |types| from |registrar|.
-void GetModelSafeParamsForTypes(const ModelTypeBitSet& types,
+void GetModelSafeParamsForTypes(ModelTypeSet types,
     ModelSafeWorkerRegistrar* registrar, ModelSafeRoutingInfo* routes,
     std::vector<ModelSafeWorker*>* workers) {
   ModelSafeRoutingInfo r_tmp;
@@ -564,19 +621,18 @@ void GetModelSafeParamsForTypes(const ModelTypeBitSet& types,
   bool passive_group_added = false;
 
   typedef std::vector<ModelSafeWorker*>::const_iterator iter;
-  for (size_t i = syncable::FIRST_REAL_MODEL_TYPE; i < types.size(); ++i) {
-    if (!types.test(i))
-      continue;
-    syncable::ModelType t = syncable::ModelTypeFromInt(i);
+  for (ModelTypeSet::Iterator it = types.First();
+       it.Good(); it.Inc()) {
+    const syncable::ModelType t = it.Get();
     DCHECK_EQ(1U, r_tmp.count(t));
     (*routes)[t] = r_tmp[t];
-    iter it = std::find_if(w_tmp.begin(), w_tmp.end(),
-                           ModelSafeWorkerGroupIs(r_tmp[t]));
-    if (it != w_tmp.end()) {
-      iter it2 = std::find_if(workers->begin(), workers->end(),
-                              ModelSafeWorkerGroupIs(r_tmp[t]));
-      if (it2 == workers->end())
-        workers->push_back(*it);
+    iter w_tmp_it = std::find_if(w_tmp.begin(), w_tmp.end(),
+                                 ModelSafeWorkerGroupIs(r_tmp[t]));
+    if (w_tmp_it != w_tmp.end()) {
+      iter workers_it = std::find_if(workers->begin(), workers->end(),
+                                     ModelSafeWorkerGroupIs(r_tmp[t]));
+      if (workers_it == workers->end())
+        workers->push_back(*w_tmp_it);
 
       if (r_tmp[t] == GROUP_PASSIVE)
         passive_group_added = true;
@@ -597,19 +653,22 @@ void GetModelSafeParamsForTypes(const ModelTypeBitSet& types,
 }
 
 void SyncScheduler::ScheduleConfig(
-    const ModelTypeBitSet& types,
+    ModelTypeSet types,
     GetUpdatesCallerInfo::GetUpdatesSource source) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   DCHECK(IsConfigRelatedUpdateSourceValue(source));
-  SVLOG(2) << "Scheduling a config";
+  SDVLOG(2) << "Scheduling a config";
   ModelSafeRoutingInfo routes;
   std::vector<ModelSafeWorker*> workers;
   GetModelSafeParamsForTypes(types, session_context_->registrar(),
                              &routes, &workers);
 
   PostTask(FROM_HERE, "ScheduleConfigImpl",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::ScheduleConfigImpl, routes, workers, source));
+           base::Bind(&SyncScheduler::ScheduleConfigImpl,
+                      weak_ptr_factory_.GetWeakPtr(),
+                      routes,
+                      workers,
+                      source));
 }
 
 void SyncScheduler::ScheduleConfigImpl(
@@ -618,15 +677,18 @@ void SyncScheduler::ScheduleConfigImpl(
     const sync_pb::GetUpdatesCallerInfo::GetUpdatesSource source) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
 
-  SVLOG(2) << "In ScheduleConfigImpl";
+  SDVLOG(2) << "In ScheduleConfigImpl";
   // TODO(tim): config-specific GetUpdatesCallerInfo value?
   SyncSession* session = new SyncSession(session_context_.get(), this,
       SyncSourceInfo(source,
           syncable::ModelTypePayloadMapFromRoutingInfo(
               routing_info, std::string())),
       routing_info, workers);
-  ScheduleSyncSessionJob(TimeDelta::FromSeconds(0),
-    SyncSessionJob::CONFIGURATION, session, FROM_HERE);
+  SyncSessionJob job(SyncSessionJob::CONFIGURATION, TimeTicks::Now(),
+                     make_linked_ptr(session),
+                     false,
+                     FROM_HERE);
+  ScheduleSyncSessionJob(job);
 }
 
 const char* SyncScheduler::GetModeString(SyncScheduler::Mode mode) {
@@ -649,41 +711,50 @@ const char* SyncScheduler::GetDecisionString(
 
 void SyncScheduler::PostTask(
     const tracked_objects::Location& from_here,
-    const char* name, Task* task) {
-  SVLOG_LOC(from_here, 3) << "Posting " << name << " task";
+    const char* name, const base::Closure& task) {
+  SDVLOG_LOC(from_here, 3) << "Posting " << name << " task";
+  DCHECK_EQ(MessageLoop::current(), sync_loop_);
+  if (!started_) {
+    SDVLOG(1) << "Not posting task as scheduler is stopped.";
+    return;
+  }
   sync_loop_->PostTask(from_here, task);
 }
 
 void SyncScheduler::PostDelayedTask(
     const tracked_objects::Location& from_here,
-    const char* name, Task* task, int64 delay_ms) {
-  SVLOG_LOC(from_here, 3) << "Posting " << name << " task with "
-                          << delay_ms << " ms delay";
-  sync_loop_->PostDelayedTask(from_here, task, delay_ms);
+    const char* name, const base::Closure& task, base::TimeDelta delay) {
+  SDVLOG_LOC(from_here, 3) << "Posting " << name << " task with "
+                           << delay.InMilliseconds() << " ms delay";
+  DCHECK_EQ(MessageLoop::current(), sync_loop_);
+  if (!started_) {
+    SDVLOG(1) << "Not posting task as scheduler is stopped.";
+    return;
+  }
+  sync_loop_->PostDelayedTask(from_here, task, delay);
 }
 
-void SyncScheduler::ScheduleSyncSessionJob(
-    const base::TimeDelta& delay,
-    SyncSessionJob::SyncSessionJobPurpose purpose,
-    sessions::SyncSession* session,
-    const tracked_objects::Location& from_here) {
+void SyncScheduler::ScheduleSyncSessionJob(const SyncSessionJob& job) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG_LOC(from_here, 2)
+  TimeDelta delay = job.scheduled_start - TimeTicks::Now();
+  if (delay < TimeDelta::FromMilliseconds(0))
+    delay = TimeDelta::FromMilliseconds(0);
+  SDVLOG_LOC(job.from_here, 2)
       << "In ScheduleSyncSessionJob with "
-      << SyncSessionJob::GetPurposeString(purpose)
+      << SyncSessionJob::GetPurposeString(job.purpose)
       << " job and " << delay.InMilliseconds() << " ms delay";
 
-  SyncSessionJob job(purpose, TimeTicks::Now() + delay,
-                     make_linked_ptr(session), false, from_here);
-  if (purpose == SyncSessionJob::NUDGE) {
-    SVLOG_LOC(from_here, 2) << "Resetting pending_nudge";
-    DCHECK(!pending_nudge_.get() || pending_nudge_->session.get() == session);
+  if (job.purpose == SyncSessionJob::NUDGE) {
+    SDVLOG_LOC(job.from_here, 2) << "Resetting pending_nudge";
+    DCHECK(!pending_nudge_.get() || pending_nudge_->session.get() ==
+           job.session);
     pending_nudge_.reset(new SyncSessionJob(job));
   }
-  PostDelayedTask(from_here, "DoSyncSessionJob",
-                  method_factory_.NewRunnableMethod(
-                      &SyncScheduler::DoSyncSessionJob, job),
-                  delay.InMilliseconds());
+  PostDelayedTask(job.from_here, "DoSyncSessionJob",
+                  base::Bind(&SyncScheduler::DoSyncSessionJob,
+                             weak_ptr_factory_.GetWeakPtr(),
+                             job),
+                  delay);
 }
 
 void SyncScheduler::SetSyncerStepsForPurpose(
@@ -729,8 +800,8 @@ void SyncScheduler::DoSyncSessionJob(const SyncSessionJob& job) {
   if (job.purpose == SyncSessionJob::NUDGE) {
     if (pending_nudge_.get() == NULL ||
         pending_nudge_->session != job.session) {
-      SVLOG(2) << "Dropping a nudge in "
-               << "DoSyncSessionJob because another nudge was scheduled";
+      SDVLOG(2) << "Dropping a nudge in "
+                << "DoSyncSessionJob because another nudge was scheduled";
       return;  // Another nudge must have been scheduled in in the meantime.
     }
     pending_nudge_.reset();
@@ -739,10 +810,10 @@ void SyncScheduler::DoSyncSessionJob(const SyncSessionJob& job) {
     // and update any disabled or modified entries in the job.
     scoped_ptr<SyncSession> session(CreateSyncSession(job.session->source()));
 
-    job.session->RebaseRoutingInfoWithLatest(session.get());
+    job.session->RebaseRoutingInfoWithLatest(*session);
   }
-  SVLOG(2) << "DoSyncSessionJob with "
-           << SyncSessionJob::GetPurposeString(job.purpose) << " job";
+  SDVLOG(2) << "DoSyncSessionJob with "
+            << SyncSessionJob::GetPurposeString(job.purpose) << " job";
 
   SyncerStep begin(SYNCER_END);
   SyncerStep end(SYNCER_END);
@@ -750,14 +821,14 @@ void SyncScheduler::DoSyncSessionJob(const SyncSessionJob& job) {
 
   bool has_more_to_sync = true;
   while (ShouldRunJob(job) && has_more_to_sync) {
-    SVLOG(2) << "Calling SyncShare.";
+    SDVLOG(2) << "Calling SyncShare.";
     // Synchronously perform the sync session from this thread.
     syncer_->SyncShare(job.session.get(), begin, end);
     has_more_to_sync = job.session->HasMoreToSync();
     if (has_more_to_sync)
       job.session->ResetTransientState();
   }
-  SVLOG(2) << "Done SyncShare looping.";
+  SDVLOG(2) << "Done SyncShare looping.";
 
   FinishSyncSessionJob(job);
 }
@@ -797,52 +868,55 @@ void SyncScheduler::FinishSyncSessionJob(const SyncSessionJob& job) {
     }
   }
   last_sync_session_end_time_ = now;
+
+  // Now update the status of the connection from SCM. We need this
+  // to decide whether we need to save/run future jobs. The notifications
+  // from SCM are not reliable.
+  // TODO(rlarocque): crbug.com/110954
+  // We should get rid of the notifications and
+  // it is probably not needed to maintain this status variable
+  // in 2 places. We should query it directly from SCM when needed.
+  // But that would need little more refactoring(including a method to
+  // query if the auth token is invalid) from SCM side.
+  ServerConnectionManager* scm = session_context_->connection_manager();
+  UpdateServerConnectionManagerStatus(scm->server_status());
+
   UpdateCarryoverSessionState(job);
   if (IsSyncingCurrentlySilenced()) {
-    SVLOG(2) << "We are currently throttled; not scheduling the next sync.";
+    SDVLOG(2) << "We are currently throttled; not scheduling the next sync.";
     // TODO(sync): Investigate whether we need to check job.purpose
     // here; see DCHECKs in SaveJob().  (See http://crbug.com/90868.)
     SaveJob(job);
     return;  // Nothing to do.
   }
 
-  SVLOG(2) << "Updating the next polling time after SyncMain";
+  SDVLOG(2) << "Updating the next polling time after SyncMain";
   ScheduleNextSync(job);
 }
 
 void SyncScheduler::ScheduleNextSync(const SyncSessionJob& old_job) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   DCHECK(!old_job.session->HasMoreToSync());
-  // Note: |num_server_changes_remaining| > 0 here implies that we received a
-  // broken response while trying to download all updates, because the Syncer
-  // will loop until this value is exhausted. Also, if unsynced_handles exist
-  // but HasMoreToSync is false, this implies that the Syncer determined no
-  // forward progress was possible at this time (an error, such as an HTTP
-  // 500, is likely to have occurred during commit).
-  int num_server_changes_remaining =
-      old_job.session->status_controller()->num_server_changes_remaining();
-  size_t num_unsynced_handles =
-      old_job.session->status_controller()->unsynced_handles().size();
-  const bool work_to_do =
-      num_server_changes_remaining > 0 || num_unsynced_handles > 0;
-  SVLOG(2) << "num server changes remaining: " << num_server_changes_remaining
-           << ", num unsynced handles: " << num_unsynced_handles
-           << ", syncer has work to do: " << work_to_do;
 
   AdjustPolling(&old_job);
 
-  // TODO(tim): Old impl had special code if notifications disabled. Needed?
-  if (!work_to_do) {
+  if (old_job.session->Succeeded()) {
     // Success implies backoff relief.  Note that if this was a
     // "one-off" job (i.e. purpose ==
     // SyncSessionJob::{CLEAR_USER_DATA,CLEANUP_DISABLED_TYPES}), if
-    // there was work_to_do before it ran this wont have changed, as
+    // there was work to do before it ran this wont have changed, as
     // jobs like this don't run a full sync cycle.  So we don't need
     // special code here.
     wait_interval_.reset();
-    SVLOG(2) << "Job succeeded so not scheduling more jobs";
+    SDVLOG(2) << "Job succeeded so not scheduling more jobs";
     return;
   }
+
+  // TODO(rlarocque): There's no reason why we should blindly backoff and retry
+  // if we don't succeed.  Some types of errors are not likely to disappear on
+  // their own.  With the return values now available in the old_job.session, we
+  // should be able to detect such errors and only retry when we detect
+  // transient errors.
 
   // We are in backoff mode and our time did not run out. That means we had
   // a local change, notification from server or a network connection change
@@ -853,7 +927,7 @@ void SyncScheduler::ScheduleNextSync(const SyncSessionJob& old_job) {
   // have anything similar to had_nudge.
   if (IsBackingOff() && wait_interval_->timer.IsRunning() &&
       mode_ == NORMAL_MODE) {
-    SVLOG(2) << "A nudge during backoff failed";
+    SDVLOG(2) << "A nudge during backoff failed";
     // We weren't continuing but we're in backoff; must have been a nudge.
     DCHECK_EQ(SyncSessionJob::NUDGE, old_job.purpose);
     DCHECK(!wait_interval_->had_nudge);
@@ -864,11 +938,11 @@ void SyncScheduler::ScheduleNextSync(const SyncSessionJob& old_job) {
     RestartWaiting();
   } else if (old_job.session->source().updates_source ==
              GetUpdatesCallerInfo::SYNC_CYCLE_CONTINUATION) {
-    SVLOG(2) << "Job failed with source continuation";
+    SDVLOG(2) << "Job failed with source continuation";
     // We don't seem to have made forward progress. Start or extend backoff.
     HandleConsecutiveContinuationError(old_job);
   } else {
-    SVLOG(2) << "Failed. Schedule a job with continuation as source";
+    SDVLOG(2) << "Failed. Schedule a job with continuation as source";
     // We weren't continuing and we aren't in backoff.  Schedule a normal
     // continuation.
     if (old_job.purpose == SyncSessionJob::CONFIGURATION) {
@@ -923,10 +997,10 @@ void SyncScheduler::HandleConsecutiveContinuationError(
   TimeDelta length = delay_provider_->GetDelay(
       IsBackingOff() ? wait_interval_->length : TimeDelta::FromSeconds(1));
 
-  SVLOG(2) << "In handle continuation error with "
-           << SyncSessionJob::GetPurposeString(old_job.purpose)
-           << " job. The time delta(ms) is "
-           << length.InMilliseconds();
+  SDVLOG(2) << "In handle continuation error with "
+            << SyncSessionJob::GetPurposeString(old_job.purpose)
+            << " job. The time delta(ms) is "
+            << length.InMilliseconds();
 
   // This will reset the had_nudge variable as well.
   wait_interval_.reset(new WaitInterval(WaitInterval::EXPONENTIAL_BACKOFF,
@@ -973,25 +1047,33 @@ TimeDelta SyncScheduler::GetRecommendedDelay(const TimeDelta& last_delay) {
   return TimeDelta::FromSeconds(backoff_s);
 }
 
-void SyncScheduler::RequestEarlyExit() {
+void SyncScheduler::RequestStop(const base::Closure& callback) {
   syncer_->RequestEarlyExit();  // Safe to call from any thread.
+  DCHECK(weak_handle_this_.IsInitialized());
+  SDVLOG(3) << "Posting StopImpl";
+  weak_handle_this_.Call(FROM_HERE,
+                         &SyncScheduler::StopImpl,
+                         callback);
 }
 
-void SyncScheduler::Stop() {
+void SyncScheduler::StopImpl(const base::Closure& callback) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "Stop called";
-  method_factory_.RevokeAll();
+  SDVLOG(2) << "StopImpl called";
+
+  // Kill any in-flight method calls.
+  weak_ptr_factory_.InvalidateWeakPtrs();
   wait_interval_.reset();
   poll_timer_.Stop();
   if (started_) {
-    session_context_->connection_manager()->RemoveListener(this);
     started_ = false;
   }
+  if (!callback.is_null())
+    callback.Run();
 }
 
 void SyncScheduler::DoCanaryJob() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "Do canary job";
+  SDVLOG(2) << "Do canary job";
   DoPendingJobIfPossible(true);
 }
 
@@ -1000,10 +1082,10 @@ void SyncScheduler::DoPendingJobIfPossible(bool is_canary_job) {
   SyncSessionJob* job_to_execute = NULL;
   if (mode_ == CONFIGURATION_MODE && wait_interval_.get()
       && wait_interval_->pending_configure_job.get()) {
-    SVLOG(2) << "Found pending configure job";
+    SDVLOG(2) << "Found pending configure job";
     job_to_execute = wait_interval_->pending_configure_job.get();
   } else if (mode_ == NORMAL_MODE && pending_nudge_.get()) {
-    SVLOG(2) << "Found pending nudge job";
+    SDVLOG(2) << "Found pending nudge job";
     // Pending jobs mostly have time from the past. Reset it so this job
     // will get executed.
     if (pending_nudge_->scheduled_start < TimeTicks::Now())
@@ -1020,7 +1102,7 @@ void SyncScheduler::DoPendingJobIfPossible(bool is_canary_job) {
   }
 
   if (job_to_execute != NULL) {
-    SVLOG(2) << "Executing pending job";
+    SDVLOG(2) << "Executing pending job";
     SyncSessionJob copy = *job_to_execute;
     copy.is_canary_job = is_canary_job;
     DoSyncSessionJob(copy);
@@ -1032,8 +1114,8 @@ SyncSession* SyncScheduler::CreateSyncSession(const SyncSourceInfo& source) {
   ModelSafeRoutingInfo routes;
   std::vector<ModelSafeWorker*> workers;
   session_context_->registrar()->GetModelSafeRoutingInfo(&routes);
-  VLOG(2) << "Creating sync session with routes "
-          << ModelSafeRoutingInfoToString(routes);
+  DVLOG(2) << "Creating sync session with routes "
+           << ModelSafeRoutingInfoToString(routes);
   session_context_->registrar()->GetWorkers(&workers);
   SyncSourceInfo info(source);
 
@@ -1050,14 +1132,19 @@ void SyncScheduler::PollTimerCallback() {
       syncable::ModelTypePayloadMapFromRoutingInfo(r, std::string());
   SyncSourceInfo info(GetUpdatesCallerInfo::PERIODIC, types_with_payloads);
   SyncSession* s = CreateSyncSession(info);
-  ScheduleSyncSessionJob(TimeDelta::FromSeconds(0), SyncSessionJob::POLL, s,
-      FROM_HERE);
+
+  SyncSessionJob job(SyncSessionJob::POLL, TimeTicks::Now(),
+                     make_linked_ptr(s),
+                     false,
+                     FROM_HERE);
+
+  ScheduleSyncSessionJob(job);
 }
 
 void SyncScheduler::Unthrottle() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   DCHECK_EQ(WaitInterval::THROTTLED, wait_interval_->mode);
-  SVLOG(2) << "Unthrottled.";
+  SDVLOG(2) << "Unthrottled.";
   DoCanaryJob();
   wait_interval_.reset();
 }
@@ -1107,7 +1194,7 @@ void SyncScheduler::OnReceivedSessionsCommitDelay(
 
 void SyncScheduler::OnShouldStopSyncingPermanently() {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "OnShouldStopSyncingPermanently";
+  SDVLOG(2) << "OnShouldStopSyncingPermanently";
   syncer_->RequestEarlyExit();  // Thread-safe.
   Notify(SyncEngineEvent::STOP_SYNCING_PERMANENTLY);
 }
@@ -1115,7 +1202,7 @@ void SyncScheduler::OnShouldStopSyncingPermanently() {
 void SyncScheduler::OnActionableError(
     const sessions::SyncSessionSnapshot& snap) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  SVLOG(2) << "OnActionableError";
+  SDVLOG(2) << "OnActionableError";
   SyncEngineEvent event(SyncEngineEvent::ACTIONABLE_ERROR);
   sessions::SyncSessionSnapshot snapshot(snap);
   event.snapshot = &snapshot;
@@ -1126,21 +1213,11 @@ void SyncScheduler::OnSyncProtocolError(
     const sessions::SyncSessionSnapshot& snapshot) {
   DCHECK_EQ(MessageLoop::current(), sync_loop_);
   if (ShouldRequestEarlyExit(snapshot.errors.sync_protocol_error)) {
-    SVLOG(2) << "Sync Scheduler requesting early exit.";
+    SDVLOG(2) << "Sync Scheduler requesting early exit.";
     syncer_->RequestEarlyExit();  // Thread-safe.
   }
   if (IsActionableError(snapshot.errors.sync_protocol_error))
     OnActionableError(snapshot);
-}
-
-
-void SyncScheduler::OnServerConnectionEvent(
-    const ServerConnectionEvent& event) {
-  DCHECK_EQ(MessageLoop::current(), sync_loop_);
-  PostTask(FROM_HERE, "CheckServerConnectionManagerStatus",
-           method_factory_.NewRunnableMethod(
-               &SyncScheduler::CheckServerConnectionManagerStatus,
-               event.connection_code));
 }
 
 void SyncScheduler::set_notifications_enabled(bool notifications_enabled) {
@@ -1153,9 +1230,9 @@ base::TimeDelta SyncScheduler::sessions_commit_delay() const {
   return sessions_commit_delay_;
 }
 
-#undef SVLOG_LOC
+#undef SDVLOG_LOC
 
-#undef SVLOG
+#undef SDVLOG
 
 #undef SLOG
 

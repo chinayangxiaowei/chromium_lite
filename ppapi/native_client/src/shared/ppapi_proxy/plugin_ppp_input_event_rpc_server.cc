@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -12,7 +12,6 @@
 #include "native_client/src/shared/ppapi_proxy/input_event_data.h"
 #include "native_client/src/shared/ppapi_proxy/object_serialize.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_globals.h"
-#include "native_client/src/shared/ppapi_proxy/plugin_ppb_var.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_ppb_input_event.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_resource.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_resource_tracker.h"
@@ -64,7 +63,7 @@ void PppInputEventRpcServer::PPP_InputEvent_HandleInputEvent(
   InputEventData data;
   std::memcpy(&data, event_data, event_data_size);
   PP_Var character_text_var = PP_MakeUndefined();
-  DeserializeTo(rpc->channel, character_text_bytes, character_text_size, 1,
+  DeserializeTo(character_text_bytes, character_text_size, 1,
                 &character_text_var);
   input_event->Init(data, character_text_var);
 

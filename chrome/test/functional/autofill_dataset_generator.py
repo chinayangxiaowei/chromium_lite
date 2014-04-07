@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -104,7 +104,6 @@ class DatasetGenerator(object):
       [u'ADDRESS_HOME_ZIP', self.GenerateZip],
       [u'ADDRESS_HOME_COUNTRY', u'United States'],
       [u'PHONE_HOME_WHOLE_NUMBER', None],
-      [u'PHONE_FAX_WHOLE_NUMBER', u'6501234555'],
     ]
 
     self.next_dict = {}
@@ -269,7 +268,6 @@ class DatasetGenerator(object):
 
 
 def main():
-  # Command line options.
   parser = OptionParser()
   parser.add_option(
     '-o', '--output', dest='output_filename', default='',
@@ -285,7 +283,7 @@ def main():
   (options, args) = parser.parse_args()
   if args:
     parser.print_help()
-    sys.exit(1)
+    return 1
   options.log_level = options.log_level.lower()
   if options.log_level not in ['debug', 'info', 'warning', 'error']:
     parser.error('Wrong log_level argument.')
@@ -302,7 +300,8 @@ def main():
 
   gen = DatasetGenerator(options.output_filename, options.log_level)
   gen.GenerateDataset(options.dict_no)
+  return 0
 
 
 if __name__ == '__main__':
-  main()
+  sys.exit(main())

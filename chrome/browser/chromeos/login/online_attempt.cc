@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
@@ -16,11 +17,13 @@
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 #include "chrome/common/net/gaia/gaia_auth_fetcher.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_status.h"
 #include "third_party/libjingle/source/talk/base/urlencode.h"
+
+using content::BrowserThread;
 
 namespace {
 
@@ -41,9 +44,8 @@ OnlineAttempt::OnlineAttempt(bool using_oauth,
     : using_oauth_(using_oauth),
       attempt_(current_attempt),
       resolver_(callback),
-      fetch_canceler_(NULL),
+      weak_factory_(this),
       try_again_(true) {
-  CHECK(chromeos::CrosLibrary::Get()->EnsureLoaded());
 }
 
 OnlineAttempt::~OnlineAttempt() {
@@ -70,17 +72,15 @@ void OnlineAttempt::Initiate(Profile* auth_profile) {
   }
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(this, &OnlineAttempt::TryClientLogin));
+      base::Bind(&OnlineAttempt::TryClientLogin, this));
 }
 
 void OnlineAttempt::OnClientLoginSuccess(
     const GaiaAuthConsumer::ClientLoginResult& credentials) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   VLOG(1) << "Online login successful!";
-  if (fetch_canceler_) {
-    fetch_canceler_->Cancel();
-    fetch_canceler_ = NULL;
-  }
+
+  weak_factory_.InvalidateWeakPtrs();
 
   if (attempt_->hosted_policy() == GaiaAuthFetcher::HostedAccountsAllowed &&
       attempt_->is_first_time_user()) {
@@ -101,10 +101,9 @@ void OnlineAttempt::OnClientLoginSuccess(
 void OnlineAttempt::OnClientLoginFailure(
     const GoogleServiceAuthError& error) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (fetch_canceler_) {
-    fetch_canceler_->Cancel();
-    fetch_canceler_ = NULL;
-  }
+
+  weak_factory_.InvalidateWeakPtrs();
+
   if (error.state() == GoogleServiceAuthError::REQUEST_CANCELED) {
     if (try_again_) {
       try_again_ = false;
@@ -156,10 +155,12 @@ void OnlineAttempt::OnOAuthLoginFailure(const GoogleServiceAuthError& error) {
 
 void OnlineAttempt::TryClientLogin() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  fetch_canceler_ = NewRunnableMethod(this, &OnlineAttempt::CancelClientLogin);
-  BrowserThread::PostDelayedTask(BrowserThread::IO, FROM_HERE,
-                                 fetch_canceler_,
-                                 kClientLoginTimeoutMs);
+
+  BrowserThread::PostDelayedTask(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(&OnlineAttempt::CancelClientLogin, weak_factory_.GetWeakPtr()),
+      kClientLoginTimeoutMs);
+
   if (using_oauth_) {
     if (!attempt_->oauth1_access_token().length() ||
         !attempt_->oauth1_access_secret().length()) {
@@ -170,7 +171,7 @@ void OnlineAttempt::TryClientLogin() {
           GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
     } else {
       oauth_fetcher_->StartOAuthLogin(GaiaConstants::kChromeOSSource,
-                                      GaiaConstants::kContactsService,
+                                      GaiaConstants::kPicasaService,
                                       attempt_->oauth1_access_token(),
                                       attempt_->oauth1_access_secret());
     }
@@ -178,7 +179,7 @@ void OnlineAttempt::TryClientLogin() {
     client_fetcher_->StartClientLogin(
         attempt_->username,
         attempt_->password,
-        GaiaConstants::kContactsService,
+        GaiaConstants::kPicasaService,
         attempt_->login_token,
         attempt_->login_captcha,
         attempt_->hosted_policy());
@@ -191,19 +192,14 @@ bool OnlineAttempt::HasPendingFetch() {
 }
 
 void OnlineAttempt::CancelRequest() {
-  if (using_oauth_)
-    oauth_fetcher_->HasPendingFetch();
-  else
-    client_fetcher_->HasPendingFetch();
+  weak_factory_.InvalidateWeakPtrs();
 }
-
 
 void OnlineAttempt::CancelClientLogin() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   if (HasPendingFetch()) {
     LOG(WARNING) << "Canceling ClientLogin attempt.";
     CancelRequest();
-    fetch_canceler_ = NULL;
 
     TriggerResolve(GaiaAuthConsumer::ClientLoginResult(),
                    LoginFailure(LoginFailure::LOGIN_TIMED_OUT));

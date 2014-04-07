@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,11 +13,15 @@ import test_utils
 class SpecialTabsTest(pyauto.PyUITest):
   """TestCase for Special Tabs like about:version, chrome://history, etc."""
 
-  special_accelerator_tabs = {
-    pyauto.IDC_SHOW_HISTORY: 'History',
-    pyauto.IDC_MANAGE_EXTENSIONS: 'Extensions',
-    pyauto.IDC_SHOW_DOWNLOADS: 'Downloads',
-  }
+  @staticmethod
+  def GetSpecialAcceleratorTabs():
+    """Get a dict of accelerators and corresponding tab titles."""
+    ret = {
+        pyauto.IDC_SHOW_HISTORY: 'History',
+        pyauto.IDC_MANAGE_EXTENSIONS: 'Settings - Extensions',
+        pyauto.IDC_SHOW_DOWNLOADS: 'Downloads',
+    }
+    return ret
 
   special_url_redirects = {
    'about:': 'chrome://version',
@@ -36,20 +40,19 @@ class SpecialTabsTest(pyauto.PyUITest):
     'chrome://about': { 'title': 'Chrome URLs' },
     'chrome://appcache-internals': { 'title': 'AppCache Internals' },
     'chrome://blob-internals': { 'title': 'Blob Storage Internals' },
-    'chrome://bugreport': {},
-    'chrome://bugreport/#0': { 'title': 'Feedback' },
+    'chrome://feedback': {},
+    'chrome://feedback/#0': { 'title': 'Feedback' },
     'chrome://chrome-urls': { 'title': 'Chrome URLs' },
     'chrome://crashes': { 'title': 'Crashes' },
     'chrome://credits': { 'title': 'Credits', 'CSP': False },
     'chrome://downloads': { 'title': 'Downloads' },
     'chrome://dns': { 'title': 'About DNS' },
-    'chrome://extensions': { 'title': 'Extensions' },
+    'chrome://settings/extensions': { 'title': 'Settings - Extensions' },
     'chrome://flags': {},
     'chrome://flash': {},
     'chrome://gpu-internals': {},
     'chrome://histograms': { 'title': 'About Histograms' },
     'chrome://history': { 'title': 'History' },
-    'chrome://history2': { 'title': 'History' },
     'chrome://media-internals': { 'title': 'Media Internals' },
     'chrome://memory-redirect': { 'title': 'About Memory' },
     'chrome://net-internals': {},
@@ -57,13 +60,12 @@ class SpecialTabsTest(pyauto.PyUITest):
     'chrome://newtab': { 'title': 'New Tab', 'CSP': False },
     'chrome://plugins': { 'title': 'Plug-ins' },
     'chrome://sessions': { 'title': 'Sessions' },
-    'chrome://settings': { 'title': 'Preferences - Basics' },
-    'chrome://stats': { 'CSP': False },
+    'chrome://settings': { 'title': 'Settings - Basics' },
+    'chrome://stats': {},
     'chrome://sync': { 'title': 'Sync Internals' },
     'chrome://sync-internals': { 'title': 'Sync Internals' },
     'chrome://tasks': { 'title': 'Task Manager - Chromium' },
-    'chrome://terms': { 'CSP': False },
-    'chrome://textfields': { 'title': 'chrome://textfields', 'CSP': False },
+    'chrome://terms': {},
     'chrome://version': { 'title': 'About Version' },
     'chrome://view-http-cache': {},
     'chrome://workers': { 'title': 'Workers' },
@@ -108,6 +110,7 @@ class SpecialTabsTest(pyauto.PyUITest):
     'chrome://settings/clearBrowserData':
       { 'title': 'Settings - Clear Browsing Data' },
     'chrome://settings/content': { 'title': 'Settings - Content Settings' },
+    'chrome://settings/extensions': { 'title': 'Settings - Extensions' },
     'chrome://settings/internet': { 'title': 'Settings - Internet' },
     'chrome://settings/languages':
       { 'title': 'Settings - Languages and Input' },
@@ -151,9 +154,6 @@ class SpecialTabsTest(pyauto.PyUITest):
 
   win_special_url_tabs = {
     'chrome://conflicts': {},
-
-    # OVERRIDE - different title for page.
-    'chrome://settings': { 'title': 'Options - Basics' },
   }
   broken_win_special_url_tabs = {
     # Sync on windows badly broken at the moment.
@@ -164,8 +164,8 @@ class SpecialTabsTest(pyauto.PyUITest):
     # OVERRIDE - different title for Google Chrome vs. Chromium.
     'chrome://terms': {
       'title': 'Google Chrome Terms of Service',
-      'CSP': False
     },
+    'chrome://tasks': { 'title': 'Task Manager - Google Chrome' },
   }
   broken_google_special_url_tabs = {}
 
@@ -173,7 +173,6 @@ class SpecialTabsTest(pyauto.PyUITest):
     # OVERRIDE - different title for Google Chrome OS vs. Chromium OS.
     'chrome://terms': {
       'title': 'Google Chrome OS Terms',
-      'CSP': False
     },
   }
   broken_google_chromeos_special_url_tabs = {}
@@ -267,9 +266,11 @@ class SpecialTabsTest(pyauto.PyUITest):
 
   def testSpecialURLTabs(self):
     """Test special tabs created by URLs like chrome://downloads,
-       chrome://extensions, chrome://history etc.  Also ensures they
-       specify content-security-policy and not inline scripts for those
-       pages that are expected to do so."""
+       chrome://settings/extensionSettings, chrome://history etc.
+       Also ensures they specify content-security-policy and not inline
+       scripts for those pages that are expected to do so.  Patches which
+       break this test by including new inline javascript are security
+       vulnerabilities and should be reverted."""
     tabs = self._GetPlatformSpecialURLTabs()
     for url, properties in tabs.iteritems():
       logging.debug('Testing URL %s.' % url)
@@ -281,10 +282,10 @@ class SpecialTabsTest(pyauto.PyUITest):
       self.assertEqual(expected_title, actual_title)
       include_list = []
       exclude_list = []
-      if 'CSP' in properties and not properties['CSP']:
+      no_csp = 'CSP' in properties and not properties['CSP']
+      if no_csp:
         exclude_list.extend(['X-WebKit-CSP'])
       else:
-        include_list.extend(['X-WebKit-CSP'])
         exclude_list.extend(['<script>', 'onclick=', 'onload=',
                              'onchange=', 'onsubmit=', 'javascript:'])
       if 'includes' in properties:
@@ -293,6 +294,20 @@ class SpecialTabsTest(pyauto.PyUITest):
         exclude_list.extend(properties['exlcudes'])
       test_utils.StringContentCheck(self, self.GetTabContents(),
                                     include_list, exclude_list)
+      result = self.ExecuteJavascript("""
+          var r = 'blocked';
+          var f = 'executed';
+          var s = document.createElement('script');
+          s.textContent = 'r = f';
+          document.body.appendChild(s);
+          window.domAutomationController.send(r);
+        """)
+      logging.debug('has csp %s, result %s.' % (not no_csp, result))
+      if no_csp:
+        self.assertEqual(result, 'executed',
+                         msg='Got %s for %s' % (result, url))
+      else:
+        self.assertEqual(result, 'blocked');
 
   def testAboutAppCacheTab(self):
     """Test App Cache tab to confirm about page populates caches."""
@@ -309,7 +324,7 @@ class SpecialTabsTest(pyauto.PyUITest):
   def testSpecialAcceratorTabs(self):
     """Test special tabs created by acclerators like IDC_SHOW_HISTORY,
        IDC_SHOW_DOWNLOADS."""
-    for accel, title in self.special_accelerator_tabs.iteritems():
+    for accel, title in self.GetSpecialAcceleratorTabs().iteritems():
       self.RunCommand(accel)
       self.assertTrue(self.WaitUntil(
             self.GetActiveTabTitle, expect_retval=title),

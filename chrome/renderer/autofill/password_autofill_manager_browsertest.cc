@@ -7,23 +7,23 @@
 #include "chrome/common/autofill_messages.h"
 #include "chrome/renderer/autofill/autofill_agent.h"
 #include "chrome/renderer/autofill/password_autofill_manager.h"
-#include "chrome/test/base/render_view_test.h"
+#include "chrome/test/base/chrome_render_view_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFormElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebVector.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebVector.h"
 #include "ui/base/keycodes/keyboard_codes.h"
-#include "webkit/glue/form_data.h"
-#include "webkit/glue/form_field.h"
+#include "webkit/forms/form_data.h"
+#include "webkit/forms/form_field.h"
 
-using webkit_glue::FormField;
-using webkit_glue::PasswordFormFillData;
-using webkit_glue::PasswordForm;
-using webkit_glue::PasswordFormDomManager;
+using webkit::forms::FormField;
+using webkit::forms::PasswordFormFillData;
+using webkit::forms::PasswordForm;
+using webkit::forms::PasswordFormDomManager;
 using WebKit::WebDocument;
 using WebKit::WebElement;
 using WebKit::WebFrame;
@@ -55,7 +55,7 @@ const char* const kFormHTML =
 
 namespace autofill {
 
-class PasswordAutofillManagerTest : public RenderViewTest {
+class PasswordAutofillManagerTest : public ChromeRenderViewTest {
  public:
   PasswordAutofillManagerTest() {
   }
@@ -70,7 +70,7 @@ class PasswordAutofillManagerTest : public RenderViewTest {
   }
 
   virtual void SetUp() {
-    RenderViewTest::SetUp();
+    ChromeRenderViewTest::SetUp();
 
     // Add a preferred login and an additional login to the FillData.
     username1_ = ASCIIToUTF16(kAliceUsername);
@@ -169,10 +169,6 @@ class PasswordAutofillManagerTest : public RenderViewTest {
  private:
   DISALLOW_COPY_AND_ASSIGN(PasswordAutofillManagerTest);
 };
-
-}
-
-using autofill::PasswordAutofillManagerTest;
 
 // Tests that the password login is autocompleted as expected when the browser
 // sends back the password info.
@@ -422,3 +418,5 @@ TEST_F(PasswordAutofillManagerTest, SuggestionSelect) {
   // Autocomplete should not have kicked in.
   CheckTextFieldsState("", false, "", false);
 }
+
+}  // namespace autofill

@@ -13,11 +13,13 @@
 #import "chrome/browser/ui/cocoa/hyperlink_button_cell.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
 #import "chrome/browser/ui/cocoa/l10n_util.h"
+#include "content/public/browser/plugin_service.h"
 #include "grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "webkit/plugins/npapi/plugin_list.h"
+
+using content::PluginService;
 
 namespace {
 
@@ -213,15 +215,18 @@ NSTextField* LabelWithFrame(NSString* text, const NSRect& frame) {
   // Cell must be set immediately after construction.
   [button setCell:cell.get()];
 
-  // If the link text is too long, clamp it.
-  [button sizeToFit];
-  int maxWidth = NSWidth([[self bubble] frame]) - 2 * NSMinX(referenceFrame);
+  // Size to fit the button and add a little extra padding for the small-text
+  // hyperlink button, which sizeToFit gets wrong.
+  [GTMUILocalizerAndLayoutTweaker sizeToFitView:button];
   NSRect buttonFrame = [button frame];
-  if (NSWidth(buttonFrame) > maxWidth) {
-    buttonFrame.size.width = maxWidth;
-    [button setFrame:buttonFrame];
-  }
+  buttonFrame.size.width += 2;
 
+  // If the link text is too long, clamp it.
+  int maxWidth = NSWidth([[self bubble] frame]) - 2 * NSMinX(referenceFrame);
+  if (NSWidth(buttonFrame) > maxWidth)
+    buttonFrame.size.width = maxWidth;
+
+  [button setFrame:buttonFrame];
   [button setTarget:self];
   [button setAction:@selector(popupLinkClicked:)];
   return button;
@@ -242,7 +247,7 @@ NSTextField* LabelWithFrame(NSString* text, const NSRect& frame) {
     for (std::set<std::string>::iterator it = plugins.begin();
          it != plugins.end(); ++it) {
       NSString* name = SysUTF16ToNSString(
-          webkit::npapi::PluginList::Singleton()->GetPluginGroupName(*it));
+          PluginService::GetInstance()->GetPluginGroupName(*it));
       if ([name length] == 0)
         name = base::SysUTF8ToNSString(*it);
       [pluginArray addObject:name];

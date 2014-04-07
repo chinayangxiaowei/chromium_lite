@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -78,7 +78,7 @@ class MimeUtil : public PlatformMimeUtil {
   StrictMappings strict_format_map_;
 };  // class MimeUtil
 
-static base::LazyInstance<MimeUtil> g_mime_util(base::LINKER_INITIALIZED);
+static base::LazyInstance<MimeUtil> g_mime_util = LAZY_INSTANCE_INITIALIZER;
 
 struct MimeInfo {
   const char* mime_type;
@@ -112,6 +112,7 @@ static const MimeInfo secondary_mappings[] = {
   { "application/pdf", "pdf" },
   { "application/postscript", "ps,eps,ai" },
   { "application/x-javascript", "js" },
+  { "application/x-woff", "woff" },
   { "image/bmp", "bmp" },
   { "image/x-icon", "ico" },
   { "image/jpeg", "jfif,pjpeg,pjp" },

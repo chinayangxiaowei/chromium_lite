@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,42 +6,39 @@
 #define CONTENT_BROWSER_DOWNLOAD_DOWNLOAD_TYPES_H_
 #pragma once
 
-#include <vector>
-
 #include "base/file_path.h"
 #include "base/memory/linked_ptr.h"
-#include "base/synchronization/lock.h"
+#include "content/common/content_export.h"
 #include "net/base/file_stream.h"
 
-namespace net {
-class IOBuffer;
-}
-
-// DownloadBuffer is created and populated on the IO thread, and passed to the
-// file thread for writing. In order to avoid flooding the file thread with too
-// many small write messages, each write is appended to the DownloadBuffer while
-// waiting for the task to run on the file thread. Access to the write buffers
-// is synchronized via the lock. Each entry in 'contents' represents one data
-// buffer and its size in bytes.
-struct DownloadBuffer {
-  DownloadBuffer();
-  ~DownloadBuffer();
-
-  base::Lock lock;
-  typedef std::pair<net::IOBuffer*, int> Contents;
-  std::vector<Contents> contents;
-};
-
 // Holds the information about how to save a download file.
-struct DownloadSaveInfo {
+// In the case of download continuation, |file_path| is set to the current file
+// name, |offset| is set to the point where we left off, and |hash_state| will
+// hold the state of the hash algorithm where we left off.
+struct CONTENT_EXPORT DownloadSaveInfo {
   DownloadSaveInfo();
-  DownloadSaveInfo(const DownloadSaveInfo& info);
   ~DownloadSaveInfo();
-  DownloadSaveInfo& operator=(const DownloadSaveInfo& info);
 
+  // This is usually the tentative final name, but not during resumption
+  // where it will be the intermediate file name.
   FilePath file_path;
+
   linked_ptr<net::FileStream> file_stream;
+
   string16 suggested_name;
+
+  // The file offset at which to start the download.  May be 0.
+  int64 offset;
+
+  // The state of the hash at the start of the download.  May be empty.
+  std::string hash_state;
+
+  // If |prompt_for_save_location| is true, and |file_path| is empty, then
+  // the user will be prompted for a location to save the download. Otherwise,
+  // the location will be determined automatically using |file_path| as a
+  // basis if |file_path| is not empty.
+  // |prompt_for_save_location| defaults to false.
+  bool prompt_for_save_location;
 };
 
 #endif  // CONTENT_BROWSER_DOWNLOAD_DOWNLOAD_TYPES_H_

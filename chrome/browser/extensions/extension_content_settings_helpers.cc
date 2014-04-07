@@ -8,7 +8,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/common/extensions/url_pattern.h"
-#include "content/common/url_constants.h"
+#include "content/public/common/url_constants.h"
 
 namespace {
 
@@ -57,11 +57,11 @@ namespace extension_content_settings_helpers {
 
 ContentSettingsPattern ParseExtensionPattern(const std::string& pattern_str,
                                              std::string* error) {
-  URLPattern url_pattern(URLPattern::SCHEME_HTTP |
-                         URLPattern::SCHEME_HTTPS |
-                         URLPattern::SCHEME_FILE);
-  URLPattern::ParseResult result =
-      url_pattern.Parse(pattern_str, URLPattern::USE_PORTS);
+  const int kAllowedSchemes =
+      URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS |
+      URLPattern::SCHEME_FILE;
+  URLPattern url_pattern(kAllowedSchemes);
+  URLPattern::ParseResult result = url_pattern.Parse(pattern_str);
   if (result != URLPattern::PARSE_SUCCESS) {
     *error = URLPattern::GetParseResultString(result);
     return ContentSettingsPattern();

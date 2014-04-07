@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/status/clock_menu_button.h"
 
-#include "base/string_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/frame/browser_view.h"
 #include "chrome/browser/chromeos/status/status_area_view.h"
@@ -18,6 +18,10 @@
 #include "unicode/calendar.h"
 #include "unicode/timezone.h"
 
+#if defined(USE_AURA)
+#include "chrome/browser/ui/views/aura/chrome_shell_delegate.h"
+#endif
+
 namespace chromeos {
 
 class ClockMenuButtonTest : public InProcessBrowserTest {
@@ -28,26 +32,31 @@ class ClockMenuButtonTest : public InProcessBrowserTest {
     // to use stub, so reset it here.
     CrosLibrary::Get()->GetTestApi()->ResetUseStubImpl();
   }
-  ClockMenuButton* GetClockMenuButton() {
-    BrowserView* view = static_cast<BrowserView*>(browser()->window());
-    return static_cast<StatusAreaView*>(view->
-        GetViewByID(VIEW_ID_STATUS_AREA))->clock_view();
+  const ClockMenuButton* GetClockMenuButton() {
+    const views::View* parent = NULL;
+#if defined(USE_AURA)
+    parent = ChromeShellDelegate::instance()->GetStatusArea();
+#else
+    parent = static_cast<const BrowserView*>(browser()->window());
+#endif
+    return static_cast<const ClockMenuButton*>(
+        parent->GetViewByID(VIEW_ID_STATUS_BUTTON_CLOCK));
   }
 };
 
 IN_PROC_BROWSER_TEST_F(ClockMenuButtonTest, TimezoneTest) {
-  ClockMenuButton* clock = GetClockMenuButton();
+  const ClockMenuButton* clock = GetClockMenuButton();
   ASSERT_TRUE(clock != NULL);
 
   // Update timezone and make sure clock text changes.
   scoped_ptr<icu::TimeZone> timezone_first(icu::TimeZone::createTimeZone(
       icu::UnicodeString::fromUTF8("Asia/Hong_Kong")));
   system::TimezoneSettings::GetInstance()->SetTimezone(*timezone_first);
-  std::wstring text_before = clock->text();
+  string16 text_before = clock->text();
   scoped_ptr<icu::TimeZone> timezone_second(icu::TimeZone::createTimeZone(
       icu::UnicodeString::fromUTF8("Pacific/Samoa")));
   system::TimezoneSettings::GetInstance()->SetTimezone(*timezone_second);
-  std::wstring text_after = clock->text();
+  string16 text_after = clock->text();
   EXPECT_NE(text_before, text_after);
 }
 

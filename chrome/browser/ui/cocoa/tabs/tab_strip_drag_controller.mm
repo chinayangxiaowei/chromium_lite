@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,6 +38,8 @@ const NSTimeInterval kTearDuration = 0.333;
 - (void)resetDragControllers;
 - (NSArray*)dropTargetsForController:(TabWindowController*)dragController;
 - (void)setWindowBackgroundVisibility:(BOOL)shouldBeVisible;
+- (void)endDrag:(NSEvent*)event;
+- (void)continueDrag:(NSEvent*)event;
 // TODO(davidben): When we stop supporting 10.5, this can be removed.
 - (int)getWorkspaceID:(NSWindow*)window useCache:(BOOL)useCache;
 @end
@@ -135,8 +137,7 @@ const NSTimeInterval kTearDuration = 0.333;
             // Change the target to the source controller.
             targetController_ = sourceController_;
             [targetController_ insertPlaceholderForTab:[tab tabView]
-                                                 frame:sourceTabFrame_
-                                         yStretchiness:0];
+                                                 frame:sourceTabFrame_];
           }
         }
         // Simply end the drag at this point.
@@ -146,6 +147,7 @@ const NSTimeInterval kTearDuration = 0.333;
     } else if (type == NSLeftMouseDragged) {
       [self continueDrag:theEvent];
     } else if (type == NSLeftMouseUp) {
+      DCHECK(![tab inRapidClosureMode]);
       [[tab view] mouseUp:theEvent];
       [self endDrag:theEvent];
       break;
@@ -160,6 +162,11 @@ const NSTimeInterval kTearDuration = 0.333;
 }
 
 - (void)continueDrag:(NSEvent*)theEvent {
+  CHECK(draggedTab_);
+
+  // Cancel any delayed -continueDrag: requests that may still be pending.
+  [NSObject cancelPreviousPerformRequestsWithTarget:self];
+
   // Special-case this to keep the logic below simpler.
   if (moveWindowOnDrag_) {
     if ([sourceController_ windowMovementAllowed]) {
@@ -178,15 +185,10 @@ const NSTimeInterval kTearDuration = 0.333;
 
   if (draggingWithinTabStrip_) {
     NSPoint thisPoint = [NSEvent mouseLocation];
-    CGFloat stretchiness = thisPoint.y - dragOrigin_.y;
-    stretchiness = copysign(sqrtf(fabs(stretchiness))/sqrtf(kTearDistance),
-                            stretchiness) / 2.0;
     CGFloat offset = thisPoint.x - dragOrigin_.x;
-    if (fabsf(offset) > 100) stretchiness = 0;
     [sourceController_ insertPlaceholderForTab:[draggedTab_ tabView]
                                          frame:NSOffsetRect(sourceTabFrame_,
-                                                            offset, 0)
-                                 yStretchiness:stretchiness];
+                                                            offset, 0)];
     // Check that we haven't pulled the tab too far to start a drag. This
     // can include either pulling it too far down, or off the side of the tab
     // strip that would cause it to no longer be fully visible.
@@ -206,8 +208,6 @@ const NSTimeInterval kTearDuration = 0.333;
 
   // Do not start dragging until the user has "torn" the tab off by
   // moving more than 3 pixels.
-  NSDate* targetDwellDate = nil;  // The date this target was first chosen.
-
   NSPoint thisPoint = [NSEvent mouseLocation];
 
   // Iterate over possible targets checking for the one the mouse is in.
@@ -234,7 +234,6 @@ const NSTimeInterval kTearDuration = 0.333;
   // If we're now targeting a new window, re-layout the tabs in the old
   // target and reset how long we've been hovering over this new one.
   if (targetController_ != newTarget) {
-    targetDwellDate = [NSDate date];
     [targetController_ removePlaceholder];
     targetController_ = newTarget;
     if (!newTarget) {
@@ -301,7 +300,7 @@ const NSTimeInterval kTearDuration = 0.333;
 
   // When the user first tears off the window, we want slide the window to
   // the current mouse location (to reduce the jarring appearance). We do this
-  // by calling ourselves back with additional mouseDragged calls (not actual
+  // by calling ourselves back with additional -continueDrag: calls (not actual
   // events). |tearProgress| is a normalized measure of how far through this
   // tear "animation" (of length kTearDuration) we are and has values [0..1].
   // We use sqrt() so the animation is non-linear (slow down near the end
@@ -319,7 +318,7 @@ const NSTimeInterval kTearDuration = 0.333;
   if (tearProgress < 1) {
     // If the tear animation is not complete, call back to ourself with the
     // same event to animate even if the mouse isn't moving. We need to make
-    // sure these get cancelled in mouseUp:.
+    // sure these get cancelled in -endDrag:.
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self performSelector:@selector(continueDrag:)
                withObject:theEvent
@@ -346,11 +345,8 @@ const NSTimeInterval kTearDuration = 0.333;
   // opaque. Otherwise, find where the tab might be dropped and insert
   // a placeholder so it appears like it's part of that window.
   if (targetController_) {
-    if (![[targetController_ window] isKeyWindow]) {
-      // && ([targetDwellDate timeIntervalSinceNow] < -REQUIRED_DWELL)) {
+    if (![[targetController_ window] isKeyWindow])
       [[targetController_ window] orderFront:nil];
-      targetDwellDate = nil;
-    }
 
     // Compute where placeholder should go and insert it into the
     // destination tab strip.
@@ -362,8 +358,7 @@ const NSTimeInterval kTearDuration = 0.333;
     tabFrame = [[targetController_ tabStripView]
                 convertRect:tabFrame fromView:nil];
     [targetController_ insertPlaceholderForTab:[draggedTab_ tabView]
-                                         frame:tabFrame
-                                 yStretchiness:0];
+                                         frame:tabFrame];
     [targetController_ layoutTabs];
   } else {
     [dragWindow_ makeKeyAndOrderFront:nil];
@@ -378,12 +373,14 @@ const NSTimeInterval kTearDuration = 0.333;
 }
 
 - (void)endDrag:(NSEvent*)event {
-  // Special-case this to keep the logic below simpler.
-  if (moveWindowOnDrag_)
-    return;
-
-  // Cancel any delayed -mouseDragged: requests that may still be pending.
+  // Cancel any delayed -continueDrag: requests that may still be pending.
   [NSObject cancelPreviousPerformRequestsWithTarget:self];
+
+  // Special-case this to keep the logic below simpler.
+  if (moveWindowOnDrag_) {
+    [self resetDragControllers];
+    return;
+  }
 
   // TODO(pinkerton): http://crbug.com/25682 demonstrates a way to get here by
   // some weird circumstance that doesn't first go through mouseDown:. We
@@ -439,6 +436,7 @@ const NSTimeInterval kTearDuration = 0.333;
 
 // Call to clear out transient weak references we hold during drags.
 - (void)resetDragControllers {
+  draggedTab_ = nil;
   draggedController_ = nil;
   dragWindow_ = nil;
   dragOverlay_ = nil;
@@ -533,15 +531,16 @@ const NSTimeInterval kTearDuration = 0.333;
     DCHECK(CFGetTypeID(dict) == CFDictionaryGetTypeID());
 
     // Sanity check the ID.
-    CFNumberRef otherIDRef = (CFNumberRef)base::mac::GetValueFromDictionary(
-        dict, kCGWindowNumber, CFNumberGetTypeID());
+    CFNumberRef otherIDRef =
+        base::mac::GetValueFromDictionary<CFNumberRef>(dict, kCGWindowNumber);
     CGWindowID otherID;
     if (otherIDRef &&
         CFNumberGetValue(otherIDRef, kCGWindowIDCFNumberType, &otherID) &&
         otherID == windowID) {
       // And then get the workspace.
-      CFNumberRef workspaceRef = (CFNumberRef)base::mac::GetValueFromDictionary(
-          dict, kCGWindowWorkspace, CFNumberGetTypeID());
+      CFNumberRef workspaceRef =
+          base::mac::GetValueFromDictionary<CFNumberRef>(dict,
+                                                         kCGWindowWorkspace);
       if (!workspaceRef ||
           !CFNumberGetValue(workspaceRef, kCFNumberIntType, &workspace)) {
         workspace = -1;

@@ -1,6 +1,4 @@
-#!/usr/bin/python
-#
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -64,9 +62,6 @@ class IDLLinter(IDLVisitor):
         warnings += 1
 
     if node.IsA('Interface'):
-      if not node.GetLabel():
-        node.Warning('Expecting label.')
-        warnings += 1
       macro = node.GetProperty('macro')
       if macro and not node.GetProperty('wname'):
         node.Warning('Interface name inconsistent: %s' % macro)
@@ -119,4 +114,3 @@ def Lint(ast):
     if warnings:
       WarnOut.Log('%s warning(s) for %s\n' % (warnings, name))
   return skipList
-

@@ -16,8 +16,11 @@
 #include "net/base/completion_callback.h"
 
 class GURL;
-class BrowserMessageFilter;
 class URLRequestAutomationJob;
+
+namespace content {
+class BrowserMessageFilter;
+}  // namespace content
 
 namespace net {
 class URLRequestContext;
@@ -109,7 +112,7 @@ class AutomationResourceMessageFilter
 
   // Retrieves cookies for the url passed in from the external host. The
   // callback passed in is notified on success or failure asynchronously.
-  static void GetCookiesForUrl(BrowserMessageFilter* filter,
+  static void GetCookiesForUrl(content::BrowserMessageFilter* filter,
                                net::URLRequestContext* context,
                                int render_process_id,
                                IPC::Message* reply_msg,
@@ -140,7 +143,7 @@ class AutomationResourceMessageFilter
       bool pending_view);
   static void UnRegisterRenderViewInIOThread(int renderer_pid, int renderer_id);
 
-  static bool ResumePendingRenderViewInIOThread(
+  static void ResumePendingRenderViewInIOThread(
       int renderer_pid, int renderer_id, int tab_handle,
       AutomationResourceMessageFilter* filter);
 

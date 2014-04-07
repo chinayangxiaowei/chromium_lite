@@ -7,15 +7,20 @@
 #include "base/memory/scoped_nsobject.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
-#import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
+#include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_controller.h"
 #include "chrome/browser/ui/cocoa/infobars/mock_confirm_infobar_delegate.h"
 #include "chrome/browser/ui/cocoa/infobars/mock_link_infobar_delegate.h"
 #include "chrome/browser/ui/cocoa/run_loop_testing.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#import "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+
+using content::WebContents;
 
 @interface InfoBarController (ExposedForTesting)
 - (NSString*)labelString;
@@ -89,16 +94,19 @@ namespace {
 ///////////////////////////////////////////////////////////////////////////
 // Test fixtures
 
-class LinkInfoBarControllerTest : public CocoaTest,
+class LinkInfoBarControllerTest : public CocoaProfileTest,
                                   public MockLinkInfoBarDelegate::Owner {
  public:
   virtual void SetUp() {
-    CocoaTest::SetUp();
+    CocoaProfileTest::SetUp();
+    tab_contents_.reset(new TabContentsWrapper(WebContents::Create(
+        profile(), NULL, MSG_ROUTING_NONE, NULL, NULL)));
+    tab_contents_->infobar_tab_helper()->set_infobars_enabled(false);
 
     delegate_ = new MockLinkInfoBarDelegate(this);
-    controller_.reset(
-        [[TestLinkInfoBarController alloc] initWithDelegate:delegate_
-                                                      owner:NULL]);
+    controller_.reset([[TestLinkInfoBarController alloc]
+        initWithDelegate:delegate_
+                   owner:tab_contents_.get()->infobar_tab_helper()]);
     container_.reset(
         [[InfoBarContainerTest alloc] initWithController:controller_]);
     [controller_ setContainerController:container_];
@@ -109,7 +117,7 @@ class LinkInfoBarControllerTest : public CocoaTest,
   virtual void TearDown() {
     if (delegate_)
       delete delegate_;
-    CocoaTest::TearDown();
+    CocoaProfileTest::TearDown();
   }
 
  protected:
@@ -126,18 +134,23 @@ class LinkInfoBarControllerTest : public CocoaTest,
     closed_delegate_link_clicked_ = delegate_->link_clicked();
     delegate_ = NULL;
   }
+
+  scoped_ptr<TabContentsWrapper> tab_contents_;
 };
 
-class ConfirmInfoBarControllerTest : public CocoaTest,
+class ConfirmInfoBarControllerTest : public CocoaProfileTest,
                                      public MockConfirmInfoBarDelegate::Owner {
  public:
   virtual void SetUp() {
-    CocoaTest::SetUp();
+    CocoaProfileTest::SetUp();
+    tab_contents_.reset(new TabContentsWrapper(WebContents::Create(
+        profile(), NULL, MSG_ROUTING_NONE, NULL, NULL)));
+    tab_contents_->infobar_tab_helper()->set_infobars_enabled(false);
 
     delegate_ = new MockConfirmInfoBarDelegate(this);
-    controller_.reset(
-        [[TestConfirmInfoBarController alloc] initWithDelegate:delegate_
-                                                         owner:NULL]);
+    controller_.reset([[TestConfirmInfoBarController alloc]
+        initWithDelegate:delegate_
+                   owner:tab_contents_.get()->infobar_tab_helper()]);
     container_.reset(
         [[InfoBarContainerTest alloc] initWithController:controller_]);
     [controller_ setContainerController:container_];
@@ -150,7 +163,7 @@ class ConfirmInfoBarControllerTest : public CocoaTest,
   virtual void TearDown() {
     if (delegate_)
       delete delegate_;
-    CocoaTest::TearDown();
+    CocoaProfileTest::TearDown();
   }
 
  protected:
@@ -171,6 +184,8 @@ class ConfirmInfoBarControllerTest : public CocoaTest,
     closed_delegate_link_clicked_ = delegate_->link_clicked();
     delegate_ = NULL;
   }
+
+  scoped_ptr<TabContentsWrapper> tab_contents_;
 };
 
 
@@ -186,7 +201,7 @@ TEST_F(LinkInfoBarControllerTest, ShowAndDismiss) {
   EXPECT_TRUE(delegate_->icon_accessed());
 
   // Check that dismissing the infobar deletes the delegate.
-  [controller_ dismiss:nil];
+  [controller_ removeSelf];
   ASSERT_TRUE(delegate_closed());
   EXPECT_FALSE(closed_delegate_link_clicked_);
 }
@@ -233,7 +248,7 @@ TEST_F(ConfirmInfoBarControllerTest, ShowAndDismiss) {
             base::SysNSStringToUTF8([controller_.get() labelString]));
 
   // Check that dismissing the infobar deletes the delegate.
-  [controller_ dismiss:nil];
+  [controller_ removeSelf];
   ASSERT_TRUE(delegate_closed());
   EXPECT_FALSE(closed_delegate_ok_clicked_);
   EXPECT_FALSE(closed_delegate_cancel_clicked_);

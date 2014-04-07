@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,14 @@ cr.define('print_preview', function() {
     this.collateCheckbox_ = $('collate');
     this.hint_ = $('copies-hint');
     this.twoSidedCheckbox_ = $('two-sided');
+    this.twoSidedOption_ = $('two-sided-option');
+
+    // Constant values matches printing::DuplexMode enum. Not using const
+    // keyword because it is not allowed by JS strict mode.
+    this.SIMPLEX = 0;
+    this.LONG_EDGE = 1;
+    this.UNKNOWN_DUPLEX_MODE = -1;
+    this.addEventListeners_();
   }
 
   cr.addSingletonGetter(CopiesSettings);
@@ -56,15 +64,16 @@ cr.define('print_preview', function() {
     },
 
     /**
-     * Gets the duplex mode for printing.
+     * Gets the duplex mode information for printing.
      * @return {number} duplex mode.
      */
-     get duplexMode() {
-      // Constant values matches printing::DuplexMode enum. Not using const
-      // keyword because it is not allowed by JS strict mode.
-      var SIMPLEX = 0;
-      var LONG_EDGE = 1;
-      return !this.twoSidedCheckbox_.checked ? SIMPLEX : LONG_EDGE;
+    get duplexMode() {
+      if (this.twoSidedOption_.hidden)
+        return this.UNKNOWN_DUPLEX_MODE;
+      else if (this.twoSidedCheckbox_.checked)
+        return this.LONG_EDGE;
+      else
+        return this.SIMPLEX;
     },
 
     /**
@@ -109,8 +118,8 @@ cr.define('print_preview', function() {
       this.showHideCollateOption_();
 
       if (!hasPendingPreviewRequest) {
-        cr.dispatchSimpleEvent(document, 'updateSummary');
-        cr.dispatchSimpleEvent(document, 'updatePrintButton');
+        cr.dispatchSimpleEvent(document, customEvents.UPDATE_SUMMARY);
+        cr.dispatchSimpleEvent(document, customEvents.UPDATE_PRINT_BUTTON);
       }
     },
 
@@ -123,42 +132,40 @@ cr.define('print_preview', function() {
       this.updateButtonsState_();
       this.showHideCollateOption_();
       if (!hasPendingPreviewRequest) {
-        cr.dispatchSimpleEvent(document, 'updateSummary');
-        cr.dispatchSimpleEvent(document, 'updatePrintButton');
+        cr.dispatchSimpleEvent(document, customEvents.UPDATE_SUMMARY);
+        cr.dispatchSimpleEvent(document, customEvents.UPDATE_PRINT_BUTTON);
       }
     },
 
     /**
      * Adding listeners to all copies related controls. The listeners take care
      * of altering their behavior depending on |hasPendingPreviewRequest|.
+     * @private
      */
-    addEventListeners: function() {
+    addEventListeners_: function() {
       this.textfield_.oninput = this.onTextfieldChanged_.bind(this);
       this.incrementButton_.onclick = this.onIncrementButtonClicked_.bind(this);
       this.decrementButton_.onclick = this.onDecrementButtonClicked_.bind(this);
       this.twoSidedCheckbox_.onclick = function() {
         if (!hasPendingPreviewRequest)
-          cr.dispatchSimpleEvent(document, 'updateSummary');
+          cr.dispatchSimpleEvent(document, customEvents.UPDATE_SUMMARY);
       }
-      document.addEventListener('PDFLoaded',
+      document.addEventListener(customEvents.PDF_LOADED,
                                 this.updateButtonsState_.bind(this));
-      document.addEventListener('printerCapabilitiesUpdated',
+      document.addEventListener(customEvents.PRINTER_CAPABILITIES_UPDATED,
                                 this.onPrinterCapabilitiesUpdated_.bind(this));
     },
 
     /**
-     * Listener triggered when a printerCapabilitiesUpdated event occurs.
+     * Executes when a |customEvents.PRINTER_CAPABILITIES_UPDATED| event occurs.
      * @private
      */
     onPrinterCapabilitiesUpdated_: function(e) {
-      if (e.printerCapabilities.disableCopiesOption) {
-        fadeOutElement(this.copiesOption_);
-        $('hr-before-copies').classList.remove('invisible');
-      } else {
-        fadeInElement(this.copiesOption_);
-        $('hr-before-copies').classList.add('invisible');
-      }
-      this.twoSidedCheckbox_.checked = e.printerCapabilities.setDuplexAsDefault;
+      this.updateTwoSidedOption_(
+          e.printerCapabilities.printerDefaultDuplexValue);
+      e.printerCapabilities.disableCopiesOption ?
+          fadeOutOption(this.copiesOption_) :
+          fadeInOption(this.copiesOption_);
     },
 
     /**
@@ -183,12 +190,25 @@ cr.define('print_preview', function() {
      */
     showHideCollateOption_: function() {
       this.collateOption_.hidden = this.numberOfCopies <= 1;
-      // TODO(aayushkumar): Remove aria-hidden attribute once elements within
-      // the hidden attribute are no longer read out by a screen-reader.
-      // (Currently a bug in webkit).
-      this.collateOption_.setAttribute('aria-hidden',
-                                       this.collateOption_.hidden);
     },
+
+    /*
+     * Takes care of showing/hiding the two sided option and also updates the
+     * default state of the checkbox.
+     * @param {number} defaultDuplexValue Specifies the default duplex value.
+     * @private
+     */
+     updateTwoSidedOption_: function(defaultDuplexValue) {
+      // On Windows, some printers don't specify their duplex values in the
+      // printer schema. If the printer duplex value is UNKNOWN_DUPLEX_MODE,
+      // hide the two sided option in preview tab UI.
+      // Ref bug: http://crbug.com/89204
+      this.twoSidedOption_.hidden =
+          (defaultDuplexValue == this.UNKNOWN_DUPLEX_MODE);
+
+      if (!this.twoSidedOption_.hidden)
+        this.twoSidedCheckbox_.checked = !!defaultDuplexValue;
+     },
 
     /**
      * Updates the state of the increment/decrement buttons based on the current
@@ -212,6 +232,6 @@ cr.define('print_preview', function() {
   };
 
   return {
-    CopiesSettings: CopiesSettings,
+    CopiesSettings: CopiesSettings
   };
 });

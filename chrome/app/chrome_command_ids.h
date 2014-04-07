@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,10 +54,8 @@
 #define IDC_EXIT                        34031
 #define IDC_MOVE_TAB_NEXT               34032
 #define IDC_MOVE_TAB_PREVIOUS           34033
-#define IDC_TOGGLE_VERTICAL_TABS        34034
 #define IDC_SEARCH                      34035
 #define IDC_TABPOSE                     34036
-#define IDC_COMPACT_NAVBAR              34037
 #define IDC_DEBUG_FRAME_TOGGLE          34038
 #define IDC_PRESENTATION_MODE           34039
 
@@ -172,6 +170,10 @@
 #define IDC_FILE_MANAGER                40028
 #define IDC_BOOKMARKS_MENU              40029
 #define IDC_SHOW_SYNC_SETUP             40030
+#define IDC_EXTENSION_ERRORS            40031
+#define IDC_SHOW_SYNC_ERROR             40032
+#define IDC_SHOW_SETTINGS_CHANGES       40033
+#define IDC_SHOW_AVATAR_MENU            40034
 
 // Spell-check
 // Insert any additional suggestions before _LAST; these have to be consecutive.
@@ -215,6 +217,8 @@
 #define IDC_SYSTEM_OPTIONS              45000     // ChromeOS only
 #define IDC_INTERNET_OPTIONS            45100     // ChromeOS only
 #define IDC_LANGUAGE_OPTIONS            45200     // ChromeOS only
+#define IDC_LOCK_SCREEN                 45300     // ChromeOS only
+#define IDC_SHUTDOWN                    45400     // ChromeOS only
 #define IDC_HISTORY_MENU                46000     // OSX only
 #define IDC_PROFILE_MAIN_MENU           46100     // OSX only
 #define IDC_INPUT_METHODS_MENU          46300     // Linux only
@@ -250,6 +254,8 @@
 #define IDC_CONTENT_CONTEXT_MUTE 50131
 #define IDC_CONTENT_CONTEXT_LOOP 50132
 #define IDC_CONTENT_CONTEXT_CONTROLS 50133
+#define IDC_CONTENT_CONTEXT_ROTATECW 50134
+#define IDC_CONTENT_CONTEXT_ROTATECCW 50135
 // Edit items.
 #define IDC_CONTENT_CONTEXT_COPY 50140
 #define IDC_CONTENT_CONTEXT_CUT 50141
@@ -258,6 +264,7 @@
 #define IDC_CONTENT_CONTEXT_UNDO 50144
 #define IDC_CONTENT_CONTEXT_REDO 50145
 #define IDC_CONTENT_CONTEXT_SELECTALL 50146
+#define IDC_CONTENT_CONTEXT_PASTE_AND_MATCH_STYLE 50147
 // Other items.
 #define IDC_CONTENT_CONTEXT_TRANSLATE 50150
 #define IDC_CONTENT_CONTEXT_INSPECTELEMENT 50151
@@ -266,6 +273,7 @@
 #define IDC_CONTENT_CONTEXT_LOOK_UP_IN_DICTIONARY 50154
 #define IDC_CONTENT_CONTEXT_NO_SPELLING_SUGGESTIONS 50155
 #define IDC_CONTENT_CONTEXT_SPELLING_SUGGESTION 50156
+#define IDC_CONTENT_CONTEXT_SPELLING_TOGGLE 50157
 // Frame items.
 #define IDC_CONTENT_CONTEXT_RELOADFRAME 50160
 #define IDC_CONTENT_CONTEXT_VIEWFRAMESOURCE 50161
@@ -293,7 +301,7 @@
 
 // Context menu items for speech recognition
 #define IDC_SPEECH_INPUT_MENU 51200
-#define IDC_CONTENT_CONTEXT_SPEECH_INPUT_CENSOR_RESULTS 51201
+#define IDC_CONTENT_CONTEXT_SPEECH_INPUT_FILTER_PROFANITIES 51201
 #define IDC_CONTENT_CONTEXT_SPEECH_INPUT_ABOUT 51202
 
 // Protocol handler menu entries

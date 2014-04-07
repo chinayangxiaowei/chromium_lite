@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -84,7 +84,7 @@ int GetProcessCPU(pid_t pid) {
 
   DIR* dir = opendir(path.value().c_str());
   if (!dir) {
-    PLOG(ERROR) << "opendir(" << path.value() << ")";
+    DPLOG(ERROR) << "opendir(" << path.value() << ")";
     return -1;
   }
 
@@ -123,18 +123,18 @@ ProcessId GetParentProcessId(ProcessHandle process) {
 
   StringTokenizer tokenizer(status, ":\n");
   ParsingState state = KEY_NAME;
-  std::string last_key_name;
+  StringPiece last_key_name;
   while (tokenizer.GetNext()) {
     switch (state) {
       case KEY_NAME:
-        last_key_name = tokenizer.token();
+        last_key_name = tokenizer.token_piece();
         state = KEY_VALUE;
         break;
       case KEY_VALUE:
         DCHECK(!last_key_name.empty());
         if (last_key_name == "PPid") {
           int ppid;
-          base::StringToInt(tokenizer.token(), &ppid);
+          base::StringToInt(tokenizer.token_piece(), &ppid);
           return ppid;
         }
         state = KEY_NAME;
@@ -273,7 +273,7 @@ ProcessMetrics* ProcessMetrics::CreateProcessMetrics(ProcessHandle process) {
 size_t ProcessMetrics::GetPagefileUsage() const {
   std::vector<std::string> proc_stats;
   if (!GetProcStats(process_, &proc_stats))
-    LOG(WARNING) << "Failed to get process stats.";
+    DLOG(WARNING) << "Failed to get process stats.";
   const size_t kVmSize = 22;
   if (proc_stats.size() > kVmSize) {
     int vm_size;
@@ -287,7 +287,7 @@ size_t ProcessMetrics::GetPagefileUsage() const {
 size_t ProcessMetrics::GetPeakPagefileUsage() const {
   std::vector<std::string> proc_stats;
   if (!GetProcStats(process_, &proc_stats))
-    LOG(WARNING) << "Failed to get process stats.";
+    DLOG(WARNING) << "Failed to get process stats.";
   const size_t kVmPeak = 21;
   if (proc_stats.size() > kVmPeak) {
     int vm_peak;
@@ -301,7 +301,7 @@ size_t ProcessMetrics::GetPeakPagefileUsage() const {
 size_t ProcessMetrics::GetWorkingSetSize() const {
   std::vector<std::string> proc_stats;
   if (!GetProcStats(process_, &proc_stats))
-    LOG(WARNING) << "Failed to get process stats.";
+    DLOG(WARNING) << "Failed to get process stats.";
   const size_t kVmRss = 23;
   if (proc_stats.size() > kVmRss) {
     int num_pages;
@@ -315,7 +315,7 @@ size_t ProcessMetrics::GetWorkingSetSize() const {
 size_t ProcessMetrics::GetPeakWorkingSetSize() const {
   std::vector<std::string> proc_stats;
   if (!GetProcStats(process_, &proc_stats))
-    LOG(WARNING) << "Failed to get process stats.";
+    DLOG(WARNING) << "Failed to get process stats.";
   const size_t kVmHwm = 23;
   if (proc_stats.size() > kVmHwm) {
     int num_pages;
@@ -380,12 +380,12 @@ bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
           }
           if (last_key_name.starts_with(private_prefix)) {
             int cur;
-            base::StringToInt(tokenizer.token(), &cur);
+            base::StringToInt(tokenizer.token_piece(), &cur);
             private_kb += cur;
           } else if (last_key_name.starts_with(pss_prefix)) {
             have_pss = true;
             int cur;
-            base::StringToInt(tokenizer.token(), &cur);
+            base::StringToInt(tokenizer.token_piece(), &cur);
             pss_kb += cur;
           }
           state = KEY_NAME;
@@ -490,26 +490,26 @@ bool ProcessMetrics::GetIOCounters(IoCounters* io_counters) const {
 
   StringTokenizer tokenizer(proc_io_contents, ": \n");
   ParsingState state = KEY_NAME;
-  std::string last_key_name;
+  StringPiece last_key_name;
   while (tokenizer.GetNext()) {
     switch (state) {
       case KEY_NAME:
-        last_key_name = tokenizer.token();
+        last_key_name = tokenizer.token_piece();
         state = KEY_VALUE;
         break;
       case KEY_VALUE:
         DCHECK(!last_key_name.empty());
         if (last_key_name == "syscr") {
-          base::StringToInt64(tokenizer.token(),
+          base::StringToInt64(tokenizer.token_piece(),
               reinterpret_cast<int64*>(&(*io_counters).ReadOperationCount));
         } else if (last_key_name == "syscw") {
-          base::StringToInt64(tokenizer.token(),
+          base::StringToInt64(tokenizer.token_piece(),
               reinterpret_cast<int64*>(&(*io_counters).WriteOperationCount));
         } else if (last_key_name == "rchar") {
-          base::StringToInt64(tokenizer.token(),
+          base::StringToInt64(tokenizer.token_piece(),
               reinterpret_cast<int64*>(&(*io_counters).ReadTransferCount));
         } else if (last_key_name == "wchar") {
-          base::StringToInt64(tokenizer.token(),
+          base::StringToInt64(tokenizer.token_piece(),
               reinterpret_cast<int64*>(&(*io_counters).WriteTransferCount));
         }
         state = KEY_NAME;
@@ -576,14 +576,14 @@ bool GetSystemMemoryInfo(SystemMemoryInfoKB* meminfo) {
   FilePath meminfo_file("/proc/meminfo");
   std::string meminfo_data;
   if (!file_util::ReadFileToString(meminfo_file, &meminfo_data)) {
-    LOG(WARNING) << "Failed to open /proc/meminfo.";
+    DLOG(WARNING) << "Failed to open /proc/meminfo.";
     return false;
   }
   std::vector<std::string> meminfo_fields;
   SplitStringAlongWhitespace(meminfo_data, &meminfo_fields);
 
   if (meminfo_fields.size() < kMemCachedIndex) {
-    LOG(WARNING) << "Failed to parse /proc/meminfo.  Only found " <<
+    DLOG(WARNING) << "Failed to parse /proc/meminfo.  Only found " <<
       meminfo_fields.size() << " fields.";
     return false;
   }
@@ -752,7 +752,8 @@ bool AdjustOOMScore(ProcessId process, int score) {
   FilePath oom_file = oom_path.AppendASCII("oom_score_adj");
   if (file_util::PathExists(oom_file)) {
     std::string score_str = base::IntToString(score);
-    VLOG(1) << "Adjusting oom_score_adj of " << process << " to " << score_str;
+    DVLOG(1) << "Adjusting oom_score_adj of " << process << " to "
+             << score_str;
     int score_len = static_cast<int>(score_str.length());
     return (score_len == file_util::WriteFile(oom_file,
                                               score_str.c_str(),
@@ -765,7 +766,7 @@ bool AdjustOOMScore(ProcessId process, int score) {
   if (file_util::PathExists(oom_file)) {
     std::string score_str = base::IntToString(
         score * kMaxOldOomScore / kMaxOomScore);
-    VLOG(1) << "Adjusting oom_adj of " << process << " to " << score_str;
+    DVLOG(1) << "Adjusting oom_adj of " << process << " to " << score_str;
     int score_len = static_cast<int>(score_str.length());
     return (score_len == file_util::WriteFile(oom_file,
                                               score_str.c_str(),

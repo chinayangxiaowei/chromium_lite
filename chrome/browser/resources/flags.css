@@ -7,6 +7,8 @@
 body {
   margin: 10px;
   min-width: 47em;
+  /* Should match needs-restart.(height + padding-top + padding-bottom + 5) */
+  padding-bottom: 65px;
 }
 
 a {
@@ -27,10 +29,10 @@ div#header {
 }
 
 #header h1 {
-  background: url('../../app/theme/flags_section.png') 0px 20px no-repeat;
+  background: url('../../app/theme/flags_section.png') 0 20px no-repeat;
   display: inline;
   margin: 0;
-  padding-bottom: 43px;
+  padding-bottom: 20px;
   -webkit-padding-start: 75px;
   padding-top: 40px;
 }
@@ -98,13 +100,16 @@ div.content {
   -webkit-padding-end: 5px;
 }
 
-/* Disabled experiments display grey text on a grey background.  The title,
-   however, should remain completely legible. */
+/* Disabled and unsupported experiments display grey text on a grey background.
+   The title, however, should remain legible. */
+
+.experiment-unsupported > td,
 .experiment-disabled > td {
   background: #F0F0F0;
   color: #A0A0A0;
 }
 
+.experiment-unsupported .experiment-name,
 .experiment-disabled .experiment-name {
   color: #000;
 }
@@ -141,8 +146,19 @@ div.content {
 }
 
 div.needs-restart {
-  padding-top: 10px;
-  -webkit-padding-start: 5px;
+  background: #FFF;
+  border-top: 1px solid #b5c7de;
+  bottom: 0;
+  /* If you change this, update body.padding-bottom */
+  height: 30px;
+  left: 0;
+  /* If you change this, update body.padding-bottom */
+  padding-bottom: 25px;
+  padding-left: 15px;
+  /* If you change this, update body.padding-bottom */
+  padding-top: 15px;
+  position: fixed;
+  width: 100%;
 }
 
 button {

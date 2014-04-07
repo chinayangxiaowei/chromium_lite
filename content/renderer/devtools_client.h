@@ -10,17 +10,15 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "content/renderer/render_view_observer.h"
+#include "content/public/renderer/render_view_observer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDevToolsFrontendClient.h"
 
-class MessageLoop;
+class RenderViewImpl;
 
 namespace WebKit {
 class WebDevToolsFrontend;
 class WebString;
 }
-
-struct DevToolsMessageData;
 
 // Developer tools UI end of communication channel between the render process of
 // the page being inspected and tools UI renderer process. All messages will
@@ -28,34 +26,30 @@ struct DevToolsMessageData;
 // corresponding DevToolsAgent object.
 // TODO(yurys): now the client is almost empty later it will delegate calls to
 // code in glue
-class DevToolsClient : public RenderViewObserver,
+class DevToolsClient : public content::RenderViewObserver,
                        public WebKit::WebDevToolsFrontendClient {
  public:
-  explicit DevToolsClient(RenderView* render_view);
+  explicit DevToolsClient(RenderViewImpl* render_view);
   virtual ~DevToolsClient();
 
  private:
   // RenderView::Observer implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message);
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
-  // WebDevToolsFrontendClient implementation
-  virtual void sendFrontendLoaded();
-  virtual void sendMessageToBackend(const WebKit::WebString&);
-  virtual void sendDebuggerCommandToAgent(const WebKit::WebString& command);
+  // WebDevToolsFrontendClient implementation.
+  virtual void sendMessageToBackend(const WebKit::WebString&) OVERRIDE;
 
-  virtual void activateWindow();
-  virtual void closeWindow();
-  virtual void requestDockWindow();
-  virtual void requestUndockWindow();
+  virtual void activateWindow() OVERRIDE;
+  virtual void closeWindow() OVERRIDE;
+  virtual void moveWindowBy(const WebKit::WebFloatPoint& offset) OVERRIDE;
+  virtual void requestDockWindow() OVERRIDE;
+  virtual void requestUndockWindow() OVERRIDE;
+  virtual void requestSetDockSide(const WebKit::WebString& side) OVERRIDE;
+  virtual void openInNewTab(const WebKit::WebString& side) OVERRIDE;
   virtual void saveAs(const WebKit::WebString& file_name,
-                      const WebKit::WebString& content);
-
-  virtual bool shouldHideScriptsPanel();
+                      const WebKit::WebString& content) OVERRIDE;
 
   void OnDispatchOnInspectorFrontend(const std::string& message);
-
-  // Sends message to DevToolsAgent.
-  void SendToAgent(const IPC::Message& tools_agent_message);
 
   scoped_ptr<WebKit::WebDevToolsFrontend> web_tools_frontend_;
 

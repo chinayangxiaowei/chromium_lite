@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/string_number_conversions.h"
@@ -13,18 +14,17 @@
 #include "content/browser/speech/speech_input_dispatcher_host.h"
 #include "content/browser/speech/speech_input_manager.h"
 #include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_switches.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/speech_input_result.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
+
+using content::NavigationController;
+using content::WebContents;
 
 namespace speech_input {
 class FakeSpeechInputManager;
 }
-
-// This class does not need to be refcounted (typically done by PostTask) since
-// it will outlive the test and gets released only when the test shuts down.
-// Disabling refcounting here saves a bit of unnecessary code and the factory
-// method can return a plain pointer below as required by the real code.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(speech_input::FakeSpeechInputManager);
 
 namespace speech_input {
 
@@ -52,14 +52,13 @@ class FakeSpeechInputManager : public SpeechInputManager {
   }
 
   // SpeechInputManager methods.
-  virtual void StartRecognition(Delegate* delegate,
-                                int caller_id,
-                                int render_process_id,
-                                int render_view_id,
-                                const gfx::Rect& element_rect,
-                                const std::string& language,
-                                const std::string& grammar,
-                                const std::string& origin_url) {
+  virtual void StartRecognition(Delegate* delegate, int caller_id,
+      int render_process_id, int render_view_id, const gfx::Rect& element_rect,
+      const std::string& language, const std::string& grammar,
+      const std::string& origin_url,
+      net::URLRequestContextGetter* context_getter,
+      SpeechInputPreferences* speech_input_prefs,
+      AudioManager* audio_manager) OVERRIDE {
     VLOG(1) << "StartRecognition invoked.";
     EXPECT_EQ(0, caller_id_);
     EXPECT_EQ(NULL, delegate_);
@@ -68,22 +67,28 @@ class FakeSpeechInputManager : public SpeechInputManager {
     grammar_ = grammar;
     if (send_fake_response_) {
       // Give the fake result in a short while.
-      MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(this,
-          &FakeSpeechInputManager::SetFakeRecognitionResult));
+      MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+          &FakeSpeechInputManager::SetFakeRecognitionResult,
+          // This class does not need to be refcounted (typically done by
+          // PostTask) since it will outlive the test and gets released only
+          // when the test shuts down. Disabling refcounting here saves a bit
+          // of unnecessary code and the factory method can return a plain
+          // pointer below as required by the real code.
+          base::Unretained(this)));
     }
   }
-  virtual void CancelRecognition(int caller_id) {
+  virtual void CancelRecognition(int caller_id) OVERRIDE {
     VLOG(1) << "CancelRecognition invoked.";
     EXPECT_EQ(caller_id_, caller_id);
     caller_id_ = 0;
     delegate_ = NULL;
   }
-  virtual void StopRecording(int caller_id) {
+  virtual void StopRecording(int caller_id) OVERRIDE {
     VLOG(1) << "StopRecording invoked.";
     EXPECT_EQ(caller_id_, caller_id);
     // Nothing to do here since we aren't really recording.
   }
-  virtual void CancelAllRequestsWithDelegate(Delegate* delegate) {
+  virtual void CancelAllRequestsWithDelegate(Delegate* delegate) OVERRIDE {
     VLOG(1) << "CancelAllRequestsWithDelegate invoked.";
     // delegate_ is set to NULL if a fake result was received (see below), so
     // check that delegate_ matches the incoming parameter only when there is
@@ -92,13 +97,31 @@ class FakeSpeechInputManager : public SpeechInputManager {
     did_cancel_all_ = true;
   }
 
+ protected:
+  virtual void GetRequestInfo(AudioManager* audio_manager,
+      bool* can_report_metrics,
+      std::string* request_info) OVERRIDE {}
+  virtual void ShowRecognitionRequested(int caller_id, int render_process_id,
+      int render_view_id, const gfx::Rect& element_rect) OVERRIDE {}
+  virtual void ShowWarmUp(int caller_id) OVERRIDE {}
+  virtual void ShowRecognizing(int caller_id) OVERRIDE {}
+  virtual void ShowRecording(int caller_id) OVERRIDE {}
+  virtual void ShowInputVolume(int caller_id, float volume,
+      float noise_volume) OVERRIDE {}
+  virtual void ShowMicError(int caller_id,
+      SpeechInputManager::MicError error) OVERRIDE {}
+  virtual void ShowRecognizerError(int caller_id,
+      content::SpeechInputError error) OVERRIDE {}
+  virtual void DoClose(int caller_id) OVERRIDE {}
+
  private:
   void SetFakeRecognitionResult() {
     if (caller_id_) {  // Do a check in case we were cancelled..
       VLOG(1) << "Setting fake recognition result.";
       delegate_->DidCompleteRecording(caller_id_);
-      SpeechInputResultArray results;
-      results.push_back(SpeechInputResultItem(ASCIIToUTF16(kTestResult), 1.0));
+      content::SpeechInputResult results;
+      results.hypotheses.push_back(content::SpeechInputHypothesis(
+          ASCIIToUTF16(kTestResult), 1.0));
       delegate_->SetRecognitionResult(caller_id_, results);
       delegate_->DidCompleteRecognition(caller_id_);
       caller_id_ = 0;
@@ -140,13 +163,13 @@ class SpeechInputBrowserTest : public InProcessBrowserTest {
     mouse_event.x = 0;
     mouse_event.y = 0;
     mouse_event.clickCount = 1;
-    TabContents* tab_contents = browser()->GetSelectedTabContents();
+    WebContents* web_contents = browser()->GetSelectedWebContents();
     ui_test_utils::WindowedNotificationObserver observer(
         content::NOTIFICATION_LOAD_STOP,
-        Source<NavigationController>(&tab_contents->controller()));
-    tab_contents->render_view_host()->ForwardMouseEvent(mouse_event);
+        content::Source<NavigationController>(&web_contents->GetController()));
+    web_contents->GetRenderViewHost()->ForwardMouseEvent(mouse_event);
     mouse_event.type = WebKit::WebInputEvent::MouseUp;
-    tab_contents->render_view_host()->ForwardMouseEvent(mouse_event);
+    web_contents->GetRenderViewHost()->ForwardMouseEvent(mouse_event);
     observer.Wait();
   }
 
@@ -156,7 +179,7 @@ class SpeechInputBrowserTest : public InProcessBrowserTest {
     // then sets the URL fragment as 'pass' if it received the expected string.
     LoadAndStartSpeechInputTest(filename);
 
-    EXPECT_EQ("pass", browser()->GetSelectedTabContents()->GetURL().ref());
+    EXPECT_EQ("pass", browser()->GetSelectedWebContents()->GetURL().ref());
   }
 
   // InProcessBrowserTest methods.

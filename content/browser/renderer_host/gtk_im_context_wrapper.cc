@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@
 #include "base/utf_string_conversions.h"
 #include "content/browser/renderer_host/render_widget_host.h"
 #include "content/browser/renderer_host/render_widget_host_view_gtk.h"
-#include "content/common/native_web_keyboard_event.h"
+#include "content/public/browser/native_web_keyboard_event.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
 #include "ui/base/gtk/gtk_im_context_util.h"
 #include "ui/gfx/gtk_util.h"
@@ -66,25 +66,29 @@ GtkIMContextWrapper::GtkIMContextWrapper(RenderWidgetHostViewGtk* host_view)
   // context_ is for full input method support.
   // context_simple_ is for supporting dead/compose keys when input method is
   // disabled by webkit, eg. in password input box.
-  g_signal_connect(context_, "preedit_start",
+  g_signal_connect(context_, "preedit-start",
                    G_CALLBACK(HandlePreeditStartThunk), this);
-  g_signal_connect(context_, "preedit_end",
+  g_signal_connect(context_, "preedit-end",
                    G_CALLBACK(HandlePreeditEndThunk), this);
-  g_signal_connect(context_, "preedit_changed",
+  g_signal_connect(context_, "preedit-changed",
                    G_CALLBACK(HandlePreeditChangedThunk), this);
   g_signal_connect(context_, "commit",
                    G_CALLBACK(HandleCommitThunk), this);
+  g_signal_connect(context_, "retrieve-surrounding",
+                   G_CALLBACK(HandleRetrieveSurroundingThunk), this);
 
-  g_signal_connect(context_simple_, "preedit_start",
+  g_signal_connect(context_simple_, "preedit-start",
                    G_CALLBACK(HandlePreeditStartThunk), this);
-  g_signal_connect(context_simple_, "preedit_end",
+  g_signal_connect(context_simple_, "preedit-end",
                    G_CALLBACK(HandlePreeditEndThunk), this);
-  g_signal_connect(context_simple_, "preedit_changed",
+  g_signal_connect(context_simple_, "preedit-changed",
                    G_CALLBACK(HandlePreeditChangedThunk), this);
   g_signal_connect(context_simple_, "commit",
                    G_CALLBACK(HandleCommitThunk), this);
+  g_signal_connect(context_simple_, "retrieve-surrounding",
+                   G_CALLBACK(HandleRetrieveSurroundingThunk), this);
 
-  GtkWidget* widget = host_view->native_view();
+  GtkWidget* widget = host_view->GetNativeView();
   DCHECK(widget);
 
   g_signal_connect(widget, "realize",
@@ -154,7 +158,7 @@ void GtkIMContextWrapper::ProcessKeyEvent(GdkEventKey* event) {
   // Reset this flag here, as it's only used in input method callbacks.
   is_in_key_event_handler_ = false;
 
-  NativeWebKeyboardEvent wke(event);
+  NativeWebKeyboardEvent wke(reinterpret_cast<GdkEvent*>(event));
 
   // If the key event was handled by the input method, then we need to prevent
   // RenderView::UnhandledKeyboardEvent() from processing it.
@@ -216,8 +220,7 @@ void GtkIMContextWrapper::ProcessKeyEvent(GdkEventKey* event) {
 
 void GtkIMContextWrapper::UpdateInputMethodState(
     ui::TextInputType type,
-    bool can_compose_inline,
-    const gfx::Rect& caret_rect) {
+    bool can_compose_inline) {
   suppress_next_commit_ = false;
 
   // The renderer has updated its IME status.
@@ -242,11 +245,17 @@ void GtkIMContextWrapper::UpdateInputMethodState(
     // we receive and send related events to it. Otherwise, the events related
     // to the updates of composition text are directed to the candidate window.
     gtk_im_context_set_use_preedit(context_, can_compose_inline);
+  }
+}
+
+void GtkIMContextWrapper::UpdateCaretBounds(
+    const gfx::Rect& caret_bounds) {
+  if (is_enabled_) {
     // Updates the position of the IME candidate window.
     // The position sent from the renderer is a relative one, so we need to
     // attach the GtkIMContext object to this window before changing the
     // position.
-    GdkRectangle cursor_rect(caret_rect.ToGdkRectangle());
+    GdkRectangle cursor_rect(caret_bounds.ToGdkRectangle());
     gtk_im_context_set_cursor_location(context_, &cursor_rect);
   }
 }
@@ -558,13 +567,32 @@ void GtkIMContextWrapper::HandlePreeditEnd() {
   // signal may be fired before "commit" signal.
 }
 
+gboolean GtkIMContextWrapper::HandleRetrieveSurrounding(GtkIMContext* context) {
+  if (!is_enabled_)
+    return TRUE;
+
+  std::string text;
+  size_t cursor_index = 0;
+
+  if (!is_enabled_ || !host_view_->RetrieveSurrounding(&text, &cursor_index)) {
+    gtk_im_context_set_surrounding(context, "", 0, 0);
+    return TRUE;
+  }
+
+  gtk_im_context_set_surrounding(context, text.c_str(), text.length(),
+      cursor_index);
+
+  return TRUE;
+}
+
 void GtkIMContextWrapper::HandleHostViewRealize(GtkWidget* widget) {
   // We should only set im context's client window once, because when setting
   // client window.im context may destroy and recreate its internal states and
   // objects.
-  if (widget->window) {
-    gtk_im_context_set_client_window(context_, widget->window);
-    gtk_im_context_set_client_window(context_simple_, widget->window);
+  GdkWindow* gdk_window = gtk_widget_get_window(widget);
+  if (gdk_window) {
+    gtk_im_context_set_client_window(context_, gdk_window);
+    gtk_im_context_set_client_window(context_simple_, gdk_window);
   }
 }
 
@@ -606,6 +634,11 @@ void GtkIMContextWrapper::HandlePreeditChangedThunk(
 void GtkIMContextWrapper::HandlePreeditEndThunk(
     GtkIMContext* context, GtkIMContextWrapper* self) {
   self->HandlePreeditEnd();
+}
+
+gboolean GtkIMContextWrapper::HandleRetrieveSurroundingThunk(
+    GtkIMContext* context, GtkIMContextWrapper* self) {
+  return self->HandleRetrieveSurrounding(context);
 }
 
 void GtkIMContextWrapper::HandleHostViewRealizeThunk(

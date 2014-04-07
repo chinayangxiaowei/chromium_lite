@@ -48,10 +48,15 @@ cr.define('options.personal_options', function() {
 
       var profileInfo = this.profileInfo_;
 
-      var nameEl = this.contentElement;
-      nameEl.className = 'profile-item';
+      var iconEl = this.ownerDocument.createElement('img');
+      iconEl.className = 'profile-img';
+      iconEl.src = profileInfo.iconURL;
+      this.contentElement.appendChild(iconEl);
+
+      var nameEl = this.ownerDocument.createElement('div');
       if (profileInfo.isCurrentProfile)
         nameEl.classList.add('profile-item-current');
+      this.contentElement.appendChild(nameEl);
 
       var displayName = profileInfo.name;
       if (profileInfo.isCurrentProfile)
@@ -82,6 +87,14 @@ cr.define('options.personal_options', function() {
     /** @inheritDoc */
     deleteItemAtIndex: function(index) {
       ManageProfileOverlay.showDeleteDialog(this.dataModel.item(index));
+    },
+
+    /** @inheritDoc */
+    activateItemAtIndex: function(index) {
+      // Don't allow the user to edit a profile that is not current.
+      var profileInfo = this.dataModel.item(index);
+      if (profileInfo.isCurrentProfile)
+        ManageProfileOverlay.showManageDialog(profileInfo);
     },
   };
 

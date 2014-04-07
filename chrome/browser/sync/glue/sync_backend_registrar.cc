@@ -4,18 +4,21 @@
 
 #include "chrome/browser/sync/glue/sync_backend_registrar.h"
 
-#include <algorithm>
+#include <cstddef>
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sync/engine/passive_model_worker.h"
+#include "chrome/browser/sync/glue/browser_thread_model_worker.h"
 #include "chrome/browser/sync/glue/change_processor.h"
-#include "chrome/browser/sync/glue/database_model_worker.h"
 #include "chrome/browser/sync/glue/history_model_worker.h"
 #include "chrome/browser/sync/glue/password_model_worker.h"
 #include "chrome/browser/sync/glue/ui_model_worker.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+
+using content::BrowserThread;
 
 namespace browser_sync {
 
@@ -31,6 +34,8 @@ bool IsOnThreadForGroup(ModelSafeGroup group) {
       return BrowserThread::CurrentlyOn(BrowserThread::UI);
     case GROUP_DB:
       return BrowserThread::CurrentlyOn(BrowserThread::DB);
+    case GROUP_FILE:
+      return BrowserThread::CurrentlyOn(BrowserThread::FILE);
     case GROUP_HISTORY:
       // TODO(ncarter): How to determine this?
       return true;
@@ -46,7 +51,7 @@ bool IsOnThreadForGroup(ModelSafeGroup group) {
 }  // namespace
 
 SyncBackendRegistrar::SyncBackendRegistrar(
-    const syncable::ModelTypeSet& initial_types,
+    syncable::ModelTypeSet initial_types,
     const std::string& name, Profile* profile,
     MessageLoop* sync_loop) :
     name_(name),
@@ -58,16 +63,17 @@ SyncBackendRegistrar::SyncBackendRegistrar(
   CHECK(profile_);
   DCHECK(sync_loop_);
   workers_[GROUP_DB] = new DatabaseModelWorker();
+  workers_[GROUP_FILE] = new FileModelWorker();
   workers_[GROUP_UI] = ui_worker_;
-  workers_[GROUP_PASSIVE] = new ModelSafeWorker();
+  workers_[GROUP_PASSIVE] = new PassiveModelWorker(sync_loop_);
 
   // Any datatypes that we want the syncer to pull down must be in the
   // routing_info map.  We set them to group passive, meaning that
   // updates will be applied to sync, but not dispatched to the native
   // models.
-  for (syncable::ModelTypeSet::const_iterator it = initial_types.begin();
-      it != initial_types.end(); ++it) {
-    routing_info_[*it] = GROUP_PASSIVE;
+  for (syncable::ModelTypeSet::Iterator it = initial_types.First();
+       it.Good(); it.Inc()) {
+    routing_info_[it.Get()] = GROUP_PASSIVE;
   }
 
   HistoryService* history_service = profile->GetHistoryService(
@@ -75,7 +81,7 @@ SyncBackendRegistrar::SyncBackendRegistrar(
   if (history_service) {
     workers_[GROUP_HISTORY] = new HistoryModelWorker(history_service);
   } else {
-    LOG_IF(WARNING, initial_types.count(syncable::TYPED_URLS) > 0)
+    LOG_IF(WARNING, initial_types.Has(syncable::TYPED_URLS))
         << "History store disabled, cannot sync Omnibox History";
     routing_info_.erase(syncable::TYPED_URLS);
   }
@@ -85,7 +91,7 @@ SyncBackendRegistrar::SyncBackendRegistrar(
   if (password_store) {
     workers_[GROUP_PASSWORD] = new PasswordModelWorker(password_store);
   } else {
-    LOG_IF(WARNING, initial_types.count(syncable::PASSWORDS) > 0)
+    LOG_IF(WARNING, initial_types.Has(syncable::PASSWORDS))
         << "Password store not initialized, cannot sync passwords";
     routing_info_.erase(syncable::PASSWORDS);
   }
@@ -103,52 +109,46 @@ bool SyncBackendRegistrar::IsNigoriEnabled() const {
 }
 
 syncable::ModelTypeSet SyncBackendRegistrar::ConfigureDataTypes(
-    const syncable::ModelTypeSet& types_to_add,
-    const syncable::ModelTypeSet& types_to_remove) {
+    syncable::ModelTypeSet types_to_add,
+    syncable::ModelTypeSet types_to_remove) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (DCHECK_IS_ON()) {
-    syncable::ModelTypeSet intersection;
-    std::set_intersection(types_to_add.begin(), types_to_add.end(),
-                          types_to_remove.begin(), types_to_remove.end(),
-                          std::inserter(intersection, intersection.end()));
-    DCHECK(intersection.empty());
-  }
+  DCHECK(Intersection(types_to_add, types_to_remove).Empty());
   syncable::ModelTypeSet filtered_types_to_add = types_to_add;
   if (workers_.count(GROUP_HISTORY) == 0) {
     LOG(WARNING) << "No history worker -- removing TYPED_URLS";
-    filtered_types_to_add.erase(syncable::TYPED_URLS);
+    filtered_types_to_add.Remove(syncable::TYPED_URLS);
   }
   if (workers_.count(GROUP_PASSWORD) == 0) {
-    LOG(WARNING) << "No history worker -- removing PASSWORDS";
-    filtered_types_to_add.erase(syncable::PASSWORDS);
+    LOG(WARNING) << "No password worker -- removing PASSWORDS";
+    filtered_types_to_add.Remove(syncable::PASSWORDS);
   }
 
   base::AutoLock lock(lock_);
   syncable::ModelTypeSet newly_added_types;
-  for (syncable::ModelTypeSet::const_iterator it =
-           filtered_types_to_add.begin();
-       it != filtered_types_to_add.end(); ++it) {
+  for (syncable::ModelTypeSet::Iterator it =
+           filtered_types_to_add.First();
+       it.Good(); it.Inc()) {
     // Add a newly specified data type as GROUP_PASSIVE into the
     // routing_info, if it does not already exist.
-    if (routing_info_.count(*it) == 0) {
-      routing_info_[*it] = GROUP_PASSIVE;
-      newly_added_types.insert(*it);
+    if (routing_info_.count(it.Get()) == 0) {
+      routing_info_[it.Get()] = GROUP_PASSIVE;
+      newly_added_types.Put(it.Get());
     }
   }
-  for (syncable::ModelTypeSet::const_iterator it = types_to_remove.begin();
-       it != types_to_remove.end(); ++it) {
-    routing_info_.erase(*it);
+  for (syncable::ModelTypeSet::Iterator it = types_to_remove.First();
+       it.Good(); it.Inc()) {
+    routing_info_.erase(it.Get());
   }
 
   // TODO(akalin): Use SVLOG/SLOG if we add any more logging.
-  VLOG(1) << name_ << ": Adding types "
-          << syncable::ModelTypeSetToString(types_to_add)
-          << " (with newly-added types "
-          << syncable::ModelTypeSetToString(newly_added_types)
-          << ") and removing types "
-          << syncable::ModelTypeSetToString(types_to_remove)
-          << " to get new routing info "
-          << ModelSafeRoutingInfoToString(routing_info_);
+  DVLOG(1) << name_ << ": Adding types "
+           << syncable::ModelTypeSetToString(types_to_add)
+           << " (with newly-added types "
+           << syncable::ModelTypeSetToString(newly_added_types)
+           << ") and removing types "
+           << syncable::ModelTypeSetToString(types_to_remove)
+           << " to get new routing info "
+           << ModelSafeRoutingInfoToString(routing_info_);
 
   return newly_added_types;
 }
@@ -193,26 +193,40 @@ void SyncBackendRegistrar::DeactivateDataType(syncable::ModelType type) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   base::AutoLock lock(lock_);
   ChangeProcessor* change_processor = GetProcessorUnsafe(type);
-  if (change_processor) {
+  if (change_processor)
     change_processor->Stop();
-  }
+
   routing_info_.erase(type);
   ignore_result(processors_.erase(type));
   DCHECK(!GetProcessorUnsafe(type));
 }
 
-ChangeProcessor* SyncBackendRegistrar::GetProcessor(
-    syncable::ModelType type) {
-  base::AutoLock lock(lock_);
-  ChangeProcessor* processor = GetProcessorUnsafe(type);
-  if (!processor) {
-    return NULL;
-  }
-  // We can only check if |processor| exists, as otherwise the type is
-  // mapped to GROUP_PASSIVE.
-  CHECK(IsCurrentThreadSafeForModel(type));
-  CHECK(processor->IsRunning());
-  return processor;
+bool SyncBackendRegistrar::IsTypeActivatedForTest(
+    syncable::ModelType type) const {
+  return GetProcessor(type) != NULL;
+}
+
+void SyncBackendRegistrar::OnChangesApplied(
+    syncable::ModelType model_type,
+    const sync_api::BaseTransaction* trans,
+    const sync_api::ImmutableChangeRecordList& changes) {
+  ChangeProcessor* processor = GetProcessor(model_type);
+  if (!processor)
+    return;
+
+  processor->ApplyChangesFromSyncModel(trans, changes);
+}
+
+void SyncBackendRegistrar::OnChangesComplete(
+    syncable::ModelType model_type) {
+  ChangeProcessor* processor = GetProcessor(model_type);
+  if (!processor)
+    return;
+
+  // This call just notifies the processor that it can commit; it
+  // already buffered any changes it plans to makes so needs no
+  // further information.
+  processor->CommitChangesFromSyncModel();
 }
 
 void SyncBackendRegistrar::GetWorkers(
@@ -232,8 +246,22 @@ void SyncBackendRegistrar::GetModelSafeRoutingInfo(
   out->swap(copy);
 }
 
+ChangeProcessor* SyncBackendRegistrar::GetProcessor(
+    syncable::ModelType type) const {
+  base::AutoLock lock(lock_);
+  ChangeProcessor* processor = GetProcessorUnsafe(type);
+  if (!processor)
+    return NULL;
+
+  // We can only check if |processor| exists, as otherwise the type is
+  // mapped to GROUP_PASSIVE.
+  CHECK(IsCurrentThreadSafeForModel(type));
+  CHECK(processor->IsRunning());
+  return processor;
+}
+
 ChangeProcessor* SyncBackendRegistrar::GetProcessorUnsafe(
-    syncable::ModelType type) {
+    syncable::ModelType type) const {
   lock_.AssertAcquired();
   std::map<syncable::ModelType, ChangeProcessor*>::const_iterator it =
       processors_.find(type);
@@ -257,4 +285,3 @@ bool SyncBackendRegistrar::IsCurrentThreadSafeForModel(
 }
 
 }  // namespace browser_sync
-

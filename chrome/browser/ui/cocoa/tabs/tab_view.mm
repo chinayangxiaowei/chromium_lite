@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -60,11 +60,14 @@ const CGFloat kRapidCloseDist = 2.5;
 @synthesize alertAlpha = alertAlpha_;
 @synthesize closing = closing_;
 
++ (CGFloat)insetMultiplier {
+  return kInsetMultiplier;
+}
+
 - (id)initWithFrame:(NSRect)frame {
   self = [super initWithFrame:frame];
   if (self) {
     [self setShowsDivider:NO];
-    // TODO(alcor): register for theming
   }
   return self;
 }
@@ -131,17 +134,12 @@ const CGFloat kRapidCloseDist = 2.5;
 // view or our child close button.
 - (NSView*)hitTest:(NSPoint)aPoint {
   NSPoint viewPoint = [self convertPoint:aPoint fromView:[self superview]];
-  NSRect frame = [self frame];
+  NSRect rect = [self bounds];
+  NSBezierPath* path = [self bezierPathForRect:rect];
 
-  // Reduce the width of the hit rect slightly to remove the overlap
-  // between adjacent tabs.  The drawing code in TabCell has the top
-  // corners of the tab inset by height*2/3, so we inset by half of
-  // that here.  This doesn't completely eliminate the overlap, but it
-  // works well enough.
-  NSRect hitRect = NSInsetRect(frame, frame.size.height / 3.0f, 0);
   if (![closeButton_ isHidden])
     if (NSPointInRect(viewPoint, [closeButton_ frame])) return closeButton_;
-  if (NSPointInRect(aPoint, hitRect)) return self;
+  if ([path containsPoint:viewPoint]) return self;
   return nil;
 }
 
@@ -189,10 +187,6 @@ const CGFloat kRapidCloseDist = 2.5;
 
   // The custom loop has ended, so clear the point.
   mouseDownPoint_ = NSZeroPoint;
-}
-
-- (void)mouseDragged:(NSEvent*)theEvent {
-  [controller_ continueDrag:theEvent];
 }
 
 - (void)mouseUp:(NSEvent*)theEvent {
@@ -410,6 +404,18 @@ const CGFloat kRapidCloseDist = 2.5;
   }
 }
 
+// Override this to catch the text so that we can choose when to display it.
+- (void)setToolTip:(NSString*)string {
+  toolTipText_.reset([string retain]);
+}
+
+- (NSString*)toolTipText {
+  if (!toolTipText_.get()) {
+    return @"";
+  }
+  return toolTipText_.get();
+}
+
 - (void)viewDidMoveToWindow {
   [super viewDidMoveToWindow];
   if ([self window]) {
@@ -460,8 +466,9 @@ const CGFloat kRapidCloseDist = 2.5;
       [[super accessibilityAttributeNames] mutableCopy];
   [attributes addObject:NSAccessibilityTitleAttribute];
   [attributes addObject:NSAccessibilityEnabledAttribute];
+  [attributes addObject:NSAccessibilityValueAttribute];
 
-  return attributes;
+  return [attributes autorelease];
 }
 
 - (BOOL)accessibilityIsAttributeSettable:(NSString*)attribute {
@@ -471,16 +478,33 @@ const CGFloat kRapidCloseDist = 2.5;
   if ([attribute isEqual:NSAccessibilityEnabledAttribute])
     return NO;
 
+  if ([attribute isEqual:NSAccessibilityValueAttribute])
+    return YES;
+
   return [super accessibilityIsAttributeSettable:attribute];
+}
+
+- (void)accessibilityPerformAction:(NSString*)action {
+  if ([action isEqual:NSAccessibilityPressAction] &&
+      [[controller_ target] respondsToSelector:[controller_ action]]) {
+    [[controller_ target] performSelector:[controller_ action]
+        withObject:self];
+    NSAccessibilityPostNotification(self,
+                                    NSAccessibilityValueChangedNotification);
+  } else {
+    [super accessibilityPerformAction:action];
+  }
 }
 
 - (id)accessibilityAttributeValue:(NSString*)attribute {
   if ([attribute isEqual:NSAccessibilityRoleAttribute])
+    return NSAccessibilityRadioButtonRole;
+  if ([attribute isEqual:NSAccessibilityRoleDescriptionAttribute])
     return l10n_util::GetNSStringWithFixup(IDS_ACCNAME_TAB);
-
   if ([attribute isEqual:NSAccessibilityTitleAttribute])
     return [controller_ title];
-
+  if ([attribute isEqual:NSAccessibilityValueAttribute])
+    return [NSNumber numberWithInt:[controller_ selected]];
   if ([attribute isEqual:NSAccessibilityEnabledAttribute])
     return [NSNumber numberWithBool:YES];
 

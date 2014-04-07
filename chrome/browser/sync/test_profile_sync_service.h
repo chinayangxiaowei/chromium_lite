@@ -8,7 +8,9 @@
 
 #include <string>
 
+#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/sync/glue/data_type_manager_impl.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/test/engine/test_id_factory.h"
@@ -31,6 +33,7 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
   //     completed setting itself up and called us back.
   SyncBackendHostForProfileSyncTest(
       Profile* profile,
+      const base::WeakPtr<SyncPrefs>& sync_prefs,
       bool set_initial_sync_ended_on_init,
       bool synchronous_init,
       bool fail_initial_download);
@@ -42,17 +45,14 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
   void SimulateSyncCycleCompletedInitialSyncEnded(
       const tracked_objects::Location&);
 
-  virtual sync_api::HttpPostProviderFactory* MakeHttpBridgeFactory(
-      const scoped_refptr<net::URLRequestContextGetter>& getter) OVERRIDE;
-
-  virtual void StartConfiguration(Callback0::Type* callback) OVERRIDE;
+  virtual void StartConfiguration(const base::Closure& callback) OVERRIDE;
 
   static void SetDefaultExpectationsForWorkerCreation(ProfileMock* profile);
 
   static void SetHistoryServiceExpectations(ProfileMock* profile);
 
  protected:
-  virtual void InitCore(const Core::DoInitializeOptions& options) OVERRIDE;
+  virtual void InitCore(const DoInitializeOptions& options) OVERRIDE;
 
  private:
   bool synchronous_init_;
@@ -63,13 +63,16 @@ class SyncBackendHostForProfileSyncTest : public SyncBackendHost {
 
 class TestProfileSyncService : public ProfileSyncService {
  public:
-  // |initial_condition_setup_task| can be used to populate nodes
-  // before the OnBackendInitialized callback fires.
-  TestProfileSyncService(ProfileSyncFactory* factory,
+  // |callback| can be used to populate nodes before the OnBackendInitialized
+  // callback fires.
+  // TODO(tim): Remove |synchronous_backend_initialization|, and add ability to
+  // inject TokenService alongside SigninManager.
+  TestProfileSyncService(ProfileSyncComponentsFactory* factory,
                          Profile* profile,
-                         const std::string& test_user,
+                         SigninManager* signin,
+                         ProfileSyncService::StartBehavior behavior,
                          bool synchronous_backend_initialization,
-                         Task* initial_condition_setup_task);
+                         const base::Closure& callback);
 
   virtual ~TestProfileSyncService();
 
@@ -80,8 +83,8 @@ class TestProfileSyncService : public ProfileSyncService {
       bool success) OVERRIDE;
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // If this is called, configuring data types will require a syncer
   // nudge.
@@ -111,7 +114,7 @@ class TestProfileSyncService : public ProfileSyncService {
   bool synchronous_sync_configuration_;
   bool set_expect_resume_expectations_;
 
-  Task* initial_condition_setup_task_;
+  base::Closure callback_;
   bool set_initial_sync_ended_on_init_;
 
   bool fail_initial_download_;

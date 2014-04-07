@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/callback_forward.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
@@ -28,16 +28,16 @@ class DelayedCookieMonster : public CookieStore {
       const GURL& url,
       const std::string& cookie_line,
       const CookieOptions& options,
-      const CookieMonster::SetCookiesCallback& callback);
+      const CookieMonster::SetCookiesCallback& callback) OVERRIDE;
 
   virtual void GetCookiesWithOptionsAsync(
       const GURL& url, const CookieOptions& options,
-      const CookieMonster::GetCookiesCallback& callback);
+      const CookieMonster::GetCookiesCallback& callback) OVERRIDE;
 
   virtual void GetCookiesWithInfoAsync(
       const GURL& url,
       const CookieOptions& options,
-      const CookieMonster::GetCookieInfoCallback& callback);
+      const CookieMonster::GetCookieInfoCallback& callback) OVERRIDE;
 
   virtual bool SetCookieWithOptions(const GURL& url,
                                     const std::string& cookie_line,
@@ -56,21 +56,26 @@ class DelayedCookieMonster : public CookieStore {
 
   virtual void DeleteCookieAsync(const GURL& url,
                                  const std::string& cookie_name,
-                                 const base::Closure& callback);
+                                 const base::Closure& callback) OVERRIDE;
 
-  virtual CookieMonster* GetCookieMonster();
+  virtual void DeleteAllCreatedBetweenAsync(
+      const base::Time& delete_begin,
+      const base::Time& delete_end,
+      const DeleteCallback& callback) OVERRIDE;
+
+  virtual CookieMonster* GetCookieMonster() OVERRIDE;
 
  private:
 
   // Be called immediately from CookieMonster.
 
   void GetCookiesInternalCallback(
-      std::string* cookie_line,
-      std::vector<CookieStore::CookieInfo>* cookie_info);
+      const std::string& cookie_line,
+      const std::vector<CookieStore::CookieInfo>& cookie_info);
 
   void SetCookiesInternalCallback(bool result);
 
-  void GetCookiesWithOptionsInternalCallback(std::string cookie);
+  void GetCookiesWithOptionsInternalCallback(const std::string& cookie);
 
   // Invoke the original callbacks.
 

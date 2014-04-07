@@ -35,14 +35,17 @@ class ProtobufVideoWriter : public VideoWriter {
   virtual void Init(protocol::Session* session,
                     const InitializedCallback& callback) OVERRIDE;
   virtual void Close() OVERRIDE;
+  virtual bool is_connected() OVERRIDE;
 
   // VideoStub interface.
   virtual void ProcessVideoPacket(const VideoPacket* packet,
-                                  Task* done) OVERRIDE;
+                                  const base::Closure& done) OVERRIDE;
   virtual int GetPendingPackets() OVERRIDE;
 
  private:
   void OnChannelReady(net::StreamSocket* socket);
+
+  Session* session_;
 
   InitializedCallback initialized_callback_;
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/gtk_util.h"
+
+using content::OpenURLParams;
 
 namespace {
 
@@ -52,7 +54,7 @@ class ExtensionInstallDialog {
                          SkBitmap* skia_icon,
                          const ExtensionInstallUI::Prompt& prompt);
  private:
-  virtual ~ExtensionInstallDialog();
+  ~ExtensionInstallDialog();
 
   CHROMEGTK_CALLBACK_1(ExtensionInstallDialog, void, OnResponse, int);
   CHROMEGTK_CALLBACK_0(ExtensionInstallDialog, void, OnStoreLinkClick);
@@ -76,7 +78,7 @@ ExtensionInstallDialog::ExtensionInstallDialog(
 
   // Build the dialog.
   dialog_ = gtk_dialog_new_with_buttons(
-      UTF16ToUTF8(prompt.GetDialogTitle()).c_str(),
+      UTF16ToUTF8(prompt.GetDialogTitle(extension)).c_str(),
       parent,
       GTK_DIALOG_MODAL,
       NULL);
@@ -89,7 +91,9 @@ ExtensionInstallDialog::ExtensionInstallDialog(
       GTK_DIALOG(dialog_),
       UTF16ToUTF8(prompt.GetAcceptButtonLabel()).c_str(),
       GTK_RESPONSE_ACCEPT);
+#if !GTK_CHECK_VERSION(2, 22, 0)
   gtk_dialog_set_has_separator(GTK_DIALOG(dialog_), FALSE);
+#endif
 
   GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog_));
   gtk_box_set_spacing(GTK_BOX(content_area), ui::kContentAreaSpacing);
@@ -138,7 +142,8 @@ ExtensionInstallDialog::ExtensionInstallDialog(
     GtkWidget* users_label = gtk_label_new(UTF16ToUTF8(
         prompt.GetUserCount()).c_str());
     gtk_util::SetLabelWidth(users_label, kLeftColumnMinWidth);
-    gtk_util::SetLabelColor(users_label, &ui::kGdkGray);
+    GdkColor gray = GDK_COLOR_RGB(0x7f, 0x7f, 0x7f);
+    gtk_util::SetLabelColor(users_label, &gray);
     gtk_util::ForceFontSizePixels(rating_label, kRatingTextSize);
     gtk_box_pack_start(GTK_BOX(heading_vbox), users_label,
                        FALSE, FALSE, 0);
@@ -225,14 +230,15 @@ void ExtensionInstallDialog::OnStoreLinkClick(GtkWidget* sender) {
   GURL store_url(
       extension_urls::GetWebstoreItemDetailURLPrefix() + extension_->id());
   BrowserList::GetLastActive()->OpenURL(OpenURLParams(
-      store_url, GURL(), NEW_FOREGROUND_TAB, PageTransition::LINK));
+      store_url, content::Referrer(), NEW_FOREGROUND_TAB,
+      content::PAGE_TRANSITION_LINK, false));
 
   OnResponse(dialog_, GTK_RESPONSE_CLOSE);
 }
 
 }  // namespace
 
-void ShowExtensionInstallDialog(
+void ShowExtensionInstallDialogImpl(
     Profile* profile,
     ExtensionInstallUI::Delegate* delegate,
     const Extension* extension,

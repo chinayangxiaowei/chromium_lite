@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,11 +17,13 @@
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
-#include "ui/base/text/text_elider.h"
+#include "ui/base/gtk/gtk_screen_utils.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/text/text_elider.h"
 #include "ui/gfx/canvas_skia_paint.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/gtk_util.h"
+#include "ui/gfx/image/image.h"
 
 namespace {
 
@@ -134,14 +136,17 @@ gboolean OnDragIconExpose(GtkWidget* sender,
   cairo_paint(cr);
   cairo_destroy(cr);
 
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(sender, &allocation);
+
   // Paint the title text.
   gfx::CanvasSkiaPaint canvas(event, false);
   int text_x = gdk_pixbuf_get_width(data->favicon) + kBarButtonPadding;
-  int text_width = sender->allocation.width - text_x;
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  const gfx::Font& base_font = rb.GetFont(ResourceBundle::BaseFont);
+  int text_width = allocation.width - text_x;
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  const gfx::Font& base_font = rb.GetFont(ui::ResourceBundle::BaseFont);
   canvas.DrawStringInt(data->text, base_font, data->text_color,
-                       text_x, 0, text_width, sender->allocation.height);
+                       text_x, 0, text_width, allocation.height);
 
   return TRUE;
 }
@@ -166,11 +171,11 @@ GdkPixbuf* GetPixbufForNode(const BookmarkNode* node, BookmarkModel* model,
     if (model->GetFavicon(node).width() != 0) {
       pixbuf = gfx::GdkPixbufFromSkBitmap(&model->GetFavicon(node));
     } else {
-      pixbuf = GtkThemeService::GetDefaultFavicon(native);
+      pixbuf = GtkThemeService::GetDefaultFavicon(native)->ToGdkPixbuf();
       g_object_ref(pixbuf);
     }
   } else {
-    pixbuf = GtkThemeService::GetFolderIcon(native);
+    pixbuf = GtkThemeService::GetFolderIcon(native)->ToGdkPixbuf();
     g_object_ref(pixbuf);
   }
 
@@ -182,7 +187,7 @@ GtkWidget* GetDragRepresentation(GdkPixbuf* pixbuf,
                                  GtkThemeService* provider) {
   GtkWidget* window = gtk_window_new(GTK_WINDOW_POPUP);
 
-  if (gtk_util::IsScreenComposited() &&
+  if (ui::IsScreenComposited() &&
       gtk_util::AddWindowAlphaChannel(window)) {
     DragRepresentationData* data = new DragRepresentationData(
         pixbuf, title,
@@ -192,8 +197,8 @@ GtkWidget* GetDragRepresentation(GdkPixbuf* pixbuf,
     g_object_ref(window);
     g_signal_connect(window, "destroy", G_CALLBACK(OnDragIconDestroy), data);
 
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    const gfx::Font& base_font = rb.GetFont(ResourceBundle::BaseFont);
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    const gfx::Font& base_font = rb.GetFont(ui::ResourceBundle::BaseFont);
     gtk_widget_set_size_request(window, kDragRepresentationWidth,
                                 base_font.GetHeight());
   } else {
@@ -319,7 +324,8 @@ void WriteBookmarksToSelection(const std::vector<const BookmarkNode*>& nodes,
       Pickle pickle;
       data.WriteToPickle(profile, &pickle);
 
-      gtk_selection_data_set(selection_data, selection_data->target,
+      gtk_selection_data_set(selection_data,
+                             gtk_selection_data_get_target(selection_data),
                              kBitsInAByte,
                              static_cast<const guchar*>(pickle.data()),
                              pickle.size());
@@ -330,7 +336,7 @@ void WriteBookmarksToSelection(const std::vector<const BookmarkNode*>& nodes,
       std::string utf8_text = nodes[0]->url().spec() + "\n" +
           UTF16ToUTF8(nodes[0]->GetTitle());
       gtk_selection_data_set(selection_data,
-                             selection_data->target,
+                             gtk_selection_data_get_target(selection_data),
                              kBitsInAByte,
                              reinterpret_cast<const guchar*>(utf8_text.c_str()),
                              utf8_text.length());
@@ -389,22 +395,26 @@ std::vector<const BookmarkNode*> GetNodesFromSelection(
   if (dnd_success)
     *dnd_success = FALSE;
 
-  if (selection_data && selection_data->length > 0) {
-    if (context && delete_selection_data && context->action == GDK_ACTION_MOVE)
-      *delete_selection_data = TRUE;
+  if (selection_data) {
+    gint length = gtk_selection_data_get_length(selection_data);
+    if (length > 0) {
+      if (context && delete_selection_data &&
+          context->action == GDK_ACTION_MOVE)
+        *delete_selection_data = TRUE;
 
-    switch (target_type) {
-      case ui::CHROME_BOOKMARK_ITEM: {
-        if (dnd_success)
-          *dnd_success = TRUE;
-        Pickle pickle(reinterpret_cast<char*>(selection_data->data),
-                      selection_data->length);
-        BookmarkNodeData drag_data;
-        drag_data.ReadFromPickle(&pickle);
-        return drag_data.GetNodes(profile);
-      }
-      default: {
-        DLOG(ERROR) << "Unsupported drag received type: " << target_type;
+      switch (target_type) {
+        case ui::CHROME_BOOKMARK_ITEM: {
+          if (dnd_success)
+            *dnd_success = TRUE;
+          Pickle pickle(reinterpret_cast<const char*>(
+              gtk_selection_data_get_data(selection_data)), length);
+          BookmarkNodeData drag_data;
+          drag_data.ReadFromPickle(&pickle);
+          return drag_data.GetNodes(profile);
+        }
+        default: {
+          DLOG(ERROR) << "Unsupported drag received type: " << target_type;
+        }
       }
     }
   }

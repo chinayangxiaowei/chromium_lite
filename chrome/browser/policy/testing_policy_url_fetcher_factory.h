@@ -10,14 +10,20 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/policy/logging_work_scheduler.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/common/url_fetcher_delegate.h"
 #include "content/test/test_url_fetcher_factory.h"
-#include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
+
+class GURL;
+
+namespace enterprise_management {
+class DeviceManagementRequest;
+}
 
 namespace policy {
 
+class EventLogger;
+class LoggingWorkScheduler;
 class TestingPolicyURLFetcher;
 
 struct TestURLResponse {
@@ -27,31 +33,36 @@ struct TestURLResponse {
 
 // Creates mock URLFetchers whose behavior can be controlled in tests. To do so
 // set mock expectations on the method |Intercept|.
-class TestingPolicyURLFetcherFactory : public URLFetcher::Factory,
+class TestingPolicyURLFetcherFactory : public content::URLFetcherFactory,
                                        public ScopedURLFetcherFactory {
  public:
   explicit TestingPolicyURLFetcherFactory(EventLogger* logger);
   virtual ~TestingPolicyURLFetcherFactory();
 
-  virtual URLFetcher* CreateURLFetcher(
+  virtual content::URLFetcher* CreateURLFetcher(
       int id,
       const GURL& url,
-      URLFetcher::RequestType request_type,
-      URLFetcher::Delegate* delegate);
+      content::URLFetcher::RequestType request_type,
+      content::URLFetcherDelegate* delegate) OVERRIDE;
 
   LoggingWorkScheduler* scheduler();
 
   // Called back by TestingPolicyURLFetcher objects. Uses |Intercept| to get
   // the response and notifies |logger_| of a network request event.
-  void GetResponse(const std::string& auth_header,
-                   const std::string& request_type,
-                   TestURLResponse* response);
+  void GetResponse(
+      const std::string& auth_header,
+      const std::string& request_type,
+      const enterprise_management::DeviceManagementRequest& request,
+      TestURLResponse* response);
 
   // Place EXPECT_CALLs on this method to control the responses of the
   // produced URLFetchers. The response data should be copied into |response|.
-  MOCK_METHOD3(Intercept, void(const std::string& auth_header,
-                               const std::string& request_type,
-                               TestURLResponse* response));
+  MOCK_METHOD4(
+      Intercept,
+      void(const std::string& auth_header,
+           const std::string& request_type,
+           const enterprise_management::DeviceManagementRequest& request,
+           TestURLResponse* response));
 
  private:
   EventLogger* logger_;

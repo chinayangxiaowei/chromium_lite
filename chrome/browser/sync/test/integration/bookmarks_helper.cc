@@ -4,6 +4,7 @@
 
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 
+#include "base/compiler_specific.h"
 #include "base/rand_util.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
@@ -406,14 +407,14 @@ const BookmarkNode* SetURL(int profile,
     bookmark_utils::ApplyEditsWithNoFolderChange(
         GetVerifierBookmarkModel(),
         v_node->parent(),
-        BookmarkEditor::EditDetails(v_node),
+        BookmarkEditor::EditDetails::EditNode(v_node),
         v_node->GetTitle(),
         new_url);
   }
   return bookmark_utils::ApplyEditsWithNoFolderChange(
       GetBookmarkModel(profile),
       node->parent(),
-      BookmarkEditor::EditDetails(node),
+      BookmarkEditor::EditDetails::EditNode(node),
       node->GetTitle(),
       new_url);
 }
@@ -529,6 +530,12 @@ bool ContainsDuplicateBookmarks(int profile) {
     }
   }
   return false;
+}
+
+bool HasNodeWithURL(int profile, const GURL& url) {
+  std::vector<const BookmarkNode*> nodes;
+  GetBookmarkModel(profile)->GetNodesByURL(url, &nodes);
+  return !nodes.empty();
 }
 
 const BookmarkNode* GetUniqueNodeByURL(int profile, const GURL& url) {

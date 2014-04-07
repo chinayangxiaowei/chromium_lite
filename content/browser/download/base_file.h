@@ -9,10 +9,14 @@
 #include <string>
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/time.h"
 #include "content/browser/power_save_blocker.h"
+#include "content/common/content_export.h"
 #include "googleurl/src/gurl.h"
+#include "net/base/file_stream.h"
 #include "net/base/net_errors.h"
 
 namespace crypto {
@@ -24,18 +28,19 @@ class FileStream;
 
 // File being downloaded and saved to disk. This is a base class
 // for DownloadFile and SaveFile, which keep more state information.
-class BaseFile {
+class CONTENT_EXPORT BaseFile {
  public:
   BaseFile(const FilePath& full_path,
            const GURL& source_url,
            const GURL& referrer_url,
            int64 received_bytes,
+           bool calculate_hash,
+           const std::string& hash_state,
            const linked_ptr<net::FileStream>& file_stream);
   virtual ~BaseFile();
 
-  // If calculate_hash is true, sha256 hash will be calculated.
   // Returns net::OK on success, or a network error code on failure.
-  net::Error Initialize(bool calculate_hash);
+  net::Error Initialize();
 
   // Write a new chunk of data to the file.
   // Returns net::OK on success (all bytes written to the file),
@@ -58,13 +63,24 @@ class BaseFile {
   // Informs the OS that this file came from the internet.
   void AnnotateWithSourceInformation();
 
+  // Calculate and return the current speed in bytes per second.
+  int64 CurrentSpeed() const;
+
   FilePath full_path() const { return full_path_; }
   bool in_progress() const { return file_stream_ != NULL; }
   int64 bytes_so_far() const { return bytes_so_far_; }
 
-  // Set |hash| with sha256 digest for the file.
+  // Fills |hash| with the hash digest for the file.
   // Returns true if digest is successfully calculated.
-  virtual bool GetSha256Hash(std::string* hash);
+  virtual bool GetHash(std::string* hash);
+
+  // Returns the current (intermediate) state of the hash as a byte string.
+  virtual std::string GetHashState();
+
+  // Returns true if the given hash is considered empty.  An empty hash is
+  // a string of size kSha256HashLen that contains only zeros (initial value
+  // for the hash).
+  static bool IsEmptyHash(const std::string& hash);
 
   virtual std::string DebugString() const;
 
@@ -79,9 +95,16 @@ class BaseFile {
 
  private:
   friend class BaseFileTest;
-  friend class DownloadFileWithMockStream;
+  FRIEND_TEST_ALL_PREFIXES(BaseFileTest, IsEmptyHash);
+
+  // Split out from CurrentSpeed to enable testing.
+  int64 CurrentSpeedAtTime(base::TimeTicks current_time) const;
+
+  // Resets the current state of the hash to the contents of |hash_state_bytes|.
+  virtual bool SetHashState(const std::string& hash_state_bytes);
 
   static const size_t kSha256HashLen = 32;
+  static const unsigned char kEmptySha256Hash[kSha256HashLen];
 
   // Source URL for the file being downloaded.
   GURL source_url_;
@@ -95,13 +118,16 @@ class BaseFile {
   // Amount of data received up so far, in bytes.
   int64 bytes_so_far_;
 
+  // Start time for calculating speed.
+  base::TimeTicks start_tick_;
+
   // RAII handle to keep the system from sleeping while we're downloading.
   PowerSaveBlocker power_save_blocker_;
 
-  // Indicates if sha256 hash should be calculated for the file.
+  // Indicates if hash should be calculated for the file.
   bool calculate_hash_;
 
-  // Used to calculate sha256 hash for the file when calculate_hash_
+  // Used to calculate hash for the file when calculate_hash_
   // is set.
   scoped_ptr<crypto::SecureHash> secure_hash_;
 

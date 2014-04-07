@@ -45,8 +45,7 @@ void PrintedDocument::RenderPrintedPage(
 
   DCHECK(context);
 
-  const printing::PageSetup& page_setup(
-      immutable_.settings_.page_setup_device_units());
+  const PageSetup& page_setup(immutable_.settings_.page_setup_device_units());
   gfx::Rect content_area;
   page.GetCenteredPageContentRect(page_setup.physical_size(), &content_area);
 
@@ -68,7 +67,7 @@ void PrintedDocument::RenderPrintedPage(
         context,
         content_area.x() - page_setup.printable_area().x(),
         content_area.y() - page_setup.printable_area().y(),
-        mutable_.shrink_factor);
+        page.shrink_factor());
 
     if (!page.metafile()->SafePlayback(context)) {
       NOTREACHED();

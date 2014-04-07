@@ -24,9 +24,11 @@ ContextMenuParams::ContextMenuParams()
       is_image_blocked(false),
       frame_id(0),
       media_flags(0),
+      speech_input_enabled(false),
       spellcheck_enabled(false),
       is_editable(false),
-      edit_flags(0) {
+      edit_flags(0),
+      referrer_policy(WebKit::WebReferrerPolicyDefault) {
 }
 
 ContextMenuParams::ContextMenuParams(const WebKit::WebContextMenuData& data)
@@ -54,7 +56,8 @@ ContextMenuParams::ContextMenuParams(const WebKit::WebContextMenuData& data)
 #endif  // OS_MACOSX
       edit_flags(data.editFlags),
       security_info(data.securityInfo),
-      frame_charset(data.frameEncoding.utf8()) {
+      frame_charset(data.frameEncoding.utf8()),
+      referrer_policy(data.referrerPolicy) {
   for (size_t i = 0; i < data.dictionarySuggestions.size(); ++i)
     dictionary_suggestions.push_back(data.dictionarySuggestions[i]);
 

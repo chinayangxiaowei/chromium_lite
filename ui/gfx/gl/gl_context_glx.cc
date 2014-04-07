@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,32 +29,21 @@ class ScopedPtrXFree {
   }
 };
 
-bool IsCompositingWindowManagerActive(Display* display) {
-  // The X macro "None" has been undefined by gl_bindings.h.
-  const int kNone = 0;
-  static Atom net_wm_cm_s0 = kNone;
-  if (net_wm_cm_s0 == static_cast<Atom>(kNone)) {
-    net_wm_cm_s0 = XInternAtom(display, "_NET_WM_CM_S0", True);
-  }
-  if (net_wm_cm_s0 == static_cast<Atom>(kNone)) {
-    return false;
-  }
-  return XGetSelectionOwner(display, net_wm_cm_s0) != static_cast<Atom>(kNone);
-}
-
 }  // namespace anonymous
 
 GLContextGLX::GLContextGLX(GLShareGroup* share_group)
   : GLContext(share_group),
-    context_(NULL) {
+    context_(NULL),
+    display_(NULL) {
 }
 
 GLContextGLX::~GLContextGLX() {
   Destroy();
 }
 
-bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
-  GLSurfaceGLX* surface_glx = static_cast<GLSurfaceGLX*>(compatible_surface);
+bool GLContextGLX::Initialize(
+    GLSurface* compatible_surface, GpuPreference gpu_preference) {
+  display_ = static_cast<Display*>(compatible_surface->GetDisplay());
 
   GLXContext share_handle = static_cast<GLXContext>(
       share_group() ? share_group()->GetHandle() : NULL);
@@ -67,14 +56,15 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
     attribs.push_back(GLX_LOSE_CONTEXT_ON_RESET_ARB);
     attribs.push_back(0);
     context_ = glXCreateContextAttribsARB(
-        GLSurfaceGLX::GetDisplay(),
-        static_cast<GLXFBConfig>(surface_glx->GetConfig()),
+        display_,
+        static_cast<GLXFBConfig>(compatible_surface->GetConfig()),
         share_handle,
         True,
         &attribs.front());
     if (context_) {
       DLOG(INFO) << "  Successfully allocated "
-                 << (surface_glx->IsOffscreen() ? "offscreen" : "onscreen")
+                 << (compatible_surface->IsOffscreen() ?
+                     "offscreen" : "onscreen")
                  << " GL context with LOSE_CONTEXT_ON_RESET_ARB";
     } else {
       // TODO(kbr): it is not expected that things will work properly
@@ -92,24 +82,23 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
     // The means by which the context is created depends on whether
     // the drawable type works reliably with GLX 1.3. If it does not
     // then fall back to GLX 1.2.
-    if (surface_glx->IsOffscreen()) {
+    if (compatible_surface->IsOffscreen()) {
       context_ = glXCreateNewContext(
-          GLSurfaceGLX::GetDisplay(),
-          static_cast<GLXFBConfig>(surface_glx->GetConfig()),
+          display_,
+          static_cast<GLXFBConfig>(compatible_surface->GetConfig()),
           GLX_RGBA_TYPE,
           share_handle,
           True);
     } else {
-      Display* display = GLSurfaceGLX::GetDisplay();
-
       // Get the visuals for the X drawable.
       XWindowAttributes attributes;
       if (!XGetWindowAttributes(
-          display,
-          reinterpret_cast<GLXDrawable>(surface_glx->GetHandle()),
+          display_,
+          reinterpret_cast<GLXDrawable>(compatible_surface->GetHandle()),
           &attributes)) {
         LOG(ERROR) << "XGetWindowAttributes failed for window " <<
-            reinterpret_cast<GLXDrawable>(surface_glx->GetHandle()) << ".";
+            reinterpret_cast<GLXDrawable>(
+                compatible_surface->GetHandle()) << ".";
         return false;
       }
 
@@ -118,7 +107,7 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
 
       int visual_info_count = 0;
       scoped_ptr_malloc<XVisualInfo, ScopedPtrXFree> visual_info_list(
-          XGetVisualInfo(display, VisualIDMask,
+          XGetVisualInfo(display_, VisualIDMask,
                          &visual_info_template,
                          &visual_info_count));
 
@@ -130,7 +119,7 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
 
       // Attempt to create a context with each visual in turn until one works.
       context_ = glXCreateContext(
-          display,
+          display_,
           visual_info_list.get(),
           share_handle,
           True);
@@ -143,9 +132,9 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
     return false;
   }
 
-  DLOG(INFO) << (surface_glx->IsOffscreen() ? "Offscreen" : "Onscreen")
+  DLOG(INFO) << (compatible_surface->IsOffscreen() ? "Offscreen" : "Onscreen")
              << " context was "
-             << (glXIsDirect(GLSurfaceGLX::GetDisplay(),
+             << (glXIsDirect(display_,
                              static_cast<GLXContext>(context_))
                      ? "direct" : "indirect")
              << ".";
@@ -155,7 +144,7 @@ bool GLContextGLX::Initialize(GLSurface* compatible_surface) {
 
 void GLContextGLX::Destroy() {
   if (context_) {
-    glXDestroyContext(GLSurfaceGLX::GetDisplay(),
+    glXDestroyContext(display_,
                       static_cast<GLXContext>(context_));
     context_ = NULL;
   }
@@ -167,7 +156,7 @@ bool GLContextGLX::MakeCurrent(GLSurface* surface) {
     return true;
 
   if (!glXMakeCurrent(
-      GLSurfaceGLX::GetDisplay(),
+      display_,
       reinterpret_cast<GLXDrawable>(surface->GetHandle()),
       static_cast<GLXContext>(context_))) {
     LOG(ERROR) << "Couldn't make context current with X drawable.";
@@ -175,7 +164,17 @@ bool GLContextGLX::MakeCurrent(GLSurface* surface) {
     return false;
   }
 
-  surface->OnMakeCurrent(this);
+  SetCurrent(this, surface);
+  if (!InitializeExtensionBindings()) {
+    ReleaseCurrent(surface);
+    return false;
+  }
+
+  if (!surface->OnMakeCurrent(this)) {
+    LOG(ERROR) << "Could not make current.";
+    return false;
+  }
+
   return true;
 }
 
@@ -183,11 +182,20 @@ void GLContextGLX::ReleaseCurrent(GLSurface* surface) {
   if (!IsCurrent(surface))
     return;
 
-  glXMakeContextCurrent(GLSurfaceGLX::GetDisplay(), 0, 0, NULL);
+  SetCurrent(NULL, NULL);
+  glXMakeContextCurrent(display_, 0, 0, NULL);
 }
 
 bool GLContextGLX::IsCurrent(GLSurface* surface) {
-  if (glXGetCurrentContext() != static_cast<GLXContext>(context_))
+  bool native_context_is_current =
+      glXGetCurrentContext() == static_cast<GLXContext>(context_);
+
+  // If our context is current then our notion of which GLContext is
+  // current must be correct. On the other hand, third-party code
+  // using OpenGL might change the current context.
+  DCHECK(!native_context_is_current || (GetCurrent() == this));
+
+  if (!native_context_is_current)
     return false;
 
   if (surface) {
@@ -207,18 +215,8 @@ void* GLContextGLX::GetHandle() {
 void GLContextGLX::SetSwapInterval(int interval) {
   DCHECK(IsCurrent(NULL));
   if (HasExtension("GLX_EXT_swap_control") && glXSwapIntervalEXT) {
-    // Only enable vsync if we aren't using a compositing window
-    // manager. At the moment, compositing window managers don't
-    // respect this setting anyway (tearing still occurs) and it
-    // dramatically increases latency.
-    if (interval == 1 &&
-        IsCompositingWindowManagerActive(GLSurfaceGLX::GetDisplay())) {
-      LOG(INFO) <<
-          "Forcing vsync off because compositing window manager was detected.";
-      interval = 0;
-    }
     glXSwapIntervalEXT(
-        GLSurfaceGLX::GetDisplay(),
+        display_,
         glXGetCurrentDrawable(),
         interval);
   } else {

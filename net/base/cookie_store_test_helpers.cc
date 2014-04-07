@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/cookie_store_test_helpers.h"
 
+#include "base/bind.h"
 #include "base/message_loop.h"
 
 namespace net {
@@ -20,10 +21,10 @@ DelayedCookieMonster::~DelayedCookieMonster() {
 }
 
 void DelayedCookieMonster::GetCookiesInternalCallback(
-    std::string* cookie_line,
-    std::vector<CookieStore::CookieInfo>* cookie_info) {
-  cookie_line_ = *cookie_line;
-  cookie_info_ = *cookie_info;
+    const std::string& cookie_line,
+    const std::vector<CookieStore::CookieInfo>& cookie_info) {
+  cookie_line_ = cookie_line;
+  cookie_info_ = cookie_info;
   did_run_ = true;
 }
 
@@ -33,7 +34,7 @@ void DelayedCookieMonster::SetCookiesInternalCallback(bool result) {
 }
 
 void DelayedCookieMonster::GetCookiesWithOptionsInternalCallback(
-    std::string cookie) {
+    const std::string& cookie) {
   cookie_ = cookie;
   did_run_ = true;
 }
@@ -52,7 +53,7 @@ void DelayedCookieMonster::GetCookiesWithInfoAsync(
       FROM_HERE,
       base::Bind(&DelayedCookieMonster::InvokeGetCookiesCallback,
                  base::Unretained(this), callback),
-      kDelayedTime);
+      base::TimeDelta::FromMilliseconds(kDelayedTime));
 }
 
 void DelayedCookieMonster::SetCookieWithOptionsAsync(
@@ -69,7 +70,7 @@ void DelayedCookieMonster::SetCookieWithOptionsAsync(
       FROM_HERE,
       base::Bind(&DelayedCookieMonster::InvokeSetCookiesCallback,
                  base::Unretained(this), callback),
-      kDelayedTime);
+      base::TimeDelta::FromMilliseconds(kDelayedTime));
 }
 
 void DelayedCookieMonster::GetCookiesWithOptionsAsync(
@@ -85,13 +86,13 @@ void DelayedCookieMonster::GetCookiesWithOptionsAsync(
       FROM_HERE,
       base::Bind(&DelayedCookieMonster::InvokeGetCookieStringCallback,
                  base::Unretained(this), callback),
-      kDelayedTime);
+      base::TimeDelta::FromMilliseconds(kDelayedTime));
 }
 
 void DelayedCookieMonster::InvokeGetCookiesCallback(
     const CookieMonster::GetCookieInfoCallback& callback) {
   if (!callback.is_null())
-    callback.Run(&cookie_line_, &cookie_info_);
+    callback.Run(cookie_line_, cookie_info_);
 }
 
 void DelayedCookieMonster::InvokeSetCookiesCallback(
@@ -137,6 +138,13 @@ void DelayedCookieMonster::DeleteCookie(const GURL& url,
 void DelayedCookieMonster::DeleteCookieAsync(const GURL& url,
                                              const std::string& cookie_name,
                                              const base::Closure& callback) {
+  ADD_FAILURE();
+}
+
+void DelayedCookieMonster::DeleteAllCreatedBetweenAsync(
+    const base::Time& delete_begin,
+    const base::Time& delete_end,
+    const DeleteCallback& callback) {
   ADD_FAILURE();
 }
 

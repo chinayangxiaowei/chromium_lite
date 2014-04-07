@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,19 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "content/browser/browser_context.h"
-#include "content/browser/content_browser_client.h"
-#include "content/browser/site_instance.h"
-#include "content/browser/webui/web_ui_factory.h"
-#include "content/common/content_client.h"
-#include "content/common/content_switches.h"
-#include "content/common/url_constants.h"
+#include "content/browser/site_instance_impl.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/web_ui_controller_factory.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/url_constants.h"
+
+using content::SiteInstance;
+using content::WebUIControllerFactory;
 
 // static
-BrowsingInstance::ContextSiteInstanceMap
-    BrowsingInstance::context_site_instance_map_;
+base::LazyInstance<BrowsingInstance::ContextSiteInstanceMap>::Leaky
+    BrowsingInstance::context_site_instance_map_ = LAZY_INSTANCE_INITIALIZER;
 
 BrowsingInstance::BrowsingInstance(content::BrowserContext* browser_context)
     : browser_context_(browser_context) {
@@ -42,7 +44,9 @@ bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
     return true;
 
   // DevTools pages have WebUI type but should not reuse the same host.
-  if (content::WebUIFactory::Get()->UseWebUIForURL(browser_context_, url) &&
+  WebUIControllerFactory* factory =
+      content::GetContentClient()->browser()->GetWebUIControllerFactory();
+  if (factory && factory->UseWebUIForURL(browser_context_, url) &&
       !url.SchemeIs(chrome::kChromeDevToolsScheme)) {
     return true;
   }
@@ -53,20 +57,20 @@ bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
 
 BrowsingInstance::SiteInstanceMap* BrowsingInstance::GetSiteInstanceMap(
     content::BrowserContext* browser_context, const GURL& url) {
-  if (!ShouldUseProcessPerSite(SiteInstance::GetEffectiveURL(browser_context,
-                                                             url))) {
+  if (!ShouldUseProcessPerSite(
+      SiteInstanceImpl::GetEffectiveURL(browser_context, url))) {
     // Not using process-per-site, so use a map specific to this instance.
     return &site_instance_map_;
   }
 
   // Otherwise, process-per-site is in use, at least for this URL.  Look up the
   // global map for this context, creating an entry if necessary.
-  return &context_site_instance_map_[browser_context];
+  return &context_site_instance_map_.Get()[browser_context];
 }
 
 bool BrowsingInstance::HasSiteInstance(const GURL& url) {
   std::string site =
-      SiteInstance::GetSiteForURL(browser_context_, url)
+      SiteInstanceImpl::GetSiteForURL(browser_context_, url)
           .possibly_invalid_spec();
 
   SiteInstanceMap* map = GetSiteInstanceMap(browser_context_, url);
@@ -76,7 +80,7 @@ bool BrowsingInstance::HasSiteInstance(const GURL& url) {
 
 SiteInstance* BrowsingInstance::GetSiteInstanceForURL(const GURL& url) {
   std::string site =
-      SiteInstance::GetSiteForURL(browser_context_, url)
+      SiteInstanceImpl::GetSiteForURL(browser_context_, url)
           .possibly_invalid_spec();
 
   SiteInstanceMap* map = GetSiteInstanceMap(browser_context_, url);
@@ -86,7 +90,7 @@ SiteInstance* BrowsingInstance::GetSiteInstanceForURL(const GURL& url) {
   }
 
   // No current SiteInstance for this site, so let's create one.
-  SiteInstance* instance = new SiteInstance(this);
+  SiteInstanceImpl* instance = new SiteInstanceImpl(this);
 
   // Set the site of this new SiteInstance, which will register it with us.
   instance->SetSite(url);
@@ -94,9 +98,10 @@ SiteInstance* BrowsingInstance::GetSiteInstanceForURL(const GURL& url) {
 }
 
 void BrowsingInstance::RegisterSiteInstance(SiteInstance* site_instance) {
-  DCHECK(site_instance->browsing_instance() == this);
-  DCHECK(site_instance->has_site());
-  std::string site = site_instance->site().possibly_invalid_spec();
+  DCHECK(static_cast<SiteInstanceImpl*>(site_instance)->
+         browsing_instance_ == this);
+  DCHECK(static_cast<SiteInstanceImpl*>(site_instance)->HasSite());
+  std::string site = site_instance->GetSite().possibly_invalid_spec();
 
   // Only register if we don't have a SiteInstance for this site already.
   // It's possible to have two SiteInstances point to the same site if two
@@ -104,7 +109,7 @@ void BrowsingInstance::RegisterSiteInstance(SiteInstance* site_instance) {
   // register them until DidNavigate.)  If there is a previously existing
   // SiteInstance for this site, we just won't register the new one.
   SiteInstanceMap* map = GetSiteInstanceMap(browser_context_,
-                                            site_instance->site());
+                                            site_instance->GetSite());
   SiteInstanceMap::iterator i = map->find(site);
   if (i == map->end()) {
     // Not previously registered, so register it.
@@ -113,9 +118,10 @@ void BrowsingInstance::RegisterSiteInstance(SiteInstance* site_instance) {
 }
 
 void BrowsingInstance::UnregisterSiteInstance(SiteInstance* site_instance) {
-  DCHECK(site_instance->browsing_instance() == this);
-  DCHECK(site_instance->has_site());
-  std::string site = site_instance->site().possibly_invalid_spec();
+  DCHECK(static_cast<SiteInstanceImpl*>(site_instance)->
+         browsing_instance_ == this);
+  DCHECK(static_cast<SiteInstanceImpl*>(site_instance)->HasSite());
+  std::string site = site_instance->GetSite().possibly_invalid_spec();
 
   // Only unregister the SiteInstance if it is the same one that is registered
   // for the site.  (It might have been an unregistered SiteInstance.  See the
@@ -130,13 +136,16 @@ void BrowsingInstance::UnregisterSiteInstance(SiteInstance* site_instance) {
   if (!RemoveSiteInstanceFromMap(&site_instance_map_, site, site_instance)) {
     // Wasn't in our local map, so look in the static per-browser context map.
     RemoveSiteInstanceFromMap(
-        &context_site_instance_map_[browser_context_], site, site_instance);
+        &context_site_instance_map_.Get()[browser_context_],
+        site,
+        site_instance);
   }
 }
 
-bool BrowsingInstance::RemoveSiteInstanceFromMap(SiteInstanceMap* map,
-                                                 const std::string& site,
-                                                 SiteInstance* site_instance) {
+bool BrowsingInstance::RemoveSiteInstanceFromMap(
+    SiteInstanceMap* map,
+    const std::string& site,
+    SiteInstance* site_instance) {
   SiteInstanceMap::iterator i = map->find(site);
   if (i != map->end() && i->second == site_instance) {
     // Matches, so erase it.

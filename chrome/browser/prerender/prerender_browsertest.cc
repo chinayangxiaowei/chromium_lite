@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/path_service.h"
+#include "base/stringprintf.h"
 #include "base/string_util.h"
 #include "base/test/test_timeouts.h"
 #include "base/utf_string_conversions.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_manager.h"
+#include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/task_manager/task_manager.h"
@@ -31,13 +33,27 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_service.h"
-#include "content/common/url_constants.h"
+#include "content/public/browser/devtools_agent_host_registry.h"
+#include "content/public/browser/devtools_client_host.h"
+#include "content/public/browser/devtools_manager.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/url_constants.h"
 #include "grit/generated_resources.h"
+#include "net/base/mock_host_resolver.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "ui/base/l10n/l10n_util.h"
+
+using content::BrowserThread;
+using content::DevToolsAgentHost;
+using content::DevToolsAgentHostRegistry;
+using content::DevToolsClientHost;
+using content::DevToolsManager;
+using content::NavigationController;
+using content::OpenURLParams;
+using content::Referrer;
+using content::WebContents;
 
 // Prerender tests work as follows:
 //
@@ -83,11 +99,14 @@ bool ShouldRenderPrerenderedPageCorrectly(FinalStatus status) {
   switch (status) {
     case FINAL_STATUS_USED:
     case FINAL_STATUS_WINDOW_OPENER:
+    case FINAL_STATUS_APP_TERMINATING:
     case FINAL_STATUS_FRAGMENT_MISMATCH:
     case FINAL_STATUS_CACHE_OR_HISTORY_CLEARED:
     // We'll crash the renderer after it's loaded.
     case FINAL_STATUS_RENDERER_CRASHED:
     case FINAL_STATUS_CANCELLED:
+    case FINAL_STATUS_DEVTOOLS_ATTACHED:
+    case FINAL_STATUS_SESSION_STORAGE_NAMESPACE_MISMATCH:
       return true;
     default:
       return false;
@@ -102,11 +121,11 @@ class TestPrerenderContents : public PrerenderContents {
       PrerenderTracker* prerender_tracker,
       Profile* profile,
       const GURL& url,
-      const GURL& referrer,
+      const content::Referrer& referrer,
       int expected_number_of_loads,
       FinalStatus expected_final_status)
-      : PrerenderContents(prerender_manager, prerender_tracker, profile,
-                          url, referrer, ORIGIN_LINK_REL_PRERENDER,
+      : PrerenderContents(prerender_manager, prerender_tracker,
+                          profile, url, referrer, ORIGIN_LINK_REL_PRERENDER,
                           PrerenderManager::kNoExperiment),
         number_of_loads_(0),
         expected_number_of_loads_(expected_number_of_loads),
@@ -115,16 +134,24 @@ class TestPrerenderContents : public PrerenderContents {
         was_hidden_(false),
         was_shown_(false),
         should_be_shown_(expected_final_status == FINAL_STATUS_USED),
-        quit_message_loop_on_destruction_(true) {
+        quit_message_loop_on_destruction_(
+            expected_final_status != FINAL_STATUS_EVICTED &&
+            expected_final_status != FINAL_STATUS_APP_TERMINATING &&
+            expected_final_status != FINAL_STATUS_MAX),
+        expected_pending_prerenders_(0) {
     if (expected_number_of_loads == 0)
       MessageLoopForUI::current()->Quit();
   }
 
   virtual ~TestPrerenderContents() {
-    EXPECT_EQ(expected_final_status_, final_status()) <<
-              " when testing URL " << prerender_url().path() <<
-              " (Expected: " << NameFromFinalStatus(expected_final_status_) <<
-              ", Actual: " << NameFromFinalStatus(final_status()) << ")";
+    if (expected_final_status_ == FINAL_STATUS_MAX) {
+      EXPECT_EQ(match_complete_status(), MATCH_COMPLETE_REPLACEMENT);
+    } else {
+      EXPECT_EQ(expected_final_status_, final_status()) <<
+          " when testing URL " << prerender_url().path() <<
+          " (Expected: " << NameFromFinalStatus(expected_final_status_) <<
+          ", Actual: " << NameFromFinalStatus(final_status()) << ")";
+    }
     // Prerendering RenderViewHosts should be hidden before the first
     // navigation, so this should be happen for every PrerenderContents for
     // which a RenderViewHost is created, regardless of whether or not it's
@@ -147,15 +174,21 @@ class TestPrerenderContents : public PrerenderContents {
       MessageLoopForUI::current()->Quit();
   }
 
-  virtual void OnRenderViewGone(int status, int exit_code) OVERRIDE {
+  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE {
     // On quit, it's possible to end up here when render processes are closed
     // before the PrerenderManager is destroyed.  As a result, it's possible to
     // get either FINAL_STATUS_APP_TERMINATING or FINAL_STATUS_RENDERER_CRASHED
     // on quit.
-    if (expected_final_status_ == FINAL_STATUS_APP_TERMINATING)
+    //
+    // It's also possible for this to be called after we've been notified of
+    // app termination, but before we've been deleted, which is why the second
+    // check is needed.
+    if (expected_final_status_ == FINAL_STATUS_APP_TERMINATING &&
+        final_status() != expected_final_status_) {
       expected_final_status_ = FINAL_STATUS_RENDERER_CRASHED;
+    }
 
-    PrerenderContents::OnRenderViewGone(status, exit_code);
+    PrerenderContents::RenderViewGone(status);
   }
 
   virtual bool AddAliasURL(const GURL& url) OVERRIDE {
@@ -170,22 +203,37 @@ class TestPrerenderContents : public PrerenderContents {
     PrerenderContents::DidStopLoading();
     ++number_of_loads_;
     if (ShouldRenderPrerenderedPageCorrectly(expected_final_status_) &&
-        number_of_loads_ >= expected_number_of_loads_) {
+        number_of_loads_ == expected_number_of_loads_) {
       MessageLoopForUI::current()->Quit();
     }
+  }
+
+  virtual void AddPendingPrerender(Origin origin,
+                                   const GURL& url,
+                                   const content::Referrer& referrer) OVERRIDE {
+    PrerenderContents::AddPendingPrerender(origin, url, referrer);
+    if (expected_pending_prerenders_ > 0 &&
+        pending_prerender_list()->size() == expected_pending_prerenders_) {
+      MessageLoop::current()->Quit();
+    }
+  }
+
+  // Waits until the prerender has |expected_pending_prerenders| pending
+  // prerenders.
+  void WaitForPendingPrerenders(size_t expected_pending_prerenders) {
+    if (pending_prerender_list()->size() < expected_pending_prerenders) {
+      expected_pending_prerenders_ = expected_pending_prerenders;
+      ui_test_utils::RunMessageLoop();
+      expected_pending_prerenders_ = 0;
+    }
+
+    EXPECT_EQ(expected_pending_prerenders, pending_prerender_list()->size());
   }
 
   // For tests that open the prerender in a new background tab, the RenderView
   // will not have been made visible when the PrerenderContents is destroyed
   // even though it is used.
   void set_should_be_shown(bool value) { should_be_shown_ = value; }
-
-  // Some of the ui_test_utils calls that we use assume that no one will quit
-  // the message loop that they run internally. So we dont quit the message
-  // loop in the destructor so as not to interfere.
-  void set_quit_message_loop_on_destruction(bool value) {
-    quit_message_loop_on_destruction_ = value;
-  }
 
   int number_of_loads() const { return number_of_loads_; }
 
@@ -197,7 +245,7 @@ class TestPrerenderContents : public PrerenderContents {
     notification_registrar().Add(
         this,
         content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED,
-        Source<RenderWidgetHost>(new_render_view_host));
+        content::Source<RenderWidgetHost>(new_render_view_host));
 
     new_render_view_host_ = new_render_view_host;
 
@@ -205,12 +253,13 @@ class TestPrerenderContents : public PrerenderContents {
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE {
     if (type ==
         content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED) {
-      EXPECT_EQ(new_render_view_host_, Source<RenderWidgetHost>(source).ptr());
-      bool is_visible = *Details<bool>(details).ptr();
+      EXPECT_EQ(new_render_view_host_,
+                content::Source<RenderWidgetHost>(source).ptr());
+      bool is_visible = *content::Details<bool>(details).ptr();
 
       if (!is_visible) {
         was_hidden_ = true;
@@ -240,7 +289,12 @@ class TestPrerenderContents : public PrerenderContents {
   // FINAL_STATUS_USED, and false otherwise.
   bool should_be_shown_;
 
+  // If true, quits message loop on destruction of |this|.
   bool quit_message_loop_on_destruction_;
+
+  // Total number of pending prerenders we're currently waiting for.  Zero
+  // indicates we currently aren't waiting for any.
+  size_t expected_pending_prerenders_;
 };
 
 // PrerenderManager that uses TestPrerenderContents.
@@ -260,14 +314,14 @@ class WaitForLoadPrerenderContentsFactory : public PrerenderContents::Factory {
       PrerenderTracker* prerender_tracker,
       Profile* profile,
       const GURL& url,
-      const GURL& referrer,
+      const content::Referrer& referrer,
       Origin origin,
       uint8 experiment_id) OVERRIDE {
-    CHECK(!expected_final_status_queue_.empty()) <<
-          "Creating prerender contents for " << url.path() <<
-          " with no expected final status";
-    FinalStatus expected_final_status = expected_final_status_queue_.front();
-    expected_final_status_queue_.pop_front();
+    FinalStatus expected_final_status = FINAL_STATUS_MAX;
+    if (!expected_final_status_queue_.empty()) {
+      expected_final_status = expected_final_status_queue_.front();
+      expected_final_status_queue_.pop_front();
+    }
     VLOG(1) << "Creating prerender contents for " << url.path() <<
                " with expected final status " << expected_final_status;
     VLOG(1) << expected_final_status_queue_.size() << " left in the queue.";
@@ -307,8 +361,8 @@ class FakeSafeBrowsingService :  public SafeBrowsingService {
 
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
-        NewRunnableMethod(this, &FakeSafeBrowsingService::OnCheckBrowseURLDone,
-                          gurl, client));
+        base::Bind(&FakeSafeBrowsingService::OnCheckBrowseURLDone, this, gurl,
+                   client));
     return false;
   }
 
@@ -351,6 +405,26 @@ class TestSafeBrowsingServiceFactory : public SafeBrowsingServiceFactory {
 };
 #endif
 
+class FakeDevToolsClientHost : public DevToolsClientHost {
+ public:
+  FakeDevToolsClientHost() {}
+  virtual ~FakeDevToolsClientHost() {}
+  virtual void InspectedTabClosing() OVERRIDE {}
+  virtual void FrameNavigating(const std::string& url) OVERRIDE {}
+  virtual void DispatchOnInspectorFrontend(const std::string& msg) OVERRIDE {}
+  virtual void TabReplaced(WebContents* new_tab) OVERRIDE {}
+};
+
+class RestorePrerenderMode {
+ public:
+  RestorePrerenderMode() : prev_mode_(PrerenderManager::GetMode()) {
+  }
+
+  ~RestorePrerenderMode() { PrerenderManager::SetMode(prev_mode_); }
+ private:
+  PrerenderManager::PrerenderManagerMode prev_mode_;
+};
+
 }  // namespace
 
 class PrerenderBrowserTest : public InProcessBrowserTest {
@@ -373,11 +447,8 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
   }
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    command_line->AppendSwitchASCII(switches::kPrerender,
-                                    switches::kPrerenderSwitchValueEnabled);
-    // This is needed to enable click-to-play without triggering a DCHECK.
-    // It does not actually enable click-to-play.
-    command_line->AppendSwitchASCII(switches::kEnableClickToPlay, "");
+    command_line->AppendSwitchASCII(switches::kPrerenderMode,
+                                    switches::kPrerenderModeSwitchValueEnabled);
 #if defined(OS_MACOSX)
     // The plugins directory isn't read by default on the Mac, so it needs to be
     // explicitly registered.
@@ -442,43 +513,46 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
   }
 
   void OpenDestURLViaClick() const {
-    OpenDestURLWithJSImpl("Click()", true);
+    OpenDestURLWithJSImpl("Click()");
   }
 
   void OpenDestURLViaClickTarget() const {
-    OpenDestURLWithJSImpl("ClickTarget()", false);
+    OpenDestURLWithJSImpl("ClickTarget()");
   }
 
   void OpenDestURLViaClickNewWindow() const {
-    OpenDestURLWithJSImpl("ShiftClick()", true);
+    OpenDestURLWithJSImpl("ShiftClick()");
   }
 
   void OpenDestURLViaClickNewForegroundTab() const {
 #if defined(OS_MACOSX)
-    OpenDestURLWithJSImpl("MetaShiftClick()", true);
+    OpenDestURLWithJSImpl("MetaShiftClick()");
 #else
-    OpenDestURLWithJSImpl("CtrlShiftClick()", true);
+    OpenDestURLWithJSImpl("CtrlShiftClick()");
 #endif
   }
 
   void OpenDestURLViaClickNewBackgroundTab() const {
+    TestPrerenderContents* prerender_contents = GetPrerenderContents();
+    ASSERT_TRUE(prerender_contents != NULL);
+    prerender_contents->set_should_be_shown(false);
 #if defined(OS_MACOSX)
-    OpenDestURLWithJSImpl("MetaClick()", false);
+    OpenDestURLWithJSImpl("MetaClick()");
 #else
-    OpenDestURLWithJSImpl("CtrlClick()", false);
+    OpenDestURLWithJSImpl("CtrlClick()");
 #endif
   }
 
   void OpenDestURLViaWindowOpen() const {
-    OpenDestURLWithJSImpl("WindowOpen()", false);
+    OpenDestURLWithJSImpl("WindowOpen()");
   }
 
   void ClickToNextPageAfterPrerender(Browser* browser) {
     ui_test_utils::WindowedNotificationObserver new_page_observer(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
     RenderViewHost* render_view_host =
-        browser->GetSelectedTabContents()->render_view_host();
+        browser->GetSelectedWebContents()->GetRenderViewHost();
     render_view_host->ExecuteJavascriptInWebFrame(
         string16(),
         ASCIIToUTF16("ClickOpenLink()"));
@@ -491,20 +565,49 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
         test_server()->GetURL("files/prerender/prerender_page.html"));
   }
 
+  void NavigateToDestUrlAndWaitForPassTitle() {
+    string16 expected_title = ASCIIToUTF16("PASS");
+    ui_test_utils::TitleWatcher title_watcher(
+        GetPrerenderContents()->prerender_contents()->web_contents(),
+        expected_title);
+    NavigateToDestURL();
+    EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
+  }
+
   // Called after the prerendered page has been navigated to and then away from.
   // Navigates back through the history to the prerendered page.
   void GoBackToPrerender(Browser* browser) {
     ui_test_utils::WindowedNotificationObserver back_nav_observer(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
     browser->GoBack(CURRENT_TAB);
     back_nav_observer.Wait();
     bool original_prerender_page = false;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-        browser->GetSelectedTabContents()->render_view_host(), L"",
+        browser->GetSelectedWebContents()->GetRenderViewHost(), L"",
         L"window.domAutomationController.send(IsOriginalPrerenderPage())",
         &original_prerender_page));
     EXPECT_TRUE(original_prerender_page);
+  }
+
+  // Goes back to the page that was active before the prerender was swapped
+  // in. This must be called when the prerendered page is the current page
+  // in the active tab.
+  void GoBackToPageBeforePrerender(Browser* browser) {
+    WebContents* tab = browser->GetSelectedWebContents();
+    ASSERT_TRUE(tab);
+    EXPECT_FALSE(tab->IsLoading());
+    ui_test_utils::WindowedNotificationObserver back_nav_observer(
+        content::NOTIFICATION_LOAD_STOP,
+        content::Source<NavigationController>(&tab->GetController()));
+    browser->GoBack(CURRENT_TAB);
+    back_nav_observer.Wait();
+    bool js_result;
+    ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+        tab->GetRenderViewHost(), L"",
+        L"window.domAutomationController.send(DidBackToOriginalPagePass())",
+        &js_result));
+    EXPECT_TRUE(js_result);
   }
 
   // Should be const but test_server()->GetURL(...) is not const.
@@ -524,7 +627,7 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
 
   bool UrlIsPendingInPrerenderManager(const std::string& html_file) {
     GURL dest_url = test_server()->GetURL(html_file);
-    return (prerender_manager()->FindPendingEntry(dest_url) != NULL);
+    return prerender_manager()->IsPendingEntry(dest_url);
   }
 
   void set_use_https_src(bool use_https_src_server) {
@@ -541,7 +644,8 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
 
   PrerenderManager* prerender_manager() const {
     Profile* profile = browser()->GetSelectedTabContentsWrapper()->profile();
-    PrerenderManager* prerender_manager = profile->GetPrerenderManager();
+    PrerenderManager* prerender_manager =
+        PrerenderManagerFactory::GetForProfile(profile);
     return prerender_manager;
   }
 
@@ -570,6 +674,17 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
 
   void set_loader_path(const std::string& path) {
     loader_path_ = path;
+  }
+
+  GURL GetCrossDomainTestUrl(const std::string& path) {
+    static const std::string secondary_domain = "www.foo.com";
+    host_resolver()->AddRule(secondary_domain, "127.0.0.1");
+    std::string url_str(base::StringPrintf(
+        "http://%s:%d/%s",
+        secondary_domain.c_str(),
+        test_server()->host_port_pair().port(),
+        path.c_str()));
+    return GURL(url_str);
   }
 
  private:
@@ -614,7 +729,9 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
     // Since the test needs to wait until the prerendered page has stopped
     // loading, rather than the page directly navigated to, need to
     // handle browser navigation directly.
-    browser()->OpenURL(src_url, GURL(), CURRENT_TAB, PageTransition::TYPED);
+    browser()->OpenURL(OpenURLParams(
+        src_url, Referrer(), CURRENT_TAB, content::PAGE_TRANSITION_TYPED,
+        false));
 
     ui_test_utils::RunMessageLoop();
 
@@ -635,8 +752,10 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
       }
     } else {
       // In the failure case, we should have removed |dest_url_| from the
-      // prerender_manager.
-      EXPECT_TRUE(prerender_contents == NULL);
+      // prerender_manager.  We ignore dummy PrerenderContents (as indicated
+      // by not having started).
+      EXPECT_TRUE(prerender_contents == NULL ||
+                  !prerender_contents->prerendering_has_started());
     }
   }
 
@@ -650,16 +769,21 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
     if (disposition == NEW_BACKGROUND_TAB)
       GetPrerenderContents()->set_should_be_shown(false);
 
-    // In the case of zero loads, need to wait for the page load to complete
-    // before running any Javascript.
     scoped_ptr<ui_test_utils::WindowedNotificationObserver> page_load_observer;
-    TabContents* tab_contents =
-        GetPrerenderContents()->prerender_contents()->tab_contents();
-    if (GetPrerenderContents()->number_of_loads() == 0) {
-      page_load_observer.reset(
-          new ui_test_utils::WindowedNotificationObserver(
-              content::NOTIFICATION_LOAD_STOP,
-              Source<NavigationController>(&tab_contents->controller())));
+    WebContents* web_contents = NULL;
+
+    if (GetPrerenderContents()->prerender_contents()) {
+      // In the case of zero loads, need to wait for the page load to complete
+      // before running any Javascript.
+      web_contents =
+          GetPrerenderContents()->prerender_contents()->web_contents();
+      if (GetPrerenderContents()->number_of_loads() == 0) {
+        page_load_observer.reset(
+            new ui_test_utils::WindowedNotificationObserver(
+                content::NOTIFICATION_LOAD_STOP,
+                content::Source<NavigationController>(
+                    &web_contents->GetController())));
+      }
     }
 
     // ui_test_utils::NavigateToURL waits until DidStopLoading is called on
@@ -677,13 +801,13 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
     // Make sure the PrerenderContents found earlier was used or removed.
     EXPECT_TRUE(GetPrerenderContents() == NULL);
 
-    if (call_javascript_) {
+    if (call_javascript_ && web_contents) {
       if (page_load_observer.get())
         page_load_observer->Wait();
 
       bool display_test_result = false;
       ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-          tab_contents->render_view_host(), L"",
+          web_contents->GetRenderViewHost(), L"",
           L"window.domAutomationController.send(DidDisplayPass())",
           &display_test_result));
       EXPECT_TRUE(display_test_result);
@@ -692,16 +816,14 @@ class PrerenderBrowserTest : public InProcessBrowserTest {
 
   // Opens the prerendered page using javascript functions in the
   // loader page. |javascript_function_name| should be a 0 argument function
-  // which is invoked. |contents_should_be_shown| indicates whether the
-  // prerendered page expects to become visible or stay hidden.
-  void OpenDestURLWithJSImpl(const std::string& javascript_function_name,
-                             bool contents_should_be_shown) const {
+  // which is invoked.
+  void OpenDestURLWithJSImpl(const std::string& javascript_function_name)
+      const {
     TestPrerenderContents* prerender_contents = GetPrerenderContents();
     ASSERT_TRUE(prerender_contents != NULL);
-    prerender_contents->set_should_be_shown(contents_should_be_shown);
 
     RenderViewHost* render_view_host =
-        browser()->GetSelectedTabContents()->render_view_host();
+        browser()->GetSelectedWebContents()->GetRenderViewHost();
     render_view_host->ExecuteJavascriptInWebFrame(
         string16(),
         ASCIIToUTF16(javascript_function_name));
@@ -744,42 +866,6 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderVisibilityQuickSwitch) {
   NavigateToDestURL();
 }
 
-// Checks that the visibility API works when opening a page in a new hidden
-// tab.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderVisibilityBackgroundTab) {
-  PrerenderTestURL("files/prerender/prerender_visibility_hidden.html",
-                   FINAL_STATUS_USED,
-                   1);
-  NavigateToDestURLWithDisposition(NEW_BACKGROUND_TAB);
-}
-
-// Checks that the visibility API works when opening a page in a new hidden
-// tab, which is switched to before it stops loading.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderVisibilityBackgroundTabQuickSwitch) {
-  PrerenderTestURL("files/prerender/prerender_visibility_hidden_quick.html",
-                   FINAL_STATUS_USED, 0);
-  NavigateToDestURLWithDisposition(NEW_BACKGROUND_TAB);
-}
-
-// Checks that the visibility API works when opening a page in a new foreground
-// tab.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderVisibilityForegroundTab) {
-  PrerenderTestURL("files/prerender/prerender_visibility.html",
-                   FINAL_STATUS_USED,
-                   1);
-  NavigateToDestURLWithDisposition(NEW_FOREGROUND_TAB);
-}
-
-// Checks that the visibility API works when the prerender is quickly opened
-// in a new tab foreground before it stops loading.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderVisibilityForegroundTabQuickSwitch) {
-  PrerenderTestURL("files/prerender/prerender_visibility_quick.html",
-                   FINAL_STATUS_USED, 0);
-  NavigateToDestURL();
-}
-
 // Checks that the prerendering of a page is canceled correctly when a
 // Javascript alert is called.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderAlertBeforeOnload) {
@@ -798,7 +884,16 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderAlertAfterOnload) {
 
 // Checks that plugins are not loaded while a page is being preloaded, but
 // are loaded when the page is displayed.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderDelayLoadPlugin) {
+#if defined(USE_AURA)
+// http://crbug.com/103496
+#define MAYBE_PrerenderDelayLoadPlugin DISABLED_PrerenderDelayLoadPlugin
+#elif defined(OS_MACOSX)
+// http://crbug.com/100514
+#define MAYBE_PrerenderDelayLoadPlugin FAILS_PrerenderDelayLoadPlugin
+#else
+#define MAYBE_PrerenderDelayLoadPlugin PrerenderDelayLoadPlugin
+#endif
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, MAYBE_PrerenderDelayLoadPlugin) {
   PrerenderTestURL("files/prerender/plugin_delay_load.html",
                    FINAL_STATUS_USED,
                    1);
@@ -820,7 +915,19 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClickToPlay) {
 
 // Checks that plugins in an iframe are not loaded while a page is
 // being preloaded, but are loaded when the page is displayed.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderIframeDelayLoadPlugin) {
+#if defined(USE_AURA)
+// http://crbug.com/103496
+#define MAYBE_PrerenderIframeDelayLoadPlugin \
+        DISABLED_PrerenderIframeDelayLoadPlugin
+#elif defined(OS_MACOSX)
+// http://crbug.com/100514
+#define MAYBE_PrerenderIframeDelayLoadPlugin \
+        FAILS_PrerenderIframeDelayLoadPlugin
+#else
+#define MAYBE_PrerenderIframeDelayLoadPlugin PrerenderIframeDelayLoadPlugin
+#endif
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
+                       MAYBE_PrerenderIframeDelayLoadPlugin) {
   PrerenderTestURL("files/prerender/prerender_iframe_plugin_delay_load.html",
                    FINAL_STATUS_USED,
                    1);
@@ -884,9 +991,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClientRedirectToHttps) {
 
 // Checks that client-issued redirects within an iframe in a prerendered
 // page will not count as an "alias" for the prerendered page.
-// Test flaky due to http://crbug.com/88973.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       FLAKY_PrerenderClientRedirectInIframe) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClientRedirectInIframe) {
   std::string redirect_path = CreateClientRedirect(
       "/files/prerender/prerender_embedded_content.html");
   std::vector<net::TestServer::StringPair> replacement_text;
@@ -897,7 +1002,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
       "files/prerender/prerender_with_iframe.html",
       replacement_text,
       &replacement_path));
-  PrerenderTestURL(replacement_path, FINAL_STATUS_USED, 1);
+  PrerenderTestURL(replacement_path, FINAL_STATUS_USED, 2);
   EXPECT_FALSE(UrlIsInPrerenderManager(
       "files/prerender/prerender_embedded_content.html"));
   NavigateToDestURL();
@@ -921,7 +1026,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
       "files/prerender/prerender_with_iframe.html",
       replacement_text,
       &replacement_path));
-  PrerenderTestURL(replacement_path, FINAL_STATUS_USED, 1);
+  PrerenderTestURL(replacement_path, FINAL_STATUS_USED, 2);
   EXPECT_FALSE(UrlIsInPrerenderManager(https_url));
   NavigateToDestURL();
 }
@@ -1063,9 +1168,15 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderExcessiveMemory) {
                    1);
 }
 
+// Checks shutdown code while a prerender is active.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderQuickQuit) {
+  PrerenderTestURL("files/prerender/prerender_page.html",
+                   FINAL_STATUS_APP_TERMINATING,
+                   0);
+}
+
 // Checks that we don't prerender in an infinite loop.
-// crbug.com/83170
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FLAKY_PrerenderInfiniteLoop) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderInfiniteLoop) {
   const char* const kHtmlFileA = "files/prerender/prerender_infinite_a.html";
   const char* const kHtmlFileB = "files/prerender/prerender_infinite_b.html";
 
@@ -1074,6 +1185,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FLAKY_PrerenderInfiniteLoop) {
   expected_final_status_queue.push_back(FINAL_STATUS_APP_TERMINATING);
 
   PrerenderTestURL(kHtmlFileA, expected_final_status_queue, 1);
+  ASSERT_TRUE(GetPrerenderContents());
+  GetPrerenderContents()->WaitForPendingPrerenders(1u);
 
   // Next url should be in pending list but not an active entry.
   EXPECT_FALSE(UrlIsInPrerenderManager(kHtmlFileB));
@@ -1089,9 +1202,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, FLAKY_PrerenderInfiniteLoop) {
 
 // Checks that we don't prerender in an infinite loop and multiple links are
 // handled correctly.
-// Flaky, http://crbug.com/77323, but failing in a CHECK so disabled.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       DISABLED_PrerenderInfiniteLoopMultiple) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderInfiniteLoopMultiple) {
   const char* const kHtmlFileA =
       "files/prerender/prerender_infinite_a_multiple.html";
   const char* const kHtmlFileB =
@@ -1108,6 +1219,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
   expected_final_status_queue.push_back(FINAL_STATUS_APP_TERMINATING);
 
   PrerenderTestURL(kHtmlFileA, expected_final_status_queue, 1);
+  ASSERT_TRUE(GetPrerenderContents());
+  GetPrerenderContents()->WaitForPendingPrerenders(2u);
 
   // Next url should be in pending list but not an active entry.
   EXPECT_FALSE(UrlIsInPrerenderManager(kHtmlFileB));
@@ -1185,26 +1298,55 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderTaskManager) {
   EXPECT_LE(num_tabs_with_prerender_page_title, 2);
 }
 
-// Checks that prerenderers will terminate when an audio tag is encountered.
+// Checks that audio loads are deferred on prerendering.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5Audio) {
   PrerenderTestURL("files/prerender/prerender_html5_audio.html",
-                   FINAL_STATUS_HTML5_MEDIA,
-                   1);
+                  FINAL_STATUS_USED,
+                  1);
+  NavigateToDestUrlAndWaitForPassTitle();
 }
 
-// Checks that prerenderers will terminate when a video tag is encountered.
+// Checks that audio loads are deferred on prerendering and played back when
+// the prerender is swapped in if autoplay is set.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5AudioAutoplay) {
+  PrerenderTestURL("files/prerender/prerender_html5_audio_autoplay.html",
+                   FINAL_STATUS_USED,
+                   1);
+  NavigateToDestUrlAndWaitForPassTitle();
+}
+
+// Checks that audio loads are deferred on prerendering and played back when
+// the prerender is swapped in if js starts playing.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5AudioJsplay) {
+  PrerenderTestURL("files/prerender/prerender_html5_audio_jsplay.html",
+                   FINAL_STATUS_USED,
+                   1);
+  NavigateToDestUrlAndWaitForPassTitle();
+}
+
+// Checks that video loads are deferred on prerendering.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5Video) {
   PrerenderTestURL("files/prerender/prerender_html5_video.html",
-                   FINAL_STATUS_HTML5_MEDIA,
+                   FINAL_STATUS_USED,
                    1);
+  NavigateToDestUrlAndWaitForPassTitle();
 }
 
-// Checks that prerenderers will terminate when a video tag is inserted via
-// javascript.
+// Checks that video tags inserted by javascript are deferred and played
+// correctly on swap in.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5VideoJs) {
   PrerenderTestURL("files/prerender/prerender_html5_video_script.html",
-                   FINAL_STATUS_HTML5_MEDIA,
+                   FINAL_STATUS_USED,
                    1);
+  NavigateToDestUrlAndWaitForPassTitle();
+}
+
+// Checks for correct network events by using a busy sleep the javascript.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderHTML5VideoNetwork) {
+  PrerenderTestURL("files/prerender/prerender_html5_video_network.html",
+                   FINAL_STATUS_USED,
+                   1);
+  NavigateToDestUrlAndWaitForPassTitle();
 }
 
 // Checks that scripts can retrieve the correct window size while prerendering.
@@ -1229,8 +1371,12 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderRendererCrash) {
   // Navigate to about:crash and then wait for the renderer to crash.
   ASSERT_TRUE(GetPrerenderContents());
   ASSERT_TRUE(GetPrerenderContents()->prerender_contents());
-  GetPrerenderContents()->prerender_contents()->controller().LoadURL(
-      GURL(chrome::kAboutCrashURL), GURL(), PageTransition::TYPED);
+  GetPrerenderContents()->prerender_contents()->web_contents()->GetController().
+      LoadURL(
+          GURL(chrome::kAboutCrashURL),
+          content::Referrer(),
+          content::PAGE_TRANSITION_TYPED,
+          std::string());
   ui_test_utils::RunMessageLoop();
 }
 
@@ -1443,9 +1589,10 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderPrint) {
                    1);
 }
 
-// Checks that if a page is opened in a new window by javascript the
-// prerendered page is not used.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderWindowOpenerWindowOpen) {
+// Checks that if a page is opened in a new window by javascript and both the
+// pages are in the same domain, the prerendered page is not used.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
+                       PrerenderSameDomainWindowOpenerWindowOpen) {
   PrerenderTestURL("files/prerender/prerender_page.html",
                    FINAL_STATUS_WINDOW_OPENER,
                    1);
@@ -1453,16 +1600,14 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderWindowOpenerWindowOpen) {
 }
 
 // Checks that if a page is opened due to click on a href with target="_blank"
-// the prerendered page is not used.
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderWindowOpenerClickTarget) {
+// and both pages are in the same domain the prerendered page is not used.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
+                       PrerenderSameDomainWindowOpenerClickTarget) {
   PrerenderTestURL("files/prerender/prerender_page.html",
                    FINAL_STATUS_WINDOW_OPENER,
                    1);
   OpenDestURLViaClickTarget();
 }
-
-// TODO(shishir): Add a test for the case when the page having the
-// prerendering link already has an opener set.
 
 // Checks that a top-level page which would normally request an SSL client
 // certificate will never be seen since it's an https top-level resource.
@@ -1619,8 +1764,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderFavicon) {
   ASSERT_TRUE(prerender_contents != NULL);
   ui_test_utils::WindowedNotificationObserver favicon_update_watcher(
       chrome::NOTIFICATION_FAVICON_UPDATED,
-      Source<TabContents>(prerender_contents->prerender_contents()->
-                          tab_contents()));
+      content::Source<WebContents>(prerender_contents->prerender_contents()->
+                          web_contents()));
   NavigateToDestURL();
   favicon_update_watcher.Wait();
 }
@@ -1631,7 +1776,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderUnload) {
   set_loader_path("files/prerender/prerender_loader_with_unload.html");
   PrerenderTestURL("files/prerender/prerender_page.html", FINAL_STATUS_USED, 1);
   string16 expected_title = ASCIIToUTF16("Unloaded");
-  ui_test_utils::TitleWatcher title_watcher(browser()->GetSelectedTabContents(),
+  ui_test_utils::TitleWatcher title_watcher(browser()->GetSelectedWebContents(),
                                             expected_title);
   NavigateToDestURL();
   EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
@@ -1639,17 +1784,17 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderUnload) {
 
 // Checks that when the history is cleared, prerendering is cancelled and
 // prerendering history is cleared.
-// DISABLED: http://www.crbug.com/86829
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, DISABLED_PrerenderClearHistory) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClearHistory) {
   PrerenderTestURL("files/prerender/prerender_page.html",
                    FINAL_STATUS_CACHE_OR_HISTORY_CLEARED,
                    1);
 
   // Post a task to clear the history, and run the message loop until it
   // destroys the prerender.
-  MessageLoop::current()->PostTask(FROM_HERE,
-      NewRunnableFunction(ClearBrowsingData, browser(),
-                          BrowsingDataRemover::REMOVE_HISTORY));
+  MessageLoop::current()->PostTask(
+      FROM_HERE,
+      base::Bind(&ClearBrowsingData, browser(),
+                 BrowsingDataRemover::REMOVE_HISTORY));
   ui_test_utils::RunMessageLoop();
 
   // Make sure prerender history was cleared.
@@ -1666,8 +1811,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClearCache) {
   // Post a task to clear the cache, and run the message loop until it
   // destroys the prerender.
   MessageLoop::current()->PostTask(FROM_HERE,
-      NewRunnableFunction(ClearBrowsingData, browser(),
-                          BrowsingDataRemover::REMOVE_CACHE));
+      base::Bind(&ClearBrowsingData, browser(),
+                 BrowsingDataRemover::REMOVE_CACHE));
   ui_test_utils::RunMessageLoop();
 
   // Make sure prerender history was not cleared.  Not a vital behavior, but
@@ -1680,9 +1825,9 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderCancelAll) {
                    FINAL_STATUS_CANCELLED,
                    1);
   // Post a task to cancel all the prerenders.
-  MessageLoop::current()->PostTask(FROM_HERE,
-                                   NewRunnableFunction(CancelAllPrerenders,
-                                                       prerender_manager()));
+  MessageLoop::current()->PostTask(
+      FROM_HERE,
+      base::Bind(&CancelAllPrerenders, prerender_manager()));
   ui_test_utils::RunMessageLoop();
   EXPECT_TRUE(GetPrerenderContents() == NULL);
 }
@@ -1730,72 +1875,75 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClickNavigateGoBack) {
   GoBackToPrerender(browser());
 }
 
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewWindowClickGoBack) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClickNewWindow) {
   PrerenderTestURL("files/prerender/prerender_page_with_link.html",
-                   FINAL_STATUS_USED,
+                   FINAL_STATUS_SESSION_STORAGE_NAMESPACE_MISMATCH,
                    1);
   OpenDestURLViaClickNewWindow();
-  Browser* new_browser = BrowserList::GetLastActive();
-  NavigateToNextPageAfterPrerender(new_browser);
-  GoBackToPrerender(new_browser);
 }
 
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewWindowNavigateGoBack) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClickNewForegroundTab) {
   PrerenderTestURL("files/prerender/prerender_page_with_link.html",
-                   FINAL_STATUS_USED,
-                   1);
-  OpenDestURLViaClickNewWindow();
-  Browser* new_browser = BrowserList::GetLastActive();
-  ClickToNextPageAfterPrerender(new_browser);
-  GoBackToPrerender(new_browser);
-}
-
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewForegroundTabClickGoBack) {
-  PrerenderTestURL("files/prerender/prerender_page_with_link.html",
-                   FINAL_STATUS_USED,
+                   FINAL_STATUS_SESSION_STORAGE_NAMESPACE_MISMATCH,
                    1);
   OpenDestURLViaClickNewForegroundTab();
-  NavigateToNextPageAfterPrerender(browser());
-  GoBackToPrerender(browser());
 }
 
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewForegroundTabNavigateGoBack) {
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderClickNewBackgroundTab) {
   PrerenderTestURL("files/prerender/prerender_page_with_link.html",
-                   FINAL_STATUS_USED,
-                   1);
-  OpenDestURLViaClickNewForegroundTab();
-  ClickToNextPageAfterPrerender(browser());
-  GoBackToPrerender(browser());
-}
-
-IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewBackgroundTabClickGoBack) {
-  PrerenderTestURL("files/prerender/prerender_page_with_link.html",
-                   FINAL_STATUS_USED,
+                   FINAL_STATUS_SESSION_STORAGE_NAMESPACE_MISMATCH,
                    1);
   OpenDestURLViaClickNewBackgroundTab();
-  // SelectNextTab completes synchronously, in terms of
-  // updating the active index.
-  browser()->SelectNextTab();
-  NavigateToNextPageAfterPrerender(browser());
-  GoBackToPrerender(browser());
 }
 
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
-                       PrerenderClickNewBackgroundTabNavigateGoBack) {
-  PrerenderTestURL("files/prerender/prerender_page_with_link.html",
+                       NavigateToPrerenderedPageWhenDevToolsAttached) {
+  DisableJavascriptCalls();
+  WebContents* web_contents = browser()->GetSelectedWebContents();
+  DevToolsAgentHost* agent = DevToolsAgentHostRegistry::GetDevToolsAgentHost(
+      web_contents->GetRenderViewHost());
+  DevToolsManager* manager = DevToolsManager::GetInstance();
+  FakeDevToolsClientHost client_host;
+  manager->RegisterDevToolsClientHostFor(agent, &client_host);
+  const char* url = "files/prerender/prerender_page.html";
+  PrerenderTestURL(url, FINAL_STATUS_DEVTOOLS_ATTACHED, 1);
+  NavigateToURL(url);
+  manager->ClientHostClosing(&client_host);
+}
+
+// Validate that the sessionStorage namespace remains the same when swapping
+// in a prerendered page.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, PrerenderSessionStorage) {
+  set_loader_path("files/prerender/prerender_loader_with_session_storage.html");
+  PrerenderTestURL(GetCrossDomainTestUrl("files/prerender/prerender_page.html"),
                    FINAL_STATUS_USED,
                    1);
-  OpenDestURLViaClickNewBackgroundTab();
-  // SelectNextTab completes synchronously, in terms of
-  // updating the active index.
-  browser()->SelectNextTab();
-  ClickToNextPageAfterPrerender(browser());
-  GoBackToPrerender(browser());
+  NavigateToDestURL();
+  GoBackToPageBeforePrerender(browser());
+}
+
+// Checks that the control group works.  A JS alert cannot be detected in the
+// control group.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, ControlGroup) {
+  RestorePrerenderMode restore_prerender_mode;
+  PrerenderManager::SetMode(
+      PrerenderManager::PRERENDER_MODE_EXPERIMENT_CONTROL_GROUP);
+  PrerenderTestURL("files/prerender/prerender_alert_before_onload.html",
+                   FINAL_STATUS_WOULD_HAVE_BEEN_USED, 0);
+  NavigateToDestURL();
+}
+
+// Make sure that the MatchComplete dummy works in the normal case.  Once
+// a prerender is cancelled because of a script, a dummy must be created to
+// account for the MatchComplete case, and it must have a final status of
+// FINAL_STATUS_WOULD_HAVE_BEEN_USED.
+IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, MatchCompleteDummy) {
+  std::deque<FinalStatus> expected_final_status_queue;
+  expected_final_status_queue.push_back(FINAL_STATUS_JAVASCRIPT_ALERT);
+  expected_final_status_queue.push_back(FINAL_STATUS_WOULD_HAVE_BEEN_USED);
+  PrerenderTestURL("files/prerender/prerender_alert_before_onload.html",
+                   expected_final_status_queue, 1);
+  NavigateToDestURL();
 }
 
 }  // namespace prerender

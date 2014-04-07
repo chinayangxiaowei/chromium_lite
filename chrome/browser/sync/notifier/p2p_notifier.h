@@ -53,14 +53,14 @@ class P2PNotificationData {
   P2PNotificationData();
   P2PNotificationData(const std::string& sender_id,
                       P2PNotificationTarget target,
-                      const syncable::ModelTypeSet& changed_types);
+                      syncable::ModelTypeSet changed_types);
 
   ~P2PNotificationData();
 
   // Returns true if the given ID is targeted by this notification.
   bool IsTargeted(const std::string& id) const;
 
-  const syncable::ModelTypeSet& GetChangedTypes() const;
+  syncable::ModelTypeSet GetChangedTypes() const;
 
   bool Equals(const P2PNotificationData& other) const;
 
@@ -85,7 +85,14 @@ class P2PNotifier
  public:
   // Takes ownership of |talk_mediator|, but it is guaranteed that
   // |talk_mediator| is destroyed only when this object is destroyed.
-  explicit P2PNotifier(notifier::TalkMediator* talk_mediator);
+  //
+  // The |send_notification_target| parameter was added to allow us to send
+  // self-notifications in some cases, but not others.  The value should be
+  // either NOTIFY_ALL to send notifications to all clients, or NOTIFY_OTHERS
+  // to send notificaitons to all clients except for the one that triggered the
+  // notification.  See crbug.com/97780.
+  P2PNotifier(notifier::TalkMediator* talk_mediator,
+              P2PNotificationTarget send_notification_target);
 
   virtual ~P2PNotifier();
 
@@ -97,15 +104,15 @@ class P2PNotifier
   virtual void UpdateCredentials(
       const std::string& email, const std::string& token) OVERRIDE;
   virtual void UpdateEnabledTypes(
-      const syncable::ModelTypeSet& enabled_types) OVERRIDE;
+      syncable::ModelTypeSet enabled_types) OVERRIDE;
   virtual void SendNotification(
-      const syncable::ModelTypeSet& changed_types) OVERRIDE;
+      syncable::ModelTypeSet changed_types) OVERRIDE;
 
   // TalkMediator::Delegate implementation.
-  virtual void OnNotificationStateChange(bool notifications_enabled);
+  virtual void OnNotificationStateChange(bool notifications_enabled) OVERRIDE;
   virtual void OnIncomingNotification(
-      const notifier::Notification& notification);
-  virtual void OnOutgoingNotification();
+      const notifier::Notification& notification) OVERRIDE;
+  virtual void OnOutgoingNotification() OVERRIDE;
 
   // For testing.
   void SendNotificationDataForTest(
@@ -125,6 +132,8 @@ class P2PNotifier
   // Whether |talk_mediator_| has notified us that notifications are
   // enabled.
   bool notifications_enabled_;
+  // Which set of clients should be sent notifications.
+  P2PNotificationTarget send_notification_target_;
 
   syncable::ModelTypeSet enabled_types_;
   scoped_refptr<base::MessageLoopProxy> parent_message_loop_proxy_;

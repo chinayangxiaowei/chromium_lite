@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@
 #include "base/eintr_wrapper.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/mac/mac_logging.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/path_service.h"
@@ -28,9 +29,9 @@
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/mac/install_from_dmg.h"
 #include "chrome/common/chrome_switches.h"
-#include "content/common/content_paths.h"
-#include "content/common/content_switches.h"
-#include "content/common/main_function_params.h"
+#include "content/public/common/content_paths.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/main_function_params.h"
 
 // RTLD_MAIN_ONLY is supported as of Mac OS X 10.5, but <dlfcn.h> does not
 // define it in the 10.5 SDK. It is present in the 10.6 SDK and is documented
@@ -255,7 +256,7 @@ void RelauncherSynchronizeWithParent() {
 
 namespace internal {
 
-int RelauncherMain(const MainFunctionParams& main_parameters) {
+int RelauncherMain(const content::MainFunctionParams& main_parameters) {
   // CommandLine rearranges the order of the arguments returned by
   // main_parameters.argv(), rendering it impossible to determine which
   // arguments originally came before kRelauncherArgSeparator and which came
@@ -370,7 +371,7 @@ int RelauncherMain(const MainFunctionParams& main_parameters) {
 
   OSStatus status = LSOpenApplication(&ls_parameters, NULL);
   if (status != noErr) {
-    LOG(ERROR) << "LSOpenApplication: " << status;
+    OSSTATUS_LOG(ERROR, status) << "LSOpenApplication";
     return 1;
   }
 

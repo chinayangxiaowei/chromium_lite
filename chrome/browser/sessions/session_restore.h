@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -47,16 +47,16 @@ class SessionRestore {
   // restores the given session windows to a browser.
   static void RestoreForeignSessionWindows(
       Profile* profile,
-      std::vector<SessionWindow*>::const_iterator begin,
-      std::vector<SessionWindow*>::const_iterator end);
+      std::vector<const SessionWindow*>::const_iterator begin,
+      std::vector<const SessionWindow*>::const_iterator end);
 
   // Specifically used in the restoration of a foreign session.  This method
   // restores the given session tab to a browser.
   static void RestoreForeignSessionTab(Profile* profile,
                                        const SessionTab& tab);
 
-  // Returns true if we're in the process of restoring.
-  static bool IsRestoring();
+  // Returns true if we're in the process of restoring |profile|.
+  static bool IsRestoring(const Profile* profile);
 
   // The max number of non-selected tabs SessionRestore loads when restoring
   // a session. A value of 0 indicates all tabs are loaded at once.

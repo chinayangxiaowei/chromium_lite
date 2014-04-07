@@ -127,6 +127,8 @@ int GLES2Util::GLGetNumValuesReturned(int id) const {
       return 1;
     case GL_PACK_ALIGNMENT:
       return 1;
+    case GL_PACK_REVERSE_ROW_ORDER_ANGLE:
+      return 1;
     case GL_POLYGON_OFFSET_FACTOR:
       return 1;
     case GL_POLYGON_OFFSET_FILL:
@@ -194,6 +196,8 @@ int GLES2Util::GLGetNumValuesReturned(int id) const {
     case GL_TEXTURE_BINDING_CUBE_MAP:
       return 1;
     case GL_TEXTURE_BINDING_EXTERNAL_OES:
+      return 1;
+    case GL_TEXTURE_BINDING_RECTANGLE_ARB:
       return 1;
     case GL_UNPACK_ALIGNMENT:
       return 1;
@@ -273,6 +277,8 @@ int GLES2Util::GLGetNumValuesReturned(int id) const {
     // case GL_INFO_LOG_LENGTH:
     //   return 1;
     case GL_SHADER_SOURCE_LENGTH:
+      return 1;
+    case GL_TRANSLATED_SHADER_SOURCE_LENGTH_ANGLE:
       return 1;
 
     // -- glGetTexParameterfv, glGetTexParameteriv
@@ -397,6 +403,27 @@ bool GLES2Util::ComputeImageDataSize(
     }
   }
   return true;
+}
+
+size_t GLES2Util::RenderbufferBytesPerPixel(int format) {
+  switch (format) {
+    case GL_STENCIL_INDEX8:
+      return 1;
+    case GL_RGBA4:
+    case GL_RGB565:
+    case GL_RGB5_A1:
+    case GL_DEPTH_COMPONENT16:
+      return 2;
+    case GL_RGB:
+    case GL_RGBA:
+    case GL_DEPTH24_STENCIL8_OES:
+    case GL_RGB8_OES:
+    case GL_RGBA8_OES:
+    case GL_DEPTH_COMPONENT24_OES:
+      return 4;
+    default:
+      return 0;
+  }
 }
 
 uint32 GLES2Util::GetGLDataTypeSizeForUniforms(int type) {

@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -20,11 +20,9 @@ class PluginsTest(pyauto.PyUITest):
 
     This method will not run automatically.
     """
-    import pprint
-    pp = pprint.PrettyPrinter(indent=2)
     while True:
       raw_input('Interact with the browser and hit <enter> to list plugins...')
-      pp.pprint(self.GetPluginsInfo().Plugins())
+      self.pprint(self.GetPluginsInfo().Plugins())
 
   def setUp(self):
     pyauto.PyUITest.setUp(self)
@@ -136,6 +134,12 @@ class PluginsTest(pyauto.PyUITest):
     This is equivalent to testing the enable/disable functionality in
     chrome://plugins
     """
+    # Flash files loaded too quickly after firing browser end up getting
+    # downloaded, which seems to indicate that the plugin hasn't been
+    # registered yet.
+    # Hack to register Flash plugin on all platforms.  crbug.com/94123
+    self.GetPluginsInfo()
+
     for fname, plugin_name in self._ObtainPluginsList():
       # Verify initial state
       self.assertTrue(self._IsEnabled(plugin_name),
@@ -211,8 +215,7 @@ class PluginsTest(pyauto.PyUITest):
   def testBlockPluginException(self):
     """Verify that plugins can be blocked on a domain by adding
     an exception(s)."""
-    url = self.GetHttpURLForDataPath(os.path.join('plugin',
-                                                  'flash-clicktoplay.html'))
+    url = 'http://www.hulu.com'
     self.NavigateToURL(url)
     # Wait until Shockwave Flash plugin process loads.
     self.assertTrue(self.WaitUntil(
@@ -225,7 +228,7 @@ class PluginsTest(pyauto.PyUITest):
 
     # Add an exception to block plugins on localhost.
     self.SetPrefs(pyauto.kContentSettingsPatterns,
-                 {'[*.]127.0.0.1,*': {'plugins': 2}})
+                 {'[*.]hulu.com,*': {'plugins': 2}})
     self.GetBrowserWindow(0).GetTab(0).Reload()
     self.assertFalse(self._GetPluginPID('Shockwave Flash'),
                      msg='Shockwave Flash Plug-in not blocked.')

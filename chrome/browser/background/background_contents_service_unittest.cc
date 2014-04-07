@@ -9,6 +9,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/background/background_contents_service.h"
+#include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/tab_contents/background_contents.h"
@@ -17,6 +18,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/browser/notification_service.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -32,10 +34,6 @@ class BackgroundContentsServiceTest : public testing::Test {
   const DictionaryValue* GetPrefs(Profile* profile) {
     return profile->GetPrefs()->GetDictionary(
         prefs::kRegisteredBackgroundContents);
-  }
-
-  void ClearPrefs(Profile* profile) {
-    profile->GetPrefs()->ClearPref(prefs::kRegisteredBackgroundContents);
   }
 
   // Returns the stored pref URL for the passed app id.
@@ -72,26 +70,26 @@ class MockBackgroundContents : public BackgroundContents {
 
   virtual void Navigate(GURL url) {
     url_ = url;
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_BACKGROUND_CONTENTS_NAVIGATED,
-        Source<Profile>(profile_),
-        Details<BackgroundContents>(this));
+        content::Source<Profile>(profile_),
+        content::Details<BackgroundContents>(this));
   }
   virtual const GURL& GetURL() const { return url_; }
 
   void MockClose(Profile* profile) {
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_BACKGROUND_CONTENTS_CLOSED,
-        Source<Profile>(profile),
-        Details<BackgroundContents>(this));
+        content::Source<Profile>(profile),
+        content::Details<BackgroundContents>(this));
     delete this;
   }
 
   ~MockBackgroundContents() {
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_BACKGROUND_CONTENTS_DELETED,
-        Source<Profile>(profile_),
-        Details<BackgroundContents>(this));
+        content::Source<Profile>(profile_),
+        content::Details<BackgroundContents>(this));
   }
 
   const string16& appid() { return appid_; }
@@ -125,8 +123,9 @@ TEST_F(BackgroundContentsServiceTest, BackgroundContentsCreateDestroy) {
 
 TEST_F(BackgroundContentsServiceTest, BackgroundContentsUrlAdded) {
   TestingProfile profile;
-  ClearPrefs(&profile);
   BackgroundContentsService service(&profile, command_line_.get());
+  BackgroundContentsServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+      &profile);
   GURL orig_url;
   GURL url("http://a/");
   GURL url2("http://a/");
@@ -151,8 +150,10 @@ TEST_F(BackgroundContentsServiceTest, BackgroundContentsUrlAdded) {
 
 TEST_F(BackgroundContentsServiceTest, BackgroundContentsUrlAddedAndClosed) {
   TestingProfile profile;
-  ClearPrefs(&profile);
   BackgroundContentsService service(&profile, command_line_.get());
+  BackgroundContentsServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+      &profile);
+
   GURL url("http://a/");
   MockBackgroundContents* contents = new MockBackgroundContents(&profile);
   EXPECT_EQ(0U, GetPrefs(&profile)->size());
@@ -170,8 +171,10 @@ TEST_F(BackgroundContentsServiceTest, BackgroundContentsUrlAddedAndClosed) {
 // crash) then is restarted. Should not persist URL twice.
 TEST_F(BackgroundContentsServiceTest, RestartBackgroundContents) {
   TestingProfile profile;
-  ClearPrefs(&profile);
   BackgroundContentsService service(&profile, command_line_.get());
+  BackgroundContentsServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+      &profile);
+
   GURL url("http://a/");
   {
     scoped_ptr<MockBackgroundContents> contents(new MockBackgroundContents(
@@ -201,7 +204,8 @@ TEST_F(BackgroundContentsServiceTest, RestartBackgroundContents) {
 TEST_F(BackgroundContentsServiceTest, TestApplicationIDLinkage) {
   TestingProfile profile;
   BackgroundContentsService service(&profile, command_line_.get());
-  ClearPrefs(&profile);
+  BackgroundContentsServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+      &profile);
 
   EXPECT_EQ(NULL, service.GetAppBackgroundContents(ASCIIToUTF16("appid")));
   MockBackgroundContents* contents = new MockBackgroundContents(&profile,

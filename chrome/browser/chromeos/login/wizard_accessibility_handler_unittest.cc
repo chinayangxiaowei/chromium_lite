@@ -1,8 +1,8 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/accessibility_events.h"
+#include "chrome/browser/accessibility/accessibility_events.h"
 #include "chrome/browser/chromeos/login/wizard_accessibility_handler.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -44,7 +44,7 @@ TEST_F(WizardAccessibilityHandlerTest, TestFocusEvents) {
 
   // Test a simple control.
   std::string button_name = "Save";
-  AccessibilityButtonInfo button_info(NULL, button_name);
+  AccessibilityButtonInfo button_info(NULL, button_name, "");
   handler.DescribeAccessibilityEvent(
       chrome::NOTIFICATION_ACCESSIBILITY_CONTROL_FOCUSED,
       &button_info,
@@ -55,7 +55,7 @@ TEST_F(WizardAccessibilityHandlerTest, TestFocusEvents) {
 
   // Test a control with multiple states.
   std::string checkbox_name = "Accessibility";
-  AccessibilityCheckboxInfo checkbox_info(NULL, checkbox_name, false);
+  AccessibilityCheckboxInfo checkbox_info(NULL, checkbox_name, "", false);
   handler.DescribeAccessibilityEvent(
       chrome::NOTIFICATION_ACCESSIBILITY_CONTROL_FOCUSED,
       &checkbox_info,
@@ -76,7 +76,7 @@ TEST_F(WizardAccessibilityHandlerTest, TestFocusEvents) {
   std::string combobox_name = "Language";
   std::string combobox_value = "English";
   AccessibilityComboBoxInfo combobox_info(
-      NULL, combobox_name, combobox_value, 12, 35);
+      NULL, combobox_name, "", combobox_value, 12, 35);
   handler.DescribeAccessibilityEvent(
       chrome::NOTIFICATION_ACCESSIBILITY_CONTROL_FOCUSED,
       &combobox_info,
@@ -92,7 +92,7 @@ TEST_F(WizardAccessibilityHandlerTest, TestTextEvents) {
   std::string description;
   EarconType earcon;
 
-  AccessibilityTextBoxInfo textbox_info(NULL, "", false);
+  AccessibilityTextBoxInfo textbox_info(NULL, "", "", false);
   handler.DescribeAccessibilityEvent(
       chrome::NOTIFICATION_ACCESSIBILITY_CONTROL_FOCUSED,
       &textbox_info,

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,15 +33,72 @@ bool StatusController::TestAndClearIsDirty() {
   return is_dirty;
 }
 
+const UpdateProgress* StatusController::update_progress() const {
+  const PerModelSafeGroupState* state =
+      GetModelSafeGroupState(true, group_restriction_);
+  return state ? &state->update_progress : NULL;
+}
+
+UpdateProgress* StatusController::mutable_update_progress() {
+  return &GetOrCreateModelSafeGroupState(
+      true, group_restriction_)->update_progress;
+}
+
+const ConflictProgress* StatusController::conflict_progress() const {
+  const PerModelSafeGroupState* state =
+      GetModelSafeGroupState(true, group_restriction_);
+  return state ? &state->conflict_progress : NULL;
+}
+
+ConflictProgress* StatusController::mutable_conflict_progress() {
+  return &GetOrCreateModelSafeGroupState(
+      true, group_restriction_)->conflict_progress;
+}
+
+const ConflictProgress* StatusController::GetUnrestrictedConflictProgress(
+    ModelSafeGroup group) const {
+  const PerModelSafeGroupState* state =
+      GetModelSafeGroupState(false, group);
+  return state ? &state->conflict_progress : NULL;
+}
+
+ConflictProgress*
+    StatusController::GetUnrestrictedMutableConflictProgressForTest(
+        ModelSafeGroup group) {
+  return &GetOrCreateModelSafeGroupState(false, group)->conflict_progress;
+}
+
+const UpdateProgress* StatusController::GetUnrestrictedUpdateProgress(
+    ModelSafeGroup group) const {
+  const PerModelSafeGroupState* state =
+      GetModelSafeGroupState(false, group);
+  return state ? &state->update_progress : NULL;
+}
+
+UpdateProgress*
+    StatusController::GetUnrestrictedMutableUpdateProgressForTest(
+        ModelSafeGroup group) {
+  return &GetOrCreateModelSafeGroupState(false, group)->update_progress;
+}
+
+const PerModelSafeGroupState* StatusController::GetModelSafeGroupState(
+    bool restrict, ModelSafeGroup group) const {
+  DCHECK_EQ(restrict, group_restriction_in_effect_);
+  std::map<ModelSafeGroup, PerModelSafeGroupState*>::const_iterator it =
+      per_model_group_.find(group);
+  return (it == per_model_group_.end()) ? NULL : it->second;
+}
+
 PerModelSafeGroupState* StatusController::GetOrCreateModelSafeGroupState(
     bool restrict, ModelSafeGroup group) {
-  DCHECK(restrict == group_restriction_in_effect_) << "Group violation!";
-  if (per_model_group_.find(group) == per_model_group_.end()) {
+  DCHECK_EQ(restrict, group_restriction_in_effect_);
+  std::map<ModelSafeGroup, PerModelSafeGroupState*>::iterator it =
+      per_model_group_.find(group);
+  if (it == per_model_group_.end()) {
     PerModelSafeGroupState* state = new PerModelSafeGroupState(&is_dirty_);
-    per_model_group_[group] = state;
-    return state;
+    it = per_model_group_.insert(std::make_pair(group, state)).first;
   }
-  return per_model_group_[group];
+  return it->second;
 }
 
 void StatusController::increment_num_conflicting_commits_by(int value) {
@@ -55,7 +112,7 @@ void StatusController::increment_num_updates_downloaded_by(int value) {
 }
 
 void StatusController::set_types_needing_local_migration(
-    const syncable::ModelTypeSet& types) {
+    syncable::ModelTypeSet types) {
   shared_.syncer_status.mutate()->types_needing_local_migration = types;
 }
 
@@ -101,17 +158,8 @@ void StatusController::set_invalid_store(bool invalid_store) {
     shared_.syncer_status.mutate()->invalid_store = invalid_store;
 }
 
-void StatusController::set_syncer_stuck(bool syncer_stuck) {
-  if (shared_.syncer_status.value().syncer_stuck != syncer_stuck)
-    shared_.syncer_status.mutate()->syncer_stuck = syncer_stuck;
-}
-
-void StatusController::SetSyncInProgressAndUpdateStartTime(
-    bool sync_in_progress) {
-  if (shared_.syncer_status.value().sync_in_progress != sync_in_progress) {
-    shared_.syncer_status.mutate()->sync_in_progress = sync_in_progress;
-    sync_start_time_ = base::Time::Now();
-  }
+void StatusController::UpdateStartTime() {
+  sync_start_time_ = base::Time::Now();
 }
 
 void StatusController::set_num_successful_bookmark_commits(int value) {
@@ -158,16 +206,27 @@ void StatusController::set_sync_protocol_error(
   shared_.error.mutate()->sync_protocol_error = error;
 }
 
+void StatusController::set_last_download_updates_result(
+    const SyncerError result) {
+  shared_.error.mutate()->last_download_updates_result = result;
+}
+
+void StatusController::set_last_post_commit_result(const SyncerError result) {
+  shared_.error.mutate()->last_post_commit_result = result;
+}
+
+void StatusController::set_last_process_commit_response_result(
+    const SyncerError result) {
+  shared_.error.mutate()->last_process_commit_response_result = result;
+}
+
 void StatusController::set_commit_set(const OrderedCommitSet& commit_set) {
   DCHECK(!group_restriction_in_effect_);
   shared_.commit_set = commit_set;
 }
 
-void StatusController::update_conflict_sets_built(bool built) {
-  shared_.control_params.conflict_sets_built |= built;
-}
 void StatusController::update_conflicts_resolved(bool resolved) {
-  shared_.control_params.conflict_sets_built |= resolved;
+  shared_.control_params.conflicts_resolved |= resolved;
 }
 void StatusController::reset_conflicts_resolved() {
   shared_.control_params.conflicts_resolved = false;
@@ -240,6 +299,14 @@ bool StatusController::ServerSaysNothingMoreToDownload() const {
   // Changes remaining is an estimate, but if it's estimated to be
   // zero, that's firm and we don't have to ask again.
   return updates_response().get_updates().changes_remaining() == 0;
+}
+
+void StatusController::set_debug_info_sent() {
+  shared_.control_params.debug_info_sent = true;
+}
+
+bool StatusController::debug_info_sent() const {
+  return shared_.control_params.debug_info_sent;
 }
 
 }  // namespace sessions

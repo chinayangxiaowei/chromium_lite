@@ -1,11 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This class is an implementation of the ChromotingView using Pepper devices
-// as the backing stores.  This class is used only on pepper thread.
-// Chromoting objects access this object through PepperViewProxy which
-// delegates method calls on the pepper thread.
+// This class is an implementation of the ChromotingView for Pepper.  It is
+// callable only on the Pepper thread.
 
 #ifndef REMOTING_CLIENT_PLUGIN_PEPPER_VIEW_H_
 #define REMOTING_CLIENT_PLUGIN_PEPPER_VIEW_H_
@@ -13,13 +11,12 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "media/base/video_frame.h"
 #include "ppapi/cpp/graphics_2d.h"
 #include "ppapi/cpp/point.h"
 #include "remoting/client/chromoting_view.h"
 #include "remoting/client/frame_consumer.h"
-#include "ui/gfx/size.h"
 
 namespace remoting {
 
@@ -29,8 +26,8 @@ class ClientContext;
 class PepperView : public ChromotingView,
                    public FrameConsumer {
  public:
-  // Constructs a PepperView that draws to the |rendering_device|. The
-  // |rendering_device| instance must outlive this class.
+  // Constructs a PepperView for the |instance|. The |instance| and
+  // |context| must outlive this class.
   PepperView(ChromotingInstance* instance, ClientContext* context);
   virtual ~PepperView();
 
@@ -40,40 +37,43 @@ class PepperView : public ChromotingView,
   virtual void Paint() OVERRIDE;
   virtual void SetSolidFill(uint32 color) OVERRIDE;
   virtual void UnsetSolidFill() OVERRIDE;
-  virtual void SetConnectionState(ConnectionState state) OVERRIDE;
-  virtual void UpdateLoginStatus(bool success, const std::string& info)
-      OVERRIDE;
-  virtual double GetHorizontalScaleRatio() const OVERRIDE;
-  virtual double GetVerticalScaleRatio() const OVERRIDE;
+  virtual void SetConnectionState(
+      protocol::ConnectionToHost::State state,
+      protocol::ConnectionToHost::Error error) OVERRIDE;
 
   // FrameConsumer implementation.
   virtual void AllocateFrame(media::VideoFrame::Format format,
-                             size_t width,
-                             size_t height,
-                             base::TimeDelta timestamp,
-                             base::TimeDelta duration,
+                             const SkISize& size,
                              scoped_refptr<media::VideoFrame>* frame_out,
-                             Task* done);
-  virtual void ReleaseFrame(media::VideoFrame* frame);
+                             const base::Closure& done) OVERRIDE;
+  virtual void ReleaseFrame(media::VideoFrame* frame) OVERRIDE;
   virtual void OnPartialFrameOutput(media::VideoFrame* frame,
-                                    UpdatedRects* rects,
-                                    Task* done);
+                                    SkRegion* region,
+                                    const base::Closure& done) OVERRIDE;
 
-  // This is called when the dimension of the plugin element has changed.
-  // Return true if plugin size has changed, false otherwise.
-  bool SetPluginSize(const gfx::Size& plugin_size);
+  // Sets the display size of this view.  Returns true if plugin size has
+  // changed, false otherwise.
+  bool SetViewSize(const SkISize& plugin_size);
+
+  // Return the client view and original host dimensions.
+  const SkISize& get_view_size() const {
+    return view_size_;
+  }
+  const SkISize& get_host_size() const {
+    return host_size_;
+  }
 
  private:
   void OnPaintDone(base::Time paint_start);
 
   // Set the dimension of the entire host screen.
-  void SetHostSize(const gfx::Size& host_size);
+  void SetHostSize(const SkISize& host_size);
 
-  void PaintFrame(media::VideoFrame* frame, UpdatedRects* rects);
+  void PaintFrame(media::VideoFrame* frame, const SkRegion& region);
 
   // Render the rectangle of |frame| to the backing store.
   // Returns true if this rectangle is not clipped.
-  bool PaintRect(media::VideoFrame* frame, const gfx::Rect& rect);
+  bool PaintRect(media::VideoFrame* frame, const SkIRect& rect);
 
   // Blanks out a rectangle in an image.
   void BlankRect(pp::ImageData& image_data, const pp::Rect& rect);
@@ -99,15 +99,15 @@ class PepperView : public ChromotingView,
   bool flush_blocked_;
 
   // The size of the plugin element.
-  gfx::Size plugin_size_;
+  SkISize view_size_;
 
   // The size of the host screen.
-  gfx::Size host_size_;
+  SkISize host_size_;
 
   bool is_static_fill_;
   uint32 static_fill_color_;
 
-  ScopedRunnableMethodFactory<PepperView> task_factory_;
+  base::WeakPtrFactory<PepperView> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PepperView);
 };

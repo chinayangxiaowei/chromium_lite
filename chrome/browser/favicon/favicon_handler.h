@@ -9,22 +9,25 @@
 #include <map>
 
 #include "base/basictypes.h"
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
+#include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/common/favicon_url.h"
 #include "chrome/common/ref_counted_util.h"
-#include "content/browser/cancelable_request.h"
 #include "googleurl/src/gurl.h"
 #include "ui/gfx/favicon_size.h"
 
 class FaviconHandlerDelegate;
-class NavigationEntry;
 class Profile;
 class RefCountedMemory;
 class SkBitmap;
 class TabContents;
+
+namespace content {
+class NavigationEntry;
+}
 
 namespace gfx {
 class Image;
@@ -98,7 +101,7 @@ class FaviconHandler {
   int DownloadImage(const GURL& image_url,
                     int image_size,
                     history::IconType icon_type,
-                    FaviconTabHelper::ImageDownloadCallback* callback);
+                    const FaviconTabHelper::ImageDownloadCallback& callback);
 
   // Message Handler.  Must be public, because also called from
   // PrerenderContents.
@@ -116,7 +119,7 @@ class FaviconHandler {
 
   // Return the NavigationEntry for the active entry, or NULL if the active
   // entries URL does not match that of the URL last passed to FetchFavicon.
-  virtual NavigationEntry* GetEntry();
+  virtual content::NavigationEntry* GetEntry();
 
   // Asks the render to download favicon, returns the request id.
   virtual int DownloadFavicon(const GURL& image_url, int image_size);
@@ -127,19 +130,19 @@ class FaviconHandler {
       const GURL& icon_url,
       history::IconType icon_type,
       CancelableRequestConsumerBase* consumer,
-      FaviconService::FaviconDataCallback* callback);
+      const FaviconService::FaviconDataCallback& callback);
 
   virtual void GetFavicon(
       const GURL& icon_url,
       history::IconType icon_type,
       CancelableRequestConsumerBase* consumer,
-      FaviconService::FaviconDataCallback* callback);
+      const FaviconService::FaviconDataCallback& callback);
 
   virtual void GetFaviconForURL(
       const GURL& page_url,
       int icon_types,
       CancelableRequestConsumerBase* consumer,
-      FaviconService::FaviconDataCallback* callback);
+      const FaviconService::FaviconDataCallback& callback);
 
   virtual void SetHistoryFavicon(const GURL& page_url,
                                  const GURL& icon_url,
@@ -156,15 +159,16 @@ class FaviconHandler {
 
   struct DownloadRequest {
     DownloadRequest();
+    ~DownloadRequest();
 
     DownloadRequest(const GURL& url,
                     const GURL& image_url,
-                    FaviconTabHelper::ImageDownloadCallback* callback,
+                    const FaviconTabHelper::ImageDownloadCallback& callback,
                     history::IconType icon_type);
 
     GURL url;
     GURL image_url;
-    FaviconTabHelper::ImageDownloadCallback* callback;
+    FaviconTabHelper::ImageDownloadCallback callback;
     history::IconType icon_type;
   };
 
@@ -189,7 +193,7 @@ class FaviconHandler {
                        const GURL& image_url,
                        int image_size,
                        history::IconType icon_type,
-                       FaviconTabHelper::ImageDownloadCallback* callback);
+                       const FaviconTabHelper::ImageDownloadCallback& callback);
 
   // Sets the image data for the favicon. This is invoked asynchronously after
   // we request the TabContents to download the favicon.
@@ -202,9 +206,9 @@ class FaviconHandler {
   // NavigationEntry.
   // If the TabContents has a delegate, it is notified of the new favicon
   // (INVALIDATE_FAVICON).
-  void UpdateFavicon(NavigationEntry* entry,
+  void UpdateFavicon(content::NavigationEntry* entry,
                      scoped_refptr<RefCountedMemory> data);
-  void UpdateFavicon(NavigationEntry* entry, const gfx::Image* image);
+  void UpdateFavicon(content::NavigationEntry* entry, const gfx::Image* image);
 
   // If the image is not already at its preferred size, scales the image such
   // that either the width and/or height is 16 pixels wide. Does nothing if the
@@ -222,7 +226,7 @@ class FaviconHandler {
   // Returns the preferred_icon_size according icon_types_, 0 means no
   // preference.
   int preferred_icon_size() {
-    return icon_types_ == history::FAVICON ? kFaviconSize : 0;
+    return icon_types_ == history::FAVICON ? gfx::kFaviconSize : 0;
   }
 
   // Used for history requests.

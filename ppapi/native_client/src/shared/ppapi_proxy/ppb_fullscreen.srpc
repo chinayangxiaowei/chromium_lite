@@ -2,17 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# RPC methods used to implement PPB_Fullscreen_Dev interface.
-# See ppapi/c/dev/ppb_fullscreen_dev.h for interface details.
+# RPC methods used to implement PPB_Fullscreen interface.
+# See ppapi/c/dev/ppb_fullscreen.h for interface details.
 {
  'name': 'PpbFullscreenRpc',
  'rpcs': [
-          {'name': 'PPB_Fullscreen_IsFullscreen',
-           'inputs': [['instance', 'PP_Instance'],    # PP_Instance
-                     ],
-           'outputs': [['success', 'int32_t'],        # PP_Bool
-	              ]
-          },
           {'name': 'PPB_Fullscreen_SetFullscreen',
            'inputs': [['instance', 'PP_Instance'],    # PP_Instance
                       ['fullscreen', 'int32_t'],      # PP_Bool

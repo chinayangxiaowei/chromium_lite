@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "views/controls/image_view.h"
-#include "views/controls/label.h"
-#include "views/controls/link_listener.h"
-#include "views/view.h"
-#include "views/window/dialog_delegate.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/link_listener.h"
+#include "ui/views/view.h"
+#include "ui/views/window/dialog_delegate.h"
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
 #include "chrome/browser/google/google_update.h"
 #endif
 
@@ -36,7 +36,7 @@ class Profile;
 ////////////////////////////////////////////////////////////////////////////////
 class AboutChromeView : public views::DialogDelegateView,
                         public views::LinkListener
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
                         , public GoogleUpdateStatusListener
 #endif
                         {
@@ -48,45 +48,47 @@ class AboutChromeView : public views::DialogDelegateView,
   void Init();
 
   // Overridden from views::View:
-  virtual gfx::Size GetPreferredSize();
-  virtual void Layout();
-  virtual void OnPaint(gfx::Canvas* canvas);
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
+  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
-                                    views::View* child);
+                                    views::View* child) OVERRIDE;
 
   // Overridden from views::DialogDelegate:
-  virtual std::wstring GetDialogButtonLabel(
-      MessageBoxFlags::DialogButton button) const;
-  virtual bool IsDialogButtonEnabled(
-      MessageBoxFlags::DialogButton button) const;
-  virtual bool IsDialogButtonVisible(
-      MessageBoxFlags::DialogButton button) const;
-  virtual int GetDefaultDialogButton() const;
-  virtual bool CanResize() const;
-  virtual bool CanMaximize() const;
-  virtual bool IsAlwaysOnTop() const;
-  virtual bool HasAlwaysOnTopMenu() const;
-  virtual bool IsModal() const;
-  virtual std::wstring GetWindowTitle() const;
-  virtual bool Accept();
-  virtual views::View* GetContentsView();
+  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
+  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
+  virtual bool IsDialogButtonVisible(ui::DialogButton button) const OVERRIDE;
+  virtual int GetDefaultDialogButton() const OVERRIDE;
+  virtual bool CanResize() const OVERRIDE;
+  virtual bool CanMaximize() const OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
+  virtual string16 GetWindowTitle() const OVERRIDE;
+  virtual bool Accept() OVERRIDE;
+  virtual views::View* GetContentsView() OVERRIDE;
 
   // Overridden from views::LinkListener:
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   // Overridden from GoogleUpdateStatusListener:
   virtual void OnReportResults(GoogleUpdateUpgradeResult result,
                                GoogleUpdateErrorCode error_code,
-                               const std::wstring& version);
+                               const string16& error_message,
+                               const string16& version) OVERRIDE;
 #endif
 
  private:
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   // Update the UI to show the status of the upgrade.
   void UpdateStatus(GoogleUpdateUpgradeResult result,
-                    GoogleUpdateErrorCode error_code);
+                    GoogleUpdateErrorCode error_code,
+                    const string16& error_message);
+
+  // Update the size of the window containing this view to account for more
+  // text being displayed (error messages, etc). Returns how many pixels the
+  // window was increased by (if any).
+  int EnlargeWindowSizeIfNeeded();
 #endif
 
   Profile* profile_;
@@ -104,6 +106,8 @@ class AboutChromeView : public views::DialogDelegateView,
   gfx::Rect open_source_url_rect_;
   views::Link* terms_of_service_url_;
   gfx::Rect terms_of_service_url_rect_;
+  // NULL in non-official builds.
+  views::Label* error_label_;
   // UI elements we add to the parent view.
   scoped_ptr<views::Throbber> throbber_;
   views::ImageView success_indicator_;
@@ -120,22 +124,22 @@ class AboutChromeView : public views::DialogDelegateView,
   // The text to display as the main label of the About box. We draw this text
   // word for word with the help of the WordIterator, and make room for URLs
   // which are drawn using views::Link. See also |url_offsets_|.
-  std::wstring main_label_chunk1_;
-  std::wstring main_label_chunk2_;
-  std::wstring main_label_chunk3_;
-  std::wstring main_label_chunk4_;
-  std::wstring main_label_chunk5_;
+  string16 main_label_chunk1_;
+  string16 main_label_chunk2_;
+  string16 main_label_chunk3_;
+  string16 main_label_chunk4_;
+  string16 main_label_chunk5_;
   // Determines the order of the two links we draw in the main label.
   bool chromium_url_appears_first_;
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   // The class that communicates with Google Update to find out if an update is
   // available and asks it to start an upgrade.
   scoped_refptr<GoogleUpdate> google_updater_;
 #endif
 
   // The version Google Update reports is available to us.
-  std::wstring new_version_available_;
+  string16 new_version_available_;
 
   // Whether text direction is left-to-right or right-to-left.
   bool text_direction_is_rtl_;

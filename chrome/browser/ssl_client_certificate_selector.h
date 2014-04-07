@@ -7,7 +7,7 @@
 #pragma once
 
 class SSLClientAuthHandler;
-class TabContents;
+class TabContentsWrapper;
 
 namespace net {
 class SSLCertRequestInfo;
@@ -21,7 +21,16 @@ namespace browser {
 // when the dialog closes in call cases; if the user cancels the dialog, we call
 // with a NULL certificate.
 void ShowSSLClientCertificateSelector(
-    TabContents* parent,
+    TabContentsWrapper* wrapper,
+    net::SSLCertRequestInfo* cert_request_info,
+    SSLClientAuthHandler* delegate);
+
+// Same as above, but doesn't check the UseMoreWebUI flag.  It just calls the
+// native implementation.  This lets us have both the WebUI implementation and
+// the native implementation linked in at the same time and switchable behind
+// a run-time flag.
+void ShowNativeSSLClientCertificateSelector(
+    TabContentsWrapper* wrapper,
     net::SSLCertRequestInfo* cert_request_info,
     SSLClientAuthHandler* delegate);
 

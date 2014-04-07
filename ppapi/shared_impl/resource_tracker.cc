@@ -4,7 +4,9 @@
 
 #include "ppapi/shared_impl/resource_tracker.h"
 
+#include "ppapi/shared_impl/callback_tracker.h"
 #include "ppapi/shared_impl/id_assignment.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
 #include "ppapi/shared_impl/resource.h"
 
 namespace ppapi {
@@ -144,8 +146,11 @@ PP_Resource ResourceTracker::AddResource(Resource* object) {
   if (found == instance_map_.end()) {
     // If you hit this, it's likely somebody forgot to call DidCreateInstance,
     // the resource was created with an invalid PP_Instance, or the renderer
-    // side tried to create a resource for a plugin that crashed.
-    NOTREACHED();
+    // side tried to create a resource for a plugin that crashed/exited. This
+    // could happen for OOP plugins where due to reentrancies in context of
+    // outgoing sync calls the renderer can send events after a plugin has
+    // exited.
+    DLOG(INFO) << "Failed to find plugin instance in instance map";
     return 0;
   }
 
@@ -158,12 +163,15 @@ PP_Resource ResourceTracker::AddResource(Resource* object) {
 
 void ResourceTracker::RemoveResource(Resource* object) {
   PP_Resource pp_resource = object->pp_resource();
-  if (object->pp_instance())
-    instance_map_[object->pp_instance()]->resources.erase(pp_resource);
+  InstanceMap::iterator found = instance_map_.find(object->pp_instance());
+  if (found != instance_map_.end())
+    found->second->resources.erase(pp_resource);
   live_resources_.erase(pp_resource);
 }
 
 void ResourceTracker::LastPluginRefWasDeleted(Resource* object) {
+  PpapiGlobals::Get()->GetCallbackTrackerForInstance(object->pp_instance())->
+      PostAbortForResource(object->pp_resource());
   object->LastPluginRefWasDeleted();
 }
 

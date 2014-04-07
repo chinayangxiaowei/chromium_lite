@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,13 +17,10 @@
 #include "native_client/src/shared/ppapi_proxy/utility.h"
 #include "native_client/src/shared/srpc/nacl_srpc.h"
 #include "native_client/src/trusted/plugin/plugin.h"
-#include "ppapi/c/dev/ppb_context_3d_dev.h"
-#include "ppapi/c/dev/ppb_context_3d_trusted_dev.h"
 #include "ppapi/c/dev/ppb_gles_chromium_texture_mapping_dev.h"
 #include "ppapi/c/dev/ppb_layer_compositor_dev.h"
-#include "ppapi/c/dev/ppb_surface_3d_dev.h"
 #include "ppapi/c/ppb_graphics_3d.h"
-#include "ppapi/c/ppb_opengles.h"
+#include "ppapi/c/ppb_opengles2.h"
 #include "ppapi/c/trusted/ppb_graphics_3d_trusted.h"
 
 namespace ppapi_proxy {
@@ -55,26 +52,6 @@ bool enable_dev_interfaces = false;
 bool enable_3d_interfaces = true;
 
 }  // namespace
-
-// By default, disable developer (Dev) interfaces.  To enable developer
-// interfaces, set the environment variable NACL_ENABLE_PPAPI_DEV to 1.
-// Also, the plugin can request whether or not to enable dev interfaces.
-bool AreDevInterfacesEnabled() {
-  static bool first = true;
-  static bool env_dev_enabled = false;
-  if (first) {
-    const char *nacl_enable_ppapi_dev = getenv("NACL_ENABLE_PPAPI_DEV");
-    if (NULL != nacl_enable_ppapi_dev) {
-      int v = strtol(nacl_enable_ppapi_dev, (char **) 0, 0);
-      if (v != 0) {
-        env_dev_enabled = true;
-      }
-    }
-    first = false;
-  }
-  return env_dev_enabled || enable_dev_interfaces;
-}
-
 
 void SetBrowserPppForInstance(PP_Instance instance, BrowserPpp* browser_ppp) {
   // If there was no map, create one.
@@ -202,18 +179,15 @@ const void* GetBrowserInterface(const char* interface_name) {
     return NULL;
   }
   // If dev interface is not enabled, reject interfaces containing "(Dev)"
-  if (!AreDevInterfacesEnabled() && strstr(interface_name, "(Dev)") != NULL) {
+  if (!enable_dev_interfaces && strstr(interface_name, "(Dev)") != NULL) {
     return NULL;
   }
   if (!enable_3d_interfaces) {
     static const char* disabled_interface_names[] = {
       PPB_GRAPHICS_3D_INTERFACE,
       PPB_GRAPHICS_3D_TRUSTED_INTERFACE,
-      PPB_CONTEXT_3D_DEV_INTERFACE,
-      PPB_CONTEXT_3D_TRUSTED_DEV_INTERFACE,
       PPB_GLES_CHROMIUM_TEXTURE_MAPPING_DEV_INTERFACE,
       PPB_OPENGLES2_INTERFACE,
-      PPB_SURFACE_3D_DEV_INTERFACE,
       PPB_LAYER_COMPOSITOR_DEV_INTERFACE
     };
     for (size_t i = 0; i < NACL_ARRAY_SIZE(disabled_interface_names); i++) {
@@ -309,6 +283,13 @@ const PPB_MouseInputEvent* PPBMouseInputEventInterface() {
   return ppb;
 }
 
+const PPB_NetAddress_Private* PPBNetAddressPrivateInterface() {
+  static const PPB_NetAddress_Private* ppb =
+      static_cast<const PPB_NetAddress_Private*>(
+          GetBrowserInterfaceSafe(PPB_NETADDRESS_PRIVATE_INTERFACE));
+  return ppb;
+}
+
 const PPB_URLLoader* PPBURLLoaderInterface() {
   static const PPB_URLLoader* ppb =
       static_cast<const PPB_URLLoader*>(
@@ -334,6 +315,13 @@ const PPB_Var* PPBVarInterface() {
   static const PPB_Var* ppb =
       static_cast<const PPB_Var*>(
           GetBrowserInterfaceSafe(PPB_VAR_INTERFACE));
+  return ppb;
+}
+
+const PPB_VarArrayBuffer* PPBVarArrayBufferInterface() {
+  static const PPB_VarArrayBuffer* ppb =
+      static_cast<const PPB_VarArrayBuffer*>(
+          GetBrowserInterfaceSafe(PPB_VAR_ARRAY_BUFFER_INTERFACE));
   return ppb;
 }
 
@@ -387,10 +375,23 @@ const PPB_Font_Dev* PPBFontInterface() {
   return ppb;
 }
 
-const PPB_Fullscreen_Dev* PPBFullscreenInterface() {
-  static const PPB_Fullscreen_Dev* ppb =
-      static_cast<const PPB_Fullscreen_Dev*>(
-        GetBrowserInterfaceSafe(PPB_FULLSCREEN_DEV_INTERFACE));
+const PPB_Fullscreen* PPBFullscreenInterface() {
+  static const PPB_Fullscreen* ppb =
+      static_cast<const PPB_Fullscreen*>(
+        GetBrowserInterfaceSafe(PPB_FULLSCREEN_INTERFACE));
+  return ppb;
+}
+
+const PPB_Gamepad_Dev* PPBGamepadInterface() {
+  static const PPB_Gamepad_Dev* ppb =
+      static_cast<const PPB_Gamepad_Dev*>(
+          GetBrowserInterfaceSafe(PPB_GAMEPAD_DEV_INTERFACE));
+  return ppb;
+}
+
+const PPB_MouseLock* PPBMouseLockInterface() {
+  static const PPB_MouseLock* ppb = static_cast<const PPB_MouseLock*>(
+      GetBrowserInterfaceSafe(PPB_MOUSELOCK_INTERFACE));
   return ppb;
 }
 
@@ -405,6 +406,20 @@ const PPB_Testing_Dev* PPBTestingInterface() {
   static const PPB_Testing_Dev* ppb =
       static_cast<const PPB_Testing_Dev*>(
           GetBrowserInterfaceSafe(PPB_TESTING_DEV_INTERFACE));
+  return ppb;
+}
+
+const PPB_View* PPBViewInterface() {
+  static const PPB_View* ppb =
+      static_cast<const PPB_View*>(
+          GetBrowserInterfaceSafe(PPB_VIEW_INTERFACE));
+  return ppb;
+}
+
+const PPB_WebSocket* PPBWebSocketInterface() {
+  static const PPB_WebSocket* ppb =
+      static_cast<const PPB_WebSocket*>(
+          GetBrowserInterfaceSafe(PPB_WEBSOCKET_INTERFACE));
   return ppb;
 }
 
@@ -427,6 +442,20 @@ const PPB_PDF* PPBPDFInterface() {
   static const PPB_PDF* ppb =
       static_cast<const PPB_PDF*>(
           GetBrowserInterfaceSafe(PPB_PDF_INTERFACE));
+  return ppb;
+}
+
+const PPB_TCPSocket_Private* PPBTCPSocketPrivateInterface() {
+  static const PPB_TCPSocket_Private* ppb =
+      static_cast<const PPB_TCPSocket_Private*>(
+          GetBrowserInterfaceSafe(PPB_TCPSOCKET_PRIVATE_INTERFACE));
+  return ppb;
+}
+
+const PPB_UDPSocket_Private* PPBUDPSocketPrivateInterface() {
+  static const PPB_UDPSocket_Private* ppb =
+      static_cast<const PPB_UDPSocket_Private*>(
+          GetBrowserInterfaceSafe(PPB_UDPSOCKET_PRIVATE_INTERFACE));
   return ppb;
 }
 

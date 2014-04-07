@@ -10,18 +10,19 @@
 
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_context_menu_controller.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 #include "chrome/browser/prefs/pref_member.h"
-#include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_bar_instructions_gtk.h"
 #include "chrome/browser/ui/gtk/menu_bar_helper.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "ui/base/animation/animation.h"
 #include "ui/base/animation/animation_delegate.h"
 #include "ui/base/animation/slide_animation.h"
@@ -33,17 +34,18 @@
 class BookmarkMenuController;
 class Browser;
 class BrowserWindowGtk;
-class CustomContainerButton;
 class GtkThemeService;
 class MenuGtk;
-class PageNavigator;
 class TabstripOriginProvider;
 
+namespace content {
+class PageNavigator;
+}
+
 class BookmarkBarGtk : public ui::AnimationDelegate,
-                       public ProfileSyncServiceObserver,
                        public BookmarkModelObserver,
                        public MenuBarHelper::Delegate,
-                       public NotificationObserver,
+                       public content::NotificationObserver,
                        public BookmarkBarInstructionsGtk::Delegate,
                        public BookmarkContextMenuControllerDelegate {
  public:
@@ -63,7 +65,7 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
 
   // Sets the PageNavigator that is used when the user selects an entry on
   // the bookmark bar.
-  void SetPageNavigator(PageNavigator* navigator);
+  void SetPageNavigator(content::PageNavigator* navigator);
 
   // Create the contents of the bookmark bar.
   void Init();
@@ -79,16 +81,16 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   bool IsAnimating();
 
   // ui::AnimationDelegate implementation --------------------------------------
-  virtual void AnimationProgressed(const ui::Animation* animation);
-  virtual void AnimationEnded(const ui::Animation* animation);
+  virtual void AnimationProgressed(const ui::Animation* animation) OVERRIDE;
+  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
 
   // MenuBarHelper::Delegate implementation ------------------------------------
-  virtual void PopupForButton(GtkWidget* button);
+  virtual void PopupForButton(GtkWidget* button) OVERRIDE;
   virtual void PopupForButtonNextTo(GtkWidget* button,
-                                    GtkMenuDirectionType dir);
+                                    GtkMenuDirectionType dir) OVERRIDE;
 
   // BookmarkContextMenuController::Delegate implementation --------------------
-  virtual void CloseMenu();
+  virtual void CloseMenu() OVERRIDE;
 
   const ui::Animation* animation() { return &slide_animation_; }
 
@@ -110,6 +112,9 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
             BookmarkBar::AnimateChangeType animate_type);
   void Hide(BookmarkBar::State old_state,
             BookmarkBar::AnimateChangeType animate_type);
+
+  // Calculate maximum height of bookmark bar.
+  void CalculateMaxHeight();
 
   // Helper function which generates GtkToolItems for |bookmark_toolbar_|.
   void CreateAllBookmarkButtons();
@@ -229,10 +234,10 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   virtual void BookmarkNodeChildrenReordered(BookmarkModel* model,
                                              const BookmarkNode* node) OVERRIDE;
 
-  // Overridden from NotificationObserver:
+  // Overridden from content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   GtkWidget* CreateBookmarkButton(const BookmarkNode* node);
   GtkToolItem* CreateBookmarkToolItem(const BookmarkNode* node);
@@ -248,8 +253,6 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
 
   // GtkButton callbacks.
   CHROMEGTK_CALLBACK_1(BookmarkBarGtk, gboolean, OnButtonPressed,
-                       GdkEventButton*);
-  CHROMEGTK_CALLBACK_1(BookmarkBarGtk, gboolean, OnSyncErrorButtonPressed,
                        GdkEventButton*);
   CHROMEGTK_CALLBACK_0(BookmarkBarGtk, void, OnClicked);
   CHROMEGTK_CALLBACK_1(BookmarkBarGtk, void, OnButtonDragBegin,
@@ -290,17 +293,14 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   // |throbbing_widget_| callback.
   CHROMEGTK_CALLBACK_0(BookmarkBarGtk, void, OnThrobbingWidgetDestroy);
 
-  // ProfileSyncServiceObserver method.
-  virtual void OnStateChanged();
-
   // Overriden from BookmarkBarInstructionsGtk::Delegate.
-  virtual void ShowImportDialog();
+  virtual void ShowImportDialog() OVERRIDE;
 
   // Updates the drag&drop state when |edit_bookmarks_enabled_| changes.
   void OnEditBookmarksEnabledChanged();
 
   // Used for opening urls.
-  PageNavigator* page_navigator_;
+  content::PageNavigator* page_navigator_;
 
   Browser* browser_;
   BrowserWindowGtk* window_;
@@ -347,11 +347,8 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   // The other bookmarks button.
   GtkWidget* other_bookmarks_button_;
 
-  // The sync error button.
-  GtkWidget* sync_error_button_;
-
-  // A pointer to the ProfileSyncService instance if one exists.
-  ProfileSyncService* sync_service_;
+  // Padding for the other bookmarks button.
+  GtkWidget* other_padding_;
 
   // The BookmarkNode from the model being dragged. NULL when we aren't
   // dragging.
@@ -388,7 +385,7 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   // need to respond to.
   int last_allocation_width_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // The size of the tab contents last time we forced a paint. We keep track
   // of this so we don't force too many paints.
@@ -405,9 +402,12 @@ class BookmarkBarGtk : public ui::AnimationDelegate,
   // Tracks whether bookmarks can be modified.
   BooleanPrefMember edit_bookmarks_enabled_;
 
-  ScopedRunnableMethodFactory<BookmarkBarGtk> method_factory_;
+  base::WeakPtrFactory<BookmarkBarGtk> weak_factory_;
 
   BookmarkBar::State bookmark_bar_state_;
+
+  // Maximum height of the bookmark bar.
+  int max_height_;
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkBarGtk);
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include "base/hash_tables.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop_proxy.h"
 #include "build/build_config.h"
 #include "ipc/ipc_channel.h"
@@ -47,40 +48,35 @@ class GpuChannelManager : public IPC::Channel::Listener,
   virtual ~GpuChannelManager();
 
   // Remove the channel for a particular renderer.
-  void RemoveChannel(int renderer_id);
+  void RemoveChannel(int client_id);
 
   // Listener overrides.
-  virtual bool OnMessageReceived(const IPC::Message& msg);
+  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
 
   // Sender overrides.
-  virtual bool Send(IPC::Message* msg);
+  virtual bool Send(IPC::Message* msg) OVERRIDE;
 
   void LoseAllContexts();
 
-  ScopedRunnableMethodFactory<GpuChannelManager> method_factory_;
+  base::WeakPtrFactory<GpuChannelManager> weak_factory_;
 
   int GenerateRouteID();
   void AddRoute(int32 routing_id, IPC::Channel::Listener* listener);
   void RemoveRoute(int32 routing_id);
 
+  GpuChannel* LookupChannel(int32 client_id);
+
  private:
   // Message handlers.
-  void OnEstablishChannel(int renderer_id);
+  void OnEstablishChannel(int client_id, int share_client_id);
   void OnCloseChannel(const IPC::ChannelHandle& channel_handle);
   void OnVisibilityChanged(
-      int32 render_view_id, int32 renderer_id, bool visible);
+      int32 render_view_id, int32 client_id, bool visible);
   void OnCreateViewCommandBuffer(
       gfx::PluginWindowHandle window,
       int32 render_view_id,
-      int32 renderer_id,
+      int32 client_id,
       const GPUCreateCommandBufferConfig& init_params);
-  void OnResizeViewACK(int32 renderer_id, int32 command_buffer_route_id);
-
-#if defined(OS_MACOSX)
-  void OnAcceleratedSurfaceBuffersSwappedACK(
-      int renderer_id, int32 route_id, uint64 swap_buffers_count);
-  void OnDestroyCommandBuffer(int renderer_id, int32 renderer_view_id);
-#endif
 
   void OnLoseAllContexts();
 

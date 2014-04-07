@@ -4,10 +4,10 @@
 
 #include "base/message_loop.h"
 #include "base/time.h"
-#include "chrome/browser/sync/engine/mock_model_safe_workers.h"
 #include "chrome/browser/sync/engine/sync_scheduler.h"
 #include "chrome/browser/sync/sessions/sync_session_context.h"
 #include "chrome/browser/sync/sessions/test_util.h"
+#include "chrome/browser/sync/test/engine/fake_model_safe_worker_registrar.h"
 #include "chrome/browser/sync/test/engine/mock_connection_manager.h"
 #include "chrome/browser/sync/test/engine/test_directory_setter_upper.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -17,19 +17,25 @@ using base::TimeDelta;
 using base::TimeTicks;
 
 namespace browser_sync {
-using sessions::SyncSessionContext;
 using browser_sync::Syncer;
+using sessions::SyncSession;
+using sessions::SyncSessionContext;
+using sessions::SyncSourceInfo;
+using sync_pb::GetUpdatesCallerInfo;
 
 class SyncSchedulerWhiteboxTest : public testing::Test {
  public:
   virtual void SetUp() {
     syncdb_.SetUp();
     Syncer* syncer = new Syncer();
-    registrar_.reset(MockModelSafeWorkerRegistrar::PassiveBookmarks());
+    ModelSafeRoutingInfo routes;
+    routes[syncable::BOOKMARKS] = GROUP_UI;
+    routes[syncable::NIGORI] = GROUP_PASSIVE;
+    registrar_.reset(new FakeModelSafeWorkerRegistrar(routes));
     connection_.reset(new MockConnectionManager(syncdb_.manager(), "Test"));
     connection_->SetServerReachable();
     context_ = new SyncSessionContext(connection_.get(), syncdb_.manager(),
-        registrar_.get(), std::vector<SyncEngineEventListener*>());
+        registrar_.get(), std::vector<SyncEngineEventListener*>(), NULL);
     context_->set_notifications_enabled(true);
     context_->set_account_name("Test");
     scheduler_.reset(
@@ -87,18 +93,24 @@ class SyncSchedulerWhiteboxTest : public testing::Test {
 
   SyncScheduler::JobProcessDecision CreateAndDecideJob(
       SyncScheduler::SyncSessionJob::SyncSessionJobPurpose purpose) {
-    struct SyncScheduler::SyncSessionJob job;
-    job.purpose = purpose;
-    job.scheduled_start = TimeTicks::Now();
+    SyncSession* s = scheduler_->CreateSyncSession(SyncSourceInfo());
+    SyncScheduler::SyncSessionJob job(purpose, TimeTicks::Now(),
+         make_linked_ptr(s),
+         false,
+         FROM_HERE);
     return DecideOnJob(job);
   }
 
+  SyncSessionContext* context() { return context_; }
+
+ protected:
+  scoped_ptr<SyncScheduler> scheduler_;
+
  private:
   MessageLoop message_loop_;
-  scoped_ptr<SyncScheduler> scheduler_;
   scoped_ptr<MockConnectionManager> connection_;
   SyncSessionContext* context_;
-  scoped_ptr<MockModelSafeWorkerRegistrar> registrar_;
+  scoped_ptr<FakeModelSafeWorkerRegistrar> registrar_;
   MockDirectorySetterUpper syncdb_;
 };
 
@@ -111,6 +123,33 @@ TEST_F(SyncSchedulerWhiteboxTest, SaveNudge) {
   SyncScheduler::JobProcessDecision decision =
       CreateAndDecideJob(SyncScheduler::SyncSessionJob::NUDGE);
 
+  EXPECT_EQ(decision, SyncScheduler::SAVE);
+}
+
+TEST_F(SyncSchedulerWhiteboxTest, SaveNudgeWhileTypeThrottled) {
+  InitializeSyncerOnNormalMode();
+
+  syncable::ModelTypeSet types;
+  types.Put(syncable::BOOKMARKS);
+
+  // Mark bookmarks as throttled.
+  context()->SetUnthrottleTime(types,
+      base::TimeTicks::Now() + base::TimeDelta::FromHours(2));
+
+  syncable::ModelTypePayloadMap types_with_payload;
+  types_with_payload[syncable::BOOKMARKS] = "";
+
+  SyncSourceInfo info(GetUpdatesCallerInfo::LOCAL, types_with_payload);
+  SyncSession* s = scheduler_->CreateSyncSession(info);
+
+  // Now schedule a nudge with just bookmarks and the change is local.
+  SyncScheduler::SyncSessionJob job(SyncScheduler::SyncSessionJob::NUDGE,
+                                    TimeTicks::Now(),
+                                    make_linked_ptr(s),
+                                    false,
+                                    FROM_HERE);
+
+  SyncScheduler::JobProcessDecision decision = DecideOnJob(job);
   EXPECT_EQ(decision, SyncScheduler::SAVE);
 }
 

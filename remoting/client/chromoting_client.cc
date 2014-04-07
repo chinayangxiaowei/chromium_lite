@@ -1,55 +1,66 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/client/chromoting_client.h"
 
 #include "base/bind.h"
-#include "jingle/glue/thread_wrapper.h"
-#include "remoting/base/tracer.h"
 #include "remoting/client/chromoting_view.h"
 #include "remoting/client/client_context.h"
-#include "remoting/client/input_handler.h"
 #include "remoting/client/rectangle_update_decoder.h"
+#include "remoting/protocol/authentication_method.h"
 #include "remoting/protocol/connection_to_host.h"
+#include "remoting/protocol/negotiating_authenticator.h"
+#include "remoting/protocol/v1_authenticator.h"
 #include "remoting/protocol/session_config.h"
 
 namespace remoting {
+
+using protocol::AuthenticationMethod;
+
+ChromotingClient::QueuedVideoPacket::QueuedVideoPacket(
+    const VideoPacket* packet, const base::Closure& done)
+    : packet(packet), done(done) {
+}
+
+ChromotingClient::QueuedVideoPacket::~QueuedVideoPacket() {
+}
 
 ChromotingClient::ChromotingClient(const ClientConfig& config,
                                    ClientContext* context,
                                    protocol::ConnectionToHost* connection,
                                    ChromotingView* view,
                                    RectangleUpdateDecoder* rectangle_decoder,
-                                   InputHandler* input_handler,
-                                   Task* client_done)
+                                   const base::Closure& client_done)
     : config_(config),
       context_(context),
       connection_(connection),
       view_(view),
       rectangle_decoder_(rectangle_decoder),
-      input_handler_(input_handler),
       client_done_(client_done),
-      state_(CREATED),
       packet_being_processed_(false),
-      last_sequence_number_(0) {
+      last_sequence_number_(0),
+      thread_proxy_(context_->network_message_loop()) {
 }
 
 ChromotingClient::~ChromotingClient() {
 }
 
 void ChromotingClient::Start(scoped_refptr<XmppProxy> xmpp_proxy) {
-  if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &ChromotingClient::Start, xmpp_proxy));
-    return;
+  DCHECK(message_loop()->BelongsToCurrentThread());
+
+  scoped_ptr<protocol::Authenticator> authenticator;
+  if (config_.use_v1_authenticator) {
+    authenticator.reset(new protocol::V1ClientAuthenticator(
+        config_.local_jid, config_.shared_secret));
+  } else {
+    authenticator = protocol::NegotiatingAuthenticator::CreateForClient(
+        config_.authentication_tag,
+        config_.shared_secret, config_.authentication_methods);
   }
 
-  jingle_glue::JingleThreadWrapper::EnsureForCurrentThread();
-
   connection_->Connect(xmpp_proxy, config_.local_jid, config_.host_jid,
-                       config_.host_public_key, config_.access_code,
+                       config_.host_public_key, authenticator.Pass(),
                        this, this, this);
 
   if (!view_->Initialize()) {
@@ -65,6 +76,12 @@ void ChromotingClient::Stop(const base::Closure& shutdown_task) {
     return;
   }
 
+  // Drop all pending packets.
+  while(!received_packets_.empty()) {
+    received_packets_.front().done.Run();
+    received_packets_.pop_front();
+  }
+
   connection_->Disconnect(base::Bind(&ChromotingClient::OnDisconnected,
                                      base::Unretained(this), shutdown_task));
 }
@@ -76,8 +93,9 @@ void ChromotingClient::OnDisconnected(const base::Closure& shutdown_task) {
 }
 
 void ChromotingClient::ClientDone() {
-  if (client_done_ != NULL) {
+  if (!client_done_.is_null()) {
     message_loop()->PostTask(FROM_HERE, client_done_);
+    client_done_.Reset();
   }
 }
 
@@ -86,38 +104,26 @@ ChromotingStats* ChromotingClient::GetStats() {
 }
 
 void ChromotingClient::Repaint() {
-  if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &ChromotingClient::Repaint));
-    return;
-  }
-
+  DCHECK(message_loop()->BelongsToCurrentThread());
   view_->Paint();
 }
 
 void ChromotingClient::ProcessVideoPacket(const VideoPacket* packet,
-                                          Task* done) {
-  if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &ChromotingClient::ProcessVideoPacket,
-                          packet, done));
-    return;
-  }
+                                          const base::Closure& done) {
+  DCHECK(message_loop()->BelongsToCurrentThread());
 
   // If the video packet is empty then drop it. Empty packets are used to
   // maintain activity on the network.
   if (!packet->has_data() || packet->data().size() == 0) {
-    done->Run();
-    delete done;
+    done.Run();
     return;
   }
 
-  // Record size of the packet for statistics.
-  stats_.video_bandwidth()->Record(packet->data().size());
+  // Add one frame to the counter.
+  stats_.video_frame_rate()->Record(1);
 
-  // Record statistics received from host.
+  // Record other statistics received from host.
+  stats_.video_bandwidth()->Record(packet->data().size());
   if (packet->has_capture_time_ms())
     stats_.video_capture_ms()->Record(packet->capture_time_ms());
   if (packet->has_encode_time_ms())
@@ -152,8 +158,6 @@ void ChromotingClient::DispatchPacket() {
   const VideoPacket* packet = received_packets_.front().packet;
   packet_being_processed_ = true;
 
-  ScopedTracer tracer("Handle video packet");
-
   // Measure the latency between the last packet being received and presented.
   bool last_packet = (packet->flags() & VideoPacket::LAST_PACKET) != 0;
   base::Time decode_start;
@@ -161,55 +165,32 @@ void ChromotingClient::DispatchPacket() {
     decode_start = base::Time::Now();
 
   rectangle_decoder_->DecodePacket(
-      packet, NewTracedMethod(this, &ChromotingClient::OnPacketDone,
-                              last_packet, decode_start));
+      packet, base::Bind(&ChromotingClient::OnPacketDone,
+                         base::Unretained(this), last_packet, decode_start));
 }
 
-void ChromotingClient::OnConnectionOpened(protocol::ConnectionToHost* conn) {
-  VLOG(1) << "ChromotingClient::OnConnectionOpened";
-  Initialize();
-  SetConnectionState(CONNECTED);
-}
-
-void ChromotingClient::OnConnectionClosed(protocol::ConnectionToHost* conn) {
-  VLOG(1) << "ChromotingClient::OnConnectionClosed";
-  SetConnectionState(DISCONNECTED);
-}
-
-void ChromotingClient::OnConnectionFailed(protocol::ConnectionToHost* conn) {
-  VLOG(1) << "ChromotingClient::OnConnectionFailed";
-  SetConnectionState(FAILED);
+void ChromotingClient::OnConnectionState(
+    protocol::ConnectionToHost::State state,
+    protocol::ConnectionToHost::Error error) {
+  DCHECK(message_loop()->BelongsToCurrentThread());
+  VLOG(1) << "ChromotingClient::OnConnectionState(" << state << ")";
+  if (state == protocol::ConnectionToHost::CONNECTED)
+    Initialize();
+  view_->SetConnectionState(state, error);
 }
 
 base::MessageLoopProxy* ChromotingClient::message_loop() {
   return context_->network_message_loop();
 }
 
-void ChromotingClient::SetConnectionState(ConnectionState s) {
-  // TODO(ajwong): We actually may want state to be a shared variable. Think
-  // through later.
-  if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &ChromotingClient::SetConnectionState, s));
-    return;
-  }
-
-  state_ = s;
-  view_->SetConnectionState(s);
-}
-
 void ChromotingClient::OnPacketDone(bool last_packet,
                                     base::Time decode_start) {
   if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewTracedMethod(this, &ChromotingClient::OnPacketDone,
-                        last_packet, decode_start));
+    thread_proxy_.PostTask(FROM_HERE, base::Bind(
+        &ChromotingClient::OnPacketDone, base::Unretained(this),
+        last_packet, decode_start));
     return;
   }
-
-  TraceContext::tracer()->PrintString("Packet done");
 
   // Record the latency between the final packet being received and
   // presented.
@@ -218,8 +199,7 @@ void ChromotingClient::OnPacketDone(bool last_packet,
         (base::Time::Now() - decode_start).InMilliseconds());
   }
 
-  received_packets_.front().done->Run();
-  delete received_packets_.front().done;
+  received_packets_.front().done.Run();
   received_packets_.pop_front();
 
   packet_being_processed_ = false;
@@ -230,46 +210,13 @@ void ChromotingClient::OnPacketDone(bool last_packet,
 
 void ChromotingClient::Initialize() {
   if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewTracedMethod(this, &ChromotingClient::Initialize));
+    thread_proxy_.PostTask(FROM_HERE, base::Bind(
+        &ChromotingClient::Initialize, base::Unretained(this)));
     return;
   }
-
-  TraceContext::tracer()->PrintString("Initializing client.");
-
-  const protocol::SessionConfig* config = connection_->config();
 
   // Initialize the decoder.
-  rectangle_decoder_->Initialize(config);
-
-  // Schedule the input handler to process the event queue.
-  input_handler_->Initialize();
-}
-
-////////////////////////////////////////////////////////////////////////////
-// ClientStub control channel interface.
-void ChromotingClient::BeginSessionResponse(
-    const protocol::LocalLoginStatus* msg, Task* done) {
-  if (!message_loop()->BelongsToCurrentThread()) {
-    message_loop()->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &ChromotingClient::BeginSessionResponse,
-                          msg, done));
-    return;
-  }
-
-  LOG(INFO) << "BeginSessionResponse received";
-
-  // Inform the connection that the client has been authenticated. This will
-  // enable the communication channels.
-  if (msg->success()) {
-    connection_->OnClientAuthenticated();
-  }
-
-  view_->UpdateLoginStatus(msg->success(), msg->error_info());
-  done->Run();
-  delete done;
+  rectangle_decoder_->Initialize(connection_->config());
 }
 
 }  // namespace remoting

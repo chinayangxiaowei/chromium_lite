@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,12 +23,17 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD2(AttachShader, void(GLuint program, GLuint shader));
 
+  MOCK_METHOD2(BeginQuery, void(GLenum target, GLuint id));
+
   MOCK_METHOD3(BindAttribLocation, void(
       GLuint program, GLuint index, const char* name));
 
   MOCK_METHOD2(BindBuffer, void(GLenum target, GLuint buffer));
 
-  MOCK_METHOD4(BindFragDataLocationIndexedARB, void(GLuint program,
+  MOCK_METHOD3(BindFragDataLocation, void(GLuint program, GLuint colorNumber,
+      const char* name));
+
+  MOCK_METHOD4(BindFragDataLocationIndexed, void(GLuint program,
       GLuint colorNumber, GLuint index, const char* name));
 
   MOCK_METHOD2(BindFramebufferEXT, void(GLenum target, GLuint framebuffer));
@@ -112,6 +117,8 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD1(DeleteProgram, void(GLuint program));
 
+  MOCK_METHOD2(DeleteQueries, void(GLsizei n, const GLuint* ids));
+
   MOCK_METHOD2(DeleteRenderbuffersEXT, void(
       GLsizei n, const GLuint* renderbuffers));
 
@@ -145,9 +152,14 @@ class MockGLInterface : public GLInterface {
   MOCK_METHOD2(EGLImageTargetTexture2DOES, void(
       GLenum target, GLeglImageOES image));
 
+  MOCK_METHOD2(EGLImageTargetRenderbufferStorageOES, void(
+      GLenum target, GLeglImageOES image));
+
   MOCK_METHOD1(Enable, void(GLenum cap));
 
   MOCK_METHOD1(EnableVertexAttribArray, void(GLuint index));
+
+  MOCK_METHOD1(EndQuery, void(GLenum target));
 
   MOCK_METHOD0(Finish, void());
 
@@ -168,6 +180,8 @@ class MockGLInterface : public GLInterface {
   MOCK_METHOD1(GenerateMipmapEXT, void(GLenum target));
 
   MOCK_METHOD2(GenFramebuffersEXT, void(GLsizei n, GLuint* framebuffers));
+
+  MOCK_METHOD2(GenQueries, void(GLsizei n, GLuint* ids));
 
   MOCK_METHOD2(GenRenderbuffersEXT, void(GLsizei n, GLuint* renderbuffers));
 
@@ -205,6 +219,19 @@ class MockGLInterface : public GLInterface {
   MOCK_METHOD4(GetProgramInfoLog, void(
       GLuint program, GLsizei bufsize, GLsizei* length, char* infolog));
 
+  MOCK_METHOD3(GetQueryiv, void(GLenum target, GLenum pname, GLint* params));
+
+  MOCK_METHOD3(GetQueryObjecti64v, void(
+      GLuint id, GLenum pname, GLint64* params));
+
+  MOCK_METHOD3(GetQueryObjectiv, void(GLuint id, GLenum pname, GLint* params));
+
+  MOCK_METHOD3(GetQueryObjectui64v, void(
+      GLuint id, GLenum pname, GLuint64* params));
+
+  MOCK_METHOD3(GetQueryObjectuiv, void(
+      GLuint id, GLenum pname, GLuint* params));
+
   MOCK_METHOD3(GetRenderbufferParameterivEXT, void(
       GLenum target, GLenum pname, GLint* params));
 
@@ -232,6 +259,9 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD3(GetTexParameteriv, void(
       GLenum target, GLenum pname, GLint* params));
+
+  MOCK_METHOD4(GetTranslatedShaderSourceANGLE, void(
+      GLuint shader, GLsizei bufsize, GLsizei* length, char* source));
 
   MOCK_METHOD3(GetUniformfv,
                void(GLuint program, GLint location, GLfloat* params));
@@ -275,6 +305,8 @@ class MockGLInterface : public GLInterface {
   MOCK_METHOD2(PixelStorei, void(GLenum pname, GLint param));
 
   MOCK_METHOD2(PolygonOffset, void(GLfloat factor, GLfloat units));
+
+  MOCK_METHOD2(QueryCounter, void(GLuint id, GLenum target));
 
   MOCK_METHOD1(ReadBuffer, void(GLenum src));
 
@@ -334,6 +366,10 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD3(TexParameteriv, void(
       GLenum target, GLenum pname, const GLint* params));
+
+  MOCK_METHOD5(TexStorage2DEXT, void(
+      GLenum target, GLsizei levels, GLenum internalformat,
+      GLsizei width, GLsizei height));
 
   MOCK_METHOD9(TexSubImage2D, void(
       GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
@@ -439,6 +475,14 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD3(GetFenceivNV, void(GLuint fence, GLenum pname, GLint *params));
 
+  MOCK_METHOD2(FenceSync, GLsync(GLenum condition, GLbitfield flags));
+
+  MOCK_METHOD1(DeleteSync, void(GLsync sync));
+
+  MOCK_METHOD5(GetSynciv, void(
+      GLsync sync, GLenum pname, GLsizei bufSize,
+      GLsizei* length, GLint* values));
+
   MOCK_METHOD1(SetSurfaceCHROMIUM, void(GLuint));
 
   MOCK_METHOD0(GetGraphicsResetStatusARB, GLenum());
@@ -447,4 +491,3 @@ class MockGLInterface : public GLInterface {
 }  // namespace gfx
 
 #endif  // GPU_COMMAND_BUFFER_COMMON_GL_MOCK_H_
-

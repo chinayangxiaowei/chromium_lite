@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
@@ -16,11 +17,12 @@
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 #include "chrome/common/net/gaia/gaia_auth_fetcher_unittest.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using content::BrowserThread;
 using ::testing::AnyNumber;
 using ::testing::Invoke;
 using ::testing::Return;
@@ -71,9 +73,8 @@ class OnlineAttemptTest : public testing::Test {
 
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
-        NewRunnableMethod(attempt_.get(),
-                          &OnlineAttempt::OnClientLoginFailure,
-                          error));
+        base::Bind(&OnlineAttempt::OnClientLoginFailure, attempt_.get(),
+                   error));
     // Force IO thread to finish tasks so I can verify |state_|.
     io_thread_.Stop();
     EXPECT_TRUE(error == state_.online_outcome().error());
@@ -81,15 +82,13 @@ class OnlineAttemptTest : public testing::Test {
 
   void CancelLogin(OnlineAttempt* auth) {
     BrowserThread::PostTask(
-        BrowserThread::IO,
-        FROM_HERE,
-        NewRunnableMethod(auth,
-                          &OnlineAttempt::CancelClientLogin));
+        BrowserThread::IO, FROM_HERE,
+        base::Bind(&OnlineAttempt::CancelClientLogin, auth));
   }
 
   static void Quit() {
     BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE, new MessageLoop::QuitTask());
+        BrowserThread::UI, FROM_HERE, MessageLoop::QuitClosure());
   }
 
   static void RunThreadTest() {
@@ -97,8 +96,8 @@ class OnlineAttemptTest : public testing::Test {
   }
 
   MessageLoop message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread io_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread io_thread_;
   TestAttemptState state_;
   scoped_ptr<MockAuthAttemptStateResolver> resolver_;
   scoped_refptr<OnlineAttempt> attempt_;
@@ -115,9 +114,7 @@ TEST_F(OnlineAttemptTest, LoginSuccess) {
 
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(attempt_.get(),
-                        &OnlineAttempt::OnClientLoginSuccess,
-                        result));
+      base::Bind(&OnlineAttempt::OnClientLoginSuccess, attempt_.get(), result));
   // Force IO thread to finish tasks so I can verify |state_|.
   io_thread_.Stop();
   EXPECT_TRUE(result == state_.credentials());
@@ -139,7 +136,7 @@ TEST_F(OnlineAttemptTest, LoginCancelRetry) {
   attempt_->Initiate(&profile);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableFunction(&OnlineAttemptTest::RunThreadTest));
+      base::Bind(&OnlineAttemptTest::RunThreadTest));
 
   MessageLoop::current()->Run();
 
@@ -164,7 +161,7 @@ TEST_F(OnlineAttemptTest, LoginTimeout) {
   attempt_->Initiate(&profile);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableFunction(&OnlineAttemptTest::RunThreadTest));
+      base::Bind(&OnlineAttemptTest::RunThreadTest));
 
   // Post a task to cancel the login attempt.
   CancelLogin(attempt_.get());
@@ -193,7 +190,7 @@ TEST_F(OnlineAttemptTest, HostedLoginRejected) {
   attempt_->Initiate(&profile);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableFunction(&OnlineAttemptTest::RunThreadTest));
+      base::Bind(&OnlineAttemptTest::RunThreadTest));
 
   MessageLoop::current()->Run();
 
@@ -217,7 +214,7 @@ TEST_F(OnlineAttemptTest, FullLogin) {
   attempt_->Initiate(&profile);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableFunction(&OnlineAttemptTest::RunThreadTest));
+      base::Bind(&OnlineAttemptTest::RunThreadTest));
 
   MessageLoop::current()->Run();
 
@@ -265,9 +262,7 @@ TEST_F(OnlineAttemptTest, TwoFactorSuccess) {
   GoogleServiceAuthError error(GoogleServiceAuthError::TWO_FACTOR);
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(attempt_.get(),
-                        &OnlineAttempt::OnClientLoginFailure,
-                        error));
+      base::Bind(&OnlineAttempt::OnClientLoginFailure, attempt_.get(), error));
 
   // Force IO thread to finish tasks so I can verify |state_|.
   io_thread_.Stop();

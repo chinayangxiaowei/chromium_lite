@@ -1,5 +1,4 @@
-#!/usr/bin/python2.4
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,11 +15,15 @@ import pickle
 import random
 import sys
 import threading
+import time
 import urlparse
 
+import app_notification_specifics_pb2
+import app_setting_specifics_pb2
 import app_specifics_pb2
 import autofill_specifics_pb2
 import bookmark_specifics_pb2
+import extension_setting_specifics_pb2
 import extension_specifics_pb2
 import nigori_specifics_pb2
 import password_specifics_pb2
@@ -28,6 +31,7 @@ import preference_specifics_pb2
 import search_engine_specifics_pb2
 import session_specifics_pb2
 import sync_pb2
+import sync_enums_pb2
 import theme_specifics_pb2
 import typed_url_specifics_pb2
 
@@ -38,6 +42,8 @@ import typed_url_specifics_pb2
 ALL_TYPES = (
     TOP_LEVEL,  # The type of the 'Google Chrome' folder.
     APPS,
+    APP_NOTIFICATION,
+    APP_SETTINGS,
     AUTOFILL,
     AUTOFILL_PROFILE,
     BOOKMARK,
@@ -48,7 +54,8 @@ ALL_TYPES = (
     SEARCH_ENGINE,
     SESSION,
     THEME,
-    TYPED_URL) = range(13)
+    TYPED_URL,
+    EXTENSION_SETTINGS) = range(16)
 
 # Well-known server tag of the top level 'Google Chrome' folder.
 TOP_LEVEL_FOLDER_TAG = 'google_chrome'
@@ -56,10 +63,13 @@ TOP_LEVEL_FOLDER_TAG = 'google_chrome'
 # Given a sync type from ALL_TYPES, find the extension token corresponding
 # to that datatype.  Note that TOP_LEVEL has no such token.
 SYNC_TYPE_TO_EXTENSION = {
+    APP_NOTIFICATION: app_notification_specifics_pb2.app_notification,
+    APP_SETTINGS: app_setting_specifics_pb2.app_setting,
     APPS: app_specifics_pb2.app,
     AUTOFILL: autofill_specifics_pb2.autofill,
     AUTOFILL_PROFILE: autofill_specifics_pb2.autofill_profile,
     BOOKMARK: bookmark_specifics_pb2.bookmark,
+    EXTENSION_SETTINGS: extension_setting_specifics_pb2.extension_setting,
     EXTENSIONS: extension_specifics_pb2.extension,
     NIGORI: nigori_specifics_pb2.nigori,
     PASSWORD: password_specifics_pb2.password,
@@ -73,6 +83,9 @@ SYNC_TYPE_TO_EXTENSION = {
 # The parent ID used to indicate a top-level node.
 ROOT_ID = '0'
 
+# Unix time epoch in struct_time format. The tuple corresponds to UTC Wednesday
+# Jan 1 1970, 00:00:00, non-dst.
+UNIX_TIME_EPOCH = (1970, 1, 1, 0, 0, 0, 3, 1, 0)
 
 class Error(Exception):
   """Error class for this module."""
@@ -103,6 +116,10 @@ class StoreBirthdayError(Error):
 
 class TransientError(Error):
   """The client would be sent a transient error."""
+
+
+class SyncInducedError(Error):
+  """The client would be sent an error."""
 
 
 def GetEntryType(entry):
@@ -384,6 +401,12 @@ class SyncDataModel(object):
                     parent_tag='google_chrome', sync_type=AUTOFILL),
       PermanentItem('google_chrome_autofill_profiles', name='Autofill Profiles',
                     parent_tag='google_chrome', sync_type=AUTOFILL_PROFILE),
+      PermanentItem('google_chrome_app_settings',
+                    name='App Settings',
+                    parent_tag='google_chrome', sync_type=APP_SETTINGS),
+      PermanentItem('google_chrome_extension_settings',
+                    name='Extension Settings',
+                    parent_tag='google_chrome', sync_type=EXTENSION_SETTINGS),
       PermanentItem('google_chrome_extensions', name='Extensions',
                     parent_tag='google_chrome', sync_type=EXTENSIONS),
       PermanentItem('google_chrome_passwords', name='Passwords',
@@ -400,6 +423,8 @@ class SyncDataModel(object):
                     parent_tag='google_chrome', sync_type=NIGORI),
       PermanentItem('google_chrome_apps', name='Apps',
                     parent_tag='google_chrome', sync_type=APPS),
+      PermanentItem('google_chrome_app_notifications', name='App Notifications',
+                    parent_tag='google_chrome', sync_type=APP_NOTIFICATION),
       ]
 
   def __init__(self):
@@ -414,6 +439,8 @@ class SyncDataModel(object):
     self.ResetStoreBirthday()
 
     self.migration_history = MigrationHistory()
+
+    self.induced_error = sync_pb2.ClientToServerResponse.Error()
 
   def _SaveEntry(self, entry):
     """Insert or update an entry in the change log, and give it a new version.
@@ -439,6 +466,9 @@ class SyncDataModel(object):
       entry.originator_client_item_id = base_entry.originator_client_item_id
 
     self._entries[entry.id_string] = copy.deepcopy(entry)
+    # Store the current time since the Unix epoch in milliseconds.
+    self._entries[entry.id_string].mtime = (int((time.mktime(time.gmtime()) -
+        time.mktime(UNIX_TIME_EPOCH))*1000))
 
   def _ServerTagToId(self, tag):
     """Determine the server ID from a server-unique tag.
@@ -880,6 +910,12 @@ class SyncDataModel(object):
         True)
     self._SaveEntry(nigori_new)
 
+  def SetInducedError(self, error):
+    self.induced_error = error
+
+  def GetInducedError(self):
+    return self.induced_error
+
 
 class TestServer(object):
   """An object to handle requests for one (and only one) Chrome Sync account.
@@ -922,6 +958,12 @@ class TestServer(object):
     if self.transient_error:
       raise TransientError
 
+  def CheckSendError(self):
+     """Raises SyncInducedError if needed."""
+     if (self.account.induced_error.error_type !=
+         sync_enums_pb2.SyncEnums.UNKNOWN):
+       raise SyncInducedError
+
   def HandleMigrate(self, path):
     query = urlparse.urlparse(path)[4]
     code = 200
@@ -942,6 +984,39 @@ class TestServer(object):
     finally:
       self.account_lock.release()
     return (code, '<html><title>Migration: %d</title><H1>%d %s</H1></html>' %
+                (code, code, response))
+
+  def HandleSetInducedError(self, path):
+     query = urlparse.urlparse(path)[4]
+     self.account_lock.acquire()
+     code = 200;
+     response = 'Success'
+     error = sync_pb2.ClientToServerResponse.Error()
+     try:
+       error_type = urlparse.parse_qs(query)['error']
+       action = urlparse.parse_qs(query)['action']
+       error.error_type = int(error_type[0])
+       error.action = int(action[0])
+       try:
+         error.url = (urlparse.parse_qs(query)['url'])[0]
+       except KeyError:
+         error.url = ''
+       try:
+         error.error_description =(
+         (urlparse.parse_qs(query)['error_description'])[0])
+       except KeyError:
+         error.error_description = ''
+       self.account.SetInducedError(error)
+       response = ('Error = %d, action = %d, url = %s, description = %s' %
+                   (error.error_type, error.action,
+                    error.url,
+                    error.error_description))
+     except error:
+       response = 'Could not parse url'
+       code = 400
+     finally:
+       self.account_lock.release()
+     return (code, '<html><title>SetError: %d</title><H1>%d %s</H1></html>' %
                 (code, code, response))
 
   def HandleCreateBirthdayError(self):
@@ -988,10 +1063,11 @@ class TestServer(object):
       contents = request.message_contents
 
       response = sync_pb2.ClientToServerResponse()
-      response.error_code = sync_pb2.ClientToServerResponse.SUCCESS
+      response.error_code = sync_enums_pb2.SyncEnums.SUCCESS
       self.CheckStoreBirthday(request)
       response.store_birthday = self.account.store_birthday
       self.CheckTransientError();
+      self.CheckSendError();
 
       print_context('->')
 
@@ -1018,7 +1094,7 @@ class TestServer(object):
       print 'MIGRATION_DONE: <%s>' % (ShortDatatypeListSummary(error.datatypes))
       response = sync_pb2.ClientToServerResponse()
       response.store_birthday = self.account.store_birthday
-      response.error_code = sync_pb2.ClientToServerResponse.MIGRATION_DONE
+      response.error_code = sync_enums_pb2.SyncEnums.MIGRATION_DONE
       response.migrated_data_type_id[:] = [
           SyncTypeToProtocolDataTypeId(x) for x in error.datatypes]
       return (200, response.SerializeToString())
@@ -1027,13 +1103,24 @@ class TestServer(object):
       print 'NOT_MY_BIRTHDAY'
       response = sync_pb2.ClientToServerResponse()
       response.store_birthday = self.account.store_birthday
-      response.error_code = sync_pb2.ClientToServerResponse.NOT_MY_BIRTHDAY
+      response.error_code = sync_enums_pb2.SyncEnums.NOT_MY_BIRTHDAY
       return (200, response.SerializeToString())
-    except TransientError as error:
+    except TransientError, error:
+      ### This is deprecated now. Would be removed once test cases are removed.
       print_context('<-')
       print 'TRANSIENT_ERROR'
       response.store_birthday = self.account.store_birthday
-      response.error_code = sync_pb2.ClientToServerResponse.TRANSIENT_ERROR
+      response.error_code = sync_enums_pb2.SyncEnums.TRANSIENT_ERROR
+      return (200, response.SerializeToString())
+    except SyncInducedError, error:
+      print_context('<-')
+      print 'INDUCED_ERROR'
+      response.store_birthday = self.account.store_birthday
+      error = self.account.GetInducedError()
+      response.error.error_type = error.error_type
+      response.error.url = error.url
+      response.error.error_description = error.error_description
+      response.error.action = error.action
       return (200, response.SerializeToString())
     finally:
       self.account_lock.release()

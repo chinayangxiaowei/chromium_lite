@@ -1,75 +1,58 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/command_line.h"
 #include "chrome/browser/printing/print_preview_tab_controller.h"
+#include "chrome/browser/printing/print_view_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "googleurl/src/gurl.h"
+
+using content::WebContents;
 
 namespace {
 
-typedef InProcessBrowserTest PrintPreviewTabControllerBrowserTest;
+class PrintPreviewTabControllerBrowserTest : public InProcessBrowserTest {
+ public:
+  PrintPreviewTabControllerBrowserTest() {}
+  virtual ~PrintPreviewTabControllerBrowserTest() {}
 
-// Test to verify that when a preview tab navigates, we can create a new print
-// preview tab for both initiator tab and new preview tab contents.
-IN_PROC_BROWSER_TEST_F(PrintPreviewTabControllerBrowserTest,
-                       NavigateFromPrintPreviewTab) {
-  ASSERT_TRUE(browser());
-  BrowserList::SetLastActive(browser());
-  ASSERT_TRUE(BrowserList::GetLastActive());
+  virtual void SetUpCommandLine(CommandLine* command_line) {
+#if !defined(GOOGLE_CHROME_BUILD)
+    command_line->AppendSwitch(switches::kEnablePrintPreview);
+#endif
+  }
+};
 
-  // Lets start with one window with one tab.
-  EXPECT_EQ(1u, BrowserList::size());
-  EXPECT_EQ(1, browser()->tab_count());
+class TabDestroyedObserver : public content::WebContentsObserver {
+ public:
+  explicit TabDestroyedObserver(WebContents* contents)
+      : content::WebContentsObserver(contents),
+        tab_destroyed_(false) {
+  }
+  virtual ~TabDestroyedObserver() {}
 
-  // Create a reference to initiator tab contents.
-  TabContentsWrapper* initiator_tab =
-      browser()->GetSelectedTabContentsWrapper();
-  ASSERT_TRUE(initiator_tab);
+  bool tab_destroyed() { return tab_destroyed_; }
 
-  scoped_refptr<printing::PrintPreviewTabController>
-     tab_controller(new printing::PrintPreviewTabController());
-  ASSERT_TRUE(tab_controller);
+ private:
+  virtual void WebContentsDestroyed(WebContents* tab) OVERRIDE {
+    tab_destroyed_ = true;
+  }
 
-  // Get the preview tab for initiator tab.
-  TabContentsWrapper* preview_tab =
-    tab_controller->GetOrCreatePreviewTab(initiator_tab);
-
-  // New print preview tab is created. Current focus is on preview tab.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_NE(initiator_tab, preview_tab);
-
-  GURL url(chrome::kAboutBlankURL);
-  ui_test_utils::NavigateToURL(browser(), url);
-  EXPECT_EQ(url, preview_tab->tab_contents()->GetURL());
-
-  // Get the print preview tab for initiator tab.
-  TabContentsWrapper* new_preview_tab =
-     tab_controller->GetOrCreatePreviewTab(initiator_tab);
-
-  // New preview tab is created.
-  EXPECT_EQ(3, browser()->tab_count());
-  EXPECT_NE(new_preview_tab, preview_tab);
-
-  // Get the print preview tab for old preview tab.
-  TabContentsWrapper* newest_preview_tab =
-  tab_controller->GetOrCreatePreviewTab(preview_tab);
-
-  // Newest preview tab is created and the previously created preview tab is not
-  // merely activated.
-  EXPECT_EQ(4, browser()->tab_count());
-  EXPECT_NE(newest_preview_tab, new_preview_tab);
-}
+  bool tab_destroyed_;
+};
 
 // Test to verify that when a initiator tab navigates, we can create a new
-// preview tab for the new tab contents. But we cannot create a preview tab for
-// the old preview tab.
+// preview tab for the new tab contents.
 IN_PROC_BROWSER_TEST_F(PrintPreviewTabControllerBrowserTest,
                        NavigateFromInitiatorTab) {
   ASSERT_TRUE(browser());
@@ -85,44 +68,41 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewTabControllerBrowserTest,
       browser()->GetSelectedTabContentsWrapper();
   ASSERT_TRUE(initiator_tab);
 
-  scoped_refptr<printing::PrintPreviewTabController>
-     tab_controller(new printing::PrintPreviewTabController());
+  printing::PrintPreviewTabController* tab_controller =
+      printing::PrintPreviewTabController::GetInstance();
   ASSERT_TRUE(tab_controller);
 
   // Get the preview tab for initiator tab.
+  initiator_tab->print_view_manager()->PrintPreviewNow();
   TabContentsWrapper* preview_tab =
     tab_controller->GetOrCreatePreviewTab(initiator_tab);
 
-  // New print preview tab is created. Current focus is on preview tab.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_NE(initiator_tab, preview_tab);
+  // New print preview tab is created.
+  EXPECT_EQ(1, browser()->tab_count());
+  ASSERT_TRUE(preview_tab);
+  ASSERT_NE(initiator_tab, preview_tab);
+  TabDestroyedObserver observer(preview_tab->web_contents());
 
-  // Activate initiator tab.
-  browser()->ActivateTabAt(0, true);
+  // Navigate in the initiator tab.
   GURL url(chrome::kChromeUINewTabURL);
   ui_test_utils::NavigateToURL(browser(), url);
 
+  ASSERT_TRUE(observer.tab_destroyed());
+
   // Get the print preview tab for initiator tab.
+  initiator_tab->print_view_manager()->PrintPreviewNow();
   TabContentsWrapper* new_preview_tab =
      tab_controller->GetOrCreatePreviewTab(initiator_tab);
 
   // New preview tab is created.
-  EXPECT_EQ(3, browser()->tab_count());
-  EXPECT_NE(new_preview_tab, preview_tab);
-
-  // Get the print preview tab for old preview tab.
-  TabContentsWrapper* newest_preview_tab =
-  tab_controller->GetOrCreatePreviewTab(preview_tab);
-
-  // Make sure preview tab is not created for |preview_tab|.
-  EXPECT_EQ(3, browser()->tab_count());
-  EXPECT_EQ(newest_preview_tab, preview_tab);
+  EXPECT_EQ(1, browser()->tab_count());
+  EXPECT_TRUE(new_preview_tab);
 }
 
-// Test to verify that even after reloading initiator tab and preview tab,
-// their association exists.
+// Test to verify that after reloading the initiator tab, it creates a new
+// print preview tab.
 IN_PROC_BROWSER_TEST_F(PrintPreviewTabControllerBrowserTest,
-                       ReloadInitiatorTabAndPreviewTab) {
+                       ReloadInitiatorTab) {
   ASSERT_TRUE(browser());
   BrowserList::SetLastActive(browser());
   ASSERT_TRUE(BrowserList::GetLastActive());
@@ -136,39 +116,37 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewTabControllerBrowserTest,
       browser()->GetSelectedTabContentsWrapper();
   ASSERT_TRUE(initiator_tab);
 
-  scoped_refptr<printing::PrintPreviewTabController>
-     tab_controller(new printing::PrintPreviewTabController());
+  printing::PrintPreviewTabController* tab_controller =
+      printing::PrintPreviewTabController::GetInstance();
   ASSERT_TRUE(tab_controller);
 
   // Get the preview tab for initiator tab.
+  initiator_tab->print_view_manager()->PrintPreviewNow();
   TabContentsWrapper* preview_tab =
     tab_controller->GetOrCreatePreviewTab(initiator_tab);
 
-  // New print preview tab is created. Current focus is on preview tab.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_NE(initiator_tab, preview_tab);
+  // New print preview tab is created.
+  EXPECT_EQ(1, browser()->tab_count());
+  ASSERT_TRUE(preview_tab);
+  ASSERT_NE(initiator_tab, preview_tab);
+  TabDestroyedObserver tab_destroyed_observer(preview_tab->web_contents());
 
-  // Activate initiator tab and reload.
-  browser()->ActivateTabAt(0, true);
+  // Reload the initiator tab.
+  ui_test_utils::WindowedNotificationObserver notification_observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::NotificationService::AllSources());
   browser()->Reload(CURRENT_TAB);
+  notification_observer.Wait();
+
+  ASSERT_TRUE(tab_destroyed_observer.tab_destroyed());
 
   // Get the print preview tab for initiator tab.
+  initiator_tab->print_view_manager()->PrintPreviewNow();
   TabContentsWrapper* new_preview_tab =
      tab_controller->GetOrCreatePreviewTab(initiator_tab);
 
-  // Old preview tab is activated.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_EQ(new_preview_tab, preview_tab);
-
-  // Reload preview tab.
-  browser()->Reload(CURRENT_TAB);
-  // Get the print preview tab for old preview tab.
-  TabContentsWrapper* newest_preview_tab =
-  tab_controller->GetOrCreatePreviewTab(preview_tab);
-
-  // Make sure new preview tab is not created for |preview_tab|.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_EQ(newest_preview_tab, preview_tab);
+  EXPECT_EQ(1, browser()->tab_count());
+  EXPECT_TRUE(new_preview_tab);
 }
 
 }  // namespace

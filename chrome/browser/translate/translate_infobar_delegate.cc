@@ -8,17 +8,22 @@
 
 #include "base/metrics/histogram.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/translate/translate_infobar_view.h"
 #include "chrome/browser/translate/translate_manager.h"
 #include "chrome/browser/translate/translate_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_constants.h"
-#include "content/browser/tab_contents/navigation_details.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+
+using content::NavigationEntry;
 
 // static
 const size_t TranslateInfoBarDelegate::kNoIndex = static_cast<size_t>(-1);
@@ -26,7 +31,8 @@ const size_t TranslateInfoBarDelegate::kNoIndex = static_cast<size_t>(-1);
 // static
 TranslateInfoBarDelegate* TranslateInfoBarDelegate::CreateDelegate(
     Type type,
-    TabContents* tab_contents,
+    InfoBarTabHelper* infobar_helper,
+    PrefService* prefs,
     const std::string& original_language,
     const std::string& target_language) {
   DCHECK_NE(TRANSLATION_ERROR, type);
@@ -39,19 +45,28 @@ TranslateInfoBarDelegate* TranslateInfoBarDelegate::CreateDelegate(
          ((type == TRANSLATING) &&
           (original_language == chrome::kUnknownLanguageCode)));
   TranslateInfoBarDelegate* delegate =
-      new TranslateInfoBarDelegate(type, TranslateErrors::NONE, tab_contents,
-                                   original_language, target_language);
+      new TranslateInfoBarDelegate(type,
+                                   TranslateErrors::NONE,
+                                   infobar_helper,
+                                   prefs,
+                                   original_language,
+                                   target_language);
   DCHECK_NE(kNoIndex, delegate->target_language_index());
   return delegate;
 }
 
 TranslateInfoBarDelegate* TranslateInfoBarDelegate::CreateErrorDelegate(
     TranslateErrors::Type error,
-    TabContents* tab_contents,
+    InfoBarTabHelper* infobar_helper,
+    PrefService* prefs,
     const std::string& original_language,
     const std::string& target_language) {
-  return new TranslateInfoBarDelegate(TRANSLATION_ERROR, error, tab_contents,
-                                      original_language, target_language);
+  return new TranslateInfoBarDelegate(TRANSLATION_ERROR,
+                                      error,
+                                      infobar_helper,
+                                      prefs,
+                                      original_language,
+                                      target_language);
 }
 
 TranslateInfoBarDelegate::~TranslateInfoBarDelegate() {
@@ -99,28 +114,29 @@ void TranslateInfoBarDelegate::SetTargetLanguage(size_t language_index) {
 
 void TranslateInfoBarDelegate::Translate() {
   const std::string& original_language_code = GetOriginalLanguageCode();
-  if (!tab_contents()->browser_context()->IsOffTheRecord()) {
+  if (!owner()->web_contents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationDeniedCount(original_language_code);
     prefs_.IncrementTranslationAcceptedCount(original_language_code);
   }
 
-  TranslateManager::GetInstance()->TranslatePage(tab_contents_,
+  TranslateManager::GetInstance()->TranslatePage(owner()->web_contents(),
       GetLanguageCodeAt(original_language_index()),
       GetLanguageCodeAt(target_language_index()));
 }
 
 void TranslateInfoBarDelegate::RevertTranslation() {
-  TranslateManager::GetInstance()->RevertTranslation(tab_contents_);
+  TranslateManager::GetInstance()->RevertTranslation(owner()->web_contents());
   RemoveSelf();
 }
 
 void TranslateInfoBarDelegate::ReportLanguageDetectionError() {
-  TranslateManager::GetInstance()->ReportLanguageDetectionError(tab_contents_);
+  TranslateManager::GetInstance()->
+      ReportLanguageDetectionError(owner()->web_contents());
 }
 
 void TranslateInfoBarDelegate::TranslationDeclined() {
   const std::string& original_language_code = GetOriginalLanguageCode();
-  if (!tab_contents()->browser_context()->IsOffTheRecord()) {
+  if (!owner()->web_contents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationAcceptedCount(original_language_code);
     prefs_.IncrementTranslationDeniedCount(original_language_code);
   }
@@ -131,7 +147,7 @@ void TranslateInfoBarDelegate::TranslationDeclined() {
   // happens when a load stops. That could happen multiple times, including
   // after the user already declined the translation.)
   TranslateTabHelper* helper = TabContentsWrapper::GetCurrentWrapperForContents(
-      tab_contents_)->translate_tab_helper();
+      owner()->web_contents())->translate_tab_helper();
   helper->language_state().set_translation_declined(true);
 }
 
@@ -247,7 +263,7 @@ void TranslateInfoBarDelegate::MessageInfoBarButtonPressed() {
     return;
   }
   // This is the "Try again..." case.
-  TranslateManager::GetInstance()->TranslatePage(tab_contents_,
+  TranslateManager::GetInstance()->TranslatePage(owner()->web_contents(),
       GetOriginalLanguageCode(), GetTargetLanguageCode());
 }
 
@@ -257,13 +273,13 @@ bool TranslateInfoBarDelegate::ShouldShowMessageInfoBarButton() {
 
 bool TranslateInfoBarDelegate::ShouldShowNeverTranslateButton() {
   DCHECK_EQ(BEFORE_TRANSLATE, type_);
-  return !tab_contents()->browser_context()->IsOffTheRecord() &&
+  return !owner()->web_contents()->GetBrowserContext()->IsOffTheRecord() &&
       (prefs_.GetTranslationDeniedCount(GetOriginalLanguageCode()) >= 3);
 }
 
 bool TranslateInfoBarDelegate::ShouldShowAlwaysTranslateButton() {
   DCHECK_EQ(BEFORE_TRANSLATE, type_);
-  return !tab_contents()->browser_context()->IsOffTheRecord() &&
+  return !owner()->web_contents()->GetBrowserContext()->IsOffTheRecord() &&
       (prefs_.GetTranslationAcceptedCount(GetOriginalLanguageCode()) >= 3);
 }
 
@@ -306,20 +322,19 @@ void TranslateInfoBarDelegate::GetAfterTranslateStrings(
 TranslateInfoBarDelegate::TranslateInfoBarDelegate(
     Type type,
     TranslateErrors::Type error,
-    TabContents* tab_contents,
+    InfoBarTabHelper* infobar_helper,
+    PrefService* prefs,
     const std::string& original_language,
     const std::string& target_language)
-    : InfoBarDelegate(tab_contents),
+    : InfoBarDelegate(infobar_helper),
       type_(type),
       background_animation_(NONE),
-      tab_contents_(tab_contents),
       original_language_index_(kNoIndex),
       initial_original_language_index_(kNoIndex),
       target_language_index_(kNoIndex),
       error_(error),
       infobar_view_(NULL),
-      prefs_(Profile::FromBrowserContext(
-          tab_contents_->browser_context())->GetPrefs()) {
+      prefs_(prefs) {
   DCHECK_NE((type_ == TRANSLATION_ERROR), (error == TranslateErrors::NONE));
 
   std::vector<std::string> language_codes;
@@ -386,6 +401,7 @@ TranslateInfoBarDelegate*
 }
 
 std::string TranslateInfoBarDelegate::GetPageHost() {
-  NavigationEntry* entry = tab_contents_->controller().GetActiveEntry();
-  return entry ? entry->url().HostNoBrackets() : std::string();
+  NavigationEntry* entry =
+      owner()->web_contents()->GetController().GetActiveEntry();
+  return entry ? entry->GetURL().HostNoBrackets() : std::string();
 }

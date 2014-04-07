@@ -27,7 +27,7 @@ class OmniboxPopupViewMacTest : public PlatformTest {
     color_ = [NSColor blackColor];
     dimColor_ = [NSColor darkGrayColor];
     font_ = gfx::Font(
-        base::SysNSStringToUTF16([[NSFont userFontOfSize:12] fontName]), 12);
+        base::SysNSStringToUTF8([[NSFont userFontOfSize:12] fontName]), 12);
   }
 
   // Returns the length of the run starting at |location| for which
@@ -461,14 +461,14 @@ TEST_F(OmniboxPopupViewMacTest, ElideString) {
 
   // When elided, result is the same as ElideText().
   ret = OmniboxPopupViewMac::ElideString(as, contents16, font_, kNarrow);
-  string16 elided = ui::ElideText(contents16, font_, kNarrow, false);
+  string16 elided = ui::ElideText(contents16, font_, kNarrow, ui::ELIDE_AT_END);
   EXPECT_TRUE(ret == as);
   EXPECT_FALSE([[as string] isEqualToString:contents]);
   EXPECT_TRUE([[as string] isEqualToString:base::SysUTF16ToNSString(elided)]);
 
   // When elided, result is the same as ElideText().
   ret = OmniboxPopupViewMac::ElideString(as, contents16, font_, 0.0);
-  elided = ui::ElideText(contents16, font_, 0.0, false);
+  elided = ui::ElideText(contents16, font_, 0.0, ui::ELIDE_AT_END);
   EXPECT_TRUE(ret == as);
   EXPECT_FALSE([[as string] isEqualToString:contents]);
   EXPECT_TRUE([[as string] isEqualToString:base::SysUTF16ToNSString(elided)]);

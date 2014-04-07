@@ -1,42 +1,46 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/app/content_main.h"
 
 #include "base/at_exit.h"
-#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
+#include "base/debug/trace_event.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/stats_table.h"
 #include "base/process_util.h"
 #include "base/stringprintf.h"
 #include "base/string_number_conversions.h"
-#include "content/app/content_main_delegate.h"
-#include "content/common/content_constants.h"
-#include "content/common/content_paths.h"
-#include "content/common/content_switches.h"
-#include "content/common/main_function_params.h"
-#include "content/common/sandbox_init_wrapper.h"
+#include "content/browser/browser_main.h"
 #include "content/common/set_process_title.h"
+#include "content/public/app/content_main_delegate.h"
+#include "content/public/app/startup_helper_win.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_constants.h"
+#include "content/public/common/content_paths.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/main_function_params.h"
+#include "content/public/common/sandbox_init.h"
 #include "crypto/nss_util.h"
 #include "ipc/ipc_switches.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/ui_base_paths.h"
+#include "webkit/glue/webkit_glue.h"
 
 #if defined(OS_WIN)
 #include <atlbase.h>
 #include <atlapp.h>
-#include <new.h>
 #include <malloc.h>
 #elif defined(OS_MACOSX)
+#include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/mach_ipc_mac.h"
 #include "base/system_monitor/system_monitor.h"
 #include "content/browser/mach_broker_mac.h"
+#include "content/common/sandbox_init_mac.h"
 #endif // OS_WIN
 
 #if defined(OS_POSIX)
@@ -46,7 +50,7 @@
 #include "content/common/chrome_descriptors.h"
 
 #if !defined(OS_MACOSX)
-#include "content/common/zygote_fork_delegate_linux.h"
+#include "content/public/common/zygote_fork_delegate_linux.h"
 #endif
 
 #endif  // OS_POSIX
@@ -57,17 +61,16 @@ int tc_set_new_mode(int mode);
 }
 #endif
 
-extern int BrowserMain(const MainFunctionParams&);
-extern int RendererMain(const MainFunctionParams&);
-extern int GpuMain(const MainFunctionParams&);
-extern int PluginMain(const MainFunctionParams&);
-extern int PpapiPluginMain(const MainFunctionParams&);
-extern int PpapiBrokerMain(const MainFunctionParams&);
-extern int WorkerMain(const MainFunctionParams&);
-extern int UtilityMain(const MainFunctionParams&);
+extern int GpuMain(const content::MainFunctionParams&);
+extern int PluginMain(const content::MainFunctionParams&);
+extern int PpapiPluginMain(const content::MainFunctionParams&);
+extern int PpapiBrokerMain(const content::MainFunctionParams&);
+extern int RendererMain(const content::MainFunctionParams&);
+extern int WorkerMain(const content::MainFunctionParams&);
+extern int UtilityMain(const content::MainFunctionParams&);
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
-extern int ZygoteMain(const MainFunctionParams&,
-                      ZygoteForkDelegate* forkdelegate);
+extern int ZygoteMain(const content::MainFunctionParams&,
+                      content::ZygoteForkDelegate* forkdelegate);
 #endif
 
 namespace {
@@ -75,31 +78,6 @@ namespace {
 #if defined(OS_WIN)
 
 static CAppModule _Module;
-
-#pragma optimize("", off)
-// Handlers for invalid parameter and pure call. They generate a breakpoint to
-// tell breakpad that it needs to dump the process.
-void InvalidParameter(const wchar_t* expression, const wchar_t* function,
-                      const wchar_t* file, unsigned int line,
-                      uintptr_t reserved) {
-  __debugbreak();
-  _exit(1);
-}
-
-void PureCall() {
-  __debugbreak();
-  _exit(1);
-}
-#pragma optimize("", on)
-
-// Register the invalid param handler and pure call handler to be able to
-// notify breakpad when it happens.
-void RegisterInvalidParamHandler() {
-  _set_invalid_parameter_handler(InvalidParameter);
-  _set_purecall_handler(PureCall);
-  // Also enable the new handler for malloc() based failures.
-  _set_new_mode(1);
-}
 
 #elif defined(OS_MACOSX)
 
@@ -154,19 +132,6 @@ void SetupSignalHandlers() {
 
 #endif  // OS_POSIX
 
-void SetupCRT(const CommandLine& command_line) {
-#if defined(OS_WIN)
-#if defined(_CRTDBG_MAP_ALLOC)
-  _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
-  _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-#else
-  if (!command_line.HasSwitch(switches::kDisableBreakpad)) {
-    _CrtSetReportMode(_CRT_ASSERT, 0);
-  }
-#endif
-#endif
-}
-
 void CommonSubprocessInit(const std::string& process_type) {
 #if defined(OS_WIN)
   // HACK: Let Windows know that we have started.  This is needed to suppress
@@ -176,7 +141,7 @@ void CommonSubprocessInit(const std::string& process_type) {
   MSG msg;
   PeekMessage(&msg, NULL, 0, 0, PM_REMOVE);
 #endif
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
   // Various things break when you're using a locale where the decimal
   // separator isn't a period.  See e.g. bugs 22782 and 39964.  For
   // all processes except the browser process (where we call system
@@ -196,8 +161,7 @@ void InitializeStatsTable(base::ProcessId browser_pid,
   // Chrome.  These lines can be commented out to effectively turn
   // counters 'off'.  The table is created and exists for the life
   // of the process.  It is not cleaned up.
-  if (command_line.HasSwitch(switches::kEnableStatsTable) ||
-      command_line.HasSwitch(switches::kEnableBenchmarking)) {
+  if (command_line.HasSwitch(switches::kEnableStatsTable)) {
     // NOTIMPLEMENTED: we probably need to shut this down correctly to avoid
     // leaking shared memory regions on posix platforms.
     std::string statsfile =
@@ -214,7 +178,7 @@ void InitializeStatsTable(base::ProcessId browser_pid,
 // flag.  This struct is used to build a table of (flag, main function) pairs.
 struct MainFunction {
   const char* name;
-  int (*function)(const MainFunctionParams&);
+  int (*function)(const content::MainFunctionParams&);
 };
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
@@ -222,15 +186,16 @@ struct MainFunction {
 // subprocesses that are launched via the zygote.  This function
 // fills in some process-launching bits around ZygoteMain().
 // Returns the exit code of the subprocess.
-int RunZygote(const MainFunctionParams& main_function_params,
+int RunZygote(const content::MainFunctionParams& main_function_params,
               content::ContentMainDelegate* delegate) {
   static const MainFunction kMainFunctions[] = {
     { switches::kRendererProcess,    RendererMain },
     { switches::kWorkerProcess,      WorkerMain },
     { switches::kPpapiPluginProcess, PpapiPluginMain },
+    { switches::kUtilityProcess,     UtilityMain },
   };
 
-  scoped_ptr<ZygoteForkDelegate> zygote_fork_delegate;
+  scoped_ptr<content::ZygoteForkDelegate> zygote_fork_delegate;
   if (delegate) zygote_fork_delegate.reset(delegate->ZygoteStarting());
 
   // This function call can return multiple times, once per fork().
@@ -243,6 +208,13 @@ int RunZygote(const MainFunctionParams& main_function_params,
   // line so update it here with the new version.
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
 
+  // If a custom user agent was passed on the command line, we need
+  // to (re)set it now, rather than using the default one the zygote
+  // initialized.
+  bool custom = false;
+  std::string ua = content::GetContentClient()->GetUserAgent(&custom);
+  if (custom) webkit_glue::SetUserAgent(ua, custom);
+
   // The StatsTable must be initialized in each process; we already
   // initialized for the browser process, now we need to initialize
   // within the new processes as well.
@@ -250,9 +222,8 @@ int RunZygote(const MainFunctionParams& main_function_params,
       base::GetParentProcessId(base::GetCurrentProcId()));
   InitializeStatsTable(browser_pid, command_line);
 
-  MainFunctionParams main_params(command_line,
-                                 main_function_params.sandbox_info_,
-                                 main_function_params.autorelease_pool_);
+  content::MainFunctionParams main_params(command_line);
+
   // Get the new process type from the new command line.
   std::string process_type =
       command_line.GetSwitchValueASCII(switches::kProcessType);
@@ -273,9 +244,10 @@ int RunZygote(const MainFunctionParams& main_function_params,
 // Run the FooMain() for a given process type.
 // If |process_type| is empty, runs BrowserMain().
 // Returns the exit code for this process.
-int RunNamedProcessTypeMain(const std::string& process_type,
-                            const MainFunctionParams& main_function_params,
-                            content::ContentMainDelegate* delegate) {
+int RunNamedProcessTypeMain(
+    const std::string& process_type,
+    const content::MainFunctionParams& main_function_params,
+    content::ContentMainDelegate* delegate) {
   static const MainFunction kMainFunctions[] = {
     { "",                            BrowserMain },
     { switches::kRendererProcess,    RendererMain },
@@ -319,11 +291,11 @@ int ContentMain(HINSTANCE instance,
   int argc = 0;
   char** argv = NULL;
 
-  RegisterInvalidParamHandler();
+  content::RegisterInvalidParamHandler();
   _Module.Init(NULL, static_cast<HINSTANCE>(instance));
 #else
 int ContentMain(int argc,
-                char** argv,
+                const char** argv,
                 ContentMainDelegate* delegate) {
   // NOTE(willchan): One might ask why this call is done here rather than in
   // process_util_linux.cc with the definition of
@@ -336,16 +308,18 @@ int ContentMain(int argc,
   tc_set_new_mode(1);
 #endif
 
+#if !defined(OS_ANDROID)
   // Set C library locale to make sure CommandLine can parse argument values
   // in correct encoding.
   setlocale(LC_ALL, "");
+#endif
 
   SetupSignalHandlers();
 
   base::GlobalDescriptors* g_fds = base::GlobalDescriptors::GetInstance();
   g_fds->Set(kPrimaryIPCChannel,
              kPrimaryIPCChannel + base::GlobalDescriptors::kBaseDescriptor);
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_OPENBSD)
   g_fds->Set(kCrashDumpSignal,
              kCrashDumpSignal + base::GlobalDescriptors::kBaseDescriptor);
 #endif
@@ -358,11 +332,13 @@ int ContentMain(int argc,
   // The exit manager is in charge of calling the dtors of singleton objects.
   base::AtExitManager exit_manager;
 
+#if defined(OS_MACOSX)
   // We need this pool for all the objects created before we get to the
   // event loop, but we don't want to leave them hanging around until the
   // app quits. Each "main" needs to flush this pool right before it goes into
   // its main event loop to get rid of the cruft.
   base::mac::ScopedNSAutoreleasePool autorelease_pool;
+#endif
 
   CommandLine::Init(argc, argv);
 
@@ -373,6 +349,12 @@ int ContentMain(int argc,
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
   std::string process_type =
         command_line.GetSwitchValueASCII(switches::kProcessType);
+
+  // Enable startup tracing asap to avoid early TRACE_EVENT calls being ignored.
+  if (command_line.HasSwitch(switches::kTraceStartup)) {
+    base::debug::TraceLog::GetInstance()->SetEnabled(
+        command_line.GetSwitchValueASCII(switches::kTraceStartup));
+  }
 
 #if defined(OS_MACOSX)
   // We need to allocate the IO Ports before the Sandbox is initialized or
@@ -392,6 +374,8 @@ int ContentMain(int argc,
       (!delegate || delegate->ShouldSendMachPort(process_type))) {
     SendTaskPortToParentProcess();
   }
+#elif defined(OS_WIN)
+  content::SetupCRT(command_line);
 #endif
 
 #if defined(OS_POSIX)
@@ -411,8 +395,6 @@ int ContentMain(int argc,
       signal(SIGINT, SIG_IGN);
   }
 #endif
-
-  SetupCRT(command_line);
 
 #if defined(USE_NSS)
   crypto::EarlySetupForNSSInit();
@@ -446,29 +428,18 @@ int ContentMain(int argc,
   if (!process_type.empty())
     CommonSubprocessInit(process_type);
 
-  // Initialize the sandbox for this process.
-  SandboxInitWrapper sandbox_wrapper;
-  bool initialize_sandbox = true;
-
 #if defined(OS_WIN)
-  sandbox_wrapper.SetServices(sandbox_info);
+  CHECK(content::InitializeSandbox(sandbox_info));
 #elif defined(OS_MACOSX)
-  // On OS X the renderer sandbox needs to be initialized later in the startup
-  // sequence in RendererMainPlatformDelegate::EnableSandbox().
   if (process_type == switches::kRendererProcess ||
       process_type == switches::kPpapiPluginProcess ||
       (delegate && delegate->DelaySandboxInitialization(process_type))) {
-    initialize_sandbox = false;
+    // On OS X the renderer sandbox needs to be initialized later in the startup
+    // sequence in RendererMainPlatformDelegate::EnableSandbox().
+  } else {
+    CHECK(content::InitializeSandbox());
   }
 #endif
-
-  if (initialize_sandbox) {
-    bool sandbox_initialized_ok =
-        sandbox_wrapper.InitializeSandbox(command_line, process_type);
-    // Die if the sandbox can't be enabled.
-    CHECK(sandbox_initialized_ok) << "Error initializing sandbox for "
-                                  << process_type;
-  }
 
   if (delegate) delegate->SandboxInitialized(process_type);
 
@@ -476,8 +447,12 @@ int ContentMain(int argc,
   SetProcessTitleFromCommandLine(argv);
 #endif
 
-  MainFunctionParams main_params(command_line, sandbox_wrapper,
-                                 &autorelease_pool);
+  content::MainFunctionParams main_params(command_line);
+#if defined(OS_WIN)
+  main_params.sandbox_info = sandbox_info;
+#elif defined(OS_MACOSX)
+  main_params.autorelease_pool = &autorelease_pool;
+#endif
 
   exit_code = RunNamedProcessTypeMain(process_type, main_params, delegate);
 

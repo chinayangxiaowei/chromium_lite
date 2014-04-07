@@ -1,28 +1,33 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef WEBKIT_FILEAPI_FILE_SYSTEM_OPERATION_H_
 #define WEBKIT_FILEAPI_FILE_SYSTEM_OPERATION_H_
 
+#include <string>
 #include <vector>
 
 #include "base/file_path.h"
 #include "base/file_util_proxy.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_callback_factory.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop_proxy.h"
 #include "base/platform_file.h"
 #include "base/process.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/fileapi/file_system_operation_context.h"
+#include "webkit/fileapi/file_system_operation_interface.h"
 #include "webkit/fileapi/file_system_types.h"
 #include "webkit/quota/quota_manager.h"
 
 namespace base {
 class Time;
+}
+
+namespace chromeos {
+class CrosMountPointProvider;
 }
 
 namespace net {
@@ -38,69 +43,65 @@ class FileSystemCallbackDispatcher;
 class FileSystemContext;
 class FileWriterDelegate;
 class FileSystemOperationTest;
-class FileSystemQuotaUtil;
 
-// This class is designed to serve one-time file system operation per instance.
-// Only one method(CreateFile, CreateDirectory, Copy, Move, DirectoryExists,
-// GetMetadata, ReadDirectory and Remove) may be called during the lifetime of
-// this object and it should be called no more than once.
-// This class is self-destructed and an instance automatically gets deleted
-// when its operation is finished.
-class FileSystemOperation {
+// FileSystemOperation implementation for local file systems.
+class FileSystemOperation : public FileSystemOperationInterface {
  public:
-  // |dispatcher| will be owned by this class.
-  // |file_util| is optional; if supplied, it will not be deleted by
-  // the class.  It's expecting a pointer to a singleton.
-  FileSystemOperation(FileSystemCallbackDispatcher* dispatcher,
-                      scoped_refptr<base::MessageLoopProxy> proxy,
-                      FileSystemContext* file_system_context,
-                      FileSystemFileUtil* file_util);
   virtual ~FileSystemOperation();
 
-  void OpenFileSystem(const GURL& origin_url,
-                      fileapi::FileSystemType type,
-                      bool create);
-  void CreateFile(const GURL& path,
-                  bool exclusive);
-  void CreateDirectory(const GURL& path,
-                       bool exclusive,
-                       bool recursive);
-  void Copy(const GURL& src_path,
-            const GURL& dest_path);
-  void Move(const GURL& src_path,
-            const GURL& dest_path);
-  void DirectoryExists(const GURL& path);
-  void FileExists(const GURL& path);
-  void GetMetadata(const GURL& path);
-  void ReadDirectory(const GURL& path);
-  void Remove(const GURL& path, bool recursive);
-  void Write(scoped_refptr<net::URLRequestContext> url_request_context,
-             const GURL& path,
-             const GURL& blob_url,
-             int64 offset);
-  void Truncate(const GURL& path, int64 length);
-  void TouchFile(const GURL& path,
-                 const base::Time& last_access_time,
-                 const base::Time& last_modified_time);
-  void OpenFile(
+  // FileSystemOperation overrides.
+  virtual void CreateFile(const GURL& path,
+                          bool exclusive) OVERRIDE;
+  virtual void CreateDirectory(const GURL& path,
+                               bool exclusive,
+                               bool recursive) OVERRIDE;
+  virtual void Copy(const GURL& src_path,
+                    const GURL& dest_path) OVERRIDE;
+  virtual void Move(const GURL& src_path,
+                    const GURL& dest_path) OVERRIDE;
+  virtual void DirectoryExists(const GURL& path) OVERRIDE;
+  virtual void FileExists(const GURL& path) OVERRIDE;
+  virtual void GetMetadata(const GURL& path) OVERRIDE;
+  virtual void ReadDirectory(const GURL& path) OVERRIDE;
+  virtual void Remove(const GURL& path, bool recursive) OVERRIDE;
+  virtual void Write(const net::URLRequestContext* url_request_context,
+                     const GURL& path,
+                     const GURL& blob_url,
+                     int64 offset) OVERRIDE;
+  virtual void Truncate(const GURL& path, int64 length) OVERRIDE;
+  virtual void TouchFile(const GURL& path,
+                         const base::Time& last_access_time,
+                         const base::Time& last_modified_time) OVERRIDE;
+  virtual void OpenFile(
       const GURL& path,
       int file_flags,
-      base::ProcessHandle peer_handle);
+      base::ProcessHandle peer_handle) OVERRIDE;
+  virtual void Cancel(
+      scoped_ptr<FileSystemCallbackDispatcher> cancel_dispatcher) OVERRIDE;
+  virtual FileSystemOperation* AsFileSystemOperation() OVERRIDE;
 
-  // Try to cancel the current operation [we support cancelling write or
-  // truncate only].  Report failure for the current operation, then tell the
-  // passed-in operation to report success.
-  void Cancel(FileSystemOperation* cancel_operation);
+  // Synchronously gets the platform path for the given |path|.
+  void SyncGetPlatformPath(const GURL& path, FilePath* platform_path);
 
  private:
   class ScopedQuotaUtilHelper;
 
+  // Only MountPointProviders or testing class can create a
+  // new operation directly.
+  friend class SandboxMountPointProvider;
+  friend class FileSystemTestHelper;
+  friend class chromeos::CrosMountPointProvider;
+
+  FileSystemOperation(scoped_ptr<FileSystemCallbackDispatcher> dispatcher,
+                      scoped_refptr<base::MessageLoopProxy> proxy,
+                      FileSystemContext* file_system_context);
+
   FileSystemContext* file_system_context() const {
-    return file_system_operation_context_.file_system_context();
+    return operation_context_.file_system_context();
   }
 
   FileSystemOperationContext* file_system_operation_context() {
-    return &file_system_operation_context_;
+    return &operation_context_;
   }
 
   friend class FileSystemOperationTest;
@@ -109,13 +110,23 @@ class FileSystemOperation {
   friend class FileSystemTestOriginHelper;
   friend class FileSystemQuotaTest;
 
-  bool GetUsageAndQuotaThenCallback(
-      const GURL& origin_url,
-      quota::QuotaManager::GetUsageAndQuotaCallback* callback);
+  // The unit tests that need to specify and control the lifetime of the
+  // file_util on their own should call this before performing the actual
+  // operation. If it is given it will not be overwritten by the class.
+  void set_override_file_util(FileSystemFileUtil* file_util) {
+    operation_context_.set_src_file_util(file_util);
+    operation_context_.set_dest_file_util(file_util);
+  }
 
-  void DelayedCreateFileForQuota(quota::QuotaStatusCode status,
+  void GetUsageAndQuotaThenCallback(
+      const GURL& origin_url,
+      const quota::QuotaManager::GetUsageAndQuotaCallback& callback);
+
+  void DelayedCreateFileForQuota(bool exclusive,
+                                 quota::QuotaStatusCode status,
                                  int64 usage, int64 quota);
-  void DelayedCreateDirectoryForQuota(quota::QuotaStatusCode status,
+  void DelayedCreateDirectoryForQuota(bool exclusive, bool recursive,
+                                      quota::QuotaStatusCode status,
                                       int64 usage, int64 quota);
   void DelayedCopyForQuota(quota::QuotaStatusCode status,
                            int64 usage, int64 quota);
@@ -123,15 +134,12 @@ class FileSystemOperation {
                            int64 usage, int64 quota);
   void DelayedWriteForQuota(quota::QuotaStatusCode status,
                             int64 usage, int64 quota);
-  void DelayedTruncateForQuota(quota::QuotaStatusCode status,
+  void DelayedTruncateForQuota(int64 length,
+                               quota::QuotaStatusCode status,
                                int64 usage, int64 quota);
-  void DelayedOpenFileForQuota(quota::QuotaStatusCode status,
+  void DelayedOpenFileForQuota(int file_flags,
+                               quota::QuotaStatusCode status,
                                int64 usage, int64 quota);
-
-  // A callback used for OpenFileSystem.
-  void DidGetRootPath(bool success,
-                      const FilePath& path,
-                      const std::string& name);
 
   // Callback for CreateFile for |exclusive|=true cases.
   void DidEnsureFileExistsExclusive(base::PlatformFileError rv,
@@ -208,10 +216,24 @@ class FileSystemOperation {
                                     FilePath* virtual_path,
                                     FileSystemFileUtil** file_util);
 
+  // Common internal routine for VerifyFileSystemPathFor{Read,Write}.
+  bool VerifyFileSystemPath(const GURL& path,
+                            GURL* root_url,
+                            FileSystemType* type,
+                            FilePath* virtual_path,
+                            FileSystemFileUtil** file_util);
+
+  // Setup*Context*() functions will call the appropriate VerifyFileSystem
+  // function and store the results to operation_context_ and
+  // *_virtual_path_.
+  // Return the result of VerifyFileSystem*().
+  bool SetupSrcContextForRead(const GURL& path);
+  bool SetupSrcContextForWrite(const GURL& path, bool create);
+  bool SetupDestContextForWrite(const GURL& path, bool create);
+
 #ifndef NDEBUG
   enum OperationType {
     kOperationNone,
-    kOperationOpenFileSystem,
     kOperationCreateFile,
     kOperationCreateDirectory,
     kOperationCopy,
@@ -236,11 +258,10 @@ class FileSystemOperation {
   // Proxy for calling file_util_proxy methods.
   scoped_refptr<base::MessageLoopProxy> proxy_;
 
+  // This can be NULL if the operation is cancelled on the way.
   scoped_ptr<FileSystemCallbackDispatcher> dispatcher_;
 
-  FileSystemOperationContext file_system_operation_context_;
-
-  base::ScopedCallbackFactory<FileSystemOperation> callback_factory_;
+  FileSystemOperationContext operation_context_;
 
   scoped_ptr<ScopedQuotaUtilHelper> quota_util_helper_;
 
@@ -248,7 +269,7 @@ class FileSystemOperation {
   friend class FileWriterDelegate;
   scoped_ptr<FileWriterDelegate> file_writer_delegate_;
   scoped_ptr<net::URLRequest> blob_request_;
-  scoped_ptr<FileSystemOperation> cancel_operation_;
+  scoped_ptr<FileSystemCallbackDispatcher> cancel_dispatcher_;
 
   // Used only by OpenFile, in order to clone the file handle back to the
   // requesting process.
@@ -259,16 +280,6 @@ class FileSystemOperation {
   // write.
   FilePath src_virtual_path_;
   FilePath dest_virtual_path_;
-
-  // Options for CreateFile and CreateDirectory.
-  bool exclusive_;
-  bool recursive_;
-
-  // Options for OpenFile.
-  int file_flags_;
-
-  // Length to be truncated.
-  int64 length_;
 
   DISALLOW_COPY_AND_ASSIGN(FileSystemOperation);
 };

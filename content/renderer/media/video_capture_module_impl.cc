@@ -4,14 +4,9 @@
 
 #include "content/renderer/media/video_capture_module_impl.h"
 
+#include "base/atomicops.h"
+#include "base/bind.h"
 #include "content/renderer/media/video_capture_impl_manager.h"
-
-// static
-webrtc::VideoCaptureModule* webrtc::VideoCaptureModule::Create(
-    const WebRtc_Word32 id, const WebRtc_UWord8* device_unique_id_utf8) {
-  NOTREACHED();
-  return NULL;
-}
 
 VideoCaptureModuleImpl::VideoCaptureModuleImpl(
     const media::VideoCaptureSessionId id,
@@ -19,21 +14,26 @@ VideoCaptureModuleImpl::VideoCaptureModuleImpl(
     : webrtc::videocapturemodule::VideoCaptureImpl(id),
       session_id_(id),
       thread_("VideoCaptureModuleImpl"),
+      stopped_event_(false, false),
       vc_manager_(vc_manager),
-      state_(media::VideoCapture::kStopped),
-      got_first_frame_(false),
+      state_(video_capture::kStopped),
       width_(-1),
       height_(-1),
       frame_rate_(-1),
       video_type_(webrtc::kVideoI420),
       capture_engine_(NULL),
-      pending_start_(false) {
+      ref_count_(0) {
   DCHECK(vc_manager_);
   Init();
 }
 
 VideoCaptureModuleImpl::~VideoCaptureModuleImpl() {
+  // Ensure to stop capture in case user doesn't do it.
+  StopCapture();
   vc_manager_->RemoveDevice(session_id_, this);
+  // Ensure capture stopped by |capture_engine_| since all tasks posted on this
+  // thread will be executed and VCMImpl is waiting for OnStopped signal from
+  // |capture_engine_|.
   thread_.Stop();
 }
 
@@ -43,26 +43,40 @@ void VideoCaptureModuleImpl::Init() {
   capture_engine_ = vc_manager_->AddDevice(session_id_, this);
 }
 
+int32_t VideoCaptureModuleImpl::AddRef() {
+  DVLOG(1) << "VideoCaptureModuleImpl::AddRef()";
+  return base::subtle::Barrier_AtomicIncrement(&ref_count_, 1);
+}
+
+int32_t VideoCaptureModuleImpl::Release() {
+  DVLOG(1) << "VideoCaptureModuleImpl::Release()";
+  int ret = base::subtle::Barrier_AtomicIncrement(&ref_count_, -1);
+  if (ret == 0) {
+    DVLOG(1) << "Reference count is zero, hence this object is now deleted.";
+    delete this;
+  }
+  return ret;
+}
+
 WebRtc_Word32 VideoCaptureModuleImpl::StartCapture(
     const webrtc::VideoCaptureCapability& capability) {
   message_loop_proxy_->PostTask(
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &VideoCaptureModuleImpl::StartCaptureOnCaptureThread,
-                        capability));
+      base::Bind(&VideoCaptureModuleImpl::StartCaptureOnCaptureThread,
+                 base::Unretained(this), capability));
   return 0;
 }
 
 WebRtc_Word32 VideoCaptureModuleImpl::StopCapture() {
   message_loop_proxy_->PostTask(
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &VideoCaptureModuleImpl::StopCaptureOnCaptureThread));
+      base::Bind(&VideoCaptureModuleImpl::StopCaptureOnCaptureThread,
+                 base::Unretained(this)));
   return 0;
 }
 
 bool VideoCaptureModuleImpl::CaptureStarted() {
-  return state_ == media::VideoCapture::kStarted;
+  return state_ == video_capture::kStarted;
 }
 
 WebRtc_Word32 VideoCaptureModuleImpl::CaptureSettings(
@@ -80,10 +94,7 @@ void VideoCaptureModuleImpl::OnStarted(media::VideoCapture* capture) {
 }
 
 void VideoCaptureModuleImpl::OnStopped(media::VideoCapture* capture) {
-  message_loop_proxy_->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &VideoCaptureModuleImpl::OnStoppedOnCaptureThread,
-                        capture));
+  stopped_event_.Signal();
 }
 
 void VideoCaptureModuleImpl::OnPaused(media::VideoCapture* capture) {
@@ -95,14 +106,17 @@ void VideoCaptureModuleImpl::OnError(media::VideoCapture* capture,
   NOTIMPLEMENTED();
 }
 
+void VideoCaptureModuleImpl::OnRemoved(media::VideoCapture* capture) {
+  NOTIMPLEMENTED();
+}
+
 void VideoCaptureModuleImpl::OnBufferReady(
     media::VideoCapture* capture,
     scoped_refptr<media::VideoCapture::VideoFrameBuffer> buf) {
   message_loop_proxy_->PostTask(
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &VideoCaptureModuleImpl::OnBufferReadyOnCaptureThread,
-                        capture, buf));
+      base::Bind(&VideoCaptureModuleImpl::OnBufferReadyOnCaptureThread,
+                 base::Unretained(this), capture, buf));
 }
 
 void VideoCaptureModuleImpl::OnDeviceInfoReceived(
@@ -114,17 +128,10 @@ void VideoCaptureModuleImpl::OnDeviceInfoReceived(
 void VideoCaptureModuleImpl::StartCaptureOnCaptureThread(
     const webrtc::VideoCaptureCapability& capability) {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
-  DCHECK_NE(state_, media::VideoCapture::kStarted);
+  DCHECK_NE(state_, video_capture::kStarted);
 
-  if (state_ == media::VideoCapture::kStopping) {
-    VLOG(1) << "Got a new StartCapture in Stopping state!!! ";
-    pending_start_ = true;
-    pending_cap_ = capability;
-    return;
-  }
-
-  VLOG(1) << "StartCaptureOnCaptureThread: " << capability.width << ", "
-          << capability.height;
+  DVLOG(1) << "StartCaptureOnCaptureThread: " << capability.width << ", "
+           << capability.height;
 
   StartCaptureInternal(capability);
   return;
@@ -139,54 +146,35 @@ void VideoCaptureModuleImpl::StartCaptureInternal(
   width_ = capability.width;
   height_ = capability.height;
   frame_rate_ = capability.maxFPS;
-  state_ = media::VideoCapture::kStarted;
+  state_ = video_capture::kStarted;
 
   media::VideoCapture::VideoCaptureCapability cap;
   cap.width = capability.width;
   cap.height = capability.height;
   cap.max_fps = capability.maxFPS;
   cap.raw_type = media::VideoFrame::I420;
-  cap.resolution_fixed = true;
   capture_engine_->StartCapture(this, cap);
 }
 
 void VideoCaptureModuleImpl::StopCaptureOnCaptureThread() {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
 
-  if (pending_start_) {
-    VLOG(1) << "Got a StopCapture with one pending start!!! ";
-    pending_start_ = false;
+  if (state_ != video_capture::kStarted) {
+    DVLOG(1) << "Got a StopCapture while not started!!! ";
     return;
   }
 
-  if (state_ != media::VideoCapture::kStarted) {
-    VLOG(1) << "Got a StopCapture while not started!!! ";
-    return;
-  }
-
-  VLOG(1) << "StopCaptureOnCaptureThread. ";
-  state_ = media::VideoCapture::kStopping;
-
+  DVLOG(1) << "StopCaptureOnCaptureThread. ";
   capture_engine_->StopCapture(this);
-  return;
-}
-
-void VideoCaptureModuleImpl::OnStoppedOnCaptureThread(
-    media::VideoCapture* capture) {
-  DCHECK(message_loop_proxy_->BelongsToCurrentThread());
-
-  VLOG(1) << "Capture Stopped!!! ";
-  state_ = media::VideoCapture::kStopped;
-  got_first_frame_ = false;
+  // Need to use synchronous mode here to make sure |capture_engine_| will
+  // not call VCMImpl after this function returns. Otherwise, there could be
+  // use-after-free, especially when StopCapture() is called from dtor.
+  stopped_event_.Wait();
+  DVLOG(1) << "Capture Stopped!!! ";
+  state_ = video_capture::kStopped;
   width_ = -1;
   height_ = -1;
   frame_rate_ = -1;
-
-  if (pending_start_) {
-    VLOG(1) << "restart pending start ";
-    pending_start_ = false;
-    StartCaptureInternal(pending_cap_);
-  }
 }
 
 void VideoCaptureModuleImpl::OnBufferReadyOnCaptureThread(
@@ -194,13 +182,8 @@ void VideoCaptureModuleImpl::OnBufferReadyOnCaptureThread(
     scoped_refptr<media::VideoCapture::VideoFrameBuffer> buf) {
   DCHECK(message_loop_proxy_->BelongsToCurrentThread());
 
-  if (state_ != media::VideoCapture::kStarted)
+  if (state_ != video_capture::kStarted)
     return;
-
-  if (!got_first_frame_) {
-    got_first_frame_ = true;
-    start_time_ = buf->timestamp;
-  }
 
   frameInfo_.width = buf->width;
   frameInfo_.height = buf->height;
@@ -211,7 +194,7 @@ void VideoCaptureModuleImpl::OnBufferReadyOnCaptureThread(
       static_cast<WebRtc_Word32>(buf->buffer_size),
       frameInfo_,
       static_cast<WebRtc_Word64>(
-          (buf->timestamp - start_time_).InMicroseconds()));
+          (buf->timestamp - start_time_).InMilliseconds()));
 
   capture->FeedBuffer(buf);
 }

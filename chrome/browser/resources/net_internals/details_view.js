@@ -1,133 +1,120 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/**
- * The DetailsView handles the tabbed view that displays either the "log" or
- * "timeline" view. This class keeps track of what the current view is, and
- * invalidates the specific view each time the selected data has changed.
- *
- * @constructor
- */
-function DetailsView(tabHandlesContainerId,
-                     logTabId,
-                     timelineTabId,
-                     logBoxId,
-                     timelineBoxId) {
-  var tabSwitcher = new TabSwitcherView();
+var DetailsView = (function() {
+  'use strict';
 
-  VerticalSplitView.call(this,
-                         new DivView(tabHandlesContainerId),
-                         tabSwitcher);
+  // We inherit from DivView.
+  var superClass = DivView;
 
-  this.tabSwitcher_ = tabSwitcher;
-
-  this.logView_ = new DetailsLogView(logBoxId);
-  this.timelineView_ = new DetailsTimelineView(timelineBoxId);
-
-  this.tabSwitcher_.addTab(logTabId, this.logView_, true, true);
-  this.tabSwitcher_.addTab(timelineTabId, this.timelineView_, true, true);
-
-  // Default to the log view.
-  this.tabSwitcher_.switchToTab(logTabId, null);
-};
-
-inherits(DetailsView, VerticalSplitView);
-
-// The delay between updates to repaint.
-DetailsView.REPAINT_TIMEOUT_MS = 50;
-
-/**
- * Updates the data this view is using.
- */
-DetailsView.prototype.setData = function(currentData) {
-  // Make a copy of the array (in case the caller mutates it), and sort it
-  // by the source ID.
-  var sortedCurrentData = DetailsView.createSortedCopy_(currentData);
-
-  // TODO(eroman): Should not access private members of TabSwitcherView.
-  for (var i = 0; i < this.tabSwitcher_.tabs_.length; ++i)
-    this.tabSwitcher_.tabs_[i].contentView.setData(sortedCurrentData);
-};
-
-DetailsView.createSortedCopy_ = function(origArray) {
-  var sortedArray = origArray.slice(0);
-  sortedArray.sort(function(a, b) {
-    return a.getSourceId() - b.getSourceId();
-  });
-  return sortedArray;
-};
-
-//-----------------------------------------------------------------------------
-
-/**
- * Base class for the Log view and Timeline view.
- *
- * @constructor
- */
-function DetailsSubView(boxId) {
-  DivView.call(this, boxId);
-  this.sourceEntries_ = [];
-}
-
-inherits(DetailsSubView, DivView);
-
-DetailsSubView.prototype.setData = function(sourceEntries) {
-  this.sourceEntries_ = sourceEntries;
-
-  // Repaint the view.
-  if (this.isVisible() && !this.outstandingRepaint_) {
-    this.outstandingRepaint_ = true;
-    window.setTimeout(this.repaint.bind(this),
-                      DetailsView.REPAINT_TIMEOUT_MS);
+  /**
+   * The DetailsView displays the "log" view. This class keeps track of the
+   * selected SourceEntries, and repaints when they change.
+   *
+   * @constructor
+   */
+  function DetailsView(boxId) {
+    superClass.call(this, boxId);
+    this.sourceEntries_ = [];
+    // Map of source IDs to their corresponding DIVs.
+    this.sourceIdToDivMap_ = {};
+    // True when there's an asychronous repaint outstanding.
+    this.outstandingRepaint_ = false;
+    // ID of source entry we should jump to after the oustanding repaint.
+    // 0 if none, or there's no such repaint.
+    this.outstandingScrollToId_ = 0;
   }
-};
 
-DetailsSubView.prototype.repaint = function() {
-  this.outstandingRepaint_ = false;
-  this.getNode().innerHTML = '';
-};
+  // The delay between updates to repaint.
+  var REPAINT_TIMEOUT_MS = 50;
 
-DetailsSubView.prototype.show = function(isVisible) {
-  DetailsSubView.superClass_.show.call(this, isVisible);
-  if (isVisible) {
-    this.repaint();
-  } else {
-    this.getNode().innerHTML = '';
+  DetailsView.prototype = {
+    // Inherit the superclass's methods.
+    __proto__: superClass.prototype,
+
+    setData: function(sourceEntries) {
+      // Make a copy of the array (in case the caller mutates it), and sort it
+      // by the source ID.
+      this.sourceEntries_ = createSortedCopy_(sourceEntries);
+
+      // Repaint the view.
+      if (this.isVisible() && !this.outstandingRepaint_) {
+        this.outstandingRepaint_ = true;
+        window.setTimeout(this.repaint.bind(this),
+                          REPAINT_TIMEOUT_MS);
+      }
+    },
+
+    repaint: function() {
+      this.outstandingRepaint_ = false;
+      this.sourceIdToDivMap_ = {};
+      this.getNode().innerHTML = '';
+
+      var node = this.getNode();
+
+      for (var i = 0; i < this.sourceEntries_.length; ++i) {
+        if (i != 0)
+          addNode(node, 'hr');
+
+        var sourceEntry = this.sourceEntries_[i];
+        var div = addNode(node, 'div');
+        div.className = 'logSourceEntry';
+
+        var p = addNode(div, 'p');
+        addNodeWithText(p, 'h4',
+                        sourceEntry.getSourceId() + ': ' +
+                            sourceEntry.getSourceTypeString());
+
+        if (sourceEntry.getDescription())
+          addNodeWithText(p, 'h4', sourceEntry.getDescription());
+
+        var logEntries = sourceEntry.getLogEntries();
+        var startDate = timeutil.convertTimeTicksToDate(logEntries[0].time);
+        addNodeWithText(p, 'div', 'Start Time: ' + startDate.toLocaleString());
+
+        sourceEntry.printAsText(div);
+
+        this.sourceIdToDivMap_[sourceEntry.getSourceId()] = div;
+      }
+
+      if (this.outstandingScrollToId_) {
+        this.scrollToSourceId(this.outstandingScrollToId_);
+        this.outstandingScrollToId_ = 0;
+      }
+    },
+
+    show: function(isVisible) {
+      superClass.prototype.show.call(this, isVisible);
+      if (isVisible) {
+        this.repaint();
+      } else {
+        this.getNode().innerHTML = '';
+      }
+    },
+
+    /**
+     * Scrolls to the source indicated by |sourceId|, if displayed.  If a
+     * repaint is outstanding, waits for it to complete before scrolling.
+     */
+    scrollToSourceId: function(sourceId) {
+      if (this.outstandingRepaint_) {
+        this.outstandingScrollToId_ = sourceId;
+        return;
+      }
+      var div = this.sourceIdToDivMap_[sourceId];
+      if (div)
+        div.scrollIntoView();
+    }
+  };
+
+  function createSortedCopy_(origArray) {
+    var sortedArray = origArray.slice(0);
+    sortedArray.sort(function(a, b) {
+      return a.getSourceId() - b.getSourceId();
+    });
+    return sortedArray;
   }
-};
 
-//-----------------------------------------------------------------------------
-
-
-/**
- * Subview that is displayed in the log tab.
- * @constructor
- */
-function DetailsLogView(boxId) {
-  DetailsSubView.call(this, boxId);
-}
-
-inherits(DetailsLogView, DetailsSubView);
-
-DetailsLogView.prototype.repaint = function() {
-  DetailsLogView.superClass_.repaint.call(this);
-  PaintLogView(this.sourceEntries_, this.getNode());
-};
-
-//-----------------------------------------------------------------------------
-
-/**
- * Subview that is displayed in the timeline tab.
- * @constructor
- */
-function DetailsTimelineView(boxId) {
-  DetailsSubView.call(this, boxId);
-}
-
-inherits(DetailsTimelineView, DetailsSubView);
-
-DetailsTimelineView.prototype.repaint = function() {
-  DetailsTimelineView.superClass_.repaint.call(this);
-  PaintTimelineView(this.sourceEntries_, this.getNode());
-};
+  return DetailsView;
+})();

@@ -264,6 +264,9 @@ class PyUITestBase {
   %feature("docstring", "Like ApplyAccelerator, except that it waits for "
            "the command to execute.") RunCommand;
   bool RunCommand(int browser_command, int window_index = 0);
+  %feature("docstring", "Returns true if the given command id is enabled on "
+           "the given window.") IsMenuCommandEnabled;
+  bool IsMenuCommandEnabled(int browser_command, int window_index = 0);
 
   // Get/fetch properties
   %feature("docstring",
@@ -285,6 +288,10 @@ class PyUITestBase {
            "If the NTP is visible, only return true if attached "
            "(to the chrome).") GetBookmarkBarVisibility;
   bool GetBookmarkBarVisibility();
+
+  %feature("docstring", "Determine if the bookmark bar is detached. "
+           "This usually is only true on the NTP.") IsBookmarkBarDetached;
+  bool IsBookmarkBarDetached();
 
   %feature("docstring", "Wait for the bookmark bar animation to complete. "
            "|wait_for_open| specifies which kind of change we wait for.")
@@ -372,12 +379,6 @@ class PyUITestBase {
                         int tab_index=0);
 
   // Misc methods
-  %feature("docstring", "Install an extension from the given path.  The path "
-           "must be absolute and may be a crx file or an unpacked extension "
-           "directory. Returns the extension ID if successfully installed and "
-           "loaded. Otherwise, returns the empty string.") InstallExtension;
-  std::string InstallExtension(const std::string& extension_path, bool with_ui);
-
   %feature("docstring", "Get a proxy to the browser window at the given "
                         "zero-based index.") GetBrowserWindow;
   scoped_refptr<BrowserProxy> GetBrowserWindow(int window_index);
@@ -391,22 +392,6 @@ class PyUITestBase {
   std::string _SendJSONRequest(int window_index,
                                const std::string& request,
                                int timeout);
-
-  %feature("docstring", "Execute a string of javascript in the specified "
-           "(window, tab, frame) and return a string.") ExecuteJavascript;
-  std::wstring ExecuteJavascript(const std::wstring& script,
-                                 int window_index=0,
-                                 int tab_index=0,
-                                 const std::wstring& frame_xpath="");
-
-  %feature("docstring", "Evaluate a javascript expression in the specified "
-           "(window, tab, frame) and return the specified DOM value "
-           "as a string. This is a wrapper around "
-           "window.domAutomationController.send().") GetDOMValue;
-  std::wstring GetDOMValue(const std::wstring& expr,
-                           int window_index=0,
-                           int tab_index=0,
-                           const std::wstring& frame_xpath="");
 
   %feature("docstring", "Resets to the default theme. "
            "Returns true on success.") ResetToDefaultTheme;
@@ -444,5 +429,23 @@ class TestServer {
   %feature("docstring", "Get URL for a file path") GetURL;
   GURL GetURL(const std::string& path) const;
 };
+
+%extend TestServer {
+  %feature("docstring", "Get port number.") GetPort;
+  int GetPort() const {
+    int val = 0;
+    $self->server_data().GetInteger("port", &val);
+    return val;
+  }
+
+  %feature("docstring", "Get xmpp port number in case of sync server.")
+      GetSyncXmppPort;
+  int GetSyncXmppPort() const {
+    int val = 0;
+    $self->server_data().GetInteger("xmpp_port", &val);
+    return val;
+  }
+};
+
 }
 

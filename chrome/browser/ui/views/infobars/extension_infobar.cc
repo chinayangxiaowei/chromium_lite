@@ -16,14 +16,14 @@
 #include "ui/base/animation/slide_animation.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas_skia.h"
-#include "views/controls/button/menu_button.h"
-#include "views/controls/menu/menu_item_view.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/widget/widget.h"
 
 // ExtensionInfoBarDelegate ----------------------------------------------------
 
-InfoBar* ExtensionInfoBarDelegate::CreateInfoBar(TabContentsWrapper* owner) {
-  return new ExtensionInfoBar(owner, this);
+InfoBar* ExtensionInfoBarDelegate::CreateInfoBar(InfoBarTabHelper* owner) {
+  return new ExtensionInfoBar(browser_, owner, this);
 }
 
 // ExtensionInfoBar ------------------------------------------------------------
@@ -33,10 +33,12 @@ namespace {
 const int kMenuHorizontalMargin = 1;
 }  // namespace
 
-ExtensionInfoBar::ExtensionInfoBar(TabContentsWrapper* owner,
+ExtensionInfoBar::ExtensionInfoBar(Browser* browser,
+                                   InfoBarTabHelper* owner,
                                    ExtensionInfoBarDelegate* delegate)
     : InfoBarView(owner, delegate),
       delegate_(delegate),
+      browser_(browser),
       menu_(NULL),
       ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)) {
   delegate->set_observer(this);
@@ -72,8 +74,9 @@ void ExtensionInfoBar::ViewHierarchyChanged(bool is_add,
     return;
   }
 
-  menu_ = new views::MenuButton(NULL, std::wstring(), this, false);
+  menu_ = new views::MenuButton(NULL, string16(), this, false);
   menu_->SetVisible(false);
+  menu_->set_focusable(true);
   AddChildView(menu_);
 
   ExtensionHost* extension_host = GetDelegate()->extension_host();
@@ -120,7 +123,8 @@ void ExtensionInfoBar::OnImageLoaded(SkBitmap* image,
   // The margin between the extension icon and the drop-down arrow bitmap.
   static const int kDropArrowLeftMargin = 3;
   scoped_ptr<gfx::CanvasSkia> canvas(new gfx::CanvasSkia(
-      image_size + kDropArrowLeftMargin + drop_image->width(), image_size,
+      gfx::Size(image_size + kDropArrowLeftMargin + drop_image->width(),
+                image_size),
       false));
   canvas->DrawBitmapInt(*icon, 0, 0, icon->width(), icon->height(), 0, 0,
                         image_size, image_size, false);
@@ -137,18 +141,16 @@ void ExtensionInfoBar::OnDelegateDeleted() {
 }
 
 void ExtensionInfoBar::RunMenu(View* source, const gfx::Point& pt) {
+  if (!owned())
+    return;  // We're closing; don't call anything, it might access the owner.
   const Extension* extension = GetDelegate()->extension_host()->extension();
   if (!extension->ShowConfigureContextMenus())
     return;
 
-  Browser* browser = BrowserView::GetBrowserViewForNativeWindow(
-      platform_util::GetTopLevel(source->GetWidget()->GetNativeView()))->
-      browser();
   scoped_refptr<ExtensionContextMenuModel> options_menu_contents =
-      new ExtensionContextMenuModel(extension, browser, NULL);
+      new ExtensionContextMenuModel(extension, browser_, NULL);
   DCHECK_EQ(source, menu_);
   RunMenuAt(options_menu_contents.get(), menu_, views::MenuItemView::TOPLEFT);
-  // TODO(pkasting): this may be deleted after rewrite.
 }
 
 ExtensionInfoBarDelegate* ExtensionInfoBar::GetDelegate() {

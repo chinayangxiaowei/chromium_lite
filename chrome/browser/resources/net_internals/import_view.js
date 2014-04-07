@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,6 @@
  */
 var ImportView = (function() {
   'use strict';
-
-  // IDs for special HTML elements in import_view.html
-  var MAIN_BOX_ID = 'import-view-tab-content';
-  var LOADED_DIV_ID = 'import-view-loaded-div';
-  var LOAD_LOG_FILE_ID = 'import-view-load-log-file';
-  var LOAD_STATUS_TEXT_ID = 'import-view-load-status-text';
-  var RELOAD_LINK_ID = 'import-view-reloaded-link';
-  var LOADED_INFO_EXPORT_DATE_ID = 'import-view-export-date';
-  var LOADED_INFO_BUILD_NAME_ID = 'import-view-build-name';
-  var LOADED_INFO_OS_TYPE_ID = 'import-view-os-type';
-  var LOADED_INFO_COMMAND_LINE_ID = 'import-view-command-line';
-  var LOADED_INFO_USER_COMMENTS_ID = 'import-view-user-comments';
 
   // This is defined in index.html, but for all intents and purposes is part
   // of this view.
@@ -34,29 +22,41 @@ var ImportView = (function() {
     assertFirstConstructorCall(ImportView);
 
     // Call superclass's constructor.
-    superClass.call(this, MAIN_BOX_ID);
+    superClass.call(this, ImportView.MAIN_BOX_ID);
 
-    this.loadedDiv_ = $(LOADED_DIV_ID);
+    this.loadedDiv_ = $(ImportView.LOADED_DIV_ID);
 
-    this.loadFileElement_ = $(LOAD_LOG_FILE_ID);
+    this.loadFileElement_ = $(ImportView.LOAD_LOG_FILE_ID);
     this.loadFileElement_.onchange = this.logFileChanged.bind(this);
-    this.loadStatusText_ = $(LOAD_STATUS_TEXT_ID);
+    this.loadStatusText_ = $(ImportView.LOAD_STATUS_TEXT_ID);
 
     var dropTarget = $(LOAD_LOG_FILE_DROP_TARGET_ID);
     dropTarget.ondragenter = this.onDrag.bind(this);
     dropTarget.ondragover = this.onDrag.bind(this);
     dropTarget.ondrop = this.onDrop.bind(this);
 
-    $(RELOAD_LINK_ID).onclick = this.clickedReload_.bind(this);
+    $(ImportView.RELOAD_LINK_ID).onclick = this.clickedReload_.bind(this);
 
-    this.loadedInfoBuildName_ = $(LOADED_INFO_BUILD_NAME_ID);
-    this.loadedInfoExportDate_ = $(LOADED_INFO_EXPORT_DATE_ID);
-    this.loadedInfoOsType_ = $(LOADED_INFO_OS_TYPE_ID);
-    this.loadedInfoCommandLine_ = $(LOADED_INFO_COMMAND_LINE_ID);
-    this.loadedInfoUserComments_ = $(LOADED_INFO_USER_COMMENTS_ID);
+    this.loadedInfoBuildName_ = $(ImportView.LOADED_INFO_BUILD_NAME_ID);
+    this.loadedInfoExportDate_ = $(ImportView.LOADED_INFO_EXPORT_DATE_ID);
+    this.loadedInfoOsType_ = $(ImportView.LOADED_INFO_OS_TYPE_ID);
+    this.loadedInfoCommandLine_ = $(ImportView.LOADED_INFO_COMMAND_LINE_ID);
+    this.loadedInfoUserComments_ = $(ImportView.LOADED_INFO_USER_COMMENTS_ID);
   }
 
   ImportView.TAB_HANDLE_ID = 'tab-handle-import';
+
+  // IDs for special HTML elements in import_view.html
+  ImportView.MAIN_BOX_ID = 'import-view-tab-content';
+  ImportView.LOADED_DIV_ID = 'import-view-loaded-div';
+  ImportView.LOAD_LOG_FILE_ID = 'import-view-load-log-file';
+  ImportView.LOAD_STATUS_TEXT_ID = 'import-view-load-status-text';
+  ImportView.RELOAD_LINK_ID = 'import-view-reloaded-link';
+  ImportView.LOADED_INFO_EXPORT_DATE_ID = 'import-view-export-date';
+  ImportView.LOADED_INFO_BUILD_NAME_ID = 'import-view-build-name';
+  ImportView.LOADED_INFO_OS_TYPE_ID = 'import-view-os-type';
+  ImportView.LOADED_INFO_COMMAND_LINE_ID = 'import-view-command-line';
+  ImportView.LOADED_INFO_USER_COMMENTS_ID = 'import-view-user-comments';
 
   cr.addSingletonGetter(ImportView);
 
@@ -69,9 +69,9 @@ var ImportView = (function() {
      * loading the new ones.  Returns true to indicate the view should
      * still be visible.
      */
-    onLoadLogFinish: function(data, unused, userComments) {
+    onLoadLogFinish: function(data, unused, logDump) {
       setNodeDisplay(this.loadedDiv_, true);
-      this.updateLoadedClientInfo(userComments);
+      this.updateLoadedClientInfo(logDump.userComments);
       return true;
     },
 
@@ -150,7 +150,7 @@ var ImportView = (function() {
     },
 
     onLoadLogFile: function(logFile, event) {
-      var result = logutil.loadLogFile(event.target.result, logFile.fileName);
+      var result = log_util.loadLogFile(event.target.result, logFile.fileName);
       this.setLoadFileStatus(result, false);
     },
 
@@ -196,8 +196,17 @@ var ImportView = (function() {
       if (typeof(ClientInfo) != 'object')
         return;
 
-      // Dumps made with the command line option don't have a date.
-      this.loadedInfoExportDate_.innerText = ClientInfo.date || '';
+      var dateString = '';
+      // Dumps made with the command line option don't have a date, and older
+      // versions of Chrome use a formatted string.
+      // TODO(mmenke):  At some point, after Chrome 17 hits stable, remove the
+      //                ClientInfo.date case.
+      if (ClientInfo.numericDate) {
+        dateString = (new Date(ClientInfo.numericDate)).toLocaleString();
+      } else if (ClientInfo.date) {
+        dateString = ClientInfo.date;
+      }
+      this.loadedInfoExportDate_.innerText = dateString;
 
       var buildName =
           ClientInfo.name +

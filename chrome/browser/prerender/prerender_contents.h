@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_PRERENDER_PRERENDER_CONTENTS_H_
 #pragma once
 
+#include <list>
 #include <string>
 #include <vector>
 
@@ -13,23 +14,23 @@
 #include "base/time.h"
 #include "base/values.h"
 #include "chrome/browser/prerender/prerender_final_status.h"
-#include "content/browser/tab_contents/tab_contents_observer.h"
-#include "content/browser/renderer_host/render_view_host_delegate.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/referrer.h"
 
 class Profile;
 class RenderViewHost;
-class TabContents;
+class SessionStorageNamespace;
 class TabContentsWrapper;
 struct FaviconURL;
-struct ViewHostMsg_FrameNavigate_Params;
 
 namespace base {
 class ProcessMetrics;
 }
 
-namespace gfx {
-class Rect;
+namespace content {
+class RenderViewHostDelegate;
 }
 
 namespace prerender {
@@ -43,8 +44,8 @@ class PrerenderTracker;
 // NavigationController because is has no facility for navigating (other than
 // programatically view window.location.href) or RenderViewHostManager because
 // it is never allowed to navigate across a SiteInstance boundary.
-class PrerenderContents : public NotificationObserver,
-                          public TabContentsObserver {
+class PrerenderContents : public content::NotificationObserver,
+                          public content::WebContentsObserver {
  public:
   // PrerenderContents::Create uses the currently registered Factory to create
   // the PrerenderContents. Factory is intended for testing.
@@ -60,12 +61,41 @@ class PrerenderContents : public NotificationObserver,
         PrerenderTracker* prerender_tracker,
         Profile* profile,
         const GURL& url,
-        const GURL& referrer,
+        const content::Referrer& referrer,
         Origin origin,
         uint8 experiment_id) = 0;
 
    private:
     DISALLOW_COPY_AND_ASSIGN(Factory);
+  };
+
+  // Information on pages that the prerendered page has tried to prerender.
+  struct PendingPrerenderData {
+    PendingPrerenderData(Origin origin,
+                         const GURL& url,
+                         const content::Referrer& referrer);
+
+    Origin origin;
+    GURL url;
+    content::Referrer referrer;
+  };
+  typedef std::list<PendingPrerenderData> PendingPrerenderList;
+
+  // Indicates how this PrerenderContents relates to MatchComplete.
+  // This is important to figure out in what histograms to record the
+  // FinalStatus in, as described below.
+  enum MatchCompleteStatus {
+    // A regular prerender which will be recorded both in Match and
+    // MatchComplete.
+    MATCH_COMPLETE_DEFAULT,
+    // A prerender that used to be a regular prerender, but has since
+    // been replaced by a MatchComplete dummy.  Therefore, we will record
+    // this only for Match, but not for MatchComplete.
+    MATCH_COMPLETE_REPLACED,
+    // A prerender that is a MatchComplete dummy replacing a regular
+    // prerender.  Therefore, we will record this only for MatchComplete,
+    // but not Match.
+    MATCH_COMPLETE_REPLACEMENT
   };
 
   virtual ~PrerenderContents();
@@ -75,9 +105,10 @@ class PrerenderContents : public NotificationObserver,
   static Factory* CreateFactory();
 
   // |source_render_view_host| is the RenderViewHost that initiated
-  // prerendering.  It must be non-NULL and have its own view.  It is used
-  // solely to determine the window bounds while prerendering.
-  virtual void StartPrerendering(const RenderViewHost* source_render_view_host);
+  // prerendering.
+  virtual void StartPrerendering(
+      const RenderViewHost* source_render_view_host,
+      SessionStorageNamespace* session_storage_namespace);
 
   // Verifies that the prerendering is not using too many resources, and kills
   // it if not.
@@ -85,16 +116,19 @@ class PrerenderContents : public NotificationObserver,
 
   RenderViewHost* render_view_host_mutable();
   const RenderViewHost* render_view_host() const;
-
-  ViewHostMsg_FrameNavigate_Params* navigate_params() {
-    return navigate_params_.get();
-  }
   string16 title() const { return title_; }
   int32 page_id() const { return page_id_; }
   GURL icon_url() const { return icon_url_; }
   const GURL& prerender_url() const { return prerender_url_; }
+  const content::Referrer& referrer() const { return referrer_; }
   bool has_stopped_loading() const { return has_stopped_loading_; }
   bool prerendering_has_started() const { return prerendering_has_started_; }
+  MatchCompleteStatus match_complete_status() const {
+    return match_complete_status_;
+  }
+  void set_match_complete_status(MatchCompleteStatus status) {
+    match_complete_status_ = status;
+  }
 
   // Sets the parameter to the value of the associated RenderViewHost's child id
   // and returns a boolean indicating the validity of that id.
@@ -111,6 +145,7 @@ class PrerenderContents : public NotificationObserver,
   FinalStatus final_status() const { return final_status_; }
 
   Origin origin() const { return origin_; }
+  uint8 experiment_id() const { return experiment_id_; }
 
   base::TimeTicks load_start_time() const { return load_start_time_; }
 
@@ -120,27 +155,31 @@ class PrerenderContents : public NotificationObserver,
   bool MatchesURL(const GURL& url, GURL* matching_url) const;
 
   void OnJSOutOfMemory();
-  void OnRunJavaScriptMessage(const string16& message,
-                              const string16& default_prompt,
-                              const GURL& frame_url,
-                              const int flags,
-                              bool* did_suppress_message,
-                              string16* prompt_field);
-  virtual void OnRenderViewGone(int status, int exit_code);
+  bool ShouldSuppressDialogs();
 
-  // TabContentsObserver implementation.
+  // content::WebContentsObserver implementation.
   virtual void DidStopLoading() OVERRIDE;
+  virtual void DidStartProvisionalLoadForFrame(
+      int64 frame_id,
+      bool is_main_frame,
+      const GURL& validated_url,
+      bool is_error_page,
+      RenderViewHost* render_view_host) OVERRIDE;
+  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
 
-  // NotificationObserver
+  // content::NotificationObserver
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Adds an alias URL, for one of the many redirections. If the URL can not
   // be prerendered - for example, it's an ftp URL - |this| will be destroyed
   // and false is returned. Otherwise, true is returned and the alias is
   // remembered.
   virtual bool AddAliasURL(const GURL& url);
+
+  // Adds all alias URLs from another prerender.
+  void AddAliasURLsFromOtherPrerenderContents(PrerenderContents* other_pc);
 
   // The preview TabContents (may be null).
   TabContentsWrapper* prerender_contents() const {
@@ -157,8 +196,6 @@ class PrerenderContents : public NotificationObserver,
   // new tab.
   void CommitHistory(TabContentsWrapper* tab);
 
-  int32 starting_page_id() { return starting_page_id_; }
-
   base::Value* GetAsValue() const;
 
   // Returns whether a pending cross-site navigation is happening.
@@ -166,22 +203,38 @@ class PrerenderContents : public NotificationObserver,
   // MouseEvent being dispatched by a link to a website installed as an app.
   bool IsCrossSiteNavigationPending() const;
 
+  // Adds a pending prerender to the list.
+  virtual void AddPendingPrerender(Origin origin,
+                                   const GURL& url,
+                                   const content::Referrer& referrer);
+
+  // Returns true if |url| corresponds to a pending prerender.
+  bool IsPendingEntry(const GURL& url) const;
+
+  // Reissues any pending prerender requests from the prerendered page.  Also
+  // clears the list of pending requests.
+  void StartPendingPrerenders();
+
  protected:
   PrerenderContents(PrerenderManager* prerender_manager,
                     PrerenderTracker* prerender_tracker,
                     Profile* profile,
                     const GURL& url,
-                    const GURL& referrer,
+                    const content::Referrer& referrer,
                     Origin origin,
                     uint8 experiment_id);
-
-  NotificationRegistrar& notification_registrar() {
-    return notification_registrar_;
-  }
 
   // Called whenever a RenderViewHost is created for prerendering.  Only called
   // once the RenderViewHost has a RenderView and RenderWidgetHostView.
   virtual void OnRenderViewHostCreated(RenderViewHost* new_render_view_host);
+
+  content::NotificationRegistrar& notification_registrar() {
+    return notification_registrar_;
+  }
+
+  const PendingPrerenderList* pending_prerender_list() const {
+    return &pending_prerender_list_;
+  }
 
  private:
   class TabContentsDelegateImpl;
@@ -192,14 +245,10 @@ class PrerenderContents : public NotificationObserver,
   friend class PrerenderRenderViewHostObserver;
 
   // Message handlers.
-  void OnDidStartProvisionalLoadForFrame(int64 frame_id,
-                                         bool main_frame,
-                                         bool has_opener_set,
-                                         const GURL& url);
   void OnUpdateFaviconURL(int32 page_id, const std::vector<FaviconURL>& urls);
 
   // Returns the RenderViewHost Delegate for this prerender.
-  RenderViewHostDelegate* GetRenderViewHostDelegate();
+  content::WebContents* GetWebContents();
 
   // Returns the ProcessMetrics for the render process, if it exists.
   base::ProcessMetrics* MaybeGetProcessMetrics();
@@ -214,10 +263,7 @@ class PrerenderContents : public NotificationObserver,
   GURL prerender_url_;
 
   // The referrer.
-  GURL referrer_;
-
-  // The NavigationParameters of the finished navigation.
-  scoped_ptr<ViewHostMsg_FrameNavigate_Params> navigate_params_;
+  content::Referrer referrer_;
 
   // The profile being used
   Profile* profile_;
@@ -231,7 +277,7 @@ class PrerenderContents : public NotificationObserver,
   int32 page_id_;
   GURL url_;
   GURL icon_url_;
-  NotificationRegistrar notification_registrar_;
+  content::NotificationRegistrar notification_registrar_;
 
   // A vector of URLs that this prerendered page matches against.
   // This array can contain more than element as a result of redirects,
@@ -245,6 +291,11 @@ class PrerenderContents : public NotificationObserver,
   FinalStatus final_status_;
 
   bool prerendering_has_started_;
+
+  // The MatchComplete status of the prerender, indicating how it relates
+  // to being a MatchComplete dummy (see definition of MatchCompleteStatus
+  // above).
+  MatchCompleteStatus match_complete_status_;
 
   // Tracks whether or not prerendering has been cancelled by calling Destroy.
   // Used solely to prevent double deletion.
@@ -270,17 +321,14 @@ class PrerenderContents : public NotificationObserver,
   int child_id_;
   int route_id_;
 
-  // Page ID at which prerendering started.
-  int32 starting_page_id_;
-
   // Origin for this prerender.
   Origin origin_;
 
   // Experiment during which this prerender is performed.
   uint8 experiment_id_;
 
-  // Offset by which to offset prerendered pages
-  static const int32 kPrerenderPageIdOffset = 10;
+  // List of all pages the prerendered page has tried to prerender.
+  PendingPrerenderList pending_prerender_list_;
 
   DISALLOW_COPY_AND_ASSIGN(PrerenderContents);
 };

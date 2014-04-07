@@ -7,6 +7,8 @@
 #include <functional>
 #include <set>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
@@ -18,7 +20,9 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/memory_details.h"
 #include "chrome/common/chrome_switches.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+
+using content::BrowserThread;
 
 namespace chromeos {
 namespace system {
@@ -175,7 +179,7 @@ class SyslogsProviderImpl : public SyslogsProvider {
       bool compress_logs,
       SyslogsContext context,
       CancelableRequestConsumerBase* consumer,
-      ReadCompleteCallback* callback);
+      const ReadCompleteCallback& callback);
 
   // Reads system logs, compresses content if requested.
   // Called from FILE thread.
@@ -208,7 +212,7 @@ CancelableRequestProvider::Handle SyslogsProviderImpl::RequestSyslogs(
     bool compress_logs,
     SyslogsContext context,
     CancelableRequestConsumerBase* consumer,
-    ReadCompleteCallback* callback) {
+    const ReadCompleteCallback& callback) {
   // Register the callback request.
   scoped_refptr<CancelableRequest<ReadCompleteCallback> > request(
          new CancelableRequest<ReadCompleteCallback>(callback));
@@ -218,9 +222,8 @@ CancelableRequestProvider::Handle SyslogsProviderImpl::RequestSyslogs(
   // callback on the calling thread (e.g. UI) when complete.
   BrowserThread::PostTask(
       BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(
-          this, &SyslogsProviderImpl::ReadSyslogs, request,
-          compress_logs, context));
+      base::Bind(&SyslogsProviderImpl::ReadSyslogs, base::Unretained(this),
+                 request, compress_logs, context));
 
   return request->handle();
 }
@@ -258,7 +261,7 @@ class SyslogsMemoryHandler : public MemoryDetails {
              chrome.processes.begin();
          iter1 != chrome.processes.end(); ++iter1) {
       std::string process_string(
-          ChildProcessInfo::GetFullTypeNameInEnglish(
+          ProcessMemoryInformation::GetFullTypeNameInEnglish(
               iter1->type, iter1->renderer_type));
       if (!iter1->titles.empty()) {
         std::string titles(" [");
@@ -285,8 +288,7 @@ class SyslogsMemoryHandler : public MemoryDetails {
     }
     (*logs_)["mem_usage"] = mem_string;
     // This will call the callback on the calling thread.
-    request_->ForwardResult(
-        Tuple2<LogDictionaryType*, std::string*>(logs_, zip_content_));
+    request_->ForwardResult(logs_, zip_content_);
   }
 
  private:
@@ -377,7 +379,3 @@ SyslogsProvider* SyslogsProvider::GetInstance() {
 
 }  // namespace system
 }  // namespace chromeos
-
-// Allows InvokeLater without adding refcounting. SyslogsProviderImpl is a
-// Singleton and won't be deleted until it's last InvokeLater is run.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(chromeos::system::SyslogsProviderImpl);

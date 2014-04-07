@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@ cr.define('print_preview', function() {
     this.landscapeRadioButton_ = $('landscape');
     this.wasLandscape_ = false;
     this.updateState();
+    this.addEventListeners_();
   }
 
   cr.addSingletonGetter(LayoutSettings);
@@ -49,31 +50,33 @@ cr.define('print_preview', function() {
      * @return {boolean} true if the chosen layout mode has changed since last
      *     time the state was updated.
      */
-    hasChanged_ : function() {
-      return this.isLandscape() !=  this.wasLandscape_;
+    hasChanged_: function() {
+      return this.isLandscape() != this.wasLandscape_;
     },
 
     /**
      * Saves the currently selected layout mode. Used  in |this.hasChanged_|.
      */
-    updateState : function() {
+    updateState: function() {
       this.wasLandscape_ = this.isLandscape();
     },
 
     /**
      * Adding listeners to all layout related controls. The listeners take care
      * of altering their behavior depending on |hasPendingPreviewRequest|.
+     * @private
      */
-    addEventListeners: function() {
+    addEventListeners_: function() {
       this.landscapeRadioButton_.onclick = this.onLayoutButtonClick_.bind(this);
       this.portraitRadioButton_.onclick = this.onLayoutButtonClick_.bind(this);
-      document.addEventListener('PDFLoaded', this.onPDFLoaded_.bind(this));
-      document.addEventListener('printerCapabilitiesUpdated',
+      document.addEventListener(customEvents.PDF_LOADED,
+                                this.onPDFLoaded_.bind(this));
+      document.addEventListener(customEvents.PRINTER_CAPABILITIES_UPDATED,
                                 this.onPrinterCapabilitiesUpdated_.bind(this));
     },
 
     /**
-     * Listener triggered when a printerCapabilitiesUpdated event occurs.
+     * Executes when a |customEvents.PRINTER_CAPABILITIES_UPDATED| event occurs.
      * @private
      */
     onPrinterCapabilitiesUpdated_: function(e) {
@@ -93,11 +96,11 @@ cr.define('print_preview', function() {
     },
 
     /**
-     * Listener executing when a PDFLoaded event occurs.
+     * Listener executing when a |customEvents.PDF_LOADED| event occurs.
      * @private
      */
     onPDFLoaded_: function() {
-      this.fadeInOut_(!previewModifiable);
+      this.fadeInOut_(!previewModifiable || hasPageSizeStyle);
     },
 
     /**
@@ -106,12 +109,12 @@ cr.define('print_preview', function() {
      * @private
      */
     fadeInOut_: function(fadeOut) {
-      fadeOut ? fadeOutElement(this.layoutOption_) :
-          fadeInElement(this.layoutOption_);
+      fadeOut ? fadeOutOption(this.layoutOption_) :
+          fadeInOption(this.layoutOption_);
     }
   };
 
   return {
-    LayoutSettings: LayoutSettings,
+    LayoutSettings: LayoutSettings
   };
 });

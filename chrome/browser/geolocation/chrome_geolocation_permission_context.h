@@ -7,7 +7,7 @@
 #pragma once
 
 #include "base/memory/scoped_ptr.h"
-#include "content/browser/geolocation/geolocation_permission_context.h"
+#include "content/public/browser/geolocation_permission_context.h"
 
 class GeolocationInfoBarQueueController;
 class Profile;
@@ -15,7 +15,8 @@ class Profile;
 // Chrome specific implementation of GeolocationPermissionContext; manages
 // Geolocation permissions flow, and delegates UI handling via
 // GeolocationInfoBarQueueController.
-class ChromeGeolocationPermissionContext : public GeolocationPermissionContext {
+class ChromeGeolocationPermissionContext
+    : public content::GeolocationPermissionContext {
  public:
   explicit ChromeGeolocationPermissionContext(Profile* profile);
 
@@ -26,24 +27,24 @@ class ChromeGeolocationPermissionContext : public GeolocationPermissionContext {
                            int render_view_id,
                            int bridge_id,
                            const GURL& requesting_frame,
+                           base::Callback<void(bool)> callback,
                            bool allowed);
 
-  // GeolocationPermissionContext
-  virtual void RequestGeolocationPermission(int render_process_id,
-                                            int render_view_id,
-                                            int bridge_id,
-                                            const GURL& requesting_frame);
-
-  virtual void CancelGeolocationPermissionRequest(int render_process_id,
-                                                  int render_view_id,
-                                                  int bridge_id,
-                                                  const GURL& requesting_frame);
+  // GeolocationPermissionContext implementation:
+  virtual void RequestGeolocationPermission(
+      int render_process_id,
+      int render_view_id,
+      int bridge_id,
+      const GURL& requesting_frame,
+      base::Callback<void(bool)> callback) OVERRIDE;
+  virtual void CancelGeolocationPermissionRequest(
+      int render_process_id,
+      int render_view_id,
+      int bridge_id,
+      const GURL& requesting_frame) OVERRIDE;
 
  private:
   virtual ~ChromeGeolocationPermissionContext();
-
-  // Calls GeolocationArbitrator::OnPermissionGranted.
-  void NotifyArbitratorPermissionGranted(const GURL& requesting_frame);
 
   // Removes any pending InfoBar request.
   void CancelPendingInfoBarRequest(int render_process_id,

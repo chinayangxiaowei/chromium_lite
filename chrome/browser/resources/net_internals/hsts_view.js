@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,12 @@
  * use HTTPS. See http://dev.chromium.org/sts
  *
  * This UI allows a user to query and update the browser's list of HSTS domains.
+ * It also allows users to query and update the browser's list of public key
+ * pins.
  */
 
 var HSTSView = (function() {
   'use strict';
-
-  // IDs for special HTML elements in hsts_view.html
-  var MAIN_BOX_ID = 'hsts-view-tab-content';
-  var QUERY_INPUT_ID = 'hsts-view-query-input';
-  var FORM_ID = 'hsts-view-query-form';
-  var QUERY_OUTPUT_DIV_ID = 'hsts-view-query-output';
-  var ADD_INPUT_ID = 'hsts-view-add-input';
-  var ADD_FORM_ID = 'hsts-view-add-form';
-  var ADD_CHECK_ID = 'hsts-view-check-input';
-  var ADD_PINS_ID = 'hsts-view-add-pins';
-  var DELETE_INPUT_ID = 'hsts-view-delete-input';
-  var DELETE_FORM_ID = 'hsts-view-delete-form';
 
   // We inherit from DivView.
   var superClass = DivView;
@@ -34,21 +24,23 @@ var HSTSView = (function() {
     assertFirstConstructorCall(HSTSView);
 
     // Call superclass's constructor.
-    superClass.call(this, MAIN_BOX_ID);
+    superClass.call(this, HSTSView.MAIN_BOX_ID);
 
-    this.queryInput_ = $(QUERY_INPUT_ID);
-    this.addCheck_ = $(ADD_CHECK_ID);
-    this.addInput_ = $(ADD_INPUT_ID);
-    this.addPins_ = $(ADD_PINS_ID);
-    this.deleteInput_ = $(DELETE_INPUT_ID);
-    this.queryOutputDiv_ = $(QUERY_OUTPUT_DIV_ID);
+    this.addInput_ = $(HSTSView.ADD_INPUT_ID);
+    this.addCheck_ = $(HSTSView.ADD_CHECK_ID);
+    this.addPins_ = $(HSTSView.ADD_PINS_ID);
+    this.deleteInput_ = $(HSTSView.DELETE_INPUT_ID);
+    this.queryInput_ = $(HSTSView.QUERY_INPUT_ID);
+    this.queryOutputDiv_ = $(HSTSView.QUERY_OUTPUT_DIV_ID);
 
-    var form = $(FORM_ID);
-    form.addEventListener('submit', this.onSubmitQuery_.bind(this), false);
-    form = $(ADD_FORM_ID);
+    var form = $(HSTSView.ADD_FORM_ID);
     form.addEventListener('submit', this.onSubmitAdd_.bind(this), false);
-    form = $(DELETE_FORM_ID);
+
+    form = $(HSTSView.DELETE_FORM_ID);
     form.addEventListener('submit', this.onSubmitDelete_.bind(this), false);
+
+    form = $(HSTSView.QUERY_FORM_ID);
+    form.addEventListener('submit', this.onSubmitQuery_.bind(this), false);
 
     g_browser.addHSTSObserver(this);
   }
@@ -56,16 +48,26 @@ var HSTSView = (function() {
   // ID for special HTML element in category_tabs.html
   HSTSView.TAB_HANDLE_ID = 'tab-handle-hsts';
 
+  // IDs for special HTML elements in hsts_view.html
+  HSTSView.MAIN_BOX_ID = 'hsts-view-tab-content';
+  HSTSView.ADD_INPUT_ID = 'hsts-view-add-input';
+  HSTSView.ADD_CHECK_ID = 'hsts-view-check-input';
+  HSTSView.ADD_PINS_ID = 'hsts-view-add-pins';
+  HSTSView.ADD_FORM_ID = 'hsts-view-add-form';
+  HSTSView.ADD_SUBMIT_ID = 'hsts-view-add-submit';
+  HSTSView.DELETE_INPUT_ID = 'hsts-view-delete-input';
+  HSTSView.DELETE_FORM_ID = 'hsts-view-delete-form';
+  HSTSView.DELETE_SUBMIT_ID = 'hsts-view-delete-submit';
+  HSTSView.QUERY_INPUT_ID = 'hsts-view-query-input';
+  HSTSView.QUERY_OUTPUT_DIV_ID = 'hsts-view-query-output';
+  HSTSView.QUERY_FORM_ID = 'hsts-view-query-form';
+  HSTSView.QUERY_SUBMIT_ID = 'hsts-view-query-submit';
+
   cr.addSingletonGetter(HSTSView);
 
   HSTSView.prototype = {
     // Inherit the superclass's methods.
     __proto__: superClass.prototype,
-
-    onSubmitQuery_: function(event) {
-      g_browser.sendHSTSQuery(this.queryInput_.value);
-      event.preventDefault();
-    },
 
     onSubmitAdd_: function(event) {
       g_browser.sendHSTSAdd(this.addInput_.value,
@@ -82,6 +84,11 @@ var HSTSView = (function() {
     onSubmitDelete_: function(event) {
       g_browser.sendHSTSDelete(this.deleteInput_.value);
       this.deleteInput_.value = '';
+      event.preventDefault();
+    },
+
+    onSubmitQuery_: function(event) {
+      g_browser.sendHSTSQuery(this.queryInput_.value);
       event.preventDefault();
     },
 
@@ -127,8 +134,25 @@ var HSTSView = (function() {
       addTextNode(this.queryOutputDiv_, ' pubkey_hashes:');
 
       t = addNode(this.queryOutputDiv_, 'tt');
-      t.textContent = result.public_key_hashes;
+      // |public_key_hashes| is an old synonym for what is now
+      // |preloaded_spki_hashes|. Look for both, and also for
+      // |dynamic_spki_hashes|.
+      if (typeof result.public_key_hashes === 'undefined')
+        result.public_key_hashes = '';
+      if (typeof result.preloaded_spki_hashes === 'undefined')
+        result.preloaded_spki_hashes = '';
+      if (typeof result.dynamic_spki_hashes === 'undefined')
+        result.dynamic_spki_hashes = '';
 
+      var hashes = [];
+      if (result.public_key_hashes)
+        hashes.push(result.public_key_hashes);
+      if (result.preloaded_spki_hashes)
+        hashes.push(result.preloaded_spki_hashes);
+      if (result.dynamic_spki_hashes)
+        hashes.push(result.dynamic_spki_hashes);
+
+      t.textContent = hashes.join(",");
       yellowFade(this.queryOutputDiv_);
     }
   };

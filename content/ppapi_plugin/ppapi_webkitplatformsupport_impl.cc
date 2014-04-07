@@ -10,21 +10,27 @@
 #include "base/logging.h"
 #include "base/string16.h"
 #include "build/build_config.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSerializedScriptValue.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
+#include "content/common/child_process_messages.h"
+#include "content/common/child_thread.h"
+#include "ipc/ipc_sync_message_filter.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebSerializedScriptValue.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
 
 #if defined(OS_WIN)
-#include "third_party/WebKit/Source/WebKit/chromium/public/win/WebSandboxSupport.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/win/WebSandboxSupport.h"
 #elif defined(OS_MACOSX)
-#include "third_party/WebKit/Source/WebKit/chromium/public/mac/WebSandboxSupport.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/mac/WebSandboxSupport.h"
 #elif defined(OS_POSIX)
-#include "content/common/child_process_sandbox_support_linux.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/linux/WebSandboxSupport.h"
+#include "content/common/child_process_sandbox_support_impl_linux.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/linux/WebFontFamily.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/linux/WebSandboxSupport.h"
 #endif
 
 using WebKit::WebSandboxSupport;
 using WebKit::WebString;
 using WebKit::WebUChar;
+
+typedef struct CGFont* CGFontRef;
 
 class PpapiWebKitPlatformSupportImpl::SandboxSupport : public WebSandboxSupport {
  public:
@@ -34,12 +40,13 @@ class PpapiWebKitPlatformSupportImpl::SandboxSupport : public WebSandboxSupport 
   virtual bool ensureFontLoaded(HFONT);
 #elif defined(OS_MACOSX)
   virtual bool loadFont(
-      NSFont* srcFont, ATSFontContainerRef* out, uint32_t* fontID);
+      NSFont* srcFont, CGFontRef* out, uint32_t* fontID);
 #elif defined(OS_POSIX)
-  virtual WebString getFontFamilyForCharacters(
+  virtual void getFontFamilyForCharacters(
       const WebUChar* characters,
       size_t numCharacters,
-      const char* preferred_locale);
+      const char* preferred_locale,
+      WebKit::WebFontFamily* family);
   virtual void getRenderStyleForStrike(
       const char* family, int sizeAndStyle, WebKit::WebFontRenderStyle* out);
 
@@ -49,7 +56,7 @@ class PpapiWebKitPlatformSupportImpl::SandboxSupport : public WebSandboxSupport 
   // here. The key in this map is an array of 16-bit UTF16 values from WebKit.
   // The value is a string containing the correct font family.
   base::Lock unicode_font_families_mutex_;
-  std::map<string16, std::string> unicode_font_families_;
+  std::map<string16, WebKit::WebFontFamily> unicode_font_families_;
 #endif
 };
 
@@ -57,51 +64,55 @@ class PpapiWebKitPlatformSupportImpl::SandboxSupport : public WebSandboxSupport 
 
 bool PpapiWebKitPlatformSupportImpl::SandboxSupport::ensureFontLoaded(
     HFONT font) {
-  // TODO(brettw) this should do the something similar to what
-  // RendererWebKitPlatformSupportImpl does and request that the browser load
-  // the font.
-  NOTIMPLEMENTED();
-  return false;
+  LOGFONT logfont;
+  GetObject(font, sizeof(LOGFONT), &logfont);
+
+  return ChildThread::current()->sync_message_filter()->Send(
+      new ChildProcessHostMsg_PreCacheFont(logfont));
 }
 
 #elif defined(OS_MACOSX)
 
-bool PpapiWebKitPlatformSupportImpl::SandboxSupport::loadFont(NSFont* srcFont,
-    ATSFontContainerRef* out, uint32_t* fontID) {
+bool PpapiWebKitPlatformSupportImpl::SandboxSupport::loadFont(
+    NSFont* src_font,
+    CGFontRef* out,
+    uint32_t* font_id) {
   // TODO(brettw) this should do the something similar to what
-  // RendererWebKitPlatformSupportImpl does and request that the browser load
-  // the font.
+  // RendererWebKitClientImpl does and request that the browser load the font.
   NOTIMPLEMENTED();
   return false;
 }
 
 #elif defined(OS_POSIX)
 
-WebString
+void
 PpapiWebKitPlatformSupportImpl::SandboxSupport::getFontFamilyForCharacters(
     const WebUChar* characters,
     size_t num_characters,
-    const char* preferred_locale) {
+    const char* preferred_locale,
+    WebKit::WebFontFamily* family) {
   base::AutoLock lock(unicode_font_families_mutex_);
   const string16 key(characters, num_characters);
-  const std::map<string16, std::string>::const_iterator iter =
+  const std::map<string16, WebKit::WebFontFamily>::const_iterator iter =
       unicode_font_families_.find(key);
-  if (iter != unicode_font_families_.end())
-    return WebString::fromUTF8(iter->second);
+  if (iter != unicode_font_families_.end()) {
+    family->name = iter->second.name;
+    family->isBold = iter->second.isBold;
+    family->isItalic = iter->second.isItalic;
+    return;
+  }
 
-  const std::string family_name =
-      child_process_sandbox_support::getFontFamilyForCharacters(
-          characters,
-          num_characters,
-          preferred_locale);
-  unicode_font_families_.insert(make_pair(key, family_name));
-  return WebString::fromUTF8(family_name);
+  content::GetFontFamilyForCharacters(
+      characters,
+      num_characters,
+      preferred_locale,
+      family);
+  unicode_font_families_.insert(make_pair(key, *family));
 }
 
 void PpapiWebKitPlatformSupportImpl::SandboxSupport::getRenderStyleForStrike(
     const char* family, int sizeAndStyle, WebKit::WebFontRenderStyle* out) {
-  child_process_sandbox_support::getRenderStyleForStrike(family, sizeAndStyle,
-                                                         out);
+  content::GetRenderStyleForStrike(family, sizeAndStyle, out);
 }
 
 #endif

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,17 @@
 #define CHROME_BROWSER_CHROMEOS_EXTERNAL_PROTOCOL_DIALOG_H_
 #pragma once
 
+#include <string>
+
+#include "base/string16.h"
 #include "base/time.h"
-#include "views/window/dialog_delegate.h"
+#include "ui/views/window/dialog_delegate.h"
 
 class GURL;
-class TabContents;
+
+namespace content {
+class WebContents;
+}
 
 namespace views {
 class MessageBoxView;
@@ -22,21 +28,19 @@ class MessageBoxView;
 class ExternalProtocolDialog : public views::DialogDelegate {
  public:
   // RunExternalProtocolDialog calls this private constructor.
-  ExternalProtocolDialog(TabContents* tab_contents, const GURL& url);
+  ExternalProtocolDialog(content::WebContents* web_contents, const GURL& url);
 
   virtual ~ExternalProtocolDialog();
 
   // views::DialogDelegate Methods:
   virtual int GetDialogButtons() const OVERRIDE;
-  virtual std::wstring GetDialogButtonLabel(
-      MessageBoxFlags::DialogButton button) const OVERRIDE;
-  virtual std::wstring GetWindowTitle() const OVERRIDE;
+  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
+  virtual string16 GetWindowTitle() const OVERRIDE;
   virtual void DeleteDelegate() OVERRIDE;
   virtual bool Accept() OVERRIDE;
   virtual views::View* GetContentsView() OVERRIDE;
 
   // views::WidgetDelegate Methods:
-  virtual bool IsModal() const OVERRIDE;
   virtual const views::Widget* GetWidget() const OVERRIDE;
   virtual views::Widget* GetWidget() OVERRIDE;
 

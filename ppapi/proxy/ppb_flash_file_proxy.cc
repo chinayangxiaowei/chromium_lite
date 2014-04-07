@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 
+#include "base/bind.h"
 #include "base/logging.h"
 #include "base/message_loop_proxy.h"
 #include "base/synchronization/lock.h"
@@ -20,9 +21,10 @@
 #include "ppapi/c/pp_file_info.h"
 #include "ppapi/c/private/ppb_flash_file.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
-#include "ppapi/proxy/plugin_resource_tracker.h"
 #include "ppapi/proxy/ppapi_messages.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
 #include "ppapi/shared_impl/resource.h"
+#include "ppapi/shared_impl/resource_tracker.h"
 
 namespace ppapi {
 namespace proxy {
@@ -56,7 +58,7 @@ void FreeDirContents(PP_Instance /* instance */,
 }  // namespace
 
 // ModuleLocalThreadAdapter ----------------------------------------------------
-
+// TODO(yzshen): Refactor to use IPC::SyncMessageFilter.
 class ModuleLocalThreadAdapter
     : public base::RefCountedThreadSafe<ModuleLocalThreadAdapter> {
   class Filter;
@@ -176,7 +178,7 @@ void ModuleLocalThreadAdapter::Filter::OnFilterRemoved() {
 bool ModuleLocalThreadAdapter::Filter::OnMessageReceived(
     const IPC::Message& message) {
   if (!message.is_reply() ||
-      message.routing_id() != INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL)
+      message.routing_id() != API_ID_PPB_FLASH_FILE_MODULELOCAL)
     return false;
 
   if (g_module_local_thread_adapter->OnModuleLocalMessageReceived(message)) {
@@ -314,8 +316,8 @@ bool ModuleLocalThreadAdapter::Send(PP_Instance instance, IPC::Message* msg) {
   // random place, but it should actually still work (since the Flash file
   // operations are global).
   io_thread_->PostTask(FROM_HERE,
-      NewRunnableMethod(this, &ModuleLocalThreadAdapter::SendFromIOThread,
-      dispatcher, msg));
+      base::Bind(&ModuleLocalThreadAdapter::SendFromIOThread, this,
+                 dispatcher, msg));
 
   // Now we block the current thread waiting for the reply.
   event.Wait();
@@ -397,7 +399,7 @@ int32_t OpenModuleLocalFile(PP_Instance instance,
   IPC::PlatformFileForTransit transit;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_OpenFile(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL,
+          API_ID_PPB_FLASH_FILE_MODULELOCAL,
           instance, path, mode, &transit, &result));
   *file = IPC::PlatformFileForTransitToPlatformFile(transit);
   return result;
@@ -412,7 +414,7 @@ int32_t RenameModuleLocalFile(PP_Instance instance,
   int32_t result = PP_ERROR_FAILED;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_RenameFile(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL,
+          API_ID_PPB_FLASH_FILE_MODULELOCAL,
           instance, from_path, to_path, &result));
   return result;
 }
@@ -426,7 +428,7 @@ int32_t DeleteModuleLocalFileOrDir(PP_Instance instance,
   int32_t result = PP_ERROR_FAILED;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_DeleteFileOrDir(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL,
+          API_ID_PPB_FLASH_FILE_MODULELOCAL,
           instance, path, recursive, &result));
   return result;
 }
@@ -438,7 +440,7 @@ int32_t CreateModuleLocalDir(PP_Instance instance, const char* path) {
   int32_t result = PP_ERROR_FAILED;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_CreateDir(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL, instance, path, &result));
+          API_ID_PPB_FLASH_FILE_MODULELOCAL, instance, path, &result));
   return result;
 }
 
@@ -451,7 +453,7 @@ int32_t QueryModuleLocalFile(PP_Instance instance,
   int32_t result = PP_ERROR_FAILED;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_QueryFile(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL, instance, path,
+          API_ID_PPB_FLASH_FILE_MODULELOCAL, instance, path,
           info, &result));
   return result;
 }
@@ -466,7 +468,7 @@ int32_t GetModuleLocalDirContents(PP_Instance instance,
   std::vector<SerializedDirEntry> entries;
   g_module_local_thread_adapter->Send(instance,
       new PpapiHostMsg_PPBFlashFile_ModuleLocal_GetDirContents(
-          INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL,
+          API_ID_PPB_FLASH_FILE_MODULELOCAL,
           instance, path, &entries, &result));
 
   if (result != PP_OK)
@@ -501,32 +503,31 @@ const PPB_Flash_File_ModuleLocal flash_file_modulelocal_interface = {
   &FreeDirContents,
 };
 
-InterfaceProxy* CreateFlashFileModuleLocalProxy(Dispatcher* dispatcher,
-                                                const void* target_interface) {
-  return new PPB_Flash_File_ModuleLocal_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateFlashFileModuleLocalProxy(Dispatcher* dispatcher) {
+  return new PPB_Flash_File_ModuleLocal_Proxy(dispatcher);
 }
 
 }  // namespace
 
 PPB_Flash_File_ModuleLocal_Proxy::PPB_Flash_File_ModuleLocal_Proxy(
-    Dispatcher* dispatcher,
-    const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface) {
+    Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
+      ppb_flash_file_module_local_impl_(NULL) {
+  if (!dispatcher->IsPlugin()) {
+    ppb_flash_file_module_local_impl_ =
+        static_cast<const PPB_Flash_File_ModuleLocal*>(
+            dispatcher->local_get_interface()(
+                PPB_FLASH_FILE_MODULELOCAL_INTERFACE));
+  }
 }
 
 PPB_Flash_File_ModuleLocal_Proxy::~PPB_Flash_File_ModuleLocal_Proxy() {
 }
 
 // static
-const InterfaceProxy::Info* PPB_Flash_File_ModuleLocal_Proxy::GetInfo() {
-  static const Info info = {
-    &flash_file_modulelocal_interface,
-    PPB_FLASH_FILE_MODULELOCAL_INTERFACE,
-    INTERFACE_ID_PPB_FLASH_FILE_MODULELOCAL,
-    true,
-    &CreateFlashFileModuleLocalProxy,
-  };
-  return &info;
+const PPB_Flash_File_ModuleLocal*
+PPB_Flash_File_ModuleLocal_Proxy::GetInterface() {
+  return &flash_file_modulelocal_interface;
 }
 
 bool PPB_Flash_File_ModuleLocal_Proxy::OnMessageReceived(
@@ -558,8 +559,8 @@ void PPB_Flash_File_ModuleLocal_Proxy::OnMsgOpenFile(
     IPC::PlatformFileForTransit* file_handle,
     int32_t* result) {
   base::PlatformFile file;
-  *result = ppb_flash_file_module_local_target()->
-      OpenFile(instance, path.c_str(), mode, &file);
+  *result = ppb_flash_file_module_local_impl_->OpenFile(
+      instance, path.c_str(), mode, &file);
   *file_handle = PlatformFileToPlatformFileForTransit(
       dispatcher(), result, file);
 }
@@ -569,8 +570,8 @@ void PPB_Flash_File_ModuleLocal_Proxy::OnMsgRenameFile(
     const std::string& from_path,
     const std::string& to_path,
     int32_t* result) {
-  *result = ppb_flash_file_module_local_target()->
-      RenameFile(instance, from_path.c_str(), to_path.c_str());
+  *result = ppb_flash_file_module_local_impl_->RenameFile(
+      instance, from_path.c_str(), to_path.c_str());
 }
 
 void PPB_Flash_File_ModuleLocal_Proxy::OnMsgDeleteFileOrDir(
@@ -578,23 +579,23 @@ void PPB_Flash_File_ModuleLocal_Proxy::OnMsgDeleteFileOrDir(
     const std::string& path,
     PP_Bool recursive,
     int32_t* result) {
-  *result = ppb_flash_file_module_local_target()->
-      DeleteFileOrDir(instance, path.c_str(), recursive);
+  *result = ppb_flash_file_module_local_impl_->DeleteFileOrDir(
+      instance, path.c_str(), recursive);
 }
 
 void PPB_Flash_File_ModuleLocal_Proxy::OnMsgCreateDir(PP_Instance instance,
                                                       const std::string& path,
                                                       int32_t* result) {
-  *result = ppb_flash_file_module_local_target()->
-      CreateDir(instance, path.c_str());
+  *result = ppb_flash_file_module_local_impl_->CreateDir(
+      instance, path.c_str());
 }
 
 void PPB_Flash_File_ModuleLocal_Proxy::OnMsgQueryFile(PP_Instance instance,
                                                       const std::string& path,
                                                       PP_FileInfo* info,
                                                       int32_t* result) {
-  *result = ppb_flash_file_module_local_target()->
-      QueryFile(instance, path.c_str(), info);
+  *result = ppb_flash_file_module_local_impl_->QueryFile(
+      instance, path.c_str(), info);
 }
 
 void PPB_Flash_File_ModuleLocal_Proxy::OnMsgGetDirContents(
@@ -603,8 +604,8 @@ void PPB_Flash_File_ModuleLocal_Proxy::OnMsgGetDirContents(
     std::vector<SerializedDirEntry>* entries,
     int32_t* result) {
   PP_DirContents_Dev* contents = NULL;
-  *result = ppb_flash_file_module_local_target()->
-      GetDirContents(instance, path.c_str(), &contents);
+  *result = ppb_flash_file_module_local_impl_->GetDirContents(
+      instance, path.c_str(), &contents);
   if (*result != PP_OK)
     return;
 
@@ -614,7 +615,7 @@ void PPB_Flash_File_ModuleLocal_Proxy::OnMsgGetDirContents(
     (*entries)[i].name.assign(contents->entries[i].name);
     (*entries)[i].is_dir = PP_ToBool(contents->entries[i].is_dir);
   }
-  ppb_flash_file_module_local_target()->FreeDirContents(instance, contents);
+  ppb_flash_file_module_local_impl_->FreeDirContents(instance, contents);
 }
 
 // PPB_Flash_File_FileRef ------------------------------------------------------
@@ -625,7 +626,7 @@ int32_t OpenFileRefFile(PP_Resource file_ref_id,
                         int32_t mode,
                         PP_FileHandle* file) {
   Resource* file_ref =
-      PluginResourceTracker::GetInstance()->GetResource(file_ref_id);
+      PpapiGlobals::Get()->GetResourceTracker()->GetResource(file_ref_id);
   if (!file_ref)
     return PP_ERROR_BADRESOURCE;
 
@@ -636,7 +637,7 @@ int32_t OpenFileRefFile(PP_Resource file_ref_id,
   int32_t result = PP_ERROR_FAILED;
   IPC::PlatformFileForTransit transit;
   dispatcher->Send(new PpapiHostMsg_PPBFlashFile_FileRef_OpenFile(
-      INTERFACE_ID_PPB_FLASH_FILE_FILEREF,
+      API_ID_PPB_FLASH_FILE_FILEREF,
       file_ref->host_resource(), mode, &transit, &result));
   *file = IPC::PlatformFileForTransitToPlatformFile(transit);
   return result;
@@ -645,7 +646,7 @@ int32_t OpenFileRefFile(PP_Resource file_ref_id,
 int32_t QueryFileRefFile(PP_Resource file_ref_id,
                          PP_FileInfo* info) {
   Resource* file_ref =
-      PluginResourceTracker::GetInstance()->GetResource(file_ref_id);
+      PpapiGlobals::Get()->GetResourceTracker()->GetResource(file_ref_id);
   if (!file_ref)
     return PP_ERROR_BADRESOURCE;
 
@@ -655,7 +656,7 @@ int32_t QueryFileRefFile(PP_Resource file_ref_id,
 
   int32_t result = PP_ERROR_FAILED;
   dispatcher->Send(new PpapiHostMsg_PPBFlashFile_FileRef_QueryFile(
-      INTERFACE_ID_PPB_FLASH_FILE_FILEREF,
+      API_ID_PPB_FLASH_FILE_FILEREF,
       file_ref->host_resource(), info, &result));
   return result;
 }
@@ -665,32 +666,28 @@ const PPB_Flash_File_FileRef flash_file_fileref_interface = {
   &QueryFileRefFile,
 };
 
-InterfaceProxy* CreateFlashFileFileRefProxy(Dispatcher* dispatcher,
-                                            const void* target_interface) {
-  return new PPB_Flash_File_FileRef_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateFlashFileFileRefProxy(Dispatcher* dispatcher) {
+  return new PPB_Flash_File_FileRef_Proxy(dispatcher);
 }
 
 }  // namespace
 
 PPB_Flash_File_FileRef_Proxy::PPB_Flash_File_FileRef_Proxy(
-    Dispatcher* dispatcher,
-    const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface) {
+    Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
+      ppb_flash_file_fileref_impl_(NULL) {
+  if (!dispatcher->IsPlugin()) {
+    ppb_flash_file_fileref_impl_ = static_cast<const PPB_Flash_File_FileRef*>(
+        dispatcher->local_get_interface()(PPB_FLASH_FILE_FILEREF_INTERFACE));
+  }
 }
 
 PPB_Flash_File_FileRef_Proxy::~PPB_Flash_File_FileRef_Proxy() {
 }
 
 // static
-const InterfaceProxy::Info* PPB_Flash_File_FileRef_Proxy::GetInfo() {
-  static const Info info = {
-    &flash_file_fileref_interface,
-    PPB_FLASH_FILE_FILEREF_INTERFACE,
-    INTERFACE_ID_PPB_FLASH_FILE_FILEREF,
-    true,
-    &CreateFlashFileFileRefProxy,
-  };
-  return &info;
+const PPB_Flash_File_FileRef* PPB_Flash_File_FileRef_Proxy::GetInterface() {
+  return &flash_file_fileref_interface;
 }
 
 bool PPB_Flash_File_FileRef_Proxy::OnMessageReceived(
@@ -713,8 +710,8 @@ void PPB_Flash_File_FileRef_Proxy::OnMsgOpenFile(
     IPC::PlatformFileForTransit* file_handle,
     int32_t* result) {
   base::PlatformFile file;
-  *result = ppb_flash_file_module_local_target()->
-      OpenFile(host_resource.host_resource(), mode, &file);
+  *result = ppb_flash_file_fileref_impl_->OpenFile(
+      host_resource.host_resource(), mode, &file);
   *file_handle = PlatformFileToPlatformFileForTransit(
       dispatcher(), result, file);
 }
@@ -723,8 +720,8 @@ void PPB_Flash_File_FileRef_Proxy::OnMsgQueryFile(
     const HostResource& host_resource,
     PP_FileInfo* info,
     int32_t* result) {
-  *result = ppb_flash_file_module_local_target()->
-      QueryFile(host_resource.host_resource(), info);
+  *result = ppb_flash_file_fileref_impl_->QueryFile(
+      host_resource.host_resource(), info);
 }
 
 }  // namespace proxy

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 
 #include "build/build_config.h"
 
+#include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_handle.h"
 #include "base/shared_memory.h"
 #include "build/build_config.h"
-#include "content/common/content_client.h"
+#include "content/common/npobject_proxy.h"
+#include "content/common/npobject_util.h"
 #include "content/common/plugin_messages.h"
-#include "content/common/url_constants.h"
-#include "content/plugin/npobject_proxy.h"
-#include "content/plugin/npobject_util.h"
 #include "content/plugin/plugin_channel.h"
 #include "content/plugin/plugin_thread.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/url_constants.h"
 #include "skia/ext/platform_canvas.h"
 #include "skia/ext/platform_device.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
@@ -28,11 +29,6 @@
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "content/plugin/webplugin_accelerated_surface_proxy_mac.h"
-#endif
-
-#if defined(OS_WIN)
-#include "content/common/section_util_win.h"
-#include "ui/gfx/gdi_util.h"
 #endif
 
 #if defined(USE_X11)
@@ -63,7 +59,7 @@ WebPluginProxy::WebPluginProxy(
       transparent_(false),
       windowless_buffer_index_(0),
       host_render_view_routing_id_(host_render_view_routing_id),
-      ALLOW_THIS_IN_INITIALIZER_LIST(runnable_method_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
 #if defined(USE_X11)
   windowless_shm_pixmaps_[0] = None;
   windowless_shm_pixmaps_[1] = None;
@@ -75,8 +71,8 @@ WebPluginProxy::WebPluginProxy(
   Display* display = ui::GetXDisplay();
   if (ui::QuerySharedMemorySupport(display) == ui::SHARED_MEMORY_PIXMAP &&
       ui::BitsPerPixelForPixmapDepth(
-          display, DefaultDepth(display, 0)) == 32) {
-    Visual* vis = DefaultVisual(display, 0);
+          display, DefaultDepth(display, DefaultScreen(display))) == 32) {
+    Visual* vis = DefaultVisual(display, DefaultScreen(display));
 
     if (vis->red_mask == 0xff0000 &&
         vis->green_mask == 0xff00 &&
@@ -146,6 +142,11 @@ void WebPluginProxy::ReparentPluginWindow(HWND window, HWND parent) {
   PluginThread::current()->Send(
       new PluginProcessHostMsg_ReparentPluginWindow(window, parent));
 }
+
+void WebPluginProxy::ReportExecutableMemory(size_t size) {
+  PluginThread::current()->Send(
+      new PluginProcessHostMsg_ReportExecutableMemory(size));
+}
 #endif
 
 void WebPluginProxy::CancelResource(unsigned long id) {
@@ -198,8 +199,8 @@ void WebPluginProxy::InvalidateRect(const gfx::Rect& rect) {
     // Invalidates caused by calls to NPN_InvalidateRect/NPN_InvalidateRgn
     // need to be painted asynchronously as per the NPAPI spec.
     MessageLoop::current()->PostTask(FROM_HERE,
-        runnable_method_factory_.NewRunnableMethod(
-            &WebPluginProxy::OnPaint, damaged_rect_));
+        base::Bind(&WebPluginProxy::OnPaint, weak_factory_.GetWeakPtr(),
+            damaged_rect_));
     damaged_rect_ = gfx::Rect();
   }
 }
@@ -472,9 +473,11 @@ void WebPluginProxy::CreateCanvasFromHandle(
   // Create a canvas that will reference the shared bits. We have to handle
   // errors here since we're mapping a large amount of memory that may not fit
   // in our address space, or go wrong in some other way.
-  HANDLE section = chrome::GetSectionFromProcess(dib_handle,
-                                                 channel_->renderer_handle(),
-                                                 false);
+  HANDLE section;
+  DuplicateHandle(channel_->renderer_handle(), dib_handle, GetCurrentProcess(),
+                  &section,
+                  STANDARD_RIGHTS_REQUIRED | FILE_MAP_READ | FILE_MAP_WRITE,
+                  FALSE, 0);
   scoped_ptr<skia::PlatformCanvas> canvas(new skia::PlatformCanvas);
   if (!canvas->initialize(
           window_rect.width(),
@@ -603,7 +606,8 @@ void WebPluginProxy::CreateShmPixmapFromDIB(
     *pixmap_out = XShmCreatePixmap(display, root_window,
                                    NULL, &shminfo,
                                    window_rect.width(), window_rect.height(),
-                                   DefaultDepth(display, 0));
+                                   DefaultDepth(display,
+                                                DefaultScreen(display)));
   }
 }
 
@@ -672,16 +676,18 @@ void WebPluginProxy::BindFakePluginWindowHandle(bool opaque) {
   Send(new PluginHostMsg_BindFakePluginWindowHandle(route_id_, opaque));
 }
 
-WebPluginAcceleratedSurface* WebPluginProxy::GetAcceleratedSurface() {
+WebPluginAcceleratedSurface* WebPluginProxy::GetAcceleratedSurface(
+    gfx::GpuPreference gpu_preference) {
   if (!accelerated_surface_.get())
-    accelerated_surface_.reset(new WebPluginAcceleratedSurfaceProxy(this));
+    accelerated_surface_.reset(
+        WebPluginAcceleratedSurfaceProxy::Create(this, gpu_preference));
   return accelerated_surface_.get();
 }
 
 void WebPluginProxy::AcceleratedFrameBuffersDidSwap(
-    gfx::PluginWindowHandle window, uint64 surface_id) {
+    gfx::PluginWindowHandle window, uint64 surface_handle) {
   Send(new PluginHostMsg_AcceleratedSurfaceBuffersSwapped(
-        route_id_, window, surface_id));
+        route_id_, window, surface_handle));
 }
 
 void WebPluginProxy::SetAcceleratedSurface(
@@ -708,6 +714,22 @@ void WebPluginProxy::AllocSurfaceDIB(const size_t size,
 
 void WebPluginProxy::FreeSurfaceDIB(TransportDIB::Id dib_id) {
   Send(new PluginHostMsg_FreeTransportDIB(route_id_, dib_id));
+}
+
+void WebPluginProxy::AcceleratedPluginEnabledRendering() {
+  Send(new PluginHostMsg_AcceleratedPluginEnabledRendering(route_id_));
+}
+
+void WebPluginProxy::AcceleratedPluginAllocatedIOSurface(int32 width,
+                                                         int32 height,
+                                                         uint32 surface_id) {
+  Send(new PluginHostMsg_AcceleratedPluginAllocatedIOSurface(
+      route_id_, width, height, surface_id));
+}
+
+void WebPluginProxy::AcceleratedPluginSwappedIOSurface() {
+  Send(new PluginHostMsg_AcceleratedPluginSwappedIOSurface(
+      route_id_));
 }
 #endif
 
@@ -747,3 +769,16 @@ void WebPluginProxy::ResourceClientDeleted(
 void WebPluginProxy::URLRedirectResponse(bool allow, int resource_id) {
   Send(new PluginHostMsg_URLRedirectResponse(route_id_, allow, resource_id));
 }
+
+#if defined(OS_WIN) && !defined(USE_AURA)
+void WebPluginProxy::UpdateIMEStatus() {
+  // Retrieve the IME status from a plug-in and send it to a renderer process
+  // when the plug-in has updated it.
+  int input_type;
+  gfx::Rect caret_rect;
+  if (!delegate_->GetIMEStatus(&input_type, &caret_rect))
+    return;
+
+  Send(new PluginHostMsg_NotifyIMEStatus(route_id_, input_type, caret_rect));
+}
+#endif

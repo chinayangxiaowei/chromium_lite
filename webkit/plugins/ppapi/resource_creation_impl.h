@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,26 +29,24 @@ class ResourceCreationImpl : public ::ppapi::FunctionGroupBase,
                                   PP_Resource config_id,
                                   PPB_Audio_Callback audio_callback,
                                   void* user_data) OVERRIDE;
-  virtual PP_Resource CreateAudioTrusted(PP_Instance instace) OVERRIDE;
+  virtual PP_Resource CreateAudioTrusted(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateAudioConfig(PP_Instance instance,
                                         PP_AudioSampleRate sample_rate,
                                         uint32_t sample_frame_count) OVERRIDE;
+  virtual PP_Resource CreateAudioInput(
+      PP_Instance instance,
+      PP_Resource config_id,
+      PPB_AudioInput_Callback audio_input_callback,
+      void* user_data) OVERRIDE;
+  virtual PP_Resource CreateAudioInputTrusted(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateBroker(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateBuffer(PP_Instance instance,
                                    uint32_t size) OVERRIDE;
-  virtual PP_Resource CreateContext3D(PP_Instance instance,
-                                      PP_Config3D_Dev config,
-                                      PP_Resource share_context,
-                                      const int32_t* attrib_list) OVERRIDE;
-  virtual PP_Resource CreateContext3DRaw(PP_Instance instance,
-                                         PP_Config3D_Dev config,
-                                         PP_Resource share_context,
-                                         const int32_t* attrib_list) OVERRIDE;
   virtual PP_Resource CreateDirectoryReader(PP_Resource directory_ref) OVERRIDE;
   virtual PP_Resource CreateFileChooser(
       PP_Instance instance,
       PP_FileChooserMode_Dev mode,
-      const PP_Var& accept_mime_types) OVERRIDE;
+      const char* accept_mime_types) OVERRIDE;
   virtual PP_Resource CreateFileIO(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateFileRef(PP_Resource file_system,
                                     const char* path) OVERRIDE;
@@ -57,7 +55,6 @@ class ResourceCreationImpl : public ::ppapi::FunctionGroupBase,
   virtual PP_Resource CreateFlashMenu(PP_Instance instance,
                                       const PP_Flash_Menu* menu_data) OVERRIDE;
   virtual PP_Resource CreateFlashNetConnector(PP_Instance instance) OVERRIDE;
-  virtual PP_Resource CreateFlashTCPSocket(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateFontObject(
       PP_Instance instance,
       const PP_FontDescription_Dev* description) OVERRIDE;
@@ -90,14 +87,16 @@ class ResourceCreationImpl : public ::ppapi::FunctionGroupBase,
       const PP_Point* mouse_position,
       int32_t click_count,
       const PP_Point* mouse_movement) OVERRIDE;
+  virtual PP_Resource CreateResourceArray(PP_Instance instance,
+                                          const PP_Resource elements[],
+                                          uint32_t size) OVERRIDE;
   virtual PP_Resource CreateScrollbar(PP_Instance instance,
                                       PP_Bool vertical) OVERRIDE;
-  virtual PP_Resource CreateSurface3D(PP_Instance instance,
-                                      PP_Config3D_Dev config,
-                                      const int32_t* attrib_list) OVERRIDE;
+  virtual PP_Resource CreateTCPSocketPrivate(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateTransport(PP_Instance instance,
                                       const char* name,
-                                      const char* proto) OVERRIDE;
+                                      PP_TransportType type) OVERRIDE;
+  virtual PP_Resource CreateUDPSocketPrivate(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateURLLoader(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateURLRequestInfo(
       PP_Instance instance,
@@ -105,10 +104,11 @@ class ResourceCreationImpl : public ::ppapi::FunctionGroupBase,
   virtual PP_Resource CreateVideoCapture(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateVideoDecoder(
       PP_Instance instance,
-      PP_Resource context3d_id,
+      PP_Resource graphics3d_id,
       PP_VideoDecoder_Profile profile) OVERRIDE;
   virtual PP_Resource CreateVideoLayer(PP_Instance instance,
                                        PP_VideoLayerMode_Dev mode) OVERRIDE;
+  virtual PP_Resource CreateWebSocket(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateWheelInputEvent(
       PP_Instance instance,
       PP_TimeTicks time_stamp,

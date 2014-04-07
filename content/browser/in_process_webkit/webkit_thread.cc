@@ -6,10 +6,12 @@
 
 #include "base/command_line.h"
 #include "content/browser/in_process_webkit/browser_webkitplatformsupport_impl.h"
-#include "content/common/content_switches.h"
+#include "content/public/common/content_switches.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
 #include "webkit/glue/webkit_glue.h"
+
+namespace content {
 
 WebKitThread::WebKitThread() {
 }
@@ -20,14 +22,15 @@ WebKitThread::~WebKitThread() {
   // MessageLoop::Current is sometimes NULL and other times valid and there's
   // no BrowserThread object.  Can't check that CurrentlyOn is not IO since
   // some unit tests set that BrowserThread for other checks.
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED));
 }
 
 void WebKitThread::Initialize() {
   DCHECK(!webkit_thread_.get());
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess)) {
-    // TODO(jorlow): We need a better story for single process mode.
+    // TODO(joth): As this cannot work in single process mode use of the
+    // webkit thread is deprecated; see http://crbug.com/106839.
     return;
   }
 
@@ -37,7 +40,7 @@ void WebKitThread::Initialize() {
 }
 
 WebKitThread::InternalWebKitThread::InternalWebKitThread()
-    : BrowserThread(BrowserThread::WEBKIT) {
+    : content::BrowserThreadImpl(BrowserThread::WEBKIT_DEPRECATED) {
 }
 
 WebKitThread::InternalWebKitThread::~InternalWebKitThread() {
@@ -47,7 +50,7 @@ WebKitThread::InternalWebKitThread::~InternalWebKitThread() {
 void WebKitThread::InternalWebKitThread::Init() {
   DCHECK(!webkit_platform_support_.get());
   webkit_platform_support_.reset(new BrowserWebKitPlatformSupportImpl);
-  WebKit::initialize(webkit_platform_support_.get());
+  WebKit::initializeWithoutV8(webkit_platform_support_.get());
   webkit_glue::EnableWebCoreLogChannels(
       CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kWebCoreLogChannels));
@@ -64,3 +67,5 @@ void WebKitThread::InternalWebKitThread::CleanUp() {
   DCHECK(webkit_platform_support_.get());
   WebKit::shutdown();
 }
+
+}  // namespace content

@@ -6,15 +6,17 @@
 
 #include "base/metrics/histogram.h"
 #include "base/string_util.h"
+#include "content/browser/download/download_resource_handler.h"
+#include "content/browser/download/interrupt_reasons.h"
 
 namespace download_stats {
 
 // All possible error codes from the network module. Note that the error codes
 // are all positive (since histograms expect positive sample values).
-const int kAllNetErrorCodes[] = {
-#define NET_ERROR(label, value) -(value),
-#include "net/base/net_error_list.h"
-#undef NET_ERROR
+const int kAllInterruptReasonCodes[] = {
+#define INTERRUPT_REASON(label, value) (value),
+#include "content/browser/download/interrupt_reason_values.h"
+#undef INTERRUPT_REASON
 };
 
 void RecordDownloadCount(DownloadCountTypes type) {
@@ -22,18 +24,27 @@ void RecordDownloadCount(DownloadCountTypes type) {
       "Download.Counts", type, DOWNLOAD_COUNT_TYPES_LAST_ENTRY);
 }
 
-void RecordDownloadCompleted(const base::TimeTicks& start) {
+void RecordDownloadCompleted(const base::TimeTicks& start, int64 download_len) {
   RecordDownloadCount(COMPLETED_COUNT);
   UMA_HISTOGRAM_LONG_TIMES("Download.Time", (base::TimeTicks::Now() - start));
+  int64 max = 1024 * 1024 * 1024;  // One Terabyte.
+  download_len /= 1024;  // In Kilobytes
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.DownloadSize",
+                              download_len,
+                              1,
+                              max,
+                              256);
 }
 
-void RecordDownloadInterrupted(int error, int64 received, int64 total) {
+void RecordDownloadInterrupted(InterruptReason reason,
+                               int64 received,
+                               int64 total) {
   RecordDownloadCount(INTERRUPTED_COUNT);
   UMA_HISTOGRAM_CUSTOM_ENUMERATION(
-      "Download.InterruptedError",
-      -error,
+      "Download.InterruptedReason",
+      reason,
       base::CustomHistogram::ArrayToCustomRanges(
-          kAllNetErrorCodes, arraysize(kAllNetErrorCodes)));
+          kAllInterruptReasonCodes, arraysize(kAllInterruptReasonCodes)));
 
   // The maximum should be 2^kBuckets, to have the logarithmic bucket
   // boundaries fall on powers of 2.
@@ -54,7 +65,15 @@ void RecordDownloadInterrupted(int error, int64 received, int64 total) {
                                 1,
                                 kMaxKb,
                                 kBuckets);
-    if (delta_bytes >= 0) {
+    if (delta_bytes == 0) {
+      RecordDownloadCount(INTERRUPTED_AT_END_COUNT);
+      UMA_HISTOGRAM_CUSTOM_ENUMERATION(
+          "Download.InterruptedAtEndReason",
+          reason,
+          base::CustomHistogram::ArrayToCustomRanges(
+              kAllInterruptReasonCodes,
+              arraysize(kAllInterruptReasonCodes)));
+    } else if (delta_bytes > 0) {
       UMA_HISTOGRAM_CUSTOM_COUNTS("Download.InterruptedOverrunBytes",
                                   delta_bytes,
                                   1,
@@ -70,6 +89,44 @@ void RecordDownloadInterrupted(int error, int64 received, int64 total) {
   }
 
   UMA_HISTOGRAM_BOOLEAN("Download.InterruptedUnknownSize", unknown_size);
+}
+
+void RecordDownloadWriteSize(size_t data_len) {
+  RecordDownloadCount(WRITE_SIZE_COUNT);
+  int max = 1024 * 1024;  // One Megabyte.
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.WriteSize", data_len, 1, max, 256);
+}
+
+void RecordDownloadWriteLoopCount(int count) {
+  RecordDownloadCount(WRITE_LOOP_COUNT);
+  UMA_HISTOGRAM_ENUMERATION("Download.WriteLoopCount", count, 20);
+}
+
+void RecordAcceptsRanges(const std::string& accepts_ranges,
+                         int64 download_len) {
+  int64 max = 1024 * 1024 * 1024;  // One Terabyte.
+  download_len /= 1024;  // In Kilobytes
+  static const int kBuckets = 50;
+
+  if (LowerCaseEqualsASCII(accepts_ranges, "none")) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Download.AcceptRangesNone.KBytes",
+                                download_len,
+                                1,
+                                max,
+                                kBuckets);
+  } else if (LowerCaseEqualsASCII(accepts_ranges, "bytes")) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Download.AcceptRangesBytes.KBytes",
+                                download_len,
+                                1,
+                                max,
+                                kBuckets);
+  } else {
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Download.AcceptRangesMissingOrInvalid.KBytes",
+                                download_len,
+                                1,
+                                max,
+                                kBuckets);
+  }
 }
 
 namespace {
@@ -114,6 +171,48 @@ static MimeTypeToDownloadContent kMapMimeTypeToDownloadContent[] = {
   {"application/x-chrome-extension", DOWNLOAD_CONTENT_CRX},
 };
 
+enum DownloadImage {
+  DOWNLOAD_IMAGE_UNRECOGNIZED = 0,
+  DOWNLOAD_IMAGE_GIF = 1,
+  DOWNLOAD_IMAGE_JPEG = 2,
+  DOWNLOAD_IMAGE_PNG = 3,
+  DOWNLOAD_IMAGE_TIFF = 4,
+  DOWNLOAD_IMAGE_ICON = 5,
+  DOWNLOAD_IMAGE_WEBP = 6,
+  DOWNLOAD_IMAGE_MAX = 7,
+};
+
+struct MimeTypeToDownloadImage {
+  const char* mime_type;
+  DownloadImage download_image;
+};
+
+static MimeTypeToDownloadImage kMapMimeTypeToDownloadImage[] = {
+  {"image/gif", DOWNLOAD_IMAGE_GIF},
+  {"image/jpeg", DOWNLOAD_IMAGE_JPEG},
+  {"image/png", DOWNLOAD_IMAGE_PNG},
+  {"image/tiff", DOWNLOAD_IMAGE_TIFF},
+  {"image/vnd.microsoft.icon", DOWNLOAD_IMAGE_ICON},
+  {"image/webp", DOWNLOAD_IMAGE_WEBP},
+};
+
+void RecordDownloadImageType(const std::string& mime_type_string) {
+  DownloadImage download_image = DOWNLOAD_IMAGE_UNRECOGNIZED;
+
+  // Look up exact matches.
+  for (size_t i = 0; i < arraysize(kMapMimeTypeToDownloadImage); ++i) {
+    const MimeTypeToDownloadImage& entry = kMapMimeTypeToDownloadImage[i];
+    if (mime_type_string == entry.mime_type) {
+      download_image = entry.download_image;
+      break;
+    }
+  }
+
+  UMA_HISTOGRAM_ENUMERATION("Download.ContentImageType",
+                            download_image,
+                            DOWNLOAD_IMAGE_MAX);
+}
+
 }  // namespace
 
 void RecordDownloadMimeType(const std::string& mime_type_string) {
@@ -121,8 +220,7 @@ void RecordDownloadMimeType(const std::string& mime_type_string) {
 
   // Look up exact matches.
   for (size_t i = 0; i < arraysize(kMapMimeTypeToDownloadContent); ++i) {
-    const MimeTypeToDownloadContent& entry =
-        kMapMimeTypeToDownloadContent[i];
+    const MimeTypeToDownloadContent& entry = kMapMimeTypeToDownloadContent[i];
     if (mime_type_string == entry.mime_type) {
       download_content = entry.download_content;
       break;
@@ -135,6 +233,7 @@ void RecordDownloadMimeType(const std::string& mime_type_string) {
       download_content = DOWNLOAD_CONTENT_TEXT;
     } else if (StartsWithASCII(mime_type_string, "image/", true)) {
       download_content = DOWNLOAD_CONTENT_IMAGE;
+      RecordDownloadImageType(mime_type_string);
     } else if (StartsWithASCII(mime_type_string, "audio/", true)) {
       download_content = DOWNLOAD_CONTENT_AUDIO;
     } else if (StartsWithASCII(mime_type_string, "video/", true)) {
@@ -146,6 +245,57 @@ void RecordDownloadMimeType(const std::string& mime_type_string) {
   UMA_HISTOGRAM_ENUMERATION("Download.ContentType",
                             download_content,
                             DOWNLOAD_CONTENT_MAX);
+}
+
+void RecordFileThreadReceiveBuffers(size_t num_buffers) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS(
+      "Download.FileThreadReceiveBuffers", num_buffers, 1,
+      DownloadResourceHandler::kLoadsToWrite,
+      DownloadResourceHandler::kLoadsToWrite);
+}
+
+void RecordBandwidth(double actual_bandwidth, double potential_bandwidth) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS(
+      "Download.ActualBandwidth", actual_bandwidth, 1, 1000000000, 50);
+  UMA_HISTOGRAM_CUSTOM_COUNTS(
+      "Download.PotentialBandwidth", potential_bandwidth, 1, 1000000000, 50);
+  UMA_HISTOGRAM_PERCENTAGE(
+      "Download.BandwidthUsed",
+      (int) ((actual_bandwidth * 100)/ potential_bandwidth));
+}
+
+void RecordOpen(const base::Time& end, bool first) {
+  if (!end.is_null()) {
+    UMA_HISTOGRAM_LONG_TIMES("Download.OpenTime", (base::Time::Now() - end));
+    if (first) {
+      UMA_HISTOGRAM_LONG_TIMES("Download.FirstOpenTime",
+                              (base::Time::Now() - end));
+    }
+  }
+}
+
+void RecordHistorySize(int size) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.HistorySize",
+                              size,
+                              0/*min*/,
+                              (1 << 10)/*max*/,
+                              32/*num_buckets*/);
+}
+
+void RecordClearAllSize(int size) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.ClearAllSize",
+                              size,
+                              0/*min*/,
+                              (1 << 10)/*max*/,
+                              32/*num_buckets*/);
+}
+
+void RecordOpensOutstanding(int size) {
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Download.OpensOutstanding",
+                              size,
+                              0/*min*/,
+                              (1 << 10)/*max*/,
+                              64/*num_buckets*/);
 }
 
 }  // namespace download_stats

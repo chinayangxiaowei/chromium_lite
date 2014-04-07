@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/tracked_objects.h"
 #include "chrome/browser/sync/notifier/cache_invalidation_packet_handler.h"
 #include "chrome/browser/sync/notifier/invalidation_util.h"
 #include "chrome/browser/sync/notifier/registration_manager.h"
 #include "chrome/browser/sync/syncable/model_type.h"
-#include "google/cacheinvalidation/v2/invalidation-client-impl.h"
+#include "google/cacheinvalidation/v2/invalidation-client.h"
+#include "google/cacheinvalidation/v2/invalidation-client-factory.h"
+#include "google/cacheinvalidation/v2/types.pb.h"
 
 namespace {
 
@@ -27,7 +30,6 @@ ChromeInvalidationClient::Listener::~Listener() {}
 
 ChromeInvalidationClient::ChromeInvalidationClient()
     : chrome_system_resources_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-      scoped_callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
       listener_(NULL),
       state_writer_(NULL),
       ticl_ready_(false) {
@@ -43,8 +45,13 @@ ChromeInvalidationClient::~ChromeInvalidationClient() {
 
 void ChromeInvalidationClient::Start(
     const std::string& client_id, const std::string& client_info,
-    const std::string& state, Listener* listener,
-    StateWriter* state_writer, base::WeakPtr<talk_base::Task> base_task) {
+    const std::string& state,
+    const InvalidationVersionMap& initial_max_invalidation_versions,
+    const browser_sync::WeakHandle<InvalidationVersionTracker>&
+        invalidation_version_tracker,
+    Listener* listener,
+    StateWriter* state_writer,
+    base::WeakPtr<buzz::XmppTaskParentInterface> base_task) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
   Stop();
 
@@ -56,6 +63,21 @@ void ChromeInvalidationClient::Start(
   // update the in-memory cache, while reads just return the cached state.
   chrome_system_resources_.storage()->SetInitialState(state);
 
+  max_invalidation_versions_ = initial_max_invalidation_versions;
+  if (max_invalidation_versions_.empty()) {
+    DVLOG(2) << "No initial max invalidation versions for any type";
+  } else {
+    for (InvalidationVersionMap::const_iterator it =
+             max_invalidation_versions_.begin();
+         it != max_invalidation_versions_.end(); ++it) {
+      DVLOG(2) << "Initial max invalidation version for "
+               << syncable::ModelTypeToString(it->first) << " is "
+               << it->second;
+    }
+  }
+  invalidation_version_tracker_ = invalidation_version_tracker;
+  DCHECK(invalidation_version_tracker_.IsInitialized());
+
   DCHECK(!listener_);
   DCHECK(listener);
   listener_ = listener;
@@ -64,12 +86,9 @@ void ChromeInvalidationClient::Start(
   state_writer_ = state_writer;
 
   int client_type = ipc::invalidation::ClientType::CHROME_SYNC;
-  // TODO(akalin): Use InvalidationClient::Create() once it supports
-  // taking a ClientConfig.
-  invalidation::InvalidationClientImpl::Config client_config;
   invalidation_client_.reset(
-      new invalidation::InvalidationClientImpl(
-          &chrome_system_resources_, client_type, client_id, client_config,
+      invalidation::CreateInvalidationClient(
+          &chrome_system_resources_, client_type, client_id,
           kApplicationName, this));
   ChangeBaseTask(base_task);
   invalidation_client_->Start();
@@ -79,7 +98,7 @@ void ChromeInvalidationClient::Start(
 }
 
 void ChromeInvalidationClient::ChangeBaseTask(
-    base::WeakPtr<talk_base::Task> base_task) {
+    base::WeakPtr<buzz::XmppTaskParentInterface> base_task) {
   DCHECK(invalidation_client_.get());
   DCHECK(base_task.get());
   cache_invalidation_packet_handler_.reset(
@@ -103,10 +122,12 @@ void ChromeInvalidationClient::Stop() {
   invalidation_client_.reset();
   state_writer_ = NULL;
   listener_ = NULL;
+
+  invalidation_version_tracker_.Reset();
+  max_invalidation_versions_.clear();
 }
 
-void ChromeInvalidationClient::RegisterTypes(
-    const syncable::ModelTypeSet& types) {
+void ChromeInvalidationClient::RegisterTypes(syncable::ModelTypeSet types) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
   registered_types_ = types;
   if (ticl_ready_ && registration_manager_.get()) {
@@ -127,7 +148,7 @@ void ChromeInvalidationClient::Invalidate(
     const invalidation::Invalidation& invalidation,
     const invalidation::AckHandle& ack_handle) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "Invalidate: " << InvalidationToString(invalidation);
+  DVLOG(1) << "Invalidate: " << InvalidationToString(invalidation);
   syncable::ModelType model_type;
   if (!ObjectIdToRealModelType(invalidation.object_id(), &model_type)) {
     LOG(WARNING) << "Could not get invalidation model type; "
@@ -144,9 +165,7 @@ void ChromeInvalidationClient::Invalidate(
   // should drop invalidations for unregistered types.  We may also
   // have to filter it at a higher level, as invalidations for
   // newly-unregistered types may already be in flight.
-  //
-  // TODO(akalin): Persist |max_invalidation_versions_| somehow.
-  std::map<syncable::ModelType, int64>::const_iterator it =
+  InvalidationVersionMap::const_iterator it =
       max_invalidation_versions_.find(model_type);
   if ((it != max_invalidation_versions_.end()) &&
       (invalidation.version() <= it->second)) {
@@ -154,16 +173,21 @@ void ChromeInvalidationClient::Invalidate(
     client->Acknowledge(ack_handle);
     return;
   }
+  DVLOG(2) << "Setting max invalidation version for "
+           << syncable::ModelTypeToString(model_type) << " to "
+           << invalidation.version();
   max_invalidation_versions_[model_type] = invalidation.version();
+  invalidation_version_tracker_.Call(
+      FROM_HERE,
+      &InvalidationVersionTracker::SetMaxVersion,
+      model_type, invalidation.version());
 
   std::string payload;
   // payload() CHECK()'s has_payload(), so we must check it ourselves first.
   if (invalidation.has_payload())
     payload = invalidation.payload();
 
-  syncable::ModelTypeSet types;
-  types.insert(model_type);
-  EmitInvalidation(types, payload);
+  EmitInvalidation(syncable::ModelTypeSet(model_type), payload);
   // TODO(akalin): We should really acknowledge only after we get the
   // updates from the sync server. (see http://crbug.com/78462).
   client->Acknowledge(ack_handle);
@@ -174,7 +198,7 @@ void ChromeInvalidationClient::InvalidateUnknownVersion(
     const invalidation::ObjectId& object_id,
     const invalidation::AckHandle& ack_handle) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "InvalidateUnknownVersion";
+  DVLOG(1) << "InvalidateUnknownVersion";
 
   syncable::ModelType model_type;
   if (!ObjectIdToRealModelType(object_id, &model_type)) {
@@ -185,9 +209,7 @@ void ChromeInvalidationClient::InvalidateUnknownVersion(
     return;
   }
 
-  syncable::ModelTypeSet types;
-  types.insert(model_type);
-  EmitInvalidation(types, "");
+  EmitInvalidation(syncable::ModelTypeSet(model_type), "");
   // TODO(akalin): We should really acknowledge only after we get the
   // updates from the sync server. (see http://crbug.com/78462).
   client->Acknowledge(ack_handle);
@@ -199,7 +221,7 @@ void ChromeInvalidationClient::InvalidateAll(
     invalidation::InvalidationClient* client,
     const invalidation::AckHandle& ack_handle) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "InvalidateAll";
+  DVLOG(1) << "InvalidateAll";
   EmitInvalidation(registered_types_, std::string());
   // TODO(akalin): We should really acknowledge only after we get the
   // updates from the sync server. (see http://crbug.com/76482).
@@ -207,13 +229,10 @@ void ChromeInvalidationClient::InvalidateAll(
 }
 
 void ChromeInvalidationClient::EmitInvalidation(
-    const syncable::ModelTypeSet& types, const std::string& payload) {
+    syncable::ModelTypeSet types, const std::string& payload) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  // TODO(akalin): Move all uses of ModelTypeBitSet for invalidations
-  // to ModelTypeSet.
   syncable::ModelTypePayloadMap type_payloads =
-      syncable::ModelTypePayloadMapFromBitSet(
-          syncable::ModelTypeBitSetFromSet(types), payload);
+      syncable::ModelTypePayloadMapFromEnumSet(types, payload);
   listener_->OnInvalidate(type_payloads);
 }
 
@@ -222,8 +241,8 @@ void ChromeInvalidationClient::InformRegistrationStatus(
       const invalidation::ObjectId& object_id,
       InvalidationListener::RegistrationState new_state) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "InformRegistrationStatus: "
-          << ObjectIdToString(object_id) << " " << new_state;
+  DVLOG(1) << "InformRegistrationStatus: "
+           << ObjectIdToString(object_id) << " " << new_state;
 
   syncable::ModelType model_type;
   if (!ObjectIdToRealModelType(object_id, &model_type)) {
@@ -243,10 +262,10 @@ void ChromeInvalidationClient::InformRegistrationFailure(
     bool is_transient,
     const std::string& error_message) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "InformRegistrationFailure: "
-          << ObjectIdToString(object_id)
-          << "is_transient=" << is_transient
-          << ", message=" << error_message;
+  DVLOG(1) << "InformRegistrationFailure: "
+           << ObjectIdToString(object_id)
+           << "is_transient=" << is_transient
+           << ", message=" << error_message;
 
   syncable::ModelType model_type;
   if (!ObjectIdToRealModelType(object_id, &model_type)) {
@@ -254,9 +273,17 @@ void ChromeInvalidationClient::InformRegistrationFailure(
     return;
   }
 
-  // We don't care about |unknown_hint|; we let
-  // |registration_manager_| handle the registration backoff policy.
-  registration_manager_->MarkRegistrationLost(model_type);
+  if (is_transient) {
+    // We don't care about |unknown_hint|; we let
+    // |registration_manager_| handle the registration backoff policy.
+    registration_manager_->MarkRegistrationLost(model_type);
+  } else {
+    // Non-transient failures are permanent, so block any future
+    // registration requests for |model_type|.  (This happens if the
+    // server doesn't recognize the data type, which could happen for
+    // brand-new data types.)
+    registration_manager_->DisableType(model_type);
+  }
 }
 
 void ChromeInvalidationClient::ReissueRegistrations(
@@ -264,7 +291,7 @@ void ChromeInvalidationClient::ReissueRegistrations(
     const std::string& prefix,
     int prefix_length) {
   DCHECK(non_thread_safe_.CalledOnValidThread());
-  VLOG(1) << "AllRegistrationsLost";
+  DVLOG(1) << "AllRegistrationsLost";
   registration_manager_->MarkAllRegistrationsLost();
 }
 

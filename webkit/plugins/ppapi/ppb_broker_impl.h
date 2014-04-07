@@ -6,21 +6,24 @@
 #define WEBKIT_PLUGINS_PPAPI_PPB_BROKER_IMPL_H_
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
 #include "ppapi/c/pp_completion_callback.h"
 #include "ppapi/c/trusted/ppb_broker_trusted.h"
 #include "ppapi/shared_impl/resource.h"
+#include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/thunk/ppb_broker_api.h"
 #include "webkit/plugins/ppapi/plugin_delegate.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
-#include "webkit/plugins/ppapi/callbacks.h"
+#include "webkit/plugins/webkit_plugins_export.h"
 
 namespace webkit {
 namespace ppapi {
 
-class PPB_Broker_Impl : public ::ppapi::Resource,
-                        public ::ppapi::thunk::PPB_Broker_API,
-                        public base::SupportsWeakPtr<PPB_Broker_Impl> {
+class WEBKIT_PLUGINS_EXPORT PPB_Broker_Impl
+    : public ::ppapi::Resource,
+      NON_EXPORTED_BASE(public ::ppapi::thunk::PPB_Broker_API),
+      public base::SupportsWeakPtr<PPB_Broker_Impl> {
  public:
   explicit PPB_Broker_Impl(PP_Instance instance);
   virtual ~PPB_Broker_Impl();
@@ -40,7 +43,7 @@ class PPB_Broker_Impl : public ::ppapi::Resource,
   PluginDelegate::PpapiBroker* broker_;
 
   // Callback invoked from BrokerConnected.
-  scoped_refptr<TrackedCompletionCallback> connect_callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> connect_callback_;
 
   // Pipe handle for the plugin instance to use to communicate with the broker.
   // Never owned by this object.

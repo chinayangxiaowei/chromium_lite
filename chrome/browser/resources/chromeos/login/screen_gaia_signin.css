@@ -17,6 +17,11 @@
   width: 200px;
 }
 
+/*  For touch-optimized UI, make the links bigger. */
+html[touch-optimized] #signin-right {
+  font-size: 14px;
+}
+
 html[dir=ltr] #signin-right {
   right: -150px;  /* ('gaia-sign'.width - 'signin-frame'.width) / 2 -
                      desiredGap - 'signin-right'.width =

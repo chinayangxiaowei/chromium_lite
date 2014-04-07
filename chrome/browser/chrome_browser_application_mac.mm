@@ -5,11 +5,11 @@
 #import "chrome/browser/chrome_browser_application_mac.h"
 
 #import "base/logging.h"
+#include "base/mac/crash_logging.h"
 #import "base/mac/scoped_nsexception_enabler.h"
 #import "base/metrics/histogram.h"
 #import "base/memory/scoped_nsobject.h"
 #import "base/sys_string_conversions.h"
-#import "chrome/app/breakpad_mac.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
@@ -17,6 +17,7 @@
 #import "chrome/common/mac/objc_zombie.h"
 #include "content/browser/accessibility/browser_accessibility_state.h"
 #include "content/browser/renderer_host/render_view_host.h"
+#include "content/public/browser/web_contents.h"
 
 // The implementation of NSExceptions break various assumptions in the
 // Chrome code.  This category defines a replacement for
@@ -63,7 +64,7 @@ static IMP gOriginalInitIMP = NULL;
     static NSString* const kNSExceptionKey = @"nsexception";
     NSString* value =
         [NSString stringWithFormat:@"%@ reason %@", aName, aReason];
-    SetCrashKeyValue(kNSExceptionKey, value);
+    base::mac::SetCrashKeyValue(kNSExceptionKey, value);
 
     // Force crash for selected exceptions to generate crash dumps.
     BOOL fatal = NO;
@@ -215,7 +216,34 @@ void SwizzleInit() {
 
 - (id)init {
   SwizzleInit();
-  return [super init];
+  if ((self = [super init])) {
+    eventHooks_.reset([[NSMutableArray alloc] init]);
+  }
+  return self;
+}
+
+// Initialize NSApplication using the custom subclass.  Check whether NSApp
+// was already initialized using another class, because that would break
+// some things.
++ (NSApplication*)sharedApplication {
+  NSApplication* app = [super sharedApplication];
+
+  // +sharedApplication initializes the global NSApp, so if a specific
+  // NSApplication subclass is requested, require that to be the one
+  // delivered.  The practical effect is to require a consistent NSApp
+  // across the executable.
+  CHECK([NSApp isKindOfClass:self])
+      << "NSApp must be of type " << [[self className] UTF8String]
+      << ", not " << [[NSApp className] UTF8String];
+
+  // If the message loop was initialized before NSApp is setup, the
+  // message pump will be setup incorrectly.  Failing this implies
+  // that RegisterBrowserCrApp() should be called earlier.
+  CHECK(base::MessagePumpMac::UsingCrApp())
+      << "MessagePumpMac::Create() is using the wrong pump implementation"
+      << " for " << [[self className] UTF8String];
+
+  return app;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -338,7 +366,7 @@ void SwizzleInit() {
         [NSString stringWithFormat:@"%@ tag %d sending %@ to %p",
                   [sender className], tag, actionString, aTarget];
 
-  ScopedCrashKey key(kActionKey, value);
+  base::mac::ScopedCrashKey key(kActionKey, value);
 
   // Certain third-party code, such as print drivers, can still throw
   // exceptions and Chromium cannot fix them.  This provides a way to
@@ -355,6 +383,30 @@ void SwizzleInit() {
   if (enableNSExceptions)
     enabler.reset(new base::mac::ScopedNSExceptionEnabler());
   return [super sendAction:anAction to:aTarget from:sender];
+}
+
+- (void)addEventHook:(id<CrApplicationEventHookProtocol>)handler {
+  [eventHooks_ addObject:handler];
+}
+
+- (void)removeEventHook:(id<CrApplicationEventHookProtocol>)handler {
+  [eventHooks_ removeObject:handler];
+}
+
+- (BOOL)isHandlingSendEvent {
+  return handlingSendEvent_;
+}
+
+- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
+  handlingSendEvent_ = handlingSendEvent;
+}
+
+- (void)sendEvent:(NSEvent*)event {
+  base::mac::ScopedSendingEvent sendingEventScoper;
+  for (id<CrApplicationEventHookProtocol> handler in eventHooks_.get()) {
+    [handler hookForEvent:event];
+  }
+  [super sendEvent:event];
 }
 
 // NSExceptions which are caught by the event loop are logged here.
@@ -377,7 +429,7 @@ void SwizzleInit() {
     // sidestep scopers is setjmp/longjmp (see above).  The following
     // is to "fix" this while the more fundamental concern is
     // addressed elsewhere.
-    [self clearIsHandlingSendEvent];
+    [self setHandlingSendEvent:NO];
 
     // If |ScopedNSExceptionEnabler| is used to allow exceptions, and an
     // uncaught exception is thrown, it will throw past all of the scopers.
@@ -406,10 +458,10 @@ void SwizzleInit() {
     NSString* value = [NSString stringWithFormat:@"%@ reason %@",
                                 [anException name], [anException reason]];
     if (!trackedFirstException) {
-      SetCrashKeyValue(kFirstExceptionKey, value);
+      base::mac::SetCrashKeyValue(kFirstExceptionKey, value);
       trackedFirstException = YES;
     } else {
-      SetCrashKeyValue(kLastExceptionKey, value);
+      base::mac::SetCrashKeyValue(kLastExceptionKey, value);
     }
 
     reportingException = NO;
@@ -426,7 +478,8 @@ void SwizzleInit() {
          !it.done();
          ++it) {
       if (TabContentsWrapper* contents = *it) {
-        if (RenderViewHost* rvh = contents->render_view_host()) {
+        if (RenderViewHost* rvh =
+                contents->web_contents()->GetRenderViewHost()) {
           rvh->EnableRendererAccessibility();
         }
       }

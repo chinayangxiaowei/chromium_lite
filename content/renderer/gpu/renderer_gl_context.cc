@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/renderer/gpu/renderer_gl_context.h"
 
+#include "base/bind.h"
 #include "base/debug/trace_event.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
@@ -14,9 +15,6 @@
 #include "content/common/view_messages.h"
 #include "content/renderer/gpu/command_buffer_proxy.h"
 #include "content/renderer/gpu/gpu_channel_host.h"
-#include "content/renderer/gpu/transport_texture_host.h"
-#include "content/renderer/gpu/transport_texture_service.h"
-#include "content/renderer/render_thread.h"
 #include "content/renderer/render_widget.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_channel_handle.h"
@@ -25,6 +23,7 @@
 #include "gpu/command_buffer/client/gles2_cmd_helper.h"
 #include "gpu/command_buffer/client/gles2_implementation.h"
 #include "gpu/command_buffer/client/gles2_lib.h"
+#include "gpu/command_buffer/client/transfer_buffer.h"
 #include "gpu/command_buffer/common/constants.h"
 #endif  // ENABLE_GPU
 
@@ -33,7 +32,9 @@ namespace {
 const int32 kCommandBufferSize = 1024 * 1024;
 // TODO(kbr): make the transfer buffer size configurable via context
 // creation attributes.
-const int32 kTransferBufferSize = 1024 * 1024;
+const size_t kStartTransferBufferSize = 1 * 1024 * 1024;
+const size_t kMinTransferBufferSize = 1 * 256 * 1024;
+const size_t kMaxTransferBufferSize = 16 * 1024 * 1024;
 
 // Singleton used to initialize and terminate the gles2 library.
 class GLES2Initializer {
@@ -52,8 +53,8 @@ class GLES2Initializer {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static base::LazyInstance<GLES2Initializer> g_gles2_initializer(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<GLES2Initializer> g_gles2_initializer =
+    LAZY_INSTANCE_INITIALIZER;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -73,7 +74,7 @@ RendererGLContext::ContextLostReason ConvertReason(
 }
 #endif
 
-}  // namespace anonymous
+}  // namespace
 
 RendererGLContext::~RendererGLContext() {
   Destroy();
@@ -81,21 +82,23 @@ RendererGLContext::~RendererGLContext() {
 
 RendererGLContext* RendererGLContext::CreateViewContext(
     GpuChannelHost* channel,
-    int render_view_id,
+    int32 surface_id,
     RendererGLContext* share_group,
     const char* allowed_extensions,
     const int32* attrib_list,
-    const GURL& active_url) {
+    const GURL& active_url,
+    gfx::GpuPreference gpu_preference) {
 #if defined(ENABLE_GPU)
   scoped_ptr<RendererGLContext> context(new RendererGLContext(channel));
   if (!context->Initialize(
       true,
-      render_view_id,
+      surface_id,
       gfx::Size(),
       share_group,
       allowed_extensions,
       attrib_list,
-      active_url))
+      active_url,
+      gpu_preference))
     return NULL;
 
   return context.release();
@@ -110,7 +113,8 @@ RendererGLContext* RendererGLContext::CreateOffscreenContext(
     RendererGLContext* share_group,
     const char* allowed_extensions,
     const int32* attrib_list,
-    const GURL& active_url) {
+    const GURL& active_url,
+    gfx::GpuPreference gpu_preference) {
 #if defined(ENABLE_GPU)
   scoped_ptr<RendererGLContext> context(new RendererGLContext(channel));
   if (!context->Initialize(
@@ -120,7 +124,8 @@ RendererGLContext* RendererGLContext::CreateOffscreenContext(
       share_group,
       allowed_extensions,
       attrib_list,
-      active_url))
+      active_url,
+      gpu_preference))
     return NULL;
 
   return context.release();
@@ -193,12 +198,13 @@ void RendererGLContext::DeleteParentTexture(uint32 texture) {
 }
 
 void RendererGLContext::SetContextLostCallback(
-    Callback1<ContextLostReason>::Type* callback) {
-  context_lost_callback_.reset(callback);
+    const base::Callback<void (ContextLostReason)>& callback) {
+  context_lost_callback_ = callback;
 }
 
 bool RendererGLContext::MakeCurrent(RendererGLContext* context) {
   if (context) {
+    DCHECK(context->CalledOnValidThread());
     gles2::SetGLContext(context->gles2_implementation_);
 
     // Don't request latest error status from service. Just use the locally
@@ -229,14 +235,8 @@ bool RendererGLContext::SwapBuffers() {
   return true;
 }
 
-bool RendererGLContext::Echo(Task* task) {
+bool RendererGLContext::Echo(const base::Closure& task) {
   return command_buffer_->Echo(task);
-}
-
-scoped_refptr<TransportTextureHost>
-RendererGLContext::CreateTransportTextureHost() {
-  return channel_->transport_texture_service()->CreateTransportTextureHost(
-      this, command_buffer_->route_id());
 }
 
 RendererGLContext::Error RendererGLContext::GetError() {
@@ -253,12 +253,20 @@ RendererGLContext::Error RendererGLContext::GetError() {
 }
 
 bool RendererGLContext::IsCommandBufferContextLost() {
+  // If the channel shut down unexpectedly, let that supersede the
+  // command buffer's state.
+  if (channel_->state() == GpuChannelHost::kLost)
+    return true;
   gpu::CommandBuffer::State state = command_buffer_->GetLastState();
   return state.error == gpu::error::kLostContext;
 }
 
 CommandBufferProxy* RendererGLContext::GetCommandBufferProxy() {
   return command_buffer_;
+}
+
+bool RendererGLContext::SetSurfaceVisible(bool visible) {
+  return GetCommandBufferProxy()->SetSurfaceVisible(visible);
 }
 
 // TODO(gman): Remove This
@@ -276,7 +284,7 @@ RendererGLContext::RendererGLContext(GpuChannelHost* channel)
       parent_texture_id_(0),
       command_buffer_(NULL),
       gles2_helper_(NULL),
-      transfer_buffer_id_(-1),
+      transfer_buffer_(NULL),
       gles2_implementation_(NULL),
       last_error_(SUCCESS),
       frame_number_(0) {
@@ -284,12 +292,14 @@ RendererGLContext::RendererGLContext(GpuChannelHost* channel)
 }
 
 bool RendererGLContext::Initialize(bool onscreen,
-                                   int render_view_id,
+                                   int32 surface_id,
                                    const gfx::Size& size,
                                    RendererGLContext* share_group,
                                    const char* allowed_extensions,
                                    const int32* attrib_list,
-                                   const GURL& active_url) {
+                                   const GURL& active_url,
+                                   gfx::GpuPreference gpu_preference) {
+  DCHECK(CalledOnValidThread());
   DCHECK(size.width() >= 0 && size.height() >= 0);
   TRACE_EVENT2("gpu", "RendererGLContext::Initialize",
                    "on_screen", onscreen, "num_pixels", size.GetArea());
@@ -341,18 +351,20 @@ bool RendererGLContext::Initialize(bool onscreen,
     TRACE_EVENT0("gpu",
                  "RendererGLContext::Initialize::CreateViewCommandBuffer");
     command_buffer_ = channel_->CreateViewCommandBuffer(
-        render_view_id,
+        surface_id,
         share_group ? share_group->command_buffer_ : NULL,
         allowed_extensions,
         attribs,
-        active_url);
+        active_url,
+        gpu_preference);
   } else {
     command_buffer_ = channel_->CreateOffscreenCommandBuffer(
         size,
         share_group ? share_group->command_buffer_ : NULL,
         allowed_extensions,
         attribs,
-        active_url);
+        active_url,
+        gpu_preference);
   }
   if (!command_buffer_) {
     Destroy();
@@ -363,14 +375,14 @@ bool RendererGLContext::Initialize(bool onscreen,
     TRACE_EVENT0("gpu",
                  "RendererGLContext::Initialize::InitializeCommandBuffer");
     // Initiaize the command buffer.
-    if (!command_buffer_->Initialize(kCommandBufferSize)) {
+    if (!command_buffer_->Initialize()) {
       Destroy();
       return false;
     }
   }
 
   command_buffer_->SetChannelErrorCallback(
-      NewCallback(this, &RendererGLContext::OnContextLost));
+      base::Bind(&RendererGLContext::OnContextLost, base::Unretained(this)));
 
   // Create the GLES2 helper, which writes the command buffer protocol.
   gles2_helper_ = new gpu::gles2::GLES2CmdHelper(command_buffer_);
@@ -383,36 +395,30 @@ bool RendererGLContext::Initialize(bool onscreen,
     TRACE_EVENT0("gpu", "RendererGLContext::Initialize::CreateTransferBuffer");
     // Create a transfer buffer used to copy resources between the renderer
     // process and the GPU process.
-    transfer_buffer_id_ = command_buffer_->CreateTransferBuffer(
-        kTransferBufferSize, gpu::kCommandBufferSharedMemoryId);
-    if (transfer_buffer_id_ < 0) {
-      Destroy();
-      return false;
-    }
-  }
-
-  // Map the buffer into the renderer process's address space.
-  gpu::Buffer transfer_buffer =
-      command_buffer_->GetTransferBuffer(transfer_buffer_id_);
-  if (!transfer_buffer.ptr) {
-    Destroy();
-    return false;
+    transfer_buffer_ = new gpu::TransferBuffer(gles2_helper_);
   }
 
   // Create the object exposing the OpenGL API.
   gles2_implementation_ = new gpu::gles2::GLES2Implementation(
       gles2_helper_,
-      transfer_buffer.size,
-      transfer_buffer.ptr,
-      transfer_buffer_id_,
+      transfer_buffer_,
       share_resources,
       bind_generates_resources);
+
+  if (!gles2_implementation_->Initialize(
+      kStartTransferBufferSize,
+      kMinTransferBufferSize,
+      kMaxTransferBufferSize)) {
+    Destroy();
+    return false;
+  }
 
   return true;
 }
 
 void RendererGLContext::Destroy() {
   TRACE_EVENT0("gpu", "RendererGLContext::Destroy");
+  DCHECK(CalledOnValidThread());
   SetParent(NULL);
 
   if (gles2_implementation_) {
@@ -427,10 +433,10 @@ void RendererGLContext::Destroy() {
     gles2_implementation_ = NULL;
   }
 
-  // Do not destroy this transfer buffer here, because commands are still
-  // in flight on the GPU process that may access them. When the command buffer
-  // is destroyed, the associated shared memory will be cleaned up.
-  transfer_buffer_id_ = -1;
+  if (transfer_buffer_) {
+    delete transfer_buffer_;
+    transfer_buffer_ = NULL;
+  }
 
   delete gles2_helper_;
   gles2_helper_ = NULL;
@@ -444,12 +450,12 @@ void RendererGLContext::Destroy() {
 }
 
 void RendererGLContext::OnContextLost() {
-  if (context_lost_callback_.get()) {
+  if (!context_lost_callback_.is_null()) {
     RendererGLContext::ContextLostReason reason = kUnknown;
     if (command_buffer_) {
       reason = ConvertReason(
           command_buffer_->GetLastState().context_lost_reason);
     }
-    context_lost_callback_->Run(reason);
+    context_lost_callback_.Run(reason);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include "base/at_exit.h"
 #include "base/base64.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/file_path.h"
@@ -36,27 +38,29 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFileSystemCallbacks.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginParams.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLError.h"
-#if defined(OS_LINUX)
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLError.h"
+#if defined(TOOLKIT_USES_GTK)
 #include "ui/base/keycodes/keyboard_code_conversion_gtk.h"
 #endif
 #include "ui/gfx/gl/gl_context.h"
 #include "ui/gfx/gl/gl_implementation.h"
 #include "ui/gfx/gl/gl_surface.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
-#include "webkit/glue/media/video_renderer_impl.h"
+#include "webkit/glue/user_agent.h"
 #include "webkit/glue/webkit_constants.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webkitplatformsupport_impl.h"
-#include "webkit/glue/webmediaplayer_impl.h"
+#include "webkit/gpu/webgraphicscontext3d_in_process_impl.h"
+#include "webkit/gpu/webgraphicscontext3d_in_process_command_buffer_impl.h"
+#include "webkit/media/webmediaplayer_impl.h"
 #include "webkit/plugins/npapi/plugin_list.h"
 #include "webkit/plugins/npapi/webplugin_impl.h"
 #include "webkit/plugins/npapi/webplugin_page_delegate.h"
 #include "webkit/plugins/webplugininfo.h"
 #include "webkit/support/platform_support.h"
 #include "webkit/support/simple_database_system.h"
-#include "webkit/support/test_webplugin_page_delegate.h"
 #include "webkit/support/test_webkit_platform_support.h"
+#include "webkit/support/test_webplugin_page_delegate.h"
 #include "webkit/tools/test_shell/simple_file_system.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 
@@ -117,13 +121,22 @@ void InitLogging(bool enable_gp_fault_error_box) {
 
 class TestEnvironment {
  public:
-  explicit TestEnvironment(bool unit_test_mode) {
+#if defined(OS_ANDROID)
+  // Android UI message loop goes through Java, so don't use it in tests.
+  typedef MessageLoop MessageLoopType;
+#else
+  typedef MessageLoopForUI MessageLoopType;
+#endif
+
+  TestEnvironment(bool unit_test_mode,
+                  base::AtExitManager* existing_at_exit_manager) {
     if (!unit_test_mode) {
-      at_exit_manager_.reset(new base::AtExitManager);
+      // The existing_at_exit_manager must be not NULL.
+      at_exit_manager_.reset(existing_at_exit_manager);
       InitLogging(false);
     }
-    main_message_loop_.reset(new MessageLoopForUI);
-    // TestWebKitPlatformSupport must be instantiated after MessageLoopForUI.
+    main_message_loop_.reset(new MessageLoopType);
+    // TestWebKitPlatformSupport must be instantiated after MessageLoopType.
     webkit_platform_support_.reset(
       new TestWebKitPlatformSupport(unit_test_mode));
   }
@@ -148,8 +161,10 @@ class TestEnvironment {
 #endif
 
  private:
+  // Data member at_exit_manager_ will take the ownership of the input
+  // AtExitManager and manage its lifecycle.
   scoped_ptr<base::AtExitManager> at_exit_manager_;
-  scoped_ptr<MessageLoopForUI> main_message_loop_;
+  scoped_ptr<MessageLoopType> main_message_loop_;
   scoped_ptr<TestWebKitPlatformSupport> webkit_platform_support_;
 };
 
@@ -160,11 +175,9 @@ class WebPluginImplWithPageDelegate
  public:
   WebPluginImplWithPageDelegate(WebFrame* frame,
                                 const WebPluginParams& params,
-                                const FilePath& path,
-                                const std::string& mime_type)
+                                const FilePath& path)
       : webkit_support::TestWebPluginPageDelegate(),
-        webkit::npapi::WebPluginImpl(
-            frame, params, path, mime_type, AsWeakPtr()) {}
+        webkit::npapi::WebPluginImpl(frame, params, path, AsWeakPtr()) {}
   virtual ~WebPluginImplWithPageDelegate() {}
  private:
   DISALLOW_COPY_AND_ASSIGN(WebPluginImplWithPageDelegate);
@@ -201,26 +214,6 @@ class WebKitClientMessageLoopImpl
   MessageLoop* message_loop_;
 };
 
-// An wrapper object for giving TaskAdaptor ref-countability,
-// which NewRunnableMethod() requires.
-class TaskAdaptorHolder : public CancelableTask {
- public:
-  explicit TaskAdaptorHolder(webkit_support::TaskAdaptor* adaptor)
-      : adaptor_(adaptor) {
-  }
-
-  virtual void Run() {
-    adaptor_->Run();
-  }
-
-  virtual void Cancel() {
-    adaptor_.reset();
-  }
-
- private:
-  scoped_ptr<webkit_support::TaskAdaptor> adaptor_;
-};
-
 webkit_support::GraphicsContext3DImplementation
     g_graphics_context_3d_implementation =
         webkit_support::IN_PROCESS_COMMAND_BUFFER;
@@ -249,14 +242,22 @@ static void SetUpTestEnvironmentImpl(bool unit_test_mode) {
   // Otherwise crash may happend when different threads try to create a GURL
   // at same time.
   url_util::Initialize();
-  webkit_support::BeforeInitialize(unit_test_mode);
-  webkit_support::test_environment = new TestEnvironment(unit_test_mode);
-  webkit_support::AfterInitialize(unit_test_mode);
+  base::AtExitManager* at_exit_manager = NULL;
+  // Some initialization code may use a AtExitManager before initializing
+  // TestEnvironment, so we create a AtExitManager early and pass its ownership
+  // to TestEnvironment.
+  if (!unit_test_mode)
+    at_exit_manager = new base::AtExitManager;
+  BeforeInitialize(unit_test_mode);
+  test_environment = new TestEnvironment(unit_test_mode, at_exit_manager);
+  AfterInitialize(unit_test_mode);
   if (!unit_test_mode) {
     // Load ICU data tables.  This has to run after TestEnvironment is created
     // because on Linux, we need base::AtExitManager.
     icu_util::Initialize();
   }
+  webkit_glue::SetUserAgent(webkit_glue::BuildUserAgentFromProduct(
+      "DumpRenderTree/0.0.0.0"), false);
 }
 
 void SetUpTestEnvironment() {
@@ -296,32 +297,42 @@ WebPlugin* CreateWebPlugin(WebFrame* frame,
   if (plugins.empty())
     return NULL;
 
+  WebPluginParams new_params = params;
+  new_params.mimeType = WebString::fromUTF8(mime_types.front());
   return new WebPluginImplWithPageDelegate(
-      frame, params, plugins.front().path, mime_types.front());
+      frame, new_params, plugins.front().path);
 }
 
-WebKit::WebMediaPlayer* CreateMediaPlayer(WebFrame* frame,
-                                          WebMediaPlayerClient* client) {
+WebKit::WebMediaPlayer* CreateMediaPlayer(
+    WebFrame* frame,
+    WebMediaPlayerClient* client,
+    webkit_media::MediaStreamClient* media_stream_client) {
+#if defined(OS_ANDROID)
+  // TODO: Implement the WebMediaPlayer that will be used for Android.
+  return NULL;
+#else
   scoped_ptr<media::MessageLoopFactory> message_loop_factory(
       new media::MessageLoopFactoryImpl());
 
   scoped_ptr<media::FilterCollection> collection(
       new media::FilterCollection());
 
-  scoped_refptr<webkit_glue::VideoRendererImpl> video_renderer(
-      new webkit_glue::VideoRendererImpl(false));
-  collection->AddVideoRenderer(video_renderer);
+  return new webkit_media::WebMediaPlayerImpl(
+      frame,
+      client,
+      base::WeakPtr<webkit_media::WebMediaPlayerDelegate>(),
+      collection.release(),
+      NULL,
+      message_loop_factory.release(),
+      media_stream_client,
+      new media::MediaLog());
+#endif
+}
 
-  scoped_ptr<webkit_glue::WebMediaPlayerImpl> result(
-      new webkit_glue::WebMediaPlayerImpl(client,
-                                          collection.release(),
-                                          message_loop_factory.release(),
-                                          NULL,
-                                          new media::MediaLog()));
-  if (!result->Initialize(frame, false, video_renderer)) {
-    return NULL;
-  }
-  return result.release();
+WebKit::WebMediaPlayer* CreateMediaPlayer(
+    WebFrame* frame,
+    WebMediaPlayerClient* client) {
+  return CreateMediaPlayer(frame, client, NULL);
 }
 
 WebKit::WebApplicationCacheHost* CreateApplicationCacheHost(
@@ -337,7 +348,7 @@ WebKit::WebString GetWebKitRootDir() {
 }
 
 void SetUpGLBindings(GLBindingPreferences bindingPref) {
-  switch(bindingPref) {
+  switch (bindingPref) {
     case GL_BINDING_DEFAULT:
       gfx::GLSurface::InitializeOneOff();
       break;
@@ -355,6 +366,26 @@ void SetGraphicsContext3DImplementation(GraphicsContext3DImplementation impl) {
 
 GraphicsContext3DImplementation GetGraphicsContext3DImplementation() {
   return g_graphics_context_3d_implementation;
+}
+
+WebKit::WebGraphicsContext3D* CreateGraphicsContext3D(
+    const WebKit::WebGraphicsContext3D::Attributes& attributes,
+    WebKit::WebView* web_view,
+    bool direct) {
+  scoped_ptr<WebKit::WebGraphicsContext3D> context;
+  switch (webkit_support::GetGraphicsContext3DImplementation()) {
+    case webkit_support::IN_PROCESS:
+      context.reset(new webkit::gpu::WebGraphicsContext3DInProcessImpl(
+          gfx::kNullPluginWindow, NULL));
+      break;
+    case webkit_support::IN_PROCESS_COMMAND_BUFFER:
+      context.reset(
+          new webkit::gpu::WebGraphicsContext3DInProcessCommandBufferImpl());
+      break;
+  }
+  if (!context->initialize(attributes, web_view, direct))
+    return NULL;
+  return context.release();
 }
 
 void RegisterMockedURL(const WebKit::WebURL& url,
@@ -420,12 +451,16 @@ WebDevToolsAgentClient::WebKitClientMessageLoop* CreateDevToolsMessageLoop() {
 
 void PostDelayedTask(void (*func)(void*), void* context, int64 delay_ms) {
   MessageLoop::current()->PostDelayedTask(
-      FROM_HERE, NewRunnableFunction(func, context), delay_ms);
+      FROM_HERE,
+      base::Bind(func, context),
+      base::TimeDelta::FromMilliseconds(delay_ms));
 }
 
 void PostDelayedTask(TaskAdaptor* task, int64 delay_ms) {
   MessageLoop::current()->PostDelayedTask(
-      FROM_HERE, new TaskAdaptorHolder(task), delay_ms);
+      FROM_HERE,
+      base::Bind(&TaskAdaptor::Run, base::Owned(task)),
+      base::TimeDelta::FromMilliseconds(delay_ms));
 }
 
 // Wrappers for FilePath and file_util
@@ -507,16 +542,16 @@ WebURL LocalFileToDataURL(const WebURL& fileUrl) {
 // by webkit layout tests.
 class ScopedTempDirectoryInternal : public ScopedTempDirectory {
  public:
-   virtual bool CreateUniqueTempDir() {
-     return tempDirectory_.CreateUniqueTempDir();
-   }
+  virtual bool CreateUniqueTempDir() {
+    return tempDirectory_.CreateUniqueTempDir();
+  }
 
-   virtual std::string path() const {
-     return tempDirectory_.path().MaybeAsASCII();
-   }
+  virtual std::string path() const {
+    return tempDirectory_.path().MaybeAsASCII();
+  }
 
  private:
-   ScopedTempDir tempDirectory_;
+  ScopedTempDir tempDirectory_;
 };
 
 ScopedTempDirectory* CreateScopedTempDirectory() {
@@ -529,7 +564,7 @@ int64 GetCurrentTimeInMillisecond() {
 }
 
 std::string EscapePath(const std::string& path) {
-  return ::EscapePath(path);
+  return net::EscapePath(path);
 }
 
 std::string MakeURLErrorDescription(const WebKit::WebURLError& error) {
@@ -554,8 +589,9 @@ std::string MakeURLErrorDescription(const WebKit::WebURLError& error) {
       code = -1004;  // NSURLErrorCannotConnectToHost
       break;
     }
-  } else
+  } else {
     DLOG(WARNING) << "Unknown error domain";
+  }
 
   return base::StringPrintf("<NSError domain %s, code %d, failing URL \"%s\">",
       domain.c_str(), code, error.unreachableURL.spec().data());
@@ -621,7 +657,7 @@ void OpenFileSystem(WebFrame* frame, WebFileSystem::Type type,
 }
 
 // Keyboard code
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
 int NativeKeyCodeForWindowsKeyCode(int keycode, bool shift) {
   ui::KeyboardCode code = static_cast<ui::KeyboardCode>(keycode);
   return ui::GdkNativeKeyCodeForWindowsKeyCode(code, shift);
@@ -631,6 +667,15 @@ int NativeKeyCodeForWindowsKeyCode(int keycode, bool shift) {
 // Timers
 double GetForegroundTabTimerInterval() {
   return webkit_glue::kForegroundTabTimerInterval;
+}
+
+// Logging
+void EnableWebCoreLogChannels(const std::string& channels) {
+  webkit_glue::EnableWebCoreLogChannels(channels);
+}
+
+void SetGamepadData(const WebKit::WebGamepads& pads) {
+  test_environment->webkit_platform_support()->setGamepadData(pads);
 }
 
 }  // namespace webkit_support

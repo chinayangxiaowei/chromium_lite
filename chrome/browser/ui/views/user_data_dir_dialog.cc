@@ -8,16 +8,15 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/message_box_flags.h"
-#include "views/controls/message_box_view.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/message_box_view.h"
+#include "ui/views/widget/widget.h"
 
 // static
 FilePath UserDataDirDialog::RunUserDataDirDialog(
     const FilePath& user_data_dir) {
   // When the window closes, it will delete itself.
   UserDataDirDialog* dlg = new UserDataDirDialog(user_data_dir);
-  MessageLoopForUI::current()->Run(dlg);
+  MessageLoopForUI::current()->RunWithDispatcher(dlg);
   return dlg->user_data_dir();
 }
 
@@ -25,13 +24,15 @@ UserDataDirDialog::UserDataDirDialog(const FilePath& user_data_dir)
     : ALLOW_THIS_IN_INITIALIZER_LIST(
           select_file_dialog_(SelectFileDialog::Create(this))),
       is_blocking_(true) {
-  std::wstring message_text = UTF16ToWide(l10n_util::GetStringFUTF16(
+  string16 message_text = l10n_util::GetStringFUTF16(
       IDS_CANT_WRITE_USER_DIRECTORY_SUMMARY,
-      user_data_dir.LossyDisplayName()));
+      user_data_dir.LossyDisplayName());
   const int kDialogWidth = 400;
   message_box_view_ = new views::MessageBoxView(
-      ui::MessageBoxFlags::kIsConfirmMessageBox,
-      message_text.c_str(), std::wstring(), kDialogWidth);
+      views::MessageBoxView::NO_OPTIONS,
+      message_text,
+      string16(),
+      kDialogWidth);
 
   views::Widget::CreateWindow(this)->Show();
 }
@@ -40,26 +41,23 @@ UserDataDirDialog::~UserDataDirDialog() {
   select_file_dialog_->ListenerDestroyed();
 }
 
-std::wstring UserDataDirDialog::GetDialogButtonLabel(
-    ui::MessageBoxFlags::DialogButton button) const {
-
+string16 UserDataDirDialog::GetDialogButtonLabel(
+    ui::DialogButton button) const {
   switch (button) {
-    case ui::MessageBoxFlags::DIALOGBUTTON_OK:
-      return UTF16ToWide(l10n_util::GetStringUTF16(
-          IDS_CANT_WRITE_USER_DIRECTORY_CHOOSE_DIRECTORY_BUTTON));
-    case ui::MessageBoxFlags::DIALOGBUTTON_CANCEL:
-      return UTF16ToWide(l10n_util::GetStringUTF16(
-          IDS_CANT_WRITE_USER_DIRECTORY_EXIT_BUTTON));
+    case ui::DIALOG_BUTTON_OK:
+      return l10n_util::GetStringUTF16(
+          IDS_CANT_WRITE_USER_DIRECTORY_CHOOSE_DIRECTORY_BUTTON);
+    case ui::DIALOG_BUTTON_CANCEL:
+      return l10n_util::GetStringUTF16(
+          IDS_CANT_WRITE_USER_DIRECTORY_EXIT_BUTTON);
     default:
       NOTREACHED();
   }
-
-  return std::wstring();
+  return string16();
 }
 
-std::wstring UserDataDirDialog::GetWindowTitle() const {
-  return UTF16ToWide(
-      l10n_util::GetStringUTF16(IDS_CANT_WRITE_USER_DIRECTORY_TITLE));
+string16 UserDataDirDialog::GetWindowTitle() const {
+  return l10n_util::GetStringUTF16(IDS_CANT_WRITE_USER_DIRECTORY_TITLE);
 }
 
 void UserDataDirDialog::DeleteDelegate() {

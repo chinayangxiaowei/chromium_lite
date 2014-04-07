@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,21 @@
 #include <ole2.h>
 #endif
 
-#include "base/compiler_specific.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/message_loop.h"
 #include "base/string_number_conversions.h"
 #include "chrome/browser/automation/ui_controls.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "views/view.h"
-#include "views/widget/widget.h"
+#include "content/public/browser/browser_thread.h"
+#include "ui/gfx/compositor/test/compositor_test_support.h"
+#include "ui/views/view.h"
+#include "ui/views/widget/widget.h"
+
+#if defined(USE_AURA)
+#include "ash/shell.h"
+#include "ui/aura/root_window.h"
+#endif
 
 namespace {
 
@@ -53,13 +61,10 @@ const int kMouseMoveDelayMS = 200;
 ViewEventTestBase::ViewEventTestBase()
   : window_(NULL),
     content_view_(NULL),
-    ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+    ui_thread_(content::BrowserThread::UI, &message_loop_) {
 }
 
 void ViewEventTestBase::Done() {
-  // Cancel the pending time-out.
-  method_factory_.RevokeAll();
-
   MessageLoop::current()->Quit();
 
 #if defined(OS_WIN)
@@ -68,14 +73,21 @@ void ViewEventTestBase::Done() {
   PostMessage(window_->GetNativeWindow(), WM_USER, 0, 0);
 #endif
 
-  // If we're in a nested message loop, as is the case with menus, we need
-  // to quit twice. The second quit does that for us.
-  MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
+  // If we're in a nested message loop, as is the case with menus, we
+  // need to quit twice. The second quit does that for us. Finish all
+  // pending UI events before posting closure because events it may be
+  // executed before UI events are executed.
+  ui_controls::RunClosureAfterAllPendingUIEvents(MessageLoop::QuitClosure());
 }
 
 void ViewEventTestBase::SetUp() {
 #if defined(OS_WIN)
   OleInitialize(NULL);
+#endif
+  ui::CompositorTestSupport::Initialize();
+#if defined(USE_AURA)
+  aura::RootWindow::GetInstance();
+  ash::Shell::CreateInstance(NULL);
 #endif
   window_ = views::Widget::CreateWindow(this);
 }
@@ -86,11 +98,15 @@ void ViewEventTestBase::TearDown() {
     DestroyWindow(window_->GetNativeWindow());
 #else
     window_->Close();
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
-    ui_test_utils::RunMessageLoop();
+    ui_test_utils::RunAllPendingInMessageLoop();
 #endif
     window_ = NULL;
   }
+#if defined(USE_AURA)
+  ash::Shell::DeleteInstance();
+  aura::RootWindow::DeleteInstance();
+#endif
+  ui::CompositorTestSupport::Terminate();
 #if defined(OS_WIN)
   OleUninitialize();
 #endif
@@ -132,15 +148,15 @@ void ViewEventTestBase::StartMessageLoopAndRunTest() {
 #endif
 
   // Flush any pending events to make sure we start with a clean slate.
-  MessageLoop::current()->RunAllPending();
+  ui_test_utils::RunAllPendingInMessageLoop();
 
   // Schedule a task that starts the test. Need to do this as we're going to
   // run the message loop.
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      NewRunnableMethod(this, &ViewEventTestBase::DoTestOnMessageLoop));
+      base::Bind(&ViewEventTestBase::DoTestOnMessageLoop, this));
 
-  MessageLoop::current()->Run();
+  ui_test_utils::RunMessageLoop();
 }
 
 gfx::Size ViewEventTestBase::GetPreferredSize() {
@@ -153,7 +169,8 @@ void ViewEventTestBase::ScheduleMouseMoveInBackground(int x, int y) {
     dnd_thread_->Start();
   }
   dnd_thread_->message_loop()->PostDelayedTask(
-      FROM_HERE, NewRunnableFunction(&ui_controls::SendMouseMove, x, y),
+      FROM_HERE,
+      base::Bind(base::IgnoreResult(&ui_controls::SendMouseMove), x, y),
       kMouseMoveDelayMS);
 }
 
@@ -161,11 +178,10 @@ void ViewEventTestBase::StopBackgroundThread() {
   dnd_thread_.reset(NULL);
 }
 
-void ViewEventTestBase::RunTestMethod(Task* task) {
+void ViewEventTestBase::RunTestMethod(const base::Closure& task) {
   StopBackgroundThread();
 
-  scoped_ptr<Task> task_deleter(task);
-  task->Run();
+  task.Run();
   if (HasFatalFailure())
     Done();
 }

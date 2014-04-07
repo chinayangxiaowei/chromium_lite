@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/scoped_temp_dir.h"
 #include "chrome/browser/ui/browser.h"
@@ -9,16 +10,23 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/download/mhtml_generation_manager.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_notification_types.h"
+#include "content/public/browser/web_contents.h"
 #include "net/test/test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::WebContents;
 
 namespace {
 
 class MHTMLGenerationTest : public InProcessBrowserTest {
  public:
-  MHTMLGenerationTest() {}
+  MHTMLGenerationTest() : mhtml_generated_(false), file_size_(0) {}
+
+  void MHTMLGenerated(const FilePath& path, int64 size) {
+    mhtml_generated_ = true;
+    file_size_ = size;
+    MessageLoopForUI::current()->Quit();
+  }
 
  protected:
   virtual void SetUp() {
@@ -26,7 +34,14 @@ class MHTMLGenerationTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUp();
   }
 
+  bool mhtml_generated() const { return mhtml_generated_; }
+  int64 file_size() const { return file_size_; }
+
   ScopedTempDir temp_dir_;
+
+ private:
+  bool mhtml_generated_;
+  int64 file_size_;
 };
 
 // Tests that generating a MHTML does create contents.
@@ -42,22 +57,20 @@ IN_PROC_BROWSER_TEST_F(MHTMLGenerationTest, GenerateMHTML) {
   ui_test_utils::NavigateToURL(browser(),
       test_server()->GetURL("files/google/google.html"));
 
-  TabContents* tab = browser()->GetSelectedTabContents();
+  WebContents* tab = browser()->GetSelectedWebContents();
   MHTMLGenerationManager* mhtml_generation_manager =
       g_browser_process->mhtml_generation_manager();
 
-  Source<RenderViewHost> source(tab->render_view_host());
-  ui_test_utils::WindowedNotificationObserverWithDetails<
-      MHTMLGenerationManager::NotificationDetails> signal(
-          content::NOTIFICATION_MHTML_GENERATED, source);
-  mhtml_generation_manager->GenerateMHTML(tab, path);
-  signal.Wait();
+  mhtml_generation_manager->GenerateMHTML(tab, path,
+      base::Bind(&MHTMLGenerationTest::MHTMLGenerated, this));
 
-  MHTMLGenerationManager::NotificationDetails details;
-  ASSERT_TRUE(signal.GetDetailsFor(source.map_key(), &details));
-  ASSERT_TRUE(details.success);
+  // Block until the MHTML is generated.
+  ui_test_utils::RunMessageLoop();
 
-  // Make sure the generated file has some contents.
+  EXPECT_TRUE(mhtml_generated());
+  EXPECT_GT(file_size(), 0);
+
+  // Make sure the actual generated file has some contents.
   int64 file_size;
   ASSERT_TRUE(file_util::GetFileSize(path, &file_size));
   EXPECT_GT(file_size, 100);

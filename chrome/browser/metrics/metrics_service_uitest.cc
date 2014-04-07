@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,6 @@
 #include "chrome/test/automation/browser_proxy.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/ui/ui_test.h"
-#include "content/common/notification_service.h"
 #include "net/base/net_util.h"
 
 class MetricsServiceTest : public UITest {
@@ -38,11 +37,6 @@ class MetricsServiceTest : public UITest {
   void OpenTabs() {
     scoped_refptr<BrowserProxy> window = automation()->GetBrowserWindow(0);
     ASSERT_TRUE(window.get());
-
-    // The Instant field trial causes a preload of the default search engine,
-    // which messes up the expected page load count. Setting this preference
-    // disables the field trial.
-    ASSERT_TRUE(window->SetBooleanPreference(prefs::kInstantEnabledOnce, true));
 
     FilePath page1_path;
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &page1_path));
@@ -75,8 +69,8 @@ TEST_F(MetricsServiceTest, CloseRenderersNormally) {
   local_state->RegisterIntegerPref(prefs::kStabilityRendererCrashCount, 0);
   EXPECT_TRUE(local_state->GetBoolean(prefs::kStabilityExitedCleanly));
   EXPECT_EQ(1, local_state->GetInteger(prefs::kStabilityLaunchCount));
-#if defined(TOUCH_UI)
-  // The keyboard page loads for touchui.
+#if defined(USE_VIRTUAL_KEYBOARD)
+  // The keyboard page loads.
   EXPECT_EQ(4, local_state->GetInteger(prefs::kStabilityPageLoadCount));
 #else
   EXPECT_EQ(3, local_state->GetInteger(prefs::kStabilityPageLoadCount));
@@ -108,7 +102,7 @@ TEST_F(MetricsServiceTest, DISABLED_CrashRenderers) {
   }
 
   // Give the browser a chance to notice the crashed tab.
-  base::PlatformThread::Sleep(TestTimeouts::action_timeout_ms());
+  base::PlatformThread::Sleep(TestTimeouts::action_timeout());
 
   QuitBrowser();
 
@@ -119,8 +113,8 @@ TEST_F(MetricsServiceTest, DISABLED_CrashRenderers) {
   local_state->RegisterIntegerPref(prefs::kStabilityRendererCrashCount, 0);
   EXPECT_TRUE(local_state->GetBoolean(prefs::kStabilityExitedCleanly));
   EXPECT_EQ(1, local_state->GetInteger(prefs::kStabilityLaunchCount));
-#if defined(TOUCH_UI)
-  // The keyboard page loads for touchui.
+#if defined(USE_VIRTUAL_KEYBOARD)
+  // The keyboard page loads.
   EXPECT_EQ(5, local_state->GetInteger(prefs::kStabilityPageLoadCount));
 #else
   EXPECT_EQ(4, local_state->GetInteger(prefs::kStabilityPageLoadCount));

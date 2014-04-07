@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "ppapi/cpp/completion_callback.h"
+#include "ppapi/utility/completion_callback_factory.h"
 
 #if defined(__native_client__)
 #include "ppapi/cpp/instance.h"
@@ -48,7 +48,8 @@ pp::InstancePrivate {
 
   // pp::Instance override.
   virtual bool Init(uint32_t argc, const char* argn[], const char* argv[]);
-  virtual void DidChangeView(const pp::Rect& position, const pp::Rect& clip);
+  virtual void DidChangeView(const pp::View& view);
+  virtual bool HandleInputEvent(const pp::InputEvent& event);
 
 #if !(defined __native_client__)
   virtual pp::Var GetInstanceObject();
@@ -82,12 +83,28 @@ pp::InstancePrivate {
     return protocol_;
   }
 
+  // Posts a message to the test page to eval() the script.
+  void EvalScript(const std::string& script);
+
+  // Sets the given cookie in the current document.
+  void SetCookie(const std::string& name, const std::string& value);
+
  private:
   void ExecuteTests(int32_t unused);
 
   // Creates a new TestCase for the give test name, or NULL if there is no such
-  // test. Ownership is passed to the caller.
-  TestCase* CaseForTestName(const char* name);
+  // test. Ownership is passed to the caller. The given string is split by '_'.
+  // The test case name is the first part.
+  TestCase* CaseForTestName(const std::string& name);
+  // Returns the filter (second part) of the given string. If there is no '_',
+  // returns the empty string, which means 'run all tests for this test case'.
+  // E.g.:
+  //  http://testserver/test_case.html?testcase=PostMessage
+  // Otherwise, the part of the testcase after '_' is returned, and the test
+  // whose name matches that string (if any) will be run:
+  //  http://testserver/test_case.html?testcase=PostMessage_SendingData
+  // Runs 'PostMessage_SendingData.
+  std::string FilterForTestName(const std::string& name);
 
   // Appends a list of available tests to the console in the document.
   void LogAvailableTests();
@@ -100,13 +117,14 @@ pp::InstancePrivate {
 
   void ReportProgress(const std::string& progress_value);
 
-  // Sets the given cookie in the current document.
-  void SetCookie(const std::string& name, const std::string& value);
-
   pp::CompletionCallbackFactory<TestingInstance> callback_factory_;
 
   // Owning pointer to the current test case. Valid after Init has been called.
   TestCase* current_case_;
+
+  // A filter to use when running tests. This is passed to 'RunTests', which
+  // runs only tests whose name contains test_filter_ as a substring.
+  std::string test_filter_;
 
   // The current step we're on starting at 0. This is incremented every time we
   // report progress via a cookie. See comment above the class.
@@ -127,4 +145,3 @@ pp::InstancePrivate {
 };
 
 #endif  // PPAPI_TESTS_TESTING_INSTANCE_H_
-

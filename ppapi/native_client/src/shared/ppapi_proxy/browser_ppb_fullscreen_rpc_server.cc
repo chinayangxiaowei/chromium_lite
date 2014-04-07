@@ -1,35 +1,19 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// SRPC-abstraction wrappers around PPB_Fullscreen_Dev functions.
+// SRPC-abstraction wrappers around PPB_Fullscreen functions.
 
 #include "native_client/src/shared/ppapi_proxy/browser_globals.h"
 #include "native_client/src/shared/ppapi_proxy/utility.h"
-#include "ppapi/c/dev/ppb_fullscreen_dev.h"
 #include "ppapi/c/pp_size.h"
+#include "ppapi/c/ppb_fullscreen.h"
 #include "srpcgen/ppb_rpc.h"
 
 using ppapi_proxy::DebugPrintf;
 using ppapi_proxy::PPBFullscreenInterface;
 
-void PpbFullscreenRpcServer::PPB_Fullscreen_IsFullscreen(
-      NaClSrpcRpc* rpc,
-      NaClSrpcClosure* done,
-      // inputs
-      PP_Instance instance,
-      // outputs
-      int32_t* success) {
-  NaClSrpcClosureRunner runner(done);
-  rpc->result = NACL_SRPC_RESULT_APP_ERROR;
-
-  PP_Bool pp_success = PPBFullscreenInterface()->IsFullscreen(instance);
-  DebugPrintf("PPB_Fullscreen::IsFullscreen: pp_success=%d\n", pp_success);
-
-  *success = (pp_success == PP_TRUE);
-  rpc->result = NACL_SRPC_RESULT_OK;
-}
-
+// IsFullscreen is implemented via an extra flag to the DidChangeView proxy.
 
 void PpbFullscreenRpcServer::PPB_Fullscreen_SetFullscreen(
       NaClSrpcRpc* rpc,
@@ -44,10 +28,9 @@ void PpbFullscreenRpcServer::PPB_Fullscreen_SetFullscreen(
 
   PP_Bool pp_success = PPBFullscreenInterface()->SetFullscreen(
       instance,
-      (fullscreen ? PP_TRUE : PP_FALSE));
-  DebugPrintf("PPB_Fullscreen::SetFullscreen: pp_success=%d\n", pp_success);
-
-  *success = (pp_success == PP_TRUE);
+      PP_FromBool(fullscreen));
+  *success = PP_ToBool(pp_success);
+  DebugPrintf("PPB_Fullscreen::SetFullscreen: success=%d\n", *success);
   rpc->result = NACL_SRPC_RESULT_OK;
 }
 
@@ -69,8 +52,7 @@ void PpbFullscreenRpcServer::PPB_Fullscreen_GetScreenSize(
   PP_Bool pp_success = PPBFullscreenInterface()->GetScreenSize(
       instance,
       reinterpret_cast<struct PP_Size*>(size));
-  DebugPrintf("PPB_Fullscreen::SetFullscreen: pp_success=%d\n", pp_success);
-
-  *success = (pp_success == PP_TRUE);
+  *success = PP_ToBool(pp_success);
+  DebugPrintf("PPB_Fullscreen::GetScreenSize: success=%d\n", *success);
   rpc->result = NACL_SRPC_RESULT_OK;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include <string>
 
 #include "ppapi/c/pp_resource.h"
+#include "ppapi/c/dev/ppb_testing_dev.h"
 #include "ppapi/cpp/dev/scrollbar_dev.h"
+#include "ppapi/cpp/view.h"
 
 #if (defined __native_client__)
 #include "ppapi/cpp/var.h"
@@ -18,7 +20,6 @@
 #include "ppapi/cpp/private/var_private.h"
 #endif
 
-struct PPB_Testing_Dev;
 class TestingInstance;
 
 namespace pp {
@@ -34,11 +35,15 @@ class TestCase {
   virtual ~TestCase();
 
   // Optionally override to do testcase specific initialization.
-  virtual bool Init() { return true; }
+  // Default implementation just returns true.
+  virtual bool Init();
 
-  // Override to implement the test. It will be called after the plugin is
-  // first displayed.
-  virtual void RunTest() = 0;
+  // Override to implement the test case. It will be called after the plugin is
+  // first displayed, passing a string. If the string is empty, the
+  // should run all tests for this test case. Otherwise, it should run the test
+  // whose name matches test_filter exactly (if there is one). This should
+  // generally be implemented using the RUN_TEST* macros.
+  virtual void RunTests(const std::string& test_filter) = 0;
 
   static std::string MakeFailureMessage(const char* file, int line,
                                         const char* cmd);
@@ -55,6 +60,16 @@ class TestCase {
   // method.
   virtual void HandleMessage(const pp::Var& message_data);
 
+  // A function that is invoked whenever DidChangeView is called on the
+  // associated TestingInstance. Default implementation does nothing. TestCases
+  // that want to handle view changes should override this method.
+  virtual void DidChangeView(const pp::View& view);
+
+  // A function that is invoked whenever HandleInputEvent is called on the
+  // associated TestingInstance. Default implementation returns false. TestCases
+  // that want to handle view changes should override this method.
+  virtual bool HandleInputEvent(const pp::InputEvent& event);
+
  protected:
 #if !(defined __native_client__)
   // Overridden by each test to supply a ScriptableObject corresponding to the
@@ -66,11 +81,22 @@ class TestCase {
   virtual pp::deprecated::ScriptableObject* CreateTestObject();
 #endif
 
-  // Initializes the testing interface.
-  bool InitTestingInterface();
+  // Checks whether the testing interface is available. Returns true if it is,
+  // false otherwise. If it is not available, adds a descriptive error. This is
+  // for use by tests that require the testing interface.
+  bool CheckTestingInterface();
 
   // Makes sure the test is run over HTTP.
   bool EnsureRunningOverHTTP();
+
+  // Return true if the given test name matches the filter. This is true if
+  // (a) filter is empty or (b) test_name and filter match exactly.
+  bool MatchesFilter(const std::string& test_name, const std::string& filter);
+
+  // Check for leaked resources and vars at the end of the test. If any exist,
+  // return a string with some information about the error. Otherwise, return
+  // an empty string.
+  std::string CheckResourcesAndVars();
 
   // Pointer to the instance that owns us.
   TestingInstance* instance_;
@@ -129,24 +155,41 @@ class TestCaseFactory {
 // Helper macro for calling functions implementing specific tests in the
 // RunTest function. This assumes the function name is TestFoo where Foo is the
 // test |name|.
-#define RUN_TEST(name) \
-  do { \
+#define RUN_TEST(name, test_filter) \
+  if (MatchesFilter(#name, test_filter)) { \
     force_async_ = false; \
-    instance_->LogTest(#name, Test##name()); \
-  } while (false)
+    std::string error_message = Test##name(); \
+    if (error_message.empty()) \
+      error_message = CheckResourcesAndVars(); \
+    instance_->LogTest(#name, error_message); \
+  }
+
+#define RUN_TEST_WITH_REFERENCE_CHECK(name, test_filter) \
+  if (MatchesFilter(#name, test_filter)) { \
+    force_async_ = false; \
+    uint32_t objects = testing_interface_->GetLiveObjectsForInstance( \
+        instance_->pp_instance()); \
+    std::string error_message = Test##name(); \
+    if (error_message.empty() && \
+        testing_interface_->GetLiveObjectsForInstance( \
+            instance_->pp_instance()) != objects) \
+      error_message = MakeFailureMessage(__FILE__, __LINE__, \
+          "reference leak check"); \
+    instance_->LogTest(#name, error_message); \
+  }
 
 // Like RUN_TEST above but forces functions taking callbacks to complete
 // asynchronously on success or error.
-#define RUN_TEST_FORCEASYNC(name) \
-  do { \
+#define RUN_TEST_FORCEASYNC(name, test_filter) \
+  if (MatchesFilter(#name"ForceAsync", test_filter)) { \
     force_async_ = true; \
     instance_->LogTest(#name"ForceAsync", Test##name()); \
-  } while (false)
+  }
 
-#define RUN_TEST_FORCEASYNC_AND_NOT(name) \
+#define RUN_TEST_FORCEASYNC_AND_NOT(name, test_filter) \
   do { \
-    RUN_TEST_FORCEASYNC(name); \
-    RUN_TEST(name); \
+    RUN_TEST_FORCEASYNC(name, test_filter); \
+    RUN_TEST(name, test_filter); \
   } while (false)
 
 

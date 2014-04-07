@@ -21,12 +21,12 @@ REGISTER_TEST_CASE(Memory);
 bool TestMemory::Init() {
   memory_dev_interface_ = static_cast<const PPB_Memory_Dev*>(
       pp::Module::Get()->GetBrowserInterface(PPB_MEMORY_DEV_INTERFACE));
-  return memory_dev_interface_ && InitTestingInterface();
+  return memory_dev_interface_ && CheckTestingInterface();
 }
 
-void TestMemory::RunTest() {
-  RUN_TEST(MemAlloc);
-  RUN_TEST(NullMemFree);
+void TestMemory::RunTests(const std::string& filter) {
+  RUN_TEST(MemAlloc, filter);
+  RUN_TEST(NullMemFree, filter);
 }
 
 std::string TestMemory::TestMemAlloc() {

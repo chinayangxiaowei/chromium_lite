@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <list>
 #include <map>
 
+#include "base/compiler_specific.h"
 #include "base/message_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
@@ -111,9 +112,5 @@ class JingleThreadWrapper
 };
 
 }
-
-// Safe to disable refcounting because JingleThreadWrapper deletes
-// itself with the thread.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(jingle_glue::JingleThreadWrapper);
 
 #endif  // JINGLE_GLUE_THREAD_WRAPPER_H_

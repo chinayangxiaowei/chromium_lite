@@ -6,7 +6,8 @@
 
 #include <string.h>
 
-#include "base/memory/scoped_ptr.h"
+#include <vector>
+
 #include "ppapi/c/dev/ppb_testing_dev.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppb_file_io.h"
@@ -108,18 +109,18 @@ int32_t WriteEntireBuffer(PP_Instance instance,
 }  // namespace
 
 bool TestFileIO::Init() {
-  return InitTestingInterface() && EnsureRunningOverHTTP();
+  return CheckTestingInterface() && EnsureRunningOverHTTP();
 }
 
-void TestFileIO::RunTest() {
-  RUN_TEST_FORCEASYNC_AND_NOT(Open);
-  RUN_TEST_FORCEASYNC_AND_NOT(ReadWriteSetLength);
-  RUN_TEST_FORCEASYNC_AND_NOT(TouchQuery);
-  RUN_TEST_FORCEASYNC_AND_NOT(AbortCalls);
-  RUN_TEST_FORCEASYNC_AND_NOT(ParallelReads);
-  RUN_TEST_FORCEASYNC_AND_NOT(ParallelWrites);
-  RUN_TEST_FORCEASYNC_AND_NOT(NotAllowMixedReadWrite);
-  RUN_TEST_FORCEASYNC_AND_NOT(WillWriteWillSetLength);
+void TestFileIO::RunTests(const std::string& filter) {
+  RUN_TEST_FORCEASYNC_AND_NOT(Open, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(ReadWriteSetLength, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(TouchQuery, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(AbortCalls, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(ParallelReads, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(ParallelWrites, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(NotAllowMixedReadWrite, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(WillWriteWillSetLength, filter);
 
   // TODO(viettrungluu): add tests:
   //  - that PP_ERROR_PENDING is correctly returned
@@ -697,19 +698,17 @@ std::string TestFileIO::TestParallelReads() {
   TestCompletionCallback callback_1(instance_->pp_instance(), force_async_);
   int32_t read_offset_1 = 0;
   int32_t size_1 = 3;
-  char* extended_buf_1 = new char[border_size * 2 + size_1];
-  scoped_array<char> extended_buf_1_deleter(extended_buf_1);
-  char* buf_1 = extended_buf_1 + border_size;
-  memcpy(extended_buf_1, border, border_size);
+  std::vector<char> extended_buf_1(border_size * 2 + size_1);
+  char* buf_1 = &extended_buf_1[border_size];
+  memcpy(&extended_buf_1[0], border, border_size);
   memcpy(buf_1 + size_1, border, border_size);
 
   TestCompletionCallback callback_2(instance_->pp_instance(), force_async_);
   int32_t read_offset_2 = size_1;
   int32_t size_2 = 9;
-  char* extended_buf_2 = new char[border_size * 2 + size_2];
-  scoped_array<char> extended_buf_2_deleter(extended_buf_2);
-  char* buf_2 = extended_buf_2 + border_size;
-  memcpy(extended_buf_2, border, border_size);
+  std::vector<char> extended_buf_2(border_size * 2 + size_2);
+  char* buf_2 = &extended_buf_2[border_size];
+  memcpy(&extended_buf_2[0], border, border_size);
   memcpy(buf_2 + size_2, border, border_size);
 
   int32_t rv_1 = PP_OK;
@@ -754,12 +753,12 @@ std::string TestFileIO::TestParallelReads() {
   }
 
   // Make sure every read operation writes into the correct buffer.
-  const char* expected_result_1 = "__border__abc__border__";
-  const char* expected_result_2 = "__border__defghijkl__border__";
-  if (strncmp(extended_buf_1, expected_result_1,
-              sizeof(expected_result_1)) != 0 ||
-      strncmp(extended_buf_2, expected_result_2,
-              sizeof(expected_result_2)) != 0) {
+  const char expected_result_1[] = "__border__abc__border__";
+  const char expected_result_2[] = "__border__defghijkl__border__";
+  if (strncmp(&extended_buf_1[0], expected_result_1,
+              strlen(expected_result_1)) != 0 ||
+      strncmp(&extended_buf_2[0], expected_result_2,
+              strlen(expected_result_2)) != 0) {
     return std::string(
         "Parallel FileIO::Read operations have written into wrong buffers.");
   }
@@ -904,6 +903,31 @@ std::string TestFileIO::TestNotAllowMixedReadWrite() {
   if (rv_2 != PP_ERROR_INPROGRESS)
     return ReportError("FileIO::Read", rv_2);
 
+  // Cannot query while the write is pending.
+  TestCompletionCallback callback_3(instance_->pp_instance(), force_async_);
+  PP_FileInfo info;
+  int32_t rv_3 = file_io.Query(&info, callback_3);
+  if (rv_3 == PP_OK_COMPLETIONPENDING)
+    rv_3 = callback_3.WaitForResult();
+  if (rv_3 != PP_ERROR_INPROGRESS)
+    return ReportError("FileIO::Query", rv_3);
+
+  // Cannot touch while the write is pending.
+  TestCompletionCallback callback_4(instance_->pp_instance(), force_async_);
+  int32_t rv_4 = file_io.Touch(1234.0, 5678.0, callback_4);
+  if (rv_4 == PP_OK_COMPLETIONPENDING)
+    rv_4 = callback_4.WaitForResult();
+  if (rv_4 != PP_ERROR_INPROGRESS)
+    return ReportError("FileIO::Touch", rv_4);
+
+  // Cannot set length while the write is pending.
+  TestCompletionCallback callback_5(instance_->pp_instance(), force_async_);
+  int32_t rv_5 = file_io.SetLength(123, callback_5);
+  if (rv_5 == PP_OK_COMPLETIONPENDING)
+    rv_5 = callback_5.WaitForResult();
+  if (rv_5 != PP_ERROR_INPROGRESS)
+    return ReportError("FileIO::SetLength", rv_5);
+
   callback_1.WaitForResult();
 
   PASS();
@@ -941,10 +965,14 @@ std::string TestFileIO::TestWillWriteWillSetLength() {
   if (!trusted)
     return ReportError("FileIOTrusted", PP_ERROR_FAILED);
 
-  // Get file descriptor.
-  int32_t fd = trusted->GetOSFileDescriptor(file_io.pp_resource());
-  if (fd < 0)
-    return "FileIO::GetOSFileDescriptor() returned a bad file descriptor.";
+  // Get file descriptor. This is only supported in-process for now, so don't
+  // test out of process.
+  const PPB_Testing_Dev* testing_interface = GetTestingInterface();
+  if (testing_interface && !testing_interface->IsOutOfProcess()) {
+    int32_t fd = trusted->GetOSFileDescriptor(file_io.pp_resource());
+    if (fd < 0)
+      return "FileIO::GetOSFileDescriptor() returned a bad file descriptor.";
+  }
 
   // Calling WillWrite.
   rv = trusted->WillWrite(

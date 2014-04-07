@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_AUTOFILL_CREDIT_CARD_H_
 #pragma once
 
-#include <ostream>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -32,8 +32,9 @@ class CreditCard : public FormGroup {
                                     const string16& value) OVERRIDE;
   virtual void GetMatchingTypes(const string16& text,
                                 FieldTypeSet* matching_types) const OVERRIDE;
+
   // Credit card preview summary, for example: ******1234, Exp: 01/2020
-  virtual const string16 Label() const;
+  const string16 Label() const;
 
   // Special method to set value for HTML5 month input type.
   void SetInfoForMonthInputType(const string16& value);
@@ -52,6 +53,12 @@ class CreditCard : public FormGroup {
   // For use in STL containers.
   void operator=(const CreditCard& credit_card);
 
+  // If the card numbers for |this| and |imported_card| match, overwrites |this|
+  // card's data with the data in |credit_card| and returns true.  Otherwise,
+  // returns false.
+  bool UpdateFromImportedCard(const CreditCard& imported_card)
+      WARN_UNUSED_RESULT;
+
   // Comparison for Sync.  Returns 0 if the credit card is the same as |this|,
   // or < 0, or > 0 if it is different.  The implied ordering can be used for
   // culling duplicates.  The ordering is based on collation order of the
@@ -59,10 +66,6 @@ class CreditCard : public FormGroup {
   // GUIDs, labels, and unique IDs are not compared, only the values of the
   // credit cards themselves.
   int Compare(const CreditCard& credit_card) const;
-
-  // This is same as |Compare| for credit cards as they are single-valued.
-  // This is here to unify templated code that deals with |FormGroup|s.
-  int CompareMulti(const CreditCard& credit_card) const;
 
   // Used by tests.
   bool operator==(const CreditCard& credit_card) const;

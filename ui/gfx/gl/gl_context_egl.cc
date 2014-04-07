@@ -8,8 +8,8 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "third_party/angle/include/EGL/egl.h"
-#include "ui/gfx/gl/gl_surface_egl.h"
 #include "ui/gfx/gl/egl_util.h"
+#include "ui/gfx/gl/gl_surface.h"
 
 // This header must come after the above third-party include, as
 // it brings in #defines that cause conflicts.
@@ -34,15 +34,17 @@ std::string GLContextEGL::GetExtensions() {
 
 GLContextEGL::GLContextEGL(GLShareGroup* share_group)
     : GLContext(share_group),
-      context_(NULL)
-{
+      context_(NULL),
+      display_(NULL),
+      config_(NULL) {
 }
 
 GLContextEGL::~GLContextEGL() {
   Destroy();
 }
 
-bool GLContextEGL::Initialize(GLSurface* compatible_surface) {
+bool GLContextEGL::Initialize(
+    GLSurface* compatible_surface, GpuPreference gpu_preference) {
   DCHECK(compatible_surface);
   DCHECK(!context_);
 
@@ -51,9 +53,8 @@ bool GLContextEGL::Initialize(GLSurface* compatible_surface) {
     EGL_NONE
   };
 
-  GLSurfaceEGL* egl_surface = static_cast<GLSurfaceEGL*>(compatible_surface);
-  display_ = egl_surface->GetDisplay();
-  config_ = egl_surface->GetConfig();
+  display_ = compatible_surface->GetDisplay();
+  config_ = compatible_surface->GetConfig();
 
   context_ = eglCreateContext(
       display_,
@@ -95,7 +96,17 @@ bool GLContextEGL::MakeCurrent(GLSurface* surface) {
     return false;
   }
 
-  surface->OnMakeCurrent(this);
+  SetCurrent(this, surface);
+  if (!InitializeExtensionBindings()) {
+    ReleaseCurrent(surface);
+    return false;
+  }
+
+  if (!surface->OnMakeCurrent(this)) {
+    LOG(ERROR) << "Could not make current.";
+    return false;
+  }
+
   return true;
 }
 
@@ -103,6 +114,7 @@ void GLContextEGL::ReleaseCurrent(GLSurface* surface) {
   if (!IsCurrent(surface))
     return;
 
+  SetCurrent(NULL, NULL);
   eglMakeCurrent(display_,
                  EGL_NO_SURFACE,
                  EGL_NO_SURFACE,
@@ -111,7 +123,15 @@ void GLContextEGL::ReleaseCurrent(GLSurface* surface) {
 
 bool GLContextEGL::IsCurrent(GLSurface* surface) {
   DCHECK(context_);
-  if (context_ != eglGetCurrentContext())
+
+  bool native_context_is_current = context_ == eglGetCurrentContext();
+
+  // If our context is current then our notion of which GLContext is
+  // current must be correct. On the other hand, third-party code
+  // using OpenGL might change the current context.
+  DCHECK(!native_context_is_current || (GetCurrent() == this));
+
+  if (!native_context_is_current)
     return false;
 
   if (surface) {

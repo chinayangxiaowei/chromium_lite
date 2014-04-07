@@ -12,12 +12,17 @@
 #include "chrome/browser/extensions/extension_devtools_events.h"
 #include "chrome/browser/extensions/extension_devtools_manager.h"
 #include "chrome/browser/extensions/extension_event_router.h"
-#include "chrome/browser/extensions/extension_tabs_module.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#include "content/browser/debugger/devtools_manager.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/devtools_messages.h"
+#include "content/public/browser/devtools_agent_host_registry.h"
+#include "content/public/browser/devtools_manager.h"
+#include "content/public/browser/web_contents.h"
+
+using content::DevToolsAgentHost;
+using content::DevToolsAgentHostRegistry;
+using content::DevToolsManager;
+using content::WebContents;
 
 ExtensionDevToolsBridge::ExtensionDevToolsBridge(int tab_id,
                                                  Profile* profile)
@@ -56,34 +61,30 @@ bool ExtensionDevToolsBridge::RegisterAsDevToolsClientHost() {
                                    &browser, &tab_strip,
                                    &contents, &tab_index)) {
     DevToolsManager* devtools_manager = DevToolsManager::GetInstance();
-    if (devtools_manager->GetDevToolsClientHostFor(contents->
-            render_view_host()) != NULL)
+    DevToolsAgentHost* agent = DevToolsAgentHostRegistry::GetDevToolsAgentHost(
+        contents->web_contents()->GetRenderViewHost());
+    if (devtools_manager->GetDevToolsClientHostFor(agent))
       return false;
 
-    devtools_manager->RegisterDevToolsClientHostFor(
-        contents->render_view_host(), this);
+    devtools_manager->RegisterDevToolsClientHostFor(agent, this);
 
     // Following messages depend on inspector protocol that is not yet
     // finalized.
 
-    // 1. Report front-end is loaded.
-    devtools_manager->ForwardToDevToolsAgent(
+    // 1. Start timeline profiler.
+    devtools_manager->DispatchOnInspectorBackend(
         this,
-        DevToolsAgentMsg_FrontendLoaded(MSG_ROUTING_NONE));
+        FormatDevToolsMessage(2, "Timeline.start"));
 
-    // 2. Start timeline profiler.
-    devtools_manager->ForwardToDevToolsAgent(
+    // 2. Enable network resource tracking.
+    devtools_manager->DispatchOnInspectorBackend(
         this,
-        DevToolsAgentMsg_DispatchOnInspectorBackend(
-            MSG_ROUTING_NONE,
-            FormatDevToolsMessage(2, "Timeline.start")));
+        FormatDevToolsMessage(3, "Network.enable"));
 
-    // 3. Enable network resource tracking.
-    devtools_manager->ForwardToDevToolsAgent(
+    // 3. Enable page events.
+    devtools_manager->DispatchOnInspectorBackend(
         this,
-        DevToolsAgentMsg_DispatchOnInspectorBackend(
-            MSG_ROUTING_NONE,
-            FormatDevToolsMessage(3, "Network.enable")));
+        FormatDevToolsMessage(4, "Page.enable"));
 
     return true;
   }
@@ -92,8 +93,7 @@ bool ExtensionDevToolsBridge::RegisterAsDevToolsClientHost() {
 
 void ExtensionDevToolsBridge::UnregisterAsDevToolsClientHost() {
   DCHECK_EQ(MessageLoop::current()->type(), MessageLoop::TYPE_UI);
-
-  NotifyCloseListener();
+  DevToolsManager::GetInstance()->ClientHostClosing(this);
 }
 
 // If the tab we are looking at is going away then we fire a closing event at
@@ -111,24 +111,16 @@ void ExtensionDevToolsBridge::InspectedTabClosing() {
   extension_devtools_manager_->BridgeClosingForTab(tab_id_);
 }
 
-void ExtensionDevToolsBridge::SendMessageToClient(const IPC::Message& msg) {
-  IPC_BEGIN_MESSAGE_MAP(ExtensionDevToolsBridge, msg)
-    IPC_MESSAGE_HANDLER(DevToolsClientMsg_DispatchOnInspectorFrontend,
-                        OnDispatchOnInspectorFrontend);
-    IPC_MESSAGE_UNHANDLED_ERROR()
-  IPC_END_MESSAGE_MAP()
-}
-
-void ExtensionDevToolsBridge::TabReplaced(TabContents* new_tab) {
-  // We don't update the tab id as it needs to remain the same so that we can
-  // properly unregister.
-}
-
-void ExtensionDevToolsBridge::OnDispatchOnInspectorFrontend(
+void ExtensionDevToolsBridge::DispatchOnInspectorFrontend(
     const std::string& data) {
   DCHECK_EQ(MessageLoop::current()->type(), MessageLoop::TYPE_UI);
 
   std::string json = base::StringPrintf("[%s]", data.c_str());
   profile_->GetExtensionEventRouter()->DispatchEventToRenderers(
       on_page_event_name_, json, profile_, GURL());
+}
+
+void ExtensionDevToolsBridge::TabReplaced(WebContents* new_tab) {
+  // We don't update the tab id as it needs to remain the same so that we can
+  // properly unregister.
 }

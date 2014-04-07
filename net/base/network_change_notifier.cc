@@ -51,13 +51,16 @@ NetworkChangeNotifier* NetworkChangeNotifier::Create() {
     return g_network_change_notifier_factory->CreateInstance();
 
 #if defined(OS_WIN)
-  return new NetworkChangeNotifierWin();
+  NetworkChangeNotifierWin* network_change_notifier =
+      new NetworkChangeNotifierWin();
+  network_change_notifier->WatchForAddressChange();
+  return network_change_notifier;
 #elif defined(OS_CHROMEOS)
   // ChromeOS builds MUST use its own class factory.
   CHECK(false);
   return NULL;
 #elif defined(OS_LINUX) || defined(OS_ANDROID)
-  return new NetworkChangeNotifierLinux();
+  return NetworkChangeNotifierLinux::Create();
 #elif defined(OS_MACOSX)
   return new NetworkChangeNotifierMac();
 #else
@@ -153,6 +156,17 @@ void NetworkChangeNotifier::NotifyObserversOfOnlineStateChange() {
     g_network_change_notifier->online_state_observer_list_->Notify(
         &OnlineStateObserver::OnOnlineStateChanged, !IsOffline());
   }
+}
+
+NetworkChangeNotifier::DisableForTest::DisableForTest()
+    : network_change_notifier_(g_network_change_notifier) {
+  DCHECK(g_network_change_notifier);
+  g_network_change_notifier = NULL;
+}
+
+NetworkChangeNotifier::DisableForTest::~DisableForTest() {
+  DCHECK(!g_network_change_notifier);
+  g_network_change_notifier = network_change_notifier_;
 }
 
 }  // namespace net

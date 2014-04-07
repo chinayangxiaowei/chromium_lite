@@ -12,7 +12,6 @@ include_rules = [
   "+skia",
   "+third_party/sqlite",
   "+third_party/tcmalloc",
-  "+ui/gfx",
 
   # For databases/
   "+sql",
@@ -22,7 +21,7 @@ include_rules = [
   "+gpu/command_buffer/client",
   "+gpu/command_buffer/common",
   "+gpu/command_buffer/service",
-  "+gpu/GLES2",
+  "+third_party/khronos/GLES2",
 
   # TODO(brettw) - review these; move up if it's ok, or remove the dependency
   "+crypto",
@@ -35,6 +34,5 @@ include_rules = [
   "+net/test",
   "+net/url_request",
   "+net/websockets",
-  "+ppapi/cpp",
   "+third_party/npapi/bindings",
 ]

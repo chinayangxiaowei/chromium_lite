@@ -7,12 +7,12 @@
 #pragma once
 
 #include "base/memory/ref_counted.h"
+#include "base/message_loop_helpers.h"
 #include "base/process.h"
-#include "base/tracked.h"
-#include "content/browser/browser_message_filter.h"
 #include "content/browser/in_process_webkit/dom_storage_area.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
 #include "content/common/dom_storage_common.h"
+#include "content/public/browser/browser_message_filter.h"
 
 class DOMStorageContext;
 class GURL;
@@ -21,15 +21,16 @@ struct DOMStorageMsg_Event_Params;
 // This class handles the logistics of DOM Storage within the browser process.
 // It mostly ferries information between IPCs and the WebKit implementations,
 // but it also handles some special cases like when renderer processes die.
-class DOMStorageMessageFilter : public BrowserMessageFilter {
+class DOMStorageMessageFilter : public content::BrowserMessageFilter {
  public:
   // Only call the constructor from the UI thread.
   DOMStorageMessageFilter(int process_id, WebKitContext* webkit_context);
 
-  // BrowserMessageFilter implementation
+  // content::BrowserMessageFilter implementation
   virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
-  virtual void OverrideThreadForMessage(const IPC::Message& message,
-                                        BrowserThread::ID* thread) OVERRIDE;
+  virtual void OverrideThreadForMessage(
+      const IPC::Message& message,
+      content::BrowserThread::ID* thread) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message,
                                  bool* message_was_ok) OVERRIDE;
   virtual void OnDestruct() const OVERRIDE;
@@ -40,8 +41,8 @@ class DOMStorageMessageFilter : public BrowserMessageFilter {
       const string16& origin, const GURL& url, bool is_local_storage);
 
  private:
-  friend class BrowserThread;
-  friend class DeleteTask<DOMStorageMessageFilter>;
+  friend class content::BrowserThread;
+  friend class base::DeleteHelper<DOMStorageMessageFilter>;
   virtual ~DOMStorageMessageFilter();
 
   // Message Handlers.

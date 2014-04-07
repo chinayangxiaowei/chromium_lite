@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,27 +8,26 @@
 
 #include <vector>
 #include "base/basictypes.h"
-#include "base/memory/ref_counted.h"
+#include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/task.h"
+#include "base/timer.h"
 #include "chrome/browser/ui/panels/auto_hiding_desktop_bar.h"
 #include "chrome/browser/ui/panels/panel.h"
 #include "ui/gfx/rect.h"
 
 class Browser;
-class Panel;
+class PanelMouseWatcher;
+class OverflowPanelStrip;
+class DockedPanelStrip;
 
 // This class manages a set of panels.
-// Note that the ref count is needed by using PostTask in the implementation.
-class PanelManager : public AutoHidingDesktopBar::Observer,
-                     public base::RefCounted<PanelManager> {
+class PanelManager : public AutoHidingDesktopBar::Observer {
  public:
-  typedef std::vector<Panel*> Panels;
-
   // Returns a single instance.
   static PanelManager* GetInstance();
 
-  virtual ~PanelManager();
+  // Returns true if panels should be used for the extension.
+  static bool ShouldUsePanels(const std::string& extension_id);
 
   // Called when the display is changed, i.e. work area is updated.
   void OnDisplayChanged();
@@ -40,15 +39,28 @@ class PanelManager : public AutoHidingDesktopBar::Observer,
   void Remove(Panel* panel);
   void RemoveAll();
 
+  // Asynchronous confirmation of panel having been removed.
+  void OnPanelRemoved(Panel* panel);
+
   // Drags the given panel.
   void StartDragging(Panel* panel);
   void Drag(int delta_x);
   void EndDragging(bool cancelled);
 
+  // Invoked when a panel's expansion state changes.
+  void OnPanelExpansionStateChanged(Panel* panel);
+
+  // Invoked when a panel is starting/stopping drawing an attention.
+  void OnPanelAttentionStateChanged(Panel* panel);
+
   // Invoked when the preferred window size of the given panel might need to
   // get changed.
   void OnPreferredWindowSizeChanged(
       Panel* panel, const gfx::Size& preferred_window_size);
+
+  // Resizes the panel. Explicitly setting the panel size is not allowed
+  // for panels that are auto-sized.
+  void ResizePanel(Panel* panel, const gfx::Size& new_size);
 
   // Returns true if we should bring up the titlebars, given the current mouse
   // point.
@@ -57,21 +69,44 @@ class PanelManager : public AutoHidingDesktopBar::Observer,
   // Brings up or down the titlebars for all minimized panels.
   void BringUpOrDownTitlebars(bool bring_up);
 
-  // Returns the bottom position for the panel per its expansion state. If auto-
-  // hide bottom bar is present, we want to move the minimized panel to the
-  // bottom of the screen, not the bottom of the work area.
-  int GetBottomPositionForExpansionState(
-      Panel::ExpansionState expansion_state) const;
+  // Returns the next browser window which could be either panel window or
+  // tabbed window, to switch to if the given panel is going to be deactivated.
+  // Returns NULL if such window cannot be found.
+  BrowserWindow* GetNextBrowserWindowToActivate(Panel* panel) const;
 
-  int num_panels() const { return panels_.size(); }
-  bool is_dragging_panel() const;
+  int num_panels() const;
+  int StartingRightPosition() const;
+  std::vector<Panel*> panels() const;
+
+  AutoHidingDesktopBar* auto_hiding_desktop_bar() const {
+    return auto_hiding_desktop_bar_;
+  }
+
+  PanelMouseWatcher* mouse_watcher() const {
+    return panel_mouse_watcher_.get();
+  }
+
+  DockedPanelStrip* docked_strip() const {
+    return docked_strip_.get();
+  }
+
+  bool is_full_screen() const { return is_full_screen_; }
+  OverflowPanelStrip* overflow_strip() const {
+    return overflow_strip_.get();
+  }
+
+  // Reduces time interval in tests to shorten test run time.
+  // Wrapper should be used around all time intervals in panels code.
+  static inline double AdjustTimeInterval(double interval) {
+    if (shorten_time_intervals_)
+      return interval / 100.0;
+    else
+      return interval;
+  }
 
 #ifdef UNIT_TEST
-  const Panels& panels() const { return panels_; }
-  static int horizontal_spacing() { return kPanelsHorizontalSpacing; }
-
-  const gfx::Rect& work_area() const {
-    return work_area_;
+  static void shorten_time_intervals_for_testing() {
+    shorten_time_intervals_ = true;
   }
 
   void set_auto_hiding_desktop_bar(
@@ -83,19 +118,24 @@ class PanelManager : public AutoHidingDesktopBar::Observer,
     auto_sizing_enabled_ = enabled;
   }
 
+  const gfx::Rect& work_area() const {
+    return work_area_;
+  }
+
   void SetWorkAreaForTesting(const gfx::Rect& work_area) {
     SetWorkArea(work_area);
+  }
+
+  void SetMouseWatcherForTesting(PanelMouseWatcher* watcher) {
+    SetMouseWatcher(watcher);
   }
 #endif
 
  private:
-  enum TitlebarAction {
-    NO_ACTION,
-    BRING_UP,
-    BRING_DOWN
-  };
+  friend struct base::DefaultLazyInstanceTraits<PanelManager>;
 
   PanelManager();
+  virtual ~PanelManager();
 
   // Overridden from AutoHidingDesktopBar::Observer:
   virtual void OnAutoHidingDesktopBarThicknessChanged() OVERRIDE;
@@ -110,46 +150,25 @@ class PanelManager : public AutoHidingDesktopBar::Observer,
   // Adjusts the work area to exclude the influence of auto-hiding desktop bars.
   void AdjustWorkAreaForAutoHidingDesktopBars();
 
-  // Handles all the panels that're delayed to be removed.
-  void DelayedRemove();
+  // Positions the various groupings of panels.
+  void Layout();
 
-  // Does the remove. Called from Remove and DelayedRemove.
-  void DoRemove(Panel* panel);
+  // Tests if the current active app is in full screen mode.
+  void CheckFullScreenMode();
 
-  // Rearranges the positions of the panels starting from the given iterator.
-  // This is called when the display space has been changed, i.e. working
-  // area being changed or a panel being closed.
-  void Rearrange(Panels::iterator iter_to_start, int rightmost_position);
+  // Tests may want to use a mock panel mouse watcher.
+  void SetMouseWatcher(PanelMouseWatcher* watcher);
 
-  // Finds one panel to close so that we may have space for the new panel
-  // created by |extension|.
-  void FindAndClosePanelOnOverflow(const Extension* extension);
+  // Tests may want to shorten time intervals to reduce running time.
+  static bool shorten_time_intervals_;
 
-  // Help functions to drag the given panel.
-  void DragLeft();
-  void DragRight();
+  scoped_ptr<DockedPanelStrip> docked_strip_;
+  scoped_ptr<OverflowPanelStrip> overflow_strip_;
 
-  // Checks if the titlebars have been brought up or down. If not, do not wait
-  // for the notifications to trigger it any more, and start to bring them up or
-  // down immediately.
-  void DelayedBringUpOrDownTitlebarsCheck();
-
-  // Does the real job of bringing up or down the titlebars.
-  void DoBringUpOrDownTitlebars(bool bring_up);
-
-  int GetMaxPanelWidth() const;
-  int GetMaxPanelHeight() const;
-  int GetRightMostAvaialblePosition() const;
-
-  // Updates the maximum size of each panel as the result of adding, removing,
-  // or sizing panels.
-  void UpdateMaxSizeForAllPanels();
-
-  Panels panels_;
-
-  // Stores the panels that are pending to remove. We want to delay the removal
-  // when we're in the process of the dragging.
-  Panels panels_pending_to_remove_;
+  // Use a mouse watcher to know when to bring up titlebars to "peek" at
+  // minimized panels. Mouse movement is only tracked when there is a minimized
+  // panel.
+  scoped_ptr<PanelMouseWatcher> panel_mouse_watcher_;
 
   // The maximum work area avaialble. This area does not include the area taken
   // by the always-visible (non-auto-hiding) desktop bars.
@@ -161,30 +180,18 @@ class PanelManager : public AutoHidingDesktopBar::Observer,
   // right of the screen edges) when they become fully visible.
   gfx::Rect adjusted_work_area_;
 
-  // Panel to drag.
-  size_t dragging_panel_index_;
-
-  // Original x coordinate of the panel to drag. This is used to get back to
-  // the original position when we cancel the dragging.
-  int dragging_panel_original_x_;
-
-  // Bounds of the panel to drag. It is first set to the original bounds when
-  // the dragging happens. Then it is updated to the position that will be set
-  // to when the dragging ends.
-  gfx::Rect dragging_panel_bounds_;
-
   scoped_refptr<AutoHidingDesktopBar> auto_hiding_desktop_bar_;
-
-  TitlebarAction delayed_titlebar_action_;
-
-  ScopedRunnableMethodFactory<PanelManager> method_factory_;
 
   // Whether or not bounds will be updated when the preferred content size is
   // changed. The testing code could set this flag to false so that other tests
   // will not be affected.
   bool auto_sizing_enabled_;
 
-  static const int kPanelsHorizontalSpacing = 4;
+  // Timer used to track if the current active app is in full screen mode.
+  base::RepeatingTimer<PanelManager> full_screen_mode_timer_;
+
+  // True if current active app is in full screen mode.
+  bool is_full_screen_;
 
   DISALLOW_COPY_AND_ASSIGN(PanelManager);
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/stats_table.h"
 #include "base/path_service.h"
@@ -20,7 +19,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "content/common/content_paths.h"
+#include "content/public/common/content_paths.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
@@ -28,18 +27,18 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
 
-#if defined(TOOLKIT_VIEWS)
-#include "views/view.h"
-#endif
-
 #if defined(OS_MACOSX)
+#include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
-#include "content/common/chrome_application_mac.h"
+#include "base/mac/scoped_nsautorelease_pool.h"
+#include "chrome/browser/chrome_browser_application_mac.h"
 #endif
 
 #if defined(OS_POSIX)
 #include "base/shared_memory.h"
 #endif
+
+#include "ui/gfx/compositor/compositor_setup.h"
 
 namespace {
 
@@ -161,10 +160,9 @@ ChromeTestSuite::~ChromeTestSuite() {
 
 void ChromeTestSuite::Initialize() {
 #if defined(OS_MACOSX)
-  chrome_application_mac::RegisterCrApp();
-#endif
-
   base::mac::ScopedNSAutoreleasePool autorelease_pool;
+  chrome_browser_application_mac::RegisterBrowserCrApp();
+#endif
 
   base::TestSuite::Initialize();
 
@@ -184,22 +182,20 @@ void ChromeTestSuite::Initialize() {
   FilePath path;
   PathService::Get(base::DIR_EXE, &path);
   path = path.Append(chrome::kFrameworkName);
-  base::mac::SetOverrideAppBundlePath(path);
+  base::mac::SetOverrideFrameworkBundlePath(path);
 #endif
 
   // Force unittests to run using en-US so if we test against string
   // output, it'll pass regardless of the system language.
-  ResourceBundle::InitSharedInstance("en-US");
+  ResourceBundle::InitSharedInstanceWithLocale("en-US");
   FilePath resources_pack_path;
   PathService::Get(base::DIR_MODULE, &resources_pack_path);
   resources_pack_path =
       resources_pack_path.Append(FILE_PATH_LITERAL("resources.pak"));
   ResourceBundle::AddDataPackToSharedInstance(resources_pack_path);
 
-#if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)
-  // Turn of GPU compositing in browser during unit tests.
-  views::View::set_use_acceleration_when_possible(false);
-#endif
+  // Mock out the compositor on platforms that use it.
+  ui::SetupTestCompositor();
 
   stats_filename_ = base::StringPrintf("unit_tests-%d",
                                        base::GetCurrentProcId());
@@ -216,7 +212,7 @@ void ChromeTestSuite::Shutdown() {
   ResourceBundle::CleanupSharedInstance();
 
 #if defined(OS_MACOSX)
-  base::mac::SetOverrideAppBundle(NULL);
+  base::mac::SetOverrideFrameworkBundle(NULL);
 #endif
 
   base::StatsTable::set_current(NULL);

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,10 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "ui/gfx/gl/gpu_preference.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
+#include "webkit/plugins/webkit_plugins_export.h"
 
 // TODO(port): this typedef is obviously incorrect on non-Windows
 // platforms, but now a lot of code now accidentally depends on them
@@ -20,22 +22,16 @@ typedef void* HANDLE;
 class GURL;
 struct NPObject;
 
-namespace WebKit {
-class WebFrame;
-}
-
 namespace webkit {
 namespace npapi {
 
-class WebPluginDelegate;
-class WebPluginParentView;
 class WebPluginResourceClient;
 #if defined(OS_MACOSX)
 class WebPluginAcceleratedSurface;
 #endif
 
 // Describes the new location for a plugin window.
-struct WebPluginGeometry {
+struct WEBKIT_PLUGINS_EXPORT WebPluginGeometry {
   WebPluginGeometry();
   ~WebPluginGeometry();
 
@@ -88,6 +84,7 @@ class WebPlugin {
   // Cancels a pending request.
   virtual void SetWindowlessPumpEvent(HANDLE pump_messages_event) = 0;
   virtual void ReparentPluginWindow(HWND window, HWND parent) = 0;
+  virtual void ReportExecutableMemory(size_t size) = 0;
 #endif
   virtual void CancelResource(unsigned long id) = 0;
   virtual void Invalidate() = 0;
@@ -145,10 +142,10 @@ class WebPlugin {
 
 #if defined(OS_MACOSX)
   // Called to inform the WebPlugin that the plugin has gained or lost focus.
-  virtual void FocusChanged(bool focused) {};
+  virtual void FocusChanged(bool focused) {}
 
   // Starts plugin IME.
-  virtual void StartIme() {};
+  virtual void StartIme() {}
 
   // Synthesize a fake window handle for the plug-in to identify the instance
   // to the browser, allowing mapping to a surface for hardware accelleration
@@ -159,7 +156,15 @@ class WebPlugin {
   virtual void BindFakePluginWindowHandle(bool opaque) {}
 
   // Returns the accelerated surface abstraction for accelerated plugins.
-  virtual WebPluginAcceleratedSurface* GetAcceleratedSurface();
+  virtual WebPluginAcceleratedSurface* GetAcceleratedSurface(
+      gfx::GpuPreference gpu_preference);
+
+  // Composited Core Animation plugin support.
+  virtual void AcceleratedPluginEnabledRendering() = 0;
+  virtual void AcceleratedPluginAllocatedIOSurface(int32 width,
+                                                   int32 height,
+                                                   uint32 surface_id) = 0;
+  virtual void AcceleratedPluginSwappedIOSurface() = 0;
 #endif
 
   // Handles NPN_URLRedirectResponse calls issued by plugins in response to

@@ -22,12 +22,20 @@
   },
   'targets': [
     {
+      'target_name': 'pull_in_copy_TestNetscapePlugIn',
+      'type': 'none',
+      'dependencies': [
+        '../third_party/WebKit/Tools/DumpRenderTree/DumpRenderTree.gyp/DumpRenderTree.gyp:copy_TestNetscapePlugIn'
+      ],
+    },
+    {
       'target_name': 'test_shell_common',
       'type': 'static_library',
       'variables': {
         'chromium_code': 1,
       },
       'dependencies': [
+        '../build/temp_gyp/googleurl.gyp:googleurl',
         '<(DEPTH)/base/base.gyp:base',
         '<(DEPTH)/base/base.gyp:base_i18n',
         '<(DEPTH)/gpu/gpu.gyp:gles2_c_lib',
@@ -46,8 +54,10 @@
         '<(DEPTH)/webkit/support/webkit_support.gyp:glue',
         '<(DEPTH)/webkit/support/webkit_support.gyp:quota',
         '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_gpu',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_media',
         '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_resources',
         '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_support_common',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_user_agent',
       ],
       'sources': [
         'mac/test_shell_webview.h',
@@ -93,8 +103,6 @@
         'test_shell_webthemecontrol.cc',
         'test_shell_webthemeengine.h',
         'test_shell_webthemeengine.cc',
-        'test_web_worker.cc',
-        'test_web_worker.h',
         'test_webview_delegate.cc',
         'test_webview_delegate.h',
         'test_webview_delegate_gtk.cc',
@@ -156,7 +164,7 @@
       'target_name': 'test_shell_pak',
       'type': 'none',
       'variables': {
-        'repack_path': '../../../tools/data_pack/repack.py',
+        'repack_path': '../../../tools/grit/grit/format/repack.py',
         'pak_path': '<(INTERMEDIATE_DIR)/repack/test_shell.pak',
       },
       'conditions': [
@@ -205,7 +213,7 @@
         '<(DEPTH)/net/net.gyp:net_test_support',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/third_party/mesa/mesa.gyp:osmesa',
-        '<(DEPTH)/third_party/WebKit/Source/WebKit/chromium/WebKit.gyp:copy_TestNetscapePlugIn',
+        'pull_in_copy_TestNetscapePlugIn',
         '<(DEPTH)/tools/imagediff/image_diff.gyp:image_diff',
       ],
       'defines': [
@@ -284,7 +292,7 @@
             '<(DEPTH)/third_party/mesa/mesa.gyp:osmesa',
           ],
           'variables': {
-            'repack_path': '../../../tools/data_pack/repack.py',
+            'repack_path': '../../../tools/grit/grit/format/repack.py',
           },
           'actions': [
             {
@@ -310,10 +318,8 @@
             },
           ],
           'copies': [
-            # TODO(ajwong): This, and the parallel chromium stanza below
-            # really should find a way to share file paths with
-            # ffmpeg.gyp so they don't diverge. (BUG=23602)
             {
+              # Copy FFmpeg binaries for audio/video support.
               'destination': '<(PRODUCT_DIR)/TestShell.app/Contents/MacOS/',
               'files': [
                 '<(PRODUCT_DIR)/ffmpegsumo.so',
@@ -348,17 +354,20 @@
         'chromium_code': 1,
       },
       'dependencies': [
+        '../build/temp_gyp/googleurl.gyp:googleurl',
         'test_shell_common',
         'test_shell_test_support',
         '<(DEPTH)/base/base.gyp:test_support_base',
         '<(DEPTH)/media/media.gyp:media_test_support',
         '<(DEPTH)/net/net.gyp:net',
         '<(DEPTH)/net/net.gyp:net_test_support',
+        '<(DEPTH)/ppapi/ppapi_internal.gyp:ppapi_shared',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/testing/gmock.gyp:gmock',
         '<(DEPTH)/testing/gtest.gyp:gtest',
         '<(DEPTH)/third_party/leveldatabase/leveldatabase.gyp:leveldatabase',
         '<(DEPTH)/v8/tools/gyp/v8.gyp:v8',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_user_agent',
       ],
       'sources': [
         '../../../skia/ext/convolver_unittest.cc',
@@ -378,6 +387,8 @@
         '../../appcache/appcache_storage_impl_unittest.cc',
         '../../appcache/appcache_update_job_unittest.cc',
         '../../appcache/appcache_url_request_job_unittest.cc',
+        '../../appcache/mock_appcache_policy.h',
+        '../../appcache/mock_appcache_policy.cc',
         '../../appcache/mock_appcache_service.cc',
         '../../appcache/mock_appcache_service.h',
         '../../appcache/mock_appcache_storage.cc',
@@ -392,22 +403,25 @@
         '../../database/database_tracker_unittest.cc',
         '../../database/database_util_unittest.cc',
         '../../database/quota_table_unittest.cc',
-        '../../fileapi/file_system_context_unittest.cc',
         '../../fileapi/file_system_directory_database_unittest.cc',
         '../../fileapi/file_system_file_util_unittest.cc',
+        '../../fileapi/file_system_mount_point_provider_unittest.cc',
         '../../fileapi/file_system_operation_unittest.cc',
         '../../fileapi/file_system_origin_database_unittest.cc',
-        '../../fileapi/file_system_path_manager_unittest.cc',
         '../../fileapi/file_system_quota_client_unittest.cc',
         '../../fileapi/file_system_quota_unittest.cc',
+        '../../fileapi/file_system_test_helper.cc',
+        '../../fileapi/file_system_test_helper.h',
         '../../fileapi/file_system_usage_cache_unittest.cc',
         '../../fileapi/file_system_util_unittest.cc',
         '../../fileapi/local_file_util_unittest.cc',
+        '../../fileapi/mock_file_system_options.cc',
+        '../../fileapi/mock_file_system_options.h',
         '../../fileapi/obfuscated_file_util_unittest.cc',
         '../../fileapi/quota_file_util_unittest.cc',
         '../../fileapi/sandbox_mount_point_provider_unittest.cc',
-        '../../fileapi/file_system_test_helper.cc',
-        '../../fileapi/file_system_test_helper.h',
+        '../../fileapi/test_file_set.cc',
+        '../../fileapi/test_file_set.h',
         '../../fileapi/webfilewriter_base_unittest.cc',
         '../../glue/bookmarklet_unittest.cc',
         '../../glue/context_menu_unittest.cc',
@@ -417,9 +431,6 @@
         '../../glue/dom_serializer_unittest.cc',
         '../../glue/glue_serialize_unittest.cc',
         '../../glue/iframe_redirect_unittest.cc',
-        '../../glue/media/buffered_data_source_unittest.cc',
-        '../../glue/media/buffered_resource_loader_unittest.cc',
-        '../../glue/media/simple_data_source_unittest.cc',
         '../../glue/mimetype_unittest.cc',
         '../../glue/multipart_response_delegate_unittest.cc',
         '../../glue/regular_expression_unittest.cc',
@@ -429,6 +440,13 @@
         '../../glue/webframe_unittest.cc',
         '../../glue/webkit_glue_unittest.cc',
         '../../glue/webview_unittest.cc',
+        '../../glue/worker_task_runner_unittest.cc',
+        '../../media/buffered_data_source_unittest.cc',
+        '../../media/buffered_resource_loader_unittest.cc',
+        '../../media/simple_data_source_unittest.cc',
+        '../../media/skcanvas_video_renderer_unittest.cc',
+        '../../media/test_response_generator.cc',
+        '../../media/test_response_generator.h',
         '../../mocks/mock_resource_loader_bridge.h',
         '../../mocks/mock_webframeclient.h',
         '../../mocks/mock_weburlloader.cc',
@@ -437,23 +455,23 @@
         '../../plugins/npapi/plugin_lib_unittest.cc',
         '../../plugins/npapi/plugin_list_unittest.cc',
         '../../plugins/npapi/webplugin_impl_unittest.cc',
-        '../../plugins/ppapi/callbacks_unittest.cc',
+        '../../plugins/ppapi/host_var_tracker_unittest.cc',
         '../../plugins/ppapi/mock_plugin_delegate.cc',
         '../../plugins/ppapi/mock_plugin_delegate.h',
         '../../plugins/ppapi/mock_resource.h',
         '../../plugins/ppapi/ppapi_unittest.cc',
         '../../plugins/ppapi/ppapi_unittest.h',
+        '../../plugins/ppapi/ppb_file_chooser_impl_unittest.cc',
         '../../plugins/ppapi/quota_file_io_unittest.cc',
-        '../../plugins/ppapi/resource_tracker_unittest.cc',
         '../../plugins/ppapi/time_conversion_unittest.cc',
         '../../plugins/ppapi/url_request_info_unittest.cc',
+        '../../quota/mock_quota_manager.cc',
+        '../../quota/mock_quota_manager.h',
+        '../../quota/mock_quota_manager_unittest.cc',
         '../../quota/mock_special_storage_policy.cc',
         '../../quota/mock_special_storage_policy.h',
         '../../quota/mock_storage_client.cc',
         '../../quota/mock_storage_client.h',
-        '../../quota/mock_quota_manager.cc',
-        '../../quota/mock_quota_manager.h',
-        '../../quota/mock_quota_manager_unittest.cc',
         '../../quota/quota_database_unittest.cc',
         '../../quota/quota_manager_unittest.cc',
         '../../quota/quota_temporary_storage_evictor_unittest.cc',
@@ -500,6 +518,9 @@
         ['chromeos==1', {
           'sources': [
             '../../chromeos/fileapi/file_access_permissions_unittest.cc',
+            '../../chromeos/fileapi/memory_file_util.cc',
+            '../../chromeos/fileapi/memory_file_util.h',
+            '../../chromeos/fileapi/memory_file_util_unittest.cc',
           ],
         }],
         ['OS=="mac"', {

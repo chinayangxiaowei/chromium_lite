@@ -4,12 +4,18 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-#include "base/memory/scoped_callback_factory.h"
+#include "base/bind.h"
+#include "base/memory/weak_ptr.h"
+#include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
+#include "base/message_loop.h"
 #include "base/scoped_temp_dir.h"
 #include "chrome/browser/browsing_data_quota_helper_impl.h"
+#include "content/test/test_browser_thread.h"
 #include "webkit/quota/mock_storage_client.h"
 #include "webkit/quota/quota_manager.h"
+
+using content::BrowserThread;
 
 class BrowsingDataQuotaHelperTest : public testing::Test {
  public:
@@ -21,7 +27,8 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
         db_thread_(BrowserThread::DB, &message_loop_),
         io_thread_(BrowserThread::IO, &message_loop_),
         fetching_completed_(true),
-        callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+        quota_(-1),
+        weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
 
   virtual ~BrowsingDataQuotaHelperTest() {}
 
@@ -57,8 +64,8 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
   void StartFetching() {
     fetching_completed_ = false;
     helper_->StartFetching(
-        callback_factory_.NewCallback(
-            &BrowsingDataQuotaHelperTest::FetchCompleted));
+        base::Bind(&BrowsingDataQuotaHelperTest::FetchCompleted,
+                   weak_factory_.GetWeakPtr()));
   }
 
   void RegisterClient(const quota::MockOriginData* data, std::size_t data_len) {
@@ -69,6 +76,39 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
     client->TouchAllOriginsAndNotify();
   }
 
+  void SetPersistentHostQuota(const std::string& host, int64 quota) {
+    quota_ = -1;
+    quota_manager_->SetPersistentHostQuota(
+        host, quota,
+        base::Bind(&BrowsingDataQuotaHelperTest::GotPersistentHostQuota,
+                   weak_factory_.GetWeakPtr()));
+  }
+
+  void GetPersistentHostQuota(const std::string& host) {
+    quota_ = -1;
+    quota_manager_->GetPersistentHostQuota(
+        host,
+        base::Bind(&BrowsingDataQuotaHelperTest::GotPersistentHostQuota,
+                   weak_factory_.GetWeakPtr()));
+  }
+
+  void GotPersistentHostQuota(quota::QuotaStatusCode status,
+                              const std::string& host,
+                              quota::StorageType type,
+                              int64 quota) {
+    EXPECT_EQ(quota::kQuotaStatusOk, status);
+    EXPECT_EQ(quota::kStorageTypePersistent, type);
+    quota_ = quota;
+  }
+
+  void RevokeHostQuota(const std::string& host) {
+    helper_->RevokeHostQuota(host);
+  }
+
+  int64 quota() {
+    return quota_;
+  }
+
  private:
   void FetchCompleted(const QuotaInfoArray& quota_info) {
     quota_info_ = quota_info;
@@ -76,9 +116,9 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
   }
 
   MessageLoop message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread db_thread_;
-  BrowserThread io_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread db_thread_;
+  content::TestBrowserThread io_thread_;
   scoped_refptr<quota::QuotaManager> quota_manager_;
 
   ScopedTempDir dir_;
@@ -86,7 +126,8 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
 
   bool fetching_completed_;
   QuotaInfoArray quota_info_;
-  base::ScopedCallbackFactory<BrowsingDataQuotaHelperTest> callback_factory_;
+  int64 quota_;
+  base::WeakPtrFactory<BrowsingDataQuotaHelperTest> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowsingDataQuotaHelperTest);
 };
@@ -116,4 +157,24 @@ TEST_F(BrowsingDataQuotaHelperTest, FetchData) {
   expected.insert(QuotaInfo("example.com", 11, 100));
   expected.insert(QuotaInfo("example2.com", 1000, 0));
   EXPECT_TRUE(expected == actual);
+}
+
+TEST_F(BrowsingDataQuotaHelperTest, RevokeHostQuota) {
+  const std::string kHost1("example1.com");
+  const std::string kHost2("example2.com");
+
+  SetPersistentHostQuota(kHost1, 1);
+  SetPersistentHostQuota(kHost2, 10);
+  MessageLoop::current()->RunAllPending();
+
+  RevokeHostQuota(kHost1);
+  MessageLoop::current()->RunAllPending();
+
+  GetPersistentHostQuota(kHost1);
+  MessageLoop::current()->RunAllPending();
+  EXPECT_EQ(0, quota());
+
+  GetPersistentHostQuota(kHost2);
+  MessageLoop::current()->RunAllPending();
+  EXPECT_EQ(10, quota());
 }

@@ -7,12 +7,14 @@
 
 #include "base/shared_memory.h"
 #include "base/time.h"
+#include "content/common/content_export.h"
 
 // ID used for identifying an object of VideoCaptureController.
-struct VideoCaptureControllerID {
-  VideoCaptureControllerID(int device_id);
+struct CONTENT_EXPORT VideoCaptureControllerID {
+  explicit VideoCaptureControllerID(int device_id);
 
   bool operator<(const VideoCaptureControllerID& vc) const;
+  bool operator==(const VideoCaptureControllerID& vc) const;
 
   int device_id;
 };
@@ -20,7 +22,7 @@ struct VideoCaptureControllerID {
 // VideoCaptureControllerEventHandler is the interface for
 // VideoCaptureController to notify clients about the events such as
 // BufferReady, FrameInfo, Error, etc.
-class VideoCaptureControllerEventHandler {
+class CONTENT_EXPORT VideoCaptureControllerEventHandler {
  public:
   // An Error has occurred in the VideoCaptureDevice.
   virtual void OnError(const VideoCaptureControllerID& id) = 0;

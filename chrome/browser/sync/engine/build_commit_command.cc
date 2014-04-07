@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,11 @@
 
 #include "base/string_util.h"
 #include "chrome/browser/sync/engine/syncer_proto_util.h"
-#include "chrome/browser/sync/engine/syncer_util.h"
 #include "chrome/browser/sync/protocol/bookmark_specifics.pb.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/syncable/syncable_changes_version.h"
+#include "chrome/browser/sync/util/time.h"
 
 using std::set;
 using std::string;
@@ -57,7 +57,7 @@ void BuildCommitCommand::AddExtensionsActivityToMessage(
   // We only send ExtensionsActivity to the server if bookmarks are being
   // committed.
   ExtensionsActivityMonitor* monitor = session->context()->extensions_monitor();
-  if (!session->status_controller()->HasBookmarkCommitActivity()) {
+  if (!session->status_controller().HasBookmarkCommitActivity()) {
     // Return the records to the activity monitor.
     monitor->PutRecords(session->extensions_activity());
     session->mutable_extensions_activity()->clear();
@@ -85,7 +85,7 @@ void SetEntrySpecifics(MutableEntry* meta_entry, SyncEntity* sync_entry) {
 }
 }  // namespace
 
-void BuildCommitCommand::ExecuteImpl(SyncSession* session) {
+SyncerError BuildCommitCommand::ExecuteImpl(SyncSession* session) {
   ClientToServerMessage message;
   message.set_share(session->context()->account_name());
   message.set_message_contents(ClientToServerMessage::COMMIT);
@@ -105,7 +105,7 @@ void BuildCommitCommand::ExecuteImpl(SyncSession* session) {
   // whose ID is the map's key.
   std::map<Id, std::pair<int64, int64> > position_map;
 
-  const vector<Id>& commit_ids = session->status_controller()->commit_ids();
+  const vector<Id>& commit_ids = session->status_controller().commit_ids();
   for (size_t i = 0; i < commit_ids.size(); i++) {
     Id id = commit_ids[i];
     SyncEntity* sync_entry =
@@ -172,10 +172,8 @@ void BuildCommitCommand::ExecuteImpl(SyncSession* session) {
       DCHECK(id.ServerKnows()) << meta_entry;
       sync_entry->set_version(meta_entry.Get(syncable::BASE_VERSION));
     }
-    sync_entry->set_ctime(ClientTimeToServerTime(
-        meta_entry.Get(syncable::CTIME)));
-    sync_entry->set_mtime(ClientTimeToServerTime(
-        meta_entry.Get(syncable::MTIME)));
+    sync_entry->set_ctime(TimeToProtoTime(meta_entry.Get(syncable::CTIME)));
+    sync_entry->set_mtime(TimeToProtoTime(meta_entry.Get(syncable::MTIME)));
 
     // Deletion is final on the server, let's move things and then delete them.
     if (meta_entry.Get(IS_DEL)) {
@@ -210,7 +208,10 @@ void BuildCommitCommand::ExecuteImpl(SyncSession* session) {
       SetEntrySpecifics(&meta_entry, sync_entry);
     }
   }
-  session->status_controller()->mutable_commit_message()->CopyFrom(message);
+  session->mutable_status_controller()->
+      mutable_commit_message()->CopyFrom(message);
+
+  return SYNCER_OK;
 }
 
 int64 BuildCommitCommand::FindAnchorPosition(syncable::IdField direction,

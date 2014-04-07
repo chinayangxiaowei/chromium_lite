@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,16 @@
 #include <queue>
 #include <string>
 
+#include "base/bind.h"
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/stringprintf.h"
-#include "base/task.h"
 #include "base/time.h"
-#include "chrome/browser/safe_browsing/browser_features.h"
 #include "chrome/browser/safe_browsing/client_side_detection_service.h"
 #include "chrome/common/safe_browsing/client_model.pb.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
-#include "chrome/renderer/safe_browsing/features.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/url_fetcher.h"
+#include "content/test/test_browser_thread.h"
 #include "content/test/test_url_fetcher_factory.h"
 #include "crypto/sha2.h"
 #include "googleurl/src/gurl.h"
@@ -31,6 +27,7 @@ using ::testing::_;
 using ::testing::Invoke;
 using ::testing::Mock;
 using ::testing::StrictMock;
+using content::BrowserThread;
 
 namespace safe_browsing {
 namespace {
@@ -49,7 +46,7 @@ class MockClientSideDetectionService : public ClientSideDetectionService {
 
   void Disable(int) {
     // Ignore the status.
-    SetEnabled(false);
+    SetEnabledAndRefreshState(false);
   }
 
  private:
@@ -65,11 +62,13 @@ ACTION(QuitCurrentMessageLoop) {
 class ClientSideDetectionServiceTest : public testing::Test {
  protected:
   virtual void SetUp() {
-    file_thread_.reset(new BrowserThread(BrowserThread::FILE, &msg_loop_));
+    file_thread_.reset(new content::TestBrowserThread(BrowserThread::FILE,
+                                                      &msg_loop_));
 
     factory_.reset(new FakeURLFetcherFactory());
 
-    browser_thread_.reset(new BrowserThread(BrowserThread::UI, &msg_loop_));
+    browser_thread_.reset(new content::TestBrowserThread(BrowserThread::UI,
+                                                         &msg_loop_));
   }
 
   virtual void TearDown() {
@@ -87,7 +86,8 @@ class ClientSideDetectionServiceTest : public testing::Test {
     request->set_is_phishing(true);  // client thinks the URL is phishing.
     csd_service_->SendClientReportPhishingRequest(
         request,
-        NewCallback(this, &ClientSideDetectionServiceTest::SendRequestDone));
+        base::Bind(&ClientSideDetectionServiceTest::SendRequestDone,
+                   base::Unretained(this)));
     phishing_url_ = phishing_url;
     msg_loop_.Run();  // Waits until callback is called.
     return is_phishing_;
@@ -122,24 +122,32 @@ class ClientSideDetectionServiceTest : public testing::Test {
   void TestCache() {
     ClientSideDetectionService::PhishingCache& cache = csd_service_->cache_;
     base::Time now = base::Time::Now();
-    base::Time time = now - ClientSideDetectionService::kNegativeCacheInterval +
+    base::Time time =
+        now - base::TimeDelta::FromDays(
+            ClientSideDetectionService::kNegativeCacheIntervalDays) +
         base::TimeDelta::FromMinutes(5);
     cache[GURL("http://first.url.com/")] =
         make_linked_ptr(new ClientSideDetectionService::CacheState(false,
                                                                    time));
 
-    time = now - ClientSideDetectionService::kNegativeCacheInterval -
+    time =
+        now - base::TimeDelta::FromDays(
+            ClientSideDetectionService::kNegativeCacheIntervalDays) -
         base::TimeDelta::FromHours(1);
     cache[GURL("http://second.url.com/")] =
         make_linked_ptr(new ClientSideDetectionService::CacheState(false,
                                                                    time));
 
-    time = now - ClientSideDetectionService::kPositiveCacheInterval -
+    time =
+        now - base::TimeDelta::FromMinutes(
+            ClientSideDetectionService::kPositiveCacheIntervalMinutes) -
         base::TimeDelta::FromMinutes(5);
     cache[GURL("http://third.url.com/")] =
         make_linked_ptr(new ClientSideDetectionService::CacheState(true, time));
 
-    time = now - ClientSideDetectionService::kPositiveCacheInterval +
+    time =
+        now - base::TimeDelta::FromMinutes(
+            ClientSideDetectionService::kPositiveCacheIntervalMinutes) +
         base::TimeDelta::FromMinutes(5);
     cache[GURL("http://fourth.url.com/")] =
         make_linked_ptr(new ClientSideDetectionService::CacheState(true, time));
@@ -192,8 +200,8 @@ class ClientSideDetectionServiceTest : public testing::Test {
     msg_loop_.Quit();
   }
 
-  scoped_ptr<BrowserThread> browser_thread_;
-  scoped_ptr<BrowserThread> file_thread_;
+  scoped_ptr<content::TestBrowserThread> browser_thread_;
+  scoped_ptr<content::TestBrowserThread> file_thread_;
 
   GURL phishing_url_;
   bool is_phishing_;
@@ -205,7 +213,7 @@ TEST_F(ClientSideDetectionServiceTest, FetchModelTest) {
   // make the test flaky.
   MockClientSideDetectionService service;
   EXPECT_CALL(service, ScheduleFetchModel(_)).Times(1);
-  service.SetEnabled(true);
+  service.SetEnabledAndRefreshState(true);
 
   // The model fetch failed.
   SetModelFetchResponse("blamodel", false /* failure */);
@@ -315,7 +323,7 @@ TEST_F(ClientSideDetectionServiceTest, FetchModelTest) {
 TEST_F(ClientSideDetectionServiceTest, ServiceObjectDeletedBeforeCallbackDone) {
   SetModelFetchResponse("bogus model", true /* success */);
   csd_service_.reset(ClientSideDetectionService::Create(NULL));
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(true);
   EXPECT_TRUE(csd_service_.get() != NULL);
   // We delete the client-side detection service class even though the callbacks
   // haven't run yet.
@@ -328,7 +336,7 @@ TEST_F(ClientSideDetectionServiceTest, ServiceObjectDeletedBeforeCallbackDone) {
 TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
   SetModelFetchResponse("bogus model", true /* success */);
   csd_service_.reset(ClientSideDetectionService::Create(NULL));
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(true);
 
   GURL url("http://a.com/");
   float score = 0.4f;  // Some random client score.
@@ -353,19 +361,11 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
                                   false /* success */);
   EXPECT_FALSE(SendClientReportPhishingRequest(second_url, score));
 
-  // This is a false positive.
-  response.set_phishy(true);
-  response.add_whitelist_expression("c.com/a.html");
-  SetClientReportPhishingResponse(response.SerializeAsString(),
-                                  true /* success */);
-  GURL third_url("http://c.com/");
-  EXPECT_FALSE(SendClientReportPhishingRequest(third_url, score));
-
   base::Time after = base::Time::Now();
 
-  // Check that we have recorded all 4 requests within the correct time range.
+  // Check that we have recorded all 3 requests within the correct time range.
   std::queue<base::Time>& report_times = GetPhishingReportTimes();
-  EXPECT_EQ(4U, report_times.size());
+  EXPECT_EQ(3U, report_times.size());
   while (!report_times.empty()) {
     base::Time time = report_times.back();
     report_times.pop();
@@ -432,11 +432,11 @@ TEST_F(ClientSideDetectionServiceTest, SetBadSubnets) {
 
   // Bad subnets are skipped.
   ClientSideModel::IPSubnet* subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, '.'));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, '.'));
   subnet->set_size(130);  // Invalid size.
 
   subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, '.'));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, '.'));
   subnet->set_size(-1);  // Invalid size.
 
   subnet = model.add_bad_subnet();
@@ -447,19 +447,19 @@ TEST_F(ClientSideDetectionServiceTest, SetBadSubnets) {
   EXPECT_EQ(0U, bad_subnets.size());
 
   subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, '.'));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, '.'));
   subnet->set_size(64);
 
   subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, ','));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, ','));
   subnet->set_size(64);
 
   subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, '.'));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, '.'));
   subnet->set_size(128);
 
   subnet = model.add_bad_subnet();
-  subnet->set_prefix(std::string(crypto::SHA256_LENGTH, '.'));
+  subnet->set_prefix(std::string(crypto::kSHA256Length, '.'));
   subnet->set_size(100);
 
   ClientSideDetectionService::SetBadSubnets(model, &bad_subnets);
@@ -467,16 +467,16 @@ TEST_F(ClientSideDetectionServiceTest, SetBadSubnets) {
   ClientSideDetectionService::BadSubnetMap::const_iterator it;
   std::string mask = std::string(8, '\xFF') + std::string(8, '\x00');
   EXPECT_TRUE(bad_subnets.count(mask));
-  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::SHA256_LENGTH, '.')));
-  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::SHA256_LENGTH, ',')));
+  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::kSHA256Length, '.')));
+  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::kSHA256Length, ',')));
 
   mask = std::string(16, '\xFF');
   EXPECT_TRUE(bad_subnets.count(mask));
-  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::SHA256_LENGTH, '.')));
+  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::kSHA256Length, '.')));
 
   mask = std::string(12, '\xFF') + "\xF0" + std::string(3, '\x00');
   EXPECT_TRUE(bad_subnets.count(mask));
-  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::SHA256_LENGTH, '.')));
+  EXPECT_TRUE(bad_subnets[mask].count(std::string(crypto::kSHA256Length, '.')));
 }
 
 TEST_F(ClientSideDetectionServiceTest, IsBadIpAddress) {
@@ -596,7 +596,7 @@ TEST_F(ClientSideDetectionServiceTest, ModelHasValidHashIds) {
   EXPECT_TRUE(ClientSideDetectionService::ModelHasValidHashIds(model));
 }
 
-TEST_F(ClientSideDetectionServiceTest, SetEnabled) {
+TEST_F(ClientSideDetectionServiceTest, SetEnabledAndRefreshState) {
   // Check that the model isn't downloaded until the service is enabled.
   csd_service_.reset(ClientSideDetectionService::Create(NULL));
   EXPECT_FALSE(csd_service_->enabled());
@@ -621,24 +621,24 @@ TEST_F(ClientSideDetectionServiceTest, SetEnabled) {
   EXPECT_CALL(*service, EndFetchModel(
       ClientSideDetectionService::MODEL_SUCCESS))
       .WillOnce(QuitCurrentMessageLoop());
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(true);
   EXPECT_TRUE(csd_service_->model_fetcher_.get() != NULL);
   msg_loop_.Run();  // EndFetchModel will quit the message loop.
   Mock::VerifyAndClearExpectations(service);
 
   // Check that enabling again doesn't request the model.
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(true);
   // No calls expected.
   Mock::VerifyAndClearExpectations(service);
 
   // Check that disabling the service cancels pending requests.
   EXPECT_CALL(*service, ScheduleFetchModel(_))
       .WillOnce(Invoke(service, &MockClientSideDetectionService::Schedule));
-  csd_service_->SetEnabled(false);
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(false);
+  csd_service_->SetEnabledAndRefreshState(true);
   Mock::VerifyAndClearExpectations(service);
   EXPECT_TRUE(csd_service_->model_fetcher_.get() != NULL);
-  csd_service_->SetEnabled(false);
+  csd_service_->SetEnabledAndRefreshState(false);
   EXPECT_TRUE(csd_service_->model_fetcher_.get() == NULL);
   msg_loop_.RunAllPending();
   // No calls expected.
@@ -658,127 +658,8 @@ TEST_F(ClientSideDetectionServiceTest, SetEnabled) {
   EXPECT_CALL(*service, EndFetchModel(
       ClientSideDetectionService::MODEL_NOT_CHANGED))
       .WillOnce(Invoke(service, &MockClientSideDetectionService::Disable));
-  csd_service_->SetEnabled(true);
+  csd_service_->SetEnabledAndRefreshState(true);
   EXPECT_FALSE(SendClientReportPhishingRequest(GURL("http://a.com/"), 0.4f));
   Mock::VerifyAndClearExpectations(service);
-}
-
-TEST_F(ClientSideDetectionServiceTest, SanitizeRequestForPingback) {
-  ClientPhishingRequest request;
-  request.set_url("http://www.us.host.com/blah");
-  request.set_hash_prefix("hash");
-  request.set_client_score(0.8f);
-  request.set_is_phishing(true);
-  AddFeature(std::string(features::kUrlTldToken) + "com", 1.0, &request);
-  AddFeature(std::string(features::kUrlDomainToken) + "host", 1.0, &request);
-  AddFeature(std::string(features::kUrlOtherHostToken) + "us", 1.0, &request);
-  AddFeature(std::string(features::kUrlOtherHostToken) + "www", 1.0, &request);
-  AddFeature(features::kUrlNumOtherHostTokensGTOne, 1.0, &request);
-  AddFeature(std::string(features::kUrlPathToken) + "blah", 1.0, &request);
-  AddFeature(features::kPageHasForms, 1.0, &request);
-  AddFeature(std::string(features::kPageTerm) + "term", 1.0, &request);
-  AddFeature(features::kPageImgOtherDomainFreq, 0.5, &request);
-  request.set_model_version(3);
-  AddNonModelFeature(features::kUrlHistoryVisitCount, 5.0, &request);
-  AddNonModelFeature(StringPrintf("%s=http://referrer.com/",
-                                  features::kReferrer),
-                     1.0, &request);
-  AddNonModelFeature(StringPrintf("%s%s=http://redirreferrer.com/",
-                                  features::kRedirectPrefix,
-                                  features::kReferrer),
-                     1.0, &request);
-  AddNonModelFeature(StringPrintf("%s%s=http://hostreferrer.com/",
-                                  features::kHostPrefix, features::kReferrer),
-                     1.0, &request);
-  AddNonModelFeature(StringPrintf("%s%s%s=http://hostredirreferrer.com/",
-                                  features::kHostPrefix,
-                                  features::kRedirectPrefix,
-                                  features::kReferrer),
-                     1.0, &request);
-  AddNonModelFeature(std::string(features::kBadIpFetch) + "1.2.3.4",
-                     1.0, &request);
-  AddNonModelFeature(std::string(features::kSafeBrowsingMaliciousUrl) +
-                     "http://malicious.com/", 1.0, &request);
-  AddNonModelFeature(std::string(features::kSafeBrowsingOriginalUrl) +
-                     "http://original.com/", 1.0, &request);
-
-  csd_service_.reset(ClientSideDetectionService::Create(NULL));
-
-  ClientPhishingRequest sanitized_request;
-  csd_service_->SanitizeRequestForPingback(request, &sanitized_request);
-
-  // For easier debugging, we'll check the output protobuf fields individually.
-  ClientPhishingRequest expected;
-  expected.set_hash_prefix(request.hash_prefix());
-  expected.set_client_score(request.client_score());
-  expected.set_is_phishing(request.is_phishing());
-  AddFeature(features::kUrlNumOtherHostTokensGTOne, 1.0, &expected);
-  AddFeature(features::kPageHasForms, 1.0, &expected);
-  AddFeature(features::kPageImgOtherDomainFreq, 0.5, &expected);
-  expected.set_model_version(3);
-  AddNonModelFeature(features::kUrlHistoryVisitCount, 5.0, &expected);
-
-  EXPECT_FALSE(sanitized_request.has_url());
-  EXPECT_EQ(expected.hash_prefix(), sanitized_request.hash_prefix());
-  EXPECT_FLOAT_EQ(expected.client_score(), sanitized_request.client_score());
-  EXPECT_EQ(expected.is_phishing(), sanitized_request.is_phishing());
-
-  ASSERT_EQ(expected.feature_map_size(), sanitized_request.feature_map_size());
-  for (int i = 0; i < expected.feature_map_size(); ++i) {
-    EXPECT_EQ(expected.feature_map(i).name(),
-              sanitized_request.feature_map(i).name()) << "Feature " << i;
-    EXPECT_DOUBLE_EQ(expected.feature_map(i).value(),
-                     sanitized_request.feature_map(i).value())
-        << "Feature " << i;
-  }
-  EXPECT_EQ(expected.model_version(), sanitized_request.model_version());
-  ASSERT_EQ(expected.non_model_feature_map_size(),
-            sanitized_request.non_model_feature_map_size());
-  for (int i = 0; i < expected.non_model_feature_map_size(); ++i) {
-    EXPECT_EQ(expected.non_model_feature_map(i).name(),
-              sanitized_request.non_model_feature_map(i).name())
-        << "Non-model feature " << i;
-    EXPECT_DOUBLE_EQ(expected.non_model_feature_map(i).value(),
-                     sanitized_request.non_model_feature_map(i).value())
-        << "Non-model feature " << i;
-  }
-
-  // Also check the serialized forms in case there's a field that we forget
-  // to add above.
-  EXPECT_EQ(expected.SerializeAsString(),
-            sanitized_request.SerializeAsString());
-}
-
-TEST_F(ClientSideDetectionServiceTest, IsFalsePositiveResponse) {
-  GURL url("http://www.google.com/");
-  ClientPhishingResponse response;
-
-  // If the response is not phishing is should never be a false positive.
-  response.set_phishy(false);
-  response.add_whitelist_expression("www.google.com/");
-  EXPECT_FALSE(ClientSideDetectionService::IsFalsePositiveResponse(
-      url, response));
-
-  // If there are no entries in the whitelist it should always return false.
-  response.clear_whitelist_expression();
-  response.set_phishy(true);
-  EXPECT_FALSE(ClientSideDetectionService::IsFalsePositiveResponse(
-      url, response));
-
-  // If the URL doesn't match any whitelist entries it whould return false.
-  response.add_whitelist_expression("www.yahoo.com/");
-  EXPECT_FALSE(ClientSideDetectionService::IsFalsePositiveResponse(
-      url, response));
-
-  // If the URL matches the whitelist it should return true.
-  response.add_whitelist_expression("google.com/");
-  EXPECT_TRUE(ClientSideDetectionService::IsFalsePositiveResponse(
-      url, response));
-
-  // If an entry in the whitelist matches the URL it should return true.
-  response.clear_whitelist_expression();
-  response.add_whitelist_expression("www.google.com/a/b.html");
-  EXPECT_TRUE(ClientSideDetectionService::IsFalsePositiveResponse(
-      url, response));
 }
 }  // namespace safe_browsing

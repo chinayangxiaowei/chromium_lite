@@ -1,8 +1,6 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-var localStrings = new LocalStrings();
 
 /**
  * This variable structure is here to document the structure that the template
@@ -127,33 +125,39 @@ function returnPluginsData(pluginsData){
 
   // Add handlers to dynamically created HTML elements.
   var links = document.getElementsByClassName('disable-plugin-link');
-  for (var i = 0; i < links.length; ++i) {
+  for (var i = 0; i < links.length; i++) {
     links[i].onclick = function () {
       handleEnablePlugin(this, false, false);
       return false;
     };
   }
   links = document.getElementsByClassName('enable-plugin-link');
-  for (var i = 0; i < links.length; ++i) {
+  for (var i = 0; i < links.length; i++) {
     links[i].onclick = function () {
       handleEnablePlugin(this, true, false);
       return false;
     };
   }
   links = document.getElementsByClassName('disable-group-link');
-  for (var i = 0; i < links.length; ++i) {
+  for (var i = 0; i < links.length; i++) {
     links[i].onclick = function () {
       handleEnablePlugin(this, false, true);
       return false;
     };
   }
   links = document.getElementsByClassName('enable-group-link');
-  for (var i = 0; i < links.length; ++i) {
+  for (var i = 0; i < links.length; i++) {
     links[i].onclick = function () {
       handleEnablePlugin(this, true, true);
       return false;
     };
   }
+  var checkboxes = document.getElementsByClassName('always-allow');
+  for (var i = 0; i < checkboxes.length; i++) {
+    checkboxes[i].onclick = function () {
+      handleSetPluginAlwaysAllowed(this)
+    };
+  };
 
   // Make sure the left column (with "Description:", "Location:", etc.) is the
   // same size for all plugins.
@@ -211,6 +215,10 @@ function toggleTmiMode() {
   chrome.send('saveShowDetailsToPrefs', [String(tmiModeExpanded)]);
 }
 
+function handleSetPluginAlwaysAllowed(el) {
+  chrome.send('setPluginAlwaysAllowed', [el.identifier, el.checked]);
+}
+
 /**
  * Determines whether a plugin's version should be displayed.
  */
@@ -237,13 +245,6 @@ function shouldDisplayPluginDescription(plugin) {
 function isPluginEnabled(plugin) {
   return plugin.enabledMode == 'enabledByUser' ||
          plugin.enabledMode == 'enabledByPolicy';
-}
-
-/**
- * Determines whether buttons to enable/disable plugins are displayed or not.
- */
-function preferenceControlsEnabled() {
-  return !localStrings.getString('pluginsDisabledText');
 }
 
 // Unfortunately, we don't have notifications for plugin (list) status changes

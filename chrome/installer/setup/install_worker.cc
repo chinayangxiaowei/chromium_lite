@@ -30,13 +30,13 @@
 #include "chrome/installer/util/installation_state.h"
 #include "chrome/installer/util/installer_state.h"
 #include "chrome/installer/util/install_util.h"
+#include "chrome/installer/util/l10n_string_util.h"
 #include "chrome/installer/util/product.h"
 #include "chrome/installer/util/set_reg_value_work_item.h"
 #include "chrome/installer/util/shell_util.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/work_item_list.h"
-
-#include "chrome_tab.h"  // NOLINT
+#include "chrome_frame/chrome_tab.h"
 
 using base::win::RegKey;
 
@@ -182,11 +182,11 @@ void AddUninstallShortcutWorkItems(const InstallerState& installer_state,
                                          true);
 
     // DisplayIcon, NoModify and NoRepair
-    FilePath chrome_icon(install_path.Append(installer::kChromeExe));
-    ShellUtil::GetChromeIcon(product.distribution(), chrome_icon.value());
+    std::wstring chrome_icon = ShellUtil::GetChromeIcon(
+        product.distribution(),
+        install_path.Append(installer::kChromeExe).value());
     install_list->AddSetRegValueWorkItem(reg_root, uninstall_reg,
-                                         L"DisplayIcon", chrome_icon.value(),
-                                         true);
+                                         L"DisplayIcon", chrome_icon, true);
     install_list->AddSetRegValueWorkItem(reg_root, uninstall_reg,
                                          L"NoModify", static_cast<DWORD>(1),
                                          true);
@@ -200,11 +200,11 @@ void AddUninstallShortcutWorkItems(const InstallerState& installer_state,
                                          true);
     install_list->AddSetRegValueWorkItem(reg_root, uninstall_reg,
                                          L"Version",
-                                         UTF8ToWide(new_version.GetString()),
+                                         ASCIIToWide(new_version.GetString()),
                                          true);
     install_list->AddSetRegValueWorkItem(reg_root, uninstall_reg,
                                          L"DisplayVersion",
-                                         UTF8ToWide(new_version.GetString()),
+                                         ASCIIToWide(new_version.GetString()),
                                          true);
     install_list->AddSetRegValueWorkItem(reg_root, uninstall_reg,
                                          L"InstallDate",
@@ -240,6 +240,7 @@ void AddMultiUninstallWorkItems(const InstallerState& installer_state,
 void AddVersionKeyWorkItems(HKEY root,
                             BrowserDistribution* dist,
                             const Version& new_version,
+                            bool add_language_identifier,
                             WorkItemList* list) {
   // Create Version key for each distribution (if not already present) and set
   // the new product version as the last step.
@@ -253,9 +254,20 @@ void AddVersionKeyWorkItems(HKEY root,
                                google_update::kRegOopcrashesField,
                                static_cast<DWORD>(1),
                                false);  // set during first install
+  if (add_language_identifier) {
+    // Write the language identifier of the current translation.  Omaha's set of
+    // languages is a superset of Chrome's set of translations with this one
+    // exception: what Chrome calls "en-us", Omaha calls "en".  sigh.
+    std::wstring language(GetCurrentTranslation());
+    if (LowerCaseEqualsASCII(language, "en-us"))
+      language.resize(2);
+    list->AddSetRegValueWorkItem(root, version_key,
+                                 google_update::kRegLangField, language,
+                                 false);  // do not overwrite language
+  }
   list->AddSetRegValueWorkItem(root, version_key,
                                google_update::kRegVersionField,
-                               UTF8ToWide(new_version.GetString()),
+                               ASCIIToWide(new_version.GetString()),
                                true);  // overwrite version
 }
 
@@ -457,9 +469,11 @@ void AddUsageStatsWorkItems(const InstallationState& original_state,
     std::wstring state_key(
         installer_state.multi_package_binaries_distribution()->GetStateKey());
     install_list->AddCreateRegKeyWorkItem(root_key, state_key);
+    // Overwrite any existing value so that overinstalls (where Omaha writes a
+    // new value into a product's state key) pick up the correct value.
     install_list->AddSetRegValueWorkItem(root_key, state_key,
                                          google_update::kRegUsageStatsField,
-                                         usagestats, false);
+                                         usagestats, true);
 
     for (Products::const_iterator scan = products.begin(), end = products.end();
          scan != end; ++scan) {
@@ -548,14 +562,19 @@ bool AppendPostInstallTasks(const InstallerState& installer_state,
   const Products& products = installer_state.products();
 
   // Append work items that will only be executed if this was an update.
-  // We update the 'opv' key with the current version that is active and 'cmd'
-  // key with the rename command to run.
+  // We update the 'opv' value with the current version that is active,
+  // the 'cpv' value with the critical update version (if present), and the
+  // 'cmd' value with the rename command to run.
   {
     scoped_ptr<WorkItemList> in_use_update_work_items(
         WorkItem::CreateConditionalWorkItemList(
             new ConditionRunIfFileExists(new_chrome_exe)));
     in_use_update_work_items->set_log_message("InUseUpdateWorkItemList");
 
+    // |critical_version| will be valid only if this in-use update includes a
+    // version considered critical relative to the version being updated.
+    Version critical_version(installer_state.DetermineCriticalVersion(
+        current_version, new_version));
     FilePath installer_path(installer_state.GetInstallerDirectory(new_version)
         .Append(setup_path.BaseName()));
 
@@ -575,7 +594,15 @@ bool AppendPostInstallTasks(const InstallerState& installer_state,
       if (current_version != NULL) {
         in_use_update_work_items->AddSetRegValueWorkItem(root, version_key,
             google_update::kRegOldVersionField,
-            UTF8ToWide(current_version->GetString()), true);
+            ASCIIToWide(current_version->GetString()), true);
+      }
+      if (critical_version.IsValid()) {
+        in_use_update_work_items->AddSetRegValueWorkItem(root, version_key,
+            google_update::kRegCriticalVersionField,
+            ASCIIToWide(critical_version.GetString()), true);
+      } else {
+        in_use_update_work_items->AddDeleteRegValueWorkItem(root, version_key,
+            google_update::kRegCriticalVersionField);
       }
 
       // Adding this registry entry for all products is overkill.
@@ -586,22 +613,25 @@ bool AppendPostInstallTasks(const InstallerState& installer_state,
       CommandLine product_rename_cmd(rename);
       products[i]->AppendRenameFlags(&product_rename_cmd);
       in_use_update_work_items->AddSetRegValueWorkItem(
-          root,
-          version_key,
-          google_update::kRegRenameCmdField,
-          product_rename_cmd.GetCommandLineString(),
-          true);
+          root, version_key, google_update::kRegRenameCmdField,
+          product_rename_cmd.GetCommandLineString(), true);
     }
 
     if (current_version != NULL && installer_state.is_multi_install()) {
       BrowserDistribution* dist =
           installer_state.multi_package_binaries_distribution();
+      version_key = dist->GetVersionKey();
       in_use_update_work_items->AddSetRegValueWorkItem(
-          root,
-          dist->GetVersionKey(),
-          google_update::kRegOldVersionField,
-          UTF8ToWide(current_version->GetString()),
-          true);
+          root, version_key, google_update::kRegOldVersionField,
+          ASCIIToWide(current_version->GetString()), true);
+      if (critical_version.IsValid()) {
+        in_use_update_work_items->AddSetRegValueWorkItem(
+            root, version_key, google_update::kRegCriticalVersionField,
+            ASCIIToWide(critical_version.GetString()), true);
+      } else {
+        in_use_update_work_items->AddDeleteRegValueWorkItem(
+            root, version_key, google_update::kRegCriticalVersionField);
+      }
       // TODO(tommi): We should move the rename command here. We also need to
       // update upgrade_utils::SwapNewChromeExeIfPresent.
     }
@@ -621,14 +651,16 @@ bool AppendPostInstallTasks(const InstallerState& installer_state,
             new Not(new ConditionRunIfFileExists(new_chrome_exe))));
     regular_update_work_items->set_log_message("RegularUpdateWorkItemList");
 
-    // Since this was not an in-use-update, delete 'opv' and 'cmd' keys.
+    // Since this was not an in-use-update, delete 'opv', 'cpv', and 'cmd' keys.
     for (size_t i = 0; i < products.size(); ++i) {
       BrowserDistribution* dist = products[i]->distribution();
       std::wstring version_key(dist->GetVersionKey());
       regular_update_work_items->AddDeleteRegValueWorkItem(root, version_key,
-                                            google_update::kRegOldVersionField);
+          google_update::kRegOldVersionField);
       regular_update_work_items->AddDeleteRegValueWorkItem(root, version_key,
-                                            google_update::kRegRenameCmdField);
+          google_update::kRegCriticalVersionField);
+      regular_update_work_items->AddDeleteRegValueWorkItem(root, version_key,
+          google_update::kRegRenameCmdField);
     }
 
     if (installer_state.FindProduct(BrowserDistribution::CHROME_FRAME)) {
@@ -754,9 +786,10 @@ void AddInstallWorkItems(const InstallationState& original_state,
       target_path.Append(installer::kDictionaries).value(),
       temp_path.value(), WorkItem::IF_NOT_PRESENT);
 
-  // Delete any old_chrome.exe if present.
+  // Delete any old_chrome.exe if present (ignore failure if it's in use).
   install_list->AddDeleteTreeWorkItem(
-      target_path.Append(installer::kChromeOldExe), temp_path);
+      target_path.Append(installer::kChromeOldExe), temp_path)
+      ->set_ignore_failure(true);
 
   // Copy installer in install directory and
   // add shortcut in Control Panel->Add/Remove Programs.
@@ -764,6 +797,9 @@ void AddInstallWorkItems(const InstallationState& original_state,
                         new_version, install_list);
 
   const HKEY root = installer_state.root_key();
+  // Only set "lang" for user-level installs since for system-level, the install
+  // language may not be related to a given user's runtime language.
+  const bool add_language_identifier = !installer_state.system_install();
 
   const Products& products = installer_state.products();
   for (size_t i = 0; i < products.size(); ++i) {
@@ -773,7 +809,7 @@ void AddInstallWorkItems(const InstallationState& original_state,
                                   install_list, *product);
 
     AddVersionKeyWorkItems(root, product->distribution(), new_version,
-                           install_list);
+                           add_language_identifier, install_list);
   }
 
   if (installer_state.is_multi_install()) {
@@ -782,7 +818,7 @@ void AddInstallWorkItems(const InstallationState& original_state,
 
     AddVersionKeyWorkItems(root,
         installer_state.multi_package_binaries_distribution(), new_version,
-        install_list);
+        add_language_identifier, install_list);
   }
 
   // Add any remaining work items that involve special settings for

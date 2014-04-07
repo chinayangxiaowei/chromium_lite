@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@
 
 class AppBackgroundPageApiTest : public ExtensionApiTest {
  public:
-  void SetUpCommandLine(CommandLine* command_line) {
+  void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kDisablePopupBlocking);
     command_line->AppendSwitch(switches::kAllowHTTPBackgroundPage);
@@ -61,6 +61,7 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, MAYBE_Basic) {
       "{"
       "  \"name\": \"App\","
       "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
       "  \"app\": {"
       "    \"urls\": ["
       "      \"http://a.com/\""
@@ -79,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, MAYBE_Basic) {
   ASSERT_TRUE(RunExtensionTest("app_background_page/basic")) << message_;
 }
 
-// Crashy, http://crbug.com/49215.
+// Crashy, http://crbug.com/69215.
 IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, DISABLED_LacksPermission) {
   host_resolver()->AddRule("a.com", "127.0.0.1");
   ASSERT_TRUE(StartTestServer());
@@ -88,6 +89,7 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, DISABLED_LacksPermission) {
       "{"
       "  \"name\": \"App\","
       "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
       "  \"app\": {"
       "    \"urls\": ["
       "      \"http://a.com/\""
@@ -114,6 +116,7 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, ManifestBackgroundPage) {
       "{"
       "  \"name\": \"App\","
       "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
       "  \"app\": {"
       "    \"urls\": ["
       "      \"http://a.com/\""
@@ -123,7 +126,9 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, ManifestBackgroundPage) {
       "    }"
       "  },"
       "  \"permissions\": [\"background\"],"
-      "  \"background_page\": \"http://a.com:%d/test.html\""
+      "  \"background\": {"
+      "    \"page\": \"http://a.com:%d/test.html\""
+      "  }"
       "}",
       test_server()->host_port_pair().port(),
       test_server()->host_port_pair().port());
@@ -136,4 +141,94 @@ IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, ManifestBackgroundPage) {
   ASSERT_TRUE(
       BackgroundContentsServiceFactory::GetForProfile(browser()->profile())->
           GetAppBackgroundContents(ASCIIToUTF16(extension->id())));
+}
+
+IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, OpenTwoBackgroundPages) {
+  host_resolver()->AddRule("a.com", "127.0.0.1");
+  ASSERT_TRUE(StartTestServer());
+
+  std::string app_manifest = base::StringPrintf(
+      "{"
+      "  \"name\": \"App\","
+      "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
+      "  \"app\": {"
+      "    \"urls\": ["
+      "      \"http://a.com/\""
+      "    ],"
+      "    \"launch\": {"
+      "      \"web_url\": \"http://a.com:%d/\""
+      "    }"
+      "  },"
+      "  \"permissions\": [\"background\"]"
+      "}",
+      test_server()->host_port_pair().port());
+
+  FilePath app_dir;
+  ASSERT_TRUE(CreateApp(app_manifest, &app_dir));
+  ASSERT_TRUE(LoadExtension(app_dir));
+  ASSERT_TRUE(RunExtensionTest("app_background_page/two_pages")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, OpenTwoPagesWithManifest) {
+  host_resolver()->AddRule("a.com", "127.0.0.1");
+  ASSERT_TRUE(StartTestServer());
+
+  std::string app_manifest = base::StringPrintf(
+      "{"
+      "  \"name\": \"App\","
+      "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
+      "  \"app\": {"
+      "    \"urls\": ["
+      "      \"http://a.com/\""
+      "    ],"
+      "    \"launch\": {"
+      "      \"web_url\": \"http://a.com:%d/\""
+      "    }"
+      "  },"
+      "  \"background\": {"
+      "    \"page\": \"http://a.com:%d/bg.html\""
+      "  },"
+      "  \"permissions\": [\"background\"]"
+      "}",
+      test_server()->host_port_pair().port(),
+      test_server()->host_port_pair().port());
+
+  FilePath app_dir;
+  ASSERT_TRUE(CreateApp(app_manifest, &app_dir));
+  ASSERT_TRUE(LoadExtension(app_dir));
+  ASSERT_TRUE(RunExtensionTest("app_background_page/two_with_manifest")) <<
+      message_;
+}
+
+// Times out occasionally -- see crbug.com/108493
+IN_PROC_BROWSER_TEST_F(AppBackgroundPageApiTest, DISABLED_OpenPopupFromBGPage) {
+  host_resolver()->AddRule("a.com", "127.0.0.1");
+  ASSERT_TRUE(StartTestServer());
+
+  std::string app_manifest = base::StringPrintf(
+      "{"
+      "  \"name\": \"App\","
+      "  \"version\": \"0.1\","
+      "  \"manifest_version\": 2,"
+      "  \"app\": {"
+      "    \"urls\": ["
+      "      \"http://a.com/\""
+      "    ],"
+      "    \"launch\": {"
+      "      \"web_url\": \"http://a.com:%d/\""
+      "    }"
+      "  },"
+      "  \"background\": { \"page\": \"http://a.com:%d/files/extensions/api_test/"
+      "app_background_page/bg_open/bg_open_bg.html\" },"
+      "  \"permissions\": [\"background\"]"
+      "}",
+      test_server()->host_port_pair().port(),
+      test_server()->host_port_pair().port());
+
+  FilePath app_dir;
+  ASSERT_TRUE(CreateApp(app_manifest, &app_dir));
+  ASSERT_TRUE(LoadExtension(app_dir));
+  ASSERT_TRUE(RunExtensionTest("app_background_page/bg_open")) << message_;
 }

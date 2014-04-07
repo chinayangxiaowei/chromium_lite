@@ -8,12 +8,10 @@
 #include "remoting/base/encoder.h"
 #include "remoting/proto/video.pb.h"
 #include "third_party/skia/include/core/SkRect.h"
-#include "ui/gfx/size.h"
 
 namespace remoting {
 
 class Compressor;
-class UpdateStreamPacket;
 
 // EncoderRowBased implements an Encoder using zlib or verbatim
 // compression. Zlib-based encoder must be created using
@@ -31,9 +29,10 @@ class EncoderRowBased : public Encoder {
 
   virtual ~EncoderRowBased();
 
-  virtual void Encode(scoped_refptr<CaptureData> capture_data,
-                      bool key_frame,
-                      DataAvailableCallback* data_available_callback);
+  virtual void Encode(
+      scoped_refptr<CaptureData> capture_data,
+      bool key_frame,
+      const DataAvailableCallback& data_available_callback) OVERRIDE;
 
  private:
   EncoderRowBased(Compressor* compressor, VideoPacketFormat::Encoding encoding);
@@ -59,10 +58,10 @@ class EncoderRowBased : public Encoder {
   scoped_ptr<Compressor> compressor_;
 
   scoped_refptr<CaptureData> capture_data_;
-  scoped_ptr<DataAvailableCallback> callback_;
+  DataAvailableCallback callback_;
 
   // The most recent screen size.
-  gfx::Size screen_size_;
+  SkISize screen_size_;
 
   int packet_size_;
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "base/test/test_timeouts.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/prefs/pref_value_store.h"
-#include "chrome/browser/sync/signin_manager.h"
+#include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/json_pref_store.h"
@@ -160,54 +160,4 @@ TEST_F(NewTabUIProcessPerTabTest, MAYBE_NavBeforeNTPCommits) {
   scoped_refptr<TabProxy> tab2 = window->GetActiveTab();
   ASSERT_TRUE(tab2.get());
   ASSERT_TRUE(tab2->NavigateToURL(GURL("data:text/html,hello world")));
-}
-
-// Fails about ~5% of the time on all platforms. http://crbug.com/45001
-TEST_F(NewTabUITest, FLAKY_ChromeInternalLoadsNTP) {
-  scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
-  ASSERT_TRUE(window.get());
-
-  // Go to the "new tab page" using its old url, rather than chrome://newtab.
-  scoped_refptr<TabProxy> tab = window->GetTab(0);
-  ASSERT_TRUE(tab.get());
-  ASSERT_TRUE(tab->NavigateToURLAsync(GURL("chrome-internal:")));
-  int load_time;
-  ASSERT_TRUE(automation()->WaitForInitialNewTabUILoad(&load_time));
-
-  // Ensure there are some thumbnails loaded in the page.
-  int thumbnails_count = -1;
-  ASSERT_TRUE(tab->ExecuteAndExtractInt(L"",
-      L"window.domAutomationController.send("
-      L"document.getElementsByClassName('thumbnail-container').length)",
-      &thumbnails_count));
-  EXPECT_GT(thumbnails_count, 0);
-}
-
-// Bug 87200: Disable UpdateUserPrefsVersion for Windows
-#if defined(OS_WIN)
-#define MAYBE_UpdateUserPrefsVersion DISABLED_UpdateUserPrefsVersion
-#else
-#define MAYBE_UpdateUserPrefsVersion UpdateUserPrefsVersion
-#endif
-TEST_F(NewTabUITest, MAYBE_UpdateUserPrefsVersion) {
-  // PrefService with JSON user-pref file only, no enforced or advised prefs.
-  scoped_ptr<PrefService> prefs(new TestingPrefService);
-
-  // Does the migration
-  NewTabUI::RegisterUserPrefs(prefs.get());
-
-  ASSERT_EQ(NewTabUI::current_pref_version(),
-            prefs->GetInteger(prefs::kNTPPrefVersion));
-
-  // Reset the version
-  prefs->ClearPref(prefs::kNTPPrefVersion);
-  ASSERT_EQ(0, prefs->GetInteger(prefs::kNTPPrefVersion));
-
-  bool migrated = NewTabUI::UpdateUserPrefsVersion(prefs.get());
-  ASSERT_TRUE(migrated);
-  ASSERT_EQ(NewTabUI::current_pref_version(),
-            prefs->GetInteger(prefs::kNTPPrefVersion));
-
-  migrated = NewTabUI::UpdateUserPrefsVersion(prefs.get());
-  ASSERT_FALSE(migrated);
 }

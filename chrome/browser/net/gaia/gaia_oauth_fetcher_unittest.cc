@@ -14,11 +14,12 @@
 #include "chrome/browser/net/gaia/gaia_oauth_fetcher.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
+#include "chrome/common/net/gaia/gaia_urls.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
 #include "chrome/common/net/http_return.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/common/notification_service.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "content/test/test_url_fetcher_factory.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
@@ -27,31 +28,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-
-// These constants are internal to the GaiaOAuthFetcher implementation, and
-// should not be referenced except by unit tests, where they are required.
-//
-// The values must exactly match those defined in gaia_oauth_fetcher.cc
-static const char kGetOAuthTokenUrl[] =
-    "https://www.google.com/accounts/o8/GetOAuthToken";
-
-static const char kOAuthGetAccessTokenUrl[] =
-    "https://www.google.com/accounts/OAuthGetAccessToken";
-
-static const char kOAuthWrapBridgeUrl[] =
-    "https://www.google.com/accounts/OAuthWrapBridge";
-
-static const char kOAuthWrapBridgeUserInfoScope[] =
-    "https://www.googleapis.com/auth/userinfo.email";
-
-static const char kOAuth1LoginScope[] =
-    "https://www.google.com/accounts/OAuthLogin";
-
-static const char kUserInfoUrl[] =
-    "https://www.googleapis.com/oauth2/v1/userinfo";
-
-static const char kRevokeTokenUrl[] =
-    "https://www.google.com/accounts/AuthSubRevokeToken";
 
 class MockGaiaOAuthConsumer : public GaiaOAuthConsumer {
  public:
@@ -149,8 +125,8 @@ TEST(GaiaOAuthFetcherTest, GetOAuthToken) {
 
   oauth_fetcher.Observe(
       chrome::NOTIFICATION_COOKIE_CHANGED,
-      Source<Profile>(&profile),
-      Details<ChromeCookieDetails>(cookie_details.get()));
+      content::Source<Profile>(&profile),
+      content::Details<ChromeCookieDetails>(cookie_details.get()));
 }
 #endif  // 0  // Suppressing for now
 
@@ -182,12 +158,15 @@ TEST_F(GaiaOAuthFetcherTest, OAuthGetAccessToken) {
 
   net::ResponseCookies cookies;
   net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
-  oauth_fetcher.OnURLFetchComplete(NULL,
-                                   GURL(kOAuthGetAccessTokenUrl),
-                                   status,
-                                   RC_REQUEST_OK,
-                                   cookies,
-                                   data);
+  GURL url(GaiaUrls::GetInstance()->oauth_get_access_token_url());
+
+  TestURLFetcher test_fetcher(0, GURL(), &oauth_fetcher);
+  test_fetcher.set_url(url);
+  test_fetcher.set_status(status);
+  test_fetcher.set_response_code(RC_REQUEST_OK);
+  test_fetcher.set_cookies(cookies);
+  test_fetcher.SetResponseString(data);
+  oauth_fetcher.OnURLFetchComplete(&test_fetcher);
 }
 
 TEST_F(GaiaOAuthFetcherTest, OAuthWrapBridge) {
@@ -214,12 +193,15 @@ TEST_F(GaiaOAuthFetcherTest, OAuthWrapBridge) {
 
   net::ResponseCookies cookies;
   net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
-  oauth_fetcher.OnURLFetchComplete(NULL,
-                                   GURL(kOAuthWrapBridgeUrl),
-                                   status,
-                                   RC_REQUEST_OK,
-                                   cookies,
-                                   data);
+  GURL url(GaiaUrls::GetInstance()->oauth_wrap_bridge_url());
+
+  TestURLFetcher test_fetcher(0, GURL(), &oauth_fetcher);
+  test_fetcher.set_url(url);
+  test_fetcher.set_status(status);
+  test_fetcher.set_response_code(RC_REQUEST_OK);
+  test_fetcher.set_cookies(cookies);
+  test_fetcher.SetResponseString(data);
+  oauth_fetcher.OnURLFetchComplete(&test_fetcher);
 }
 
 TEST_F(GaiaOAuthFetcherTest, UserInfo) {
@@ -241,12 +223,15 @@ TEST_F(GaiaOAuthFetcherTest, UserInfo) {
 
   net::ResponseCookies cookies;
   net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
-  oauth_fetcher.OnURLFetchComplete(NULL,
-                                   GURL(kUserInfoUrl),
-                                   status,
-                                   RC_REQUEST_OK,
-                                   cookies,
-                                   data);
+  GURL url(GaiaUrls::GetInstance()->oauth_user_info_url());
+
+  TestURLFetcher test_fetcher(0, GURL(), &oauth_fetcher);
+  test_fetcher.set_url(url);
+  test_fetcher.set_status(status);
+  test_fetcher.set_response_code(RC_REQUEST_OK);
+  test_fetcher.set_cookies(cookies);
+  test_fetcher.SetResponseString(data);
+  oauth_fetcher.OnURLFetchComplete(&test_fetcher);
 }
 
 TEST_F(GaiaOAuthFetcherTest, OAuthRevokeToken) {
@@ -263,7 +248,12 @@ TEST_F(GaiaOAuthFetcherTest, OAuthRevokeToken) {
 
   net::ResponseCookies cookies;
   net::URLRequestStatus status(net::URLRequestStatus::SUCCESS, 0);
-  GURL url(kRevokeTokenUrl);
-  oauth_fetcher.OnURLFetchComplete(NULL, url, status,
-                                   RC_REQUEST_OK, cookies, std::string());
+  GURL url(GaiaUrls::GetInstance()->oauth_revoke_token_url());
+
+  TestURLFetcher test_fetcher(0, GURL(), &oauth_fetcher);
+  test_fetcher.set_url(url);
+  test_fetcher.set_status(status);
+  test_fetcher.set_response_code(RC_REQUEST_OK);
+  test_fetcher.set_cookies(cookies);
+  oauth_fetcher.OnURLFetchComplete(&test_fetcher);
 }

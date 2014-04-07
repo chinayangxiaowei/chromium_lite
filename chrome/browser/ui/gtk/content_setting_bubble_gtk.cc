@@ -17,16 +17,19 @@
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/common/content_settings.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/plugin_service.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/ui_resources.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/text_elider.h"
 #include "ui/gfx/gtk_util.h"
-#include "webkit/plugins/npapi/plugin_list.h"
+
+using content::PluginService;
+using content::WebContents;
 
 namespace {
 
@@ -42,7 +45,7 @@ std::string BuildElidedText(const std::string& input) {
       UTF8ToUTF16(input),
       gfx::Font(),
       kMaxLinkPixelSize,
-      false));
+      ui::ELIDE_AT_END));
 }
 
 }  // namespace
@@ -52,15 +55,15 @@ ContentSettingBubbleGtk::ContentSettingBubbleGtk(
     BubbleDelegateGtk* delegate,
     ContentSettingBubbleModel* content_setting_bubble_model,
     Profile* profile,
-    TabContents* tab_contents)
+    WebContents* web_contents)
     : anchor_(anchor),
       profile_(profile),
-      tab_contents_(tab_contents),
+      web_contents_(web_contents),
       delegate_(delegate),
       content_setting_bubble_model_(content_setting_bubble_model),
       bubble_(NULL) {
-  registrar_.Add(this, content::NOTIFICATION_TAB_CONTENTS_DESTROYED,
-                 Source<TabContents>(tab_contents));
+  registrar_.Add(this, content::NOTIFICATION_WEB_CONTENTS_DESTROYED,
+                 content::Source<WebContents>(web_contents));
   BuildBubble();
 }
 
@@ -78,12 +81,13 @@ void ContentSettingBubbleGtk::BubbleClosing(BubbleGtk* bubble,
   delete this;
 }
 
-void ContentSettingBubbleGtk::Observe(int type,
-                                      const NotificationSource& source,
-                                      const NotificationDetails& details) {
-  DCHECK(type == content::NOTIFICATION_TAB_CONTENTS_DESTROYED);
-  DCHECK(source == Source<TabContents>(tab_contents_));
-  tab_contents_ = NULL;
+void ContentSettingBubbleGtk::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
+  DCHECK(type == content::NOTIFICATION_WEB_CONTENTS_DESTROYED);
+  DCHECK(source == content::Source<WebContents>(web_contents_));
+  web_contents_ = NULL;
 }
 
 void ContentSettingBubbleGtk::BuildBubble() {
@@ -108,7 +112,7 @@ void ContentSettingBubbleGtk::BuildBubble() {
     for (std::set<std::string>::const_iterator it = plugins.begin();
         it != plugins.end(); ++it) {
       std::string name = UTF16ToUTF8(
-          webkit::npapi::PluginList::Singleton()->GetPluginGroupName(*it));
+          PluginService::GetInstance()->GetPluginGroupName(*it));
       if (name.empty())
         name = *it;
 
@@ -182,6 +186,8 @@ void ContentSettingBubbleGtk::BuildBubble() {
       // or pain occurs.
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(radio), TRUE);
     }
+    if (!content.radio_group_enabled)
+      gtk_widget_set_sensitive(radio, FALSE);
     radio_group_gtk_.push_back(radio);
   }
   for (std::vector<GtkWidget*>::const_iterator i = radio_group_gtk_.begin();

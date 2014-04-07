@@ -4,6 +4,8 @@
 
 #include "chrome/browser/importer/profile_writer.h"
 
+#include <map>
+#include <set>
 #include <string>
 
 #include "base/string_number_conversions.h"
@@ -19,7 +21,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/common/notification_service.h"
 
 namespace {
 
@@ -54,17 +55,7 @@ string16 GenerateUniqueFolderName(BookmarkModel* model,
 
 // Shows the bookmarks toolbar.
 void ShowBookmarkBar(Profile* profile) {
-  PrefService* prefs = profile->GetPrefs();
-  // Check whether the bookmark bar is shown in current pref.
-  if (!prefs->GetBoolean(prefs::kShowBookmarkBar)) {
-    // Set the pref and notify the notification service.
-    prefs->SetBoolean(prefs::kShowBookmarkBar, true);
-    prefs->ScheduleSavePersistentPrefs();
-    Source<Profile> source(profile);
-    NotificationService::current()->Notify(
-        chrome::NOTIFICATION_BOOKMARK_BAR_VISIBILITY_PREF_CHANGED, source,
-        NotificationService::NoDetails());
-  }
+  profile->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
 }
 
 }  // namespace
@@ -74,6 +65,16 @@ ProfileWriter::BookmarkEntry::BookmarkEntry()
       is_folder(false) {}
 
 ProfileWriter::BookmarkEntry::~BookmarkEntry() {}
+
+bool ProfileWriter::BookmarkEntry::operator==(
+    const ProfileWriter::BookmarkEntry& other) const {
+  return (in_toolbar == other.in_toolbar &&
+          is_folder == other.is_folder &&
+          url == other.url &&
+          path == other.path &&
+          title == other.title &&
+          creation_time == other.creation_time);
+}
 
 ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
 
@@ -85,7 +86,7 @@ bool ProfileWriter::TemplateURLServiceIsLoaded() const {
   return TemplateURLServiceFactory::GetForProfile(profile_)->loaded();
 }
 
-void ProfileWriter::AddPasswordForm(const webkit_glue::PasswordForm& form) {
+void ProfileWriter::AddPasswordForm(const webkit::forms::PasswordForm& form) {
   profile_->GetPasswordStore(Profile::EXPLICIT_ACCESS)->AddLogin(form);
 }
 
@@ -109,7 +110,6 @@ void ProfileWriter::AddHomepage(const GURL& home_page) {
   const PrefService::Preference* pref = prefs->FindPreference(prefs::kHomePage);
   if (pref && !pref->IsManaged()) {
     prefs->SetString(prefs::kHomePage, home_page.spec());
-    prefs->ScheduleSavePersistentPrefs();
   }
 }
 
@@ -126,23 +126,33 @@ void ProfileWriter::AddBookmarks(const std::vector<BookmarkEntry>& bookmarks,
   const BookmarkNode* bookmark_bar = model->bookmark_bar_node();
   bool import_to_top_level = bookmark_bar->empty();
 
+  // Reorder bookmarks so that the toolbar entries come first.
+  std::vector<BookmarkEntry> toolbar_bookmarks;
+  std::vector<BookmarkEntry> reordered_bookmarks;
+  for (std::vector<BookmarkEntry>::const_iterator it = bookmarks.begin();
+       it != bookmarks.end(); ++it) {
+    if (it->in_toolbar)
+      toolbar_bookmarks.push_back(*it);
+    else
+      reordered_bookmarks.push_back(*it);
+  }
+  reordered_bookmarks.insert(reordered_bookmarks.begin(),
+                             toolbar_bookmarks.begin(),
+                             toolbar_bookmarks.end());
+
   // If the user currently has no bookmarks in the bookmark bar, make sure that
   // at least some of the imported bookmarks end up there.  Otherwise, we'll end
   // up with just a single folder containing the imported bookmarks, which makes
   // for unnecessary nesting.
-  bool add_all_to_top_level = import_to_top_level;
-  for (std::vector<BookmarkEntry>::const_iterator it = bookmarks.begin();
-       it != bookmarks.end() && add_all_to_top_level; ++it) {
-    if (it->in_toolbar)
-      add_all_to_top_level = false;
-  }
+  bool add_all_to_top_level = import_to_top_level && toolbar_bookmarks.empty();
 
   model->BeginImportMode();
 
   std::set<const BookmarkNode*> folders_added_to;
   const BookmarkNode* top_level_folder = NULL;
-  for (std::vector<BookmarkEntry>::const_iterator bookmark = bookmarks.begin();
-       bookmark != bookmarks.end(); ++bookmark) {
+  for (std::vector<BookmarkEntry>::const_iterator bookmark =
+         reordered_bookmarks.begin();
+       bookmark != reordered_bookmarks.end(); ++bookmark) {
     // Disregard any bookmarks with invalid urls.
     if (!bookmark->is_folder && !bookmark->url.is_valid())
       continue;

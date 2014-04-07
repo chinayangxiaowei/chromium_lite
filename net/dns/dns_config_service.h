@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,15 @@
 #include <string>
 #include <vector>
 
+#include "base/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/observer_list.h"
+#include "base/threading/non_thread_safe.h"
 #include "base/time.h"
 #include "net/base/ip_endpoint.h"  // win requires size of IPEndPoint
 #include "net/base/net_export.h"
 #include "net/dns/dns_hosts.h"
-#include "net/dns/watching_file_reader.h"
+#include "net/dns/serial_worker.h"
 
 namespace net {
 
@@ -37,20 +39,19 @@ struct NET_EXPORT_PRIVATE DnsConfig {
   std::vector<IPEndPoint> nameservers;
   // Suffix search list; used on first lookup when number of dots in given name
   // is less than |ndots|.
+  // TODO(szym): Filter out duplicate entries from this list.
   std::vector<std::string> search;
 
   DnsHosts hosts;
 
   // Resolver options; see man resolv.conf.
-  // TODO(szym): use |ndots| and |search| to determine the sequence of FQDNs
-  // to query given a specific name.
   // TODO(szym): implement DNS Devolution for windows
 
   // Minimum number of dots before global resolution precedes |search|.
   int ndots;
   // Time between retransmissions, see res_state.retrans.
   base::TimeDelta timeout;
-  // Maximum number of retries, see res_state.retry.
+  // Maximum number of attempts, see res_state.retry.
   int attempts;
   // Round robin entries in |nameservers| for subsequent requests.
   bool rotate;
@@ -110,16 +111,19 @@ class NET_EXPORT_PRIVATE DnsConfigService
 
 // A WatchingFileReader that reads a HOSTS file and notifies
 // DnsConfigService::OnHostsRead().
-class DnsHostsReader : public WatchingFileReader {
+// Client should call Cancel() when |service| is going away.
+class NET_EXPORT_PRIVATE DnsHostsReader
+  : NON_EXPORTED_BASE(public SerialWorker) {
  public:
-  explicit DnsHostsReader(DnsConfigService* service);
+  DnsHostsReader(const FilePath& path, DnsConfigService* service);
 
-  virtual void DoRead() OVERRIDE;
-  virtual void OnReadFinished() OVERRIDE;
+  virtual void DoWork() OVERRIDE;
+  virtual void OnWorkFinished() OVERRIDE;
 
  private:
   virtual ~DnsHostsReader();
 
+  FilePath path_;
   DnsConfigService* service_;
   // Written in DoRead, read in OnReadFinished, no locking necessary.
   DnsHosts dns_hosts_;

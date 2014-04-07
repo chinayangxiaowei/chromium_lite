@@ -12,7 +12,9 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "content/browser/renderer_host/p2p/socket_host.h"
+#include "content/common/content_export.h"
 #include "content/common/p2p_sockets.h"
+#include "net/base/completion_callback.h"
 #include "net/socket/tcp_server_socket.h"
 
 namespace net {
@@ -21,7 +23,7 @@ class StreamSocket;
 
 namespace content {
 
-class P2PSocketHostTcpServer : public P2PSocketHost {
+class CONTENT_EXPORT P2PSocketHostTcpServer : public P2PSocketHost {
  public:
   P2PSocketHostTcpServer(IPC::Message::Sender* message_sender,
                          int routing_id, int id);
@@ -54,7 +56,7 @@ class P2PSocketHostTcpServer : public P2PSocketHost {
   scoped_ptr<net::StreamSocket> accept_socket_;
   AcceptedSocketsMap accepted_sockets_;
 
-  net::CompletionCallbackImpl<P2PSocketHostTcpServer> accept_callback_;
+  net::CompletionCallback accept_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(P2PSocketHostTcpServer);
 };

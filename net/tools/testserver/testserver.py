@@ -1,5 +1,5 @@
-#!/usr/bin/python2.4
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -23,12 +23,12 @@ import os
 import random
 import re
 import select
-import simplejson
 import SocketServer
 import socket
 import sys
 import struct
 import time
+import urllib
 import urlparse
 import warnings
 import zlib
@@ -48,6 +48,11 @@ except ImportError:
   import md5
   _new_md5 = md5.new
 
+try:
+  import json
+except ImportError:
+  import simplejson as json
+
 if sys.platform == 'win32':
   import msvcrt
 
@@ -62,6 +67,20 @@ debug_output = sys.stderr
 def debug(str):
   debug_output.write(str + "\n")
   debug_output.flush()
+
+class RecordingSSLSessionCache(object):
+  """RecordingSSLSessionCache acts as a TLS session cache and maintains a log of
+  lookups and inserts in order to test session cache behaviours."""
+
+  def __init__(self):
+    self.log = []
+
+  def __getitem__(self, sessionID):
+    self.log.append(('lookup', sessionID))
+    raise KeyError()
+
+  def __setitem__(self, sessionID, session):
+    self.log.append(('insert', sessionID))
 
 class StoppableHTTPServer(BaseHTTPServer.HTTPServer):
   """This is a specialization of of BaseHTTPServer to allow it
@@ -78,7 +97,8 @@ class HTTPSServer(tlslite.api.TLSSocketServerMixIn, StoppableHTTPServer):
   """This is a specialization of StoppableHTTPerver that add https support."""
 
   def __init__(self, server_address, request_hander_class, cert_path,
-               ssl_client_auth, ssl_client_cas, ssl_bulk_ciphers):
+               ssl_client_auth, ssl_client_cas, ssl_bulk_ciphers,
+               record_resume_info):
     s = open(cert_path).read()
     x509 = tlslite.api.X509()
     x509.parse(s)
@@ -96,7 +116,12 @@ class HTTPSServer(tlslite.api.TLSSocketServerMixIn, StoppableHTTPServer):
     if ssl_bulk_ciphers is not None:
       self.ssl_handshake_settings.cipherNames = ssl_bulk_ciphers
 
-    self.session_cache = tlslite.api.SessionCache()
+    if record_resume_info:
+      # If record_resume_info is true then we'll replace the session cache with
+      # an object that records the lookups and inserts that it sees.
+      self.session_cache = RecordingSSLSessionCache()
+    else:
+      self.session_cache = tlslite.api.SessionCache()
     StoppableHTTPServer.__init__(self, server_address, request_hander_class)
 
   def handshake(self, tlsConnection):
@@ -132,6 +157,7 @@ class SyncHTTPServer(StoppableHTTPServer):
     self._xmpp_server = xmppserver.XmppServer(
       self._xmpp_socket_map, ('localhost', 0))
     self.xmpp_port = self._xmpp_server.getsockname()[1]
+    self.authenticated = True
 
   def GetXmppServer(self):
     return self._xmpp_server
@@ -154,6 +180,12 @@ class SyncHTTPServer(StoppableHTTPServer):
       except:
         self.handle_error(request, client_address)
         self.close_request(request)
+
+  def SetAuthenticated(self, auth_valid):
+    self.authenticated = auth_valid
+
+  def GetAuthenticated(self):
+    return self.authenticated
 
   def serve_forever(self):
     """This is a merge of asyncore.loop() and SocketServer.serve_forever().
@@ -255,9 +287,11 @@ class UDPEchoServer(SocketServer.UDPServer):
 class BasePageHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
   def __init__(self, request, client_address, socket_server,
-               connect_handlers, get_handlers, post_handlers, put_handlers):
+               connect_handlers, get_handlers, head_handlers, post_handlers,
+               put_handlers):
     self._connect_handlers = connect_handlers
     self._get_handlers = get_handlers
+    self._head_handlers = head_handlers
     self._post_handlers = post_handlers
     self._put_handlers = put_handlers
     BaseHTTPServer.BaseHTTPRequestHandler.__init__(
@@ -284,6 +318,11 @@ class BasePageHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
   def do_GET(self):
     for handler in self._get_handlers:
+      if handler():
+        return
+
+  def do_HEAD(self):
+    for handler in self._head_handlers:
       if handler():
         return
 
@@ -327,6 +366,7 @@ class TestPageHandler(BasePageHandler):
       self.ZipFileHandler,
       self.FileHandler,
       self.SetCookieHandler,
+      self.SetHeaderHandler,
       self.AuthBasicHandler,
       self.AuthDigestHandler,
       self.SlowServerHandler,
@@ -336,16 +376,20 @@ class TestPageHandler(BasePageHandler):
       self.ServerRedirectHandler,
       self.ClientRedirectHandler,
       self.MultipartHandler,
+      self.MultipartSlowHandler,
+      self.GetSSLSessionCacheHandler,
       self.DefaultResponseHandler]
     post_handlers = [
       self.EchoTitleHandler,
-      self.EchoAllHandler,
       self.EchoHandler,
-      self.DeviceManagementHandler] + get_handlers
+      self.DeviceManagementHandler,
+      self.PostOnlyFileHandler] + get_handlers
     put_handlers = [
       self.EchoTitleHandler,
-      self.EchoAllHandler,
       self.EchoHandler] + get_handlers
+    head_handlers = [
+      self.FileHandler,
+      self.DefaultResponseHandler]
 
     self._mime_types = {
       'crx' : 'application/x-chrome-extension',
@@ -359,8 +403,8 @@ class TestPageHandler(BasePageHandler):
     self._default_mime_type = 'text/html'
 
     BasePageHandler.__init__(self, request, client_address, socket_server,
-                             connect_handlers, get_handlers, post_handlers,
-                             put_handlers)
+                             connect_handlers, get_handlers, head_handlers,
+                             post_handlers, put_handlers)
 
   def GetMIMETypeFromName(self, file_name):
     """Returns the mime type for the specified file_name. So far it only looks
@@ -383,7 +427,7 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(200)
     self.send_header('Cache-Control', 'max-age=0')
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
 
     self.wfile.write('<html><head><title>%s</title></head></html>' %
@@ -400,7 +444,7 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(200)
     self.send_header('Cache-Control', 'no-cache')
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
 
     self.wfile.write('<html><head><title>%s</title></head></html>' %
@@ -417,7 +461,7 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(200)
     self.send_header('Cache-Control', 'max-age=60')
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
 
     self.wfile.write('<html><head><title>%s</title></head></html>' %
@@ -434,7 +478,7 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(200)
     self.send_header('Expires', 'Thu, 1 Jan 2099 00:00:00 GMT')
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
 
     self.wfile.write('<html><head><title>%s</title></head></html>' %
@@ -450,7 +494,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=60, proxy-revalidate')
     self.end_headers()
 
@@ -467,7 +511,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=3, private')
     self.end_headers()
 
@@ -484,7 +528,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=3, public')
     self.end_headers()
 
@@ -501,7 +545,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'public, s-maxage = 60, max-age = 0')
     self.end_headers()
 
@@ -518,7 +562,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'must-revalidate')
     self.end_headers()
 
@@ -536,7 +580,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=60, must-revalidate')
     self.end_headers()
 
@@ -553,7 +597,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'no-store')
     self.end_headers()
 
@@ -571,7 +615,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=60, no-store')
     self.end_headers()
 
@@ -590,7 +634,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'no-transform')
     self.end_headers()
 
@@ -618,7 +662,7 @@ class TestPageHandler(BasePageHandler):
       header_name = self.path[query_char+1:]
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/plain')
+    self.send_header('Content-Type', 'text/plain')
     if echo_header == '/echoheadercache':
       self.send_header('Cache-control', 'max-age=60000')
     else:
@@ -662,7 +706,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write(self.ReadRequestBody())
     return True
@@ -674,7 +718,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     request = self.ReadRequestBody()
     self.wfile.write('<html><head><title>')
@@ -690,7 +734,7 @@ class TestPageHandler(BasePageHandler):
       return False
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write('<html><head><style>'
       'pre { border: 1px solid black; margin: 5px; padding: 5px }'
@@ -736,7 +780,7 @@ class TestPageHandler(BasePageHandler):
     size_chunk2 = 10*1024
 
     self.send_response(200)
-    self.send_header('Content-type', 'application/octet-stream')
+    self.send_header('Content-Type', 'application/octet-stream')
     self.send_header('Cache-Control', 'max-age=0')
     if send_length:
       self.send_header('Content-Length', size_chunk1 + size_chunk2)
@@ -763,7 +807,7 @@ class TestPageHandler(BasePageHandler):
 
     self.server.waitForDownload = False
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.send_header('Cache-Control', 'max-age=0')
     self.end_headers()
     return True
@@ -847,7 +891,7 @@ class TestPageHandler(BasePageHandler):
       content_length = compressed_len + uncompressed_len
 
     self.send_response(200)
-    self.send_header('Content-type', 'application/msword')
+    self.send_header('Content-Type', 'application/msword')
     self.send_header('Content-encoding', 'deflate')
     self.send_header('Connection', 'close')
     self.send_header('Content-Length', content_length)
@@ -861,15 +905,23 @@ class TestPageHandler(BasePageHandler):
   def FileHandler(self):
     """This handler sends the contents of the requested file.  Wow, it's like
     a real webserver!"""
-
     prefix = self.server.file_root_url
     if not self.path.startswith(prefix):
       return False
-
     # Consume a request body if present.
     if self.command == 'POST' or self.command == 'PUT' :
       self.ReadRequestBody()
+    return self._FileHandlerHelper(prefix)
 
+  def PostOnlyFileHandler(self):
+    """This handler sends the contents of the requested file on a POST."""
+    prefix = self.server.file_root_url + '/post/'
+    if not self.path.startswith(prefix):
+      return False
+    self.ReadRequestBody()
+    return self._FileHandlerHelper(prefix)
+
+  def _FileHandlerHelper(self, prefix):
     _, _, url_path, _, query, _ = urlparse.urlparse(self.path)
     sub_path = url_path[len(prefix):]
     entries = sub_path.split('/')
@@ -912,11 +964,14 @@ class TestPageHandler(BasePageHandler):
 
       range = self.headers.get('Range')
       if range and range.startswith('bytes='):
-        # Note this doesn't handle all valid byte range values (i.e. open ended
-        # ones), just enough for what we needed so far.
+        # Note this doesn't handle all valid byte range values (i.e. left
+        # open ended ones), just enough for what we needed so far.
         range = range[6:].split('-')
         start = int(range[0])
-        end = int(range[1])
+        if range[1]:
+          end = int(range[1])
+        else:
+          end = len(data)
 
         self.send_response(206)
         content_range = 'bytes ' + str(start) + '-' + str(end) + '/' + \
@@ -926,13 +981,14 @@ class TestPageHandler(BasePageHandler):
       else:
         self.send_response(200)
 
-      self.send_header('Content-type', self.GetMIMETypeFromName(file_path))
+      self.send_header('Content-Type', self.GetMIMETypeFromName(file_path))
       self.send_header('Accept-Ranges', 'bytes')
       self.send_header('Content-Length', len(data))
       self.send_header('ETag', '\'' + file_path + '\'')
     self.end_headers()
 
-    self.wfile.write(data)
+    if (self.command != 'HEAD'):
+      self.wfile.write(data)
 
     return True
 
@@ -948,12 +1004,35 @@ class TestPageHandler(BasePageHandler):
     else:
       cookie_values = ("",)
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     for cookie_value in cookie_values:
       self.send_header('Set-Cookie', '%s' % cookie_value)
     self.end_headers()
     for cookie_value in cookie_values:
       self.wfile.write('%s' % cookie_value)
+    return True
+
+  def SetHeaderHandler(self):
+    """This handler sets a response header. Parameters are in the
+    key%3A%20value&key2%3A%20value2 format."""
+
+    if not self._ShouldHandleRequest("/set-header"):
+      return False
+
+    query_char = self.path.find('?')
+    if query_char != -1:
+      headers_values = self.path[query_char + 1:].split('&')
+    else:
+      headers_values = ("",)
+    self.send_response(200)
+    self.send_header('Content-Type', 'text/html')
+    for header_value in headers_values:
+      header_value = urllib.unquote(header_value)
+      (key, value) = header_value.split(': ', 1)
+      self.send_header(key, value)
+    self.end_headers()
+    for header_value in headers_values:
+      self.wfile.write('%s' % header_value)
     return True
 
   def AuthBasicHandler(self):
@@ -990,7 +1069,7 @@ class TestPageHandler(BasePageHandler):
       # Authentication failed.
       self.send_response(401)
       self.send_header('WWW-Authenticate', 'Basic realm="%s"' % realm)
-      self.send_header('Content-type', 'text/html')
+      self.send_header('Content-Type', 'text/html')
       if set_cookie_if_challenged:
         self.send_header('Set-Cookie', 'got_challenged=true')
       self.end_headers()
@@ -1029,14 +1108,14 @@ class TestPageHandler(BasePageHandler):
       f.close()
 
       self.send_response(200)
-      self.send_header('Content-type', 'image/gif')
+      self.send_header('Content-Type', 'image/gif')
       self.send_header('Cache-control', 'max-age=60000')
       self.send_header('Etag', 'abc')
       self.end_headers()
       self.wfile.write(data)
     else:
       self.send_response(200)
-      self.send_header('Content-type', 'text/html')
+      self.send_header('Content-Type', 'text/html')
       self.send_header('Cache-control', 'max-age=60000')
       self.send_header('Etag', 'abc')
       self.end_headers()
@@ -1124,7 +1203,7 @@ class TestPageHandler(BasePageHandler):
       if stale:
         hdr += ', stale="TRUE"'
       self.send_header('WWW-Authenticate', hdr)
-      self.send_header('Content-type', 'text/html')
+      self.send_header('Content-Type', 'text/html')
       self.end_headers()
       self.wfile.write('<html><head>')
       self.wfile.write('<title>Denied: %s</title>' % e)
@@ -1138,7 +1217,7 @@ class TestPageHandler(BasePageHandler):
 
     # Authentication successful.
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write('<html><head>')
     self.wfile.write('<title>%s/%s</title>' % (pairs['username'], password))
@@ -1163,7 +1242,7 @@ class TestPageHandler(BasePageHandler):
         pass
     time.sleep(wait_sec)
     self.send_response(200)
-    self.send_header('Content-type', 'text/plain')
+    self.send_header('Content-Type', 'text/plain')
     self.end_headers()
     self.wfile.write("waited %d seconds" % wait_sec)
     return True
@@ -1195,7 +1274,7 @@ class TestPageHandler(BasePageHandler):
     time.sleep(0.001 * chunkedSettings['waitBeforeHeaders']);
     self.protocol_version = 'HTTP/1.1' # Needed for chunked encoding
     self.send_response(200)
-    self.send_header('Content-type', 'text/plain')
+    self.send_header('Content-Type', 'text/plain')
     self.send_header('Connection', 'close')
     self.send_header('Transfer-Encoding', 'chunked')
     self.end_headers()
@@ -1250,7 +1329,7 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(301)  # moved permanently
     self.send_header('Location', dest)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write('<html><head>')
     self.wfile.write('</head><body>Redirecting to %s</body></html>' % dest)
@@ -1273,7 +1352,7 @@ class TestPageHandler(BasePageHandler):
     dest = self.path[query_char + 1:]
 
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write('<html><head>')
     self.wfile.write('<meta http-equiv="refresh" content="0;url=%s">' % dest)
@@ -1283,24 +1362,69 @@ class TestPageHandler(BasePageHandler):
 
   def MultipartHandler(self):
     """Send a multipart response (10 text/html pages)."""
-    test_name = "/multipart"
+    test_name = '/multipart'
     if not self._ShouldHandleRequest(test_name):
       return False
 
     num_frames = 10
     bound = '12345'
     self.send_response(200)
-    self.send_header('Content-type',
+    self.send_header('Content-Type',
                      'multipart/x-mixed-replace;boundary=' + bound)
     self.end_headers()
 
     for i in xrange(num_frames):
       self.wfile.write('--' + bound + '\r\n')
-      self.wfile.write('Content-type: text/html\r\n\r\n')
+      self.wfile.write('Content-Type: text/html\r\n\r\n')
       self.wfile.write('<title>page ' + str(i) + '</title>')
       self.wfile.write('page ' + str(i))
 
     self.wfile.write('--' + bound + '--')
+    return True
+
+  def MultipartSlowHandler(self):
+    """Send a multipart response (3 text/html pages) with a slight delay
+    between each page.  This is similar to how some pages show status using
+    multipart."""
+    test_name = '/multipart-slow'
+    if not self._ShouldHandleRequest(test_name):
+      return False
+
+    num_frames = 3
+    bound = '12345'
+    self.send_response(200)
+    self.send_header('Content-Type',
+                     'multipart/x-mixed-replace;boundary=' + bound)
+    self.end_headers()
+
+    for i in xrange(num_frames):
+      self.wfile.write('--' + bound + '\r\n')
+      self.wfile.write('Content-Type: text/html\r\n\r\n')
+      time.sleep(0.25)
+      if i == 2:
+        self.wfile.write('<title>PASS</title>')
+      else:
+        self.wfile.write('<title>page ' + str(i) + '</title>')
+      self.wfile.write('page ' + str(i) + '<!-- ' + ('x' * 2048) + '-->')
+
+    self.wfile.write('--' + bound + '--')
+    return True
+
+  def GetSSLSessionCacheHandler(self):
+    """Send a reply containing a log of the session cache operations."""
+
+    if not self._ShouldHandleRequest('/ssl-session-cache'):
+      return False
+
+    self.send_response(200)
+    self.send_header('Content-Type', 'text/plain')
+    self.end_headers()
+    try:
+      for (action, sessionID) in self.server.session_cache.log:
+        self.wfile.write('%s\t%s\n' % (action, sessionID.encode('hex')))
+    except AttributeError, e:
+      self.wfile.write('Pass --https-record-resume in order to use' +
+                       ' this request')
     return True
 
   def DefaultResponseHandler(self):
@@ -1311,10 +1435,11 @@ class TestPageHandler(BasePageHandler):
 
     contents = "Default response given for path: " + self.path
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
-    self.send_header("Content-Length", len(contents))
+    self.send_header('Content-Type', 'text/html')
+    self.send_header('Content-Length', len(contents))
     self.end_headers()
-    self.wfile.write(contents)
+    if (self.command != 'HEAD'):
+      self.wfile.write(contents)
     return True
 
   def RedirectConnectHandler(self):
@@ -1356,8 +1481,8 @@ class TestPageHandler(BasePageHandler):
 
     contents = "Your client has issued a malformed or illegal request."
     self.send_response(400)  # bad request
-    self.send_header('Content-type', 'text/html')
-    self.send_header("Content-Length", len(contents))
+    self.send_header('Content-Type', 'text/html')
+    self.send_header('Content-Length', len(contents))
     self.end_headers()
     self.wfile.write(contents)
     return True
@@ -1382,6 +1507,8 @@ class TestPageHandler(BasePageHandler):
                                                              self.headers,
                                                              raw_request))
     self.send_response(http_response)
+    if (http_response == 200):
+      self.send_header('Content-Type', 'application/x-protobuffer')
     self.end_headers()
     self.wfile.write(raw_reply)
     return True
@@ -1389,7 +1516,7 @@ class TestPageHandler(BasePageHandler):
   # called by the redirect handling function when there is no parameter
   def sendRedirectHelp(self, redirect_name):
     self.send_response(200)
-    self.send_header('Content-type', 'text/html')
+    self.send_header('Content-Type', 'text/html')
     self.end_headers()
     self.wfile.write('<html><body><h1>Error: no redirect destination</h1>')
     self.wfile.write('Use <pre>%s?http://dest...</pre>' % redirect_name)
@@ -1414,13 +1541,16 @@ class SyncPageHandler(BasePageHandler):
                     self.ChromiumSyncSendNotificationOpHandler,
                     self.ChromiumSyncBirthdayErrorOpHandler,
                     self.ChromiumSyncTransientErrorOpHandler,
-                    self.ChromiumSyncSyncTabsOpHandler]
+                    self.ChromiumSyncSyncTabsOpHandler,
+                    self.ChromiumSyncErrorOpHandler,
+                    self.ChromiumSyncCredHandler]
 
     post_handlers = [self.ChromiumSyncCommandHandler,
                      self.ChromiumSyncTimeHandler]
     BasePageHandler.__init__(self, request, client_address,
-                             sync_http_server, [], get_handlers,
+                             sync_http_server, [], get_handlers, [],
                              post_handlers, [])
+
 
   def ChromiumSyncTimeHandler(self):
     """Handle Chromium sync .../time requests.
@@ -1454,10 +1584,19 @@ class SyncPageHandler(BasePageHandler):
 
     length = int(self.headers.getheader('content-length'))
     raw_request = self.rfile.read(length)
+    http_response = 200
+    raw_reply = None
+    if not self.server.GetAuthenticated():
+      http_response = 401
+      challenge = 'GoogleLogin realm="http://127.0.0.1", service="chromiumsync"'
+    else:
+      http_response, raw_reply = self.server.HandleCommand(
+          self.path, raw_request)
 
-    http_response, raw_reply = self.server.HandleCommand(
-        self.path, raw_request)
+    ### Now send the response to the client. ###
     self.send_response(http_response)
+    if http_response == 401:
+      self.send_header('www-Authenticate', challenge)
     self.end_headers()
     self.wfile.write(raw_reply)
     return True
@@ -1469,6 +1608,29 @@ class SyncPageHandler(BasePageHandler):
 
     http_response, raw_reply = self.server._sync_handler.HandleMigrate(
         self.path)
+    self.send_response(http_response)
+    self.send_header('Content-Type', 'text/html')
+    self.send_header('Content-Length', len(raw_reply))
+    self.end_headers()
+    self.wfile.write(raw_reply)
+    return True
+
+  def ChromiumSyncCredHandler(self):
+    test_name = "/chromiumsync/cred"
+    if not self._ShouldHandleRequest(test_name):
+      return False
+    try:
+      query = urlparse.urlparse(self.path)[4]
+      cred_valid = urlparse.parse_qs(query)['valid']
+      if cred_valid[0] == 'True':
+        self.server.SetAuthenticated(True)
+      else:
+        self.server.SetAuthenticated(False)
+    except:
+      self.server.SetAuthenticated(False)
+
+    http_response = 200
+    raw_reply = 'Authenticated: %s ' % self.server.GetAuthenticated()
     self.send_response(http_response)
     self.send_header('Content-Type', 'text/html')
     self.send_header('Content-Length', len(raw_reply))
@@ -1548,6 +1710,19 @@ class SyncPageHandler(BasePageHandler):
     if not self._ShouldHandleRequest(test_name):
       return False
     result, raw_reply = self.server._sync_handler.HandleSetTransientError()
+    self.send_response(result)
+    self.send_header('Content-Type', 'text/html')
+    self.send_header('Content-Length', len(raw_reply))
+    self.end_headers()
+    self.wfile.write(raw_reply)
+    return True;
+
+  def ChromiumSyncErrorOpHandler(self):
+    test_name = "/chromiumsync/error"
+    if not self._ShouldHandleRequest(test_name):
+      return False
+    result, raw_reply = self.server._sync_handler.HandleSetInducedError(
+        self.path)
     self.send_response(result)
     self.send_header('Content-Type', 'text/html')
     self.send_header('Content-Length', len(raw_reply))
@@ -1677,7 +1852,7 @@ def main(options, args):
           return
       server = HTTPSServer(('127.0.0.1', port), TestPageHandler, options.cert,
                            options.ssl_client_auth, options.ssl_client_ca,
-                           options.ssl_bulk_cipher)
+                           options.ssl_bulk_cipher, options.record_resume)
       print 'HTTPS server started on port %d...' % server.server_port
     else:
       server = StoppableHTTPServer(('127.0.0.1', port), TestPageHandler)
@@ -1739,7 +1914,7 @@ def main(options, args):
   # Notify the parent that we've started. (BaseServer subclasses
   # bind their sockets on construction.)
   if options.startup_pipe is not None:
-    server_data_json = simplejson.dumps(server_data)
+    server_data_json = json.dumps(server_data)
     server_data_len = len(server_data_json)
     print 'sending server_data: %s (%d bytes)' % (
       server_data_json, server_data_len)
@@ -1793,6 +1968,11 @@ if __name__ == '__main__':
                            help='Specify that https should be used, specify '
                            'the path to the cert containing the private key '
                            'the server should use.')
+  option_parser.add_option('', '--https-record-resume', dest='record_resume',
+                           const=True, default=False, action='store_const',
+                           help='Record resumption cache events rather than'
+                           ' resuming as normal. Allows the use of the'
+                           ' /ssl-session-cache request')
   option_parser.add_option('', '--ssl-client-auth', action='store_true',
                            help='Require SSL client auth on every connection.')
   option_parser.add_option('', '--ssl-client-ca', action='append', default=[],

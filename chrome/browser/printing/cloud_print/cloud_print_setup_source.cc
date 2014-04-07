@@ -54,7 +54,9 @@ void CloudPrintSetupSource::StartDataRequest(const std::string& path_raw,
 
   std::string response;
   if (path_raw == kCloudPrintSetupPath) {
-    AddString(dict, "header", IDS_CLOUD_PRINT_SETUP_HEADER);
+    dict->SetString("header",
+        l10n_util::GetStringFUTF16(IDS_CLOUD_PRINT_SETUP_HEADER,
+        l10n_util::GetStringUTF16(IDS_GOOGLE_CLOUD_PRINT)));
     AddString(dict, "explain", IDS_CLOUD_PRINT_SETUP_EXPLAIN);
     AddString(dict, "anywhereheader", IDS_CLOUD_PRINT_SETUP_ANYWHERE_HEADER);
     AddString(dict, "anywhereexplain", IDS_CLOUD_PRINT_SETUP_ANYWHERE_EXPLAIN);
@@ -82,8 +84,8 @@ void CloudPrintSetupSource::StartDataRequest(const std::string& path_raw,
     AddString(dict, "signinprefix", IDS_SYNC_LOGIN_SIGNIN_PREFIX);
     AddString(dict, "signinsuffix", IDS_SYNC_LOGIN_SIGNIN_SUFFIX);
     AddString(dict, "cannotbeblank", IDS_SYNC_CANNOT_BE_BLANK);
-    AddString(dict, "emaillabel", IDS_SYNC_LOGIN_EMAIL);
-    AddString(dict, "passwordlabel", IDS_SYNC_LOGIN_PASSWORD);
+    AddString(dict, "emaillabel", IDS_SYNC_LOGIN_EMAIL_SAME_LINE);
+    AddString(dict, "passwordlabel", IDS_SYNC_LOGIN_PASSWORD_SAME_LINE);
     AddString(dict, "invalidcredentials", IDS_SYNC_INVALID_USER_CREDENTIALS);
     AddString(dict, "signin", IDS_SYNC_SIGNIN);
     AddString(dict, "couldnotconnect", IDS_SYNC_LOGIN_COULD_NOT_CONNECT);

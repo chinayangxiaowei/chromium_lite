@@ -9,7 +9,7 @@
 #include "base/time.h"
 #include "chrome/browser/autofill/autofill_type.h"
 #include "chrome/browser/autofill/form_structure.h"
-#include "webkit/glue/form_data.h"
+#include "webkit/forms/form_data.h"
 
 namespace {
 
@@ -28,6 +28,10 @@ enum ServerExperiment {
   ACCEPTANCE_RATIO_04_WINNER_LEAD_RATIO_3_MIN_FORM_SCORE_4,
   NO_SERVER_RESPONSE,
   PROBABILITY_PICKER_05,
+  PROBABILITY_PICKER_025,
+  PROBABILITY_PICKER_025_CC_THRESHOLD_03,
+  PROBABILITY_PICKER_025_CONTEXTUAL_CC_THRESHOLD_03,
+  PROBABILITY_PICKER_025_CONTEXTUAL_CC_THRESHOLD_03_WITH_FALLBACK,
   NUM_SERVER_EXPERIMENTS
 };
 
@@ -42,7 +46,7 @@ enum FieldTypeGroupForMetrics {
   ADDRESS_ZIP,
   ADDRESS_COUNTRY,
   PHONE,
-  FAX,
+  FAX,  // Deprecated.
   EMAIL,
   CREDIT_CARD_NAME,
   CREDIT_CARD_NUMBER,
@@ -120,12 +124,8 @@ int GetFieldTypeGroupMetric(const AutofillFieldType field_type,
       group = EMAIL;
       break;
 
-    case AutofillType::PHONE_HOME:
+    case AutofillType::PHONE:
       group = PHONE;
-      break;
-
-    case AutofillType::PHONE_FAX:
-      group = FAX;
       break;
 
     case AutofillType::CREDIT_CARD:
@@ -202,7 +202,7 @@ void LogServerExperimentId(const std::string& histogram_name,
   ServerExperiment metric = UNKNOWN_EXPERIMENT;
 
   const std::string default_experiment_name =
-      FormStructure(webkit_glue::FormData()).server_experiment_id();
+      FormStructure(webkit::forms::FormData()).server_experiment_id();
   if (experiment_id.empty())
     metric = NO_EXPERIMENT;
   else if (experiment_id == "ar06")
@@ -227,6 +227,14 @@ void LogServerExperimentId(const std::string& histogram_name,
     metric = NO_SERVER_RESPONSE;
   else if (experiment_id == "fp05")
     metric = PROBABILITY_PICKER_05;
+  else if (experiment_id == "fp025")
+    metric = PROBABILITY_PICKER_025;
+  else if (experiment_id == "fp05cc03")
+    metric = PROBABILITY_PICKER_025_CC_THRESHOLD_03;
+  else if (experiment_id == "fp05cco03")
+    metric = PROBABILITY_PICKER_025_CONTEXTUAL_CC_THRESHOLD_03;
+  else if (experiment_id == "fp05cco03cstd")
+    metric = PROBABILITY_PICKER_025_CONTEXTUAL_CC_THRESHOLD_03_WITH_FALLBACK;
 
   DCHECK(metric < NUM_SERVER_EXPERIMENTS);
   LogUMAHistogramEnumeration(histogram_name, metric, NUM_SERVER_EXPERIMENTS);

@@ -13,11 +13,11 @@
 #include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/importer/profile_writer.h"
 #include "chrome/browser/search_engines/template_url.h"
-#include "content/common/common_param_traits.h"
-#include "content/common/webkit_param_traits.h"
+#include "content/public/common/common_param_traits.h"
+#include "content/public/common/webkit_param_traits.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_message_utils.h"
-#include "webkit/glue/password_form.h"
+#include "webkit/forms/password_form.h"
 
 #ifndef CHROME_BROWSER_IMPORTER_PROFILE_IMPORT_PROCESS_MESSAGES_H_
 #define CHROME_BROWSER_IMPORTER_PROFILE_IMPORT_PROCESS_MESSAGES_H_
@@ -431,7 +431,7 @@ IPC_MESSAGE_CONTROL1(ProfileImportProcessHostMsg_NotifyFaviconsImportGroup,
                      std::vector<history::ImportedFaviconUsage>)
 
 IPC_MESSAGE_CONTROL1(ProfileImportProcessHostMsg_NotifyPasswordFormReady,
-                     webkit_glue::PasswordForm)
+                     webkit::forms::PasswordForm)
 
 IPC_MESSAGE_CONTROL3(ProfileImportProcessHostMsg_NotifyKeywordsReady,
                      std::vector<TemplateURL>,

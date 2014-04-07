@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 The Native Client Authors. All rights reserved.
+ * Copyright (c) 2011 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -26,8 +26,6 @@ class DescWrapper;
 }  // namespace nacl
 
 namespace plugin {
-
-class Plugin;
 
 // DescBasedHandles are used to convey NaClDesc objects through JavaScript.
 class DescBasedHandle {

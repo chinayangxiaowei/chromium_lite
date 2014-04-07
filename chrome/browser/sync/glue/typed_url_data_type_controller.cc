@@ -1,20 +1,21 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/glue/typed_url_data_type_controller.h"
 
 #include "base/metrics/histogram.h"
-#include "base/task.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/profile_sync_factory.h"
+#include "chrome/browser/sync/profile_sync_components_factory.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_details.h"
+
+using content::BrowserThread;
 
 namespace browser_sync {
 
@@ -41,10 +42,12 @@ class ControlTask : public HistoryDBTask {
 };
 
 TypedUrlDataTypeController::TypedUrlDataTypeController(
-    ProfileSyncFactory* profile_sync_factory,
-    Profile* profile)
+    ProfileSyncComponentsFactory* profile_sync_factory,
+    Profile* profile,
+    ProfileSyncService* sync_service)
     : NonFrontendDataTypeController(profile_sync_factory,
-                                 profile),
+                                    profile,
+                                    sync_service),
       backend_(NULL) {
   pref_registrar_.Init(profile->GetPrefs());
   pref_registrar_.Add(prefs::kSavingBrowserHistoryDisabled, this);
@@ -89,7 +92,7 @@ void TypedUrlDataTypeController::CreateSyncComponents() {
   DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK_EQ(state(), ASSOCIATING);
   DCHECK(backend_);
-  ProfileSyncFactory::SyncComponents sync_components =
+  ProfileSyncComponentsFactory::SyncComponents sync_components =
       profile_sync_factory()->CreateTypedUrlSyncComponents(
           profile_sync_service(),
           backend_,
@@ -98,13 +101,14 @@ void TypedUrlDataTypeController::CreateSyncComponents() {
   set_change_processor(sync_components.change_processor);
 }
 
-void TypedUrlDataTypeController::Observe(int type,
-                                         const NotificationSource& source,
-                                         const NotificationDetails& details) {
+void TypedUrlDataTypeController::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   switch (type) {
     case chrome::NOTIFICATION_PREF_CHANGED:
-      DCHECK(*Details<std::string>(details).ptr() ==
+      DCHECK(*content::Details<std::string>(details).ptr() ==
              prefs::kSavingBrowserHistoryDisabled);
       if (profile()->GetPrefs()->GetBoolean(
               prefs::kSavingBrowserHistoryDisabled)) {
@@ -125,7 +129,8 @@ void TypedUrlDataTypeController::Observe(int type,
 
 void TypedUrlDataTypeController::StopModels() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(state() == STOPPING || state() == NOT_RUNNING);
+  DCHECK(state() == STOPPING || state() == NOT_RUNNING || state() == DISABLED);
+  DVLOG(1) << "TypedUrlDataTypeController::StopModels(): State = " << state();
   notification_registrar_.RemoveAll();
 }
 

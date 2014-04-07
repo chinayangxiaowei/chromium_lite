@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
 #include "remoting/base/base_mock_objects.h"
@@ -24,21 +25,25 @@ class ConnectionToClientTest : public testing::Test {
   }
 
  protected:
-  virtual void SetUp() {
+  virtual void SetUp() OVERRIDE {
     session_ = new protocol::FakeSession();
     session_->set_message_loop(&message_loop_);
 
     // Allocate a ClientConnection object with the mock objects.
-    viewer_ = new ConnectionToClient(
-        base::MessageLoopProxy::current(), &handler_);
+    viewer_.reset(new ConnectionToClient(session_));
     viewer_->set_host_stub(&host_stub_);
     viewer_->set_input_stub(&input_stub_);
-    viewer_->Init(session_);
+    viewer_->SetEventHandler(&handler_);
     EXPECT_CALL(handler_, OnConnectionOpened(viewer_.get()));
-    session_->state_change_callback()->Run(
+    session_->state_change_callback().Run(
         protocol::Session::CONNECTED);
-    session_->state_change_callback()->Run(
-        protocol::Session::CONNECTED_CHANNELS);
+    session_->state_change_callback().Run(
+        protocol::Session::AUTHENTICATED);
+    message_loop_.RunAllPending();
+  }
+
+  virtual void TearDown() OVERRIDE {
+    viewer_.reset();
     message_loop_.RunAllPending();
   }
 
@@ -46,7 +51,7 @@ class ConnectionToClientTest : public testing::Test {
   MockConnectionToClientEventHandler handler_;
   MockHostStub host_stub_;
   MockInputStub input_stub_;
-  scoped_refptr<ConnectionToClient> viewer_;
+  scoped_ptr<ConnectionToClient> viewer_;
 
   // Owned by |viewer_|.
   protocol::FakeSession* session_;
@@ -59,7 +64,7 @@ TEST_F(ConnectionToClientTest, SendUpdateStream) {
   // Then send the actual data.
   VideoPacket* packet = new VideoPacket();
   viewer_->video_stub()->ProcessVideoPacket(
-      packet, new DeleteTask<VideoPacket>(packet));
+      packet, base::Bind(&base::DeletePointer<VideoPacket>, packet));
 
   message_loop_.RunAllPending();
 
@@ -79,7 +84,7 @@ TEST_F(ConnectionToClientTest, NoWriteAfterDisconnect) {
   // Then send the actual data.
   VideoPacket* packet = new VideoPacket();
   viewer_->video_stub()->ProcessVideoPacket(
-      packet, new DeleteTask<VideoPacket>(packet));
+      packet, base::Bind(&base::DeletePointer<VideoPacket>, packet));
 
   // And then close the connection to ConnectionToClient.
   viewer_->Disconnect();
@@ -92,19 +97,13 @@ TEST_F(ConnectionToClientTest, NoWriteAfterDisconnect) {
 
 TEST_F(ConnectionToClientTest, StateChange) {
   EXPECT_CALL(handler_, OnConnectionClosed(viewer_.get()));
-  session_->state_change_callback()->Run(protocol::Session::CLOSED);
+  session_->state_change_callback().Run(protocol::Session::CLOSED);
   message_loop_.RunAllPending();
 
-  EXPECT_CALL(handler_, OnConnectionFailed(viewer_.get()));
-  session_->state_change_callback()->Run(protocol::Session::FAILED);
-  message_loop_.RunAllPending();
-}
-
-// Test that we can close client connection more than once.
-TEST_F(ConnectionToClientTest, Close) {
-  viewer_->Disconnect();
-  message_loop_.RunAllPending();
-  viewer_->Disconnect();
+  EXPECT_CALL(handler_, OnConnectionFailed(
+      viewer_.get(), Session::SESSION_REJECTED));
+  session_->set_error(Session::SESSION_REJECTED);
+  session_->state_change_callback().Run(protocol::Session::FAILED);
   message_loop_.RunAllPending();
 }
 

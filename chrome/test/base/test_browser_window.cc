@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -76,6 +76,14 @@ bool TestBrowserWindow::IsToolbarVisible() const {
   return false;
 }
 
+gfx::Rect TestBrowserWindow::GetRootWindowResizerRect() const {
+  return gfx::Rect();
+}
+
+bool TestBrowserWindow::IsPanel() const {
+  return false;
+}
+
 void TestBrowserWindow::ShowAboutChromeDialog() {
   return;
 }
@@ -86,12 +94,6 @@ bool TestBrowserWindow::IsDownloadShelfVisible() const {
 
 DownloadShelf* TestBrowserWindow::GetDownloadShelf() {
   return NULL;
-}
-
-gfx::NativeWindow TestBrowserWindow::ShowHTMLDialog(
-    HtmlDialogUIDelegate* delegate,
-    gfx::NativeWindow parent_window) {
- return NULL;
 }
 
 int TestBrowserWindow::GetExtraRenderViewHeight() const {

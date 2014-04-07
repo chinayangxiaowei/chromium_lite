@@ -14,7 +14,6 @@
 
 namespace pp {
 
-class Context3D_Dev;
 class Graphics3D;
 class Instance;
 
@@ -25,9 +24,6 @@ class Instance;
 class VideoDecoder_Dev : public Resource {
  public:
   // See PPB_VideoDecoder_Dev::Create.
-  VideoDecoder_Dev(const Instance* instance,
-                   const Context3D_Dev& context,
-                   PP_VideoDecoder_Profile profile);
   VideoDecoder_Dev(const Instance* instance,
                    const Graphics3D& context,
                    PP_VideoDecoder_Profile profile);
@@ -41,7 +37,7 @@ class VideoDecoder_Dev : public Resource {
                  CompletionCallback callback);
   void ReusePictureBuffer(int32_t picture_buffer_id);
   int32_t Flush(CompletionCallback callback);
-  int32_t Reset(CompletionCallback callback);
+  int32_t Reset(const CompletionCallback& callback);
 
  private:
   // Disallow copy-construction to ensure Destroy() is called exactly once.

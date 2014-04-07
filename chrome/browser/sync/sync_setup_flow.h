@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -62,13 +62,11 @@ class SyncSetupFlow {
                             SyncSetupWizard::State start,
                             SyncSetupWizard::State end);
 
-  // Fills |args| with "user" and "error" arguments by querying |service|.
-  static void GetArgsForGaiaLogin(
-      const ProfileSyncService* service,
-      DictionaryValue* args);
+  // Fills |args| with "user" and "error" arguments per our current state.
+  void GetArgsForGaiaLogin(DictionaryValue* args);
 
   // Fills |args| for the configure screen (Choose Data Types/Encryption)
-  void GetArgsForConfigure(ProfileSyncService* service, DictionaryValue* args);
+  void GetArgsForConfigure(DictionaryValue* args);
 
   // Attaches the |handler| to this flow. Returns true if successful and false
   // if a handler has already been attached.
@@ -89,6 +87,8 @@ class SyncSetupFlow {
                            const std::string& captcha,
                            const std::string& access_code);
 
+  void OnUserSubmittedOAuth(const std::string& oauth1_request_token);
+
   void OnUserConfigured(const SyncConfiguration& configuration);
 
   // The 'passphrase' screen is used when the user is prompted to enter
@@ -101,6 +101,7 @@ class SyncSetupFlow {
   void OnDialogClosed(const std::string& json_retval);
 
  private:
+  friend class ProfileSyncServiceForWizardTest;
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, InitialStepLogin);
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, ChooseDataTypesSetsPrefs);
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, DialogCancelled);
@@ -114,6 +115,9 @@ class SyncSetupFlow {
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, EnterPassphraseRequired);
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, NonFatalError);
   FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, CrosAuthSetup);
+  FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, ShowErrorUIForPasswordTest);
+  FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardTest, ShowErrorUIForPassphraseTest);
+  FRIEND_TEST_ALL_PREFIXES(SyncSetupWizardCrosTest, CrosAuthSetup);
 
   // Use static Run method to get an instance.
   SyncSetupFlow(SyncSetupWizard::State start_state,
@@ -142,17 +146,17 @@ class SyncSetupFlow {
   // We need this to propagate back all user settings changes. Weak reference.
   ProfileSyncService* service_;
 
-  // Set to true if we've tried creating an explicit passphrase, so we
+  // Set to true if the user has tried creating an explicit passphrase, so we
   // can appropriately reflect this in the UI.
-  bool tried_creating_explicit_passphrase_;
+  bool user_tried_creating_explicit_passphrase_;
 
   // Set to true if the user entered a passphrase, so we can appropriately
   // reflect this in the UI.
-  bool tried_setting_passphrase_;
+  bool user_tried_setting_passphrase_;
 
-  // We track the passphrase the user entered so we can set it when configuring
-  // the ProfileSyncService.
-  std::string cached_passphrase_;
+  // Cache of the last name the client attempted to authenticate.
+  // TODO(atwilson): Move this out of here entirely and up into the UI layer.
+  std::string last_attempted_user_email_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncSetupFlow);
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,28 @@
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_EDITOR_VIEW_H_
 #pragma once
 
+#include <vector>
+
 #include "base/compiler_specific.h"
+#include "base/gtest_prod_util.h"
 #include "base/string16.h"
 #include "chrome/browser/bookmarks/bookmark_editor.h"
 #include "chrome/browser/bookmarks/bookmark_expanded_state_tracker.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/models/tree_node_model.h"
-#include "views/context_menu_controller.h"
-#include "views/controls/button/button.h"
-#include "views/controls/textfield/textfield.h"
-#include "views/controls/textfield/textfield_controller.h"
-#include "views/controls/tree/tree_view.h"
-#include "views/window/dialog_delegate.h"
+#include "ui/views/context_menu_controller.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/controls/textfield/textfield_controller.h"
+#include "ui/views/controls/tree/tree_view_controller.h"
+#include "ui/views/window/dialog_delegate.h"
 
 namespace views {
 class Label;
 class Menu2;
 class TextButton;
+class TreeView;
 }
 
 class BookmarkEditorViewTest;
@@ -64,7 +67,7 @@ class BookmarkEditorView : public BookmarkEditor,
     virtual void SetTitle(ui::TreeModelNode* node,
                           const string16& title) {
       if (!title.empty())
-        TreeNodeModel::SetTitle(node, title);
+        ui::TreeNodeModel<EditorNode>::SetTitle(node, title);
     }
 
    private:
@@ -78,44 +81,47 @@ class BookmarkEditorView : public BookmarkEditor,
 
   virtual ~BookmarkEditorView();
 
-  // DialogDelegate methods:
-  virtual bool IsDialogButtonEnabled(
-      MessageBoxFlags::DialogButton button) const;
-  virtual bool IsModal() const;
-  virtual bool CanResize() const;
-  virtual std::wstring GetWindowTitle() const;
-  virtual bool Accept();
-  virtual bool AreAcceleratorsEnabled(MessageBoxFlags::DialogButton button);
-  virtual views::View* GetContentsView();
+  // views::DialogDelegateView:
+  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
+  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
+  virtual bool CanResize() const  OVERRIDE;
+  virtual string16 GetWindowTitle() const  OVERRIDE;
+  virtual bool Accept() OVERRIDE;
+  virtual bool AreAcceleratorsEnabled(ui::DialogButton button) OVERRIDE;
+  virtual views::View* GetContentsView()  OVERRIDE;
 
-  // views::View.
-  virtual void Layout();
-  virtual gfx::Size GetPreferredSize();
+  // views::View:
+  virtual void Layout() OVERRIDE;
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
-                                    views::View* child);
+                                    views::View* child) OVERRIDE;
 
-  // views::TreeViewObserver.
-  virtual void OnTreeViewSelectionChanged(views::TreeView* tree_view);
-  virtual bool CanEdit(views::TreeView* tree_view, ui::TreeModelNode* node);
+  // views::TreeViewController:
+  virtual void OnTreeViewSelectionChanged(views::TreeView* tree_view) OVERRIDE;
+  virtual bool CanEdit(views::TreeView* tree_view,
+                       ui::TreeModelNode* node) OVERRIDE;
 
   // views::TextfieldController:
   virtual void ContentsChanged(views::Textfield* sender,
-                               const std::wstring& new_contents);
+                               const string16& new_contents)  OVERRIDE;
   virtual bool HandleKeyEvent(views::Textfield* sender,
-                              const views::KeyEvent& key_event) {
+                              const views::KeyEvent& key_event)  OVERRIDE {
     return false;
   }
 
   // views::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+  virtual void ButtonPressed(views::Button* sender,
+                             const views::Event& event) OVERRIDE;
 
   // ui::SimpleMenuModel::Delegate:
-  virtual bool IsCommandIdChecked(int command_id) const;
-  virtual bool IsCommandIdEnabled(int command_id) const;
-  virtual bool GetAcceleratorForCommandId(int command_id,
-                                          ui::Accelerator* accelerator);
-  virtual void ExecuteCommand(int command_id);
+  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
+  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
+  virtual bool GetAcceleratorForCommandId(
+      int command_id,
+      ui::Accelerator* accelerator) OVERRIDE;
+  virtual void ExecuteCommand(int command_id) OVERRIDE;
 
   // Creates a Window and adds the BookmarkEditorView to it. When the window is
   // closed the BookmarkEditorView is deleted.
@@ -203,7 +209,7 @@ class BookmarkEditorView : public BookmarkEditor,
   GURL GetInputURL() const;
 
   // Returns the title the user has input.
-  std::wstring GetInputTitle() const;
+  string16 GetInputTitle() const;
 
   // Invoked when the url or title has possibly changed. Updates the background
   // of Textfields and ok button appropriately.
@@ -256,7 +262,9 @@ class BookmarkEditorView : public BookmarkEditor,
 
   // The context menu.
   scoped_ptr<ui::SimpleMenuModel> context_menu_contents_;
+#if !defined(USE_AURA)
   scoped_ptr<views::Menu2> context_menu_;
+#endif
 
   // Mode used to create nodes from.
   BookmarkModel* bb_model_;

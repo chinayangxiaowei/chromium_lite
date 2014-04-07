@@ -1,6 +1,5 @@
-#!/usr/bin/python
-#
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -64,7 +63,8 @@ class IDLLexer(object):
       'STRING',
 
     # Operators
-      'LSHIFT'
+      'LSHIFT',
+      'RSHIFT'
   ]
 
   # 'keywords' is a map of string to token type.  All SYMBOL tokens are
@@ -82,7 +82,7 @@ class IDLLexer(object):
 
   # 'literals' is a value expected by lex which specifies a list of valid
   # literal tokens, meaning the token type and token value are identical.
-  literals = '"*.(){}[],;:=+-'
+  literals = '"*.(){}[],;:=+-/~|&^'
 
   # Token definitions
   #
@@ -96,10 +96,11 @@ class IDLLexer(object):
 
   # Constant values
   t_FLOAT = r'-?(\d+\.\d*|\d*\.\d+)([Ee][+-]?\d+)?|-?\d+[Ee][+-]?\d+'
-  t_INT = r'-?[0-9]+'
+  t_INT = r'-?[0-9]+[uU]?'
   t_OCT = r'-?0[0-7]+'
   t_HEX = r'-?0[Xx][0-9A-Fa-f]+'
   t_LSHIFT = r'<<'
+  t_RSHIFT = r'>>'
 
   # A line ending '\n', we use this to increment the line number
   def t_LINE_END(self, t):
@@ -306,8 +307,6 @@ def TestExpect(tokens):
   return -1
 
 
-
-
 def Main(args):
   filenames = ParseOptions(args)
 
@@ -326,6 +325,6 @@ def Main(args):
     sys.stderr.write('%s\n' % str(le))
   return -1
 
+
 if __name__ == '__main__':
   sys.exit(Main(sys.argv[1:]))
-

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,28 @@
 #define CHROME_BROWSER_POLICY_CLOUD_POLICY_PROVIDER_IMPL_H_
 #pragma once
 
-#include "base/observer_list.h"
+#include <vector>
+
 #include "chrome/browser/policy/cloud_policy_cache_base.h"
 #include "chrome/browser/policy/cloud_policy_provider.h"
 #include "chrome/browser/policy/policy_map.h"
 
 namespace policy {
 
+class BrowserPolicyConnector;
+
 class CloudPolicyProviderImpl : public CloudPolicyProvider,
                                 public CloudPolicyCacheBase::Observer {
  public:
-  CloudPolicyProviderImpl(const PolicyDefinitionList* policy_list,
-                          CloudPolicyCacheBase::PolicyLevel level);
+  CloudPolicyProviderImpl(BrowserPolicyConnector* browser_policy_connector,
+                          const PolicyDefinitionList* policy_list,
+                          PolicyLevel level);
   virtual ~CloudPolicyProviderImpl();
 
   // ConfigurationPolicyProvider implementation.
-  virtual bool Provide(ConfigurationPolicyStoreInterface* store) OVERRIDE;
+  virtual bool ProvideInternal(PolicyMap* result) OVERRIDE;
   virtual bool IsInitializationComplete() const OVERRIDE;
-  virtual void AddObserver(ConfigurationPolicyProvider::Observer* observer)
-      OVERRIDE;
-  virtual void RemoveObserver(ConfigurationPolicyProvider::Observer* observer)
-      OVERRIDE;
+  virtual void RefreshPolicies() OVERRIDE;
 
   // CloudPolicyCacheBase::Observer implementation.
   virtual void OnCacheUpdate(CloudPolicyCacheBase* cache) OVERRIDE;
@@ -37,34 +38,32 @@ class CloudPolicyProviderImpl : public CloudPolicyProvider,
  private:
   friend class CloudPolicyProviderTest;
 
-  // Combines two PolicyMap and stores the result in out_map. The policies in
-  // |base| take precedence over the policies in |overlay|. Proxy policies are
-  // only applied in groups, that is if at least one proxy policy is present in
-  // |base| then no proxy related policy of |overlay| will be applied.
-  static void CombineTwoPolicyMaps(const PolicyMap& base,
-                                   const PolicyMap& overlay,
-                                   PolicyMap* out_map);
+  typedef std::vector<CloudPolicyCacheBase*> ListType;
 
   // Recompute |combined_| from |caches_| and trigger an OnUpdatePolicy if
   // something changed. This is called whenever a change in one of the caches
   // is observed. For i=0..n-1: |caches_[i]| will contribute all its policies
-  // except those already provided by |caches_[0]|..|caches_[i-1]|. Proxy
-  // related policies are handled as a special case: they are only applied in
-  // groups.
-  void RecombineCachesAndMaybeTriggerUpdate();
+  // except those already provided by |caches_[0]|..|caches_[i-1]|.
+  void RecombineCachesAndTriggerUpdate();
+
+  // Removes |cache| from |caches|, if contained therein.
+  static void RemoveCache(CloudPolicyCacheBase* cache, ListType* caches);
+
+  // Weak pointer to the connector. Guaranteed to outlive |this|.
+  BrowserPolicyConnector* browser_policy_connector_;
 
   // The underlying policy caches.
-  typedef std::vector<CloudPolicyCacheBase*> ListType;
   ListType caches_;
 
+  // Caches with pending updates. Used by RefreshPolicies to determine if a
+  // refresh has fully completed.
+  ListType pending_update_caches_;
+
   // Policy level this provider will handle.
-  CloudPolicyCacheBase::PolicyLevel level_;
+  PolicyLevel level_;
 
   // Whether all caches are fully initialized.
   bool initialization_complete_;
-
-  // Provider observers that are registered with this provider.
-  ObserverList<ConfigurationPolicyProvider::Observer, true> observer_list_;
 
   // The currently valid combination of all the maps in |caches_|. Will be
   // applied as is on call of Provide.

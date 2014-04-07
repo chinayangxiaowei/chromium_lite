@@ -1,14 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/protocol/content_description.h"
 
-#include "base/base64.h"
 #include "base/logging.h"
 #include "base/string_number_conversions.h"
 #include "remoting/base/constants.h"
-#include "remoting/proto/auth.pb.h"
+#include "remoting/protocol/authenticator.h"
 #include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
 
 using buzz::QName;
@@ -28,16 +27,13 @@ const char kDescriptionTag[] = "description";
 const char kControlTag[] = "control";
 const char kEventTag[] = "event";
 const char kVideoTag[] = "video";
-const char kResolutionTag[] = "initial-resolution";
-const char kAuthenticationTag[] = "authentication";
-const char kCertificateTag[] = "certificate";
-const char kAuthTokenTag[] = "auth-token";
+const char kDeprecatedResolutionTag[] = "initial-resolution";
 
 const char kTransportAttr[] = "transport";
 const char kVersionAttr[] = "version";
 const char kCodecAttr[] = "codec";
-const char kWidthAttr[] = "width";
-const char kHeightAttr[] = "height";
+const char kDeprecatedWidthAttr[] = "width";
+const char kDeprecatedHeightAttr[] = "height";
 
 const char kStreamTransport[] = "stream";
 const char kDatagramTransport[] = "datagram";
@@ -150,12 +146,10 @@ bool ParseChannelConfig(const XmlElement* element, bool codec_required,
 }  // namespace
 
 ContentDescription::ContentDescription(
-    const CandidateSessionConfig* candidate_config,
-    const std::string& auth_token,
-    const std::string& certificate)
-    : candidate_config_(candidate_config),
-      auth_token_(auth_token),
-      certificate_(certificate) {
+    scoped_ptr<CandidateSessionConfig> config,
+    scoped_ptr<buzz::XmlElement> authenticator_message)
+    : candidate_config_(config.Pass()),
+      authenticator_message_(authenticator_message.Pass()) {
 }
 
 ContentDescription::~ContentDescription() { }
@@ -166,10 +160,8 @@ ContentDescription::~ContentDescription() { }
 //     <control transport="stream" version="1" />
 //     <event transport="datagram" version="1" />
 //     <video transport="srtp" codec="vp8" version="1" />
-//     <initial-resolution width="800" height="600" />
 //     <authentication>
-//       <certificate>[BASE64 Encoded Certificate]</certificate>
-//       <auth-token>...</auth-token>  // IT2Me only.
+//      Message created by Authenticator implementation.
 //     </authentication>
 //   </description>
 //
@@ -194,41 +186,16 @@ XmlElement* ContentDescription::ToXml() const {
     root->AddElement(FormatChannelConfig(*it, kVideoTag));
   }
 
+  // Older endpoints require an initial-resolution tag, but otherwise ignore it.
   XmlElement* resolution_tag = new XmlElement(
-      QName(kChromotingXmlNamespace, kResolutionTag));
-  resolution_tag->AddAttr(QName(kDefaultNs, kWidthAttr),
-                          base::IntToString(
-                              config()->initial_resolution().width));
-  resolution_tag->AddAttr(QName(kDefaultNs, kHeightAttr),
-                          base::IntToString(
-                              config()->initial_resolution().height));
+      QName(kChromotingXmlNamespace, kDeprecatedResolutionTag));
+  resolution_tag->AddAttr(QName(kDefaultNs, kDeprecatedWidthAttr), "640");
+  resolution_tag->AddAttr(QName(kDefaultNs, kDeprecatedHeightAttr), "480");
   root->AddElement(resolution_tag);
 
-  if (!certificate().empty() || !auth_token().empty()) {
-    XmlElement* authentication_tag = new XmlElement(
-        QName(kChromotingXmlNamespace, kAuthenticationTag));
-
-    if (!certificate().empty()) {
-      XmlElement* certificate_tag = new XmlElement(
-          QName(kChromotingXmlNamespace, kCertificateTag));
-
-      std::string base64_cert;
-      if (!base::Base64Encode(certificate(), &base64_cert)) {
-        LOG(DFATAL) << "Cannot perform base64 encode on certificate";
-      }
-
-      certificate_tag->SetBodyText(base64_cert);
-      authentication_tag->AddElement(certificate_tag);
-    }
-
-    if (!auth_token().empty()) {
-      XmlElement* auth_token_tag = new XmlElement(
-          QName(kChromotingXmlNamespace, kAuthTokenTag));
-      auth_token_tag->SetBodyText(auth_token());
-      authentication_tag->AddElement(auth_token_tag);
-    }
-
-    root->AddElement(authentication_tag);
+  if (authenticator_message_.get()) {
+    DCHECK(Authenticator::IsAuthenticatorMessage(authenticator_message_.get()));
+    root->AddElement(new XmlElement(*authenticator_message_));
   }
 
   return root;
@@ -275,51 +242,12 @@ ContentDescription* ContentDescription::ParseXml(
       child = child->NextNamed(video_tag);
     }
 
-    // <initial-resolution> tag.
-    child = element->FirstNamed(QName(kChromotingXmlNamespace, kResolutionTag));
-    if (!child)
-      return NULL; // Resolution must always be specified.
-    int width;
-    int height;
-    if (!base::StringToInt(child->Attr(QName(kDefaultNs, kWidthAttr)),
-                           &width) ||
-        !base::StringToInt(child->Attr(QName(kDefaultNs, kHeightAttr)),
-                           &height)) {
-      return NULL;
-    }
-    ScreenResolution resolution(width, height);
-    if (!resolution.IsValid()) {
-      return NULL;
-    }
+    scoped_ptr<XmlElement> authenticator_message;
+    child = Authenticator::FindAuthenticatorMessage(element);
+    if (child)
+      authenticator_message.reset(new XmlElement(*child));
 
-    *config->mutable_initial_resolution() = resolution;
-
-    // Parse authentication information.
-    std::string certificate;
-    std::string auth_token;
-    child = element->FirstNamed(QName(kChromotingXmlNamespace,
-                                      kAuthenticationTag));
-    if (child) {
-      // Parse the certificate.
-      const XmlElement* cert_tag =
-          child->FirstNamed(QName(kChromotingXmlNamespace, kCertificateTag));
-      if (cert_tag) {
-        std::string base64_cert = cert_tag->BodyText();
-        if (!base::Base64Decode(base64_cert, &certificate)) {
-          LOG(ERROR) << "Failed to decode certificate received from the peer.";
-          return NULL;
-        }
-      }
-
-      // Parse auth-token.
-      const XmlElement* auth_token_tag =
-          child->FirstNamed(QName(kChromotingXmlNamespace, kAuthTokenTag));
-      if (auth_token_tag) {
-        auth_token = auth_token_tag->BodyText();
-      }
-    }
-
-    return new ContentDescription(config.release(), auth_token, certificate);
+    return new ContentDescription(config.Pass(), authenticator_message.Pass());
   }
   LOG(ERROR) << "Invalid description: " << element->Str();
   return NULL;

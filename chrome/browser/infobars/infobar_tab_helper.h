@@ -7,17 +7,17 @@
 #pragma once
 
 #include "base/basictypes.h"
-#include "content/browser/tab_contents/tab_contents_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 
 class InfoBarDelegate;
-class TabContentsWrapper;
 
 // Per-tab info bar manager.
-class InfoBarTabHelper : public TabContentsObserver,
-                         public NotificationObserver {
+class InfoBarTabHelper : public content::WebContentsObserver,
+                         public content::NotificationObserver {
  public:
-  explicit InfoBarTabHelper(TabContentsWrapper* tab_contents);
+  explicit InfoBarTabHelper(content::WebContents* web_contents);
   virtual ~InfoBarTabHelper();
 
   // Adds an InfoBar for the specified |delegate|.
@@ -49,14 +49,19 @@ class InfoBarTabHelper : public TabContentsObserver,
   InfoBarDelegate* GetInfoBarDelegateAt(size_t index);
   void set_infobars_enabled(bool value) { infobars_enabled_ = value; }
 
-  // TabContentsObserver overrides:
-  virtual void RenderViewGone() OVERRIDE;
+  // content::WebContentsObserver overrides:
+  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
-  // NotificationObserver overrides:
+  // content::NotificationObserver overrides:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  // Helper functions for infobars:
+  content::WebContents* web_contents() {
+    return content::WebContentsObserver::web_contents();
+  }
 
  private:
   void RemoveInfoBarInternal(InfoBarDelegate* delegate, bool animate);
@@ -70,10 +75,7 @@ class InfoBarTabHelper : public TabContentsObserver,
   std::vector<InfoBarDelegate*> infobars_;
   bool infobars_enabled_;
 
-  NotificationRegistrar registrar_;
-
-  // Owning TabContentsWrapper.
-  TabContentsWrapper* tab_contents_wrapper_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(InfoBarTabHelper);
 };

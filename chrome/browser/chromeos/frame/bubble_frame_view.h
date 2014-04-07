@@ -7,8 +7,8 @@
 #pragma once
 
 #include "chrome/browser/chromeos/frame/bubble_window.h"
-#include "views/controls/button/button.h"
-#include "views/window/non_client_view.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/window/non_client_view.h"
 
 namespace gfx {
 class Insets;
@@ -31,9 +31,8 @@ namespace chromeos {
 class BubbleFrameView : public views::NonClientFrameView,
                         public views::ButtonListener {
  public:
-  BubbleFrameView(views::Widget* frame,
-                  views::WidgetDelegate* widget_delegate,
-                  BubbleWindowStyle style);
+  BubbleFrameView(views::WidgetDelegate* widget_delegate,
+                  DialogStyle style);
   virtual ~BubbleFrameView();
 
   // Overridden from views::NonClientFrameView:
@@ -43,7 +42,6 @@ class BubbleFrameView : public views::NonClientFrameView,
   virtual int NonClientHitTest(const gfx::Point& point) OVERRIDE;
   virtual void GetWindowMask(const gfx::Size& size, gfx::Path* window_mask)
       OVERRIDE;
-  virtual void EnableClose(bool enable) OVERRIDE;
   virtual void ResetWindowControls() OVERRIDE;
   virtual void UpdateWindowIcon() OVERRIDE;
 
@@ -61,11 +59,8 @@ class BubbleFrameView : public views::NonClientFrameView,
   void StopThrobber();
 
  private:
-  // The window that owns this view.
-  views::Widget* frame_;
-
   // Allows to tweak appearance of the view.
-  BubbleWindowStyle style_;
+  DialogStyle style_;
 
   // Title label
   views::Label* title_;
@@ -85,4 +80,3 @@ class BubbleFrameView : public views::NonClientFrameView,
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_FRAME_BUBBLE_FRAME_VIEW_H_
-

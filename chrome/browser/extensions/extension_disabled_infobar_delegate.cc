@@ -17,10 +17,10 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -84,9 +84,9 @@ void ExtensionDisabledDialogDelegate::InstallUIAbort(bool user_initiated) {
 // ExtensionDisabledInfobarDelegate -------------------------------------------
 
 class ExtensionDisabledInfobarDelegate : public ConfirmInfoBarDelegate,
-                                         public NotificationObserver {
+                                         public content::NotificationObserver {
  public:
-  ExtensionDisabledInfobarDelegate(TabContentsWrapper* tab_contents,
+  ExtensionDisabledInfobarDelegate(InfoBarTabHelper* infobar_helper,
                                    ExtensionService* service,
                                    const Extension* extension);
 
@@ -99,30 +99,28 @@ class ExtensionDisabledInfobarDelegate : public ConfirmInfoBarDelegate,
   virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
   virtual bool Accept() OVERRIDE;
 
-  // NotificationObserver:
+  // content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
-  NotificationRegistrar registrar_;
-  TabContentsWrapper* tab_contents_;
+  content::NotificationRegistrar registrar_;
   ExtensionService* service_;
   const Extension* extension_;
 };
 
 ExtensionDisabledInfobarDelegate::ExtensionDisabledInfobarDelegate(
-    TabContentsWrapper* tab_contents,
+    InfoBarTabHelper* infobar_helper,
     ExtensionService* service,
     const Extension* extension)
-    : ConfirmInfoBarDelegate(tab_contents->tab_contents()),
-      tab_contents_(tab_contents),
+    : ConfirmInfoBarDelegate(infobar_helper),
       service_(service),
       extension_(extension) {
   // The user might re-enable the extension in other ways, so watch for that.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
-                 Source<Profile>(service->profile()));
+                 content::Source<Profile>(service->profile()));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
-                 Source<Profile>(service->profile()));
+                 content::Source<Profile>(service->profile()));
 }
 
 ExtensionDisabledInfobarDelegate::~ExtensionDisabledInfobarDelegate() {
@@ -147,26 +145,25 @@ string16 ExtensionDisabledInfobarDelegate::GetButtonLabel(
 
 bool ExtensionDisabledInfobarDelegate::Accept() {
   // This object manages its own lifetime.
-  new ExtensionDisabledDialogDelegate(tab_contents_->profile(), service_,
+  new ExtensionDisabledDialogDelegate(service_->profile(), service_,
                                       extension_);
   return true;
 }
 
 void ExtensionDisabledInfobarDelegate::Observe(
     int type,
-    const NotificationSource& source,
-    const NotificationDetails& details) {
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   // TODO(mpcomplete): RemoveInfoBar doesn't seem to always result in us getting
   // deleted.
   const Extension* extension = NULL;
   if (type == chrome::NOTIFICATION_EXTENSION_LOADED) {
-    extension = Details<const Extension>(details).ptr();
+    extension = content::Details<const Extension>(details).ptr();
   } else {
     DCHECK_EQ(chrome::NOTIFICATION_EXTENSION_UNLOADED, type);
-    UnloadedExtensionInfo* info = Details<UnloadedExtensionInfo>(details).ptr();
-    if (info->reason == extension_misc::UNLOAD_REASON_DISABLE ||
-        info->reason == extension_misc::UNLOAD_REASON_UNINSTALL)
-      extension = info->extension;
+    UnloadedExtensionInfo* info =
+        content::Details<UnloadedExtensionInfo>(details).ptr();
+    extension = info->extension;
   }
   if (extension == extension_)
     RemoveSelf();
@@ -175,7 +172,8 @@ void ExtensionDisabledInfobarDelegate::Observe(
 
 // Globals --------------------------------------------------------------------
 
-void ShowExtensionDisabledUI(ExtensionService* service, Profile* profile,
+void ShowExtensionDisabledUI(ExtensionService* service,
+                             Profile* profile,
                              const Extension* extension) {
   Browser* browser = BrowserList::GetLastActiveWithProfile(profile);
   if (!browser)
@@ -185,8 +183,9 @@ void ShowExtensionDisabledUI(ExtensionService* service, Profile* profile,
   if (!tab_contents)
     return;
 
-  tab_contents->infobar_tab_helper()->AddInfoBar(
-      new ExtensionDisabledInfobarDelegate(tab_contents, service, extension));
+  InfoBarTabHelper* infobar_helper = tab_contents->infobar_tab_helper();
+  infobar_helper->AddInfoBar(
+      new ExtensionDisabledInfobarDelegate(infobar_helper, service, extension));
 }
 
 void ShowExtensionDisabledDialog(ExtensionService* service, Profile* profile,

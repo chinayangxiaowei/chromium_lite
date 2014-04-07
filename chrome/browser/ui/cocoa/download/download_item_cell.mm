@@ -11,8 +11,8 @@
 #import "chrome/browser/ui/cocoa/download/background_theme.h"
 #import "chrome/browser/ui/cocoa/image_utils.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
-#include "content/browser/download/download_item.h"
-#include "content/browser/download/download_manager.h"
+#include "content/public/browser/download_item.h"
+#include "content/public/browser/download_manager.h"
 #include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 #import "third_party/GTM/AppKit/GTMNSColor+Luminance.h"
@@ -76,6 +76,8 @@ const int kCompleteAnimationDuration = 2.5;
 
 // Duration of the 'download interrupted' animation, in seconds.
 const int kInterruptedAnimationDuration = 2.5;
+
+using content::DownloadItem;
 
 // This is a helper class to animate the fading out of the status text.
 @interface DownloadItemCellAnimation : NSAnimation {
@@ -175,7 +177,7 @@ const int kInterruptedAnimationDuration = 2.5;
     [self showSecondaryTitle];
   }
 
-  switch (downloadModel->download()->state()) {
+  switch (downloadModel->download()->GetState()) {
     case DownloadItem::COMPLETE:
       // Small downloads may start in a complete state due to asynchronous
       // notifications. In this case, we'll get a second complete notification
@@ -210,7 +212,7 @@ const int kInterruptedAnimationDuration = 2.5;
       percentDone_ = -2;
       break;
     case DownloadItem::IN_PROGRESS:
-      percentDone_ = downloadModel->download()->is_paused() ?
+      percentDone_ = downloadModel->download()->IsPaused() ?
           -1 : downloadModel->download()->PercentComplete();
       break;
     default:
@@ -336,7 +338,7 @@ const int kInterruptedAnimationDuration = 2.5;
 
 - (NSString*)elideTitle:(int)availableWidth {
   NSFont* font = [self font];
-  gfx::Font font_chr(base::SysNSStringToUTF16([font fontName]),
+  gfx::Font font_chr(base::SysNSStringToUTF8([font fontName]),
                      [font pointSize]);
 
   return base::SysUTF16ToNSString(
@@ -345,14 +347,14 @@ const int kInterruptedAnimationDuration = 2.5;
 
 - (NSString*)elideStatus:(int)availableWidth {
   NSFont* font = [self secondaryFont];
-  gfx::Font font_chr(base::SysNSStringToUTF16([font fontName]),
+  gfx::Font font_chr(base::SysNSStringToUTF8([font fontName]),
                      [font pointSize]);
 
   return base::SysUTF16ToNSString(ui::ElideText(
       base::SysNSStringToUTF16([self secondaryTitle]),
       font_chr,
       availableWidth,
-      false));
+      ui::ELIDE_AT_END));
 }
 
 - (ui::ThemeProvider*)backgroundThemeWrappingProvider:

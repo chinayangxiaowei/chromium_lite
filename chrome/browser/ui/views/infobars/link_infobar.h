@@ -9,7 +9,7 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "chrome/browser/ui/views/infobars/infobar_view.h"
-#include "views/controls/link_listener.h"
+#include "ui/views/controls/link_listener.h"
 
 class LinkInfoBarDelegate;
 
@@ -17,7 +17,7 @@ class LinkInfoBarDelegate;
 class LinkInfoBar : public InfoBarView,
                     public views::LinkListener {
  public:
-  LinkInfoBar(TabContentsWrapper* owner, LinkInfoBarDelegate* delegate);
+  LinkInfoBar(InfoBarTabHelper* owner, LinkInfoBarDelegate* delegate);
 
  private:
   virtual ~LinkInfoBar();

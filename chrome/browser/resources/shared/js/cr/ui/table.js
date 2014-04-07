@@ -51,6 +51,15 @@ cr.define('cr.ui', function() {
     },
 
     /**
+     * The list of table.
+     *
+     * @type {cr.ui.list}
+     */
+    get list() {
+      return this.list_;
+    },
+
+    /**
      * The table column model.
      *
      * @type {cr.ui.table.TableColumnModel}
@@ -98,6 +107,13 @@ cr.define('cr.ui', function() {
     },
     set autoExpands(autoExpands) {
       this.list_.autoExpands = autoExpands;
+    },
+
+    get fixedHeight() {
+      return this.list_.fixedHeight;
+    },
+    set fixedHeight(fixedHeight) {
+      this.list_.fixedHeight = fixedHeight;
     },
 
     /**

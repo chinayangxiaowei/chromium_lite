@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include <string>
 
-#include "base/memory/singleton.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/about_flags.h"
@@ -15,11 +16,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -29,9 +30,12 @@
 #include "ui/base/resource/resource_bundle.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/user_cros_settings_provider.h"
+#include "chrome/browser/chromeos/cros_settings.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #endif
+
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 namespace {
 
@@ -45,21 +49,17 @@ ChromeWebUIDataSource* CreateFlagsUIHTMLSource() {
                              IDS_FLAGS_NO_EXPERIMENTS_AVAILABLE);
   source->AddLocalizedString("flagsWarningHeader", IDS_FLAGS_WARNING_HEADER);
   source->AddLocalizedString("flagsBlurb", IDS_FLAGS_WARNING_TEXT);
-#if defined(OS_CHROMEOS)
-  int ids = IDS_PRODUCT_OS_NAME;
-#else
-  int ids = IDS_PRODUCT_NAME;
-#endif
-  source->AddString("flagsRestartNotice", l10n_util::GetStringFUTF16(
-      IDS_FLAGS_RELAUNCH_NOTICE, l10n_util::GetStringUTF16(ids)));
+  source->AddLocalizedString("flagsNotSupported", IDS_FLAGS_NOT_AVAILABLE);
+  source->AddLocalizedString("flagsRestartNotice", IDS_FLAGS_RELAUNCH_NOTICE);
   source->AddLocalizedString("flagsRestartButton", IDS_FLAGS_RELAUNCH_BUTTON);
   source->AddLocalizedString("disable", IDS_FLAGS_DISABLE);
   source->AddLocalizedString("enable", IDS_FLAGS_ENABLE);
 #if defined(OS_CHROMEOS)
   // Set the strings to show which user can actually change the flags
   source->AddLocalizedString("ownerOnly", IDS_OPTIONS_ACCOUNTS_OWNER_ONLY);
-  source->AddString("ownerUserId", UTF8ToUTF16(
-      chromeos::UserCrosSettingsProvider::cached_owner()));
+  std::string owner;
+  chromeos::CrosSettings::Get()->GetString(chromeos::kDeviceOwner, &owner);
+  source->AddString("ownerUserId", UTF8ToUTF16(owner));
 #endif
 
   source->set_json_path("strings.js");
@@ -103,12 +103,15 @@ class FlagsDOMHandler : public WebUIMessageHandler {
 };
 
 void FlagsDOMHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("requestFlagsExperiments",
-      NewCallback(this, &FlagsDOMHandler::HandleRequestFlagsExperiments));
-  web_ui_->RegisterMessageCallback("enableFlagsExperiment",
-      NewCallback(this, &FlagsDOMHandler::HandleEnableFlagsExperimentMessage));
-  web_ui_->RegisterMessageCallback("restartBrowser",
-      NewCallback(this, &FlagsDOMHandler::HandleRestartBrowser));
+  web_ui()->RegisterMessageCallback("requestFlagsExperiments",
+      base::Bind(&FlagsDOMHandler::HandleRequestFlagsExperiments,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("enableFlagsExperiment",
+      base::Bind(&FlagsDOMHandler::HandleEnableFlagsExperimentMessage,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("restartBrowser",
+      base::Bind(&FlagsDOMHandler::HandleRestartBrowser,
+                 base::Unretained(this)));
 }
 
 void FlagsDOMHandler::HandleRequestFlagsExperiments(const ListValue* args) {
@@ -118,7 +121,7 @@ void FlagsDOMHandler::HandleRequestFlagsExperiments(const ListValue* args) {
                   g_browser_process->local_state()));
   results.SetBoolean("needsRestart",
                      about_flags::IsRestartNeededToCommitChanges());
-  web_ui_->CallJavascriptFunction("returnFlagsExperiments", results);
+  web_ui()->CallJavascriptFunction("returnFlagsExperiments", results);
 }
 
 void FlagsDOMHandler::HandleEnableFlagsExperimentMessage(
@@ -151,11 +154,11 @@ void FlagsDOMHandler::HandleRestartBrowser(const ListValue* args) {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-FlagsUI::FlagsUI(TabContents* contents) : ChromeWebUI(contents) {
-  AddMessageHandler((new FlagsDOMHandler())->Attach(this));
+FlagsUI::FlagsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  web_ui->AddMessageHandler(new FlagsDOMHandler());
 
   // Set up the about:flags source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(CreateFlagsUIHTMLSource());
 }
 

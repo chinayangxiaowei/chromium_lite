@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "base/tracked.h"
+#include "base/location.h"
 #include "chrome/browser/sync/engine/syncer_proto_util.h"
 #include "chrome/browser/sync/engine/syncproto.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
@@ -19,15 +19,16 @@ namespace browser_sync {
 PostCommitMessageCommand::PostCommitMessageCommand() {}
 PostCommitMessageCommand::~PostCommitMessageCommand() {}
 
-void PostCommitMessageCommand::ExecuteImpl(sessions::SyncSession* session) {
-  if (session->status_controller()->commit_ids().empty())
-    return;  // Nothing to commit.
+SyncerError PostCommitMessageCommand::ExecuteImpl(
+    sessions::SyncSession* session) {
+  if (session->status_controller().commit_ids().empty())
+    return SYNCER_OK;  // Nothing to commit.
   ClientToServerResponse response;
   syncable::ScopedDirLookup dir(session->context()->directory_manager(),
                                 session->context()->account_name());
   if (!dir.good())
-    return;
-  sessions::StatusController* status = session->status_controller();
+    return DIRECTORY_LOOKUP_FAILED;
+  sessions::StatusController* status = session->mutable_status_controller();
   if (!SyncerProtoUtil::PostClientToServerMessage(status->commit_message(),
           &response, session)) {
     // None of our changes got through.  Clear the SYNCING bit which was
@@ -41,11 +42,13 @@ void PostCommitMessageCommand::ExecuteImpl(sessions::SyncSession* session) {
       syncable::MutableEntry entry(&trans, syncable::GET_BY_ID, commit_ids[i]);
       entry.Put(syncable::SYNCING, false);
     }
-    return;
+    return SYNCER_OK; // TODO(rlarocque): Return an error here.
   } else {
     status->set_items_committed();
   }
+
   status->mutable_commit_response()->CopyFrom(response);
+  return SYNCER_OK;
 }
 
 }  // namespace browser_sync

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -115,12 +115,12 @@ void ChromeFrameTestWithWebServer::SetUp() {
   CFInstance_src_path = chrome_frame_source_path.AppendASCII("CFInstance.js");
   CFInstance_path_ = test_file_path_.AppendASCII("CFInstance.js");
 
-  file_util::CopyFileW(CFInstance_src_path, CFInstance_path_);
+  ASSERT_TRUE(file_util::CopyFile(CFInstance_src_path, CFInstance_path_));
 
   CFInstall_src_path = chrome_frame_source_path.AppendASCII("CFInstall.js");
   CFInstall_path_ = test_file_path_.AppendASCII("CFInstall.js");
 
-  file_util::CopyFileW(CFInstall_src_path, CFInstall_path_);
+  ASSERT_TRUE(file_util::CopyFile(CFInstall_src_path, CFInstall_path_));
 
   server_mock_.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
   server_mock_.set_expected_result("OK");
@@ -223,7 +223,6 @@ void ChromeFrameTestWithWebServer::VersionTest(BrowserKind browser,
     const wchar_t* page) {
   FilePath plugin_path;
   PathService::Get(base::DIR_MODULE, &plugin_path);
-  plugin_path = plugin_path.AppendASCII("servers");
   plugin_path = plugin_path.Append(kChromeFrameDllName);
 
   static FileVersionInfo* version_info =
@@ -300,7 +299,7 @@ void MockWebServer::HandlePostedResponse(
   posted_result_ = request.content();
   if (posted_result_ == expected_result_) {
     MessageLoop::current()->PostDelayedTask(FROM_HERE,
-                                            new MessageLoop::QuitTask,
+                                            MessageLoop::QuitClosure(),
                                             100);
   }
   connection->Send("HTTP/1.1 200 OK\r\n", "");
@@ -419,7 +418,7 @@ TEST_F(ChromeFrameTestWithWebServer, WidgetModeIE_iframeBasic) {
 
 const wchar_t kSrcPropertyTestPage[] = L"src_property_host.html";
 
-TEST_F(ChromeFrameTestWithWebServer, WidgetModeIE_SrcProperty) {
+TEST_F(ChromeFrameTestWithWebServer, FLAKY_WidgetModeIE_SrcProperty) {
   SimpleBrowserTest(IE, kSrcPropertyTestPage);
 }
 
@@ -779,7 +778,8 @@ TEST_F(ChromeFrameTestWithWebServer, FullTabModeIE_XHRConditionalHeaderTest) {
 const wchar_t kWindowCloseTestUrl[] =
     L"window_close.html";
 
-TEST_F(ChromeFrameTestWithWebServer, FullTabModeIE_WindowClose) {
+// http://code.google.com/p/chromium/issues/detail?id=111074
+TEST_F(ChromeFrameTestWithWebServer, FLAKY_FullTabModeIE_WindowClose) {
   SimpleBrowserTest(IE, kWindowCloseTestUrl);
 }
 

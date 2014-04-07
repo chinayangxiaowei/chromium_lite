@@ -6,22 +6,20 @@
 #define IPC_IPC_SYNC_MESSAGE_FILTER_H_
 #pragma once
 
+#include <set>
+
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_sync_message.h"
-#include <set>
 
 namespace base {
+class MessageLoopProxy;
 class WaitableEvent;
 }
 
-class MessageLoop;
-
 namespace IPC {
-
-class MessageReplyDeserializer;
 
 // This MessageFilter allows sending synchronous IPC messages from a thread
 // other than the listener thread associated with the SyncChannel.  It does not
@@ -35,13 +33,13 @@ class IPC_EXPORT SyncMessageFilter : public ChannelProxy::MessageFilter,
   virtual ~SyncMessageFilter();
 
   // Message::Sender implementation.
-  virtual bool Send(Message* message);
+  virtual bool Send(Message* message) OVERRIDE;
 
   // ChannelProxy::MessageFilter implementation.
-  virtual void OnFilterAdded(Channel* channel);
-  virtual void OnChannelError();
-  virtual void OnChannelClosing();
-  virtual bool OnMessageReceived(const Message& message);
+  virtual void OnFilterAdded(Channel* channel) OVERRIDE;
+  virtual void OnChannelError() OVERRIDE;
+  virtual void OnChannelClosing() OVERRIDE;
+  virtual bool OnMessageReceived(const Message& message) OVERRIDE;
 
  private:
   void SendOnIOThread(Message* message);
@@ -51,8 +49,11 @@ class IPC_EXPORT SyncMessageFilter : public ChannelProxy::MessageFilter,
   // The channel to which this filter was added.
   Channel* channel_;
 
-  MessageLoop* listener_loop_;  // The process's main thread.
-  MessageLoop* io_loop_;  // The message loop where the Channel lives.
+  // The process's main thread.
+  scoped_refptr<base::MessageLoopProxy> listener_loop_;
+
+  // The message loop where the Channel lives.
+  scoped_refptr<base::MessageLoopProxy> io_loop_;
 
   typedef std::set<PendingSyncMsg*> PendingSyncMessages;
   PendingSyncMessages pending_sync_messages_;

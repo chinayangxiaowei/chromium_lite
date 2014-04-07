@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,35 +6,30 @@
 #define CONTENT_COMMON_GPU_GPU_CHANNEL_H_
 #pragma once
 
-#include <queue>
-#include <set>
+#include <deque>
 #include <string>
-#include <vector>
 
 #include "base/id_map.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/process.h"
 #include "build/build_config.h"
 #include "content/common/gpu/gpu_command_buffer_stub.h"
 #include "content/common/message_router.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ui/gfx/gl/gl_share_group.h"
+#include "ui/gfx/gl/gpu_preference.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 
 class GpuChannelManager;
 struct GPUCreateCommandBufferConfig;
 class GpuWatchdog;
-class TransportTexture;
 
 namespace base {
 class MessageLoopProxy;
 class WaitableEvent;
-}
-
-namespace gfx {
-class GLSurface;
 }
 
 // Encapsulates an IPC channel between the GPU process and one renderer
@@ -46,7 +41,8 @@ class GpuChannel : public IPC::Channel::Listener,
   // Takes ownership of the renderer process handle.
   GpuChannel(GpuChannelManager* gpu_channel_manager,
              GpuWatchdog* watchdog,
-             int renderer_id,
+             gfx::GLShareGroup* share_group,
+             int client_id,
              bool software);
   virtual ~GpuChannel();
 
@@ -62,7 +58,7 @@ class GpuChannel : public IPC::Channel::Listener,
   std::string GetChannelName();
 
 #if defined(OS_POSIX)
-  int GetRendererFileDescriptor();
+  int TakeRendererFileDescriptor();
 #endif  // defined(OS_POSIX)
 
   base::ProcessHandle renderer_process() const {
@@ -75,7 +71,7 @@ class GpuChannel : public IPC::Channel::Listener,
   virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
 
   // IPC::Message::Sender implementation:
-  virtual bool Send(IPC::Message* msg);
+  virtual bool Send(IPC::Message* msg) OVERRIDE;
 
   // Whether this channel is able to handle IPC messages.
   bool IsScheduled();
@@ -88,33 +84,18 @@ class GpuChannel : public IPC::Channel::Listener,
 
   void CreateViewCommandBuffer(
       gfx::PluginWindowHandle window,
-      int32 render_view_id,
+      int32 surface_id,
       const GPUCreateCommandBufferConfig& init_params,
       int32* route_id);
-
-  void ViewResized(int32 command_buffer_route_id);
 
   gfx::GLShareGroup* share_group() const { return share_group_.get(); }
 
   GpuCommandBufferStub* LookupCommandBuffer(int32 route_id);
 
-#if defined(OS_MACOSX)
-  virtual void AcceleratedSurfaceBuffersSwapped(
-      int32 route_id, uint64 swap_buffers_count);
-  void DestroyCommandBufferByViewId(int32 render_view_id);
-#endif
-
   void LoseAllContexts();
 
   // Destroy channel and all contained contexts.
   void DestroySoon();
-
-  // Get the TransportTexture by ID.
-  TransportTexture* GetTransportTexture(int32 route_id);
-
-  // Destroy the TransportTexture by ID. This method is only called by
-  // TransportTexture to delete and detach itself.
-  void DestroyTransportTexture(int32 route_id);
 
   // Generate a route ID guaranteed to be unique for this channel.
   int GenerateRouteID();
@@ -123,12 +104,16 @@ class GpuChannel : public IPC::Channel::Listener,
   void AddRoute(int32 route_id, IPC::Channel::Listener* listener);
   void RemoveRoute(int32 route_id);
 
+  // Indicates whether newly created contexts should prefer the
+  // discrete GPU even if they would otherwise use the integrated GPU.
+  bool ShouldPreferDiscreteGpu() const;
+
  private:
   void OnDestroy();
 
   bool OnControlMessageReceived(const IPC::Message& msg);
 
-  void HandleDeferredMessages();
+  void HandleMessage();
 
   // Message handlers.
   void OnInitialize(base::ProcessHandle renderer_process);
@@ -138,9 +123,15 @@ class GpuChannel : public IPC::Channel::Listener,
       IPC::Message* reply_message);
   void OnDestroyCommandBuffer(int32 route_id, IPC::Message* reply_message);
 
-  void OnCreateTransportTexture(int32 context_route_id, int32 host_id);
-
   void OnEcho(const IPC::Message& message);
+
+  void OnWillGpuSwitchOccur(bool is_creating_context,
+                            gfx::GpuPreference gpu_preference,
+                            IPC::Message* reply_message);
+  void OnCloseChannel();
+
+  void WillCreateCommandBuffer(gfx::GpuPreference gpu_preference);
+  void DidDestroyCommandBuffer(gfx::GpuPreference gpu_preference);
 
   // The lifetime of objects of this class is managed by a GpuChannelManager.
   // The GpuChannelManager destroy all the GpuChannels that they own when they
@@ -149,10 +140,13 @@ class GpuChannel : public IPC::Channel::Listener,
 
   scoped_ptr<IPC::SyncChannel> channel_;
 
-  std::queue<IPC::Message*> deferred_messages_;
+  std::deque<IPC::Message*> deferred_messages_;
 
-  // The id of the renderer who is on the other side of the channel.
-  int renderer_id_;
+  // The id of the client who is on the other side of the channel.
+  int client_id_;
+
+  // Uniquely identifies the channel within this GPU process.
+  std::string channel_id_;
 
   // Handle to the renderer process that is on the other side of the channel.
   base::ProcessHandle renderer_process_;
@@ -172,16 +166,15 @@ class GpuChannel : public IPC::Channel::Listener,
   StubMap stubs_;
 #endif  // defined (ENABLE_GPU)
 
-  // A collection of transport textures created.
-  typedef IDMap<TransportTexture, IDMapOwnPointer> TransportTextureMap;
-  TransportTextureMap transport_textures_;
-
   bool log_messages_;  // True if we should log sent and received messages.
-  gpu::gles2::DisallowedExtensions disallowed_extensions_;
+  gpu::gles2::DisallowedFeatures disallowed_features_;
   GpuWatchdog* watchdog_;
   bool software_;
+  bool handle_messages_scheduled_;
+  bool processed_get_state_fast_;
+  int32 num_contexts_preferring_discrete_gpu_;
 
-  ScopedRunnableMethodFactory<GpuChannel> task_factory_;
+  base::WeakPtrFactory<GpuChannel> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuChannel);
 };

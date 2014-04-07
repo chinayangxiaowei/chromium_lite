@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,14 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKitPlatformSupport.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebKitPlatformSupport.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLError.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLLoader.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLError.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLLoader.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebURLLoaderOptions.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLRequest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLResponse.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLResponse.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
@@ -36,6 +36,7 @@ using ppapi::Resource;
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_URLLoader_API;
 using ppapi::thunk::PPB_URLRequestInfo_API;
+using ppapi::TrackedCallback;
 using WebKit::WebFrame;
 using WebKit::WebString;
 using WebKit::WebURL;
@@ -102,8 +103,13 @@ int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
     return PP_ERROR_INPROGRESS;
 
   EnterResourceNoLock<PPB_URLRequestInfo_API> enter_request(request_id, true);
-  if (enter_request.failed())
+  if (enter_request.failed()) {
+    Log(PP_LOGLEVEL_ERROR,
+        "PPB_URLLoader.Open: invalid request resource ID. (Hint to C++ wrapper"
+        " users: use the ResourceRequest constructor that takes an instance or"
+        " else the request will be null.)");
     return PP_ERROR_BADARGUMENT;
+  }
   PPB_URLRequestInfo_Impl* request = static_cast<PPB_URLRequestInfo_Impl*>(
       enter_request.object());
 
@@ -111,8 +117,13 @@ int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
   if (rv != PP_OK)
     return rv;
 
-  if (request->RequiresUniversalAccess() && !has_universal_access_)
+  if (request->RequiresUniversalAccess() && !has_universal_access_) {
+    Log(PP_LOGLEVEL_ERROR, "PPB_URLLoader.Open: The URL you're requesting is "
+        " on a different security origin than your plugin. To request "
+        " cross-origin resources, see "
+        " PP_URLREQUESTPROPERTY_ALLOWCROSSORIGINREQUESTS.");
     return PP_ERROR_NOACCESS;
+  }
 
   if (loader_.get())
     return PP_ERROR_INPROGRESS;
@@ -131,15 +142,22 @@ int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
 
   WebURLLoaderOptions options;
   if (has_universal_access_) {
-    // Universal access allows cross-origin requests and sends credentials.
+    options.allowCredentials = true;
     options.crossOriginRequestPolicy =
         WebURLLoaderOptions::CrossOriginRequestPolicyAllow;
-    options.allowCredentials = true;
-  } else if (request_data_.allow_cross_origin_requests) {
-    // Otherwise, allow cross-origin requests with access control.
-    options.crossOriginRequestPolicy =
-        WebURLLoaderOptions::CrossOriginRequestPolicyUseAccessControl;
-    options.allowCredentials = request_data_.allow_credentials;
+  } else {
+    // All other HTTP requests are untrusted.
+    options.untrustedHTTP = true;
+    if (request_data_.allow_cross_origin_requests) {
+      // Allow cross-origin requests with access control. The request specifies
+      // if credentials are to be sent.
+      options.allowCredentials = request_data_.allow_credentials;
+      options.crossOriginRequestPolicy =
+          WebURLLoaderOptions::CrossOriginRequestPolicyUseAccessControl;
+    } else {
+      // Same-origin requests can always send credentials.
+      options.allowCredentials = true;
+    }
   }
 
   is_asynchronous_load_suspended_ = false;
@@ -311,15 +329,11 @@ void PPB_URLLoader_Impl::didReceiveData(WebURLLoader* loader,
   UpdateStatus();
 
   buffer_.insert(buffer_.end(), data, data + data_length);
-  if (user_buffer_) {
-    RunCallback(FillUserBuffer());
-  } else {
-    DCHECK(!pending_callback_.get() || pending_callback_->completed());
-  }
 
   // To avoid letting the network stack download an entire stream all at once,
   // defer loading when we have enough buffer.
-  // Check the buffer size after potentially moving some to the user buffer.
+  // Check for this before we run the callback, even though that could move
+  // data out of the buffer. Doing anything after the callback is unsafe.
   DCHECK(request_data_.prefetch_buffer_lower_threshold <
          request_data_.prefetch_buffer_upper_threshold);
   if (!is_streaming_to_file_ &&
@@ -328,6 +342,12 @@ void PPB_URLLoader_Impl::didReceiveData(WebURLLoader* loader,
           request_data_.prefetch_buffer_upper_threshold))) {
     DVLOG(1) << "Suspending async load - buffer size: " << buffer_.size();
     SetDefersLoading(true);
+  }
+
+  if (user_buffer_) {
+    RunCallback(FillUserBuffer());
+  } else {
+    DCHECK(!TrackedCallback::IsPending(pending_callback_));
   }
 }
 
@@ -371,16 +391,16 @@ void PPB_URLLoader_Impl::FinishLoading(int32_t done_status) {
   // If the client hasn't called any function that takes a callback since
   // the initial call to Open, or called ReadResponseBody and got a
   // synchronous return, then the callback will be NULL.
-  if (pending_callback_.get() && !pending_callback_->completed())
+  if (TrackedCallback::IsPending(pending_callback_))
     RunCallback(done_status_);
 }
 
 int32_t PPB_URLLoader_Impl::ValidateCallback(PP_CompletionCallback callback) {
   // We only support non-blocking calls.
   if (!callback.func)
-    return PP_ERROR_BADARGUMENT;
+    return PP_ERROR_BLOCKS_MAIN_THREAD;
 
-  if (pending_callback_.get() && !pending_callback_->completed())
+  if (TrackedCallback::IsPending(pending_callback_))
     return PP_ERROR_INPROGRESS;
 
   return PP_OK;
@@ -388,14 +408,13 @@ int32_t PPB_URLLoader_Impl::ValidateCallback(PP_CompletionCallback callback) {
 
 void PPB_URLLoader_Impl::RegisterCallback(PP_CompletionCallback callback) {
   DCHECK(callback.func);
-  DCHECK(!pending_callback_.get() || pending_callback_->completed());
+  DCHECK(!TrackedCallback::IsPending(pending_callback_));
 
   PluginModule* plugin_module = ResourceHelper::GetPluginModule(this);
   if (!plugin_module)
     return;
 
-  pending_callback_ = new TrackedCompletionCallback(
-      plugin_module->GetCallbackTracker(), pp_resource(), callback);
+  pending_callback_ = new TrackedCallback(this, callback);
 }
 
 void PPB_URLLoader_Impl::RunCallback(int32_t result) {
@@ -404,10 +423,7 @@ void PPB_URLLoader_Impl::RunCallback(int32_t result) {
     CHECK(main_document_loader_);
     return;
   }
-
-  scoped_refptr<TrackedCompletionCallback> callback;
-  callback.swap(pending_callback_);
-  callback->Run(result);  // Will complete abortively if necessary.
+  TrackedCallback::ClearAndRun(&pending_callback_, result);
 }
 
 size_t PPB_URLLoader_Impl::FillUserBuffer() {

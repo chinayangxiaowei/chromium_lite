@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 #include "base/file_util.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
+#include "base/pickle.h"
 #include "base/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
+#include "content/browser/download/download_stats.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/content_browser_client.h"
 #include "crypto/secure_hash.h"
 #include "net/base/file_stream.h"
 #include "net/base/net_errors.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/content_browser_client.h"
 
 #if defined(OS_WIN)
 #include <windows.h>
@@ -24,6 +26,8 @@
 #elif defined(OS_MACOSX)
 #include "content/browser/file_metadata_mac.h"
 #endif
+
+using content::BrowserThread;
 
 namespace {
 
@@ -56,8 +60,8 @@ net::Error LogError(const char* file, int line, const char* func,
 
 #undef NET_ERROR
 
-  DVLOG(1) << " " << func << "(): " << operation
-           << "() returned error " << error << " (" << err_string << ")";
+  VLOG(1) << " " << func << "(): " << operation
+          << "() returned error " << error << " (" << err_string << ")";
 
   return net_error;
 }
@@ -183,21 +187,38 @@ net::Error RenameFileAndResetSecurityDescriptor(
 
 }  // namespace
 
+// This will initialize the entire array to zero.
+const unsigned char BaseFile::kEmptySha256Hash[] = { 0 };
+
 BaseFile::BaseFile(const FilePath& full_path,
                    const GURL& source_url,
                    const GURL& referrer_url,
                    int64 received_bytes,
+                   bool calculate_hash,
+                   const std::string& hash_state,
                    const linked_ptr<net::FileStream>& file_stream)
     : full_path_(full_path),
       source_url_(source_url),
       referrer_url_(referrer_url),
       file_stream_(file_stream),
       bytes_so_far_(received_bytes),
-      power_save_blocker_(true),
-      calculate_hash_(false),
+      start_tick_(base::TimeTicks::Now()),
+      power_save_blocker_(PowerSaveBlocker::kPowerSaveBlockPreventSystemSleep),
+      calculate_hash_(calculate_hash),
       detached_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  memset(sha256_hash_, 0, sizeof(sha256_hash_));
+  memcpy(sha256_hash_, kEmptySha256Hash, kSha256HashLen);
+  if (file_stream_.get())
+    file_stream_->EnableErrorStatistics();
+
+  if (calculate_hash_) {
+    secure_hash_.reset(crypto::SecureHash::Create(crypto::SecureHash::SHA256));
+    if ((bytes_so_far_ > 0) &&  // Not starting at the beginning.
+        (hash_state != "") &&  // Reasonably sure we have a hash state.
+        (!IsEmptyHash(hash_state))) {
+      SetHashState(hash_state);
+    }
+  }
 }
 
 BaseFile::~BaseFile() {
@@ -208,14 +229,9 @@ BaseFile::~BaseFile() {
     Cancel();  // Will delete the file.
 }
 
-net::Error BaseFile::Initialize(bool calculate_hash) {
+net::Error BaseFile::Initialize() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   DCHECK(!detached_);
-
-  calculate_hash_ = calculate_hash;
-
-  if (calculate_hash_)
-    secure_hash_.reset(crypto::SecureHash::Create(crypto::SecureHash::SHA256));
 
   if (full_path_.empty()) {
     FilePath temp_file;
@@ -235,6 +251,12 @@ net::Error BaseFile::AppendDataToFile(const char* data, size_t data_len) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   DCHECK(!detached_);
 
+  // NOTE(benwells): The above DCHECK won't be present in release builds,
+  // so we log any occurences to see how common this error is in the wild.
+  if (detached_)
+    download_stats::RecordDownloadCount(
+        download_stats::APPEND_TO_DETACHED_FILE_COUNT);
+
   if (!file_stream_.get())
     return LOG_ERROR("get", net::ERR_INVALID_HANDLE);
 
@@ -242,15 +264,37 @@ net::Error BaseFile::AppendDataToFile(const char* data, size_t data_len) {
   if (data_len == 0)
     return net::OK;
 
-  bytes_so_far_ += data_len;
+  // The Write call below is not guaranteed to write all the data.
+  size_t write_count = 0;
+  size_t len = data_len;
+  const char* current_data = data;
+  while (len > 0) {
+    write_count++;
+    int write_result =
+        file_stream_->Write(current_data, len, net::CompletionCallback());
+    DCHECK_NE(0, write_result);
 
-  int written = file_stream_->Write(data, data_len, NULL);
-  if (static_cast<size_t>(written) != data_len) {
-    // Report errors on file writes.
-    if (written < 0)
-      return LOG_ERROR("Write", written);
-    return LOG_ERROR("Write", net::ERR_FAILED);
+    // Check for errors.
+    if (static_cast<size_t>(write_result) != data_len) {
+      // We should never get ERR_IO_PENDING, as the Write above is synchronous.
+      DCHECK_NE(net::ERR_IO_PENDING, write_result);
+
+      // Report errors on file writes.
+      if (write_result < 0)
+        return LOG_ERROR("Write", write_result);
+    }
+
+    // Update status.
+    size_t write_size = static_cast<size_t>(write_result);
+    DCHECK_LE(write_size, len);
+    len -= write_size;
+    current_data += write_size;
+    bytes_so_far_ += write_size;
   }
+
+  // TODO(ahendrickson) -- Uncomment these when the functions are available.
+   download_stats::RecordDownloadWriteSize(data_len);
+   download_stats::RecordDownloadWriteLoopCount(write_count);
 
   if (calculate_hash_)
     secure_hash_->Update(data, data_len);
@@ -305,16 +349,19 @@ net::Error BaseFile::Rename(const FilePath& new_path) {
     int stat_error = stat(new_path.value().c_str(), &st);
     bool stat_succeeded = (stat_error == 0);
     if (!stat_succeeded)
-      return LOG_ERROR("stat", net::MapSystemError(errno));
+      LOG_ERROR("stat", net::MapSystemError(errno));
 
     // TODO(estade): Move() falls back to copying and deleting when a simple
     // rename fails. Copying sucks for large downloads. crbug.com/8737
     if (!file_util::Move(full_path_, new_path))
       return LOG_ERROR("Move", net::MapSystemError(errno));
 
-    int chmod_error = chmod(new_path.value().c_str(), st.st_mode);
-    if (chmod_error < 0)
-      return LOG_ERROR("chmod", net::MapSystemError(errno));
+    if (stat_succeeded) {
+      // On Windows file systems (FAT, NTFS), chmod fails.  This is OK.
+      int chmod_error = chmod(new_path.value().c_str(), st.st_mode);
+      if (chmod_error < 0)
+        LOG_ERROR("chmod", net::MapSystemError(errno));
+    }
   }
 #endif
 
@@ -350,13 +397,38 @@ void BaseFile::Finish() {
   Close();
 }
 
-bool BaseFile::GetSha256Hash(std::string* hash) {
+bool BaseFile::GetHash(std::string* hash) {
   DCHECK(!detached_);
-  if (!calculate_hash_ || in_progress())
-    return false;
   hash->assign(reinterpret_cast<const char*>(sha256_hash_),
                sizeof(sha256_hash_));
-  return true;
+  return (calculate_hash_ && !in_progress());
+}
+
+std::string BaseFile::GetHashState() {
+  if (!calculate_hash_)
+    return "";
+
+  Pickle hash_state;
+  if (!secure_hash_->Serialize(&hash_state))
+    return "";
+
+  return std::string(reinterpret_cast<const char*>(hash_state.data()),
+                     hash_state.size());
+}
+
+bool BaseFile::SetHashState(const std::string& hash_state_bytes) {
+  if (!calculate_hash_)
+    return false;
+
+  Pickle hash_state(hash_state_bytes.c_str(), hash_state_bytes.size());
+  void* data_iterator = NULL;
+
+  return secure_hash_->Deserialize(&data_iterator, &hash_state);
+}
+
+bool BaseFile::IsEmptyHash(const std::string& hash) {
+  return (hash.size() == kSha256HashLen &&
+          0 == memcmp(hash.data(), kEmptySha256Hash, sizeof(kSha256HashLen)));
 }
 
 void BaseFile::AnnotateWithSourceInformation() {
@@ -388,6 +460,7 @@ net::Error BaseFile::Open() {
   // Create a new file stream if it is not provided.
   if (!file_stream_.get()) {
     CreateFileStream();
+    file_stream_->EnableErrorStatistics();
     int open_result = file_stream_->Open(
         full_path_,
         base::PLATFORM_FILE_OPEN_ALWAYS | base::PLATFORM_FILE_WRITE);
@@ -427,9 +500,21 @@ void BaseFile::Close() {
 std::string BaseFile::DebugString() const {
   return base::StringPrintf("{ source_url_ = \"%s\""
                             " full_path_ = \"%" PRFilePath "\""
-                            " bytes_so_far_ = %" PRId64 " detached_ = %c }",
+                            " bytes_so_far_ = %" PRId64
+                            " detached_ = %c }",
                             source_url_.spec().c_str(),
                             full_path_.value().c_str(),
                             bytes_so_far_,
                             detached_ ? 'T' : 'F');
+}
+
+int64 BaseFile::CurrentSpeedAtTime(base::TimeTicks current_time) const {
+  base::TimeDelta diff = current_time - start_tick_;
+  int64 diff_ms = diff.InMilliseconds();
+  return diff_ms == 0 ? 0 : bytes_so_far() * 1000 / diff_ms;
+}
+
+int64 BaseFile::CurrentSpeed() const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  return CurrentSpeedAtTime(base::TimeTicks::Now());
 }

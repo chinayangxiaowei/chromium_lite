@@ -1,22 +1,19 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/base/in_process_browser_test.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/debug/stack_trace.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/path_service.h"
 #include "base/string_number_conversions.h"
 #include "base/test/test_file_util.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/intranet_redirect_detector.h"
 #include "chrome/browser/io_thread.h"
-#include "chrome/browser/net/url_request_mock_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
@@ -32,35 +29,32 @@
 #include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/main_function_params.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/renderer/mock_content_renderer_client.h"
+#include "content/test/test_browser_thread.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/test/test_server.h"
-#include "sandbox/src/dep.h"
-
-#if defined(OS_MACOSX)
-#include "base/mac/mac_util.h"
-#include "base/system_monitor/system_monitor.h"
-#endif
-
-#if defined(OS_WIN)
-#include "chrome/browser/ui/views/frame/browser_frame_win.h"
-#endif
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/audio_handler.h"
+#include "chrome/browser/chromeos/audio/audio_handler.h"
+#elif defined(OS_MACOSX)
+#include "base/mac/scoped_nsautorelease_pool.h"
 #endif
 
-extern int BrowserMain(const MainFunctionParams&);
+#if defined(USE_AURA)
+#include "ui/aura/root_window.h"
+#include "ui/views/widget/widget.h"
+#endif
 
-const char kUnitTestShowWindows[] = "show-windows";
+namespace {
 
 // Passed as value of kTestType.
-static const char kBrowserTestType[] = "browser";
+const char kBrowserTestType[] = "browser";
+
+}  // namespace
 
 InProcessBrowserTest::InProcessBrowserTest()
     : browser_(NULL),
@@ -68,10 +62,7 @@ InProcessBrowserTest::InProcessBrowserTest()
       dom_automation_enabled_(false),
       tab_closeable_state_watcher_enabled_(false) {
 #if defined(OS_MACOSX)
-  base::mac::SetOverrideAmIBundled(true);
-  base::SystemMonitor::AllocateSystemIOPorts();
-#endif
-
+  // TODO(phajdan.jr): Make browser_tests self-contained on Mac, remove this.
   // Before we run the browser, we have to hack the path to the exe to match
   // what it would be if Chrome was running, because it is used to fork renderer
   // processes, on Linux at least (failure to do so will cause a browser_test to
@@ -81,6 +72,7 @@ InProcessBrowserTest::InProcessBrowserTest()
   chrome_path = chrome_path.DirName();
   chrome_path = chrome_path.Append(chrome::kBrowserProcessExecutablePath);
   CHECK(PathService::Override(base::FILE_EXE, chrome_path));
+#endif  // defined(OS_MACOSX)
 
   test_server_.reset(new net::TestServer(
       net::TestServer::TYPE_HTTP,
@@ -106,11 +98,6 @@ void InProcessBrowserTest::SetUp() {
   ASSERT_TRUE(SetUpUserDataDirectory())
       << "Could not set up user data directory.";
 
-  // Don't delete the resources when BrowserMain returns. Many ui classes
-  // cache SkBitmaps in a static field so that if we delete the resource
-  // bundle we'll crash.
-  browser_shutdown::delete_resources_on_shutdown = false;
-
   CommandLine* command_line = CommandLine::ForCurrentProcess();
   // Allow subclasses to change the command line before running any tests.
   SetUpCommandLine(command_line);
@@ -120,7 +107,7 @@ void InProcessBrowserTest::SetUp() {
   // Single-process mode is not set in BrowserMain, so process it explicitly,
   // and set up renderer.
   if (command_line->HasSwitch(switches::kSingleProcess)) {
-    RenderProcessHost::set_run_renderer_in_process(true);
+    content::RenderProcessHost::set_run_renderer_in_process(true);
     single_process_renderer_client_.reset(
         new content::MockContentRendererClient);
     content::GetContentClient()->set_renderer(
@@ -133,13 +120,7 @@ void InProcessBrowserTest::SetUp() {
   file_util::CreateDirectory(log_dir);
 #endif  // defined(OS_CHROMEOS)
 
-  SandboxInitWrapper sandbox_wrapper;
-  MainFunctionParams params(*command_line, sandbox_wrapper, NULL);
-  params.ui_task =
-      NewRunnableMethod(this, &InProcessBrowserTest::RunTestOnMainThreadLoop);
-
-  host_resolver_ = new net::RuleBasedHostResolverProc(
-      new IntranetRedirectHostResolverProc(NULL));
+  host_resolver_ = new net::RuleBasedHostResolverProc(NULL);
 
   // Something inside the browser does this lookup implicitly. Make it fail
   // to avoid external dependency. It won't break the tests.
@@ -152,21 +133,12 @@ void InProcessBrowserTest::SetUp() {
   net::ScopedDefaultHostResolverProc scoped_host_resolver_proc(
       host_resolver_.get());
 
-  SetUpInProcessBrowserTestFixture();
-
-  BrowserMain(params);
-  TearDownInProcessBrowserTestFixture();
+  BrowserTestBase::SetUp();
 }
 
 void InProcessBrowserTest::PrepareTestCommandLine(CommandLine* command_line) {
   // Propagate commandline settings from test_launcher_utils.
   test_launcher_utils::PrepareBrowserCommandLineForTests(command_line);
-
-#if defined(OS_WIN)
-  // Hide windows on show.
-  if (!command_line->HasSwitch(kUnitTestShowWindows) && !show_window_)
-    BrowserFrameWin::SetShowState(SW_HIDE);
-#endif
 
   if (dom_automation_enabled_)
     command_line->AppendSwitch(switches::kDomAutomationController);
@@ -221,19 +193,18 @@ bool InProcessBrowserTest::CreateUserDataDirectory() {
 
 void InProcessBrowserTest::TearDown() {
   DCHECK(!g_browser_process);
+  BrowserTestBase::TearDown();
+}
 
-  browser_shutdown::delete_resources_on_shutdown = true;
-
-#if defined(OS_WIN)
-  BrowserFrameWin::SetShowState(-1);
-#endif
+const content::ResourceContext& InProcessBrowserTest::GetResourceContext() {
+  return browser_->profile()->GetResourceContext();
 }
 
 void InProcessBrowserTest::AddTabAtIndexToBrowser(
     Browser* browser,
     int index,
     const GURL& url,
-    PageTransition::Type transition) {
+    content::PageTransition transition) {
   browser::NavigateParams params(browser, url, transition);
   params.tabstrip_index = index;
   params.disposition = NEW_FOREGROUND_TAB;
@@ -243,7 +214,7 @@ void InProcessBrowserTest::AddTabAtIndexToBrowser(
 void InProcessBrowserTest::AddTabAtIndex(
     int index,
     const GURL& url,
-    PageTransition::Type transition) {
+    content::PageTransition transition) {
   AddTabAtIndexToBrowser(browser(), index, url, transition);
 }
 
@@ -274,12 +245,20 @@ Browser* InProcessBrowserTest::CreateBrowserForPopup(Profile* profile) {
 }
 
 void InProcessBrowserTest::AddBlankTabAndShow(Browser* browser) {
+  ui_test_utils::WindowedNotificationObserver observer(
+      content::NOTIFICATION_LOAD_STOP,
+       content::NotificationService::AllSources());
   browser->AddSelectedTabWithURL(
-      GURL(chrome::kAboutBlankURL), PageTransition::START_PAGE);
+      GURL(chrome::kAboutBlankURL), content::PAGE_TRANSITION_START_PAGE);
+  observer.Wait();
 
-  // Wait for the page to finish loading.
-  ui_test_utils::WaitForNavigation(
-      &browser->GetSelectedTabContents()->controller());
+#if defined(USE_AURA)
+  // Disable animations on aura, otherwise any code that gets the bounds may get
+  // the wrong thing.
+  views::Widget* widget = views::Widget::GetWidgetForNativeView(
+      browser->window()->GetNativeHandle());
+  widget->SetVisibilityChangedAnimationsEnabled(false);
+#endif
 
   browser->window()->Show();
 }
@@ -299,6 +278,7 @@ void InProcessBrowserTest::RunTestOnMainThreadLoop() {
   signal(SIGTERM, DumpStackTraceSignalHandler);
 #endif  // defined(OS_POSIX)
 
+#if defined(OS_MACOSX)
   // On Mac, without the following autorelease pool, code which is directly
   // executed (as opposed to executed inside a message loop) would autorelease
   // objects into a higher-level pool. This pool is not recycled in-sync with
@@ -307,44 +287,46 @@ void InProcessBrowserTest::RunTestOnMainThreadLoop() {
   // browser shutdown). To avoid this, the following pool is recycled after each
   // time code is directly executed.
   base::mac::ScopedNSAutoreleasePool pool;
+#endif
 
   // Pump startup related events.
-  MessageLoopForUI::current()->RunAllPending();
+  ui_test_utils::RunAllPendingInMessageLoop();
 
-  // In the long term it would be great if we could use a TestingProfile
-  // here and only enable services you want tested, but that requires all
-  // consumers of Profile to handle NULL services.
-  Profile* profile = ProfileManager::GetDefaultProfile();
-  if (!profile) {
-    // We should only be able to get here if the profile already exists and
-    // has been created.
-    NOTREACHED();
-    return;
-  }
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      NewRunnableFunction(chrome_browser_net::SetUrlRequestMocksEnabled, true));
-
-  browser_ = CreateBrowser(profile);
+  browser_ = CreateBrowser(ProfileManager::GetDefaultProfile());
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 
   // Pump any pending events that were created as a result of creating a
   // browser.
-  MessageLoopForUI::current()->RunAllPending();
+  ui_test_utils::RunAllPendingInMessageLoop();
 
   SetUpOnMainThread();
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 
-  RunTestOnMainThread();
+  if (!HasFatalFailure())
+    RunTestOnMainThread();
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 
+  // Invoke cleanup and quit even if there are failures. This is similar to
+  // gtest in that it invokes TearDown even if Setup fails.
   CleanUpOnMainThread();
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 
   QuitBrowsers();
+#if defined(OS_MACOSX)
   pool.Recycle();
+#endif
 }
 
 void InProcessBrowserTest::QuitBrowsers() {
@@ -354,8 +336,7 @@ void InProcessBrowserTest::QuitBrowsers() {
   // Invoke CloseAllBrowsersAndMayExit on a running message loop.
   // CloseAllBrowsersAndMayExit exits the message loop after everything has been
   // shut down properly.
-  MessageLoopForUI::current()->PostTask(
-      FROM_HERE,
-      NewRunnableFunction(&BrowserList::AttemptExit));
+  MessageLoopForUI::current()->PostTask(FROM_HERE,
+                                        base::Bind(&BrowserList::AttemptExit));
   ui_test_utils::RunMessageLoop();
 }

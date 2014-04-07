@@ -9,17 +9,18 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "chrome/browser/sync/glue/generic_change_processor.h"
 #include "chrome/browser/sync/glue/frontend_data_type_controller.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 namespace browser_sync {
 
 class SearchEngineDataTypeController : public FrontendDataTypeController,
-                                       public NotificationObserver {
+                                       public content::NotificationObserver {
  public:
   SearchEngineDataTypeController(
-      ProfileSyncFactory* profile_sync_factory,
+      ProfileSyncComponentsFactory* profile_sync_factory,
       Profile* profile,
       ProfileSyncService* sync_service);
   virtual ~SearchEngineDataTypeController();
@@ -27,10 +28,13 @@ class SearchEngineDataTypeController : public FrontendDataTypeController,
   // FrontendDataTypeController implementation.
   virtual syncable::ModelType type() const OVERRIDE;
 
-  // NotificationObserver interface.
+  // content::NotificationObserver interface.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+ protected:
+  virtual GenericChangeProcessor* change_processor() const OVERRIDE;
 
  private:
   // FrontendDataTypeController implementations.
@@ -43,7 +47,9 @@ class SearchEngineDataTypeController : public FrontendDataTypeController,
   virtual void RecordAssociationTime(base::TimeDelta time) OVERRIDE;
   virtual void RecordStartFailure(StartResult result) OVERRIDE;
 
-  NotificationRegistrar registrar_;
+  scoped_ptr<GenericChangeProcessor> generic_change_processor_;
+
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(SearchEngineDataTypeController);
 };

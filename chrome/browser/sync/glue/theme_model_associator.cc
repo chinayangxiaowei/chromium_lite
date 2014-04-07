@@ -5,8 +5,8 @@
 #include "chrome/browser/sync/glue/theme_model_associator.h"
 
 #include "base/basictypes.h"
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/tracked.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/sync/api/sync_error.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
@@ -96,16 +96,16 @@ bool ThemeModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   }
   // The sync model has user created nodes iff the themes folder has
   // any children.
-  *has_nodes = root.GetFirstChildId() != sync_api::kInvalidId;
+  *has_nodes = root.HasChildren();
   return true;
 }
 
 bool ThemeModelAssociator::CryptoReadyIfNecessary() {
   // We only access the cryptographer while holding a transaction.
   sync_api::ReadTransaction trans(FROM_HERE, sync_service_->GetUserShare());
-  syncable::ModelTypeSet encrypted_types;
-  encrypted_types = sync_api::GetEncryptedTypes(&trans);
-  return encrypted_types.count(syncable::THEMES) == 0 ||
+  const syncable::ModelTypeSet encrypted_types =
+      sync_api::GetEncryptedTypes(&trans);
+  return !encrypted_types.Has(syncable::THEMES) ||
          sync_service_->IsCryptographerReady(&trans);
 }
 

@@ -1,9 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_UI_COCOA_LOCATION_BAR_VIEW_MAC_H_
-#define CHROME_BROWSER_UI_COCOA_LOCATION_BAR_VIEW_MAC_H_
+#ifndef CHROME_BROWSER_UI_COCOA_LOCATION_BAR_LOCATION_BAR_VIEW_MAC_H_
+#define CHROME_BROWSER_UI_COCOA_LOCATION_BAR_LOCATION_BAR_VIEW_MAC_H_
 #pragma once
 
 #include <string>
@@ -13,9 +13,9 @@
 #include "base/memory/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/scoped_vector.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete_edit.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
-#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/ui/cocoa/omnibox/omnibox_view_mac.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
@@ -25,9 +25,7 @@
 @class AutocompleteTextField;
 class CommandUpdater;
 class ContentSettingDecoration;
-class ContentSettingImageModel;
 class EVBubbleDecoration;
-@class ExtensionPopupController;
 class KeywordHintDecoration;
 class LocationIconDecoration;
 class PageActionDecoration;
@@ -44,7 +42,7 @@ class ToolbarModel;
 class LocationBarViewMac : public AutocompleteEditController,
                            public LocationBar,
                            public LocationBarTesting,
-                           public NotificationObserver {
+                           public content::NotificationObserver {
  public:
   LocationBarViewMac(AutocompleteTextField* field,
                      CommandUpdater* command_updater,
@@ -54,19 +52,19 @@ class LocationBarViewMac : public AutocompleteEditController,
   virtual ~LocationBarViewMac();
 
   // Overridden from LocationBar:
-  virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type) OVERRIDE;
+  virtual void ShowFirstRunBubble() OVERRIDE;
   virtual void SetSuggestedText(const string16& text,
                                 InstantCompleteBehavior behavior) OVERRIDE;
   virtual string16 GetInputString() const OVERRIDE;
   virtual WindowOpenDisposition GetWindowOpenDisposition() const OVERRIDE;
-  virtual PageTransition::Type GetPageTransition() const OVERRIDE;
+  virtual content::PageTransition GetPageTransition() const OVERRIDE;
   virtual void AcceptInput() OVERRIDE;
   virtual void FocusLocation(bool select_all) OVERRIDE;
   virtual void FocusSearch() OVERRIDE;
   virtual void UpdateContentSettingsIcons() OVERRIDE;
   virtual void UpdatePageActions() OVERRIDE;
   virtual void InvalidatePageActions() OVERRIDE;
-  virtual void SaveStateToContents(TabContents* contents) OVERRIDE;
+  virtual void SaveStateToContents(content::WebContents* contents) OVERRIDE;
   virtual void Revert() OVERRIDE;
   virtual const OmniboxView* location_entry() const OVERRIDE;
   virtual OmniboxView* location_entry() OVERRIDE;
@@ -98,13 +96,13 @@ class LocationBarViewMac : public AutocompleteEditController,
   // Updates the location bar.  Resets the bar's permanent text and
   // security style, and if |should_restore_state| is true, restores
   // saved state from the tab (for tab switching).
-  void Update(const TabContents* tab, bool should_restore_state);
+  void Update(const content::WebContents* tab, bool should_restore_state);
 
   // Layout the various decorations which live in the field.
   void Layout();
 
-  // Returns the current TabContents.
-  TabContents* GetTabContents() const;
+  // Returns the current WebContents.
+  content::WebContents* GetWebContents() const;
 
   // Sets preview_enabled_ for the PageActionImageView associated with this
   // |page_action|. If |preview_enabled|, the location bar will display the
@@ -127,19 +125,20 @@ class LocationBarViewMac : public AutocompleteEditController,
   NSRect GetBlockedPopupRect() const;
 
   // AutocompleteEditController implementation.
-  virtual void OnAutocompleteAccept(const GURL& url,
+  virtual void OnAutocompleteAccept(
+      const GURL& url,
       WindowOpenDisposition disposition,
-      PageTransition::Type transition,
-      const GURL& alternate_nav_url);
-  virtual void OnChanged();
-  virtual void OnSelectionBoundsChanged();
-  virtual void OnInputInProgress(bool in_progress);
-  virtual void OnKillFocus();
-  virtual void OnSetFocus();
-  virtual SkBitmap GetFavicon() const;
-  virtual string16 GetTitle() const;
-  virtual InstantController* GetInstant();
-  virtual TabContentsWrapper* GetTabContentsWrapper() const;
+      content::PageTransition transition,
+      const GURL& alternate_nav_url) OVERRIDE;
+  virtual void OnChanged() OVERRIDE;
+  virtual void OnSelectionBoundsChanged() OVERRIDE;
+  virtual void OnInputInProgress(bool in_progress) OVERRIDE;
+  virtual void OnKillFocus() OVERRIDE;
+  virtual void OnSetFocus() OVERRIDE;
+  virtual SkBitmap GetFavicon() const OVERRIDE;
+  virtual string16 GetTitle() const OVERRIDE;
+  virtual InstantController* GetInstant() OVERRIDE;
+  virtual TabContentsWrapper* GetTabContentsWrapper() const OVERRIDE;
 
   NSImage* GetKeywordImage(const string16& keyword);
 
@@ -148,8 +147,8 @@ class LocationBarViewMac : public AutocompleteEditController,
 
   // Overridden from NotificationObserver.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  private:
   // Posts |notification| to the default notification center.
@@ -169,7 +168,7 @@ class LocationBarViewMac : public AutocompleteEditController,
   // tab contents state.
   bool RefreshContentSettingsDecorations();
 
-  void ShowFirstRunBubbleInternal(FirstRun::BubbleType bubble_type);
+  void ShowFirstRunBubbleInternal();
 
   // Checks if the bookmark star should be enabled or not.
   bool IsStarEnabled();
@@ -217,13 +216,13 @@ class LocationBarViewMac : public AutocompleteEditController,
   ToolbarModel* toolbar_model_;  // Weak, owned by Browser.
 
   // The transition type to use for the navigation.
-  PageTransition::Type transition_;
+  content::PageTransition transition_;
 
   // Used to register for notifications received by NotificationObserver.
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Used to schedule a task for the first run info bubble.
-  ScopedRunnableMethodFactory<LocationBarViewMac> first_run_bubble_;
+  base::WeakPtrFactory<LocationBarViewMac> weak_ptr_factory_;
 
   // Used to change the visibility of the star decoration.
   BooleanPrefMember edit_bookmarks_enabled_;
@@ -231,4 +230,4 @@ class LocationBarViewMac : public AutocompleteEditController,
   DISALLOW_COPY_AND_ASSIGN(LocationBarViewMac);
 };
 
-#endif  // CHROME_BROWSER_UI_COCOA_LOCATION_BAR_VIEW_MAC_H_
+#endif  // CHROME_BROWSER_UI_COCOA_LOCATION_BAR_LOCATION_BAR_VIEW_MAC_H_

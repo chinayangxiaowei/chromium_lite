@@ -5,6 +5,7 @@
 #ifndef PPAPI_PROXY_PLUGIN_DISPATCHER_H_
 #define PPAPI_PROXY_PLUGIN_DISPATCHER_H_
 
+#include <set>
 #include <string>
 
 #include "base/basictypes.h"
@@ -12,17 +13,13 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/process.h"
 #include "build/build_config.h"
+#include "ppapi/c/dev/ppb_console_dev.h"
 #include "ppapi/c/pp_rect.h"
 #include "ppapi/c/pp_instance.h"
 #include "ppapi/proxy/dispatcher.h"
 #include "ppapi/shared_impl/function_group_base.h"
 #include "ppapi/shared_impl/ppapi_preferences.h"
-
-class MessageLoop;
-
-namespace base {
-class WaitableEvent;
-}
+#include "ppapi/shared_impl/ppb_view_shared.h"
 
 namespace ppapi {
 
@@ -33,9 +30,15 @@ namespace proxy {
 
 // Used to keep track of per-instance data.
 struct InstanceData {
-  InstanceData() : fullscreen(PP_FALSE) {}
-  PP_Rect position;
-  PP_Bool fullscreen;
+  InstanceData();
+  ~InstanceData();
+
+  ViewData view;
+
+  PP_Bool flash_fullscreen;  // Used for PPB_FlashFullscreen.
+
+  // When non-0, indicates the callback to execute when mouse lock is lost.
+  PP_CompletionCallback mouse_lock_callback;
 };
 
 class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
@@ -47,20 +50,6 @@ class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
     //
     // DEREFERENCE ONLY ON THE I/O THREAD.
     virtual std::set<PP_Instance>* GetGloballySeenInstanceIDSet() = 0;
-
-    // Returns the WebKit forwarding object used to make calls into WebKit.
-    // Necessary only on the plugin side.
-    virtual WebKitForwarding* GetWebKitForwarding() = 0;
-
-    // Posts the given task to the WebKit thread associated with this plugin
-    // process. The WebKit thread should be lazily created if it does not
-    // exist yet.
-    virtual void PostToWebKitThread(const tracked_objects::Location& from_here,
-                                    const base::Closure& task) = 0;
-
-    // Sends the given message to the browser. Identical semantics to
-    // IPC::Message::Sender interface.
-    virtual bool SendToBrowser(IPC::Message* msg) = 0;
 
     // Registers the plugin dispatcher and returns an ID.
     // Plugin dispatcher IDs will be used to dispatch messages from the browser.
@@ -88,7 +77,19 @@ class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
   // object as a convenience. Returns NULL on failure.
   static PluginDispatcher* GetForResource(const Resource* resource);
 
-  static const void* GetInterfaceFromDispatcher(const char* interface);
+  // Implements the GetInterface function for the plugin to call to retrieve
+  // a browser interface.
+  static const void* GetBrowserInterface(const char* interface_name);
+
+  // Logs the given log message to the given instance, or, if the instance is
+  // invalid, to all instances associated with all dispatchers. Used for
+  // global log messages.
+  static void LogWithSource(PP_Instance instance,
+                            PP_LogLevel_Dev level,
+                            const std::string& source,
+                            const std::string& value);
+
+  const void* GetPluginInterface(const std::string& interface_name);
 
   // You must call this function before anything else. Returns true on success.
   // The delegate pointer must outlive this class, ownership is not
@@ -114,16 +115,6 @@ class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
   // correspond to a known instance.
   InstanceData* GetInstanceData(PP_Instance instance);
 
-  // Posts the given task to the WebKit thread.
-  void PostToWebKitThread(const tracked_objects::Location& from_here,
-                          const base::Closure& task);
-
-  // Calls the PluginDelegate.SendToBrowser function.
-  bool SendToBrowser(IPC::Message* msg);
-
-  // Returns the WebKitForwarding object used to forward events to WebKit.
-  WebKitForwarding* GetWebKitForwarding();
-
   // Returns the Preferences.
   const Preferences& preferences() const { return preferences_; }
 
@@ -131,7 +122,7 @@ class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
   // it if necessary.
   // TODO(brettw) this is in progress. It should be merged with the target
   // proxies so there is one list to consult.
-  FunctionGroupBase* GetFunctionAPI(InterfaceID id);
+  FunctionGroupBase* GetFunctionAPI(ApiID id);
 
   uint32 plugin_dispatcher_id() const { return plugin_dispatcher_id_; }
 
@@ -148,14 +139,12 @@ class PPAPI_PROXY_EXPORT PluginDispatcher : public Dispatcher {
 
   PluginDelegate* plugin_delegate_;
 
-  // All target proxies currently created. These are ones that receive
-  // messages.
-  scoped_ptr<InterfaceProxy> target_proxies_[INTERFACE_ID_COUNT];
-
-  // Function proxies created for "new-style" FunctionGroups.
-  // TODO(brettw) this is in progress. It should be merged with the target
-  // proxies so there is one list to consult.
-  scoped_ptr<FunctionGroupBase> function_proxies_[INTERFACE_ID_COUNT];
+  // Contains all the plugin interfaces we've queried. The mapped value will
+  // be the pointer to the interface pointer supplied by the plugin if it's
+  // supported, or NULL if it's not supported. This allows us to cache failures
+  // and not req-query if a plugin doesn't support the interface.
+  typedef base::hash_map<std::string, const void*> InterfaceMap;
+  InterfaceMap plugin_interfaces_;
 
   typedef base::hash_map<PP_Instance, InstanceData> InstanceDataMap;
   InstanceDataMap instance_map_;

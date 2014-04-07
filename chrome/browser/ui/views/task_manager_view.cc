@@ -21,20 +21,21 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/table_model_observer.h"
-#include "views/accelerator.h"
-#include "views/background.h"
-#include "views/context_menu_controller.h"
-#include "views/controls/button/text_button.h"
-#include "views/controls/link.h"
-#include "views/controls/link_listener.h"
-#include "views/controls/menu/menu.h"
-#include "views/controls/table/group_table_view.h"
-#include "views/controls/table/table_view_observer.h"
-#include "views/layout/layout_constants.h"
-#include "views/widget/widget.h"
-#include "views/window/dialog_delegate.h"
+#include "ui/views/background.h"
+#include "ui/views/context_menu_controller.h"
+#include "ui/views/controls/button/text_button.h"
+#include "ui/views/controls/link.h"
+#include "ui/views/controls/link_listener.h"
+#include "ui/views/controls/menu/menu.h"
+#include "ui/views/controls/table/group_table_model.h"
+#include "ui/views/controls/table/group_table_view.h"
+#include "ui/views/controls/table/table_view_observer.h"
+#include "ui/views/layout/layout_constants.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
 
 // The task manager window default size.
 static const int kDefaultWidth = 460;
@@ -42,7 +43,7 @@ static const int kDefaultHeight = 270;
 
 // Yellow highlight used when highlighting background resources.
 static const SkColor kBackgroundResourceHighlight =
-    SkColorSetRGB(0xff,0xf1,0xcd);
+    SkColorSetRGB(0xff, 0xf1, 0xcd);
 
 namespace {
 
@@ -93,6 +94,9 @@ string16 TaskManagerTableModel::GetText(int row, int col_id) {
   switch (col_id) {
     case IDS_TASK_MANAGER_PAGE_COLUMN:  // Process
       return model_->GetResourceTitle(row);
+
+    case IDS_TASK_MANAGER_PROFILE_NAME_COLUMN:  // Profile Name
+      return model_->GetResourceProfileName(row);
 
     case IDS_TASK_MANAGER_NET_COLUMN:  // Net
       return model_->GetResourceNetworkUsage(row);
@@ -273,28 +277,29 @@ class TaskManagerView : public views::ButtonListener,
   static void Show(bool highlight_background_resources);
 
   // views::View
-  virtual void Layout();
-  virtual gfx::Size GetPreferredSize();
+  virtual void Layout() OVERRIDE;
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual void ViewHierarchyChanged(bool is_add, views::View* parent,
-                                    views::View* child);
+                                    views::View* child) OVERRIDE;
 
   // ButtonListener implementation.
-  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+  virtual void ButtonPressed(views::Button* sender,
+                             const views::Event& event) OVERRIDE;
 
   // views::DialogDelegate
-  virtual bool CanResize() const;
-  virtual bool CanMaximize() const;
-  virtual bool ExecuteWindowsCommand(int command_id);
-  virtual std::wstring GetWindowTitle() const;
-  virtual std::wstring GetWindowName() const;
-  virtual int GetDialogButtons() const;
-  virtual void WindowClosing();
-  virtual views::View* GetContentsView();
+  virtual bool CanResize() const OVERRIDE;
+  virtual bool CanMaximize() const OVERRIDE;
+  virtual bool ExecuteWindowsCommand(int command_id) OVERRIDE;
+  virtual string16 GetWindowTitle() const OVERRIDE;
+  virtual std::string GetWindowName() const OVERRIDE;
+  virtual int GetDialogButtons() const OVERRIDE;
+  virtual void WindowClosing() OVERRIDE;
+  virtual views::View* GetContentsView() OVERRIDE;
 
   // views::TableViewObserver implementation.
-  virtual void OnSelectionChanged();
-  virtual void OnDoubleClick();
-  virtual void OnKeyDown(ui::KeyboardCode keycode);
+  virtual void OnSelectionChanged() OVERRIDE;
+  virtual void OnDoubleClick() OVERRIDE;
+  virtual void OnKeyDown(ui::KeyboardCode keycode) OVERRIDE;
 
   // views::LinkListener implementation.
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
@@ -383,6 +388,9 @@ void TaskManagerView::Init() {
   columns_.push_back(ui::TableColumn(IDS_TASK_MANAGER_PAGE_COLUMN,
                                      ui::TableColumn::LEFT, -1, 1));
   columns_.back().sortable = true;
+  columns_.push_back(ui::TableColumn(IDS_TASK_MANAGER_PROFILE_NAME_COLUMN,
+                                     ui::TableColumn::LEFT, -1, 0));
+  columns_.back().sortable = true;
   columns_.push_back(ui::TableColumn(IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN,
                                      ui::TableColumn::RIGHT, -1, 0));
   columns_.back().sortable = true;
@@ -427,6 +435,7 @@ void TaskManagerView::Init() {
       table_model_.get(), columns_, highlight_background_resources_);
 
   // Hide some columns by default
+  tab_table_->SetColumnVisibility(IDS_TASK_MANAGER_PROFILE_NAME_COLUMN, false);
   tab_table_->SetColumnVisibility(IDS_TASK_MANAGER_PROCESS_ID_COLUMN, false);
   tab_table_->SetColumnVisibility(IDS_TASK_MANAGER_SHARED_MEM_COLUMN, false);
   tab_table_->SetColumnVisibility(IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN, false);
@@ -455,12 +464,12 @@ void TaskManagerView::Init() {
   }
   kill_button_ = new views::NativeTextButton(
       this, UTF16ToWide(l10n_util::GetStringUTF16(IDS_TASK_MANAGER_KILL)));
-  kill_button_->AddAccelerator(views::Accelerator(ui::VKEY_E,
-                                                  false, false, false));
+  kill_button_->AddAccelerator(ui::Accelerator(ui::VKEY_E, false, false,
+                                               false));
   kill_button_->SetAccessibleKeyboardShortcut(L"E");
   kill_button_->set_prefix_type(views::TextButtonBase::PREFIX_SHOW);
-  about_memory_link_ = new views::Link(UTF16ToWide(
-      l10n_util::GetStringUTF16(IDS_TASK_MANAGER_ABOUT_MEMORY_LINK)));
+  about_memory_link_ = new views::Link(
+      l10n_util::GetStringUTF16(IDS_TASK_MANAGER_ABOUT_MEMORY_LINK));
   about_memory_link_->set_listener(this);
 
   // Makes sure our state is consistent.
@@ -634,7 +643,7 @@ bool TaskManagerView::ExecuteWindowsCommand(int command_id) {
     // Save the state.
     if (g_browser_process->local_state()) {
       DictionaryPrefUpdate update(g_browser_process->local_state(),
-                                  WideToUTF8(GetWindowName()).c_str());
+                                  GetWindowName().c_str());
       DictionaryValue* window_preferences = update.Get();
       window_preferences->SetBoolean("always_on_top", is_always_on_top_);
     }
@@ -644,16 +653,16 @@ bool TaskManagerView::ExecuteWindowsCommand(int command_id) {
   return false;
 }
 
-std::wstring TaskManagerView::GetWindowTitle() const {
-  return UTF16ToWide(l10n_util::GetStringUTF16(IDS_TASK_MANAGER_TITLE));
+string16 TaskManagerView::GetWindowTitle() const {
+  return l10n_util::GetStringUTF16(IDS_TASK_MANAGER_TITLE);
 }
 
-std::wstring TaskManagerView::GetWindowName() const {
-  return UTF8ToWide(prefs::kTaskManagerWindowPlacement);
+std::string TaskManagerView::GetWindowName() const {
+  return prefs::kTaskManagerWindowPlacement;
 }
 
 int TaskManagerView::GetDialogButtons() const {
-  return MessageBoxFlags::DIALOGBUTTON_NONE;
+  return ui::DIALOG_BUTTON_NONE;
 }
 
 void TaskManagerView::WindowClosing() {
@@ -775,8 +784,7 @@ bool TaskManagerView::GetSavedAlwaysOnTopState(bool* always_on_top) const {
     return false;
 
   const DictionaryValue* dictionary =
-      g_browser_process->local_state()->GetDictionary(
-          WideToUTF8(GetWindowName()).c_str());
+      g_browser_process->local_state()->GetDictionary(GetWindowName().c_str());
   return dictionary &&
       dictionary->GetBoolean("always_on_top", always_on_top) && always_on_top;
 }

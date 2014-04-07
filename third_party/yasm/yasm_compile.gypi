@@ -26,16 +26,23 @@
 
 {
   'variables': {
-    'yasm_path': '<(PRODUCT_DIR)/yasm',
+    'yasm_flags': [],
+
     'conditions': [
+      [ 'use_system_yasm==0', {
+        'yasm_path': '<(PRODUCT_DIR)/yasm',
+      }, {
+        'yasm_path': '<!(which yasm)',
+      }],
+
       # Define yasm_flags that pass into YASM.
-      [ 'OS=="linux" and target_arch=="ia32"', {
+      [ 'os_posix==1 and OS!="mac" and target_arch=="ia32"', {
         'yasm_flags': [
           '-felf32',
           '-m', 'x86',
         ],
       }],
-      [ 'OS=="linux" and target_arch=="x64"', {
+      [ 'os_posix==1 and OS!="mac" and target_arch=="x64"', {
         'yasm_flags': [
           '-DPIC',
           '-felf64',
@@ -57,11 +64,10 @@
       }],
 
       # Define output extension.
-      ['OS=="mac" or OS=="linux"', {
-        'asm_obj_extension': 'o',
-      }],
       ['OS=="win"', {
         'asm_obj_extension': 'obj',
+      }, {
+        'asm_obj_extension': 'o',
       }],
     ],
   },  # variables
@@ -69,7 +75,7 @@
   'conditions': [
     # Only depend on YASM on x86 systems, do this so that compiling
     # .asm files for ARM will fail.
-    ['target_arch=="ia32" or target_arch=="x64"', {
+    ['use_system_yasm==0 and ( target_arch=="ia32" or target_arch=="x64" )', {
       'dependencies': [
         '<(DEPTH)/third_party/yasm/yasm.gyp:yasm#host',
       ],

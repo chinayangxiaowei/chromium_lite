@@ -56,9 +56,11 @@ extern const bool kDownloadPageHasShowInFolder;
 // Should the tab strip be sized to the top of the tab strip?
 extern const bool kSizeTabButtonToTopOfTabStrip;
 
-// Whether we should bootstrap the sync authentication using cookies instead of
-// asking the user for credentials.
-extern const bool kBootstrapSyncAuthentication;
+// If true, we want to automatically start sync signin whenever we have
+// credentials (user doesn't need to go through the startup flow). This is
+// typically enabled on platforms (like ChromeOS) that have their own
+// distinct signin flow.
+extern const bool kSyncAutoStarts;
 
 // Should other browsers be shown in about:memory page?
 extern const bool kShowOtherBrowsersInAboutMemory;
@@ -86,9 +88,6 @@ extern const int kInfoBarBorderPaddingVertical;
 
 // Are bookmark enabled? True by default.
 extern bool bookmarks_enabled;
-
-// Should we skip the user's preference for restore. False by default.
-extern bool skip_restore;
 
 // Whether HelpApp is enabled. True by default. This is only used by Chrome OS
 // today.

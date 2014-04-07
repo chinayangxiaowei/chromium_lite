@@ -15,7 +15,7 @@ namespace pp {
 namespace {
 
 template <> const char* interface_name<PPB_VideoCapture_Dev>() {
-  return PPB_VIDEO_CAPTURE_DEV_INTERFACE;
+  return PPB_VIDEOCAPTURE_DEV_INTERFACE;
 }
 
 }  // namespace
@@ -32,6 +32,11 @@ VideoCapture_Dev::VideoCapture_Dev(PP_Resource resource) : Resource(resource) {
 
 VideoCapture_Dev::VideoCapture_Dev(const VideoCapture_Dev& other)
     : Resource(other) {
+}
+
+// static
+bool VideoCapture_Dev::IsAvailable() {
+  return has_interface<PPB_VideoCapture_Dev>();
 }
 
 int32_t VideoCapture_Dev::StartCapture(

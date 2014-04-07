@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/file_util.h"
+#include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/scoped_temp_dir.h"
 #include "base/stringprintf.h"
@@ -12,11 +13,12 @@
 #include "chrome/browser/history/shortcuts_backend.h"
 #include "chrome/browser/history/shortcuts_database.h"
 #include "chrome/common/guid.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "sql/statement.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
 
+using content::BrowserThread;
 using shortcuts_provider::Shortcut;
 using shortcuts_provider::ShortcutMap;
 
@@ -36,21 +38,17 @@ class ShortcutsBackendTest : public testing::Test,
   void TearDown();
 
   virtual void OnShortcutsLoaded() OVERRIDE;
-  virtual void OnShortcutAddedOrUpdated(const Shortcut& shortcut) OVERRIDE;
-  virtual void OnShortcutsRemoved(
-      const std::vector<std::string>& shortcut_ids) OVERRIDE;
+  virtual void OnShortcutsChanged() OVERRIDE;
 
   void InitBackend();
 
   ScopedTempDir temp_dir_;
   scoped_refptr<ShortcutsBackend> backend_;
   MessageLoopForUI ui_message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread db_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread db_thread_;
 
   bool load_notified_;
-  Shortcut notified_shortcut_;
-  std::vector<std::string> notified_shortcut_ids_;
 };
 
 void ShortcutsBackendTest::SetUp() {
@@ -70,15 +68,7 @@ void ShortcutsBackendTest::OnShortcutsLoaded() {
   MessageLoop::current()->Quit();
 }
 
-void ShortcutsBackendTest::OnShortcutAddedOrUpdated(const Shortcut& shortcut) {
-  notified_shortcut_ = shortcut;
-  MessageLoop::current()->Quit();
-}
-
-void ShortcutsBackendTest::OnShortcutsRemoved(
-    const std::vector<std::string>& shortcut_ids) {
-  notified_shortcut_ids_ = shortcut_ids;
-  MessageLoop::current()->Quit();
+void ShortcutsBackendTest::OnShortcutsChanged() {
 }
 
 void ShortcutsBackendTest::InitBackend() {
@@ -90,7 +80,6 @@ void ShortcutsBackendTest::InitBackend() {
   EXPECT_TRUE(backend_->initialized());
 }
 
-
 TEST_F(ShortcutsBackendTest, AddAndUpdateShortcut) {
   InitBackend();
   Shortcut shortcut("BD85DBA2-8C29-49F9-84AE-48E1E90880DF",
@@ -100,14 +89,15 @@ TEST_F(ShortcutsBackendTest, AddAndUpdateShortcut) {
                     base::Time::Now().ToInternalValue(),
                     100);
   EXPECT_TRUE(backend_->AddShortcut(shortcut));
-  MessageLoop::current()->Run();
-  EXPECT_EQ(shortcut.id, notified_shortcut_.id);
-  EXPECT_EQ(shortcut.contents, notified_shortcut_.contents);
+
+  const ShortcutMap& shortcuts = backend_->shortcuts_map();
+  ASSERT_TRUE(shortcuts.end() != shortcuts.find(shortcut.text));
+  EXPECT_EQ(shortcut.id, shortcuts.find(shortcut.text)->second.id);
+  EXPECT_EQ(shortcut.contents, shortcuts.find(shortcut.text)->second.contents);
   shortcut.contents = ASCIIToUTF16("Google Web Search");
   EXPECT_TRUE(backend_->UpdateShortcut(shortcut));
-  MessageLoop::current()->Run();
-  EXPECT_EQ(shortcut.id, notified_shortcut_.id);
-  EXPECT_EQ(shortcut.contents, notified_shortcut_.contents);
+  EXPECT_EQ(shortcut.id, shortcuts.find(shortcut.text)->second.id);
+  EXPECT_EQ(shortcut.contents, shortcuts.find(shortcut.text)->second.contents);
 }
 
 TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
@@ -120,7 +110,6 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
                      base::Time::Now().ToInternalValue(),
                      100);
   EXPECT_TRUE(backend_->AddShortcut(shortcut1));
-  MessageLoop::current()->Run();
 
   Shortcut shortcut2("BD85DBA2-8C29-49F9-84AE-48E1E90880E0",
                      ASCIIToUTF16("gle"), ASCIIToUTF16("http://www.google.com"),
@@ -129,7 +118,6 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
                      base::Time::Now().ToInternalValue(),
                      100);
   EXPECT_TRUE(backend_->AddShortcut(shortcut2));
-  MessageLoop::current()->Run();
 
   Shortcut shortcut3("BD85DBA2-8C29-49F9-84AE-48E1E90880E1",
                      ASCIIToUTF16("sp"), ASCIIToUTF16("http://www.sport.com"),
@@ -138,7 +126,6 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
                      base::Time::Now().ToInternalValue(),
                      10);
   EXPECT_TRUE(backend_->AddShortcut(shortcut3));
-  MessageLoop::current()->Run();
 
   Shortcut shortcut4("BD85DBA2-8C29-49F9-84AE-48E1E90880E2",
                      ASCIIToUTF16("mov"), ASCIIToUTF16("http://www.film.com"),
@@ -147,11 +134,8 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
                      base::Time::Now().ToInternalValue(),
                      10);
   EXPECT_TRUE(backend_->AddShortcut(shortcut4));
-  MessageLoop::current()->Run();
 
-  ShortcutMap shortcuts;
-
-  EXPECT_TRUE(backend_->GetShortcuts(&shortcuts));
+  const ShortcutMap& shortcuts = backend_->shortcuts_map();
 
   ASSERT_EQ(4U, shortcuts.size());
   EXPECT_EQ(shortcut1.id, shortcuts.find(shortcut1.text)->second.id);
@@ -160,17 +144,12 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
   EXPECT_EQ(shortcut4.id, shortcuts.find(shortcut4.text)->second.id);
 
   EXPECT_TRUE(backend_->DeleteShortcutsWithUrl(shortcut1.url));
-  MessageLoop::current()->Run();
-
-  ASSERT_EQ(2U, notified_shortcut_ids_.size());
-  EXPECT_TRUE(notified_shortcut_ids_[0] == shortcut1.id ||
-              notified_shortcut_ids_[1] == shortcut1.id);
-  EXPECT_TRUE(notified_shortcut_ids_[0] == shortcut2.id ||
-              notified_shortcut_ids_[1] == shortcut2.id);
-
-  EXPECT_TRUE(backend_->GetShortcuts(&shortcuts));
 
   ASSERT_EQ(2U, shortcuts.size());
+  EXPECT_TRUE(shortcuts.end() == shortcuts.find(shortcut1.text));
+  EXPECT_TRUE(shortcuts.end() == shortcuts.find(shortcut2.text));
+  ASSERT_TRUE(shortcuts.end() != shortcuts.find(shortcut3.text));
+  ASSERT_TRUE(shortcuts.end() != shortcuts.find(shortcut4.text));
   EXPECT_EQ(shortcut3.id, shortcuts.find(shortcut3.text)->second.id);
   EXPECT_EQ(shortcut4.id, shortcuts.find(shortcut4.text)->second.id);
 
@@ -179,13 +158,6 @@ TEST_F(ShortcutsBackendTest, DeleteShortcuts) {
   deleted_ids.push_back(shortcut4.id);
 
   EXPECT_TRUE(backend_->DeleteShortcutsWithIds(deleted_ids));
-  MessageLoop::current()->Run();
-
-  ASSERT_EQ(2U, notified_shortcut_ids_.size());
-  EXPECT_EQ(notified_shortcut_ids_[0], deleted_ids[0]);
-  EXPECT_EQ(notified_shortcut_ids_[1], deleted_ids[1]);
-
-  EXPECT_TRUE(backend_->GetShortcuts(&shortcuts));
 
   ASSERT_EQ(0U, shortcuts.size());
 }

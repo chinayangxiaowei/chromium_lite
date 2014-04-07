@@ -88,12 +88,12 @@ cr.define('cloudprint', function() {
       params = new Array;
     }
     if (lastXSRFToken.length != 0) {
-      params.push("xsrf=" + lastXSRFToken);
+      params.push('xsrf=' + lastXSRFToken);
     }
     if (params.length != 0) {
-      url = url + "?";
+      url = url + '?';
       for (param in params) {
-        url = url + params[param] + "&";
+        url = url + params[param] + '&';
       }
     }
     xhr.open(method, url, true);
@@ -119,13 +119,11 @@ cr.define('cloudprint', function() {
       var searchResult = JSON.parse(xhr.responseText);
       if (searchResult['success']) {
         var printerList = searchResult['printers'];
-        callback.call(this, printerList);
-      } else {
-        callback.call(this, null);
+        addCloudPrinters(printerList, callback);
+        return;
       }
-    } else {
-      callback.call(this, null);
     }
+    addCloudPrinters(null, callback);
   }
 
   /**
@@ -217,10 +215,10 @@ cr.define('cloudprint', function() {
             printer.cloudPrintOptions.colorOption.type = cap.type;
             for (var option in cap.options) {
               var opt = cap.options[option];
-              if (opt.name == "Color") {
+              if (opt.name == 'Color') {
                 printer.cloudPrintOptions.colorOnOption = opt;
               }
-              if (opt.name == "Grey_K") {
+              if (opt.name == 'Grey_K') {
                 printer.cloudPrintOptions.colorOffOption = opt;
               }
               if (opt.default) {
@@ -272,8 +270,10 @@ cr.define('cloudprint', function() {
    * @return {boolean} true if the printer defaults to color.
    */
   function colorIsDefault(printer) {
-    return isCloudPrint(printer) &&
-           printer.cloudPrintOptions.colorIsDefault;
+    // For now assume that unsupported color means we just don't know
+    // and assume color.
+    return !supportsColor(printer) ||
+        (isCloudPrint(printer) && printer.cloudPrintOptions.colorIsDefault);
   }
 
   /**
@@ -306,7 +306,8 @@ cr.define('cloudprint', function() {
                              cloud_print_data,
                              add_callback,
                              update_caps_callback) {
-    var printer = add_callback([JSON.parse(cloud_print_data)]);
+    var printer = addCloudPrinters([JSON.parse(cloud_print_data)],
+                                   add_callback);
     if (printer)
       update_caps_callback(printer);
   }
@@ -322,7 +323,7 @@ cr.define('cloudprint', function() {
     if (isCloudPrint(printer)) {
       return JSON.stringify(printer.cloudPrintOptions);
     } else {
-      return "";
+      return '';
     }
   }
 
@@ -350,7 +351,93 @@ cr.define('cloudprint', function() {
     printer.cloudPrintOptions.id = id;
   }
 
+  /**
+   * Test if a particular cloud printer has already been added to the
+   * printer dropdown.
+   * @param {string} id A unique value to track this printer.
+   * @return {boolean} True if |id| has previously been passed to
+   *     trackCloudPrinterAdded.
+   */
+  function cloudPrinterAlreadyAdded(id) {
+    return addedCloudPrinters[id];
+  }
+
+  /**
+   * Test if a particular printer has already been added to the printers
+   * dropdown.  Records it if not.
+   * @param {string} id A unique value to track this printer.
+   * @return {boolean} False if adding this printer would exceed
+   *     |maxCloudPrinters|.
+   */
+  function trackCloudPrinterAdded(id) {
+    if (Object.keys(addedCloudPrinters).length < maxCloudPrinters) {
+      addedCloudPrinters[id] = true;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  /**
+   * Add cloud printers to the list drop down.
+   * Called from the cloudprint object on receipt of printer information from
+   * the cloud print server.
+   * @param {Array} printers Array of printer info objects.
+   * @return {Object} The currently selected printer.
+   */
+  function addCloudPrinters(printers, addDestinationListOptionAtPosition) {
+    var isFirstPass = false;
+    var printerList = $('printer-list');
+
+    if (firstCloudPrintOptionPos == lastCloudPrintOptionPos) {
+      isFirstPass = true;
+      // Remove empty entry added by setDefaultPrinter.
+      if (printerList[0] && printerList[0].textContent == '')
+        printerList.remove(0);
+    }
+    if (printers != null) {
+      for (var i = 0; i < printers.length; i++) {
+        if (!cloudPrinterAlreadyAdded(printers[i]['id'])) {
+          if (!trackCloudPrinterAdded(printers[i]['id'])) {
+            break;
+          }
+          if (printers[i]['displayName'] && printers[i]['displayName'] != '')
+            var name = printers[i]['displayName'];
+          else
+            var name = printers[i]['name'];
+
+          var option = addDestinationListOptionAtPosition(
+              lastCloudPrintOptionPos++,
+              name,
+              printers[i]['id'],
+              name == defaultOrLastUsedPrinterName,
+              false,
+              false);
+          cloudprint.setCloudPrint(option,
+                                   name,
+                                   printers[i]['id']);
+        }
+      }
+    } else {
+      if (!cloudPrinterAlreadyAdded(SIGN_IN)) {
+        addDestinationListOptionAtPosition(lastCloudPrintOptionPos++,
+                                           localStrings.getString('signIn'),
+                                           SIGN_IN,
+                                           false,
+                                           false,
+                                           false);
+        trackCloudPrinterAdded(SIGN_IN);
+        chrome.send('signIn');
+      }
+    }
+    var selectedPrinter = printerList.selectedIndex;
+    if (selectedPrinter < 0)
+      return null;
+    return printerList.options[selectedPrinter];
+  }
+
   return {
+    addCloudPrinters: addCloudPrinters,
     colorIsDefault: colorIsDefault,
     fetchPrinters: fetchPrinters,
     getBaseURL: getBaseURL,

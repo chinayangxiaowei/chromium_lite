@@ -4,10 +4,11 @@
 
 #include "chrome/browser/sync/syncable/syncable_mock.h"
 
-#include "base/tracked.h"
+#include "base/location.h"
+#include "chrome/browser/sync/test/null_transaction_observer.h"
 
-MockDirectory::MockDirectory() {
-  InitKernel("myk", &delegate_);
+MockDirectory::MockDirectory() :Directory(&mock_handler_) {
+  InitKernelForTest("myk", &delegate_, syncable::NullTransactionObserver());
 }
 
 MockDirectory::~MockDirectory() {}

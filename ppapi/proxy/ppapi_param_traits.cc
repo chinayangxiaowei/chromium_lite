@@ -124,7 +124,8 @@ bool ParamTraits<PP_FileInfo>::Read(const Message* m, void** iter,
       type != PP_FILETYPE_OTHER)
     return false;
   r->type = static_cast<PP_FileType>(type);
-  if (system_type != PP_FILESYSTEMTYPE_EXTERNAL &&
+  if (system_type != PP_FILESYSTEMTYPE_INVALID &&
+      system_type != PP_FILESYSTEMTYPE_EXTERNAL &&
       system_type != PP_FILESYSTEMTYPE_LOCALPERSISTENT &&
       system_type != PP_FILESYSTEMTYPE_LOCALTEMPORARY)
     return false;
@@ -136,18 +137,19 @@ bool ParamTraits<PP_FileInfo>::Read(const Message* m, void** iter,
 void ParamTraits<PP_FileInfo>::Log(const param_type& p, std::string* l) {
 }
 
-// PP_Flash_NetAddress ---------------------------------------------------------
+// PP_NetAddress_Private -------------------------------------------------------
 
 // static
-void ParamTraits<PP_Flash_NetAddress>::Write(Message* m, const param_type& p) {
+void ParamTraits<PP_NetAddress_Private>::Write(Message* m,
+                                               const param_type& p) {
   WriteParam(m, p.size);
   m->WriteBytes(p.data, static_cast<int>(p.size));
 }
 
 // static
-bool ParamTraits<PP_Flash_NetAddress>::Read(const Message* m,
-                                            void** iter,
-                                            param_type* p) {
+bool ParamTraits<PP_NetAddress_Private>::Read(const Message* m,
+                                              void** iter,
+                                              param_type* p) {
   uint16 size;
   if (!ReadParam(m, iter, &size))
     return false;
@@ -163,9 +165,9 @@ bool ParamTraits<PP_Flash_NetAddress>::Read(const Message* m,
 }
 
 // static
-void ParamTraits<PP_Flash_NetAddress>::Log(const param_type& p,
-                                           std::string* l) {
-  l->append("<PP_Flash_NetAddress (");
+void ParamTraits<PP_NetAddress_Private>::Log(const param_type& p,
+                                             std::string* l) {
+  l->append("<PP_NetAddress_Private (");
   LogParam(p.size, l);
   l->append(" bytes)>");
 }
@@ -210,6 +212,7 @@ void ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Write(
   ParamTraits<float>::Write(m, p.transformation[2][0]);
   ParamTraits<float>::Write(m, p.transformation[2][1]);
   ParamTraits<float>::Write(m, p.transformation[2][2]);
+  ParamTraits<PP_Bool>::Write(m, p.allow_subpixel_aa);
   ParamTraits<std::vector<uint16_t> >::Write(m, p.glyph_indices);
   ParamTraits<std::vector<PP_Point> >::Write(m, p.glyph_advances);
 }
@@ -236,6 +239,7 @@ bool ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Read(
       ParamTraits<float>::Read(m, iter, &r->transformation[2][0]) &&
       ParamTraits<float>::Read(m, iter, &r->transformation[2][1]) &&
       ParamTraits<float>::Read(m, iter, &r->transformation[2][2]) &&
+      ParamTraits<PP_Bool>::Read(m, iter, &r->allow_subpixel_aa) &&
       ParamTraits<std::vector<uint16_t> >::Read(m, iter, &r->glyph_indices) &&
       ParamTraits<std::vector<PP_Point> >::Read(m, iter, &r->glyph_advances) &&
       r->glyph_indices.size() == r->glyph_advances.size();

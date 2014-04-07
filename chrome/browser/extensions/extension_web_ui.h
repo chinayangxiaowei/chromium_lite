@@ -9,36 +9,28 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/extensions/extension_bookmark_manager_api.h"
+#include "chrome/browser/bookmarks/bookmark_manager_extension_api.h"
 #include "chrome/browser/favicon/favicon_service.h"
-#include "chrome/browser/ui/webui/chrome_web_ui.h"
 #include "chrome/common/extensions/extension.h"
+#include "content/public/browser/web_ui_controller.h"
 
-class GURL;
 class PrefService;
 class Profile;
-class RenderViewHost;
-class TabContents;
-
-namespace base {
-class ListValue;
-class Value;
-}
 
 // This class implements WebUI for extensions and allows extensions to put UI in
 // the main tab contents area. For example, each extension can specify an
 // "options_page", and that page is displayed in the tab contents area and is
 // hosted by this class.
-class ExtensionWebUI : public ChromeWebUI {
+class ExtensionWebUI : public content::WebUIController {
  public:
   static const char kExtensionURLOverrides[];
 
-  ExtensionWebUI(TabContents* tab_contents, const GURL& url);
+  ExtensionWebUI(content::WebUI* web_ui, const GURL& url);
 
   virtual ~ExtensionWebUI();
 
-  virtual ExtensionBookmarkManagerEventRouter*
-      extension_bookmark_manager_event_router();
+  virtual BookmarkManagerExtensionEventRouter*
+      bookmark_manager_extension_event_router();
 
   // BrowserURLHandler
   static bool HandleChromeURLOverride(GURL* url,
@@ -75,8 +67,8 @@ class ExtensionWebUI : public ChromeWebUI {
 
   // TODO(aa): This seems out of place. Why is it not with the event routers for
   // the other extension APIs?
-  scoped_ptr<ExtensionBookmarkManagerEventRouter>
-      extension_bookmark_manager_event_router_;
+  scoped_ptr<BookmarkManagerExtensionEventRouter>
+      bookmark_manager_extension_event_router_;
 
   // The URL this WebUI was created for.
   GURL url_;

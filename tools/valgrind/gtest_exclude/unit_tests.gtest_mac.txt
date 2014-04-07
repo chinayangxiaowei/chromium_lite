@@ -17,10 +17,8 @@ NSMenuItemAdditionsTest.TestMOnDifferentLayouts
 # Hangs
 # See http://crbug.com/75733
 BookmarkBarControllerTest.DeleteFromOffTheSideWhileItIsOpen
-
-# Hangs
-# See http://crbug.com/78521
-SyncBackendHostTest.InitShutdown
+BookmarkBarControllerTest.HideWhenShowBookmarkBarTrueButDisabled
+BookmarkBarControllerTest.HideWhenShowBookmarkBarFalse
 
 # Crashes, see http://crbug.com/86656
 MacSandboxTest.FileAccess
@@ -34,3 +32,8 @@ ConnectionTesterTest.DeleteWhileInProgress
 
 # http://crbug.com/93245
 GeolocationWifiDataProviderCommonTest.*
+
+# http://crbug.com/96298
+FileSystemDirURLRequestJobTest.*
+FileSystemURLRequestJobTest.*
+FileSystemOperationWriteTest.*

@@ -4,14 +4,18 @@
 
 #include "chrome/browser/ui/webui/web_ui_test_handler.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 
 WebUITestHandler::WebUITestHandler()
     : test_done_(false),
@@ -30,25 +34,25 @@ void WebUITestHandler::PreloadJavaScript(const string16& js_text,
 }
 
 void WebUITestHandler::RunJavaScript(const string16& js_text) {
-  web_ui_->tab_contents()->render_view_host()->ExecuteJavascriptInWebFrame(
+  web_ui()->GetWebContents()->GetRenderViewHost()->ExecuteJavascriptInWebFrame(
       string16(), js_text);
 }
 
 bool WebUITestHandler::RunJavaScriptTestWithResult(const string16& js_text) {
   test_succeeded_ = false;
   run_test_succeeded_ = false;
-  RenderViewHost* rvh = web_ui_->tab_contents()->render_view_host();
-  NotificationRegistrar notification_registrar;
+  RenderViewHost* rvh = web_ui()->GetWebContents()->GetRenderViewHost();
+  content::NotificationRegistrar notification_registrar;
   notification_registrar.Add(
       this, content::NOTIFICATION_EXECUTE_JAVASCRIPT_RESULT,
-      Source<RenderViewHost>(rvh));
+      content::Source<RenderViewHost>(rvh));
   rvh->ExecuteJavascriptInWebFrameNotifyResult(string16(), js_text);
   return WaitForResult();
 }
 
 void WebUITestHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("testResult", NewCallback(
-      this, &WebUITestHandler::HandleTestResult));
+  web_ui()->RegisterMessageCallback("testResult",
+      base::Bind(&WebUITestHandler::HandleTestResult, base::Unretained(this)));
 }
 
 void WebUITestHandler::HandleTestResult(const ListValue* test_result) {
@@ -72,8 +76,8 @@ void WebUITestHandler::HandleTestResult(const ListValue* test_result) {
 }
 
 void WebUITestHandler::Observe(int type,
-                               const NotificationSource& source,
-                               const NotificationDetails& details) {
+                               const content::NotificationSource& source,
+                               const content::NotificationDetails& details) {
   // Quit the message loop if |is_waiting_| so waiting process can get result or
   // error. To ensure this gets done, do this before ASSERT* calls.
   if (is_waiting_)
@@ -87,7 +91,7 @@ void WebUITestHandler::Observe(int type,
   run_test_done_ = true;
   run_test_succeeded_ = false;
 
-  Value* value = Details<std::pair<int, Value*> >(details)->second;
+  Value* value = content::Details<std::pair<int, Value*> >(details)->second;
   ASSERT_TRUE(value->GetAsBoolean(&run_test_succeeded_));
 }
 

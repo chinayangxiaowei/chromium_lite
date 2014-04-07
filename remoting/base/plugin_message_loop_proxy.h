@@ -1,14 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_BASE_PLUGIN_MESSAGE_LOOP_H_
 #define REMOTING_BASE_PLUGIN_MESSAGE_LOOP_H_
 
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/message_loop_proxy.h"
 #include "base/synchronization/lock.h"
+#include "base/threading/platform_thread.h"
 
 namespace remoting {
 
@@ -22,7 +23,6 @@ class PluginMessageLoopProxy : public base::MessageLoopProxy {
 
     virtual bool RunOnPluginThread(
         int delay_ms, void(function)(void*), void* data) = 0;
-    virtual bool IsPluginThread() = 0;
   };
 
   // Caller keeps ownership of delegate.
@@ -31,22 +31,7 @@ class PluginMessageLoopProxy : public base::MessageLoopProxy {
 
   void Detach();
 
-  // base::MessageLoopProxy interface.
-  virtual bool PostTask(
-      const tracked_objects::Location& from_here,
-      Task* task) OVERRIDE;
-  virtual bool PostDelayedTask(
-      const tracked_objects::Location& from_here,
-      Task* task,
-      int64 delay_ms) OVERRIDE;
-  virtual bool PostNonNestableTask(
-      const tracked_objects::Location& from_here,
-      Task* task) OVERRIDE;
-  virtual bool PostNonNestableDelayedTask(
-      const tracked_objects::Location& from_here,
-      Task* task,
-      int64 delay_ms) OVERRIDE;
-
+  // base::MessageLoopProxy implementation.
   virtual bool PostTask(
       const tracked_objects::Location& from_here,
       const base::Closure& task) OVERRIDE;
@@ -67,8 +52,9 @@ class PluginMessageLoopProxy : public base::MessageLoopProxy {
  private:
   static void TaskSpringboard(void* data);
 
-  void RunTaskIf(Task* task);
   void RunClosureIf(const base::Closure& task);
+
+  base::PlatformThreadId plugin_thread_id_;
 
   // |lock_| must be acquired when accessing |delegate_|.
   base::Lock lock_;

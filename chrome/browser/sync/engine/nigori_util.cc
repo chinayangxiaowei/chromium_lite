@@ -19,8 +19,6 @@ bool ProcessUnsyncedChangesForEncryption(
     WriteTransaction* const trans,
     browser_sync::Cryptographer* cryptographer) {
   DCHECK(cryptographer->is_ready());
-  syncable::ModelTypeSet encrypted_types = cryptographer->GetEncryptedTypes();
-
   // Get list of all datatypes with unsynced changes. It's possible that our
   // local changes need to be encrypted if encryption for that datatype was
   // just turned on (and vice versa). This should never affect passwords.
@@ -40,7 +38,7 @@ bool ProcessUnsyncedChangesForEncryption(
 
 bool VerifyUnsyncedChangesAreEncrypted(
     BaseTransaction* const trans,
-    const ModelTypeSet& encrypted_types) {
+    ModelTypeSet encrypted_types) {
   std::vector<int64> handles;
   browser_sync::SyncerUtil::GetUnsyncedEntries(trans, &handles);
   for (size_t i = 0; i < handles.size(); ++i) {
@@ -55,7 +53,7 @@ bool VerifyUnsyncedChangesAreEncrypted(
   return true;
 }
 
-bool EntryNeedsEncryption(const ModelTypeSet& encrypted_types,
+bool EntryNeedsEncryption(ModelTypeSet encrypted_types,
                           const Entry& entry) {
   if (!entry.Get(UNIQUE_SERVER_TAG).empty())
     return false;  // We don't encrypt unique server nodes.
@@ -66,25 +64,26 @@ bool EntryNeedsEncryption(const ModelTypeSet& encrypted_types,
   // the data, nor for determining if data is encrypted. We simply ensure it has
   // been overwritten to avoid any possible leaks of sensitive data.
   return SpecificsNeedsEncryption(encrypted_types, entry.Get(SPECIFICS)) ||
-         (encrypted_types.count(type) > 0 &&
+         (encrypted_types.Has(type) &&
           entry.Get(NON_UNIQUE_NAME) != kEncryptedString);
 }
 
-bool SpecificsNeedsEncryption(const ModelTypeSet& encrypted_types,
+bool SpecificsNeedsEncryption(ModelTypeSet encrypted_types,
                               const sync_pb::EntitySpecifics& specifics) {
-  ModelType type = GetModelTypeFromSpecifics(specifics);
+  const ModelType type = GetModelTypeFromSpecifics(specifics);
   if (type == PASSWORDS || type == NIGORI)
     return false;  // These types have their own encryption schemes.
-  if (encrypted_types.count(type) == 0)
+  if (!encrypted_types.Has(type))
     return false;  // This type does not require encryption
   return !specifics.has_encrypted();
 }
 
 // Mainly for testing.
-bool VerifyDataTypeEncryption(BaseTransaction* const trans,
-                              browser_sync::Cryptographer* cryptographer,
-                              ModelType type,
-                              bool is_encrypted) {
+bool VerifyDataTypeEncryptionForTest(
+    BaseTransaction* const trans,
+    browser_sync::Cryptographer* cryptographer,
+    ModelType type,
+    bool is_encrypted) {
   if (type == PASSWORDS || type == NIGORI) {
     NOTREACHED();
     return true;
@@ -97,8 +96,12 @@ bool VerifyDataTypeEncryption(BaseTransaction* const trans,
   }
 
   std::queue<Id> to_visit;
-  Id id_string =
-      trans->directory()->GetFirstChildId(trans, type_root.Get(ID));
+  Id id_string;
+  if (!trans->directory()->GetFirstChildId(
+          trans, type_root.Get(ID), &id_string)) {
+    NOTREACHED();
+    return false;
+  }
   to_visit.push(id_string);
   while (!to_visit.empty()) {
     id_string = to_visit.front();
@@ -112,9 +115,14 @@ bool VerifyDataTypeEncryption(BaseTransaction* const trans,
       return false;
     }
     if (child.Get(IS_DIR)) {
+      Id child_id_string;
+      if (!trans->directory()->GetFirstChildId(
+              trans, child.Get(ID), &child_id_string)) {
+        NOTREACHED();
+        return false;
+      }
       // Traverse the children.
-      to_visit.push(
-          trans->directory()->GetFirstChildId(trans, child.Get(ID)));
+      to_visit.push(child_id_string);
     }
     const sync_pb::EntitySpecifics& specifics = child.Get(SPECIFICS);
     DCHECK_EQ(type, child.GetModelType());

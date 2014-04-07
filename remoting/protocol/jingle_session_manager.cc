@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,20 @@
 
 #include <limits>
 
+#include "base/base64.h"
 #include "base/bind.h"
 #include "base/message_loop_proxy.h"
 #include "base/string_util.h"
-#include "base/task.h"
 #include "remoting/base/constants.h"
-#include "remoting/jingle_glue/host_resolver.h"
-#include "remoting/jingle_glue/http_port_allocator.h"
 #include "remoting/jingle_glue/jingle_info_request.h"
 #include "remoting/jingle_glue/jingle_signaling_connector.h"
 #include "remoting/jingle_glue/signal_strategy.h"
+#include "remoting/protocol/authenticator.h"
 #include "third_party/libjingle/source/talk/base/basicpacketsocketfactory.h"
+#include "third_party/libjingle/source/talk/p2p/base/constants.h"
 #include "third_party/libjingle/source/talk/p2p/base/sessionmanager.h"
 #include "third_party/libjingle/source/talk/p2p/base/transport.h"
-#include "third_party/libjingle/source/talk/p2p/base/constants.h"
-#include "third_party/libjingle/source/talk/p2p/base/transport.h"
+#include "third_party/libjingle/source/talk/p2p/client/httpportallocator.h"
 #include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
 
 using buzz::XmlElement;
@@ -28,65 +27,36 @@ using buzz::XmlElement;
 namespace remoting {
 namespace protocol {
 
-// static
-JingleSessionManager* JingleSessionManager::CreateNotSandboxed(
-    base::MessageLoopProxy* message_loop) {
-  return new JingleSessionManager(message_loop, NULL, NULL, NULL, NULL);
-}
-
-// static
-JingleSessionManager* JingleSessionManager::CreateSandboxed(
-    base::MessageLoopProxy* message_loop,
-    talk_base::NetworkManager* network_manager,
-    talk_base::PacketSocketFactory* socket_factory,
-    HostResolverFactory* host_resolver_factory,
-    PortAllocatorSessionFactory* port_allocator_session_factory) {
-  return new JingleSessionManager(message_loop, network_manager, socket_factory,
-                                  host_resolver_factory,
-                                  port_allocator_session_factory);
-}
-
 JingleSessionManager::JingleSessionManager(
-    base::MessageLoopProxy* message_loop,
-    talk_base::NetworkManager* network_manager,
-    talk_base::PacketSocketFactory* socket_factory,
-    HostResolverFactory* host_resolver_factory,
-    PortAllocatorSessionFactory* port_allocator_session_factory)
+    base::MessageLoopProxy* message_loop)
     : message_loop_(message_loop),
-      network_manager_(network_manager),
-      socket_factory_(socket_factory),
-      host_resolver_factory_(host_resolver_factory),
-      port_allocator_session_factory_(port_allocator_session_factory),
       signal_strategy_(NULL),
       allow_nat_traversal_(false),
-      allow_local_ips_(false),
+      ready_(false),
       http_port_allocator_(NULL),
-      closed_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)) {
+      closed_(false) {
 }
 
 JingleSessionManager::~JingleSessionManager() {
+  // Session manager can be destroyed only after all sessions are destroyed.
+  DCHECK(sessions_.empty());
   Close();
 }
 
 void JingleSessionManager::Init(
-    const std::string& local_jid,
     SignalStrategy* signal_strategy,
-    Listener* listener,
-    crypto::RSAPrivateKey* private_key,
-    const std::string& certificate,
-    bool allow_nat_traversal) {
+    SessionManager::Listener* listener,
+    const NetworkSettings& network_settings) {
   DCHECK(CalledOnValidThread());
 
   DCHECK(signal_strategy);
   DCHECK(listener);
 
-  local_jid_ = local_jid;
   signal_strategy_ = signal_strategy;
   listener_ = listener;
-  private_key_.reset(private_key);
-  certificate_ = certificate;
-  allow_nat_traversal_ = allow_nat_traversal;
+  allow_nat_traversal_ = network_settings.allow_nat_traversal;
+
+  signal_strategy_->AddListener(this);
 
   if (!network_manager_.get()) {
     VLOG(1) << "Creating talk_base::NetworkManager.";
@@ -105,10 +75,9 @@ void JingleSessionManager::Init(
   // so we explicitly disables TCP connections.
   int port_allocator_flags = cricket::PORTALLOCATOR_DISABLE_TCP;
 
-  if (allow_nat_traversal) {
-    http_port_allocator_ = new remoting::HttpPortAllocator(
-        network_manager_.get(), socket_factory_.get(),
-        port_allocator_session_factory_.get(), "transp2");
+  if (allow_nat_traversal_) {
+    http_port_allocator_ = new cricket::HttpPortAllocator(
+        network_manager_.get(), socket_factory_.get(), "transp2");
     port_allocator_.reset(http_port_allocator_);
   } else {
     port_allocator_flags |= cricket::PORTALLOCATOR_DISABLE_STUN |
@@ -119,6 +88,9 @@ void JingleSessionManager::Init(
   }
   port_allocator_->set_flags(port_allocator_flags);
 
+  port_allocator_->SetPortRange(
+      network_settings.min_port, network_settings.max_port);
+
   // Initialize |cricket_session_manager_|.
   cricket_session_manager_.reset(
       new cricket::SessionManager(port_allocator_.get()));
@@ -127,80 +99,62 @@ void JingleSessionManager::Init(
   jingle_signaling_connector_.reset(new JingleSignalingConnector(
       signal_strategy_, cricket_session_manager_.get()));
 
-  // If NAT traversal is enabled then we need to request STUN/Relay info.
-  if (allow_nat_traversal) {
-    jingle_info_request_.reset(
-        new JingleInfoRequest(signal_strategy_->CreateIqRequest(),
-                              host_resolver_factory_.get()));
-    jingle_info_request_->Send(base::Bind(
-        &JingleSessionManager::OnJingleInfo, base::Unretained(this)));
-  } else {
-    listener_->OnSessionManagerInitialized();
-  }
+  OnSignalStrategyStateChange(signal_strategy_->GetState());
 }
 
 void JingleSessionManager::Close() {
   DCHECK(CalledOnValidThread());
 
-  // Close() can be called only after all sessions are destroyed.
-  DCHECK(sessions_.empty());
-
   if (!closed_) {
+    jingle_info_request_.reset();
     cricket_session_manager_->RemoveClient(kChromotingXmlNamespace);
     jingle_signaling_connector_.reset();
-    cricket_session_manager_.reset();
+    signal_strategy_->RemoveListener(this);
     closed_ = true;
   }
 }
 
-void JingleSessionManager::set_allow_local_ips(bool allow_local_ips) {
-  allow_local_ips_ = allow_local_ips;
+void JingleSessionManager::set_authenticator_factory(
+    scoped_ptr<AuthenticatorFactory> authenticator_factory) {
+  DCHECK(CalledOnValidThread());
+  DCHECK(authenticator_factory.get());
+  DCHECK(!authenticator_factory_.get());
+  authenticator_factory_ = authenticator_factory.Pass();
 }
 
-Session* JingleSessionManager::Connect(
+scoped_ptr<Session> JingleSessionManager::Connect(
     const std::string& host_jid,
-    const std::string& host_public_key,
-    const std::string& receiver_token,
-    CandidateSessionConfig* candidate_config,
-    Session::StateChangeCallback* state_change_callback) {
+    scoped_ptr<Authenticator> authenticator,
+    scoped_ptr<CandidateSessionConfig> config,
+    const Session::StateChangeCallback& state_change_callback) {
   DCHECK(CalledOnValidThread());
 
-  // Can be called from any thread.
-  JingleSession* jingle_session =
-      JingleSession::CreateClientSession(this, host_public_key);
-  jingle_session->set_candidate_config(candidate_config);
-  jingle_session->set_receiver_token(receiver_token);
-
   cricket::Session* cricket_session = cricket_session_manager_->CreateSession(
-      local_jid_, kChromotingXmlNamespace);
+      signal_strategy_->GetLocalJid(), kChromotingXmlNamespace);
+  cricket_session->set_remote_name(host_jid);
 
-  // Initialize connection object before we send initiate stanza.
+  scoped_ptr<JingleSession> jingle_session(
+      new JingleSession(this, cricket_session, authenticator.Pass()));
+  jingle_session->set_candidate_config(config.Pass());
   jingle_session->SetStateChangeCallback(state_change_callback);
-  jingle_session->Init(cricket_session);
-  sessions_.push_back(jingle_session);
+  sessions_.push_back(jingle_session.get());
 
-  cricket_session->Initiate(host_jid, CreateClientSessionDescription(
-      jingle_session->candidate_config()->Clone(), receiver_token));
+  jingle_session->SendSessionInitiate();
 
-  return jingle_session;
+  return jingle_session.PassAs<Session>();
 }
 
 void JingleSessionManager::OnSessionCreate(
     cricket::Session* cricket_session, bool incoming) {
   DCHECK(CalledOnValidThread());
 
-  // Allow local connections if neccessary.
-  cricket_session->set_allow_local_ips(allow_local_ips_);
+  // Allow local connections.
+  cricket_session->set_allow_local_ips(true);
 
-  // If this is an incoming session, create a JingleSession on top of it.
   if (incoming) {
-    DCHECK(!certificate_.empty());
-    DCHECK(private_key_.get());
-
-    JingleSession* jingle_session = JingleSession::CreateServerSession(
-        this, certificate_, private_key_.get());
+    JingleSession* jingle_session =
+        new JingleSession(this, cricket_session, scoped_ptr<Authenticator>());
     sessions_.push_back(jingle_session);
-    jingle_session->Init(cricket_session);
   }
 }
 
@@ -216,63 +170,41 @@ void JingleSessionManager::OnSessionDestroy(cricket::Session* cricket_session) {
   }
 }
 
-bool JingleSessionManager::AcceptConnection(
-    JingleSession* jingle_session,
-    cricket::Session* cricket_session) {
+void JingleSessionManager::OnSignalStrategyStateChange(
+    SignalStrategy::State state) {
+  if (state == SignalStrategy::CONNECTED) {
+    // If NAT traversal is enabled then we need to request STUN/Relay info.
+    if (allow_nat_traversal_) {
+      jingle_info_request_.reset(new JingleInfoRequest(signal_strategy_));
+      jingle_info_request_->Send(base::Bind(
+          &JingleSessionManager::OnJingleInfo, base::Unretained(this)));
+    } else if (!ready_) {
+      ready_ = true;
+      listener_->OnSessionManagerReady();
+    }
+  }
+}
+
+SessionManager::IncomingSessionResponse JingleSessionManager::AcceptConnection(
+    JingleSession* jingle_session) {
   DCHECK(CalledOnValidThread());
 
   // Reject connection if we are closed.
-  if (closed_) {
-    cricket_session->Reject(cricket::STR_TERMINATE_DECLINE);
-    return false;
-  }
+  if (closed_)
+    return SessionManager::DECLINE;
 
-  const cricket::SessionDescription* session_description =
-      cricket_session->remote_description();
-  const cricket::ContentInfo* content =
-      session_description->FirstContentByType(kChromotingXmlNamespace);
-
-  CHECK(content);
-
-  const ContentDescription* content_description =
-      static_cast<const ContentDescription*>(content->description);
-  jingle_session->set_candidate_config(content_description->config()->Clone());
-  jingle_session->set_initiator_token(content_description->auth_token());
-
-  // Always reject connection if there is no callback.
-  IncomingSessionResponse response = protocol::SessionManager::DECLINE;
-
-  // Use the callback to generate a response.
+  IncomingSessionResponse response = SessionManager::DECLINE;
   listener_->OnIncomingSession(jingle_session, &response);
+  return response;
+}
 
-  switch (response) {
-    case protocol::SessionManager::ACCEPT: {
-      // Connection must be configured by the callback.
-      DCHECK(jingle_session->config());
-      CandidateSessionConfig* candidate_config =
-          CandidateSessionConfig::CreateFrom(jingle_session->config());
-      cricket_session->Accept(
-          CreateHostSessionDescription(candidate_config,
-                                       jingle_session->local_certificate()));
-      break;
-    }
+scoped_ptr<Authenticator> JingleSessionManager::CreateAuthenticator(
+    const std::string& jid, const buzz::XmlElement* auth_message) {
+  DCHECK(CalledOnValidThread());
 
-    case protocol::SessionManager::INCOMPATIBLE: {
-      cricket_session->Reject(cricket::STR_TERMINATE_INCOMPATIBLE_PARAMETERS);
-      return false;
-    }
-
-    case protocol::SessionManager::DECLINE: {
-      cricket_session->Reject(cricket::STR_TERMINATE_DECLINE);
-      return false;
-    }
-
-    default: {
-      NOTREACHED();
-    }
-  }
-
-  return true;
+  if (!authenticator_factory_.get())
+    return scoped_ptr<Authenticator>(NULL);
+  return authenticator_factory_->CreateAuthenticator(jid, auth_message);
 }
 
 void JingleSessionManager::SessionDestroyed(JingleSession* jingle_session) {
@@ -296,17 +228,20 @@ void JingleSessionManager::OnJingleInfo(
     for (size_t i = 0; i < stun_hosts.size(); ++i) {
       stun_servers += stun_hosts[i].ToString() + "; ";
     }
-    LOG(INFO) << "Configuring with relay token: " << token
-              << ", relays: " << JoinString(relay_hosts, ';')
-              << ", stun: " << stun_servers;
+    VLOG(1) << "Configuring with relay token: " << token
+            << ", relays: " << JoinString(relay_hosts, ';')
+            << ", stun: " << stun_servers;
     http_port_allocator_->SetRelayToken(token);
     http_port_allocator_->SetStunHosts(stun_hosts);
     http_port_allocator_->SetRelayHosts(relay_hosts);
   } else {
-    LOG(INFO) << "Jingle info found but no port allocator.";
+    LOG(WARNING) << "Jingle info found but no port allocator.";
   }
 
-  listener_->OnSessionManagerInitialized();
+  if (!ready_) {
+    ready_ = true;
+    listener_->OnSessionManagerReady();
+  }
 }
 
 // Parse content description generated by WriteContent().
@@ -329,29 +264,6 @@ bool JingleSessionManager::WriteContent(
 
   *elem = desc->ToXml();
   return true;
-}
-
-// static
-cricket::SessionDescription*
-JingleSessionManager::CreateClientSessionDescription(
-    const CandidateSessionConfig* config,
-    const std::string& auth_token) {
-  cricket::SessionDescription* desc = new cricket::SessionDescription();
-  desc->AddContent(
-      ContentDescription::kChromotingContentName, kChromotingXmlNamespace,
-      new ContentDescription(config, auth_token, ""));
-  return desc;
-}
-
-// static
-cricket::SessionDescription* JingleSessionManager::CreateHostSessionDescription(
-    const CandidateSessionConfig* config,
-    const std::string& certificate) {
-  cricket::SessionDescription* desc = new cricket::SessionDescription();
-  desc->AddContent(
-      ContentDescription::kChromotingContentName, kChromotingXmlNamespace,
-      new ContentDescription(config, "", certificate));
-  return desc;
 }
 
 }  // namespace protocol

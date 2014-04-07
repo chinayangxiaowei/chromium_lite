@@ -14,11 +14,13 @@
 #include "chrome/browser/history/history.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
 using base::TimeDelta;
+
+using content::BrowserThread;
 
 namespace {
 
@@ -77,7 +79,8 @@ class HistoryContentsProviderTest : public testing::Test,
       Time t = Time::Now() - TimeDelta::FromDays(arraysize(test_entries) + i);
 
       history_service->AddPage(url, t, id_scope, i, GURL(),
-                               PageTransition::LINK, history::RedirectList(),
+                               content::PAGE_TRANSITION_LINK,
+                               history::RedirectList(),
                                history::SOURCE_BROWSED, false);
       history_service->SetPageTitle(url, UTF8ToUTF16(test_entries[i].title));
       history_service->SetPageContents(url, UTF8ToUTF16(test_entries[i].body));
@@ -96,12 +99,12 @@ class HistoryContentsProviderTest : public testing::Test,
     // We must quit the message loop (if running) to return control to the test.
     // Note, calling Quit() directly will checkfail if the loop isn't running,
     // so we post a task, which is safe for either case.
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
+    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
   }
 
   MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
 
   scoped_ptr<TestingProfile> profile_;
   scoped_refptr<HistoryContentsProvider> provider_;

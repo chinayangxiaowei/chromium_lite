@@ -4,18 +4,25 @@
 
 #include "chrome/browser/chromeos/status/accessibility_menu_button.h"
 
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/accessibility_util.h"
+#include "chrome/browser/chromeos/accessibility/accessibility_util.h"
+#include "chrome/browser/chromeos/status/status_area_bubble.h"
+#include "chrome/browser/chromeos/status/status_area_view_chromeos.h"
+#include "chrome/browser/chromeos/view_ids.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
+#include "content/public/browser/notification_details.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "views/widget/widget.h"
-#include "views/controls/menu/menu_runner.h"
-#include "views/controls/menu/menu_item_view.h"
+#include "ui/gfx/image/image.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 
@@ -23,16 +30,18 @@ enum MenuItemID {
   MENU_ITEM_DISABLE_SPOKEN_FEEDBACK,
 };
 
-}
+}  // namespace
 
 namespace chromeos {
 
 ////////////////////////////////////////////////////////////////////////////////
 // AccessibilityMenuButton
 
-AccessibilityMenuButton::AccessibilityMenuButton(StatusAreaHost* host)
-    : StatusAreaButton(host, this) {
-  accessibility_enabled_.Init(prefs::kAccessibilityEnabled,
+AccessibilityMenuButton::AccessibilityMenuButton(
+    StatusAreaButton::Delegate* delegate)
+    : StatusAreaButton(delegate, this) {
+  set_id(VIEW_ID_STATUS_BUTTON_ACCESSIBILITY);
+  accessibility_enabled_.Init(prefs::kSpokenFeedbackEnabled,
                               g_browser_process->local_state(), this);
   SetIcon(*ResourceBundle::GetSharedInstance().GetBitmapNamed(
       IDR_STATUSBAR_ACCESSIBILITY));
@@ -72,13 +81,36 @@ void AccessibilityMenuButton::ExecuteCommand(int id) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// NotificationObserver implementation
+// content::NotificationObserver implementation
 
-void AccessibilityMenuButton::Observe(int type,
-                                      const NotificationSource& source,
-                                      const NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_PREF_CHANGED)
+void AccessibilityMenuButton::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
+  if (type == chrome::NOTIFICATION_PREF_CHANGED) {
     Update();
+    const std::string path =
+        *static_cast<content::Details<std::string> >(details).ptr();
+    // Show a bubble when accessibility is turned on at the login screen.
+    if (path == prefs::kSpokenFeedbackEnabled) {
+      if (accessibility_enabled_.GetValue() &&
+          StatusAreaViewChromeos::IsLoginMode()) {
+        views::ImageView* icon_view = new views::ImageView;
+        const gfx::Image& image = ResourceBundle::GetSharedInstance().
+            GetImageNamed(IDR_ACCESSIBILITY_ICON);
+        icon_view->SetImage(image.ToSkBitmap());
+        bubble_controller_.reset(
+            StatusAreaBubbleController::ShowBubbleUnderViewForAWhile(
+                this,
+                new StatusAreaBubbleContentView(
+                    icon_view,
+                    l10n_util::GetStringUTF16(
+                        IDS_STATUSBAR_ACCESSIBILITY_TURNED_ON_BUBBLE))));
+      } else {
+        bubble_controller_.reset();
+      }
+    }
+  }
 }
 
 
@@ -86,7 +118,7 @@ void AccessibilityMenuButton::Update() {
   // Update tooltip and accessibile name.
   string16 message =
       l10n_util::GetStringUTF16(IDS_STATUSBAR_ACCESSIBILITY_ENABLED);
-  SetTooltipText(UTF16ToWide(message));
+  SetTooltipText(message);
   SetAccessibleName(message);
   // Update visibility.
   SetVisible(accessibility_enabled_.GetValue());
@@ -95,9 +127,9 @@ void AccessibilityMenuButton::Update() {
 void AccessibilityMenuButton::PrepareMenu() {
   views::MenuItemView* menu = new views::MenuItemView(this);
   if (accessibility_enabled_.GetValue())
-    menu->AppendMenuItemWithLabel(MENU_ITEM_DISABLE_SPOKEN_FEEDBACK,
-                                  UTF16ToWide(l10n_util::GetStringUTF16(
-                                      IDS_STATUSBAR_DISABLE_SPOKEN_FEEDBACK)));
+    menu->AppendMenuItemWithLabel(
+        MENU_ITEM_DISABLE_SPOKEN_FEEDBACK,
+        l10n_util::GetStringUTF16(IDS_STATUSBAR_DISABLE_SPOKEN_FEEDBACK));
   // |menu_runner_| takes the ownership of |menu|
   menu_runner_.reset(new views::MenuRunner(menu));
 }

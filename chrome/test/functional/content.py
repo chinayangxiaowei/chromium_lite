@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -21,7 +21,7 @@ class ContentTest(pyauto.PyUITest):
     """String check in local file.
 
        For each local filename, tell the browser to load it as a file
-       UEL from the DataDir.  Ask the browser for the loaded html.
+       URL from the DataDir.  Ask the browser for the loaded html.
        Confirm all strings in have_list are found in it.  Confirm all
        strings in nothave_list are NOT found in it.  Assumes only one
        window/tab is open.

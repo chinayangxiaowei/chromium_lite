@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,8 @@ cr.define('print_preview', function() {
   function HeaderFooterSettings() {
     this.headerFooterOption_ = $('header-footer-option');
     this.headerFooterCheckbox_ = $('header-footer');
+    this.headerFooterApplies_ = false;
+    this.addEventListeners_();
   }
 
   cr.addSingletonGetter(HeaderFooterSettings);
@@ -31,16 +33,35 @@ cr.define('print_preview', function() {
      * @return {boolean} true if Headers and Footers are checked.
      */
     hasHeaderFooter: function() {
-      return this.headerFooterCheckbox_.checked;
+      return this.headerFooterApplies_ && this.headerFooterCheckbox_.checked;
+    },
+
+    /**
+     * Sets the state of the headers footers checkbox.
+     * @param {boolean} checked True if the headers footers checkbox shoule be
+     *     checked, false if not.
+     */
+    setChecked: function(checked) {
+      this.headerFooterCheckbox_.checked = checked;
     },
 
     /**
      * Adding listeners to header footer related controls.
+     * @private
      */
-    addEventListeners: function() {
+    addEventListeners_: function() {
       this.headerFooterCheckbox_.onclick =
           this.onHeaderFooterChanged_.bind(this);
-      document.addEventListener('PDFLoaded', this.onPDFLoaded_.bind(this));
+      document.addEventListener(customEvents.PDF_LOADED,
+                                this.onPDFLoaded_.bind(this));
+      document.addEventListener(customEvents.MARGINS_SELECTION_CHANGED,
+                                this.onMarginsSelectionChanged_.bind(this));
+    },
+
+    onMarginsSelectionChanged_: function(event) {
+      this.headerFooterApplies_ = event.selectedMargins !=
+          print_preview.MarginSettings.MARGINS_VALUE_NO_MARGINS;
+      this.setVisible_(this.headerFooterApplies_);
     },
 
     /**
@@ -53,18 +74,29 @@ cr.define('print_preview', function() {
     },
 
     /**
-     * Listener executing when a PDFLoaded event occurs.
+     * Listener executing when a |customEvents.PDF_LOADED| event occurs.
      * @private
      */
     onPDFLoaded_: function() {
-      if (!previewModifiable) {
-        fadeOutElement(this.headerFooterOption_);
-        this.headerFooterCheckbox_.checked = false;
-      }
+      if (!previewModifiable)
+        this.setVisible_(false);
     },
+
+    /**
+     * Hides or shows |this.headerFooterOption|.
+     * @param {boolean} visible True if |this.headerFooterOption| should be
+     *     shown.
+     * @private
+     */
+    setVisible_: function(visible) {
+      if (visible)
+        fadeInOption(this.headerFooterOption_);
+      else
+        fadeOutOption(this.headerFooterOption_);
+    }
   };
 
   return {
-    HeaderFooterSettings: HeaderFooterSettings,
+    HeaderFooterSettings: HeaderFooterSettings
   };
 });

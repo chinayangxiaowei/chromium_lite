@@ -6,16 +6,13 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_ROOT_VIEW_H_
 #pragma once
 
-#include "views/widget/root_view.h"
+#include "ui/views/widget/root_view.h"
 
 class AbstractTabStripView;
 class BrowserView;
 
 namespace ui {
 class OSExchangeData;
-#if defined(TOUCH_UI)
-enum TouchStatus;
-#endif
 }
 
 // RootView implementation used by BrowserFrame. This forwards drop events to
@@ -32,9 +29,6 @@ class BrowserRootView : public views::internal::RootView {
   BrowserRootView(BrowserView* browser_view, views::Widget* widget);
 
   // Overridden from views::View:
-#if defined(TOUCH_UI)
-  virtual ui::TouchStatus OnTouchEvent(const views::TouchEvent& event) OVERRIDE;
-#endif
   virtual bool GetDropFormats(
       int* formats,
       std::set<ui::OSExchangeData::CustomFormat>* custom_formats) OVERRIDE;

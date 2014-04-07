@@ -52,8 +52,8 @@ class PluginDispatcherTest : public PluginProxyTest {
  public:
   PluginDispatcherTest() {}
 
-  bool HasTargetProxy(InterfaceID id) {
-    return !!plugin_dispatcher()->target_proxies_[id].get();
+  bool HasTargetProxy(ApiID id) {
+    return !!plugin_dispatcher()->proxies_[id].get();
   }
 };
 
@@ -64,11 +64,6 @@ TEST_F(PluginDispatcherTest, SupportsInterface) {
   // Sending a request for a random interface should fail.
   EXPECT_FALSE(SupportsInterface("Random interface"));
 
-  // Sending a request for a PPB interface should fail even though we've
-  // registered it as existing in the GetInterface function (the plugin proxy
-  // should only respond to PPP interfaces when asked if it supports them).
-  EXPECT_FALSE(SupportsInterface(PPB_AUDIO_INTERFACE));
-
   // Sending a request for a supported PPP interface should succeed.
   EXPECT_TRUE(SupportsInterface(PPP_INSTANCE_INTERFACE));
 }
@@ -76,12 +71,12 @@ TEST_F(PluginDispatcherTest, SupportsInterface) {
 TEST_F(PluginDispatcherTest, PPBCreation) {
   // Sending a PPB message out of the blue should create a target proxy for
   // that interface in the plugin.
-  EXPECT_FALSE(HasTargetProxy(INTERFACE_ID_PPB_AUDIO));
+  EXPECT_FALSE(HasTargetProxy(API_ID_PPB_AUDIO));
   PpapiMsg_PPBAudio_NotifyAudioStreamCreated audio_msg(
-      INTERFACE_ID_PPB_AUDIO, HostResource(), 0,
+      API_ID_PPB_AUDIO, HostResource(), 0,
       IPC::PlatformFileForTransit(), base::SharedMemoryHandle(), 0);
   plugin_dispatcher()->OnMessageReceived(audio_msg);
-  EXPECT_TRUE(HasTargetProxy(INTERFACE_ID_PPB_AUDIO));
+  EXPECT_TRUE(HasTargetProxy(API_ID_PPB_AUDIO));
 }
 
 }  // namespace proxy

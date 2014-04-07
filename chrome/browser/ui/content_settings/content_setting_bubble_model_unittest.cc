@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,11 @@
 #include "chrome/browser/ui/tab_contents/test_tab_contents_wrapper.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/tab_contents/test_tab_contents.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::BrowserThread;
 
 class ContentSettingBubbleModelTest : public TabContentsWrapperTestHarness {
  protected:
@@ -27,7 +29,7 @@ class ContentSettingBubbleModelTest : public TabContentsWrapperTestHarness {
                               bool expect_reload_hint) {
     scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
         ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-            NULL, contents_wrapper(), profile_.get(),
+            NULL, contents_wrapper(), profile(),
             CONTENT_SETTINGS_TYPE_GEOLOCATION));
     const ContentSettingBubbleModel::BubbleContent& bubble_content =
         content_setting_bubble_model->bubble_content();
@@ -41,7 +43,7 @@ class ContentSettingBubbleModelTest : public TabContentsWrapperTestHarness {
     EXPECT_FALSE(bubble_content.manage_link.empty());
   }
 
-  BrowserThread ui_thread_;
+  content::TestBrowserThread ui_thread_;
 };
 
 TEST_F(ContentSettingBubbleModelTest, ImageRadios) {
@@ -52,7 +54,7 @@ TEST_F(ContentSettingBubbleModelTest, ImageRadios) {
 
   scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-         NULL, contents_wrapper(), profile_.get(),
+         NULL, contents_wrapper(), profile(),
          CONTENT_SETTINGS_TYPE_IMAGES));
   const ContentSettingBubbleModel::BubbleContent& bubble_content =
       content_setting_bubble_model->bubble_content();
@@ -71,7 +73,7 @@ TEST_F(ContentSettingBubbleModelTest, Cookies) {
 
   scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-         NULL, contents_wrapper(), profile_.get(),
+         NULL, contents_wrapper(), profile(),
          CONTENT_SETTINGS_TYPE_COOKIES));
   const ContentSettingBubbleModel::BubbleContent& bubble_content =
       content_setting_bubble_model->bubble_content();
@@ -90,7 +92,7 @@ TEST_F(ContentSettingBubbleModelTest, Plugins) {
 
   scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-         NULL, contents_wrapper(), profile_.get(),
+         NULL, contents_wrapper(), profile(),
          CONTENT_SETTINGS_TYPE_PLUGINS));
   const ContentSettingBubbleModel::BubbleContent& bubble_content =
       content_setting_bubble_model->bubble_content();
@@ -105,9 +107,8 @@ TEST_F(ContentSettingBubbleModelTest, MultiplePlugins) {
   CommandLine* cmd = CommandLine::ForCurrentProcess();
   AutoReset<CommandLine> auto_reset(cmd, *cmd);
   cmd->AppendSwitch(switches::kEnableResourceContentSettings);
-  cmd->AppendSwitch(switches::kEnableClickToPlay);
 
-  HostContentSettingsMap* map = profile_->GetHostContentSettingsMap();
+  HostContentSettingsMap* map = profile()->GetHostContentSettingsMap();
   std::string fooPlugin = "foo";
   std::string barPlugin = "bar";
 
@@ -135,7 +136,7 @@ TEST_F(ContentSettingBubbleModelTest, MultiplePlugins) {
 
   scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-          NULL, contents_wrapper(), profile_.get(),
+          NULL, contents_wrapper(), profile(),
           CONTENT_SETTINGS_TYPE_PLUGINS));
   const ContentSettingBubbleModel::BubbleContent& bubble_content =
       content_setting_bubble_model->bubble_content();
@@ -184,7 +185,7 @@ TEST_F(ContentSettingBubbleModelTest, Geolocation) {
 
   // Add it to the content map, should now have a clear link.
   HostContentSettingsMap* setting_map =
-      profile_->GetHostContentSettingsMap();
+      profile()->GetHostContentSettingsMap();
   setting_map->SetContentSetting(
       ContentSettingsPattern::FromURLNoWildcard(frame1_url),
       ContentSettingsPattern::FromURLNoWildcard(page_url),
@@ -194,7 +195,7 @@ TEST_F(ContentSettingBubbleModelTest, Geolocation) {
   CheckGeolocationBubble(1, true, false);
 
   // Change the default to allow: no message needed.
-  profile_->GetHostContentSettingsMap()->SetDefaultContentSetting(
+  profile()->GetHostContentSettingsMap()->SetDefaultContentSetting(
       CONTENT_SETTINGS_TYPE_GEOLOCATION, CONTENT_SETTING_ALLOW);
   CheckGeolocationBubble(1, false, false);
 
@@ -203,7 +204,7 @@ TEST_F(ContentSettingBubbleModelTest, Geolocation) {
   CheckGeolocationBubble(2, false, true);
 
   // Change the default to block: offer a clear link for the persisted frame 1.
-  profile_->GetHostContentSettingsMap()->SetDefaultContentSetting(
+  profile()->GetHostContentSettingsMap()->SetDefaultContentSetting(
       CONTENT_SETTINGS_TYPE_GEOLOCATION, CONTENT_SETTING_BLOCK);
   CheckGeolocationBubble(2, true, false);
 }
@@ -213,7 +214,7 @@ TEST_F(ContentSettingBubbleModelTest, FileURL) {
   NavigateAndCommit(GURL(file_url));
   scoped_ptr<ContentSettingBubbleModel> content_setting_bubble_model(
       ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-          NULL, contents_wrapper(), profile_.get(),
+          NULL, contents_wrapper(), profile(),
           CONTENT_SETTINGS_TYPE_IMAGES));
   std::string title =
       content_setting_bubble_model->bubble_content().radio_group.radio_items[0];

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,11 +26,14 @@
 #include "printing/backend/cups_helper.h"
 #include "printing/backend/print_backend_consts.h"
 
-#if defined(OS_MACOSX)
-#if MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_5
+#if (defined(OS_MACOSX) && \
+     MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_5) || \
+    (defined(OS_LINUX) && \
+     CUPS_VERSION_MAJOR == 1 && CUPS_VERSION_MINOR < 4)
 const int CUPS_PRINTER_SCANNER = 0x2000000;  // Scanner-only device
-#endif  // MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_5
-#else
+#endif
+
+#if !defined(OS_MACOSX)
 GCRY_THREAD_OPTION_PTHREAD_IMPL;
 
 namespace {
@@ -56,31 +59,39 @@ class GcryptInitializer {
 
  private:
   void Init() {
+    const char* kGnuTlsFiles[] = {
+      "libgnutls.so.28",
+      "libgnutls.so.26",
+      "libgnutls.so",
+    };
     gcry_control(GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
-    const char* kGnuTlsFile = "libgnutls.so";
-    void* gnutls_lib = dlopen(kGnuTlsFile, RTLD_NOW);
-    if (!gnutls_lib) {
-      LOG(ERROR) << "Cannot load " << kGnuTlsFile;
+    for (size_t i = 0; i < arraysize(kGnuTlsFiles); ++i) {
+      void* gnutls_lib = dlopen(kGnuTlsFiles[i], RTLD_NOW);
+      if (!gnutls_lib) {
+        VLOG(1) << "Cannot load " << kGnuTlsFiles[i];
+        continue;
+      }
+      const char* kGnuTlsInitFuncName = "gnutls_global_init";
+      int (*pgnutls_global_init)(void) = reinterpret_cast<int(*)()>(
+          dlsym(gnutls_lib, kGnuTlsInitFuncName));
+      if (!pgnutls_global_init) {
+        VLOG(1) << "Could not find " << kGnuTlsInitFuncName
+                << " in " << kGnuTlsFiles[i];
+        continue;
+      }
+      if ((*pgnutls_global_init)() != 0)
+        LOG(ERROR) << "gnutls_global_init() failed";
       return;
     }
-    const char* kGnuTlsInitFuncName = "gnutls_global_init";
-    int (*pgnutls_global_init)(void) = reinterpret_cast<int(*)()>(
-        dlsym(gnutls_lib, kGnuTlsInitFuncName));
-    if (!pgnutls_global_init) {
-      LOG(ERROR) << "Could not find " << kGnuTlsInitFuncName
-                 << " in " << kGnuTlsFile;
-      return;
-    }
-    if ((*pgnutls_global_init)() != 0)
-      LOG(ERROR) << "Gnutls initialization failed";
+    LOG(ERROR) << "Cannot find libgnutls";
   }
 };
 
-static base::LazyInstance<GcryptInitializer> g_gcrypt_initializer(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<GcryptInitializer> g_gcrypt_initializer =
+    LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
-#endif  // defined(OS_MACOSX)
+#endif  // !defined(OS_MACOSX)
 
 namespace printing {
 
@@ -94,14 +105,15 @@ class PrintBackendCUPS : public PrintBackend {
   virtual ~PrintBackendCUPS() {}
 
   // PrintBackend implementation.
-  virtual bool EnumeratePrinters(PrinterList* printer_list);
+  virtual bool EnumeratePrinters(PrinterList* printer_list) OVERRIDE;
 
-  virtual std::string GetDefaultPrinterName();
+  virtual std::string GetDefaultPrinterName() OVERRIDE;
 
-  virtual bool GetPrinterCapsAndDefaults(const std::string& printer_name,
-                                         PrinterCapsAndDefaults* printer_info);
+  virtual bool GetPrinterCapsAndDefaults(
+      const std::string& printer_name,
+      PrinterCapsAndDefaults* printer_info) OVERRIDE;
 
-  virtual bool IsValidPrinter(const std::string& printer_name);
+  virtual bool IsValidPrinter(const std::string& printer_name) OVERRIDE;
 
  private:
   // Following functions are wrappers around corresponding CUPS functions.
@@ -259,7 +271,7 @@ int PrintBackendCUPS::GetDests(cups_dest_t** dests) {
 FilePath PrintBackendCUPS::GetPPD(const char* name) {
   // cupsGetPPD returns a filename stored in a static buffer in CUPS.
   // Protect this code with lock.
-  static base::Lock ppd_lock;
+  CR_DEFINE_STATIC_LOCAL(base::Lock, ppd_lock, ());
   base::AutoLock ppd_autolock(ppd_lock);
   FilePath ppd_path;
   const char* ppd_file_path = NULL;

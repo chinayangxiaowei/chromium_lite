@@ -1,10 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PREFS_TESTING_PREF_STORE_H_
 #define CHROME_BROWSER_PREFS_TESTING_PREF_STORE_H_
 #pragma once
+
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
@@ -22,24 +24,24 @@ class TestingPrefStore : public PersistentPrefStore {
 
   // Overriden from PrefStore.
   virtual ReadResult GetValue(const std::string& key,
-                              const base::Value** result) const;
-  virtual void AddObserver(PrefStore::Observer* observer);
-  virtual void RemoveObserver(PrefStore::Observer* observer);
-  virtual bool IsInitializationComplete() const;
+                              const base::Value** result) const OVERRIDE;
+  virtual void AddObserver(PrefStore::Observer* observer) OVERRIDE;
+  virtual void RemoveObserver(PrefStore::Observer* observer) OVERRIDE;
+  virtual size_t NumberOfObservers() const OVERRIDE;
+  virtual bool IsInitializationComplete() const OVERRIDE;
 
   // PersistentPrefStore overrides:
   virtual ReadResult GetMutableValue(const std::string& key,
-                                     base::Value** result);
-  virtual void ReportValueChanged(const std::string& key);
-  virtual void SetValue(const std::string& key, base::Value* value);
-  virtual void SetValueSilently(const std::string& key, base::Value* value);
-  virtual void RemoveValue(const std::string& key);
-  virtual bool ReadOnly() const;
-  virtual PersistentPrefStore::PrefReadError ReadPrefs();
-  virtual void ReadPrefsAsync(ReadErrorDelegate* error_delegate);
-  virtual bool WritePrefs();
-  virtual void ScheduleWritePrefs() {}
-  virtual void CommitPendingWrite() {}
+                                     base::Value** result) OVERRIDE;
+  virtual void ReportValueChanged(const std::string& key) OVERRIDE;
+  virtual void SetValue(const std::string& key, base::Value* value) OVERRIDE;
+  virtual void SetValueSilently(const std::string& key,
+                                base::Value* value) OVERRIDE;
+  virtual void RemoveValue(const std::string& key) OVERRIDE;
+  virtual bool ReadOnly() const OVERRIDE;
+  virtual PersistentPrefStore::PrefReadError ReadPrefs() OVERRIDE;
+  virtual void ReadPrefsAsync(ReadErrorDelegate* error_delegate) OVERRIDE;
+  virtual void CommitPendingWrite() OVERRIDE {}
 
   // Marks the store as having completed initialization.
   void SetInitializationCompleted();
@@ -60,8 +62,6 @@ class TestingPrefStore : public PersistentPrefStore {
   // Getter and Setter methods for setting and getting the state of the
   // |TestingPrefStore|.
   virtual void set_read_only(bool read_only);
-  virtual void set_prefs_written(bool status);
-  virtual bool get_prefs_written();
 
  private:
   // Stores the preference values.

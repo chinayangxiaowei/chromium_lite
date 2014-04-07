@@ -12,16 +12,19 @@
 #include "ppapi/c/ppb_var.h"
 #include "ppapi/c/trusted/ppb_audio_trusted.h"
 #include "ppapi/proxy/enter_proxy.h"
-#include "ppapi/proxy/interface_id.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "ppapi/shared_impl/audio_impl.h"
+#include "ppapi/shared_impl/api_id.h"
+#include "ppapi/shared_impl/platform_file.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
+#include "ppapi/shared_impl/ppb_audio_shared.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/thunk/ppb_audio_config_api.h"
 #include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/resource_creation_api.h"
 #include "ppapi/thunk/thunk.h"
 
+using ppapi::IntToPlatformFile;
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_Audio_API;
 using ppapi::thunk::PPB_AudioConfig_API;
@@ -29,7 +32,7 @@ using ppapi::thunk::PPB_AudioConfig_API;
 namespace ppapi {
 namespace proxy {
 
-class Audio : public Resource, public AudioImpl {
+class Audio : public Resource, public PPB_Audio_Shared {
  public:
   Audio(const HostResource& audio_id,
         PP_Resource config_id,
@@ -64,11 +67,11 @@ Audio::Audio(const HostResource& audio_id,
     : Resource(audio_id),
       config_(config_id) {
   SetCallback(callback, user_data);
-  PluginResourceTracker::GetInstance()->AddRefResource(config_);
+  PpapiGlobals::Get()->GetResourceTracker()->AddRefResource(config_);
 }
 
 Audio::~Audio() {
-  PluginResourceTracker::GetInstance()->ReleaseResource(config_);
+  PpapiGlobals::Get()->GetResourceTracker()->ReleaseResource(config_);
 }
 
 PPB_Audio_API* Audio::AsPPB_Audio_API() {
@@ -77,7 +80,7 @@ PPB_Audio_API* Audio::AsPPB_Audio_API() {
 
 PP_Resource Audio::GetCurrentConfig() {
   // AddRef for the caller.
-  PluginResourceTracker::GetInstance()->AddRefResource(config_);
+  PpapiGlobals::Get()->GetResourceTracker()->AddRefResource(config_);
   return config_;
 }
 
@@ -87,7 +90,7 @@ PP_Bool Audio::StartPlayback() {
   SetStartPlaybackState();
   PluginDispatcher::GetForResource(this)->Send(
       new PpapiHostMsg_PPBAudio_StartOrStop(
-          INTERFACE_ID_PPB_AUDIO, host_resource(), true));
+          API_ID_PPB_AUDIO, host_resource(), true));
   return PP_TRUE;
 }
 
@@ -96,7 +99,7 @@ PP_Bool Audio::StopPlayback() {
     return PP_TRUE;
   PluginDispatcher::GetForResource(this)->Send(
       new PpapiHostMsg_PPBAudio_StartOrStop(
-          INTERFACE_ID_PPB_AUDIO, host_resource(), false));
+          API_ID_PPB_AUDIO, host_resource(), false));
   SetStopPlaybackState();
   return PP_TRUE;
 }
@@ -114,46 +117,12 @@ int32_t Audio::GetSharedMemory(int* shm_handle, uint32_t* shm_size) {
   return PP_ERROR_NOTSUPPORTED;  // Don't proxy the trusted interface.
 }
 
-namespace {
-
-InterfaceProxy* CreateAudioProxy(Dispatcher* dispatcher,
-                                 const void* target_interface) {
-  return new PPB_Audio_Proxy(dispatcher, target_interface);
-}
-
-base::PlatformFile IntToPlatformFile(int32_t handle) {
-  // TODO(piman/brettw): Change trusted interface to return a PP_FileHandle,
-  // those casts are ugly.
-#if defined(OS_WIN)
-  return reinterpret_cast<HANDLE>(static_cast<intptr_t>(handle));
-#elif defined(OS_POSIX)
-  return handle;
-#else
-  #error Not implemented.
-#endif
-}
-
-}  // namespace
-
-PPB_Audio_Proxy::PPB_Audio_Proxy(Dispatcher* dispatcher,
-                                 const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface),
+PPB_Audio_Proxy::PPB_Audio_Proxy(Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
       callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
 }
 
 PPB_Audio_Proxy::~PPB_Audio_Proxy() {
-}
-
-// static
-const InterfaceProxy::Info* PPB_Audio_Proxy::GetInfo() {
-  static const Info info = {
-    thunk::GetPPB_Audio_Thunk(),
-    PPB_AUDIO_INTERFACE,
-    INTERFACE_ID_PPB_AUDIO,
-    false,
-    &CreateAudioProxy,
-  };
-  return &info;
 }
 
 // static
@@ -170,9 +139,12 @@ PP_Resource PPB_Audio_Proxy::CreateProxyResource(
   if (config.failed())
     return 0;
 
+  if (!audio_callback)
+    return 0;
+
   HostResource result;
   dispatcher->Send(new PpapiHostMsg_PPBAudio_Create(
-      INTERFACE_ID_PPB_AUDIO, instance_id,
+      API_ID_PPB_AUDIO, instance_id,
       config.object()->GetSampleRate(), config.object()->GetSampleFrameCount(),
       &result));
   if (result.is_null())
@@ -242,16 +214,19 @@ void PPB_Audio_Proxy::OnMsgCreate(PP_Instance instance_id,
 
   // Clean up the temporary audio config resource we made.
   const PPB_Core* core = static_cast<const PPB_Core*>(
-      dispatcher()->GetLocalInterface(PPB_CORE_INTERFACE));
+      dispatcher()->local_get_interface()(PPB_CORE_INTERFACE));
   core->ReleaseResource(audio_config_res);
 }
 
 void PPB_Audio_Proxy::OnMsgStartOrStop(const HostResource& audio_id,
                                        bool play) {
+  EnterHostFromHostResource<PPB_Audio_API> enter(audio_id);
+  if (enter.failed())
+    return;
   if (play)
-    ppb_audio_target()->StartPlayback(audio_id.host_resource());
+    enter.object()->StartPlayback();
   else
-    ppb_audio_target()->StopPlayback(audio_id.host_resource());
+    enter.object()->StopPlayback();
 }
 
 // Processed in the plugin (message from host).
@@ -297,7 +272,7 @@ void PPB_Audio_Proxy::AudioChannelConnected(
   // us, as long as the remote side always closes the handles it receives
   // (in OnMsgNotifyAudioStreamCreated), even in the failure case.
   dispatcher()->Send(new PpapiMsg_PPBAudio_NotifyAudioStreamCreated(
-      INTERFACE_ID_PPB_AUDIO, resource, result_code, socket_handle,
+      API_ID_PPB_AUDIO, resource, result_code, socket_handle,
       shared_memory, shared_memory_length));
 }
 
@@ -307,7 +282,7 @@ int32_t PPB_Audio_Proxy::GetAudioConnectedHandles(
     base::SharedMemoryHandle* foreign_shared_memory_handle,
     uint32_t* shared_memory_length) {
   // Get the audio interface which will give us the handles.
-  EnterResourceNoLock<PPB_Audio_API> enter(resource.host_resource(), false);
+  EnterHostFromHostResource<PPB_Audio_API> enter(resource);
   if (enter.failed())
     return PP_ERROR_NOINTERFACE;
 

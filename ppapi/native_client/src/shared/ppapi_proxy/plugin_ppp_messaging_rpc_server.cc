@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ void PppMessagingRpcServer::PPP_Messaging_HandleMessage(
   NaClSrpcClosureRunner runner(done);
 
   PP_Var message;
-  if (!DeserializeTo(rpc->channel, message_bytes, message_size, 1, &message))
+  if (!DeserializeTo(message_bytes, message_size, 1, &message))
     return;
   PPPMessagingInterface()->HandleMessage(instance, message);
   DebugPrintf("PPP_Messaging::HandleMessage\n");

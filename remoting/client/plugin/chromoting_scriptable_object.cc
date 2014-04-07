@@ -1,11 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/client/plugin/chromoting_scriptable_object.h"
 
+#include "base/bind.h"
 #include "base/logging.h"
 #include "base/message_loop_proxy.h"
+#include "base/string_split.h"
 // TODO(wez): Remove this when crbug.com/86353 is complete.
 #include "ppapi/cpp/private/var_private.h"
 #include "remoting/base/auth_token_util.h"
@@ -28,11 +30,11 @@ const char kDebugInfo[] = "debugInfo";
 const char kDesktopHeight[] = "desktopHeight";
 const char kDesktopWidth[] = "desktopWidth";
 const char kDesktopSizeUpdate[] = "desktopSizeUpdate";
-const char kLoginChallenge[] = "loginChallenge";
 const char kSendIq[] = "sendIq";
-const char kQualityAttribute[] = "quality";
 const char kStatusAttribute[] = "status";
+const char kErrorAttribute[] = "error";
 const char kVideoBandwidthAttribute[] = "videoBandwidth";
+const char kVideoFrameRateAttribute[] = "videoFrameRate";
 const char kVideoCaptureLatencyAttribute[] = "videoCaptureLatency";
 const char kVideoEncodeLatencyAttribute[] = "videoEncodeLatency";
 const char kVideoDecodeLatencyAttribute[] = "videoDecodeLatency";
@@ -44,8 +46,7 @@ const char kRoundTripLatencyAttribute[] = "roundTripLatency";
 ChromotingScriptableObject::ChromotingScriptableObject(
     ChromotingInstance* instance, base::MessageLoopProxy* plugin_message_loop)
     : instance_(instance),
-      plugin_message_loop_(plugin_message_loop),
-      ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)) {
+      plugin_message_loop_(plugin_message_loop) {
 }
 
 ChromotingScriptableObject::~ChromotingScriptableObject() {
@@ -57,7 +58,7 @@ void ChromotingScriptableObject::Init() {
 
   // Plugin API version.
   // This should be incremented whenever the API interface changes.
-  AddAttribute(kApiVersionAttribute, Var(2));
+  AddAttribute(kApiVersionAttribute, Var(4));
 
   // This should be updated whenever we remove support for an older version
   // of the API.
@@ -74,25 +75,27 @@ void ChromotingScriptableObject::Init() {
   AddAttribute("STATUS_CLOSED", Var(STATUS_CLOSED));
   AddAttribute("STATUS_FAILED", Var(STATUS_FAILED));
 
-  // Connection quality.
-  AddAttribute(kQualityAttribute, Var(QUALITY_UNKNOWN));
+  // Connection error.
+  AddAttribute(kErrorAttribute, Var(ERROR_NONE));
 
-  // Connection quality values.
-  AddAttribute("QUALITY_UNKNOWN", Var(QUALITY_UNKNOWN));
-  AddAttribute("QUALITY_GOOD", Var(QUALITY_GOOD));
-  AddAttribute("QUALITY_BAD", Var(QUALITY_BAD));
+  // Connection status values.
+  AddAttribute("ERROR_NONE", Var(ERROR_NONE));
+  AddAttribute("ERROR_HOST_IS_OFFLINE", Var(ERROR_HOST_IS_OFFLINE));
+  AddAttribute("ERROR_SESSION_REJECTED", Var(ERROR_SESSION_REJECTED));
+  AddAttribute("ERROR_INCOMPATIBLE_PROTOCOL", Var(ERROR_INCOMPATIBLE_PROTOCOL));
+  AddAttribute("ERROR_FAILURE_NONE", Var(ERROR_NETWORK_FAILURE));
 
   // Debug info to display.
   AddAttribute(kConnectionInfoUpdate, Var());
   AddAttribute(kDebugInfo, Var());
   AddAttribute(kDesktopSizeUpdate, Var());
-  AddAttribute(kLoginChallenge, Var());
   AddAttribute(kSendIq, Var());
   AddAttribute(kDesktopWidth, Var(0));
   AddAttribute(kDesktopHeight, Var(0));
 
   // Statistics.
   AddAttribute(kVideoBandwidthAttribute, Var());
+  AddAttribute(kVideoFrameRateAttribute, Var());
   AddAttribute(kVideoCaptureLatencyAttribute, Var());
   AddAttribute(kVideoEncodeLatencyAttribute, Var());
   AddAttribute(kVideoDecodeLatencyAttribute, Var());
@@ -101,10 +104,11 @@ void ChromotingScriptableObject::Init() {
 
   AddMethod("connect", &ChromotingScriptableObject::DoConnect);
   AddMethod("disconnect", &ChromotingScriptableObject::DoDisconnect);
-  AddMethod("submitLoginInfo", &ChromotingScriptableObject::DoSubmitLogin);
-  AddMethod("setScaleToFit", &ChromotingScriptableObject::DoSetScaleToFit);
   AddMethod("onIq", &ChromotingScriptableObject::DoOnIq);
   AddMethod("releaseAllKeys", &ChromotingScriptableObject::DoReleaseAllKeys);
+
+  // Older versions of the web app expect a setScaleToFit method.
+  AddMethod("setScaleToFit", &ChromotingScriptableObject::DoNothing);
 }
 
 bool ChromotingScriptableObject::HasProperty(const Var& name, Var* exception) {
@@ -161,6 +165,8 @@ Var ChromotingScriptableObject::GetProperty(const Var& name, Var* exception) {
   ChromotingStats* stats = instance_->GetStats();
   if (name.AsString() == kVideoBandwidthAttribute)
     return stats ? stats->video_bandwidth()->Rate() : Var();
+  if (name.AsString() == kVideoFrameRateAttribute)
+    return stats ? stats->video_frame_rate()->Rate() : Var();
   if (name.AsString() == kVideoCaptureLatencyAttribute)
     return stats ? stats->video_capture_ms()->Average() : Var();
   if (name.AsString() == kVideoEncodeLatencyAttribute)
@@ -194,13 +200,11 @@ void ChromotingScriptableObject::SetProperty(const Var& name,
     return;
   }
 
-  // Allow writing to connectionInfoUpdate or loginChallenge.  See top of
-  // chromoting_scriptable_object.h for the object interface definition.
+  // Not all properties are mutable.
   std::string property_name = name.AsString();
   if (property_name != kConnectionInfoUpdate &&
       property_name != kDebugInfo &&
       property_name != kDesktopSizeUpdate &&
-      property_name != kLoginChallenge &&
       property_name != kSendIq &&
       property_name != kDesktopWidth &&
       property_name != kDesktopHeight) {
@@ -226,22 +230,26 @@ Var ChromotingScriptableObject::Call(const Var& method_name,
   return (this->*(properties_[iter->second].method))(args, exception);
 }
 
-void ChromotingScriptableObject::SetConnectionInfo(ConnectionStatus status,
-                                                   ConnectionQuality quality) {
+void ChromotingScriptableObject::SetConnectionStatus(
+    ConnectionStatus status, ConnectionError error) {
+  VLOG(1) << "Connection status is updated: " << status;
+
+  bool signal = false;
+
   int status_index = property_names_[kStatusAttribute];
-  int quality_index = property_names_[kQualityAttribute];
-
-  LOG(INFO) << "Connection status is updated: " << status;
-
-  if (properties_[status_index].attribute.AsInt() != status ||
-      properties_[quality_index].attribute.AsInt() != quality) {
-    // Update the connection state properties..
+  if (properties_[status_index].attribute.AsInt() != status) {
     properties_[status_index].attribute = Var(status);
-    properties_[quality_index].attribute = Var(quality);
-
-    // Signal the Chromoting Tab UI to get the update connection state values.
-    SignalConnectionInfoChange();
+    signal = true;
   }
+
+  int error_index = property_names_[kErrorAttribute];
+  if (properties_[error_index].attribute.AsInt() != error) {
+    properties_[error_index].attribute = Var(error);
+    signal = true;
+  }
+
+  if (signal)
+    SignalConnectionInfoChange(status, error);
 }
 
 void ChromotingScriptableObject::LogDebugInfo(const std::string& info) {
@@ -269,13 +277,7 @@ void ChromotingScriptableObject::SetDesktopSize(int width, int height) {
     SignalDesktopSizeChange();
   }
 
-  LOG(INFO) << "Update desktop size to: " << width << " x " << height;
-}
-
-void ChromotingScriptableObject::SignalLoginChallenge() {
-  plugin_message_loop_->PostTask(
-      FROM_HERE, task_factory_.NewRunnableMethod(
-          &ChromotingScriptableObject::DoSignalLoginChallenge));
+  VLOG(1) << "Update desktop size to: " << width << " x " << height;
 }
 
 void ChromotingScriptableObject::AttachXmppProxy(PepperXmppProxy* xmpp_proxy) {
@@ -284,8 +286,8 @@ void ChromotingScriptableObject::AttachXmppProxy(PepperXmppProxy* xmpp_proxy) {
 
 void ChromotingScriptableObject::SendIq(const std::string& message_xml) {
   plugin_message_loop_->PostTask(
-      FROM_HERE, task_factory_.NewRunnableMethod(
-          &ChromotingScriptableObject::DoSendIq, message_xml));
+      FROM_HERE, base::Bind(
+          &ChromotingScriptableObject::DoSendIq, AsWeakPtr(), message_xml));
 }
 
 void ChromotingScriptableObject::AddAttribute(const std::string& name,
@@ -300,24 +302,28 @@ void ChromotingScriptableObject::AddMethod(const std::string& name,
   properties_.push_back(PropertyDescriptor(name, handler));
 }
 
-void ChromotingScriptableObject::SignalConnectionInfoChange() {
+void ChromotingScriptableObject::SignalConnectionInfoChange(int status,
+                                                            int error) {
   plugin_message_loop_->PostTask(
-      FROM_HERE, task_factory_.NewRunnableMethod(
-          &ChromotingScriptableObject::DoSignalConnectionInfoChange));
+      FROM_HERE, base::Bind(
+          &ChromotingScriptableObject::DoSignalConnectionInfoChange,
+          AsWeakPtr(), status, error));
 }
 
 void ChromotingScriptableObject::SignalDesktopSizeChange() {
   plugin_message_loop_->PostTask(
-      FROM_HERE, task_factory_.NewRunnableMethod(
-          &ChromotingScriptableObject::DoSignalDesktopSizeChange));
+      FROM_HERE, base::Bind(
+          &ChromotingScriptableObject::DoSignalDesktopSizeChange,
+          AsWeakPtr()));
 }
 
-void ChromotingScriptableObject::DoSignalConnectionInfoChange() {
+void ChromotingScriptableObject::DoSignalConnectionInfoChange(int status,
+                                                              int error) {
   Var exception;
   VarPrivate cb = GetProperty(Var(kConnectionInfoUpdate), &exception);
 
   // |this| must not be touched after Call() returns.
-  cb.Call(Var(), &exception);
+  cb.Call(Var(), Var(status), Var(error), &exception);
 
   if (!exception.is_undefined())
     LOG(ERROR) << "Exception when invoking connectionInfoUpdate JS callback.";
@@ -334,17 +340,6 @@ void ChromotingScriptableObject::DoSignalDesktopSizeChange() {
     LOG(ERROR) << "Exception when invoking JS callback"
                << exception.DebugString();
   }
-}
-
-void ChromotingScriptableObject::DoSignalLoginChallenge() {
-  Var exception;
-  VarPrivate cb = GetProperty(Var(kLoginChallenge), &exception);
-
-  // |this| must not be touched after Call() returns.
-  cb.Call(Var(), &exception);
-
-  if (!exception.is_undefined())
-    LOG(ERROR) << "Exception when invoking loginChallenge JS callback.";
 }
 
 void ChromotingScriptableObject::DoSendIq(const std::string& message_xml) {
@@ -364,33 +359,75 @@ Var ChromotingScriptableObject::DoConnect(const std::vector<Var>& args,
   //   host_jid
   //   host_public_key
   //   client_jid
-  //   access_code (optional)
+  //   shared_secret
+  //   authentication_methods
+  //   authentication_tag
+  ClientConfig config;
+
   unsigned int arg = 0;
   if (!args[arg].is_string()) {
     *exception = Var("The host_jid must be a string.");
     return Var();
   }
-  std::string host_jid = args[arg++].AsString();
+  config.host_jid = args[arg++].AsString();
 
   if (!args[arg].is_string()) {
     *exception = Var("The host_public_key must be a string.");
     return Var();
   }
-  std::string host_public_key = args[arg++].AsString();
+  config.host_public_key = args[arg++].AsString();
 
   if (!args[arg].is_string()) {
     *exception = Var("The client_jid must be a string.");
     return Var();
   }
-  std::string client_jid = args[arg++].AsString();
+  config.local_jid = args[arg++].AsString();
 
-  std::string access_code;
+  if (!args[arg].is_string()) {
+    *exception = Var("The shared_secret must be a string.");
+    return Var();
+  }
+  config.shared_secret = args[arg++].AsString();
+
+  // Older versions of the webapp do not supply the following two
+  // parameters.
+
+  // By default use V1 authentication.
+  config.use_v1_authenticator = true;
   if (args.size() > arg) {
     if (!args[arg].is_string()) {
-      *exception = Var("The access code must be a string.");
+      *exception = Var("The authentication_methods must be a string.");
       return Var();
     }
-    access_code = args[arg++].AsString();
+
+    std::string as_string = args[arg++].AsString();
+    if (as_string == "v1_token") {
+      config.use_v1_authenticator = true;
+    } else {
+      config.use_v1_authenticator = false;
+
+      std::vector<std::string> auth_methods;
+      base::SplitString(as_string, ',', &auth_methods);
+      for (std::vector<std::string>::iterator it = auth_methods.begin();
+           it != auth_methods.end(); ++it) {
+        protocol::AuthenticationMethod authentication_method =
+            protocol::AuthenticationMethod::FromString(*it);
+        if (authentication_method.is_valid())
+          config.authentication_methods.push_back(authentication_method);
+      }
+      if (config.authentication_methods.empty()) {
+        *exception = Var("No valid authentication methods specified.");
+        return Var();
+      }
+    }
+  }
+
+  if (args.size() > arg) {
+    if (!args[arg].is_string()) {
+      *exception = Var("The authentication_tag must be a string.");
+      return Var();
+    }
+    config.authentication_tag = args[arg++].AsString();
   }
 
   if (args.size() != arg) {
@@ -398,14 +435,9 @@ Var ChromotingScriptableObject::DoConnect(const std::vector<Var>& args,
     return Var();
   }
 
-  LOG(INFO) << "Connecting to host.";
-  VLOG(1) << "client_jid: " << client_jid << ", host_jid: " << host_jid
-          << ", access_code: " << access_code;
-  ClientConfig config;
-  config.local_jid = client_jid;
-  config.host_jid = host_jid;
-  config.host_public_key = host_public_key;
-  config.access_code = access_code;
+  VLOG(1) << "Connecting to host. "
+          << "client_jid: " << config.local_jid
+          << ", host_jid: " << config.host_jid;
   instance_->Connect(config);
 
   return Var();
@@ -413,50 +445,13 @@ Var ChromotingScriptableObject::DoConnect(const std::vector<Var>& args,
 
 Var ChromotingScriptableObject::DoDisconnect(const std::vector<Var>& args,
                                              Var* exception) {
-  LOG(INFO) << "Disconnecting from host.";
-
+  VLOG(1) << "Disconnecting from host.";
   instance_->Disconnect();
   return Var();
 }
 
-Var ChromotingScriptableObject::DoSubmitLogin(const std::vector<Var>& args,
-                                              Var* exception) {
-  if (args.size() != 2) {
-    *exception = Var("Usage: login(username, password)");
-    return Var();
-  }
-
-  if (!args[0].is_string()) {
-    *exception = Var("Username must be a string.");
-    return Var();
-  }
-  std::string username = args[0].AsString();
-
-  if (!args[1].is_string()) {
-    *exception = Var("Password must be a string.");
-    return Var();
-  }
-  std::string password = args[1].AsString();
-
-  LOG(INFO) << "Submitting login info to host.";
-  instance_->SubmitLoginInfo(username, password);
-  return Var();
-}
-
-Var ChromotingScriptableObject::DoSetScaleToFit(const std::vector<Var>& args,
-                                                Var* exception) {
-  if (args.size() != 1) {
-    *exception = Var("Usage: setScaleToFit(scale_to_fit)");
-    return Var();
-  }
-
-  if (!args[0].is_bool()) {
-    *exception = Var("scale_to_fit must be a boolean.");
-    return Var();
-  }
-
-  LOG(INFO) << "Setting scale-to-fit.";
-  instance_->SetScaleToFit(args[0].AsBool());
+Var ChromotingScriptableObject::DoNothing(const std::vector<Var>& args,
+                                          Var* exception) {
   return Var();
 }
 

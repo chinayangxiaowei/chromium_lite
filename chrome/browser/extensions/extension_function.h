@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,21 @@
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_FUNCTION_H_
 #pragma once
 
-#include <string>
 #include <list>
+#include <string>
 
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/message_loop_helpers.h"
 #include "base/process.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/common/extensions/extension.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/render_view_host_observer.h"
 #include "ipc/ipc_message.h"
 
 class Browser;
@@ -82,7 +84,11 @@ class ExtensionFunction
   // Returns a quota limit heuristic suitable for this function.
   // No quota limiting by default.
   virtual void GetQuotaLimitHeuristics(
-      std::list<QuotaLimitHeuristic*>* heuristics) const {}
+      QuotaLimitHeuristics* heuristics) const {}
+
+  // Called when the quota limit has been exceeded. The default implementation
+  // returns an error.
+  virtual void OnQuotaExceeded();
 
   // Specifies the raw arguments to the function, as a JSON value.
   virtual void SetArgs(const base::ListValue* args);
@@ -91,15 +97,21 @@ class ExtensionFunction
   // be empty).
   virtual const std::string GetResult();
 
+  // Retrieves the results of the function as a Value.
+  base::Value* GetResultValue();
+
   // Retrieves any error string from the function.
   virtual const std::string GetError();
+
+  // Sets the function's error string.
+  virtual void SetError(const std::string& error);
 
   // Specifies the name of the function.
   void set_name(const std::string& name) { name_ = name; }
   const std::string& name() const { return name_; }
 
-  void set_profile(void* profile) { profile_ = profile; }
-  void* profile() const { return profile_; }
+  void set_profile_id(void* profile_id) { profile_id_ = profile_id; }
+  void* profile_id() const { return profile_id_; }
 
   void set_extension(const Extension* extension) { extension_ = extension; }
   const Extension* GetExtension() const { return extension_.get(); }
@@ -135,7 +147,7 @@ class ExtensionFunction
   // Sends the result back to the extension.
   virtual void SendResponse(bool success) = 0;
 
-  // Common implementation for SenderResponse.
+  // Common implementation for SendResponse.
   void SendResponseImpl(base::ProcessHandle process,
                         IPC::Message::Sender* ipc_sender,
                         int routing_id,
@@ -155,7 +167,7 @@ class ExtensionFunction
   int request_id_;
 
   // The Profile of this function's extension.
-  void* profile_;
+  void* profile_id_;
 
   // The extension that called this function.
   scoped_refptr<const Extension> extension_;
@@ -201,9 +213,24 @@ class ExtensionFunction
 // this category.
 class UIThreadExtensionFunction : public ExtensionFunction {
  public:
+  // A delegate for use in testing, to intercept the call to SendResponse.
+  class DelegateForTests {
+   public:
+    virtual void OnSendResponse(UIThreadExtensionFunction* function,
+                                bool success) = 0;
+  };
+
   UIThreadExtensionFunction();
 
   virtual UIThreadExtensionFunction* AsUIThreadExtensionFunction() OVERRIDE;
+
+  void set_test_delegate(DelegateForTests* delegate) {
+    delegate_ = delegate;
+  }
+
+  // Called when a message was received.
+  // Should return true if it processed the message.
+  virtual bool OnMessageReceivedFromRenderView(const IPC::Message& message);
 
   // Set the profile which contains the extension that has originated this
   // function call.
@@ -220,14 +247,6 @@ class UIThreadExtensionFunction : public ExtensionFunction {
   ExtensionFunctionDispatcher* dispatcher() const {
     return dispatcher_.get();
   }
-
- protected:
-  friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
-  friend class DeleteTask<UIThreadExtensionFunction>;
-
-  virtual ~UIThreadExtensionFunction();
-
-  virtual void SendResponse(bool success);
 
   // Gets the "current" browser, if any.
   //
@@ -247,6 +266,15 @@ class UIThreadExtensionFunction : public ExtensionFunction {
   // shutdown when there are no active windows.
   Browser* GetCurrentBrowser();
 
+ protected:
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::UI>;
+  friend class base::DeleteHelper<UIThreadExtensionFunction>;
+
+  virtual ~UIThreadExtensionFunction();
+
+  virtual void SendResponse(bool success) OVERRIDE;
+
   // The dispatcher that will service this extension function call.
   base::WeakPtr<ExtensionFunctionDispatcher> dispatcher_;
 
@@ -258,25 +286,37 @@ class UIThreadExtensionFunction : public ExtensionFunction {
 
  private:
   // Helper class to track the lifetime of ExtensionFunction's RenderViewHost
-  // pointer and NULL it out when it dies. We use this separate class (instead
-  // of implementing NotificationObserver on ExtensionFunction) because it is
-  // common for subclasses of ExtensionFunction to be NotificationObservers, and
-  // it would be an easy error to forget to call the base class's Observe()
-  // method.
-  class RenderViewHostTracker : public NotificationObserver {
+  // pointer and NULL it out when it dies. It also allows us to filter IPC
+  // messages comming from the RenderViewHost. We use this separate class
+  // (instead of implementing NotificationObserver on ExtensionFunction) because
+  // it is/ common for subclasses of ExtensionFunction to be
+  // NotificationObservers, and it would be an easy error to forget to call the
+  // base class's Observe() method.
+  class RenderViewHostTracker : public content::NotificationObserver,
+                                public content::RenderViewHostObserver {
    public:
-    explicit RenderViewHostTracker(UIThreadExtensionFunction* function);
+    RenderViewHostTracker(UIThreadExtensionFunction* function,
+                          RenderViewHost* render_view_host);
    private:
     virtual void Observe(int type,
-                         const NotificationSource& source,
-                         const NotificationDetails& details) OVERRIDE;
+                         const content::NotificationSource& source,
+                         const content::NotificationDetails& details) OVERRIDE;
+
+    virtual void RenderViewHostDestroyed(
+        RenderViewHost* render_view_host) OVERRIDE;
+    virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+
     UIThreadExtensionFunction* function_;
-    NotificationRegistrar registrar_;
+    content::NotificationRegistrar registrar_;
+
+    DISALLOW_COPY_AND_ASSIGN(RenderViewHostTracker);
   };
 
-  virtual void Destruct() const;
+  virtual void Destruct() const OVERRIDE;
 
   scoped_ptr<RenderViewHostTracker> tracker_;
+
+  DelegateForTests* delegate_;
 };
 
 // Extension functions that run on the IO thread. This type of function avoids
@@ -311,14 +351,15 @@ class IOThreadExtensionFunction : public ExtensionFunction {
   }
 
  protected:
-  friend struct BrowserThread::DeleteOnThread<BrowserThread::IO>;
-  friend class DeleteTask<IOThreadExtensionFunction>;
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::IO>;
+  friend class base::DeleteHelper<IOThreadExtensionFunction>;
 
   virtual ~IOThreadExtensionFunction();
 
-  virtual void Destruct() const;
+  virtual void Destruct() const OVERRIDE;
 
-  virtual void SendResponse(bool success);
+  virtual void SendResponse(bool success) OVERRIDE;
 
  private:
   base::WeakPtr<ChromeRenderMessageFilter> ipc_sender_;

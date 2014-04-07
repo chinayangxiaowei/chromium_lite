@@ -8,44 +8,48 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
 #include "base/string_number_conversions.h"
-#include "base/task.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
+#include "chrome/browser/download/download_service.h"
+#include "chrome/browser/download/download_service_factory.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/extension_protocols.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/media/media_internals.h"
 #include "chrome/browser/net/chrome_cookie_notification_details.h"
-#include "chrome/browser/net/chrome_dns_cert_provenance_checker_factory.h"
+#include "chrome/browser/net/chrome_fraudulent_certificate_reporter.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
-#include "chrome/browser/net/pref_proxy_config_service.h"
 #include "chrome/browser/net/proxy_service_factory.h"
 #include "chrome/browser/notifications/desktop_notification_service_factory.h"
 #include "chrome/browser/policy/url_blacklist_manager.h"
 #include "chrome/browser/prefs/pref_service.h"
-#include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/transport_security_persister.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager_backend.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/chrome_blob_storage_context.h"
-#include "content/browser/host_zoom_map.h"
+#include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
 #include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "content/browser/resource_context.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/notification_service.h"
+#include "media/audio/audio_manager.h"
 #include "net/base/origin_bound_cert_service.h"
 #include "net/http/http_transaction_factory.h"
 #include "net/http/http_util.h"
@@ -55,14 +59,17 @@
 #include "net/url_request/url_request.h"
 #include "webkit/blob/blob_data.h"
 #include "webkit/blob/blob_url_request_job_factory.h"
+#include "webkit/database/database_tracker.h"
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_url_request_job_factory.h"
-#include "webkit/database/database_tracker.h"
 #include "webkit/quota/quota_manager.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/gview_request_interceptor.h"
+#include "chrome/browser/chromeos/proxy_config_service_impl.h"
 #endif  // defined(OS_CHROMEOS)
+
+using content::BrowserThread;
 
 namespace {
 
@@ -84,11 +91,8 @@ class ChromeCookieMonsterDelegate : public net::CookieMonster::Delegate {
       net::CookieMonster::Delegate::ChangeCause cause) {
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(this,
-            &ChromeCookieMonsterDelegate::OnCookieChangedAsyncHelper,
-            cookie,
-            removed,
-            cause));
+        base::Bind(&ChromeCookieMonsterDelegate::OnCookieChangedAsyncHelper,
+                   this, cookie, removed, cause));
   }
 
  private:
@@ -101,10 +105,10 @@ class ChromeCookieMonsterDelegate : public net::CookieMonster::Delegate {
     Profile* profile = profile_getter_.Run();
     if (profile) {
       ChromeCookieDetails cookie_details(&cookie, removed, cause);
-      NotificationService::current()->Notify(
+      content::NotificationService::current()->Notify(
           chrome::NOTIFICATION_COOKIE_CHANGED,
-          Source<Profile>(profile),
-          Details<ChromeCookieDetails>(&cookie_details));
+          content::Source<Profile>(profile),
+          content::Details<ChromeCookieDetails>(&cookie_details));
     }
   }
 
@@ -178,15 +182,6 @@ Profile* GetProfileOnUI(ProfileManager* profile_manager, Profile* profile) {
   return NULL;
 }
 
-prerender::PrerenderManager* GetPrerenderManagerOnUI(
-    const base::Callback<Profile*(void)>& profile_getter) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  Profile* profile = profile_getter.Run();
-  if (profile)
-    return profile->GetPrerenderManager();
-  return NULL;
-}
-
 }  // namespace
 
 void ProfileIOData::InitializeOnUIThread(Profile* profile) {
@@ -194,6 +189,7 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
   PrefService* pref_service = profile->GetPrefs();
 
   scoped_ptr<ProfileParams> params(new ProfileParams);
+  params->path = profile->GetPath();
   params->is_incognito = profile->IsOffTheRecord();
   params->clear_local_state_on_exit =
       pref_service->GetBoolean(prefs::kClearSiteDataOnExit);
@@ -203,7 +199,8 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
   // Set up Accept-Language and Accept-Charset header values
   params->accept_language = net::HttpUtil::GenerateAcceptLanguageHeader(
       pref_service->GetString(prefs::kAcceptLanguages));
-  std::string default_charset = pref_service->GetString(prefs::kDefaultCharset);
+  std::string default_charset =
+      pref_service->GetString(prefs::kGlobalDefaultCharset);
   params->accept_charset =
       net::HttpUtil::GenerateAcceptCharsetHeader(default_charset);
 
@@ -222,10 +219,11 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
   params->referrer_charset = default_charset;
 
   params->io_thread = g_browser_process->io_thread();
+  params->audio_manager = g_browser_process->audio_manager();
 
   params->host_content_settings_map = profile->GetHostContentSettingsMap();
+  params->cookie_settings = CookieSettings::GetForProfile(profile);
   params->host_zoom_map = profile->GetHostZoomMap();
-  params->transport_security_state = profile->GetTransportSecurityState();
   params->ssl_config_service = profile->GetSSLConfigService();
   base::Callback<Profile*(void)> profile_getter =
       base::Bind(&GetProfileOnUI, g_browser_process->profile_manager(),
@@ -240,13 +238,13 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
   params->extension_info_map = profile->GetExtensionInfoMap();
   params->notification_service =
       DesktopNotificationServiceFactory::GetForProfile(profile);
-  params->prerender_manager_getter =
-      base::Bind(&GetPrerenderManagerOnUI, profile_getter);
   params->protocol_handler_registry = profile->GetProtocolHandlerRegistry();
 
-  params->proxy_config_service.reset(
-      ProxyServiceFactory::CreateProxyConfigService(
-          profile->GetProxyConfigTracker()));
+  ChromeProxyConfigService* proxy_config_service =
+      ProxyServiceFactory::CreateProxyConfigService(true);
+  params->proxy_config_service.reset(proxy_config_service);
+  profile->GetProxyConfigTracker()->SetChromeProxyConfigService(
+      proxy_config_service);
   params->profile = profile;
   profile_params_.reset(params.release());
 
@@ -258,6 +256,8 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
 #if defined(ENABLE_CONFIGURATION_POLICY)
   url_blacklist_manager_.reset(new policy::URLBlacklistManager(pref_service));
 #endif
+
+  initialized_on_UI_thread_ = true;
 }
 
 ProfileIOData::AppRequestContext::AppRequestContext() {}
@@ -285,7 +285,8 @@ ProfileIOData::ProfileParams::~ProfileParams() {}
 
 ProfileIOData::ProfileIOData(bool is_incognito)
     : initialized_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(resource_context_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(resource_context_(this)),
+      initialized_on_UI_thread_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
@@ -378,6 +379,10 @@ HostContentSettingsMap* ProfileIOData::GetHostContentSettingsMap() const {
   return host_content_settings_map_;
 }
 
+CookieSettings* ProfileIOData::GetCookieSettings() const {
+  return cookie_settings_;
+}
+
 DesktopNotificationService* ProfileIOData::GetNotificationService() const {
   return notification_service_;
 }
@@ -397,7 +402,12 @@ void ProfileIOData::LazyInitialize() const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   if (initialized_)
     return;
-  DCHECK(profile_params_.get());
+
+  // TODO(jhawkins): Remove once crbug.com/102004 is fixed.
+  CHECK(initialized_on_UI_thread_);
+
+  // TODO(jhawkins): Return to DCHECK once crbug.com/102004 is fixed.
+  CHECK(profile_params_.get());
 
   IOThread* const io_thread = profile_params_->io_thread;
   IOThread::Globals* const io_thread_globals = io_thread->globals();
@@ -418,9 +428,9 @@ void ProfileIOData::LazyInitialize() const {
         profile_params_->profile,
         &enable_referrers_));
 
-  dns_cert_checker_.reset(
-      CreateDnsCertProvenanceChecker(io_thread_globals->dnsrr_resolver.get(),
-                                     main_request_context_));
+  fraudulent_certificate_reporter_.reset(
+      new chrome_browser_net::ChromeFraudulentCertificateReporter(
+          main_request_context_));
 
   proxy_service_.reset(
       ProxyServiceFactory::CreateProxyService(
@@ -428,6 +438,13 @@ void ProfileIOData::LazyInitialize() const {
           io_thread_globals->proxy_script_fetcher_context.get(),
           profile_params_->proxy_config_service.release(),
           command_line));
+
+  transport_security_state_.reset(new net::TransportSecurityState(
+      command_line.GetSwitchValueASCII(switches::kHstsHosts)));
+  transport_security_persister_.reset(
+      new TransportSecurityPersister(transport_security_state_.get(),
+                                     profile_params_->path,
+                                     profile_params_->is_incognito));
 
   // NOTE(willchan): Keep these protocol handlers in sync with
   // ProfileIOData::IsHandledProtocol().
@@ -465,13 +482,16 @@ void ProfileIOData::LazyInitialize() const {
           profile_params_->file_system_context,
           BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
   DCHECK(set_protocol);
-#if defined(OS_CHROMEOS)
+#if defined(OS_CHROMEOS) && !defined(GOOGLE_CHROME_BUILD)
   // Install the GView request interceptor that will redirect requests
   // of compatible documents (PDF, etc) to the GView document viewer.
   const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
   if (parsed_command_line.HasSwitch(switches::kEnableGView))
     job_factory_->AddInterceptor(new chromeos::GViewRequestInterceptor);
-#endif  // defined(OS_CHROMEOS)
+#endif  // defined(OS_CHROMEOS) && !defined(GOOGLE_CHROME_BUILD)
+
+  media_stream_manager_.reset(
+      new media_stream::MediaStreamManager(profile_params_->audio_manager));
 
   // Take ownership over these parameters.
   database_tracker_ = profile_params_->database_tracker;
@@ -481,9 +501,9 @@ void ProfileIOData::LazyInitialize() const {
   quota_manager_ = profile_params_->quota_manager;
   host_zoom_map_ = profile_params_->host_zoom_map;
   host_content_settings_map_ = profile_params_->host_content_settings_map;
+  cookie_settings_ = profile_params_->cookie_settings;
   notification_service_ = profile_params_->notification_service;
   extension_info_map_ = profile_params_->extension_info_map;
-  prerender_manager_getter_ = profile_params_->prerender_manager_getter;
 
   resource_context_.set_host_resolver(io_thread_globals->host_resolver.get());
   resource_context_.set_request_context(main_request_context_);
@@ -493,10 +513,11 @@ void ProfileIOData::LazyInitialize() const {
   resource_context_.set_file_system_context(file_system_context_);
   resource_context_.set_quota_manager(quota_manager_);
   resource_context_.set_host_zoom_map(host_zoom_map_);
-  resource_context_.set_prerender_manager_getter(prerender_manager_getter_);
   resource_context_.SetUserData(NULL, const_cast<ProfileIOData*>(this));
   resource_context_.set_media_observer(
       io_thread_globals->media.media_internals.get());
+  resource_context_.set_media_stream_manager(media_stream_manager_.get());
+  resource_context_.set_audio_manager(profile_params_->audio_manager);
 
   LazyInitializeInternal(profile_params_.get());
 
@@ -510,8 +531,6 @@ void ProfileIOData::ApplyProfileParamsToContext(
   context->set_accept_language(profile_params_->accept_language);
   context->set_accept_charset(profile_params_->accept_charset);
   context->set_referrer_charset(profile_params_->referrer_charset);
-  context->set_transport_security_state(
-      profile_params_->transport_security_state);
   context->set_ssl_config_service(profile_params_->ssl_config_service);
 }
 
@@ -528,10 +547,9 @@ void ProfileIOData::ShutdownOnUIThread() {
       BrowserThread::IO, FROM_HERE,
       base::Bind(
           &ResourceDispatcherHost::CancelRequestsForContext,
-          base::Unretained(g_browser_process->resource_dispatcher_host()),
+          base::Unretained(ResourceDispatcherHost::Get()),
           &resource_context_));
-  bool posted = BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                                        new DeleteTask<ProfileIOData>(this));
+  bool posted = BrowserThread::DeleteSoon(BrowserThread::IO, FROM_HERE, this);
   if (!posted)
     delete this;
 }

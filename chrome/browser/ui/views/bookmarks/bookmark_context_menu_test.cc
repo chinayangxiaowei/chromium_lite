@@ -14,8 +14,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_context_menu.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/tab_contents/page_navigator.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/test/test_browser_thread.h"
 #include "grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,22 +23,17 @@
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #endif
 
+using content::BrowserThread;
+using content::OpenURLParams;
+using content::PageNavigator;
+using content::WebContents;
+
 namespace {
 
 // PageNavigator implementation that records the URL.
 class TestingPageNavigator : public PageNavigator {
  public:
-  // Deprecated. Please use one-argument variant.
-  // TODO(adriansc): Remove this method once refactoring changed all call
-  // sites.
-  virtual TabContents* OpenURL(const GURL& url,
-                               const GURL& referrer,
-                               WindowOpenDisposition disposition,
-                               PageTransition::Type transition) OVERRIDE {
-    return OpenURL(OpenURLParams(url, referrer, disposition, transition));
-  }
-
-  virtual TabContents* OpenURL(const OpenURLParams& params) OVERRIDE {
+  virtual WebContents* OpenURL(const OpenURLParams& params) OVERRIDE {
     urls_.push_back(params.url);
     return NULL;
   }
@@ -81,8 +76,8 @@ class BookmarkContextMenuTest : public testing::Test {
 
  protected:
   MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
   scoped_ptr<TestingProfile> profile_;
   BookmarkModel* model_;
   TestingPageNavigator navigator_;

@@ -1,17 +1,20 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/geolocation/network_location_provider.h"
 
+#include "base/bind.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/geolocation/access_token_store.h"
+#include "content/public/browser/access_token_store.h"
+
+using content::AccessTokenStore;
 
 namespace {
 // The maximum period of time we'll wait for a complete set of device data
 // before sending the request.
-const int kDataCompleteWaitPeriod = 1000 * 2;  // 2 seconds
+const int kDataCompleteWaitSeconds = 2;
 }  // namespace
 
 // static
@@ -114,7 +117,7 @@ NetworkLocationProvider::NetworkLocationProvider(
       is_wifi_data_complete_(false),
       access_token_(access_token),
       is_new_data_available_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(delayed_start_task_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   // Create the position cache.
   position_cache_.reset(new PositionCache());
 
@@ -135,7 +138,7 @@ void NetworkLocationProvider::UpdatePosition() {
   // TODO(joth): When called via the public (base class) interface, this should
   // poke each data provider to get them to expedite their next scan.
   // Whilst in the delayed start, only send request if all data is ready.
-  if (delayed_start_task_.empty() ||
+  if (!weak_factory_.HasWeakPtrs() ||
       (is_radio_data_complete_ && is_wifi_data_complete_)) {
     RequestPosition();
   }
@@ -208,9 +211,9 @@ bool NetworkLocationProvider::StartProvider(bool high_accuracy) {
 
   MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
-      delayed_start_task_.NewRunnableMethod(
-          &NetworkLocationProvider::RequestPosition),
-      kDataCompleteWaitPeriod);
+      base::Bind(&NetworkLocationProvider::RequestPosition,
+                 weak_factory_.GetWeakPtr()),
+      base::TimeDelta::FromSeconds(kDataCompleteWaitSeconds));
   // Get the device data.
   is_radio_data_complete_ = radio_data_provider_->GetData(&radio_data_);
   is_wifi_data_complete_ = wifi_data_provider_->GetData(&wifi_data_);
@@ -227,7 +230,7 @@ void NetworkLocationProvider::StopProvider() {
   }
   radio_data_provider_ = NULL;
   wifi_data_provider_ = NULL;
-  delayed_start_task_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 // Other methods
@@ -257,7 +260,7 @@ void NetworkLocationProvider::RequestPosition() {
   if (most_recent_authorized_host_.empty())
     return;
 
-  delayed_start_task_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
   is_new_data_available_ = false;
 
   // TODO(joth): Rather than cancel pending requests, we should create a new

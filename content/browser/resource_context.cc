@@ -5,8 +5,8 @@
 #include "content/browser/resource_context.h"
 
 #include "base/logging.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/plugin_process_host.h"
+#include "content/public/browser/browser_thread.h"
 #include "webkit/database/database_tracker.h"
 
 namespace content {
@@ -20,7 +20,9 @@ ResourceContext::ResourceContext()
       blob_storage_context_(NULL),
       quota_manager_(NULL),
       host_zoom_map_(NULL),
-      media_observer_(NULL) {
+      media_observer_(NULL),
+      media_stream_manager_(NULL),
+      audio_manager_(NULL) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
@@ -152,18 +154,28 @@ void ResourceContext::set_media_observer(MediaObserver* media_observer) {
   media_observer_ = media_observer;
 }
 
-const base::Callback<prerender::PrerenderManager*(void)>&
-ResourceContext::prerender_manager_getter() const {
+media_stream::MediaStreamManager*
+ResourceContext::media_stream_manager() const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   EnsureInitialized();
-  return prerender_manager_getter_;
+  return media_stream_manager_;
 }
 
-void ResourceContext::set_prerender_manager_getter(
-      const base::Callback<prerender::PrerenderManager*(void)>&
-          prerender_manager_getter) {
+void ResourceContext::set_media_stream_manager(
+    media_stream::MediaStreamManager* media_stream_manager) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  prerender_manager_getter_ = prerender_manager_getter;
+  media_stream_manager_ = media_stream_manager;
+}
+
+AudioManager* ResourceContext::audio_manager() const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  EnsureInitialized();
+  return audio_manager_;
+}
+
+void ResourceContext::set_audio_manager(AudioManager* audio_manager) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  audio_manager_ = audio_manager;
 }
 
 }  // namespace content

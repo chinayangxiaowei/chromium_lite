@@ -1,6 +1,7 @@
-// Copyright 2011 Google Inc. All Rights Reserved.
-// Author: ghc@google.com (Greg Cooper)
-//
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 // Interface to SHA1 digest computation.
 
 #ifndef GOOGLE_CACHEINVALIDATION_V2_SHA1_DIGEST_FUNCTION_H_
@@ -9,8 +10,8 @@
 #include <string>
 
 #include "base/sha1.h"
-#include "google/cacheinvalidation/stl-namespace.h"
 #include "google/cacheinvalidation/v2/digest-function.h"
+#include "google/cacheinvalidation/v2/stl-namespace.h"
 
 namespace invalidation {
 

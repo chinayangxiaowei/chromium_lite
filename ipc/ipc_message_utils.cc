@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -433,6 +433,10 @@ void ParamTraits<base::FileDescriptor>::Log(const param_type& p,
 #endif  // defined(OS_POSIX)
 
 void ParamTraits<IPC::ChannelHandle>::Write(Message* m, const param_type& p) {
+#if defined(OS_WIN)
+  // On Windows marshalling pipe handle is not supported.
+  DCHECK(p.pipe.handle == NULL);
+#endif  // defined (OS_WIN)
   WriteParam(m, p.name);
 #if defined(OS_POSIX)
   WriteParam(m, p.socket);
@@ -452,6 +456,7 @@ void ParamTraits<IPC::ChannelHandle>::Log(const param_type& p,
                                           std::string* l) {
   l->append(StringPrintf("ChannelHandle(%s", p.name.c_str()));
 #if defined(OS_POSIX)
+  l->append(", ");
   ParamTraits<base::FileDescriptor>::Log(p.socket, l);
 #endif
   l->append(")");
@@ -471,7 +476,7 @@ LogData::~LogData() {
 void ParamTraits<LogData>::Write(Message* m, const param_type& p) {
   WriteParam(m, p.channel);
   WriteParam(m, p.routing_id);
-  WriteParam(m, static_cast<int>(p.type));
+  WriteParam(m, p.type);
   WriteParam(m, p.flags);
   WriteParam(m, p.sent);
   WriteParam(m, p.receive);
@@ -480,18 +485,15 @@ void ParamTraits<LogData>::Write(Message* m, const param_type& p) {
 }
 
 bool ParamTraits<LogData>::Read(const Message* m, void** iter, param_type* r) {
-  int type = -1;
-  bool result =
+  return
       ReadParam(m, iter, &r->channel) &&
       ReadParam(m, iter, &r->routing_id) &&
-      ReadParam(m, iter, &type) &&
+      ReadParam(m, iter, &r->type) &&
       ReadParam(m, iter, &r->flags) &&
       ReadParam(m, iter, &r->sent) &&
       ReadParam(m, iter, &r->receive) &&
       ReadParam(m, iter, &r->dispatch) &&
       ReadParam(m, iter, &r->params);
-  r->type = static_cast<uint16>(type);
-  return result;
 }
 
 }  // namespace IPC

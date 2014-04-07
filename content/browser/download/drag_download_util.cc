@@ -1,21 +1,22 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/download/drag_download_util.h"
 
-#include "base/string_util.h"
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/task.h"
 #include "base/string_number_conversions.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/file_stream.h"
 #include "net/base/net_errors.h"
 
+using content::BrowserThread;
 using net::FileStream;
 
 namespace drag_download_util {
@@ -73,6 +74,9 @@ FileStream* CreateFileStreamForDrop(FilePath* file_path) {
       new_file_path = file_path->InsertBeforeExtension(suffix);
     }
 
+    // http://crbug.com/110709
+    base::ThreadRestrictions::ScopedAllowIO allow_io;
+
     // Explicitly (and redundantly check) for file -- despite the fact that our
     // open won't overwrite -- just to avoid log spew.
     if (!file_util::PathExists(new_file_path) &&
@@ -101,13 +105,13 @@ void PromiseFileFinalizer::Cleanup() {
 void PromiseFileFinalizer::OnDownloadCompleted(const FilePath& file_path) {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(this, &PromiseFileFinalizer::Cleanup));
+      base::Bind(&PromiseFileFinalizer::Cleanup, this));
 }
 
 void PromiseFileFinalizer::OnDownloadAborted() {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(this, &PromiseFileFinalizer::Cleanup));
+      base::Bind(&PromiseFileFinalizer::Cleanup, this));
 }
 
 }  // namespace drag_download_util

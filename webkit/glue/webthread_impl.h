@@ -1,29 +1,69 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef WEBKIT_GLUE_WEBTHREAD_IMPL_H_
 #define WEBKIT_GLUE_WEBTHREAD_IMPL_H_
 
+#include <map>
+
 #include "base/threading/thread.h"
 #include "base/memory/scoped_ptr.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebThread.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebThread.h"
+#include "webkit/glue/webkit_glue_export.h"
 
 namespace webkit_glue {
 
-class WebThreadImpl : public WebKit::WebThread {
+class WebThreadBase : public WebKit::WebThread {
  public:
-  WebThreadImpl(const char* name);
-  virtual ~WebThreadImpl();
+  virtual ~WebThreadBase();
 
-  virtual void postTask(Task* task);
-#ifdef WEBTHREAD_HAS_LONGLONG_CHANGE
-  virtual void postDelayedTask(Task* task, long long delay_ms);
-#else
-  virtual void postDelayedTask(Task* task, int64 delay_ms);
-#endif
+  virtual void addTaskObserver(TaskObserver* observer);
+  virtual void removeTaskObserver(TaskObserver* observer);
 
  protected:
+  WebThreadBase();
+
+ private:
+  class TaskObserverAdapter;
+
+  virtual bool IsCurrentThread() const = 0;
+
+  typedef std::map<TaskObserver*, TaskObserverAdapter*> TaskObserverMap;
+  TaskObserverMap task_observer_map_;
+};
+
+class WebThreadImpl : public WebThreadBase {
+ public:
+  WEBKIT_GLUE_EXPORT explicit WebThreadImpl(const char* name);
+  WEBKIT_GLUE_EXPORT virtual ~WebThreadImpl();
+
+  virtual void postTask(Task* task);
+  virtual void postDelayedTask(Task* task, long long delay_ms);
+
+  virtual void enterRunLoop();
+  virtual void exitRunLoop();
+
+  MessageLoop* message_loop() const { return thread_->message_loop(); }
+
+ private:
+  virtual bool IsCurrentThread() const OVERRIDE;
   scoped_ptr<base::Thread> thread_;
+};
+
+class WebThreadImplForMessageLoop : public WebThreadBase {
+ public:
+  explicit WebThreadImplForMessageLoop(base::MessageLoopProxy* message_loop);
+  virtual ~WebThreadImplForMessageLoop();
+
+  virtual void postTask(Task* task);
+  virtual void postDelayedTask(Task* task, long long delay_ms);
+
+  virtual void enterRunLoop();
+  virtual void exitRunLoop();
+
+ private:
+  virtual bool IsCurrentThread() const OVERRIDE;
+  scoped_refptr<base::MessageLoopProxy> message_loop_;
 };
 
 } // namespace webkit_glue

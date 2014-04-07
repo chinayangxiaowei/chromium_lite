@@ -8,7 +8,8 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
@@ -21,8 +22,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -53,31 +55,27 @@ void VirtualKeyboardManagerHandler::GetLocalizedValues(
   RegisterTitle(localized_strings, "virtualKeyboardPage",
                 IDS_OPTIONS_SETTINGS_LANGUAGES_VIRTUAL_KEYBOARD_SETTINGS_TITLE);
 
-  // Do not call GetVirtualKeyboardList() here since |web_ui_| is not ready yet.
+  // Do not call GetVirtualKeyboardList() here since |web_ui()| is not ready
+  // yet.
 }
 
 void VirtualKeyboardManagerHandler::Initialize() {
 }
 
 void VirtualKeyboardManagerHandler::RegisterMessages() {
-  DCHECK(web_ui_);
   // Register handler functions for chrome.send().
-  web_ui_->RegisterMessageCallback("updateVirtualKeyboardList",
-      NewCallback(
-          this,
-          &VirtualKeyboardManagerHandler::UpdateVirtualKeyboardList));
-  web_ui_->RegisterMessageCallback("setVirtualKeyboardPreference",
-      NewCallback(
-          this,
-          &VirtualKeyboardManagerHandler::SetVirtualKeyboardPreference));
-  web_ui_->RegisterMessageCallback("clearVirtualKeyboardPreference",
-      NewCallback(
-          this,
-          &VirtualKeyboardManagerHandler::ClearVirtualKeyboardPreference));
+  web_ui()->RegisterMessageCallback("updateVirtualKeyboardList",
+      base::Bind(&VirtualKeyboardManagerHandler::UpdateVirtualKeyboardList,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("setVirtualKeyboardPreference",
+      base::Bind(&VirtualKeyboardManagerHandler::SetVirtualKeyboardPreference,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("clearVirtualKeyboardPreference",
+      base::Bind(&VirtualKeyboardManagerHandler::ClearVirtualKeyboardPreference,
+                 base::Unretained(this)));
 }
 
 ListValue* VirtualKeyboardManagerHandler::GetVirtualKeyboardList() {
-  DCHECK(web_ui_);
   ime::InputMethodManager* input_method =
       ime::InputMethodManager::GetInstance();
 
@@ -89,7 +87,7 @@ ListValue* VirtualKeyboardManagerHandler::GetVirtualKeyboardList() {
       input_method->GetUrlToKeyboardMapping();
 
   // Get the current pref values.
-  PrefService* prefs = Profile::FromWebUI(web_ui_)->GetPrefs();
+  PrefService* prefs = Profile::FromWebUI(web_ui())->GetPrefs();
   DCHECK(prefs);
   const DictionaryValue* virtual_keyboard_pref =
       prefs->GetDictionary(prefs::kLanguagePreferredVirtualKeyboard);
@@ -102,13 +100,12 @@ void VirtualKeyboardManagerHandler::UpdateVirtualKeyboardList(
     const ListValue* args) {
   scoped_ptr<Value> virtual_keyboards(GetVirtualKeyboardList());
   DCHECK(virtual_keyboards.get());
-  web_ui_->CallJavascriptFunction(
+  web_ui()->CallJavascriptFunction(
       "VirtualKeyboardManager.updateVirtualKeyboardList", *virtual_keyboards);
 }
 
 void VirtualKeyboardManagerHandler::SetVirtualKeyboardPreference(
     const ListValue* args) {
-  DCHECK(web_ui_);
   std::string layout, url;
   if (!args || !args->GetString(0, &layout) || !args->GetString(1, &url)) {
     LOG(ERROR) << "SetVirtualKeyboardPreference: Invalid argument";
@@ -124,7 +121,7 @@ void VirtualKeyboardManagerHandler::SetVirtualKeyboardPreference(
     return;
   }
 
-  PrefService* prefs = Profile::FromWebUI(web_ui_)->GetPrefs();
+  PrefService* prefs = Profile::FromWebUI(web_ui())->GetPrefs();
   DCHECK(prefs);
   {
     DictionaryPrefUpdate updater(
@@ -137,7 +134,6 @@ void VirtualKeyboardManagerHandler::SetVirtualKeyboardPreference(
 
 void VirtualKeyboardManagerHandler::ClearVirtualKeyboardPreference(
     const ListValue* args) {
-  DCHECK(web_ui_);
   std::string layout;
   if (!args || !args->GetString(0, &layout)) {
     LOG(ERROR) << "ClearVirtualKeyboardPreference: Invalid argument";
@@ -152,7 +148,7 @@ void VirtualKeyboardManagerHandler::ClearVirtualKeyboardPreference(
     return;
   }
 
-  PrefService* prefs = Profile::FromWebUI(web_ui_)->GetPrefs();
+  PrefService* prefs = Profile::FromWebUI(web_ui())->GetPrefs();
   DCHECK(prefs);
   {
     DictionaryPrefUpdate updater(
@@ -203,10 +199,13 @@ ListValue* VirtualKeyboardManagerHandler::CreateVirtualKeyboardList(
       layout_list->Append(dictionary);
 
       // Set layout id as well as its human readable form.
+      ime::InputMethodManager* manager = ime::InputMethodManager::GetInstance();
       const ime::InputMethodDescriptor* desc =
-          ime::GetInputMethodDescriptorFromXkbId(layout_id);
+          manager->GetInputMethodUtil()->GetInputMethodDescriptorFromXkbId(
+              layout_id);
       const std::string layout_name = desc ?
-          ime::GetInputMethodDisplayNameFromId(desc->id()) : layout_id;
+          manager->GetInputMethodUtil()->GetInputMethodDisplayNameFromId(
+              desc->id()) : layout_id;
       dictionary->SetString("layout", layout_id);
       dictionary->SetString("layoutName", layout_name);
 

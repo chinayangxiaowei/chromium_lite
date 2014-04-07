@@ -5,28 +5,28 @@
 #ifndef CHROME_BROWSER_PRERENDER_PRERENDER_TAB_HELPER_H_
 #define CHROME_BROWSER_PRERENDER_PRERENDER_TAB_HELPER_H_
 
-#include "content/browser/tab_contents/tab_contents_observer.h"
-
 #include "base/time.h"
+#include "base/memory/scoped_ptr.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "googleurl/src/gurl.h"
 
 class TabContentsWrapper;
-class GURL;
 
 namespace prerender {
 
-class PrerenderContents;
 class PrerenderManager;
 
 // PrerenderTabHelper is responsible for recording perceived pageload times
 // to compare PLT's with prerendering enabled and disabled.
-class PrerenderTabHelper : public TabContentsObserver {
+class PrerenderTabHelper : public content::WebContentsObserver {
  public:
   explicit PrerenderTabHelper(TabContentsWrapper* tab);
   virtual ~PrerenderTabHelper();
 
-  // TabContentsObserver implementation.
-  virtual void ProvisionalChangeToMainFrameUrl(const GURL& url,
-                                               bool has_opener_set) OVERRIDE;
+  // content::WebContentsObserver implementation.
+  virtual void ProvisionalChangeToMainFrameUrl(
+      const GURL& url,
+      const GURL& opener_url) OVERRIDE;
   virtual void DidStopLoading() OVERRIDE;
   virtual void DidStartProvisionalLoadForFrame(
       int64 frame_id,
@@ -49,8 +49,9 @@ class PrerenderTabHelper : public TabContentsObserver {
 
   // Checks with the PrerenderManager if the specified URL has been preloaded,
   // and if so, swap the RenderViewHost with the preload into this TabContents
-  // object.
-  bool MaybeUsePrerenderedPage(const GURL& url, bool has_opener_set);
+  // object. |opener_url| denotes the window.opener url that is set for this
+  // tab and is empty if there is no opener set.
+  bool MaybeUsePrerenderedPage(const GURL& url, const GURL& opener_url);
 
   // Returns whether the TabContents being observed is currently prerendering.
   bool IsPrerendering();
@@ -75,6 +76,9 @@ class PrerenderTabHelper : public TabContentsObserver {
   // Information about the current hover independent of thresholds.
   GURL current_hover_url_;
   base::TimeTicks current_hover_time_;
+
+  // Current URL being loaded.
+  GURL url_;
 
   DISALLOW_COPY_AND_ASSIGN(PrerenderTabHelper);
 };

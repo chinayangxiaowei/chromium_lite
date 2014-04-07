@@ -12,11 +12,9 @@
 #include "ppapi/c/pp_resource.h"
 #include "ppapi/c/pp_time.h"
 #include "ppapi/c/ppb_file_system.h"
-#include "ppapi/cpp/completion_callback.h"
 #include "ppapi/proxy/interface_proxy.h"
 #include "ppapi/proxy/proxy_non_thread_safe_ref_count.h"
-
-struct PPB_FileSystem_Dev;
+#include "ppapi/utility/completion_callback_factory.h"
 
 namespace ppapi {
 
@@ -26,7 +24,7 @@ namespace proxy {
 
 class PPB_FileSystem_Proxy : public InterfaceProxy {
  public:
-  PPB_FileSystem_Proxy(Dispatcher* dispatcher, const void* target_interface);
+  explicit PPB_FileSystem_Proxy(Dispatcher* dispatcher);
   virtual ~PPB_FileSystem_Proxy();
 
   static const Info* GetInfo();
@@ -36,6 +34,8 @@ class PPB_FileSystem_Proxy : public InterfaceProxy {
 
   // InterfaceProxy implementation.
   virtual bool OnMessageReceived(const IPC::Message& msg);
+
+  static const ApiID kApiID = API_ID_PPB_FILE_SYSTEM;
 
  private:
   // Message handlers.

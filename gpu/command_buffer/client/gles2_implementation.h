@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,17 +21,20 @@
 #if !defined(NDEBUG) && !defined(__native_client__) && !defined(GLES2_CONFORMANCE_TESTS)  // NOLINT
   #if defined(GLES2_INLINE_OPTIMIZATION)
     // TODO(gman): Replace with macros that work with inline optmization.
+    #define GPU_CLIENT_SINGLE_THREAD_CHECK()
     #define GPU_CLIENT_LOG(args)
     #define GPU_CLIENT_LOG_CODE_BLOCK(code)
     #define GPU_CLIENT_DCHECK_CODE_BLOCK(code)
   #else
     #include "base/logging.h"
+    #define GPU_CLIENT_SINGLE_THREAD_CHECK() SingleThreadChecker checker(this);
     #define GPU_CLIENT_LOG(args)  DLOG_IF(INFO, debug_) << args;
     #define GPU_CLIENT_LOG_CODE_BLOCK(code) code
     #define GPU_CLIENT_DCHECK_CODE_BLOCK(code) code
     #define GPU_CLIENT_DEBUG
   #endif
 #else
+  #define GPU_CLIENT_SINGLE_THREAD_CHECK()
   #define GPU_CLIENT_LOG(args)
   #define GPU_CLIENT_LOG_CODE_BLOCK(code)
   #define GPU_CLIENT_DCHECK_CODE_BLOCK(code)
@@ -71,6 +74,8 @@
 namespace gpu {
 
 class MappedMemoryManager;
+class ScopedTransferBufferPtr;
+class TransferBufferInterface;
 
 namespace gles2 {
 
@@ -153,13 +158,16 @@ class GLES2Implementation {
 
   GLES2Implementation(
       GLES2CmdHelper* helper,
-      size_t transfer_buffer_size,
-      void* transfer_buffer,
-      int32 transfer_buffer_id,
+      TransferBufferInterface* transfer_buffer,
       bool share_resources,
-      bool bind_generates_resource = true);  // Will remove in 2 CLs!
+      bool bind_generates_resource);
 
   ~GLES2Implementation();
+
+  bool Initialize(
+      unsigned int starting_transfer_buffer_size,
+      unsigned int min_transfer_buffer_size,
+      unsigned int max_transfer_buffer_size);
 
   // The GLES2CmdHelper being used by this GLES2Implementation. You can use
   // this to issue cmds at a lower level for certain kinds of optimization.
@@ -189,38 +197,27 @@ class GLES2Implementation {
 
   GLuint MakeTextureId() {
     GLuint id;
-    texture_id_handler_->MakeIds(0, 1, &id);
+    id_handlers_[id_namespaces::kTextures]->MakeIds(0, 1, &id);
     return id;
   }
 
   void FreeTextureId(GLuint id) {
-    texture_id_handler_->FreeIds(1, &id);
+    id_handlers_[id_namespaces::kTextures]->FreeIds(1, &id);
   }
 
+  void SetSharedMemoryChunkSizeMultiple(unsigned int multiple);
+
+  void FreeUnusedSharedMemory();
+  void FreeEverything();
+
  private:
-  // Wraps RingBufferWrapper to provide aligned allocations.
-  class AlignedRingBuffer : public RingBufferWrapper {
-   public:
-    AlignedRingBuffer(RingBuffer::Offset base_offset,
-                      unsigned int size,
-                      CommandBufferHelper *helper,
-                      void *base)
-        : RingBufferWrapper(base_offset, size, helper, base) {
-    }
+  friend class ClientSideBufferHelper;
 
-    static unsigned int RoundToAlignment(unsigned int size) {
-      return (size + kAlignment - 1) & ~(kAlignment - 1);
-    }
-
-    // Overrriden from RingBufferWrapper
-    void *Alloc(unsigned int size) {
-      return RingBufferWrapper::Alloc(RoundToAlignment(size));
-    }
-
-    // Overrriden from RingBufferWrapper
-    template <typename T> T *AllocTyped(unsigned int count) {
-      return static_cast<T *>(Alloc(count * sizeof(T)));
-    }
+  // Used to track whether an extension is available
+  enum ExtensionStatus {
+      kAvailableExtensionStatus,
+      kUnavailableExtensionStatus,
+      kUnknownExtensionStatus
   };
 
   // Base class for mapped resources.
@@ -318,21 +315,28 @@ class GLES2Implementation {
     GLuint bound_texture_cube_map;
   };
 
-  // Gets the shared memory id for the result buffer.
-  uint32 result_shm_id() const {
-    return transfer_buffer_id_;
-  }
+  // Checks for single threaded access.
+  class SingleThreadChecker {
+   public:
+    SingleThreadChecker(GLES2Implementation* gles2_implementation);
+    ~SingleThreadChecker();
 
-  // Gets the shared memory offset for the result buffer.
-  uint32 result_shm_offset() const {
-    return result_shm_offset_;
-  }
+   private:
+    GLES2Implementation* gles2_implementation_;
+  };
 
   // Gets the value of the result.
   template <typename T>
-  T GetResultAs() const {
-    return static_cast<T>(result_buffer_);
+  T GetResultAs() {
+    return static_cast<T>(GetResultBuffer());
   }
+
+  void* GetResultBuffer();
+  int32 GetResultShmId();
+  uint32 GetResultShmOffset();
+
+  // Lazily determines if GL_ANGLE_pack_reverse_row_order is available
+  bool IsAnglePackReverseRowOrderAvailable();
 
   // Gets the GLError through our wrapper.
   GLenum GetGLError();
@@ -353,7 +357,7 @@ class GLES2Implementation {
   // a transfer buffer to function which is currently managed by this class.
 
   // Gets the contents of a bucket.
-  void GetBucketContents(uint32 bucket_id, std::vector<int8>* data);
+  bool GetBucketContents(uint32 bucket_id, std::vector<int8>* data);
 
   // Sets the contents of a bucket.
   void SetBucketContents(uint32 bucket_id, const void* data, size_t size);
@@ -386,11 +390,18 @@ class GLES2Implementation {
   bool DeleteProgramHelper(GLuint program);
   bool DeleteShaderHelper(GLuint shader);
 
+  void BufferDataHelper(
+      GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+  void BufferSubDataHelper(
+      GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
+  void BufferSubDataHelperImpl(
+      GLenum target, GLintptr offset, GLsizeiptr size, const void* data,
+      ScopedTransferBufferPtr* buffer);
+
   // Helper for GetVertexAttrib
   bool GetVertexAttribHelper(GLuint index, GLenum pname, uint32* param);
 
-  // Asks the service for the max index in an element array buffer.
-  GLsizei GetMaxIndexInElementArrayBuffer(
+  GLuint GetMaxValueInBufferCHROMIUMHelper(
       GLuint buffer_id, GLsizei count, GLenum type, GLuint offset);
 
   bool CopyRectToBufferFlipped(
@@ -399,7 +410,7 @@ class GLES2Implementation {
   void TexSubImage2DImpl(
       GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
       GLsizei height, GLenum format, GLenum type, const void* pixels,
-      GLboolean internal);
+      GLboolean internal, ScopedTransferBufferPtr* buffer);
 
   // Helpers for query functions.
   bool GetHelper(GLenum pname, GLint* params);
@@ -415,22 +426,20 @@ class GLES2Implementation {
   bool GetShaderivHelper(GLuint shader, GLenum pname, GLint* params);
   bool GetTexParameterfvHelper(GLenum target, GLenum pname, GLfloat* params);
   bool GetTexParameterivHelper(GLenum target, GLenum pname, GLint* params);
+  const GLubyte* GetStringHelper(GLenum name);
+
+  bool IsExtensionAvailable(const char* ext);
 
   GLES2Util util_;
   GLES2CmdHelper* helper_;
-  scoped_ptr<IdHandlerInterface> buffer_id_handler_;
-  scoped_ptr<IdHandlerInterface> framebuffer_id_handler_;
-  scoped_ptr<IdHandlerInterface> renderbuffer_id_handler_;
-  scoped_ptr<IdHandlerInterface> program_and_shader_id_handler_;
-  scoped_ptr<IdHandlerInterface> texture_id_handler_;
-  AlignedRingBuffer transfer_buffer_;
-  int transfer_buffer_id_;
-  void* result_buffer_;
-  uint32 result_shm_offset_;
+  TransferBufferInterface* transfer_buffer_;
+  scoped_ptr<IdHandlerInterface> id_handlers_[id_namespaces::kNumIdNamespaces];
   std::string last_error_;
 
   std::queue<int32> swap_buffers_tokens_;
   std::queue<int32> rate_limit_tokens_;
+
+  ExtensionStatus angle_pack_reverse_row_order_status;
 
   GLState gl_state_;
 
@@ -442,6 +451,9 @@ class GLES2Implementation {
 
   // unpack yflip as last set by glPixelstorei
   bool unpack_flip_y_;
+
+  // pack reverse row order as last set by glPixelstorei
+  bool pack_reverse_row_order_;
 
   scoped_array<TextureUnit> texture_units_;
 
@@ -477,6 +489,9 @@ class GLES2Implementation {
   bool sharing_resources_;
 
   bool bind_generates_resource_;
+
+  // Used to check for single threaded access.
+  int use_count_;
 
   // Map of GLenum to Strings for glGetString.  We need to cache these because
   // the pointer passed back to the client has to remain valid for eternity.

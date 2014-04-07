@@ -16,8 +16,7 @@
 
 class CreditCard;
 class PersonalDataManager;
-class SkBitmap;
-class TabContents;
+
 namespace content {
 struct LoadCommittedDetails;
 }
@@ -26,7 +25,7 @@ struct LoadCommittedDetails;
 // card information gathered from a form submission.
 class AutofillCCInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  AutofillCCInfoBarDelegate(TabContents* tab_contents,
+  AutofillCCInfoBarDelegate(InfoBarTabHelper* infobar_helper,
                             const CreditCard* credit_card,
                             PersonalDataManager* personal_data,
                             const AutofillMetrics* metric_logger);

@@ -14,8 +14,8 @@ const char kChromeSource[] = "ChromiumBrowser";
 
 // Service name for Gaia.  Used to convert to cookie auth.
 const char kGaiaService[] = "gaia";
-// Service name for Gaia Contacts API. API is used to get user's image.
-const char kContactsService[] = "cp";
+// Service name for Picasa API. API is used to get user's image.
+const char kPicasaService[] = "lh2";
 
 // Service/scope names for sync.
 const char kSyncService[] = "chromiumsync";
@@ -33,11 +33,20 @@ const char kDeviceManagementService[] = "mobilesync";
 const char kDeviceManagementServiceOAuth[] =
     "https://www.googleapis.com/auth/chromeosdevicemanagement";
 
+// OAuth scopes for chrome web store.
+const char kCWSNotificationScope[] =
+    "https://www.googleapis.com/auth/chromewebstore.notification";
+
+// Service for LSO endpoint of Google that exposes OAuth APIs.
+const char kLSOService[] = "lso";
+
 // Used to mint uber auth tokens when needed.
 const char kGaiaSid[] = "sid";
 const char kGaiaLsid[] = "lsid";
-extern const char kGaiaOAuthToken[] = "oauthToken";
-extern const char kGaiaOAuthSecret[] = "oauthSecret";
-extern const char kGaiaOAuthDuration[] = "3600";
+const char kGaiaOAuthToken[] = "oauthToken";
+const char kGaiaOAuthSecret[] = "oauthSecret";
+const char kGaiaOAuthDuration[] = "3600";
+const char kGaiaOAuth2LoginRefreshToken[] = "oauth2LoginRefreshToken";
+const char kGaiaOAuth2LoginAccessToken[] = "oauth2LoginAccessToken";
 
 }  // namespace GaiaConstants

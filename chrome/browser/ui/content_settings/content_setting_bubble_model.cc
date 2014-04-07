@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 
-#include "base/command_line.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/content_settings/content_settings_utils.h"
+#include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
@@ -18,19 +18,26 @@
 #include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/content_settings.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_delegate.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
 
-namespace {
+using content::UserMetricsAction;
+using content::WebContents;
+using content_settings::SettingInfo;
+using content_settings::SettingSource;
+using content_settings::SETTING_SOURCE_USER;
+using content_settings::SETTING_SOURCE_NONE;
 
+namespace {
 struct ContentSettingsTypeIdEntry {
   ContentSettingsType type;
   int id;
@@ -204,7 +211,7 @@ class ContentSettingSingleRadioGroup
   // Initialize the radio group by setting the appropriate labels for the
   // content type and setting the default value based on the content setting.
   void SetRadioGroup() {
-    GURL url = tab_contents()->tab_contents()->GetURL();
+    GURL url = tab_contents()->web_contents()->GetURL();
     string16 display_host_utf16;
     net::AppendFormattedHost(url,
         profile()->GetPrefs()->GetString(prefs::kAcceptLanguages),
@@ -254,34 +261,53 @@ class ContentSettingSingleRadioGroup
     radio_group.radio_items.push_back(radio_allow_label);
     radio_group.radio_items.push_back(radio_block_label);
     HostContentSettingsMap* map = profile()->GetHostContentSettingsMap();
-    ContentSetting mostRestrictiveSetting;
+    CookieSettings* cookie_settings = CookieSettings::GetForProfile(profile());
+    ContentSetting most_restrictive_setting;
+    SettingSource most_restrictive_setting_source = SETTING_SOURCE_NONE;
+
     if (resources.empty()) {
-      mostRestrictiveSetting =
-          content_type() == CONTENT_SETTINGS_TYPE_COOKIES ?
-              map->GetCookieContentSetting(url, url, true) :
-              map->GetContentSetting(url, url, content_type(), std::string());
+      if (content_type() == CONTENT_SETTINGS_TYPE_COOKIES) {
+        most_restrictive_setting = cookie_settings->GetCookieSetting(
+            url, url, true, &most_restrictive_setting_source);
+      } else {
+        SettingInfo info;
+        scoped_ptr<Value> value(map->GetWebsiteSetting(
+            url, url, content_type(), std::string(), &info));
+        most_restrictive_setting =
+            content_settings::ValueToContentSetting(value.get());
+        most_restrictive_setting_source = info.source;
+      }
     } else {
-      mostRestrictiveSetting = CONTENT_SETTING_ALLOW;
+      most_restrictive_setting = CONTENT_SETTING_ALLOW;
       for (std::set<std::string>::const_iterator it = resources.begin();
            it != resources.end(); ++it) {
-        ContentSetting setting = map->GetContentSetting(url,
-                                                        url,
-                                                        content_type(),
-                                                        *it);
+        SettingInfo info;
+        scoped_ptr<Value> value(map->GetWebsiteSetting(
+            url, url, content_type(), *it, &info));
+        ContentSetting setting =
+            content_settings::ValueToContentSetting(value.get());
         if (setting == CONTENT_SETTING_BLOCK) {
-          mostRestrictiveSetting = CONTENT_SETTING_BLOCK;
+          most_restrictive_setting = CONTENT_SETTING_BLOCK;
+          most_restrictive_setting_source = info.source;
           break;
         }
-        if (setting == CONTENT_SETTING_ASK)
-          mostRestrictiveSetting = CONTENT_SETTING_ASK;
+        if (setting == CONTENT_SETTING_ASK) {
+          most_restrictive_setting = CONTENT_SETTING_ASK;
+          most_restrictive_setting_source = info.source;
+        }
       }
     }
-    if (mostRestrictiveSetting == CONTENT_SETTING_ALLOW) {
+    if (most_restrictive_setting == CONTENT_SETTING_ALLOW) {
       radio_group.default_item = 0;
       // |block_setting_| is already set to |CONTENT_SETTING_BLOCK|.
     } else {
       radio_group.default_item = 1;
-      block_setting_ = mostRestrictiveSetting;
+      block_setting_ = most_restrictive_setting;
+    }
+    if (most_restrictive_setting_source != SETTING_SOURCE_USER) {
+      set_radio_group_enabled(false);
+    } else {
+      set_radio_group_enabled(true);
     }
     selected_item_ = radio_group.default_item;
     set_radio_group(radio_group);
@@ -318,8 +344,9 @@ class ContentSettingCookiesBubbleModel : public ContentSettingSingleRadioGroup {
 
   virtual ~ContentSettingCookiesBubbleModel() {
     if (settings_changed()) {
-      tab_contents()->infobar_tab_helper()->AddInfoBar(
-          new CollectedCookiesInfoBarDelegate(tab_contents()->tab_contents()));
+      InfoBarTabHelper* infobar_helper = tab_contents()->infobar_tab_helper();
+      infobar_helper->AddInfoBar(
+          new CollectedCookiesInfoBarDelegate(infobar_helper));
     }
   }
 
@@ -327,10 +354,11 @@ class ContentSettingCookiesBubbleModel : public ContentSettingSingleRadioGroup {
   virtual void OnCustomLinkClicked() OVERRIDE {
     if (!tab_contents())
       return;
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_COLLECTED_COOKIES_SHOWN,
-        Source<TabSpecificContentSettings>(tab_contents()->content_settings()),
-        NotificationService::NoDetails());
+        content::Source<TabSpecificContentSettings>(
+            tab_contents()->content_settings()),
+        content::NotificationService::NoDetails());
     browser()->ShowCollectedCookiesDialog(tab_contents());
   }
 };
@@ -352,9 +380,9 @@ class ContentSettingPluginBubbleModel : public ContentSettingSingleRadioGroup {
 
  private:
   virtual void OnCustomLinkClicked() OVERRIDE {
-    UserMetrics::RecordAction(UserMetricsAction("ClickToPlay_LoadAll_Bubble"));
+    content::RecordAction(UserMetricsAction("ClickToPlay_LoadAll_Bubble"));
     DCHECK(tab_contents());
-    RenderViewHost* host = tab_contents()->render_view_host();
+    RenderViewHost* host = tab_contents()->web_contents()->GetRenderViewHost();
     host->Send(new ChromeViewMsg_LoadBlockedPlugins(host->routing_id()));
     set_custom_link_enabled(false);
     tab_contents()->content_settings()->set_load_plugins_link_enabled(false);
@@ -381,7 +409,7 @@ class ContentSettingPopupBubbleModel : public ContentSettingSingleRadioGroup {
         GetBlockedContents(&blocked_contents);
     for (std::vector<TabContentsWrapper*>::const_iterator
          i = blocked_contents.begin(); i != blocked_contents.end(); ++i) {
-      std::string title(UTF16ToUTF8((*i)->tab_contents()->GetTitle()));
+      std::string title(UTF16ToUTF8((*i)->web_contents()->GetTitle()));
       // The popup may not have committed a load yet, in which case it won't
       // have a URL or title.
       if (title.empty())
@@ -458,7 +486,7 @@ class ContentSettingDomainListBubbleModel
       return;
     // Reset this embedder's entry to default for each of the requesting
     // origins currently on the page.
-    const GURL& embedder_url = tab_contents()->tab_contents()->GetURL();
+    const GURL& embedder_url = tab_contents()->web_contents()->GetURL();
     TabSpecificContentSettings* content_settings =
         tab_contents()->content_settings();
     const GeolocationSettingsState::StateMap& state_map =
@@ -512,10 +540,10 @@ ContentSettingBubbleModel::ContentSettingBubbleModel(
     : tab_contents_(tab_contents),
       profile_(profile),
       content_type_(content_type) {
-  registrar_.Add(this, content::NOTIFICATION_TAB_CONTENTS_DESTROYED,
-                 Source<TabContents>(tab_contents->tab_contents()));
+  registrar_.Add(this, content::NOTIFICATION_WEB_CONTENTS_DESTROYED,
+                 content::Source<WebContents>(tab_contents->web_contents()));
   registrar_.Add(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
-                 Source<Profile>(profile_));
+                 content::Source<Profile>(profile_));
 }
 
 ContentSettingBubbleModel::~ContentSettingBubbleModel() {
@@ -530,7 +558,8 @@ ContentSettingBubbleModel::DomainList::DomainList() {}
 ContentSettingBubbleModel::DomainList::~DomainList() {}
 
 ContentSettingBubbleModel::BubbleContent::BubbleContent()
-    : custom_link_enabled(false) {
+    : radio_group_enabled(false),
+      custom_link_enabled(false) {
 }
 
 ContentSettingBubbleModel::BubbleContent::~BubbleContent() {}
@@ -541,16 +570,18 @@ void ContentSettingBubbleModel::AddBlockedResource(
   bubble_content_.resource_identifiers.insert(resource_identifier);
 }
 
-void ContentSettingBubbleModel::Observe(int type,
-                                        const NotificationSource& source,
-                                        const NotificationDetails& details) {
+void ContentSettingBubbleModel::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   switch (type) {
-    case content::NOTIFICATION_TAB_CONTENTS_DESTROYED:
-      DCHECK(source == Source<TabContents>(tab_contents_->tab_contents()));
+    case content::NOTIFICATION_WEB_CONTENTS_DESTROYED:
+      DCHECK(source ==
+             content::Source<WebContents>(tab_contents_->web_contents()));
       tab_contents_ = NULL;
       break;
     case chrome::NOTIFICATION_PROFILE_DESTROYED:
-      DCHECK(source == Source<Profile>(profile_));
+      DCHECK(source == content::Source<Profile>(profile_));
       profile_ = NULL;
       break;
     default:

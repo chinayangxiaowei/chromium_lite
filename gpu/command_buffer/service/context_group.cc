@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,7 @@ namespace gpu {
 namespace gles2 {
 
 ContextGroup::ContextGroup(bool bind_generates_resource)
-    : initialized_(false),
-      have_context_(true),
+    : num_contexts_(0),
       bind_generates_resource_(bind_generates_resource),
       max_vertex_attribs_(0u),
       max_texture_units_(0u),
@@ -30,7 +29,8 @@ ContextGroup::ContextGroup(bool bind_generates_resource)
       max_vertex_texture_image_units_(0u),
       max_fragment_uniform_vectors_(0u),
       max_varying_vectors_(0u),
-      max_vertex_uniform_vectors_(0u) {
+      max_vertex_uniform_vectors_(0u),
+      feature_info_(new FeatureInfo()) {
   id_namespaces_[id_namespaces::kBuffers].reset(new IdAllocator);
   id_namespaces_[id_namespaces::kFramebuffers].reset(new IdAllocator);
   id_namespaces_[id_namespaces::kProgramsAndShaders].reset(
@@ -40,7 +40,7 @@ ContextGroup::ContextGroup(bool bind_generates_resource)
 }
 
 ContextGroup::~ContextGroup() {
-  Destroy();
+  CHECK(num_contexts_ == 0);
 }
 
 static void GetIntegerv(GLenum pname, uint32* var) {
@@ -49,13 +49,14 @@ static void GetIntegerv(GLenum pname, uint32* var) {
   *var = value;
 }
 
-bool ContextGroup::Initialize(const DisallowedExtensions& disallowed_extensions,
+bool ContextGroup::Initialize(const DisallowedFeatures& disallowed_features,
                               const char* allowed_features) {
-  if (initialized_) {
+  if (num_contexts_ > 0) {
+    ++num_contexts_;
     return true;
   }
 
-  if (!feature_info_.Initialize(disallowed_extensions, allowed_features)) {
+  if (!feature_info_->Initialize(disallowed_features, allowed_features)) {
     LOG(ERROR) << "ContextGroup::Initialize failed because FeatureInfo "
                << "initialization failed.";
     return false;
@@ -63,10 +64,15 @@ bool ContextGroup::Initialize(const DisallowedExtensions& disallowed_extensions,
 
   GLint max_renderbuffer_size = 0;
   glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_renderbuffer_size);
+  GLint max_samples = 0;
+  if (feature_info_->feature_flags().chromium_framebuffer_multisample) {
+    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+  }
 
   buffer_manager_.reset(new BufferManager());
   framebuffer_manager_.reset(new FramebufferManager());
-  renderbuffer_manager_.reset(new RenderbufferManager(max_renderbuffer_size));
+  renderbuffer_manager_.reset(new RenderbufferManager(
+      max_renderbuffer_size, max_samples));
   shader_manager_.reset(new ShaderManager());
   program_manager_.reset(new ProgramManager());
 
@@ -108,7 +114,8 @@ bool ContextGroup::Initialize(const DisallowedExtensions& disallowed_extensions,
   }
 #endif
 
-  texture_manager_.reset(new TextureManager(max_texture_size,
+  texture_manager_.reset(new TextureManager(feature_info_.get(),
+                                            max_texture_size,
                                             max_cube_map_texture_size));
 
   GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_texture_image_units_);
@@ -130,44 +137,48 @@ bool ContextGroup::Initialize(const DisallowedExtensions& disallowed_extensions,
     max_vertex_uniform_vectors_ /= 4;
   }
 
-  if (!texture_manager_->Initialize(feature_info())) {
+  if (!texture_manager_->Initialize()) {
     LOG(ERROR) << "Context::Group::Initialize failed because texture manager "
                << "failed to initialize.";
     return false;
   }
 
-  initialized_ = true;
+  ++num_contexts_;
   return true;
 }
 
-void ContextGroup::Destroy() {
+void ContextGroup::Destroy(bool have_context) {
+  DCHECK(num_contexts_ > 0);
+  if (--num_contexts_ > 0)
+    return;
+
   if (buffer_manager_ != NULL) {
-    buffer_manager_->Destroy(have_context_);
+    buffer_manager_->Destroy(have_context);
     buffer_manager_.reset();
   }
 
   if (framebuffer_manager_ != NULL) {
-    framebuffer_manager_->Destroy(have_context_);
+    framebuffer_manager_->Destroy(have_context);
     framebuffer_manager_.reset();
   }
 
   if (renderbuffer_manager_ != NULL) {
-    renderbuffer_manager_->Destroy(have_context_);
+    renderbuffer_manager_->Destroy(have_context);
     renderbuffer_manager_.reset();
   }
 
   if (texture_manager_ != NULL) {
-    texture_manager_->Destroy(have_context_);
+    texture_manager_->Destroy(have_context);
     texture_manager_.reset();
   }
 
   if (program_manager_ != NULL) {
-    program_manager_->Destroy(have_context_);
+    program_manager_->Destroy(have_context);
     program_manager_.reset();
   }
 
   if (shader_manager_ != NULL) {
-    shader_manager_->Destroy(have_context_);
+    shader_manager_->Destroy(have_context);
     shader_manager_.reset();
   }
 }

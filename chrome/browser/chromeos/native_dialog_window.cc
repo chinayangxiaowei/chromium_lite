@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,13 @@
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/frame/bubble_window.h"
+#include "chrome/browser/ui/dialog_style.h"
 #include "chrome/browser/ui/views/window.h"
 #include "ui/base/gtk/gtk_signal.h"
-#include "views/controls/native/native_view_host.h"
-#include "views/widget/widget.h"
-#include "views/window/dialog_delegate.h"
-#include "views/window/non_client_view.h"
+#include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
+#include "ui/views/window/non_client_view.h"
 
 namespace {
 
@@ -59,12 +60,16 @@ class NativeDialogHost : public views::DialogDelegateView {
   ~NativeDialogHost();
 
   // views::DialogDelegate implementation:
-  virtual bool CanResize() const { return flags_ & DIALOG_FLAG_RESIZEABLE; }
-  virtual int GetDialogButtons() const { return 0; }
-  virtual std::wstring GetWindowTitle() const { return title_; }
-  virtual views::View* GetContentsView() { return this; }
-  virtual bool IsModal() const { return flags_ & DIALOG_FLAG_MODAL; }
-  virtual void WindowClosing();
+  virtual bool CanResize() const OVERRIDE
+      { return flags_ & DIALOG_FLAG_RESIZEABLE; }
+  virtual int GetDialogButtons() const OVERRIDE { return 0; }
+  virtual string16 GetWindowTitle() const OVERRIDE { return title_; }
+  virtual views::View* GetContentsView() OVERRIDE { return this; }
+  virtual ui::ModalType GetModalType() const OVERRIDE {
+    return flags_ & DIALOG_FLAG_MODAL ? ui::MODAL_TYPE_WINDOW :
+        ui::MODAL_TYPE_NONE;
+  }
+  virtual void WindowClosing() OVERRIDE;
 
  protected:
   CHROMEGTK_CALLBACK_0(NativeDialogHost, void, OnCheckResize);
@@ -72,11 +77,12 @@ class NativeDialogHost : public views::DialogDelegateView {
   CHROMEGTK_CALLBACK_1(NativeDialogHost, gboolean, OnGtkKeyPressed, GdkEvent*);
 
   // views::View implementation:
-  virtual gfx::Size GetPreferredSize();
-  virtual void Layout();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
-                                    views::View* child);
+                                    views::View* child) OVERRIDE;
+
  private:
   // Init and attach to native dialog.
   void Init();
@@ -93,7 +99,7 @@ class NativeDialogHost : public views::DialogDelegateView {
   // NativeViewHost for the dialog's contents.
   views::NativeViewHost* contents_view_;
 
-  std::wstring title_;
+  string16 title_;
   int flags_;
   gfx::Size size_;
   gfx::Size preferred_size_;
@@ -120,7 +126,7 @@ NativeDialogHost::NativeDialogHost(gfx::NativeView native_dialog,
       destroy_signal_id_(0) {
   const char* title = gtk_window_get_title(GTK_WINDOW(dialog_));
   if (title)
-    UTF8ToWide(title, strlen(title), &title_);
+    UTF8ToUTF16(title, strlen(title), &title_);
 
   destroy_signal_id_ = g_signal_connect(dialog_, "destroy",
       G_CALLBACK(&OnDialogDestroyThunk), this);
@@ -151,7 +157,7 @@ void NativeDialogHost::OnCheckResize(GtkWidget* widget) {
       gfx::Rect window_bounds = GetWidget()->GetWindowScreenBounds();
       window_bounds.set_width(window_size.width());
       window_bounds.set_height(window_size.height());
-      GetWidget()->SetBoundsConstrained(window_bounds, NULL);
+      GetWidget()->SetBoundsConstrained(window_bounds);
     }
   }
 }
@@ -329,7 +335,7 @@ void ShowNativeDialog(gfx::NativeWindow parent,
                       const gfx::Size& min_size) {
   NativeDialogHost* native_dialog_host =
       new NativeDialogHost(native_dialog, flags, size, min_size);
-  browser::CreateViewsWindow(parent, native_dialog_host);
+  browser::CreateViewsWindow(parent, native_dialog_host, STYLE_GENERIC);
   native_dialog_host->GetWidget()->Show();
 }
 

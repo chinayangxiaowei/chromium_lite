@@ -11,10 +11,10 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "net/base/completion_callback.h"
+#include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/thunk/ppb_transport_api.h"
 #include "webkit/glue/p2p_transport.h"
-#include "webkit/plugins/ppapi/callbacks.h"
 
 namespace webkit {
 namespace ppapi {
@@ -27,7 +27,7 @@ class PPB_Transport_Impl : public ::ppapi::Resource,
 
   static PP_Resource Create(PP_Instance instance,
                             const char* name,
-                            const char* proto);
+                            PP_TransportType type);
 
   // Resource override.
   virtual ::ppapi::thunk::PPB_Transport_API* AsPPB_Transport_API() OVERRIDE;
@@ -54,27 +54,24 @@ class PPB_Transport_Impl : public ::ppapi::Resource,
  private:
   explicit PPB_Transport_Impl(PP_Instance instance);
 
-  bool Init(const char* name, const char* proto);
+  bool Init(const char* name, PP_TransportType type);
 
   void OnRead(int result);
   void OnWritten(int result);
 
   std::string name_;
-  bool use_tcp_;
+  PP_TransportType type_;
   webkit_glue::P2PTransport::Config config_;
   bool started_;
   scoped_ptr<webkit_glue::P2PTransport> p2p_transport_;
   bool writable_;
   std::list<std::string> local_candidates_;
 
-  scoped_refptr<TrackedCompletionCallback> connect_callback_;
-  scoped_refptr<TrackedCompletionCallback> next_address_callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> connect_callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> next_address_callback_;
 
-  scoped_refptr<TrackedCompletionCallback> recv_callback_;
-  scoped_refptr<TrackedCompletionCallback> send_callback_;
-
-  net::CompletionCallbackImpl<PPB_Transport_Impl> channel_write_callback_;
-  net::CompletionCallbackImpl<PPB_Transport_Impl> channel_read_callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> recv_callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> send_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(PPB_Transport_Impl);
 };

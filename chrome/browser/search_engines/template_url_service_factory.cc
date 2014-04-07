@@ -1,11 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 
-#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile_dependency_manager.h"
+#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/common/pref_names.h"
 
 TemplateURLService* TemplateURLServiceFactory::GetForProfile(Profile* profile) {
   return static_cast<TemplateURLService*>(
@@ -17,8 +19,8 @@ TemplateURLServiceFactory* TemplateURLServiceFactory::GetInstance() {
 }
 
 TemplateURLServiceFactory::TemplateURLServiceFactory()
-    : ProfileKeyedServiceFactory(
-        ProfileDependencyManager::GetInstance()) {
+    : ProfileKeyedServiceFactory("TemplateURLServiceFactory",
+                                 ProfileDependencyManager::GetInstance()) {
   // TODO(erg): For Shutdown() order, we need to:
   //     DependsOn(WebDataServiceFactory::GetInstance());
   //     DependsOn(HistoryService::GetInstance());
@@ -30,6 +32,42 @@ TemplateURLServiceFactory::~TemplateURLServiceFactory() {}
 ProfileKeyedService* TemplateURLServiceFactory::BuildServiceInstanceFor(
     Profile* profile) const {
   return new TemplateURLService(profile);
+}
+
+void TemplateURLServiceFactory::RegisterUserPrefs(PrefService* prefs) {
+  prefs->RegisterStringPref(prefs::kSyncedDefaultSearchProviderGUID,
+                            std::string(),
+                            PrefService::SYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kDefaultSearchProviderEnabled,
+                             true,
+                             PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderName,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderID,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderPrepopulateID,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderSuggestURL,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderSearchURL,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderInstantURL,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderKeyword,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderIconURL,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultSearchProviderEncodings,
+                            std::string(),
+                            PrefService::UNSYNCABLE_PREF);
 }
 
 bool TemplateURLServiceFactory::ServiceRedirectedInIncognito() {

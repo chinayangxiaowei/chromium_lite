@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,17 @@ class DictionaryValue;
 }
 
 namespace sync_pb {
+class AppNotification;
+class AppNotificationSettings;
+class AppSettingSpecifics;
 class AppSpecifics;
 class AutofillProfileSpecifics;
 class AutofillSpecifics;
 class BookmarkSpecifics;
+class DeviceInformation;
 class EncryptedData;
 class EntitySpecifics;
+class ExtensionSettingSpecifics;
 class ExtensionSpecifics;
 class NigoriSpecifics;
 class PasswordSpecifics;
@@ -52,6 +57,10 @@ namespace browser_sync {
 base::DictionaryValue* EncryptedDataToValue(
     const sync_pb::EncryptedData& encrypted_data);
 
+// Sub-protocol of AppSpecifics.
+base::DictionaryValue* AppSettingsToValue(
+    const sync_pb::AppNotificationSettings& app_notification_settings);
+
 // Sub-protocols of SessionSpecifics.
 
 base::DictionaryValue* SessionHeaderToValue(
@@ -71,7 +80,18 @@ base::DictionaryValue* TabNavigationToValue(
 base::DictionaryValue* PasswordSpecificsDataToValue(
     const sync_pb::PasswordSpecificsData& password_specifics_data);
 
+// Sub-protocol of NigoriSpecifics.
+
+base::DictionaryValue* DeviceInformationToValue(
+    const sync_pb::DeviceInformation& device_information);
+
 // Main *SpecificsToValue functions.
+
+base::DictionaryValue* AppNotificationToValue(
+    const sync_pb::AppNotification& app_notification_specifics);
+
+base::DictionaryValue* AppSettingSpecificsToValue(
+    const sync_pb::AppSettingSpecifics& app_setting_specifics);
 
 base::DictionaryValue* AppSpecificsToValue(
     const sync_pb::AppSpecifics& app_specifics);
@@ -84,6 +104,9 @@ base::DictionaryValue* AutofillProfileSpecificsToValue(
 
 base::DictionaryValue* BookmarkSpecificsToValue(
     const sync_pb::BookmarkSpecifics& bookmark_specifics);
+
+base::DictionaryValue* ExtensionSettingSpecificsToValue(
+    const sync_pb::ExtensionSettingSpecifics& extension_setting_specifics);
 
 base::DictionaryValue* ExtensionSpecificsToValue(
     const sync_pb::ExtensionSpecifics& extension_specifics);

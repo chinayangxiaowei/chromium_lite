@@ -9,9 +9,11 @@
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/spellchecker/spellcheck_host_impl.h"
-#include "chrome/browser/spellchecker/spellchecker_platform_engine.h"
+#include "chrome/browser/spellchecker/spellcheck_platform_mac.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/spellcheck_common.h"
+
+using content::BrowserThread;
 
 namespace {
 
@@ -23,15 +25,13 @@ SpellCheckHost::EventType g_status_type = SpellCheckHost::BDICT_NOTINITIALIZED;
 }  // namespace
 
 // static
-scoped_refptr<SpellCheckHost> SpellCheckHost::Create(
+SpellCheckHost* SpellCheckHost::Create(
     SpellCheckProfileProvider* profile,
     const std::string& language,
     net::URLRequestContextGetter* request_context_getter,
     SpellCheckHostMetrics* metrics) {
-  scoped_refptr<SpellCheckHostImpl> host =
-      new SpellCheckHostImpl(profile,
-                             language,
-                             request_context_getter,
+  SpellCheckHostImpl* host =
+      new SpellCheckHostImpl(profile, language, request_context_getter,
                              metrics);
   if (!host)
     return NULL;
@@ -59,10 +59,14 @@ int SpellCheckHost::GetSpellCheckLanguages(
   // from this list to the existing list of spell check languages.
   std::vector<std::string> accept_languages;
 
-  if (SpellCheckerPlatform::SpellCheckerAvailable())
-    SpellCheckerPlatform::GetAvailableLanguages(&accept_languages);
+#if defined(OS_MACOSX)
+  if (spellcheck_mac::SpellCheckerAvailable())
+    spellcheck_mac::GetAvailableLanguages(&accept_languages);
   else
     base::SplitString(accept_languages_pref.GetValue(), ',', &accept_languages);
+#else
+  base::SplitString(accept_languages_pref.GetValue(), ',', &accept_languages);
+#endif  // !OS_MACOSX
 
   for (std::vector<std::string>::const_iterator i = accept_languages.begin();
        i != accept_languages.end(); ++i) {

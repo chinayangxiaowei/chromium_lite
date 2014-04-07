@@ -12,19 +12,15 @@
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/login/login_status_consumer.h"
 #include "chrome/browser/net/gaia/gaia_oauth_consumer.h"
 #include "chrome/browser/net/gaia/gaia_oauth_fetcher.h"
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
 
-class CancelableTask;
 class GaiaAuthFetcher;
 class Profile;
-
-namespace net {
-class URLRequestContextGetter;
-}
 
 namespace chromeos {
 class AuthAttemptState;
@@ -82,7 +78,9 @@ class OnlineAttempt
   scoped_ptr<GaiaAuthFetcher> client_fetcher_;
   // Handles OAuthLogin communications with Gaia.
   scoped_ptr<GaiaOAuthFetcher> oauth_fetcher_;
-  CancelableTask* fetch_canceler_;
+
+  // Used to cancel the CancelClientLogin closure.
+  base::WeakPtrFactory<OnlineAttempt> weak_factory_;
 
   // Whether we're willing to re-try the ClientLogin attempt.
   bool try_again_;

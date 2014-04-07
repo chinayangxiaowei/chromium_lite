@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,12 @@
 #include "chrome/browser/automation/automation_provider_json.h"
 #include "chrome/browser/automation/automation_provider_observers.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/audio_handler.h"
+#include "chrome/browser/chromeos/audio/audio_handler.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/cros/power_library.h"
-#include "chrome/browser/chromeos/cros/screen_lock_library.h"
-#include "chrome/browser/chromeos/cros/update_library.h"
+#include "chrome/browser/chromeos/dbus/dbus_thread_manager.h"
+#include "chrome/browser/chromeos/dbus/power_manager_client.h"
+#include "chrome/browser/chromeos/dbus/update_engine_client.h"
 #include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_screen.h"
 #include "chrome/browser/chromeos/login/existing_user_controller.h"
 #include "chrome/browser/chromeos/login/login_display.h"
@@ -26,7 +26,7 @@
 #include "chrome/browser/chromeos/login/webui_login_display.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/options/take_photo_dialog.h"
-#include "chrome/browser/chromeos/proxy_cros_settings_provider.h"
+#include "chrome/browser/chromeos/proxy_cros_settings_parser.h"
 #include "chrome/browser/chromeos/system/timezone_settings.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/policy/cloud_policy_cache_base.h"
@@ -35,29 +35,20 @@
 #include "chrome/browser/policy/enterprise_install_attributes.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/dialog_style.h"
 #include "chrome/browser/ui/views/window.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "net/base/network_change_notifier.h"
 #include "policy/policy_constants.h"
-#include "views/widget/widget.h"
+#include "ui/views/widget/widget.h"
 
 using chromeos::CrosLibrary;
+using chromeos::DBusThreadManager;
 using chromeos::NetworkLibrary;
-using chromeos::UpdateLibrary;
+using chromeos::UpdateEngineClient;
 using chromeos::UserManager;
 
 namespace {
-
-bool EnsureCrosLibraryLoaded(AutomationProvider* provider,
-                             IPC::Message* reply_message) {
-  if (!CrosLibrary::Get()->EnsureLoaded()) {
-    AutomationJSONReply(provider, reply_message).SendError(
-        "Could not load cros library.");
-    return false;
-  }
-  return true;
-}
 
 DictionaryValue* GetNetworkInfoDict(const chromeos::Network* network) {
   DictionaryValue* item = new DictionaryValue;
@@ -68,20 +59,23 @@ DictionaryValue* GetNetworkInfoDict(const chromeos::Network* network) {
   return item;
 }
 
-Value* GetProxySetting(const std::string& setting_name) {
-  chromeos::ProxyCrosSettingsProvider settings_provider;
+base::Value* GetProxySetting(Browser* browser,
+                             const std::string& setting_name) {
   std::string setting_path = "cros.session.proxy.";
   setting_path.append(setting_name);
 
   if (setting_name == "ignorelist") {
-    Value* value;
-    if (settings_provider.Get(setting_path, &value))
-      return value;
+    base::Value* value;
+    if (chromeos::proxy_cros_settings_parser::GetProxyPrefValue(
+            browser->profile(), setting_path, &value)) {
+       return value;
+    }
   } else {
-    Value* setting;
-    if (settings_provider.Get(setting_path, &setting)) {
+    base::Value* setting;
+    if (chromeos::proxy_cros_settings_parser::GetProxyPrefValue(
+            browser->profile(), setting_path, &setting)) {
       DictionaryValue* setting_dict = static_cast<DictionaryValue*>(setting);
-      Value* value;
+      base::Value* value;
       bool found = setting_dict->Remove("value", &value);
       delete setting;
       if (found)
@@ -91,33 +85,33 @@ Value* GetProxySetting(const std::string& setting_name) {
   return NULL;
 }
 
-const char* UpdateStatusToString(chromeos::UpdateStatusOperation status) {
+const char* UpdateStatusToString(
+    UpdateEngineClient::UpdateStatusOperation status) {
   switch (status) {
-    case chromeos::UPDATE_STATUS_IDLE:
+    case UpdateEngineClient::UPDATE_STATUS_IDLE:
       return "idle";
-    case chromeos::UPDATE_STATUS_CHECKING_FOR_UPDATE:
+    case UpdateEngineClient::UPDATE_STATUS_CHECKING_FOR_UPDATE:
       return "checking for update";
-    case chromeos::UPDATE_STATUS_UPDATE_AVAILABLE:
+    case UpdateEngineClient::UPDATE_STATUS_UPDATE_AVAILABLE:
       return "update available";
-    case chromeos::UPDATE_STATUS_DOWNLOADING:
+    case UpdateEngineClient::UPDATE_STATUS_DOWNLOADING:
       return "downloading";
-    case chromeos::UPDATE_STATUS_VERIFYING:
+    case UpdateEngineClient::UPDATE_STATUS_VERIFYING:
       return "verifying";
-    case chromeos::UPDATE_STATUS_FINALIZING:
+    case UpdateEngineClient::UPDATE_STATUS_FINALIZING:
       return "finalizing";
-    case chromeos::UPDATE_STATUS_UPDATED_NEED_REBOOT:
+    case UpdateEngineClient::UPDATE_STATUS_UPDATED_NEED_REBOOT:
       return "updated need reboot";
-    case chromeos::UPDATE_STATUS_REPORTING_ERROR_EVENT:
+    case UpdateEngineClient::UPDATE_STATUS_REPORTING_ERROR_EVENT:
       return "reporting error event";
     default:
       return "unknown";
   }
 }
 
-void GetReleaseTrackCallback(void* user_data, const char* track) {
-  AutomationJSONReply* reply = static_cast<AutomationJSONReply*>(user_data);
-
-  if (track == NULL) {
+void GetReleaseTrackCallback(AutomationJSONReply* reply,
+                             const std::string& track) {
+  if (track.empty()) {
     reply->SendError("Unable to get release track.");
     delete reply;
     return;
@@ -126,11 +120,12 @@ void GetReleaseTrackCallback(void* user_data, const char* track) {
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   return_value->SetString("release_track", track);
 
-  UpdateLibrary* update_library = CrosLibrary::Get()->GetUpdateLibrary();
-  const UpdateLibrary::Status& status = update_library->status();
-  chromeos::UpdateStatusOperation update_status = status.status;
+  const UpdateEngineClient::Status& status =
+      DBusThreadManager::Get()->GetUpdateEngineClient()->GetLastStatus();
+  UpdateEngineClient::UpdateStatusOperation update_status =
+      status.status;
   return_value->SetString("status", UpdateStatusToString(update_status));
-  if (update_status == chromeos::UPDATE_STATUS_DOWNLOADING)
+  if (update_status == UpdateEngineClient::UPDATE_STATUS_DOWNLOADING)
     return_value->SetDouble("download_progress", status.download_progress);
   if (status.last_checked_time > 0)
     return_value->SetInteger("last_checked_time", status.last_checked_time);
@@ -141,13 +136,12 @@ void GetReleaseTrackCallback(void* user_data, const char* track) {
   delete reply;
 }
 
-void UpdateCheckCallback(void* user_data, chromeos::UpdateResult result,
-                         const char* error_msg) {
-  AutomationJSONReply* reply = static_cast<AutomationJSONReply*>(user_data);
-  if (result == chromeos::UPDATE_RESULT_SUCCESS)
+void UpdateCheckCallback(AutomationJSONReply* reply,
+                         UpdateEngineClient::UpdateCheckResult result) {
+  if (result == UpdateEngineClient::UPDATE_RESULT_SUCCESS)
     reply->SendSuccess(NULL);
   else
-    reply->SendError(error_msg);
+    reply->SendError("update check failed");
   delete reply;
 }
 
@@ -192,23 +186,38 @@ const char* EnterpriseStatusToString(
 // PolicyLevel (Mandatory or Recommended policies).
 DictionaryValue* CreateDictionaryWithPolicies(
     policy::CloudPolicySubsystem* policy_subsystem,
-    policy::CloudPolicyCacheBase::PolicyLevel policy_level) {
+    policy::PolicyLevel policy_level) {
   DictionaryValue* dict = new DictionaryValue;
   policy::CloudPolicyCacheBase* policy_cache =
       policy_subsystem->GetCloudPolicyCacheBase();
   if (policy_cache) {
-    const policy::PolicyMap* policy_map = policy_cache->policy(policy_level);
+    const policy::PolicyMap* policy_map = policy_cache->policy();
     if (policy_map) {
       policy::PolicyMap::const_iterator i;
-      for (i = policy_map->begin(); i != policy_map->end(); i++)
-        dict->Set(policy::key::kMapPolicyString[i->first],
-                  i->second->DeepCopy());
+      for (i = policy_map->begin(); i != policy_map->end(); i++) {
+        if (i->second.level == policy_level)
+          dict->Set(i->first, i->second.value->DeepCopy());
+      }
     }
   }
   return dict;
 }
 
+// Last reported power status.
+chromeos::PowerSupplyStatus global_power_status;
+
 }  // namespace
+
+class PowerManagerClientObserverForTesting
+    : public chromeos::PowerManagerClient::Observer {
+ public:
+  virtual ~PowerManagerClientObserverForTesting() {}
+
+  virtual void PowerChanged(const chromeos::PowerSupplyStatus& status)
+      OVERRIDE {
+    global_power_status = status;
+  }
+};
 
 void TestingAutomationProvider::GetLoginInfo(DictionaryValue* args,
                                              IPC::Message* reply_message) {
@@ -221,11 +230,7 @@ void TestingAutomationProvider::GetLoginInfo(DictionaryValue* args,
   const chromeos::ScreenLocker* screen_locker =
       chromeos::ScreenLocker::default_screen_locker();
 
-  return_value->SetString(
-      "login_ui_type",
-      CommandLine::ForCurrentProcess()->HasSwitch(switches::kWebUILogin)?
-          "webui": "nativeui");
-
+  return_value->SetString("login_ui_type", "webui");
   return_value->SetBoolean("is_owner", user_manager->current_user_is_owner());
   return_value->SetBoolean("is_logged_in", user_manager->user_is_logged_in());
   return_value->SetBoolean("is_screen_locked", screen_locker);
@@ -274,25 +279,16 @@ void TestingAutomationProvider::Login(DictionaryValue* args,
   // Set up an observer (it will delete itself).
   new LoginObserver(controller, this, reply_message);
 
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kWebUILogin)) {
-    // WebUI login.
-    chromeos::WebUILoginDisplay* webui_login_display =
-        chromeos::WebUILoginDisplay::GetInstance();
-    webui_login_display->ShowSigninScreenForCreds(username, password);
-  } else {
-    // Native UI login.
-    controller->login_display()->SelectPod(0);
-    controller->Login(username, password);
-  }
+  // WebUI login.
+  chromeos::WebUILoginDisplay* webui_login_display =
+      static_cast<chromeos::WebUILoginDisplay*>(controller->login_display());
+  webui_login_display->ShowSigninScreenForCreds(username, password);
 }
 
 void TestingAutomationProvider::LockScreen(DictionaryValue* args,
                                            IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   new ScreenLockUnlockObserver(this, reply_message, true);
-  CrosLibrary::Get()->GetScreenLockLibrary()->
+  DBusThreadManager::Get()->GetPowerManagerClient()->
       NotifyScreenLockRequested();
 }
 
@@ -339,28 +335,24 @@ void TestingAutomationProvider::SignoutInScreenLocker(
 
 void TestingAutomationProvider::GetBatteryInfo(DictionaryValue* args,
                                                IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
-  chromeos::PowerLibrary* power_library = CrosLibrary::Get()->GetPowerLibrary();
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
 
   return_value->SetBoolean("battery_is_present",
-                           power_library->battery_is_present());
-  return_value->SetBoolean("line_power_on", power_library->line_power_on());
-  if (power_library->battery_is_present()) {
+                           global_power_status.battery_is_present);
+  return_value->SetBoolean("line_power_on", global_power_status.line_power_on);
+  if (global_power_status.battery_is_present) {
     return_value->SetBoolean("battery_fully_charged",
-                             power_library->battery_fully_charged());
+                             global_power_status.battery_is_full);
     return_value->SetDouble("battery_percentage",
-                            power_library->battery_percentage());
-    if (power_library->line_power_on()) {
-      int time = power_library->battery_time_to_full().InSeconds();
-      if (time > 0 || power_library->battery_fully_charged())
-        return_value->SetInteger("battery_time_to_full", time);
+                            global_power_status.battery_percentage);
+    if (global_power_status.line_power_on) {
+      int64 time = global_power_status.battery_seconds_to_full;
+      if (time > 0 || global_power_status.battery_is_full)
+        return_value->SetInteger("battery_seconds_to_full", time);
     } else {
-      int time = power_library->battery_time_to_empty().InSeconds();
+      int64 time = global_power_status.battery_seconds_to_empty;
       if (time > 0)
-        return_value->SetInteger("battery_time_to_empty", time);
+        return_value->SetInteger("battery_seconds_to_empty", time);
     }
   }
 
@@ -369,9 +361,6 @@ void TestingAutomationProvider::GetBatteryInfo(DictionaryValue* args,
 
 void TestingAutomationProvider::GetNetworkInfo(DictionaryValue* args,
                                                IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
 
@@ -466,7 +455,7 @@ void TestingAutomationProvider::GetNetworkInfo(DictionaryValue* args,
        remembered_wifi.begin(); iter != remembered_wifi.end();
        ++iter) {
       const chromeos::WifiNetwork* wifi = *iter;
-      items->Append(Value::CreateStringValue(wifi->service_path()));
+      items->Append(base::Value::CreateStringValue(wifi->service_path()));
   }
   return_value->Set("remembered_wifi", items);
 
@@ -475,9 +464,6 @@ void TestingAutomationProvider::GetNetworkInfo(DictionaryValue* args,
 
 void TestingAutomationProvider::NetworkScan(DictionaryValue* args,
                                             IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   network_library->RequestNetworkScan();
 
@@ -487,9 +473,6 @@ void TestingAutomationProvider::NetworkScan(DictionaryValue* args,
 
 void TestingAutomationProvider::ToggleNetworkDevice(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   std::string device;
   bool enable;
@@ -516,7 +499,8 @@ void TestingAutomationProvider::ToggleNetworkDevice(
   }
 }
 
-void TestingAutomationProvider::GetProxySettings(DictionaryValue* args,
+void TestingAutomationProvider::GetProxySettings(Browser* browser,
+                                                 DictionaryValue* args,
                                                  IPC::Message* reply_message) {
   const char* settings[] = { "pacurl", "singlehttp", "singlehttpport",
                              "httpurl", "httpport", "httpsurl", "httpsport",
@@ -524,10 +508,9 @@ void TestingAutomationProvider::GetProxySettings(DictionaryValue* args,
                              "socks", "socksport", "ignorelist" };
 
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
-  chromeos::ProxyCrosSettingsProvider settings_provider;
 
   for (size_t i = 0; i < arraysize(settings); ++i) {
-    Value* setting = GetProxySetting(settings[i]);
+    base::Value* setting = GetProxySetting(browser, settings[i]);
     if (setting)
       return_value->Set(settings[i], setting);
   }
@@ -535,11 +518,12 @@ void TestingAutomationProvider::GetProxySettings(DictionaryValue* args,
   AutomationJSONReply(this, reply_message).SendSuccess(return_value.get());
 }
 
-void TestingAutomationProvider::SetProxySettings(DictionaryValue* args,
-                                                IPC::Message* reply_message) {
+void TestingAutomationProvider::SetProxySettings(Browser* browser,
+                                                 DictionaryValue* args,
+                                                 IPC::Message* reply_message) {
   AutomationJSONReply reply(this, reply_message);
   std::string key;
-  Value* value;
+  base::Value* value;
   if (!args->GetString("key", &key) || !args->Get("value", &value)) {
     reply.SendError("Invalid or missing args.");
     return;
@@ -549,19 +533,61 @@ void TestingAutomationProvider::SetProxySettings(DictionaryValue* args,
   setting_path.append(key);
 
   // ProxyCrosSettingsProvider will own the Value* passed to Set().
-  chromeos::ProxyCrosSettingsProvider().Set(setting_path, value->DeepCopy());
+  chromeos::proxy_cros_settings_parser::SetProxyPrefValue(
+      browser->profile(), setting_path, value);
   reply.SendSuccess(NULL);
+}
+
+void TestingAutomationProvider::ConnectToCellularNetwork(
+    DictionaryValue* args, IPC::Message* reply_message) {
+  std::string service_path;
+  if (!args->GetString("service_path", &service_path)) {
+    AutomationJSONReply(this, reply_message).SendError(
+        "Invalid or missing args.");
+    return;
+  }
+
+  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  chromeos::CellularNetwork* cellular =
+      network_library->FindCellularNetworkByPath(service_path);
+  if (!cellular) {
+    AutomationJSONReply(this, reply_message).SendError(
+        "No network found with specified service path.");
+    return;
+  }
+
+  // Set up an observer (it will delete itself).
+  new ServicePathConnectObserver(this, reply_message, service_path);
+
+  network_library->ConnectToCellularNetwork(cellular);
+  network_library->RequestNetworkScan();
+}
+
+void TestingAutomationProvider::DisconnectFromCellularNetwork(
+    DictionaryValue* args, IPC::Message* reply_message) {
+  NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
+  const chromeos::CellularNetwork* cellular =
+        network_library->cellular_network();
+  if (!cellular) {
+    AutomationJSONReply(this, reply_message).SendError(
+        "Not connected to any cellular network.");
+    return;
+  }
+
+  // Set up an observer (it will delete itself).
+  new NetworkDisconnectObserver(this, reply_message, cellular->service_path());
+
+  network_library->DisconnectFromNetwork(cellular);
 }
 
 void TestingAutomationProvider::ConnectToWifiNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   std::string service_path, password;
+  bool shared;
   if (!args->GetString("service_path", &service_path) ||
-      !args->GetString("password", &password)) {
+      !args->GetString("password", &password) ||
+      !args->GetBoolean("shared", &shared)) {
     reply.SendError("Invalid or missing args.");
     return;
   }
@@ -576,17 +602,20 @@ void TestingAutomationProvider::ConnectToWifiNetwork(
   if (!password.empty())
     wifi->SetPassphrase(password);
 
+  // Regardless of what was passed, if the network is open and visible,
+  // the network must be shared because of a UI restriction.
+  if (wifi->encryption() == chromeos::SECURITY_NONE)
+    shared = true;
+
   // Set up an observer (it will delete itself).
   new ServicePathConnectObserver(this, reply_message, service_path);
 
-  network_library->ConnectToWifiNetwork(wifi);
+  network_library->ConnectToWifiNetwork(wifi, shared);
   network_library->RequestNetworkScan();
 }
 
 void TestingAutomationProvider::ForgetWifiNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
   std::string service_path;
   if (!args->GetString("service_path", &service_path)) {
     AutomationJSONReply(this, reply_message).SendError(
@@ -600,13 +629,12 @@ void TestingAutomationProvider::ForgetWifiNetwork(
 
 void TestingAutomationProvider::ConnectToHiddenWifiNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   std::string ssid, security, password;
+  bool shared;
   if (!args->GetString("ssid", &ssid) ||
       !args->GetString("security", &security) ||
-      !args->GetString("password", &password)) {
+      !args->GetString("password", &password) ||
+      !args->GetBoolean("shared", &shared)) {
     AutomationJSONReply(this, reply_message).SendError(
         "Invalid or missing args.");
     return;
@@ -632,15 +660,15 @@ void TestingAutomationProvider::ConnectToHiddenWifiNetwork(
   // Set up an observer (it will delete itself).
   new SSIDConnectObserver(this, reply_message, ssid);
 
-  const bool shared = true;
-  const bool save_credentials = false;
+  bool save_credentials = false;
 
   if (connection_security == chromeos::SECURITY_8021X) {
     chromeos::NetworkLibrary::EAPConfigData config_data;
     std::string eap_method, eap_auth, eap_identity;
     if (!args->GetString("eap_method", &eap_method) ||
         !args->GetString("eap_auth", &eap_auth) ||
-        !args->GetString("eap_identity", &eap_identity)) {
+        !args->GetString("eap_identity", &eap_identity) ||
+        !args->GetBoolean("save_credentials", &save_credentials)) {
       AutomationJSONReply(this, reply_message).SendError(
           "Invalid or missing EAP args.");
       return;
@@ -694,9 +722,6 @@ void TestingAutomationProvider::ConnectToHiddenWifiNetwork(
 
 void TestingAutomationProvider::DisconnectFromWifiNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   const chromeos::WifiNetwork* wifi = network_library->wifi_network();
@@ -711,9 +736,6 @@ void TestingAutomationProvider::DisconnectFromWifiNetwork(
 
 void TestingAutomationProvider::AddPrivateNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   std::string hostname, service_name, provider_type, key, cert_id, cert_nss,
       username, password;
   if (!args->GetString("hostname", &hostname) ||
@@ -738,11 +760,15 @@ void TestingAutomationProvider::AddPrivateNetwork(
     }
     new VirtualConnectObserver(this, reply_message, service_name);
     // Connect using a pre-shared key.
-    network_library->ConnectToVirtualNetworkPSK(service_name,
-                                                hostname,
-                                                key,
-                                                username,
-                                                password);
+    chromeos::NetworkLibrary::VPNConfigData config_data;
+    config_data.psk = key;
+    config_data.username = username;
+    config_data.user_passphrase = password;
+    network_library->ConnectToUnconfiguredVirtualNetwork(
+        service_name,
+        hostname,
+        chromeos::PROVIDER_TYPE_L2TP_IPSEC_PSK,
+        config_data);
   } else if (provider_type == VPNProviderTypeToString(
       chromeos::PROVIDER_TYPE_L2TP_IPSEC_USER_CERT)) {
     if (!args->GetString("cert_id", &cert_id) ||
@@ -753,18 +779,32 @@ void TestingAutomationProvider::AddPrivateNetwork(
     }
     new VirtualConnectObserver(this, reply_message, service_name);
     // Connect using a user certificate.
-    network_library->ConnectToVirtualNetworkCert(service_name,
-                                                 hostname,
-                                                 cert_nss,
-                                                 cert_id,
-                                                 username,
-                                                 password);
+    chromeos::NetworkLibrary::VPNConfigData config_data;
+    config_data.server_ca_cert_nss_nickname = cert_nss;
+    config_data.client_cert_pkcs11_id = cert_id;
+    config_data.username = username;
+    config_data.user_passphrase = password;
+    network_library->ConnectToUnconfiguredVirtualNetwork(
+        service_name,
+        hostname,
+        chromeos::PROVIDER_TYPE_L2TP_IPSEC_USER_CERT,
+        config_data);
   } else if (provider_type == VPNProviderTypeToString(
       chromeos::PROVIDER_TYPE_OPEN_VPN)) {
-    // Connect using OPEN_VPN. Not yet supported by the VPN implementation.
-    AutomationJSONReply(this, reply_message)
-      .SendError("Provider type OPEN_VPN is not yet supported.");
-    return;
+    std::string otp;
+    args->GetString("otp", &otp);
+    // Connect using OPEN_VPN.
+    chromeos::NetworkLibrary::VPNConfigData config_data;
+    config_data.server_ca_cert_nss_nickname = cert_nss;
+    config_data.client_cert_pkcs11_id = cert_id;
+    config_data.username = username;
+    config_data.user_passphrase = password;
+    config_data.otp = otp;
+    network_library->ConnectToUnconfiguredVirtualNetwork(
+        service_name,
+        hostname,
+        chromeos::PROVIDER_TYPE_OPEN_VPN,
+        config_data);
   } else {
     AutomationJSONReply(this, reply_message)
         .SendError("Unsupported provider type.");
@@ -774,9 +814,6 @@ void TestingAutomationProvider::AddPrivateNetwork(
 
 void TestingAutomationProvider::ConnectToPrivateNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   std::string service_path;
   if (!args->GetString("service_path", &service_path)) {
@@ -806,9 +843,6 @@ void TestingAutomationProvider::ConnectToPrivateNetwork(
 
 void TestingAutomationProvider::GetPrivateNetworkInfo(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   const chromeos::VirtualNetworkVector& virtual_networks =
@@ -840,9 +874,6 @@ void TestingAutomationProvider::GetPrivateNetworkInfo(
 
 void TestingAutomationProvider::DisconnectFromPrivateNetwork(
     DictionaryValue* args, IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   const chromeos::VirtualNetwork* virt = network_library->virtual_network();
@@ -869,27 +900,6 @@ void TestingAutomationProvider::IsEnterpriseDevice(
   reply.SendSuccess(return_value.get());
 }
 
-void TestingAutomationProvider::FetchEnterprisePolicy(
-    DictionaryValue* args, IPC::Message* reply_message) {
-  policy::BrowserPolicyConnector* connector =
-      g_browser_process->browser_policy_connector();
-  if (!connector) {
-    AutomationJSONReply(this, reply_message).SendError(
-        "Unable to access BrowserPolicyConnector");
-    return;
-  }
-  policy::CloudPolicySubsystem* policy_subsystem =
-      connector->user_cloud_policy_subsystem();
-  if (policy_subsystem) {
-    // Set up an observer (it will delete itself).
-    new CloudPolicyObserver(this, reply_message, connector, policy_subsystem);
-    connector->FetchDevicePolicy();
-  } else {
-    AutomationJSONReply(this, reply_message).SendError(
-        "Unable to access CloudPolicySubsystem");
-  }
-}
-
 void TestingAutomationProvider::EnrollEnterpriseDevice(
     DictionaryValue* args, IPC::Message* reply_message) {
   std::string user, password;
@@ -908,7 +918,7 @@ void TestingAutomationProvider::EnrollEnterpriseDevice(
   }
   user_controller->login_display_host()->StartWizard(
       chromeos::WizardController::kEnterpriseEnrollmentScreenName,
-      GURL());
+      NULL);
   chromeos::WizardController* wizard_controller =
       chromeos::WizardController::default_controller();
   if (!wizard_controller) {
@@ -926,7 +936,7 @@ void TestingAutomationProvider::EnrollEnterpriseDevice(
   // Set up an observer (it will delete itself).
   new EnrollmentObserver(this, reply_message, enroll_screen->GetActor(),
                          enroll_screen);
-  enroll_screen->OnAuthSubmitted(user, password, "", "");
+  enroll_screen->GetActor()->SubmitTestCredentials(user, password);
 }
 
 void TestingAutomationProvider::GetEnterprisePolicyInfo(
@@ -977,16 +987,16 @@ void TestingAutomationProvider::GetEnterprisePolicyInfo(
   // Get PolicyMaps.
   return_value->Set("device_mandatory_policies",
                     CreateDictionaryWithPolicies(device_cloud_policy,
-                        policy::CloudPolicyCacheBase::POLICY_LEVEL_MANDATORY));
+                        policy::POLICY_LEVEL_MANDATORY));
   return_value->Set("user_mandatory_policies",
                     CreateDictionaryWithPolicies(user_cloud_policy,
-                        policy::CloudPolicyCacheBase::POLICY_LEVEL_MANDATORY));
+                        policy::POLICY_LEVEL_MANDATORY));
   return_value->Set("device_recommended_policies",
       CreateDictionaryWithPolicies(device_cloud_policy,
-          policy::CloudPolicyCacheBase::POLICY_LEVEL_RECOMMENDED));
+          policy::POLICY_LEVEL_RECOMMENDED));
   return_value->Set("user_recommended_policies",
       CreateDictionaryWithPolicies(user_cloud_policy,
-          policy::CloudPolicyCacheBase::POLICY_LEVEL_RECOMMENDED));
+          policy::POLICY_LEVEL_RECOMMENDED));
   reply.SendSuccess(return_value.get());
 }
 
@@ -1035,30 +1045,21 @@ void TestingAutomationProvider::SetTimezone(DictionaryValue* args,
 
 void TestingAutomationProvider::GetUpdateInfo(DictionaryValue* args,
                                               IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
-  UpdateLibrary* update_library = CrosLibrary::Get()->GetUpdateLibrary();
   AutomationJSONReply* reply = new AutomationJSONReply(this, reply_message);
-  update_library->GetReleaseTrack(GetReleaseTrackCallback, reply);
+  DBusThreadManager::Get()->GetUpdateEngineClient()
+      ->GetReleaseTrack(base::Bind(GetReleaseTrackCallback, reply));
 }
 
 void TestingAutomationProvider::UpdateCheck(
     DictionaryValue* args,
     IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
-  UpdateLibrary* update_library = CrosLibrary::Get()->GetUpdateLibrary();
   AutomationJSONReply* reply = new AutomationJSONReply(this, reply_message);
-  update_library->RequestUpdateCheck(UpdateCheckCallback, reply);
+  DBusThreadManager::Get()->GetUpdateEngineClient()
+      ->RequestUpdateCheck(base::Bind(UpdateCheckCallback, reply));
 }
 
 void TestingAutomationProvider::SetReleaseTrack(DictionaryValue* args,
                                                 IPC::Message* reply_message) {
-  if (!EnsureCrosLibraryLoaded(this, reply_message))
-    return;
-
   AutomationJSONReply reply(this, reply_message);
   std::string track;
   if (!args->GetString("track", &track)) {
@@ -1066,18 +1067,22 @@ void TestingAutomationProvider::SetReleaseTrack(DictionaryValue* args,
     return;
   }
 
-  UpdateLibrary* update_library = CrosLibrary::Get()->GetUpdateLibrary();
-  update_library->SetReleaseTrack(track);
+  DBusThreadManager::Get()->GetUpdateEngineClient()->SetReleaseTrack(track);
   reply.SendSuccess(NULL);
 }
 
 void TestingAutomationProvider::GetVolumeInfo(DictionaryValue* args,
                                               IPC::Message* reply_message) {
+  AutomationJSONReply reply(this, reply_message);
   scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
   chromeos::AudioHandler* audio_handler = chromeos::AudioHandler::GetInstance();
+  if (!audio_handler) {
+    reply.SendError("AudioHandler not initialized.");
+    return;
+  }
   return_value->SetDouble("volume", audio_handler->GetVolumePercent());
   return_value->SetBoolean("is_mute", audio_handler->IsMuted());
-  AutomationJSONReply(this, reply_message).SendSuccess(return_value.get());
+  reply.SendSuccess(return_value.get());
 }
 
 void TestingAutomationProvider::SetVolume(DictionaryValue* args,
@@ -1088,8 +1093,11 @@ void TestingAutomationProvider::SetVolume(DictionaryValue* args,
     reply.SendError("Invalid or missing args.");
     return;
   }
-
   chromeos::AudioHandler* audio_handler = chromeos::AudioHandler::GetInstance();
+  if (!audio_handler) {
+    reply.SendError("AudioHandler not initialized.");
+    return;
+  }
   audio_handler->SetVolumePercent(volume_percent);
   reply.SendSuccess(NULL);
 }
@@ -1102,8 +1110,11 @@ void TestingAutomationProvider::SetMute(DictionaryValue* args,
     reply.SendError("Invalid or missing args.");
     return;
   }
-
   chromeos::AudioHandler* audio_handler = chromeos::AudioHandler::GetInstance();
+  if (!audio_handler) {
+    reply.SendError("AudioHandler not initialized.");
+    return;
+  }
   audio_handler->SetMuted(mute);
   reply.SendSuccess(NULL);
 }
@@ -1120,7 +1131,20 @@ void TestingAutomationProvider::CaptureProfilePhoto(
       this, reply_message));
 
   views::Widget* window = browser::CreateViewsWindow(
-      browser->window()->GetNativeHandle(), take_photo_dialog);
+      browser->window()->GetNativeHandle(), take_photo_dialog, STYLE_GENERIC);
   window->SetAlwaysOnTop(true);
   window->Show();
+}
+
+void TestingAutomationProvider::AddChromeosObservers() {
+  power_manager_observer_ = new PowerManagerClientObserverForTesting;
+  chromeos::DBusThreadManager::Get()->GetPowerManagerClient()->
+      AddObserver(power_manager_observer_);
+}
+
+void TestingAutomationProvider::RemoveChromeosObservers() {
+  chromeos::DBusThreadManager::Get()->GetPowerManagerClient()->
+      RemoveObserver(power_manager_observer_);
+  delete power_manager_observer_;
+  power_manager_observer_ = NULL;
 }

@@ -5,34 +5,31 @@
 #include "chrome/browser/printing/print_dialog_gtk.h"
 
 #include <fcntl.h>
-#include <gtk/gtkpagesetupunixdialog.h>
-#include <gtk/gtkprintjob.h>
+#include <gtk/gtkunixprint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
 #include "base/file_util.h"
 #include "base/file_util_proxy.h"
 #include "base/logging.h"
+#include "base/message_loop_proxy.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "printing/metafile.h"
 #include "printing/print_job_constants.h"
+#include "printing/print_settings.h"
 #include "printing/print_settings_initializer_gtk.h"
 
+using content::BrowserThread;
 using printing::PageRanges;
 using printing::PrintSettings;
 
 namespace {
-
-// CUPS ColorModel attribute and values.
-const char kCMYK[] = "CMYK";
-const char kCUPSColorModel[] = "cups-ColorModel";
-const char kColor[] = "Color";
-const char kGrayscale[] = "Grayscale";
 
 // CUPS Duplex attribute and values.
 const char kCUPSDuplex[] = "cups-Duplex";
@@ -97,14 +94,13 @@ class GtkPrinterList {
 
 // static
 printing::PrintDialogGtkInterface* PrintDialogGtk::CreatePrintDialog(
-    PrintingContextCairo* context) {
+    PrintingContextGtk* context) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   return new PrintDialogGtk(context);
 }
 
-PrintDialogGtk::PrintDialogGtk(PrintingContextCairo* context)
-    : callback_(NULL),
-      context_(context),
+PrintDialogGtk::PrintDialogGtk(PrintingContextGtk* context)
+    : context_(context),
       dialog_(NULL),
       gtk_settings_(NULL),
       page_setup_(NULL),
@@ -152,11 +148,13 @@ void PrintDialogGtk::UseDefaultSettings() {
 
   // No page range to initialize for default settings.
   PageRanges ranges_vector;
-  InitPrintSettings(ranges_vector);
+  PrintSettings settings;
+  InitPrintSettings(ranges_vector, &settings);
 }
 
-bool PrintDialogGtk::UpdateSettings(const DictionaryValue& settings,
-                                    const printing::PageRanges& ranges) {
+bool PrintDialogGtk::UpdateSettings(const DictionaryValue& job_settings,
+                                    const printing::PageRanges& ranges,
+                                    printing::PrintSettings* settings) {
   bool collate;
   int color;
   bool landscape;
@@ -165,15 +163,18 @@ bool PrintDialogGtk::UpdateSettings(const DictionaryValue& settings,
   int duplex_mode;
   std::string device_name;
 
-  if (!settings.GetBoolean(printing::kSettingLandscape, &landscape) ||
-      !settings.GetBoolean(printing::kSettingCollate, &collate) ||
-      !settings.GetInteger(printing::kSettingColor, &color) ||
-      !settings.GetBoolean(printing::kSettingPrintToPDF, &print_to_pdf) ||
-      !settings.GetInteger(printing::kSettingDuplexMode, &duplex_mode) ||
-      !settings.GetInteger(printing::kSettingCopies, &copies) ||
-      !settings.GetString(printing::kSettingDeviceName, &device_name)) {
+  if (!job_settings.GetBoolean(printing::kSettingLandscape, &landscape) ||
+      !job_settings.GetBoolean(printing::kSettingCollate, &collate) ||
+      !job_settings.GetInteger(printing::kSettingColor, &color) ||
+      !job_settings.GetBoolean(printing::kSettingPrintToPDF, &print_to_pdf) ||
+      !job_settings.GetInteger(printing::kSettingDuplexMode, &duplex_mode) ||
+      !job_settings.GetInteger(printing::kSettingCopies, &copies) ||
+      !job_settings.GetString(printing::kSettingDeviceName, &device_name)) {
     return false;
   }
+
+  if (!gtk_settings_)
+    gtk_settings_ = gtk_print_settings_new();
 
   if (!print_to_pdf) {
     scoped_ptr<GtkPrinterList> printer_list(new GtkPrinterList);
@@ -182,50 +183,55 @@ bool PrintDialogGtk::UpdateSettings(const DictionaryValue& settings,
       g_object_ref(printer_);
       gtk_print_settings_set_printer(gtk_settings_,
                                      gtk_printer_get_name(printer_));
+      if (!page_setup_) {
+        page_setup_ = gtk_printer_get_default_page_size(printer_);
+      }
     }
+
     gtk_print_settings_set_n_copies(gtk_settings_, copies);
     gtk_print_settings_set_collate(gtk_settings_, collate);
 
-    const char* color_mode;
-    switch (color) {
-      case printing::COLOR:
-        color_mode = kColor;
-        break;
-      case printing::CMYK:
-        color_mode = kCMYK;
-        break;
-      default:
-        color_mode = kGrayscale;
-        break;
-    }
-    gtk_print_settings_set(gtk_settings_, kCUPSColorModel, color_mode);
+#if defined(USE_CUPS)
+    std::string color_value;
+    std::string color_setting_name;
+    printing::GetColorModelForMode(color, &color_setting_name, &color_value);
+    gtk_print_settings_set(gtk_settings_, color_setting_name.c_str(),
+                           color_value.c_str());
 
-    const char* cups_duplex_mode;
-    switch (duplex_mode) {
-      case printing::LONG_EDGE:
-        cups_duplex_mode = kDuplexNoTumble;
-        break;
-      case printing::SHORT_EDGE:
-        cups_duplex_mode = kDuplexTumble;
-        break;
-      default:
-        cups_duplex_mode = kDuplexNone;
-        break;
+    if (duplex_mode != printing::UNKNOWN_DUPLEX_MODE) {
+      const char* cups_duplex_mode = NULL;
+      switch (duplex_mode) {
+        case printing::LONG_EDGE:
+          cups_duplex_mode = kDuplexNoTumble;
+          break;
+        case printing::SHORT_EDGE:
+          cups_duplex_mode = kDuplexTumble;
+          break;
+        case printing::SIMPLEX:
+          cups_duplex_mode = kDuplexNone;
+          break;
+        default:  // UNKNOWN_DUPLEX_MODE
+          NOTREACHED();
+          break;
+      }
+      gtk_print_settings_set(gtk_settings_, kCUPSDuplex, cups_duplex_mode);
     }
-    gtk_print_settings_set(gtk_settings_, kCUPSDuplex, cups_duplex_mode);
+#endif
   }
+  if (!page_setup_)
+    page_setup_ = gtk_page_setup_new();
 
   gtk_print_settings_set_orientation(
       gtk_settings_,
       landscape ? GTK_PAGE_ORIENTATION_LANDSCAPE :
                   GTK_PAGE_ORIENTATION_PORTRAIT);
 
-  InitPrintSettings(ranges);
+  InitPrintSettings(ranges, settings);
   return true;
 }
 
 void PrintDialogGtk::ShowDialog(
-    PrintingContextCairo::PrintSettingsCallback* callback) {
+    const PrintingContextGtk::PrintSettingsCallback& callback) {
   callback_ = callback;
 
   GtkWindow* parent = BrowserList::GetLastActive()->window()->GetNativeHandle();
@@ -282,9 +288,8 @@ void PrintDialogGtk::PrintDocument(const printing::Metafile* metafile,
     // No errors, continue printing.
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(this,
-                          &PrintDialogGtk::SendDocumentToPrinter,
-                          document_name));
+        base::Bind(&PrintDialogGtk::SendDocumentToPrinter, this,
+                   document_name));
   }
 }
 
@@ -337,14 +342,14 @@ void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
       printing::PrintSettingsInitializerGtk::InitPrintSettings(
           gtk_settings_, page_setup_, ranges_vector, false, &settings);
       context_->InitWithSettings(settings);
-      callback_->Run(PrintingContextCairo::OK);
-      callback_ = NULL;
+      callback_.Run(PrintingContextGtk::OK);
+      callback_.Reset();
       return;
     }
     case GTK_RESPONSE_DELETE_EVENT:  // Fall through.
     case GTK_RESPONSE_CANCEL: {
-      callback_->Run(PrintingContextCairo::CANCEL);
-      callback_ = NULL;
+      callback_.Run(PrintingContextGtk::CANCEL);
+      callback_.Reset();
       return;
     }
     case GTK_RESPONSE_APPLY:
@@ -388,16 +393,14 @@ void PrintDialogGtk::OnJobCompleted(GtkPrintJob* print_job, GError* error) {
     g_object_unref(print_job);
   base::FileUtilProxy::Delete(
       BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE),
-      path_to_pdf_,
-      false,
-      NULL);
+      path_to_pdf_, false, base::FileUtilProxy::StatusCallback());
   // Printing finished. Matches AddRef() in PrintDocument();
   Release();
 }
 
-void PrintDialogGtk::InitPrintSettings(const PageRanges& page_ranges) {
-  PrintSettings settings;
+void PrintDialogGtk::InitPrintSettings(const PageRanges& page_ranges,
+                                       PrintSettings* settings) {
   printing::PrintSettingsInitializerGtk::InitPrintSettings(
-      gtk_settings_, page_setup_, page_ranges, false, &settings);
-  context_->InitWithSettings(settings);
+      gtk_settings_, page_setup_, page_ranges, false, settings);
+  context_->InitWithSettings(*settings);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ cr.define('ntp4', function() {
 
       el.direction_ = el.id == 'page-switcher-start' ? -1 : 1;
 
-      el.dragWrapper_ = new DragWrapper(el, el);
+      el.dragWrapper_ = new cr.ui.DragWrapper(el, el);
     },
 
     /**
@@ -32,7 +32,9 @@ cr.define('ntp4', function() {
      */
     activate_: function() {
       var cardSlider = ntp4.getCardSlider();
-      cardSlider.selectCard(cardSlider.currentCard + this.direction_, true);
+      var index = cardSlider.currentCard + this.direction_;
+      var numCards = cardSlider.cardCount - 1;
+      cardSlider.selectCard(Math.max(0, Math.min(index, numCards)), true);
     },
 
     /**
@@ -48,6 +50,7 @@ cr.define('ntp4', function() {
     },
 
     shouldAcceptDrag: function(e) {
+      // We allow all drags to trigger the page switching effect.
       return true;
     },
 
@@ -63,7 +66,8 @@ cr.define('ntp4', function() {
     doDragOver: function(e) {
       e.preventDefault();
       var targetPage = ntp4.getCardSlider().currentCardValue;
-      targetPage.setDropEffect(e.dataTransfer);
+      if (targetPage.shouldAcceptDrag(e))
+        targetPage.setDropEffect(e.dataTransfer);
     },
 
     doDrop: function(e) {
@@ -76,7 +80,7 @@ cr.define('ntp4', function() {
 
       var sourcePage = tile.tilePage;
       var targetPage = ntp4.getCardSlider().currentCardValue;
-      if (targetPage == sourcePage)
+      if (targetPage == sourcePage || !targetPage.shouldAcceptDrag(e))
         return;
 
       targetPage.appendDraggingTile();

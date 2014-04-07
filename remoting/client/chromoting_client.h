@@ -9,8 +9,9 @@
 
 #include <list>
 
-#include "base/task.h"
+#include "base/callback.h"
 #include "base/time.h"
+#include "remoting/base/scoped_thread_proxy.h"
 #include "remoting/client/client_config.h"
 #include "remoting/client/chromoting_stats.h"
 #include "remoting/client/chromoting_view.h"
@@ -24,13 +25,7 @@ class MessageLoop;
 
 namespace remoting {
 
-namespace protocol {
-class LocalLoginStatus;
-class NotifyResolutionRequest;
-}  // namespace protocol
-
 class ClientContext;
-class InputHandler;
 class RectangleUpdateDecoder;
 
 // TODO(sergeyu): Move VideoStub implementation to RectangleUpdateDecoder.
@@ -44,8 +39,7 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
                    protocol::ConnectionToHost* connection,
                    ChromotingView* view,
                    RectangleUpdateDecoder* rectangle_decoder,
-                   InputHandler* input_handler,
-                   Task* client_done);
+                   const base::Closure& client_done);
   virtual ~ChromotingClient();
 
   void Start(scoped_refptr<XmppProxy> xmpp_proxy);
@@ -59,35 +53,27 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
   virtual void Repaint();
 
   // ConnectionToHost::HostEventCallback implementation.
-  virtual void OnConnectionOpened(protocol::ConnectionToHost* conn) OVERRIDE;
-  virtual void OnConnectionClosed(protocol::ConnectionToHost* conn) OVERRIDE;
-  virtual void OnConnectionFailed(protocol::ConnectionToHost* conn) OVERRIDE;
-
-  // ClientStub implementation.
-  virtual void BeginSessionResponse(const protocol::LocalLoginStatus* msg,
-                                    Task* done) OVERRIDE;
+  virtual void OnConnectionState(
+      protocol::ConnectionToHost::State state,
+      protocol::ConnectionToHost::Error error) OVERRIDE;
 
   // VideoStub implementation.
   virtual void ProcessVideoPacket(const VideoPacket* packet,
-                                  Task* done) OVERRIDE;
+                                  const base::Closure& done) OVERRIDE;
   virtual int GetPendingPackets() OVERRIDE;
 
  private:
   struct QueuedVideoPacket {
-    QueuedVideoPacket(const VideoPacket* packet, Task* done)
-        : packet(packet), done(done) {
-    }
+    QueuedVideoPacket(const VideoPacket* packet, const base::Closure& done);
+    ~QueuedVideoPacket();
     const VideoPacket* packet;
-    Task* done;
+    base::Closure done;
   };
 
   base::MessageLoopProxy* message_loop();
 
   // Initializes connection.
   void Initialize();
-
-  // Convenience method for modifying the state on this object's message loop.
-  void SetConnectionState(ConnectionState s);
 
   // If a packet is not being processed, dispatches a single message from the
   // |received_packets_| queue.
@@ -106,12 +92,9 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
   protocol::ConnectionToHost* connection_;
   ChromotingView* view_;
   RectangleUpdateDecoder* rectangle_decoder_;
-  InputHandler* input_handler_;
 
   // If non-NULL, this is called when the client is done.
-  Task* client_done_;
-
-  ConnectionState state_;
+  base::Closure client_done_;
 
   // Contains all video packets that have been received, but have not yet been
   // processed.
@@ -129,11 +112,11 @@ class ChromotingClient : public protocol::ConnectionToHost::HostEventCallback,
   // Keep track of the last sequence number bounced back from the host.
   int64 last_sequence_number_;
 
+  ScopedThreadProxy thread_proxy_;
+
   DISALLOW_COPY_AND_ASSIGN(ChromotingClient);
 };
 
 }  // namespace remoting
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(remoting::ChromotingClient);
 
 #endif  // REMOTING_CLIENT_CHROMOTING_CLIENT_H_

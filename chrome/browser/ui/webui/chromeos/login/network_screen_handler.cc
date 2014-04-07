@@ -4,27 +4,30 @@
 
 #include "chrome/browser/ui/webui/chromeos/login/network_screen_handler.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "content/browser/webui/web_ui.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/chromeos/login/language_switch_menu.h"
 #include "chrome/browser/chromeos/status/input_method_menu.h"
-#include "chrome/browser/chromeos/wm_ipc.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "chrome/browser/ui/webui/options/chromeos/cros_language_options_handler.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/webui/web_ui.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/rect.h"
-#include "views/layout/fill_layout.h"
-#include "views/widget/widget.h"
+#include "ui/views/layout/fill_layout.h"
+#include "ui/views/widget/widget.h"
+
+#if defined(TOOLKIT_USES_GTK)
+#include "chrome/browser/chromeos/legacy_window_manager/wm_ipc.h"
+#endif
 
 namespace {
 
@@ -74,12 +77,12 @@ void NetworkScreenHandler::Hide() {
 
 void NetworkScreenHandler::ShowError(const string16& message) {
   scoped_ptr<Value> message_value(Value::CreateStringValue(message));
-  web_ui_->CallJavascriptFunction("oobe.NetworkScreen.showError",
-                                  *message_value);
+  web_ui()->CallJavascriptFunction("oobe.NetworkScreen.showError",
+                                   *message_value);
 }
 
 void NetworkScreenHandler::ClearErrors() {
-  web_ui_->CallJavascriptFunction("oobe.NetworkScreen.clearErrors");
+  web_ui()->CallJavascriptFunction("oobe.NetworkScreen.clearErrors");
 }
 
 void NetworkScreenHandler::ShowConnectingStatus(
@@ -92,10 +95,10 @@ void NetworkScreenHandler::ShowConnectingStatus(
   // scoped_ptr<Value> network_id_value(Value::CreateStringValue(network_id));
   // scoped_ptr<Value> connecting_label_value(
   //     Value::CreateStringValue(connecting_label));
-  // web_ui_->CallJavascriptFunction("cr.ui.Oobe.showConnectingStatus",
-  //                                 *connecting_value,
-  //                                 *network_id_value,
-  //                                 *connecting_label_value);
+  // web_ui()->CallJavascriptFunction("cr.ui.Oobe.showConnectingStatus",
+  //                                  *connecting_value,
+  //                                  *network_id_value,
+  //                                  *connecting_label_value);
 }
 
 void NetworkScreenHandler::EnableContinue(bool enabled) {
@@ -104,8 +107,8 @@ void NetworkScreenHandler::EnableContinue(bool enabled) {
     return;
 
   scoped_ptr<Value> enabled_value(Value::CreateBooleanValue(enabled));
-  web_ui_->CallJavascriptFunction("cr.ui.Oobe.enableContinueButton",
-                                  *enabled_value);
+  web_ui()->CallJavascriptFunction("cr.ui.Oobe.enableContinueButton",
+                                   *enabled_value);
 }
 
 // NetworkScreenHandler, BaseScreenHandler implementation: --------------------
@@ -137,12 +140,14 @@ void NetworkScreenHandler::Initialize() {
 // NetworkScreenHandler, WebUIMessageHandler implementation: -------------------
 
 void NetworkScreenHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback(kJsApiNetworkOnExit,
-      NewCallback(this, &NetworkScreenHandler::HandleOnExit));
-  web_ui_->RegisterMessageCallback(kJsApiNetworkOnLanguageChanged,
-      NewCallback(this, &NetworkScreenHandler::HandleOnLanguageChanged));
-  web_ui_->RegisterMessageCallback(kJsApiNetworkOnInputMethodChanged,
-      NewCallback(this, &NetworkScreenHandler::HandleOnInputMethodChanged));
+  web_ui()->RegisterMessageCallback(kJsApiNetworkOnExit,
+      base::Bind(&NetworkScreenHandler::HandleOnExit,base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(kJsApiNetworkOnLanguageChanged,
+      base::Bind(&NetworkScreenHandler::HandleOnLanguageChanged,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(kJsApiNetworkOnInputMethodChanged,
+      base::Bind(&NetworkScreenHandler::HandleOnInputMethodChanged,
+                 base::Unretained(this)));
 }
 
 // NetworkScreenHandler, private: ----------------------------------------------
@@ -162,9 +167,12 @@ void NetworkScreenHandler::HandleOnLanguageChanged(const ListValue* args) {
   LanguageSwitchMenu::SwitchLanguageAndEnableKeyboardLayouts(locale);
 
   DictionaryValue localized_strings;
-  static_cast<OobeUI*>(web_ui_)->GetLocalizedStrings(&localized_strings);
-  web_ui_->CallJavascriptFunction("cr.ui.Oobe.reloadContent",
-                                  localized_strings);
+  static_cast<OobeUI*>(web_ui()->GetController())->GetLocalizedStrings(
+      &localized_strings);
+  web_ui()->CallJavascriptFunction("cr.ui.Oobe.reloadContent",
+                                   localized_strings);
+  // Buttons are recreated, updated "Continue" button state.
+  EnableContinue(is_continue_enabled_);
 }
 
 void NetworkScreenHandler::HandleOnInputMethodChanged(const ListValue* args) {
@@ -177,9 +185,11 @@ void NetworkScreenHandler::HandleOnInputMethodChanged(const ListValue* args) {
 
 ListValue* NetworkScreenHandler::GetLanguageList() {
   const std::string app_locale = g_browser_process->GetApplicationLocale();
+  input_method::InputMethodManager* manager =
+      input_method::InputMethodManager::GetInstance();
   // GetSupportedInputMethods() never returns NULL.
   scoped_ptr<input_method::InputMethodDescriptors> descriptors(
-      input_method::GetSupportedInputMethods());
+      manager->GetSupportedInputMethods());
   ListValue* languages_list =
       CrosLanguageOptionsHandler::GetLanguageList(*descriptors);
   for (size_t i = 0; i < languages_list->GetSize(); ++i) {
@@ -216,8 +226,8 @@ ListValue* NetworkScreenHandler::GetInputMethods() {
   for (size_t i = 0; i < input_methods->size(); ++i) {
     DictionaryValue* input_method = new DictionaryValue;
     input_method->SetString("value", input_methods->at(i).id());
-    input_method->SetString("title",
-      WideToUTF16(InputMethodMenu::GetTextForMenu(input_methods->at(i))));
+    input_method->SetString(
+        "title", InputMethodMenu::GetTextForMenu(input_methods->at(i)));
     input_method->SetBoolean("selected",
         input_methods->at(i).id() == current_input_method_id);
     input_methods_list->Append(input_method);

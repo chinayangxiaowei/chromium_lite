@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,18 @@
 #define CHROME_BROWSER_CHROMEOS_OPTIONS_NETWORK_CONFIG_VIEW_H_
 #pragma once
 
+#include <string>
+
+#include "base/compiler_specific.h"
+#include "base/string16.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
+#include "chrome/browser/chromeos/cros/network_ui_data.h"
 #include "ui/gfx/native_widget_types.h"  // gfx::NativeWindow
-#include "views/controls/button/button.h"  // views::ButtonListener
-#include "views/window/dialog_delegate.h"
+#include "ui/views/controls/button/button.h"  // views::ButtonListener
+#include "ui/views/window/dialog_delegate.h"
 
 namespace views {
+class ImageView;
 class NativeTextButton;
 class View;
 }
@@ -46,18 +52,16 @@ class NetworkConfigView : public views::DialogDelegateView,
   gfx::NativeWindow GetNativeWindow() const;
 
   // views::DialogDelegate methods.
-  virtual std::wstring GetDialogButtonLabel(
-      MessageBoxFlags::DialogButton button) const OVERRIDE;
-  virtual bool IsDialogButtonEnabled(
-      MessageBoxFlags::DialogButton button) const OVERRIDE;
+  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
+  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
   virtual bool Cancel() OVERRIDE;
   virtual bool Accept() OVERRIDE;
   virtual views::View* GetExtraView() OVERRIDE;
 
   // views::WidgetDelegate methods.
-  virtual bool IsModal() const OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
   virtual views::View* GetContentsView() OVERRIDE;
-  virtual std::wstring GetWindowTitle() const OVERRIDE;
+  virtual string16 GetWindowTitle() const OVERRIDE;
 
   // views::View overrides.
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
@@ -72,11 +76,11 @@ class NetworkConfigView : public views::DialogDelegateView,
 
  protected:
   // views::View overrides:
-  virtual void Layout();
-  virtual gfx::Size GetPreferredSize();
+  virtual void Layout() OVERRIDE;
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
-                                    views::View* child);
+                                    views::View* child) OVERRIDE;
 
  private:
   // Creates an "Advanced" button in the lower-left corner of the dialog.
@@ -135,6 +139,36 @@ class ChildNetworkConfigView : public views::View {
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ChildNetworkConfigView);
+};
+
+// Shows an icon with tooltip indicating whether a setting is under policy
+// control.
+class ControlledSettingIndicatorView : public views::View {
+ public:
+  ControlledSettingIndicatorView();
+  explicit ControlledSettingIndicatorView(const NetworkPropertyUIData& ui_data);
+  virtual ~ControlledSettingIndicatorView();
+
+  // Updates the view based on |ui_data|.
+  void Update(const NetworkPropertyUIData& ui_data);
+
+ protected:
+  // views::View:
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
+  virtual void OnMouseEntered(const views::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseExited(const views::MouseEvent& event) OVERRIDE;
+
+ private:
+  // Initializes the view.
+  void Init();
+
+  bool managed_;
+  views::ImageView* image_view_;
+  const SkBitmap* gray_image_;
+  const SkBitmap* color_image_;
+
+  DISALLOW_COPY_AND_ASSIGN(ControlledSettingIndicatorView);
 };
 
 }  // namespace chromeos

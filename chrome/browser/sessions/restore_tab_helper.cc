@@ -7,12 +7,14 @@
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_contents.h"
 
-RestoreTabHelper::RestoreTabHelper(TabContentsWrapper* tab)
-    : TabContentsObserver(tab->tab_contents()),
-      tab_(tab) {
+using content::WebContents;
+
+RestoreTabHelper::RestoreTabHelper(WebContents* contents)
+    : content::WebContentsObserver(contents) {
 }
 
 RestoreTabHelper::~RestoreTabHelper() {
@@ -20,15 +22,22 @@ RestoreTabHelper::~RestoreTabHelper() {
 
 void RestoreTabHelper::SetWindowID(const SessionID& id) {
   window_id_ = id;
-  NotificationService::current()->Notify(
-      content::NOTIFICATION_TAB_PARENTED,
-      Source<TabContentsWrapper>(tab_),
-      NotificationService::NoDetails());
+
+  // TODO(mpcomplete): Maybe this notification should send out a TabContents.
+  TabContentsWrapper* tab =
+      TabContentsWrapper::GetCurrentWrapperForContents(web_contents());
+  if (tab) {
+    content::NotificationService::current()->Notify(
+        content::NOTIFICATION_TAB_PARENTED,
+        content::Source<TabContentsWrapper>(tab),
+        content::NotificationService::NoDetails());
+  }
 
   // Extension code in the renderer holds the ID of the window that hosts it.
   // Notify it that the window ID changed.
-  tab_->render_view_host()->Send(new ExtensionMsg_UpdateBrowserWindowId(
-      tab_->render_view_host()->routing_id(), id.id()));
+  web_contents()->GetRenderViewHost()->Send(
+          new ExtensionMsg_UpdateBrowserWindowId(
+          web_contents()->GetRenderViewHost()->routing_id(), id.id()));
 }
 
 void RestoreTabHelper::RenderViewCreated(RenderViewHost* render_view_host) {

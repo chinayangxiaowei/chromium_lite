@@ -35,8 +35,8 @@
 #include "chrome_frame/crash_reporting/crash_metrics.h"
 #include "chrome_frame/utils.h"
 #include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/navigation_types.h"
-#include "content/common/page_zoom.h"
+#include "content/public/browser/invalidate_type.h"
+#include "content/public/common/page_zoom.h"
 #include "grit/generated_resources.h"
 
 DEFINE_GUID(CGID_DocHostCmdPriv, 0x000214D4L, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0,
@@ -600,7 +600,7 @@ HRESULT ChromeActiveDocument::ActiveXDocActivate(LONG verb) {
 
 void ChromeActiveDocument::OnNavigationStateChanged(
     int flags, const NavigationInfo& nav_info) {
-  // TODO(joshia): handle INVALIDATE_TAB,INVALIDATE_LOAD etc.
+  // TODO(joshia): handle INVALIDATE_TYPE_TAB,INVALIDATE_TYPE_LOAD etc.
   DVLOG(1) << __FUNCTION__
            << "\n Flags: " << flags
            << ", Url: " << nav_info.url
@@ -704,7 +704,7 @@ void ChromeActiveDocument::UpdateNavigationState(
   if (is_ssl_state_changed) {
     int lock_status = SECURELOCK_SET_UNSECURE;
     switch (new_navigation_info.security_style) {
-      case SECURITY_STYLE_AUTHENTICATED:
+      case content::SECURITY_STYLE_AUTHENTICATED:
         lock_status = new_navigation_info.displayed_insecure_content ?
             SECURELOCK_SET_MIXED : SECURELOCK_SET_SECUREUNKNOWNBIT;
         break;
@@ -757,6 +757,19 @@ void ChromeActiveDocument::UpdateNavigationState(
     url_.Allocate(UTF8ToWide(new_navigation_info.url.spec()).c_str());
 
   if (is_internal_navigation) {
+    // IE6 does not support tabs. If Chrome sent us a window open request
+    // indicating that the navigation needs to occur in a foreground tab or
+    // a popup window, then we need to ensure that the new window in IE6 is
+    // brought to the foreground.
+    if (GetIEVersion() == IE_6 &&
+        is_attach_external_tab_url &&
+        (cf_url.disposition() == NEW_FOREGROUND_TAB ||
+         cf_url.disposition() == NEW_POPUP)) {
+      base::win::ScopedComPtr<IWebBrowser2> wb2;
+      DoQueryService(SID_SWebBrowserApp, m_spClientSite, wb2.Receive());
+      if (wb2)
+        BaseActiveX::BringWebBrowserWindowToTop(wb2);
+    }
     base::win::ScopedComPtr<IDocObjectService> doc_object_svc;
     base::win::ScopedComPtr<IWebBrowserEventsService> web_browser_events_svc;
 
@@ -884,9 +897,9 @@ void ChromeActiveDocument::OnSetZoomRange(const GUID* cmd_group_guid,
 
   if (in_args && V_VT(in_args) == VT_I4 && IsValid()) {
     if (in_args->lVal == kZoomIn) {
-      automation_client_->SetZoomLevel(PageZoom::ZOOM_IN);
+      automation_client_->SetZoomLevel(content::PAGE_ZOOM_IN);
     } else if (in_args->lVal == kZoomOut) {
-      automation_client_->SetZoomLevel(PageZoom::ZOOM_OUT);
+      automation_client_->SetZoomLevel(content::PAGE_ZOOM_OUT);
     } else {
       DLOG(WARNING) << "Unsupported zoom level:" << in_args->lVal;
     }
@@ -1069,7 +1082,7 @@ bool ChromeActiveDocument::LaunchUrl(const ChromeFrameUrl& cf_url,
     // If no profile was given, then make use of the host process's name.
     if (profile.empty())
       profile = GetHostProcessName(false);
-    return InitializeAutomation(profile, L"", IsIEInPrivate(),
+    return InitializeAutomation(profile, IsIEInPrivate(),
                                 false, cf_url.gurl(), GURL(referrer),
                                 false);
   }
@@ -1372,13 +1385,13 @@ bool ChromeActiveDocument::IsNewNavigation(
   // the renderer(WebKit). Condition 1 below has to be true along with the
   // any of the other conditions below.
   // 1. The navigation notification flags passed in as the flags parameter
-  //    is not INVALIDATE_LOAD which indicates that the loading state of the
-  //    tab changed.
+  //    is not INVALIDATE_TYPE_LOAD which indicates that the loading state of
+  //    the tab changed.
   // 2. The navigation index is greater than 0 which means that a top level
   //    navigation was initiated on the current external tab.
   // 3. The navigation type has changed.
   // 4. The url or the referrer are different.
-  if (flags == TabContents::INVALIDATE_LOAD)
+  if (flags == content::INVALIDATE_TYPE_LOAD)
     return false;
 
   if (new_navigation_info.navigation_index <= 0)

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,36 +13,60 @@
 #include "base/i18n/rtl.h"
 #include "base/string16.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPaint.h"
 #include "ui/base/range/range.h"
-#include "ui/gfx/font.h"
-#include "ui/gfx/rect.h"
+#include "ui/gfx/font_list.h"
 #include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/selection_model.h"
+
+class SkCanvas;
+struct SkPoint;
 
 namespace gfx {
 
-// Strike line width.
-const int kStrikeWidth = 2;
-
-// Color settings for text, backgrounds and cursor.
-// These are tentative, and should be derived from theme, system
-// settings and current settings.
-// TODO(oshima): Change this to match the standard chrome
-// before dogfooding textfield views.
-const SkColor kSelectedTextColor = SK_ColorWHITE;
-const SkColor kFocusedSelectionColor = SK_ColorCYAN;
-const SkColor kUnfocusedSelectionColor = SK_ColorLTGRAY;
-const SkColor kCursorColor = SK_ColorBLACK;
-
 class Canvas;
 class RenderTextTest;
+struct StyleRange;
+
+namespace internal {
+
+// Internal helper class used by derived classes to draw text through Skia.
+class SkiaTextRenderer {
+ public:
+  explicit SkiaTextRenderer(Canvas* canvas);
+  ~SkiaTextRenderer();
+
+  void SetTypeface(SkTypeface* typeface);
+  void SetTextSize(int size);
+  void SetFont(const gfx::Font& font);
+  void SetFontStyle(int font_style);
+  void SetForegroundColor(SkColor foreground);
+  void SetShader(SkShader* shader);
+  void DrawSelection(const std::vector<Rect>& selection, SkColor color);
+  void DrawPosText(const SkPoint* pos,
+                   const uint16* glyphs,
+                   size_t glyph_count);
+  void DrawDecorations(int x, int y, int width, const StyleRange& style);
+
+ private:
+  SkCanvas* canvas_skia_;
+  SkPaint paint_;
+
+  DISALLOW_COPY_AND_ASSIGN(SkiaTextRenderer);
+};
+
+}  // namespace internal
 
 // A visual style applicable to a range of text.
 struct UI_EXPORT StyleRange {
   StyleRange();
 
-  Font font;
   SkColor foreground;
+  // A gfx::Font::FontStyle flag to specify bold and italic styles.
+  int font_style;
   bool strike;
+  bool diagonal_strike;
   bool underline;
   ui::Range range;
 };
@@ -59,85 +83,29 @@ enum BreakType {
   LINE_BREAK,
 };
 
-// TODO(xji): publish bidi-editing guide line and replace the place holder.
-// SelectionModel is used to represent the logical selection and visual
-// position of cursor.
-//
-// For bi-directional text, the mapping between visual position and logical
-// position is not one-to-one. For example, logical text "abcDEF" where capital
-// letters stand for Hebrew, the visual display is "abcFED". According to the
-// bidi editing guide (http://bidi-editing-guideline):
-// 1. If pointing to the right half of the cell of a LTR character, the current
-// position must be set after this character and the caret must be displayed
-// after this character.
-// 2. If pointing to the right half of the cell of a RTL character, the current
-// position must be set before this character and the caret must be displayed
-// before this character.
-//
-// Pointing to the right half of 'c' and pointing to the right half of 'D' both
-// set the logical cursor position to 3. But the cursor displayed visually at
-// different places:
-// Pointing to the right half of 'c' displays the cursor right of 'c' as
-// "abc|FED".
-// Pointing to the right half of 'D' displays the cursor right of 'D' as
-// "abcFED|".
-// So, besides the logical selection start point and end point, we need extra
-// information to specify to which character and on which edge of the character
-// the visual cursor is bound to. For example, the visual cursor is bound to
-// the trailing side of the 2nd character 'c' when pointing to right half of
-// 'c'. And it is bound to the leading edge of the 3rd character 'D' when
-// pointing to right of 'D'.
-class UI_EXPORT SelectionModel {
- public:
-  enum CaretPlacement {
-    LEADING,
-    TRAILING,
-  };
-
-  SelectionModel();
-  explicit SelectionModel(size_t pos);
-  SelectionModel(size_t start, size_t end);
-  SelectionModel(size_t end, size_t pos, CaretPlacement status);
-  SelectionModel(size_t start, size_t end, size_t pos, CaretPlacement status);
-
-  virtual ~SelectionModel();
-
-  size_t selection_start() const { return selection_start_; }
-  void set_selection_start(size_t pos) { selection_start_ = pos; }
-
-  size_t selection_end() const { return selection_end_; }
-  void set_selection_end(size_t pos) { selection_end_ = pos; }
-
-  size_t caret_pos() const { return caret_pos_; }
-  void set_caret_pos(size_t pos) { caret_pos_ = pos; }
-
-  CaretPlacement caret_placement() const { return caret_placement_; }
-  void set_caret_placement(CaretPlacement placement) {
-    caret_placement_ = placement;
-  }
-
-  bool Equals(const SelectionModel& sel) const;
-
- private:
-  void Init(size_t start, size_t end, size_t pos, CaretPlacement status);
-
-  // Logical selection start. If there is non-empty selection, the selection
-  // always starts visually at the leading edge of the selection_start. So, we
-  // do not need extra information for visual selection bounding.
-  size_t selection_start_;
-
-  // The logical cursor position that next character will be inserted into.
-  // It is also the end of the selection.
-  size_t selection_end_;
-
-  // The following two fields are used to guide cursor visual position.
-  // The index of the character that cursor is visually attached to.
-  size_t caret_pos_;
-  // The visual placement of the cursor, relative to its associated character.
-  CaretPlacement caret_placement_;
+// Horizontal text alignment styles.
+enum HorizontalAlignment {
+  ALIGN_LEFT,
+  ALIGN_CENTER,
+  ALIGN_RIGHT,
 };
 
-// TODO(msw): Implement RenderText[Win|Linux] for Uniscribe/Pango BiDi...
+// VisualCursorDirection and LogicalCursorDirection represent directions of
+// motion of the cursor in BiDi text. The combinations that make sense are:
+//
+//  base::i18n::TextDirection  VisualCursorDirection  LogicalCursorDirection
+//       LEFT_TO_RIGHT             CURSOR_LEFT           CURSOR_BACKWARD
+//       LEFT_TO_RIGHT             CURSOR_RIGHT          CURSOR_FORWARD
+//       RIGHT_TO_LEFT             CURSOR_RIGHT          CURSOR_BACKWARD
+//       RIGHT_TO_LEFT             CURSOR_LEFT           CURSOR_FORWARD
+enum VisualCursorDirection {
+  CURSOR_LEFT,
+  CURSOR_RIGHT
+};
+enum LogicalCursorDirection {
+  CURSOR_BACKWARD,
+  CURSOR_FORWARD
+};
 
 // RenderText represents an abstract model of styled text and its corresponding
 // visual layout. Support is built in for a cursor, a selection, simple styling,
@@ -151,9 +119,26 @@ class UI_EXPORT RenderText {
   static RenderText* CreateRenderText();
 
   const string16& text() const { return text_; }
-  virtual void SetText(const string16& text);
+  void SetText(const string16& text);
+
+  HorizontalAlignment horizontal_alignment() const {
+    return horizontal_alignment_;
+  }
+  void SetHorizontalAlignment(HorizontalAlignment alignment);
+
+  const FontList& font_list() const { return font_list_; }
+  void SetFontList(const FontList& font_list);
+
+  // Set the font size to |size| in pixels.
+  void SetFontSize(int size);
+
+  // Get the first font in |font_list_|.
+  const Font& GetFont() const;
 
   const SelectionModel& selection_model() const { return selection_model_; }
+
+  bool cursor_enabled() const { return cursor_enabled_; }
+  void SetCursorEnabled(bool cursor_enabled);
 
   bool cursor_visible() const { return cursor_visible_; }
   void set_cursor_visible(bool visible) { cursor_visible_ = visible; }
@@ -165,10 +150,15 @@ class UI_EXPORT RenderText {
   void set_focused(bool focused) { focused_ = focused; }
 
   const StyleRange& default_style() const { return default_style_; }
-  void set_default_style(StyleRange style) { default_style_ = style; }
+  void set_default_style(const StyleRange& style) { default_style_ = style; }
 
   const Rect& display_rect() const { return display_rect_; }
-  virtual void SetDisplayRect(const Rect& r);
+  void SetDisplayRect(const Rect& r);
+
+  void set_fade_head(bool fade_head) { fade_head_ = fade_head; }
+  bool fade_head() const { return fade_head_; }
+  void set_fade_tail(bool fade_tail) { fade_tail_ = fade_tail; }
+  bool fade_tail() const { return fade_tail_; }
 
   // This cursor position corresponds to SelectionModel::selection_end. In
   // addition to representing the selection end, it's also where logical text
@@ -177,19 +167,19 @@ class UI_EXPORT RenderText {
   size_t GetCursorPosition() const;
   void SetCursorPosition(size_t position);
 
-  void SetCaretPlacement(SelectionModel::CaretPlacement placement) {
-      selection_model_.set_caret_placement(placement);
-  }
-
   // Moves the cursor left or right. Cursor movement is visual, meaning that
   // left and right are relative to screen, not the directionality of the text.
   // If |select| is false, the selection start is moved to the same position.
-  void MoveCursorLeft(BreakType break_type, bool select);
-  void MoveCursorRight(BreakType break_type, bool select);
+  void MoveCursor(BreakType break_type,
+                  VisualCursorDirection direction,
+                  bool select);
 
   // Set the selection_model_ to the value of |selection|.
   // The selection model components are modified if invalid.
   // Returns true if the cursor position or selection range changed.
+  // If |selectin_start_| or |selection_end_| or |caret_pos_| in
+  // |selection_model| is not a cursorable position (not on grapheme boundary),
+  // it is a NO-OP and returns false.
   bool MoveCursorTo(const SelectionModel& selection_model);
 
   // Move the cursor to the position associated with the clicked point.
@@ -197,17 +187,24 @@ class UI_EXPORT RenderText {
   // Returns true if the cursor position or selection range changed.
   bool MoveCursorTo(const Point& point, bool select);
 
+  // Set the selection_model_ based on |range|.
+  // If the |range| start or end is greater than text length, it is modified
+  // to be the text length.
+  // If the |range| start or end is not a cursorable position (not on grapheme
+  // boundary), it is a NO-OP and returns false. Otherwise, returns true.
+  bool SelectRange(const ui::Range& range);
+
   size_t GetSelectionStart() const {
-      return selection_model_.selection_start();
+    return selection_model_.selection_start();
   }
   size_t MinOfSelection() const {
-      return std::min(GetSelectionStart(), GetCursorPosition());
+    return std::min(GetSelectionStart(), GetCursorPosition());
   }
   size_t MaxOfSelection() const {
-      return std::max(GetSelectionStart(), GetCursorPosition());
+    return std::max(GetSelectionStart(), GetCursorPosition());
   }
   bool EmptySelection() const {
-      return GetSelectionStart() == GetCursorPosition();
+    return GetSelectionStart() == GetCursorPosition();
   }
 
   // Returns true if the local point is over selected text.
@@ -222,20 +219,26 @@ class UI_EXPORT RenderText {
   void SetCompositionRange(const ui::Range& composition_range);
 
   // Apply |style_range| to the internal style model.
-  virtual void ApplyStyleRange(StyleRange style_range);
+  void ApplyStyleRange(const StyleRange& style_range);
 
   // Apply |default_style_| over the entire text range.
-  virtual void ApplyDefaultStyle();
+  void ApplyDefaultStyle();
 
-  base::i18n::TextDirection GetTextDirection() const;
+  // Returns the dominant direction of the current text.
+  virtual base::i18n::TextDirection GetTextDirection() = 0;
+
+  // Returns the visual movement direction corresponding to the logical end
+  // of the text, considering only the dominant direction returned by
+  // |GetTextDirection()|, not the direction of a particular run.
+  VisualCursorDirection GetVisualDirectionOfLogicalEnd();
 
   // Get the width of the entire string.
-  virtual int GetStringWidth();
+  virtual int GetStringWidth() = 0;
 
-  virtual void Draw(Canvas* canvas);
+  void Draw(Canvas* canvas);
 
   // Gets the SelectionModel from a visual point in local coordinates.
-  virtual SelectionModel FindCursorPosition(const Point& point);
+  virtual SelectionModel FindCursorPosition(const Point& point) = 0;
 
   // Get the visual bounds of a cursor at |selection|. These bounds typically
   // represent a vertical line, but if |insert_mode| is true they contain the
@@ -243,12 +246,25 @@ class UI_EXPORT RenderText {
   // may be outside the visible region if the text is longer than the textfield.
   // Subsequent text, cursor, or bounds changes may invalidate returned values.
   virtual Rect GetCursorBounds(const SelectionModel& selection,
-                               bool insert_mode);
+                               bool insert_mode) = 0;
 
   // Compute the current cursor bounds, panning the text to show the cursor in
   // the display rect if necessary. These bounds are in local coordinates.
   // Subsequent text, cursor, or bounds changes may invalidate returned values.
   const Rect& GetUpdatedCursorBounds();
+
+  // Given an |index| in text(), return the next or previous grapheme boundary
+  // in logical order (that is, the nearest index for which
+  // |IsCursorablePosition(index)| returns true). The return value is in the
+  // range 0 to text().length() inclusive (the input is clamped if it is out of
+  // that range). Always moves by at least one character index unless the
+  // supplied index is already at the boundary of the string.
+  virtual size_t IndexOfAdjacentGrapheme(size_t index,
+                                         LogicalCursorDirection direction) = 0;
+
+  // Return a SelectionModel with the cursor at the current selection's start.
+  // The returned value represents a cursor/caret position without a selection.
+  SelectionModel GetSelectionModelForSelectionStart();
 
  protected:
   RenderText();
@@ -256,42 +272,83 @@ class UI_EXPORT RenderText {
   const Point& GetUpdatedDisplayOffset();
 
   void set_cached_bounds_and_offset_valid(bool valid) {
-      cached_bounds_and_offset_valid_ = valid;
+    cached_bounds_and_offset_valid_ = valid;
   }
 
   const StyleRanges& style_ranges() const { return style_ranges_; }
 
   // Get the selection model that visually neighbors |position| by |break_type|.
   // The returned value represents a cursor/caret position without a selection.
-  virtual SelectionModel GetLeftSelectionModel(const SelectionModel& current,
-                                               BreakType break_type);
-  virtual SelectionModel GetRightSelectionModel(const SelectionModel& current,
-                                                BreakType break_type);
+  SelectionModel GetAdjacentSelectionModel(const SelectionModel& current,
+                                           BreakType break_type,
+                                           VisualCursorDirection direction);
+
+  // Get the selection model visually left/right of |selection| by one grapheme.
+  // The returned value represents a cursor/caret position without a selection.
+  virtual SelectionModel AdjacentCharSelectionModel(
+      const SelectionModel& selection,
+      VisualCursorDirection direction) = 0;
+
+  // Get the selection model visually left/right of |selection| by one word.
+  // The returned value represents a cursor/caret position without a selection.
+  virtual SelectionModel AdjacentWordSelectionModel(
+      const SelectionModel& selection,
+      VisualCursorDirection direction) = 0;
 
   // Get the SelectionModels corresponding to visual text ends.
   // The returned value represents a cursor/caret position without a selection.
-  virtual SelectionModel LeftEndSelectionModel();
-  virtual SelectionModel RightEndSelectionModel();
+  virtual SelectionModel EdgeSelectionModel(
+      VisualCursorDirection direction) = 0;
 
-  // Get the logical index of the grapheme preceeding the argument |position|.
-  virtual size_t GetIndexOfPreviousGrapheme(size_t position);
+  // Sets the selection model, the argument is assumed to be valid.
+  virtual void SetSelectionModel(const SelectionModel& model);
 
   // Get the visual bounds containing the logical substring within |from| to
-  // |to|. These bounds could be visually discontinuous if the substring is
-  // split by a LTR/RTL level change. These bounds are in local coordinates, but
-  // may be outside the visible region if the text is longer than the textfield.
-  // Subsequent text, cursor, or bounds changes may invalidate returned values.
-  // TODO(msw) Re-evaluate this function's necessity and signature.
-  virtual std::vector<Rect> GetSubstringBounds(size_t from, size_t to);
+  // |to|. If |from| equals |to|, the result is empty. These bounds could be
+  // visually discontinuous if the substring is split by a LTR/RTL level change.
+  // These bounds are in local coordinates, but may be outside the visible
+  // region if the text is longer than the textfield. Subsequent text, cursor,
+  // or bounds changes may invalidate returned values.
+  virtual std::vector<Rect> GetSubstringBounds(size_t from, size_t to) = 0;
+
+  // Return true if cursor can appear in front of the character at |position|,
+  // which means it is a grapheme boundary or the first character in the text.
+  virtual bool IsCursorablePosition(size_t position) = 0;
+
+  // Update the layout so that the next draw request can correctly
+  // render the text and its attributes.
+  virtual void UpdateLayout() = 0;
+
+  // Ensure the text is laid out.
+  virtual void EnsureLayout() = 0;
+
+  // Draw the text.
+  virtual void DrawVisualText(Canvas* canvas) = 0;
 
   // Apply composition style (underline) to composition range and selection
   // style (foreground) to selection range.
-  void ApplyCompositionAndSelectionStyles(StyleRanges* style_ranges) const;
+  void ApplyCompositionAndSelectionStyles(StyleRanges* style_ranges);
+
+  // Returns the text origin after applying text alignment and display offset.
+  Point GetTextOrigin();
 
   // Convert points from the text space to the view space and back.
   // Handles the display area, display offset, and the application LTR/RTL mode.
   Point ToTextPoint(const Point& point);
   Point ToViewPoint(const Point& point);
+
+  // Returns the width of content, which reserves room for the cursor if
+  // |cursor_enabled_| is true.
+  int GetContentWidth();
+
+  // Returns display offset based on current text alignment.
+  Point GetAlignmentOffset();
+
+  // Returns the origin point for drawing text via Skia.
+  Point GetOriginForSkiaDrawing();
+
+  // Applies fade effects to |renderer|.
+  void ApplyFadeEffects(internal::SkiaTextRenderer* renderer);
 
  private:
   friend class RenderTextTest;
@@ -300,29 +357,43 @@ class UI_EXPORT RenderText {
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, CustomDefaultStyle);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, ApplyStyleRange);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, StyleRangesAdjust);
-
-  // Sets the selection model, the argument is assumed to be valid.
-  void SetSelectionModel(const SelectionModel& selection_model);
+  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, GraphemePositions);
+  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, SelectionModels);
+  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, OriginForSkiaDrawing);
 
   // Set the cursor to |position|, with the caret trailing the previous
   // grapheme, or if there is no previous grapheme, leading the cursor position.
   // If |select| is false, the selection start is moved to the same position.
+  // If the |position| is not a cursorable position (not on grapheme boundary),
+  // it is a NO-OP.
   void MoveCursorTo(size_t position, bool select);
-
-  bool IsPositionAtWordSelectionBoundary(size_t pos);
 
   // Update the cached bounds and display offset to ensure that the current
   // cursor is within the visible display area.
   void UpdateCachedBoundsAndOffset();
 
+  // Draw the selection and cursor.
+  void DrawSelection(Canvas* canvas);
+  void DrawCursor(Canvas* canvas);
+
   // Logical UTF-16 string data to be drawn.
   string16 text_;
+
+  // Horizontal alignment of the text with respect to |display_rect_|.
+  HorizontalAlignment horizontal_alignment_;
+
+  // A list of fonts used to render |text_|.
+  FontList font_list_;
 
   // Logical selection range and visual cursor position.
   SelectionModel selection_model_;
 
   // The cached cursor bounds; get these bounds with GetUpdatedCursorBounds.
   Rect cursor_bounds_;
+
+  // Specifies whether the cursor is enabled. If disabled, no space is reserved
+  // for the cursor when positioning text.
+  bool cursor_enabled_;
 
   // The cursor visibility and insert mode.
   bool cursor_visible_;
@@ -339,8 +410,13 @@ class UI_EXPORT RenderText {
   // The default text style.
   StyleRange default_style_;
 
+  // Fade text head and/or tail, if text doesn't fit into |display_rect_|.
+  bool fade_head_;
+  bool fade_tail_;
+
   // The local display area for rendering the text.
   Rect display_rect_;
+
   // The offset for the text to be drawn, relative to the display area.
   // Get this point with GetUpdatedDisplayOffset (or risk using a stale value).
   Point display_offset_;

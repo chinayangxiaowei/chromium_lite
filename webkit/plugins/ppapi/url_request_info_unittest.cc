@@ -1,13 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ppapi/shared_impl/url_request_info_impl.h"
 #include "ppapi/thunk/thunk.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrameClient.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLRequest.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "webkit/glue/user_agent.h"
+#include "webkit/glue/webkit_glue.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/ppb_url_request_info_impl.h"
 #include "webkit/plugins/ppapi/ppapi_unittest.h"
@@ -58,6 +59,8 @@ class URLRequestInfoTest : public PpapiUnittest {
   }
 
   static void SetUpTestCase() {
+    webkit_glue::SetUserAgent(webkit_glue::BuildUserAgentFromProduct(
+        "TestShell/0.0.0.0"), false);
     web_view_ = WebView::create(NULL);
     web_view_->initializeMainFrame(&web_frame_client_);
     WebURL web_url(GURL(""));
@@ -119,16 +122,14 @@ WebView* URLRequestInfoTest::web_view_;
 WebFrame* URLRequestInfoTest::frame_;
 
 TEST_F(URLRequestInfoTest, GetInterface) {
-  const PPB_URLRequestInfo* interface =
-      ::ppapi::thunk::GetPPB_URLRequestInfo_Thunk();
-  EXPECT_TRUE(interface);
-  EXPECT_TRUE(interface->Create);
-  EXPECT_TRUE(interface->IsURLRequestInfo);
-  EXPECT_TRUE(interface->SetProperty);
-  EXPECT_TRUE(interface->AppendDataToBody);
-  EXPECT_TRUE(interface->AppendFileToBody);
-  EXPECT_TRUE(interface->Create);
-  EXPECT_TRUE(interface->Create);
+  const PPB_URLRequestInfo* request_info =
+      ::ppapi::thunk::GetPPB_URLRequestInfo_1_0_Thunk();
+  EXPECT_TRUE(request_info);
+  EXPECT_TRUE(request_info->Create);
+  EXPECT_TRUE(request_info->IsURLRequestInfo);
+  EXPECT_TRUE(request_info->SetProperty);
+  EXPECT_TRUE(request_info->AppendDataToBody);
+  EXPECT_TRUE(request_info->AppendFileToBody);
 }
 
 TEST_F(URLRequestInfoTest, AsURLRequestInfo) {
@@ -232,35 +233,9 @@ TEST_F(URLRequestInfoTest, SetMethod) {
   EXPECT_TRUE(SetStringProperty(
       PP_URLREQUESTPROPERTY_METHOD, "POST"));
   EXPECT_TRUE(IsExpected(GetMethod(), "POST"));
-
-  // Test that method names are converted to upper case.
-  EXPECT_TRUE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "get"));
-  EXPECT_TRUE(IsExpected(GetMethod(), "GET"));
-  EXPECT_TRUE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "post"));
-  EXPECT_TRUE(IsExpected(GetMethod(), "POST"));
 }
 
-TEST_F(URLRequestInfoTest, SetInvalidMethod) {
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "CONNECT"));
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "connect"));
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "TRACE"));
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "trace"));
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "TRACK"));
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "track"));
-
-  EXPECT_FALSE(SetStringProperty(
-      PP_URLREQUESTPROPERTY_METHOD, "POST\x0d\x0ax-csrf-token:\x20test1234"));
-}
-
-TEST_F(URLRequestInfoTest, SetValidHeaders) {
+TEST_F(URLRequestInfoTest, SetHeaders) {
   // Test default header field.
   EXPECT_TRUE(IsExpected(
       GetHeaderValue("foo"), ""));
@@ -278,52 +253,7 @@ TEST_F(URLRequestInfoTest, SetValidHeaders) {
       GetHeaderValue("bar"), "baz"));
 }
 
-TEST_F(URLRequestInfoTest, SetInvalidHeaders) {
-  const char* const kForbiddenHeaderFields[] = {
-    "accept-charset",
-    "accept-encoding",
-    "connection",
-    "content-length",
-    "cookie",
-    "cookie2",
-    "content-transfer-encoding",
-    "date",
-    "expect",
-    "host",
-    "keep-alive",
-    "origin",
-    "referer",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "user-agent",
-    "via",
-
-    "proxy-foo",  // Test for any header starting with proxy- or sec-.
-    "sec-foo",
-  };
-
-  // Test that no forbidden header fields can be set.
-  for (size_t i = 0; i < arraysize(kForbiddenHeaderFields); ++i) {
-    std::string headers(kForbiddenHeaderFields[i]);
-    headers.append(": foo");
-    SetStringProperty(
-        PP_URLREQUESTPROPERTY_HEADERS, headers.c_str());
-    EXPECT_TRUE(IsNullOrEmpty(GetHeaderValue(kForbiddenHeaderFields[i])));
-  }
-
-  // Test that forbidden header can't be set in various ways.
-  SetStringProperty(PP_URLREQUESTPROPERTY_HEADERS, "cookie : foo");
-  EXPECT_TRUE(IsNullOrEmpty(GetHeaderValue("cookie")));
-
-  // Test that forbidden header can't be set with an allowed one.
-  SetStringProperty(PP_URLREQUESTPROPERTY_HEADERS, "foo: bar\ncookie: foo");
-  EXPECT_TRUE(IsNullOrEmpty(GetHeaderValue("cookie")));
-}
-
 // TODO(bbudge) Unit tests for AppendDataToBody, AppendFileToBody.
 
 }  // namespace ppapi
 }  // namespace webkit
-

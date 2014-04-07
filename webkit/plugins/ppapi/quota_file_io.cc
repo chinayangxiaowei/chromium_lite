@@ -6,12 +6,13 @@
 
 #include <algorithm>
 
-#include "base/stl_util.h"
+#include "base/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop_proxy.h"
-#include "base/task.h"
+#include "base/stl_util.h"
+#include "webkit/plugins/ppapi/host_globals.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/resource_helper.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
 
 using base::PlatformFile;
 using base::PlatformFileError;
@@ -62,7 +63,7 @@ class QuotaFileIO::WriteOperation : public PendingOperationBase {
                  int64_t offset,
                  const char* buffer,
                  int32_t bytes_to_write,
-                 WriteCallback* callback)
+                 const WriteCallback& callback)
       : PendingOperationBase(quota_io, is_will_operation),
         offset_(offset),
         bytes_to_write_(bytes_to_write),
@@ -70,11 +71,10 @@ class QuotaFileIO::WriteOperation : public PendingOperationBase {
         finished_(false),
         status_(base::PLATFORM_FILE_OK),
         bytes_written_(0),
-        callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-        runnable_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
     if (!is_will_operation) {
-      // TODO(kinuko): check the API convention if we really need to keep a
-      // copy of the buffer during the async write operations.
+      // TODO(kinuko): Check the API convention if we really need to keep a copy
+      // of the buffer during the async write operations.
       buffer_.reset(new char[bytes_to_write]);
       memcpy(buffer_.get(), buffer, bytes_to_write);
     }
@@ -102,7 +102,8 @@ class QuotaFileIO::WriteOperation : public PendingOperationBase {
     if (!base::FileUtilProxy::Write(
             plugin_delegate->GetFileThreadMessageLoopProxy(),
             quota_io_->file_, offset_, buffer_.get(), bytes_to_write_,
-            callback_factory_.NewCallback(&WriteOperation::DidFinish))) {
+            base::Bind(&WriteOperation::DidFinish,
+                       weak_factory_.GetWeakPtr()))) {
       DidFail(base::PLATFORM_FILE_ERROR_FAILED);
       return;
     }
@@ -116,8 +117,8 @@ class QuotaFileIO::WriteOperation : public PendingOperationBase {
 
   virtual void WillRunCallback() {
     base::MessageLoopProxy::current()->PostTask(
-        FROM_HERE, runnable_factory_.NewRunnableMethod(
-            &WriteOperation::RunCallback));
+        FROM_HERE,
+        base::Bind(&WriteOperation::RunCallback, weak_factory_.GetWeakPtr()));
   }
 
  private:
@@ -132,21 +133,19 @@ class QuotaFileIO::WriteOperation : public PendingOperationBase {
   }
 
   virtual void RunCallback() {
-    DCHECK(callback_.get());
-    callback_->Run(status_, bytes_written_);
-    callback_.reset();
+    DCHECK_EQ(false, callback_.is_null());
+    callback_.Run(status_, bytes_written_);
     delete this;
   }
 
   const int64_t offset_;
   scoped_array<char> buffer_;
   const int32_t bytes_to_write_;
-  scoped_ptr<WriteCallback> callback_;
+  WriteCallback callback_;
   bool finished_;
   PlatformFileError status_;
   int64_t bytes_written_;
-  base::ScopedCallbackFactory<WriteOperation> callback_factory_;
-  ScopedRunnableMethodFactory<WriteOperation> runnable_factory_;
+  base::WeakPtrFactory<WriteOperation> weak_factory_;
 };
 
 class QuotaFileIO::SetLengthOperation : public PendingOperationBase {
@@ -154,11 +153,11 @@ class QuotaFileIO::SetLengthOperation : public PendingOperationBase {
   SetLengthOperation(QuotaFileIO* quota_io,
                      bool is_will_operation,
                      int64_t length,
-                     StatusCallback* callback)
+                     const StatusCallback& callback)
       : PendingOperationBase(quota_io, is_will_operation),
         length_(length),
         callback_(callback),
-        callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {}
+        ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {}
 
   virtual ~SetLengthOperation() {}
 
@@ -182,7 +181,8 @@ class QuotaFileIO::SetLengthOperation : public PendingOperationBase {
     if (!base::FileUtilProxy::Truncate(
             plugin_delegate->GetFileThreadMessageLoopProxy(),
             quota_io_->file_, length_,
-            callback_factory_.NewCallback(&SetLengthOperation::DidFinish))) {
+            base::Bind(&SetLengthOperation::DidFinish,
+                       weak_factory_.GetWeakPtr()))) {
       DidFail(base::PLATFORM_FILE_ERROR_FAILED);
       return;
     }
@@ -195,15 +195,14 @@ class QuotaFileIO::SetLengthOperation : public PendingOperationBase {
  private:
   void DidFinish(PlatformFileError status) {
     quota_io_->DidSetLength(status, length_);
-    DCHECK(callback_.get());
-    callback_->Run(status);
-    callback_.reset();
+    DCHECK_EQ(false, callback_.is_null());
+    callback_.Run(status);
     delete this;
   }
 
   int64_t length_;
-  scoped_ptr<StatusCallback> callback_;
-  base::ScopedCallbackFactory<SetLengthOperation> callback_factory_;
+  StatusCallback callback_;
+  base::WeakPtrFactory<SetLengthOperation> weak_factory_;
 };
 
 // QuotaFileIO --------------------------------------------------------------
@@ -223,7 +222,7 @@ QuotaFileIO::QuotaFileIO(
       outstanding_errors_(0),
       max_written_offset_(0),
       inflight_operations_(0),
-      callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   DCHECK_NE(base::kInvalidPlatformFileValue, file_);
   DCHECK_NE(quota::kStorageTypeUnknown, storage_type_);
 }
@@ -238,17 +237,16 @@ QuotaFileIO::~QuotaFileIO() {
 
 bool QuotaFileIO::Write(
     int64_t offset, const char* buffer, int32_t bytes_to_write,
-    WriteCallback* callback) {
-  if (bytes_to_write <= 0) {
-    delete callback;
+    const WriteCallback& callback) {
+  if (bytes_to_write <= 0)
     return false;
-  }
+
   WriteOperation* op = new WriteOperation(
       this, false, offset, buffer, bytes_to_write, callback);
   return RegisterOperationForQuotaChecks(op);
 }
 
-bool QuotaFileIO::SetLength(int64_t length, StatusCallback* callback) {
+bool QuotaFileIO::SetLength(int64_t length, const StatusCallback& callback) {
   DCHECK(pending_operations_.empty());
   SetLengthOperation* op = new SetLengthOperation(
       this, false, length, callback);
@@ -256,20 +254,21 @@ bool QuotaFileIO::SetLength(int64_t length, StatusCallback* callback) {
 }
 
 bool QuotaFileIO::WillWrite(
-    int64_t offset, int32_t bytes_to_write, WriteCallback* callback) {
+    int64_t offset, int32_t bytes_to_write, const WriteCallback& callback) {
   WriteOperation* op = new WriteOperation(
       this, true, offset, NULL, bytes_to_write, callback);
   return RegisterOperationForQuotaChecks(op);
 }
 
-bool QuotaFileIO::WillSetLength(int64_t length, StatusCallback* callback) {
+bool QuotaFileIO::WillSetLength(int64_t length,
+                                const StatusCallback& callback) {
   DCHECK(pending_operations_.empty());
   SetLengthOperation* op = new SetLengthOperation(this, true, length, callback);
   return RegisterOperationForQuotaChecks(op);
 }
 
 PluginDelegate* QuotaFileIO::GetPluginDelegate() const {
-  PluginInstance* instance = ResourceTracker::Get()->GetInstance(pp_instance_);
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(pp_instance_);
   if (instance)
     return instance->delegate();
   return NULL;
@@ -292,8 +291,8 @@ bool QuotaFileIO::RegisterOperationForQuotaChecks(
     ++outstanding_quota_queries_;
     if (!base::FileUtilProxy::GetFileInfoFromPlatformFile(
             plugin_delegate->GetFileThreadMessageLoopProxy(), file_,
-            callback_factory_.NewCallback(
-                &QuotaFileIO::DidQueryInfoForQuota))) {
+            base::Bind(&QuotaFileIO::DidQueryInfoForQuota,
+                       weak_factory_.GetWeakPtr()))) {
       // This makes the call fail synchronously; we do not fire the callback
       // here but just delete the operation and return false.
       return false;
@@ -303,7 +302,8 @@ bool QuotaFileIO::RegisterOperationForQuotaChecks(
     ++outstanding_quota_queries_;
     plugin_delegate->QueryAvailableSpace(
         GURL(file_url_.path()).GetOrigin(), storage_type_,
-        callback_factory_.NewCallback(&QuotaFileIO::DidQueryAvailableSpace));
+        base::Bind(&QuotaFileIO::DidQueryAvailableSpace,
+                   weak_factory_.GetWeakPtr()));
   }
   pending_operations_.push_back(op.release());
   return true;

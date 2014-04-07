@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/stl_util.h"
 #include "base/test/thread_test_helper.h"
@@ -12,12 +13,15 @@
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/ui/ui_test.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
+
+using content::BrowserThread;
 
 class FastShutdown : public UITest {
  protected:
   FastShutdown()
       : db_thread_(BrowserThread::DB),
+        io_thread_(BrowserThread::IO),
         thread_helper_(new base::ThreadTestHelper(
             BrowserThread::GetMessageLoopProxyForThread(BrowserThread::DB))) {
     dom_automation_enabled_ = true;
@@ -25,7 +29,7 @@ class FastShutdown : public UITest {
 
   void Init() {
     ASSERT_TRUE(db_thread_.Start());
-
+    ASSERT_TRUE(io_thread_.Start());
     // Cache this, so that we can still access it after the browser exits.
     user_data_dir_ = user_data_dir();
   }
@@ -36,11 +40,18 @@ class FastShutdown : public UITest {
   void GetCookie(const net::CookieMonster::CanonicalCookie& cookie,
                  bool* has_cookie, std::string* cookie_value) {
     scoped_refptr<SQLitePersistentCookieStore> cookie_store(
-        new SQLitePersistentCookieStore(
-            user_data_dir_.AppendASCII(chrome::kInitialProfile)
-                          .Append(chrome::kCookieFilename)));
+       new SQLitePersistentCookieStore(
+           user_data_dir_.AppendASCII(chrome::kInitialProfile)
+                         .Append(chrome::kCookieFilename),
+           false));
     std::vector<net::CookieMonster::CanonicalCookie*> cookies;
-    ASSERT_TRUE(cookie_store->Load(&cookies));
+    cookie_store->Load(
+        base::Bind(&FastShutdown::LoadCookiesCallback,
+                   base::Unretained(this),
+                   MessageLoop::current(),
+                   base::Unretained(&cookies)));
+    // Will receive a QuitTask when LoadCookiesCallback is invoked.
+    MessageLoop::current()->Run();
     *has_cookie = false;
     for (size_t i = 0; i < cookies.size(); ++i) {
       if (cookies[i]->IsEquivalent(cookie)) {
@@ -54,7 +65,16 @@ class FastShutdown : public UITest {
   }
 
  private:
-  BrowserThread db_thread_;  // Used by the cookie store during its clean up.
+  void LoadCookiesCallback(
+      MessageLoop* to_notify,
+      std::vector<net::CookieMonster::CanonicalCookie*>* cookies,
+      const std::vector<net::CookieMonster::CanonicalCookie*>& cookies_get) {
+    *cookies = cookies_get;
+    to_notify->PostTask(FROM_HERE, MessageLoop::QuitClosure());
+  }
+
+  content::TestBrowserThread db_thread_;
+  content::TestBrowserThread io_thread_;
   scoped_refptr<base::ThreadTestHelper> thread_helper_;
   FilePath user_data_dir_;
 
@@ -63,7 +83,8 @@ class FastShutdown : public UITest {
 
 // This tests for a previous error where uninstalling an onbeforeunload handler
 // would enable fast shutdown even if an onunload handler still existed.
-TEST_F(FastShutdown, SlowTermination) {
+// Flaky on all platforms, http://crbug.com/89173
+TEST_F(FastShutdown, FLAKY_SlowTermination) {
   Init();
 
   // Only the name, domain and path are used in IsEquivalent(), so we don't care
@@ -81,15 +102,8 @@ TEST_F(FastShutdown, SlowTermination) {
       base::Time(),  // last_access
       false,         // secure
       false,         // httponly
-      false);        // has_expires
-
-  bool has_cookie = false;
-  std::string cookie_value;
-
-  // Check that the cookie (to be set during unload) doesn't exist already.
-  GetCookie(cookie, &has_cookie, &cookie_value);
-  EXPECT_FALSE(has_cookie);
-  EXPECT_EQ("", cookie_value);
+      false,         // has_expires
+      false);        // is_persistent
 
   // This page has an unload handler.
   const FilePath dir(FILE_PATH_LITERAL("fast_shutdown"));
@@ -111,6 +125,8 @@ TEST_F(FastShutdown, SlowTermination) {
   // cookie that's stored to disk.
   QuitBrowser();
 
+  bool has_cookie = false;
+  std::string cookie_value;
   // Read the cookie and check that it has the expected value.
   GetCookie(cookie, &has_cookie, &cookie_value);
   EXPECT_TRUE(has_cookie);

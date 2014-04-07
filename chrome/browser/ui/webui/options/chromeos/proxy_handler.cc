@@ -10,7 +10,7 @@
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/chromeos/proxy_cros_settings_provider.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -20,8 +20,7 @@
 
 namespace chromeos {
 
-ProxyHandler::ProxyHandler()
-    : CrosOptionsPageUIHandler(new ProxyCrosSettingsProvider())  {
+ProxyHandler::ProxyHandler() {
 }
 
 ProxyHandler::~ProxyHandler() {
@@ -67,12 +66,22 @@ void ProxyHandler::GetLocalizedValues(
      l10n_util::GetStringUTF16(IDS_PROXY_PORT));
   localized_strings->SetString("proxyBypass",
      l10n_util::GetStringUTF16(IDS_PROXY_BYPASS));
+  localized_strings->SetString("policyManagedPrefsBannerText",
+      l10n_util::GetStringUTF16(IDS_OPTIONS_POLICY_MANAGED_PREFS));
+  localized_strings->SetString("extensionManagedPrefsBannerText",
+      l10n_util::GetStringUTF16(IDS_OPTIONS_EXTENSION_MANAGED_PREFS));
+  localized_strings->SetString("unmodifiablePrefsBannerText",
+      l10n_util::GetStringUTF16(IDS_OPTIONS_UNMODIFIABLE_PREFS));
+  localized_strings->SetString("enableSharedProxiesBannerText",
+      l10n_util::GetStringFUTF16(
+          IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_ENABLE_SHARED_PROXIES_HINT,
+          l10n_util::GetStringUTF16(IDS_OPTIONS_SETTINGS_USE_SHARED_PROXIES)));
 }
 
 void ProxyHandler::SetNetworkName(const std::string& name) {
   StringValue network(name);
-  web_ui_->CallJavascriptFunction("options.ProxyOptions.setNetworkName",
-                                  network);
+  web_ui()->CallJavascriptFunction("options.ProxyOptions.setNetworkName",
+                                   network);
 }
 
 }  // namespace chromeos

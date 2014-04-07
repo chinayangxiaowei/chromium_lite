@@ -8,20 +8,21 @@
 
 #include <algorithm>
 
+#include "base/bind.h"
 #include "chrome/browser/chromeos/notifications/balloon_collection_impl.h"
 #include "chrome/browser/chromeos/notifications/balloon_view.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "third_party/cros_system_api/window_manager/chromeos_wm_ipc_enums.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
-#include "views/background.h"
-#include "views/controls/native/native_view_host.h"
-#include "views/controls/scroll_view.h"
-#include "views/widget/native_widget_gtk.h"
+#include "ui/views/background.h"
+#include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/controls/scroll_view.h"
+#include "ui/views/widget/native_widget_gtk.h"
 
 #define SET_STATE(state) SetState(state, __PRETTY_FUNCTION__)
 
@@ -40,6 +41,9 @@ const int kMaxPanelHeight = 400;
 
 // The duration for a new notification to become stale.
 const int kStaleTimeoutInSeconds = 10;
+
+// Panel Background color
+const SkColor kPanelBackground = 0xFFEEEEEE;
 
 using chromeos::BalloonViewImpl;
 using chromeos::NotificationPanel;
@@ -418,7 +422,6 @@ NotificationPanel::NotificationPanel()
       panel_widget_(NULL),
       container_host_(NULL),
       state_(CLOSED),
-      task_factory_(this),
       min_bounds_(0, 0, kBalloonMinWidth, kBalloonMinHeight),
       stale_timeout_(1000 * kStaleTimeoutInSeconds),
       active_(NULL),
@@ -456,6 +459,9 @@ void NotificationPanel::Show() {
 
     panel_widget_->SetContentsView(scroll_view_.get());
 
+#if defined(USE_AURA)
+    native->AttachToView(balloon_container_.get());
+#else
     // Add the view port after scroll_view is attached to the panel widget.
     ViewportWidget* viewport_widget = new ViewportWidget(this);
     container_host_ = viewport_widget;
@@ -466,7 +472,7 @@ void NotificationPanel::Show() {
     // so that window_contents does not get deleted when detached.
     g_object_ref(viewport_widget->GetNativeView());
     native->Attach(viewport_widget->GetNativeView());
-
+#endif
     UnregisterNotification();
     panel_controller_.reset(
         new PanelController(this, GTK_WINDOW(panel_widget_->GetNativeView())));
@@ -474,7 +480,7 @@ void NotificationPanel::Show() {
                             gfx::Rect(0, 0, kBalloonMinWidth, 1), 0,
                             WM_IPC_PANEL_USER_RESIZE_VERTICALLY);
     registrar_.Add(this, chrome::NOTIFICATION_PANEL_STATE_CHANGED,
-                   Source<PanelController>(panel_controller_.get()));
+                   content::Source<PanelController>(panel_controller_.get()));
   }
   panel_widget_->Show();
 }
@@ -482,15 +488,18 @@ void NotificationPanel::Show() {
 void NotificationPanel::Hide() {
   balloon_container_->DismissAllNonSticky();
   if (panel_widget_) {
-    container_host_->GetRootView()->RemoveChildView(balloon_container_.get());
+    if (container_host_)
+      container_host_->GetRootView()->RemoveChildView(balloon_container_.get());
 
     views::NativeViewHost* native =
         static_cast<views::NativeViewHost*>(scroll_view_->GetContents());
     native->Detach();
     scroll_view_->SetContents(NULL);
-    container_host_->Hide();
-    container_host_->CloseNow();
-    container_host_ = NULL;
+    if (container_host_) {
+      container_host_->Hide();
+      container_host_->CloseNow();
+      container_host_ = NULL;
+    }
 
     UnregisterNotification();
     panel_controller_->Close();
@@ -621,11 +630,11 @@ void NotificationPanel::ActivatePanel() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// NotificationObserver overrides.
+// content::NotificationObserver overrides.
 
 void NotificationPanel::Observe(int type,
-                                const NotificationSource& source,
-                                const NotificationDetails& details) {
+                                const content::NotificationSource& source,
+                                const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_PANEL_STATE_CHANGED);
   PanelController::State* state =
       reinterpret_cast<PanelController::State*>(details.map_key());
@@ -687,7 +696,7 @@ void NotificationPanel::Init() {
   balloon_container_.reset(new BalloonContainer(1));
   balloon_container_->set_parent_owned(false);
   balloon_container_->set_background(
-      views::Background::CreateSolidBackground(ResourceBundle::frame_color));
+      views::Background::CreateSolidBackground(kPanelBackground));
 
   scroll_view_.reset(new views::ScrollView());
   scroll_view_->set_focusable(true);
@@ -697,9 +706,11 @@ void NotificationPanel::Init() {
 }
 
 void NotificationPanel::UnregisterNotification() {
-  if (panel_controller_.get())
-    registrar_.Remove(this, chrome::NOTIFICATION_PANEL_STATE_CHANGED,
-                      Source<PanelController>(panel_controller_.get()));
+  if (panel_controller_.get()) {
+    registrar_.Remove(
+        this, chrome::NOTIFICATION_PANEL_STATE_CHANGED,
+        content::Source<PanelController>(panel_controller_.get()));
+  }
 }
 
 void NotificationPanel::ScrollBalloonToVisible(Balloon* balloon) {
@@ -801,8 +812,7 @@ void NotificationPanel::StartStaleTimer(Balloon* balloon) {
   BalloonViewImpl* view = GetBalloonViewOf(balloon);
   MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
-      task_factory_.NewRunnableMethod(
-          &NotificationPanel::OnStale, view),
+      base::Bind(&NotificationPanel::OnStale, AsWeakPtr(), view),
       stale_timeout_);
 }
 

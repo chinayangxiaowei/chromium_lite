@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,6 @@
 #include "ui/base/resource/resource_bundle.h"
 
 void WrenchMenuModel::Build() {
-#if !defined(TOUCH_UI)
   AddItemWithStringId(IDC_NEW_TAB, IDS_NEW_TAB);
   AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
   if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession))
@@ -30,7 +29,6 @@ void WrenchMenuModel::Build() {
 
   AddSeparator();
   AddItemWithStringId(IDC_SAVE_PAGE, IDS_SAVE_PAGE);
-#endif // !TOUCH_UI
   AddItemWithStringId(IDC_FIND, IDS_FIND);
   AddItemWithStringId(IDC_PRINT, IDS_PRINT);
 
@@ -44,21 +42,18 @@ void WrenchMenuModel::Build() {
   AddSubMenuWithStringId(IDC_BOOKMARKS_MENU, IDS_BOOKMARKS_MENU,
       bookmark_sub_menu_model_.get());
   AddItemWithStringId(IDC_SHOW_HISTORY, IDS_SHOW_HISTORY);
-#if !defined(TOUCH_UI)
   AddItemWithStringId(IDC_SHOW_DOWNLOADS, IDS_SHOW_DOWNLOADS);
-#endif // !TOUCH_UI
+
   AddSeparator();
 
   AddItemWithStringId(IDC_OPTIONS, IDS_SETTINGS);
-  const string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_OS_NAME);
-  AddItem(IDC_ABOUT, l10n_util::GetStringFUTF16(IDS_ABOUT, product_name));
+  AddItem(IDC_ABOUT, l10n_util::GetStringUTF16(IDS_ABOUT));
   string16 num_background_pages = base::FormatNumber(
       TaskManager::GetBackgroundPageCount());
   AddItem(IDC_VIEW_BACKGROUND_PAGES,
       l10n_util::GetStringFUTF16(IDS_VIEW_BACKGROUND_PAGES,
           num_background_pages));
-  AddItem(IDC_UPGRADE_DIALOG,
-      l10n_util::GetStringFUTF16(IDS_UPDATE_NOW, product_name));
+  AddItem(IDC_UPGRADE_DIALOG, l10n_util::GetStringUTF16(IDS_UPDATE_NOW));
   AddItem(IDC_VIEW_INCOMPATIBILITIES,
       l10n_util::GetStringUTF16(IDS_VIEW_INCOMPATIBILITIES));
 
@@ -70,12 +65,18 @@ void WrenchMenuModel::Build() {
 
   // Show IDC_FEEDBACK in top-tier wrench menu for ChromeOS.
   AddItemWithStringId(IDC_FEEDBACK, IDS_FEEDBACK);
+
+  AddGlobalErrorMenuItems();
+
   AddSeparator();
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession)) {
     AddItemWithStringId(IDC_EXIT, IDS_EXIT_GUEST_MODE);
   } else {
+    AddItemWithStringId(IDC_LOCK_SCREEN, IDS_LOCK_SCREEN);
     AddItemWithStringId(IDC_EXIT, IDS_SIGN_OUT);
   }
+
+  AddItemWithStringId(IDC_SHUTDOWN, IDS_SHUTDOWN_BUTTON);
 }
 

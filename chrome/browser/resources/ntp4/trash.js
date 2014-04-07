@@ -20,7 +20,7 @@ cr.define('ntp4', function() {
     __proto__: HTMLDivElement.prototype,
 
     initialize: function(element) {
-      this.dragWrapper_ = new DragWrapper(this, this);
+      this.dragWrapper_ = new cr.ui.DragWrapper(this, this);
     },
 
     /**
@@ -43,8 +43,8 @@ cr.define('ntp4', function() {
     doDragOver: function(e) {
       ntp4.getCurrentlyDraggingTile().dragClone.classList.add(
           'hovering-on-trash');
+      ntp4.setCurrentDropEffect(e.dataTransfer, 'move');
       e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
     },
 
     /**
@@ -63,10 +63,8 @@ cr.define('ntp4', function() {
       e.preventDefault();
 
       var tile = ntp4.getCurrentlyDraggingTile();
-      var page = tile.tilePage;
       tile.firstChild.removeFromChrome();
       tile.landedOnTrash = true;
-      page.cleanupDrag();
     },
 
     /**

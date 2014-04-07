@@ -22,12 +22,14 @@
 #include "chrome/test/automation/automation_handle_tracker.h"
 #include "chrome/test/automation/dom_element_proxy.h"
 #include "chrome/test/automation/javascript_execution_controller.h"
-#include "content/browser/download/save_package.h"
-#include "content/common/page_type.h"
-#include "content/common/security_style.h"
+#include "content/public/browser/save_page_type.h"
+#include "content/public/common/page_type.h"
+#include "content/public/common/security_style.h"
+#include "net/base/cert_status_flags.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class BrowserProxy;
+class FilePath;
 class GURL;
 namespace IPC {
 class Message;
@@ -88,9 +90,6 @@ class TabProxy : public AutomationResourceProxy,
   bool ExecuteAndExtractInt(const std::wstring& frame_xpath,
                             const std::wstring& jscript,
                             int* value) WARN_UNUSED_RESULT;
-  bool ExecuteAndExtractValue(const std::wstring& frame_xpath,
-                              const std::wstring& jscript,
-                              base::Value** value) WARN_UNUSED_RESULT;
 
   // Returns a DOMElementProxyRef to the tab's current DOM document.
   // This proxy is invalidated when the document changes.
@@ -284,13 +283,13 @@ class TabProxy : public AutomationResourceProxy,
   bool WaitForTabToBeRestored(uint32 timeout_ms) WARN_UNUSED_RESULT;
 
   // Retrieves the different security states for the current tab.
-  bool GetSecurityState(SecurityStyle* security_style,
-                        int* ssl_cert_status,
+  bool GetSecurityState(content::SecurityStyle* security_style,
+                        net::CertStatus* ssl_cert_status,
                         int* insecure_content_status) WARN_UNUSED_RESULT;
 
   // Returns the type of the page currently showing (normal, interstitial,
   // error).
-  bool GetPageType(PageType* page_type) WARN_UNUSED_RESULT;
+  bool GetPageType(content::PageType* page_type) WARN_UNUSED_RESULT;
 
   // Simulates the user action on the SSL blocking page.  if |proceed| is true,
   // this is equivalent to clicking the 'Proceed' button, if false to 'Take me
@@ -307,7 +306,7 @@ class TabProxy : public AutomationResourceProxy,
   // |dir_path| is the directory for saving resource files. |type| indicates
   // which type we're saving as: HTML only or the complete web page.
   bool SavePage(const FilePath& file_name, const FilePath& dir_path,
-                SavePackage::SavePackageType type) WARN_UNUSED_RESULT;
+                content::SavePageType type) WARN_UNUSED_RESULT;
 
   // Retrieves the number of info-bars currently showing in |count|.
   bool GetInfoBarCount(size_t* count) WARN_UNUSED_RESULT;
@@ -403,6 +402,11 @@ class TabProxy : public AutomationResourceProxy,
   // Called when no longer tracking any objects. Used for reference counting
   // purposes.
   void LastObjectRemoved();
+
+  // Caller takes ownership over returned value.  Returns NULL on failure.
+  base::Value* ExecuteAndExtractValue(
+      const std::wstring& frame_xpath,
+      const std::wstring& jscript) WARN_UNUSED_RESULT;
 
  private:
   base::Lock list_lock_;  // Protects the observers_list_.

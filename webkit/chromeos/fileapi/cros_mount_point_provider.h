@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/synchronization/lock.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
@@ -27,27 +28,38 @@ class FileAccessPermissions;
 class CrosMountPointProvider
     : public fileapi::ExternalFileSystemMountPointProvider {
  public:
+  typedef fileapi::FileSystemMountPointProvider::ValidateFileSystemCallback
+      ValidateFileSystemCallback;
+
   CrosMountPointProvider(
       scoped_refptr<quota::SpecialStoragePolicy> special_storage_policy);
   virtual ~CrosMountPointProvider();
 
   // fileapi::FileSystemMountPointProvider overrides.
-  virtual bool IsAccessAllowed(const GURL& origin_url,
-                               fileapi::FileSystemType type,
-                               const FilePath& virtual_path) OVERRIDE;
-  virtual void ValidateFileSystemRootAndGetURL(
+  virtual void ValidateFileSystemRoot(
       const GURL& origin_url,
       fileapi::FileSystemType type,
       bool create,
-      fileapi::FileSystemPathManager::GetRootPathCallback* callback) OVERRIDE;
-  virtual FilePath ValidateFileSystemRootAndGetPathOnFileThread(
+      const ValidateFileSystemCallback& callback) OVERRIDE;
+  virtual FilePath GetFileSystemRootPathOnFileThread(
       const GURL& origin_url,
       fileapi::FileSystemType type,
       const FilePath& virtual_path,
-      bool create);
+      bool create) OVERRIDE;
+  virtual bool IsAccessAllowed(
+      const GURL& origin_url,
+      fileapi::FileSystemType type,
+      const FilePath& virtual_path) OVERRIDE;
   virtual bool IsRestrictedFileName(const FilePath& filename) const OVERRIDE;
   virtual std::vector<FilePath> GetRootDirectories() const OVERRIDE;
   virtual fileapi::FileSystemFileUtil* GetFileUtil() OVERRIDE;
+  virtual fileapi::FileSystemOperationInterface* CreateFileSystemOperation(
+      const GURL& origin_url,
+      fileapi::FileSystemType file_system_type,
+      const FilePath& virtual_path,
+      scoped_ptr<fileapi::FileSystemCallbackDispatcher> dispatcher,
+      base::MessageLoopProxy* file_proxy,
+      fileapi::FileSystemContext* context) const OVERRIDE;
 
   // fileapi::ExternalFileSystemMountPointProvider overrides.
   virtual void GrantFullAccessToExtension(

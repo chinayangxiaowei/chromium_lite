@@ -4,15 +4,14 @@
 
 #include "content/browser/download/download_state_info.h"
 
-#include "content/browser/download/download_item.h"
+#include "content/public/browser/download_item.h"
 
 DownloadStateInfo::DownloadStateInfo()
     : path_uniquifier(0),
       has_user_gesture(false),
-      transition_type(PageTransition::LINK),
+      transition_type(content::PAGE_TRANSITION_LINK),
       prompt_user_for_save_location(false),
-      is_dangerous_file(false),
-      is_dangerous_url(false) {
+      danger(content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS) {
 }
 
 DownloadStateInfo::DownloadStateInfo(
@@ -20,31 +19,35 @@ DownloadStateInfo::DownloadStateInfo(
     bool prompt_user_for_save_location)
     : path_uniquifier(0),
       has_user_gesture(has_user_gesture),
-      transition_type(PageTransition::LINK),
+      transition_type(content::PAGE_TRANSITION_LINK),
       prompt_user_for_save_location(prompt_user_for_save_location),
-      is_dangerous_file(false),
-      is_dangerous_url(false) {
+      danger(content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS) {
 }
 
 DownloadStateInfo::DownloadStateInfo(
     const FilePath& target,
     const FilePath& forced_name,
     bool has_user_gesture,
-    PageTransition::Type transition_type,
-    bool prompt_user_for_save_location,
-    int uniquifier,
-    bool dangerous_file,
-    bool dangerous_url)
+    content::PageTransition transition_type,
+    bool prompt_user_for_save_location)
     : target_name(target),
-      path_uniquifier(uniquifier),
+      path_uniquifier(0),
       has_user_gesture(has_user_gesture),
       transition_type(transition_type),
       prompt_user_for_save_location(prompt_user_for_save_location),
-      is_dangerous_file(dangerous_file),
-      is_dangerous_url(dangerous_url),
+      danger(content::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS),
       force_file_name(forced_name) {
 }
 
 bool DownloadStateInfo::IsDangerous() const {
-  return is_dangerous_url || is_dangerous_file;
+  // TODO(noelutz): At this point only the windows views UI supports
+  // warnings based on dangerous content.
+#ifdef OS_WIN
+  return (danger == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
+          danger == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+          danger == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT);
+#else
+  return (danger == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
+          danger == content::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL);
+#endif
 }

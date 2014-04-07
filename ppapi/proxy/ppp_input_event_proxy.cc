@@ -11,8 +11,7 @@
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/plugin_resource_tracker.h"
 #include "ppapi/proxy/ppapi_messages.h"
-#include "ppapi/proxy/ppb_input_event_proxy.h"
-#include "ppapi/shared_impl/input_event_impl.h"
+#include "ppapi/shared_impl/ppb_input_event_shared.h"
 #include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/ppb_input_event_api.h"
 
@@ -41,10 +40,10 @@ PP_Bool HandleInputEvent(PP_Instance instance, PP_Resource input_event) {
   PP_Bool result = PP_FALSE;
   if (data.is_filtered) {
     dispatcher->Send(new PpapiMsg_PPPInputEvent_HandleFilteredInputEvent(
-        INTERFACE_ID_PPP_INPUT_EVENT, instance, data, &result));
+        API_ID_PPP_INPUT_EVENT, instance, data, &result));
   } else {
     dispatcher->Send(new PpapiMsg_PPPInputEvent_HandleInputEvent(
-        INTERFACE_ID_PPP_INPUT_EVENT, instance, data));
+        API_ID_PPP_INPUT_EVENT, instance, data));
   }
   return result;
 }
@@ -53,16 +52,19 @@ static const PPP_InputEvent input_event_interface = {
   &HandleInputEvent
 };
 
-InterfaceProxy* CreateInputEventProxy(Dispatcher* dispatcher,
-                                      const void* target_interface) {
-  return new PPP_InputEvent_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateInputEventProxy(Dispatcher* dispatcher) {
+  return new PPP_InputEvent_Proxy(dispatcher);
 }
 
 }  // namespace
 
-PPP_InputEvent_Proxy::PPP_InputEvent_Proxy(Dispatcher* dispatcher,
-                                       const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface) {
+PPP_InputEvent_Proxy::PPP_InputEvent_Proxy(Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
+      ppp_input_event_impl_(NULL) {
+  if (dispatcher->IsPlugin()) {
+    ppp_input_event_impl_ = static_cast<const PPP_InputEvent*>(
+        dispatcher->local_get_interface()(PPP_INPUT_EVENT_INTERFACE));
+  }
 }
 
 PPP_InputEvent_Proxy::~PPP_InputEvent_Proxy() {
@@ -73,7 +75,7 @@ const InterfaceProxy::Info* PPP_InputEvent_Proxy::GetInfo() {
   static const Info info = {
     &input_event_interface,
     PPP_INPUT_EVENT_INTERFACE,
-    INTERFACE_ID_PPP_INPUT_EVENT,
+    API_ID_PPP_INPUT_EVENT,
     false,
     &CreateInputEventProxy,
   };
@@ -94,19 +96,19 @@ bool PPP_InputEvent_Proxy::OnMessageReceived(const IPC::Message& msg) {
 
 void PPP_InputEvent_Proxy::OnMsgHandleInputEvent(PP_Instance instance,
                                                  const InputEventData& data) {
-  scoped_refptr<InputEventImpl> resource(new InputEventImpl(
-      InputEventImpl::InitAsProxy(), instance, data));
-  ppp_input_event_target()->HandleInputEvent(instance, resource->pp_resource());
+  scoped_refptr<PPB_InputEvent_Shared> resource(new PPB_InputEvent_Shared(
+      PPB_InputEvent_Shared::InitAsProxy(), instance, data));
+  ppp_input_event_impl_->HandleInputEvent(instance, resource->pp_resource());
 }
 
 void PPP_InputEvent_Proxy::OnMsgHandleFilteredInputEvent(
     PP_Instance instance,
     const InputEventData& data,
     PP_Bool* result) {
-  scoped_refptr<InputEventImpl> resource(new InputEventImpl(
-      InputEventImpl::InitAsProxy(), instance, data));
-  *result = ppp_input_event_target()->HandleInputEvent(instance,
-                                                       resource->pp_resource());
+  scoped_refptr<PPB_InputEvent_Shared> resource(new PPB_InputEvent_Shared(
+      PPB_InputEvent_Shared::InitAsProxy(), instance, data));
+  *result = ppp_input_event_impl_->HandleInputEvent(instance,
+                                                    resource->pp_resource());
 }
 
 }  // namespace proxy

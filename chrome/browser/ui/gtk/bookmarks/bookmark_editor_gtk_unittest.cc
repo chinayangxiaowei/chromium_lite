@@ -6,18 +6,20 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_editor_gtk.h"
 #include "chrome/browser/ui/gtk/bookmarks/bookmark_tree_model.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
 using base::TimeDelta;
 using bookmark_utils::GetTitleFromTreeIter;
+using content::BrowserThread;
 
 // Base class for bookmark editor tests. This class is a copy from
 // bookmark_editor_view_unittest.cc, and all the tests in this file are
@@ -27,12 +29,12 @@ using bookmark_utils::GetTitleFromTreeIter;
 class BookmarkEditorGtkTest : public testing::Test {
  public:
   BookmarkEditorGtkTest()
-      : ui_thread_(BrowserThread::UI, &message_loop_),
-        file_thread_(BrowserThread::FILE, &message_loop_),
-        model_(NULL) {
+      : model_(NULL),
+        ui_thread_(BrowserThread::UI, &message_loop_),
+        file_thread_(BrowserThread::FILE, &message_loop_) {
   }
 
-  virtual void SetUp() {
+  virtual void SetUp() OVERRIDE {
     profile_.reset(new TestingProfile());
     profile_->CreateBookmarkModel(true);
     profile_->BlockUntilBookmarkModelLoaded();
@@ -42,21 +44,18 @@ class BookmarkEditorGtkTest : public testing::Test {
     AddTestData();
   }
 
-  virtual void TearDown() {
+  virtual void TearDown() OVERRIDE {
   }
 
  protected:
-  MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
-  BookmarkModel* model_;
-  scoped_ptr<TestingProfile> profile_;
-
   std::string base_path() const { return "file:///c:/tmp/"; }
 
   const BookmarkNode* GetNode(const std::string& name) {
     return model_->GetMostRecentlyAddedNodeForURL(GURL(base_path() + name));
   }
+
+  BookmarkModel* model_;
+  scoped_ptr<TestingProfile> profile_;
 
  private:
   // Creates the following structure:
@@ -71,7 +70,7 @@ class BookmarkEditorGtkTest : public testing::Test {
   //   oa
   //   OF1
   //     of1a
-  // synced node
+  // mobile node
   //   sa
   void AddTestData() {
     std::string test_base = base_path();
@@ -92,17 +91,24 @@ class BookmarkEditorGtkTest : public testing::Test {
         model_->AddFolder(model_->other_node(), 1, ASCIIToUTF16("OF1"));
     model_->AddURL(of1, 0, ASCIIToUTF16("of1a"), GURL(test_base + "of1a"));
 
-    // Children of the synced node.
-    model_->AddURL(model_->synced_node(), 0, ASCIIToUTF16("sa"),
+    // Children of the mobile node.
+    model_->AddURL(model_->mobile_node(), 0, ASCIIToUTF16("sa"),
                    GURL(test_base + "sa"));
   }
+
+  MessageLoopForUI message_loop_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
 };
 
 // Makes sure the tree model matches that of the bookmark bar model.
 TEST_F(BookmarkEditorGtkTest, ModelsMatch) {
-  BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(),
-                           BookmarkEditor::SHOW_TREE);
+  BookmarkEditorGtk editor(
+      NULL,
+      profile_.get(),
+      NULL,
+      BookmarkEditor::EditDetails::AddNodeInFolder(NULL, -1),
+      BookmarkEditor::SHOW_TREE);
 
   // The root should have two or three children, one for the bookmark bar node,
   // another for the 'other bookmarks' folder, and depending on the visib
@@ -112,8 +118,8 @@ TEST_F(BookmarkEditorGtkTest, ModelsMatch) {
   GtkTreeIter bookmark_bar_node = toplevel;
   ASSERT_TRUE(gtk_tree_model_iter_next(store, &toplevel));
   GtkTreeIter other_node = toplevel;
-  if (model_->synced_node()->IsVisible()) {
-    // If we have a synced node, then the iterator should find one element after
+  if (model_->mobile_node()->IsVisible()) {
+    // If we have a mobile node, then the iterator should find one element after
     // "other bookmarks"
     ASSERT_TRUE(gtk_tree_model_iter_next(store, &toplevel));
     ASSERT_FALSE(gtk_tree_model_iter_next(store, &toplevel));
@@ -148,7 +154,7 @@ TEST_F(BookmarkEditorGtkTest, ModelsMatch) {
 // Changes the title and makes sure parent/visual order doesn't change.
 TEST_F(BookmarkEditorGtkTest, EditTitleKeepsPosition) {
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(GetNode("a")),
+                           BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                            BookmarkEditor::SHOW_TREE);
   gtk_entry_set_text(GTK_ENTRY(editor.name_entry_), "new_a");
 
@@ -157,8 +163,7 @@ TEST_F(BookmarkEditorGtkTest, EditTitleKeepsPosition) {
   ASSERT_TRUE(gtk_tree_model_get_iter_first(store, &bookmark_bar_node));
   editor.ApplyEdits(&bookmark_bar_node);
 
-  const BookmarkNode* bb_node =
-      profile_->GetBookmarkModel()->bookmark_bar_node();
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
   ASSERT_EQ(ASCIIToUTF16("new_a"), bb_node->GetChild(0)->GetTitle());
   // The URL shouldn't have changed.
   ASSERT_TRUE(GURL(base_path() + "a") == bb_node->GetChild(0)->url());
@@ -168,7 +173,7 @@ TEST_F(BookmarkEditorGtkTest, EditTitleKeepsPosition) {
 TEST_F(BookmarkEditorGtkTest, EditURLKeepsPosition) {
   Time node_time = GetNode("a")->date_added();
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(GetNode("a")),
+                           BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                            BookmarkEditor::SHOW_TREE);
   gtk_entry_set_text(GTK_ENTRY(editor.url_entry_),
                      GURL(base_path() + "new_a").spec().c_str());
@@ -178,8 +183,7 @@ TEST_F(BookmarkEditorGtkTest, EditURLKeepsPosition) {
   ASSERT_TRUE(gtk_tree_model_get_iter_first(store, &bookmark_bar_node));
   editor.ApplyEdits(&bookmark_bar_node);
 
-  const BookmarkNode* bb_node =
-      profile_->GetBookmarkModel()->bookmark_bar_node();
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
   ASSERT_EQ(ASCIIToUTF16("a"), bb_node->GetChild(0)->GetTitle());
   // The URL should have changed.
   ASSERT_TRUE(GURL(base_path() + "new_a") == bb_node->GetChild(0)->url());
@@ -189,7 +193,7 @@ TEST_F(BookmarkEditorGtkTest, EditURLKeepsPosition) {
 // Moves 'a' to be a child of the other node.
 TEST_F(BookmarkEditorGtkTest, ChangeParent) {
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(GetNode("a")),
+                           BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                            BookmarkEditor::SHOW_TREE);
 
   GtkTreeModel* store = GTK_TREE_MODEL(editor.tree_store_);
@@ -198,7 +202,7 @@ TEST_F(BookmarkEditorGtkTest, ChangeParent) {
   ASSERT_TRUE(gtk_tree_model_iter_next(store, &gtk_other_node));
   editor.ApplyEdits(&gtk_other_node);
 
-  const BookmarkNode* other_node = profile_->GetBookmarkModel()->other_node();
+  const BookmarkNode* other_node = model_->other_node();
   ASSERT_EQ(ASCIIToUTF16("a"), other_node->GetChild(2)->GetTitle());
   ASSERT_TRUE(GURL(base_path() + "a") == other_node->GetChild(2)->url());
 }
@@ -208,7 +212,7 @@ TEST_F(BookmarkEditorGtkTest, ChangeParent) {
 TEST_F(BookmarkEditorGtkTest, ChangeParentAndURL) {
   Time node_time = GetNode("a")->date_added();
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(GetNode("a")),
+                           BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                            BookmarkEditor::SHOW_TREE);
 
   gtk_entry_set_text(GTK_ENTRY(editor.url_entry_),
@@ -220,7 +224,7 @@ TEST_F(BookmarkEditorGtkTest, ChangeParentAndURL) {
   ASSERT_TRUE(gtk_tree_model_iter_next(store, &gtk_other_node));
   editor.ApplyEdits(&gtk_other_node);
 
-  const BookmarkNode* other_node = profile_->GetBookmarkModel()->other_node();
+  const BookmarkNode* other_node = model_->other_node();
   ASSERT_EQ(ASCIIToUTF16("a"), other_node->GetChild(2)->GetTitle());
   ASSERT_TRUE(GURL(base_path() + "new_a") == other_node->GetChild(2)->url());
   ASSERT_TRUE(node_time == other_node->GetChild(2)->date_added());
@@ -229,7 +233,7 @@ TEST_F(BookmarkEditorGtkTest, ChangeParentAndURL) {
 // Creates a new folder and moves a node to it.
 TEST_F(BookmarkEditorGtkTest, MoveToNewParent) {
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(GetNode("a")),
+                           BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                            BookmarkEditor::SHOW_TREE);
 
   GtkTreeIter bookmark_bar_node;
@@ -257,8 +261,7 @@ TEST_F(BookmarkEditorGtkTest, MoveToNewParent) {
 
   editor.ApplyEdits(&f2_iter);
 
-  const BookmarkNode* bb_node =
-      profile_->GetBookmarkModel()->bookmark_bar_node();
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
   const BookmarkNode* mf2 = bb_node->GetChild(1);
 
   // F2 in the model should have two children now: F21 and the node edited.
@@ -276,9 +279,12 @@ TEST_F(BookmarkEditorGtkTest, MoveToNewParent) {
 
 // Brings up the editor, creating a new URL on the bookmark bar.
 TEST_F(BookmarkEditorGtkTest, NewURL) {
-  BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(),
-                           BookmarkEditor::SHOW_TREE);
+  BookmarkEditorGtk editor(
+      NULL,
+      profile_.get(),
+      NULL,
+      BookmarkEditor::EditDetails::AddNodeInFolder(NULL, -1),
+      BookmarkEditor::SHOW_TREE);
 
   gtk_entry_set_text(GTK_ENTRY(editor.url_entry_),
                      GURL(base_path() + "a").spec().c_str());
@@ -289,8 +295,7 @@ TEST_F(BookmarkEditorGtkTest, NewURL) {
   ASSERT_TRUE(gtk_tree_model_get_iter_first(store, &bookmark_bar_node));
   editor.ApplyEdits(&bookmark_bar_node);
 
-  const BookmarkNode* bb_node =
-      profile_->GetBookmarkModel()->bookmark_bar_node();
+  const BookmarkNode* bb_node = model_->bookmark_bar_node();
   ASSERT_EQ(4, bb_node->child_count());
 
   const BookmarkNode* new_node = bb_node->GetChild(3);
@@ -301,7 +306,7 @@ TEST_F(BookmarkEditorGtkTest, NewURL) {
 // Brings up the editor with no tree and modifies the url.
 TEST_F(BookmarkEditorGtkTest, ChangeURLNoTree) {
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(
+                           BookmarkEditor::EditDetails::EditNode(
                                model_->other_node()->GetChild(0)),
                            BookmarkEditor::NO_TREE);
 
@@ -311,7 +316,7 @@ TEST_F(BookmarkEditorGtkTest, ChangeURLNoTree) {
 
   editor.ApplyEdits(NULL);
 
-  const BookmarkNode* other_node = profile_->GetBookmarkModel()->other_node();
+  const BookmarkNode* other_node = model_->other_node();
   ASSERT_EQ(2, other_node->child_count());
 
   const BookmarkNode* new_node = other_node->GetChild(0);
@@ -323,14 +328,14 @@ TEST_F(BookmarkEditorGtkTest, ChangeURLNoTree) {
 // Brings up the editor with no tree and modifies only the title.
 TEST_F(BookmarkEditorGtkTest, ChangeTitleNoTree) {
   BookmarkEditorGtk editor(NULL, profile_.get(), NULL,
-                           BookmarkEditor::EditDetails(
+                           BookmarkEditor::EditDetails::EditNode(
                                model_->other_node()->GetChild(0)),
                            BookmarkEditor::NO_TREE);
   gtk_entry_set_text(GTK_ENTRY(editor.name_entry_), "new_a");
 
   editor.ApplyEdits();
 
-  const BookmarkNode* other_node = profile_->GetBookmarkModel()->other_node();
+  const BookmarkNode* other_node = model_->other_node();
   ASSERT_EQ(2, other_node->child_count());
 
   const BookmarkNode* new_node = other_node->GetChild(0);

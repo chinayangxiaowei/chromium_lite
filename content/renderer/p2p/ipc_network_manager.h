@@ -7,8 +7,9 @@
 
 #include <vector>
 
-#include "base/task.h"
 #include "base/compiler_specific.h"
+#include "base/memory/weak_ptr.h"
+#include "content/common/content_export.h"
 #include "content/renderer/p2p/socket_dispatcher.h"
 #include "net/base/net_util.h"
 #include "third_party/libjingle/source/talk/base/network.h"
@@ -21,7 +22,7 @@ class IpcNetworkManager : public talk_base::NetworkManagerBase,
                           public P2PSocketDispatcher::NetworkListObserver {
  public:
   // Constructor doesn't take ownership of the |socket_dispatcher|.
-  IpcNetworkManager(P2PSocketDispatcher* socket_dispatcher);
+  CONTENT_EXPORT IpcNetworkManager(P2PSocketDispatcher* socket_dispatcher);
   virtual ~IpcNetworkManager();
 
   virtual void StartUpdating() OVERRIDE;
@@ -39,7 +40,7 @@ class IpcNetworkManager : public talk_base::NetworkManagerBase,
   bool started_;
   bool first_update_sent_;
 
-  ScopedRunnableMethodFactory<IpcNetworkManager> task_factory_;
+  base::WeakPtrFactory<IpcNetworkManager> weak_factory_;
 };
 
 }  // namespace content

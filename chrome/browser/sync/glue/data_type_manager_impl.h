@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 
 #include "chrome/browser/sync/glue/data_type_manager.h"
 
+#include <list>
 #include <map>
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task.h"
 #include "base/time.h"
 
 namespace browser_sync {
@@ -28,15 +29,16 @@ class DataTypeManagerImpl : public DataTypeManager {
   virtual ~DataTypeManagerImpl();
 
   // DataTypeManager interface.
-  virtual void Configure(const TypeSet& desired_types,
-                         sync_api::ConfigureReason reason);
+  virtual void Configure(TypeSet desired_types,
+                         sync_api::ConfigureReason reason) OVERRIDE;
 
   // Needed only for backend migration.
-  virtual void ConfigureWithoutNigori(const TypeSet& desired_types,
-                                      sync_api::ConfigureReason reason);
+  virtual void ConfigureWithoutNigori(
+      TypeSet desired_types,
+      sync_api::ConfigureReason reason) OVERRIDE;
 
-  virtual void Stop();
-  virtual State state();
+  virtual void Stop() OVERRIDE;
+  virtual State state() OVERRIDE;
 
  private:
   // Starts the next data type in the kStartOrder list, indicated by
@@ -46,13 +48,12 @@ class DataTypeManagerImpl : public DataTypeManager {
 
   // Callback passed to each data type controller on startup.
   void TypeStartCallback(DataTypeController::StartResult result,
-      const tracked_objects::Location& from_here);
+                         const SyncError& error);
 
   // Stops all data types.
   void FinishStop();
   void Abort(ConfigureStatus status,
-             const tracked_objects::Location& location,
-             syncable::ModelType last_attempted_type);
+             const SyncError& error);
 
   // Returns true if any last_requested_types_ currently needs to start model
   // association.  If non-null, fills |needs_start| with all such controllers.
@@ -64,7 +65,11 @@ class DataTypeManagerImpl : public DataTypeManager {
   bool ProcessReconfigure();
 
   void Restart(sync_api::ConfigureReason reason, bool enable_nigori);
-  void DownloadReady(bool success);
+  void DownloadReady(syncable::ModelTypeSet failed_configuration_types);
+
+  // Notification from the SBH that download failed due to a transient
+  // error and it will be retried.
+  void OnDownloadRetry();
   void NotifyStart();
   void NotifyDone(const ConfigureResult& result);
   void SetBlockedAndNotify();
@@ -73,7 +78,7 @@ class DataTypeManagerImpl : public DataTypeManager {
   // Restart().
   void AddToConfigureTime();
 
-  virtual void ConfigureImpl(const TypeSet& desired_types,
+  virtual void ConfigureImpl(TypeSet desired_types,
                              sync_api::ConfigureReason reason,
                              bool enable_nigori);
 
@@ -107,6 +112,11 @@ class DataTypeManagerImpl : public DataTypeManager {
   // The accumulated time spent between calls to Restart() and going
   // to the DONE/BLOCKED state.
   base::TimeDelta configure_time_delta_;
+
+  // Collects the list of errors resulting from failing to start a type. This
+  // would eventually be sent to the listeners after all the types have
+  // been given a chance to start.
+  std::list<SyncError> failed_datatypes_info_;
 
   DISALLOW_COPY_AND_ASSIGN(DataTypeManagerImpl);
 };

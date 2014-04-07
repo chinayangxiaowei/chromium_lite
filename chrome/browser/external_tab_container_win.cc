@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include <string>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/debug/trace_event.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/win_util.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -16,20 +19,19 @@
 #include "chrome/browser/automation/automation_provider.h"
 #include "chrome/browser/debugger/devtools_toggle_action.h"
 #include "chrome/browser/debugger/devtools_window.h"
-#include "chrome/browser/google/google_util.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/history_tab_helper.h"
+#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
-#include "chrome/browser/page_info_window.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/repost_form_warning_controller.h"
 #include "chrome/browser/ui/app_modal_dialogs/message_box_handler.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
-#include "chrome/browser/ui/views/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/tab_contents/render_view_context_menu_views.h"
 #include "chrome/browser/ui/views/tab_contents/tab_contents_container.h"
 #include "chrome/common/automation_messages.h"
@@ -38,26 +40,45 @@
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
 #include "content/browser/load_notification_details.h"
-#include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
-#include "content/browser/tab_contents/navigation_details.h"
 #include "content/browser/tab_contents/provisional_load_details.h"
-#include "content/common/bindings_policy.h"
-#include "content/common/native_web_keyboard_event.h"
-#include "content/common/notification_service.h"
-#include "content/common/page_transition_types.h"
-#include "content/common/page_zoom.h"
-#include "content/common/view_messages.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/native_web_keyboard_event.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/ssl_status.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_intents_dispatcher.h"
+#include "content/public/common/bindings_policy.h"
+#include "content/public/common/frame_navigate_params.h"
+#include "content/public/common/page_transition_types.h"
+#include "content/public/common/page_zoom.h"
+#include "content/public/common/renderer_preferences.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebCString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebReferrerPolicy.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/models/menu_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/view_prop.h"
-#include "ui/base/models/menu_model.h"
-#include "views/layout/grid_layout.h"
+#include "ui/views/layout/grid_layout.h"
 
+using content::BrowserThread;
+using content::NavigationController;
+using content::NavigationEntry;
+using content::OpenURLParams;
+using content::SSLStatus;
+using content::WebContents;
 using ui::ViewProp;
+using WebKit::WebCString;
+using WebKit::WebString;
+using WebKit::WebReferrerPolicy;
+using WebKit::WebSecurityPolicy;
 
 static const char kWindowObjectKey[] = "ChromeWindowObject";
 
@@ -91,36 +112,8 @@ ContextMenuModel* ConvertMenuModel(const ui::MenuModel* ui_model) {
 
 }  // namespace
 
-// This class overrides the LinkClicked function in the PageInfoBubbleView
-// class and routes the help center link navigation to the host browser.
-class ExternalTabPageInfoBubbleView : public PageInfoBubbleView {
- public:
-  ExternalTabPageInfoBubbleView(ExternalTabContainer* container,
-                                gfx::NativeWindow parent_window,
-                                Profile* profile,
-                                const GURL& url,
-                                const NavigationEntry::SSLStatus& ssl,
-                                bool show_history)
-      : PageInfoBubbleView(parent_window, profile, url, ssl, show_history),
-        container_(container) {
-    DVLOG(1) << __FUNCTION__;
-  }
-  virtual ~ExternalTabPageInfoBubbleView() {
-    DVLOG(1) << __FUNCTION__;
-  }
-  // LinkListener methods:
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE {
-    GURL url = google_util::AppendGoogleLocaleParam(
-        GURL(chrome::kPageInfoHelpCenterURL));
-    container_->OpenURLFromTab(container_->tab_contents(), url, GURL(),
-                               NEW_FOREGROUND_TAB, PageTransition::LINK);
-  }
- private:
-  scoped_refptr<ExternalTabContainer> container_;
-};
-
 base::LazyInstance<ExternalTabContainer::PendingTabs>
-    ExternalTabContainer::pending_tabs_(base::LINKER_INITIALIZED);
+    ExternalTabContainer::pending_tabs_ = LAZY_INSTANCE_INITIALIZER;
 
 ExternalTabContainer::ExternalTabContainer(
     AutomationProvider* automation, AutomationResourceMessageFilter* filter)
@@ -132,7 +125,7 @@ ExternalTabContainer::ExternalTabContainer(
       automation_resource_message_filter_(filter),
       load_requests_via_automation_(false),
       handle_top_level_requests_(false),
-      external_method_factory_(this),
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
       pending_(false),
       focus_manager_(NULL),
       external_tab_view_(NULL),
@@ -145,8 +138,8 @@ ExternalTabContainer::~ExternalTabContainer() {
   Uninitialize();
 }
 
-TabContents* ExternalTabContainer::tab_contents() const {
-  return tab_contents_.get() ? tab_contents_->tab_contents() : NULL;
+WebContents * ExternalTabContainer::web_contents() const {
+  return tab_contents_.get() ? tab_contents_->web_contents() : NULL;
 }
 
 bool ExternalTabContainer::Init(Profile* profile,
@@ -186,48 +179,51 @@ bool ExternalTabContainer::Init(Profile* profile,
 
   if (existing_contents) {
     tab_contents_.reset(existing_contents);
-    tab_contents_->controller().set_browser_context(profile);
+    tab_contents_->web_contents()->GetController().SetBrowserContext(profile);
   } else {
-    TabContents* new_contents = new TabContents(profile, NULL, MSG_ROUTING_NONE,
-                                                NULL, NULL);
+    WebContents* new_contents = WebContents::Create(
+        profile, NULL, MSG_ROUTING_NONE, NULL, NULL);
     tab_contents_.reset(new TabContentsWrapper(new_contents));
   }
 
   if (!infobars_enabled)
     tab_contents_->infobar_tab_helper()->set_infobars_enabled(false);
 
-  tab_contents_->tab_contents()->set_delegate(this);
+  tab_contents_->web_contents()->SetDelegate(this);
 
-  tab_contents_->tab_contents()->
+  tab_contents_->web_contents()->
       GetMutableRendererPrefs()->browser_handles_top_level_requests =
           handle_top_level_requests;
 
   if (!existing_contents) {
-    tab_contents_->render_view_host()->AllowBindings(
-        BindingsPolicy::EXTERNAL_HOST);
+    tab_contents_->web_contents()->GetRenderViewHost()->AllowBindings(
+        content::BINDINGS_POLICY_EXTERNAL_HOST);
   }
 
-  NavigationController* controller = &tab_contents_->controller();
+  NavigationController* controller =
+      &tab_contents_->web_contents()->GetController();
   registrar_.Add(this, content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-                 Source<NavigationController>(controller));
+                 content::Source<NavigationController>(controller));
   registrar_.Add(this, content::NOTIFICATION_FAIL_PROVISIONAL_LOAD_WITH_ERROR,
-                 Source<NavigationController>(controller));
+                 content::Source<NavigationController>(controller));
   registrar_.Add(this, content::NOTIFICATION_LOAD_STOP,
-                 Source<NavigationController>(controller));
+                 content::Source<NavigationController>(controller));
   registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CREATED_FOR_TAB,
-                 Source<TabContents>(tab_contents_->tab_contents()));
+                 content::Source<WebContents>(tab_contents_->web_contents()));
   registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_DELETED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
+  registrar_.Add(this, content::NOTIFICATION_RENDER_VIEW_HOST_CREATED,
+                 content::NotificationService::AllSources());
 
-  TabContentsObserver::Observe(tab_contents_->tab_contents());
+  content::WebContentsObserver::Observe(tab_contents_->web_contents());
 
   // Start loading initial URL
   if (!initial_url.is_empty()) {
     // Navigate out of context since we don't have a 'tab_handle_' yet.
     MessageLoop::current()->PostTask(
         FROM_HERE,
-        external_method_factory_.NewRunnableMethod(
-            &ExternalTabContainer::Navigate, initial_url, referrer));
+        base::Bind(&ExternalTabContainer::Navigate, weak_factory_.GetWeakPtr(),
+                   initial_url, referrer));
   }
 
   // We need WS_POPUP to be on the window during initialization, but
@@ -242,7 +238,7 @@ bool ExternalTabContainer::Init(Profile* profile,
   if (parent)
     SetParent(GetNativeView(), parent);
 
-  ::ShowWindow(tab_contents_->tab_contents()->GetNativeView(), SW_SHOWNA);
+  ::ShowWindow(tab_contents_->web_contents()->GetNativeView(), SW_SHOWNA);
 
   LoadAccelerators();
   SetupExternalTabView();
@@ -253,15 +249,17 @@ bool ExternalTabContainer::Init(Profile* profile,
 void ExternalTabContainer::Uninitialize() {
   registrar_.RemoveAll();
   if (tab_contents_.get()) {
-    UnregisterRenderViewHost(tab_contents_->render_view_host());
+    UnregisterRenderViewHost(
+        tab_contents_->web_contents()->GetRenderViewHost());
 
     if (GetWidget()->GetRootView())
       GetWidget()->GetRootView()->RemoveAllChildViews(true);
 
-    NotificationService::current()->Notify(
+    content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_EXTERNAL_TAB_CLOSED,
-        Source<NavigationController>(&tab_contents_->controller()),
-        Details<ExternalTabContainer>(this));
+        content::Source<NavigationController>(
+            &tab_contents_->web_contents()->GetController()),
+        content::Details<ExternalTabContainer>(this));
 
     tab_contents_.reset(NULL);
   }
@@ -290,9 +288,8 @@ bool ExternalTabContainer::Reinitialize(
   // Wait for the automation channel to be initialized before resuming pending
   // render views and sending in the navigation state.
   MessageLoop::current()->PostTask(
-      FROM_HERE,
-      external_method_factory_.NewRunnableMethod(
-          &ExternalTabContainer::OnReinitialize));
+      FROM_HERE, base::Bind(&ExternalTabContainer::OnReinitialize,
+                            weak_factory_.GetWeakPtr()));
 
   if (parent_window)
     SetParent(GetNativeView(), parent_window);
@@ -304,8 +301,7 @@ void ExternalTabContainer::SetTabHandle(int handle) {
 }
 
 void ExternalTabContainer::ProcessUnhandledAccelerator(const MSG& msg) {
-  NativeWebKeyboardEvent keyboard_event(msg.hwnd, msg.message, msg.wParam,
-                                        msg.lParam);
+  NativeWebKeyboardEvent keyboard_event(msg);
   unhandled_keyboard_event_handler_.HandleKeyboardEvent(keyboard_event,
                                                         focus_manager_);
 }
@@ -314,14 +310,14 @@ void ExternalTabContainer::FocusThroughTabTraversal(
     bool reverse, bool restore_focus_to_view) {
   DCHECK(tab_contents_.get());
   if (tab_contents_.get())
-    tab_contents_->tab_contents()->Focus();
+    tab_contents_->web_contents()->Focus();
 
   // The tab_contents_ member can get destroyed in the context of the call to
   // TabContentsViewViews::Focus() above. This method eventually calls SetFocus
   // on the native window, which could end up dispatching messages like
   // WM_DESTROY for the external tab.
   if (tab_contents_.get() && restore_focus_to_view)
-    tab_contents_->tab_contents()->FocusThroughTabTraversal(reverse);
+    tab_contents_->web_contents()->FocusThroughTabTraversal(reverse);
 }
 
 // static
@@ -356,20 +352,9 @@ ExternalTabContainer*
   return tab_container;
 }
 ////////////////////////////////////////////////////////////////////////////////
-// ExternalTabContainer, TabContentsDelegate implementation:
+// ExternalTabContainer, content::WebContentsDelegate implementation:
 
-// TODO(adriansc): Remove this method once refactoring changed all call sites.
-TabContents* ExternalTabContainer::OpenURLFromTab(
-    TabContents* source,
-    const GURL& url,
-    const GURL& referrer,
-    WindowOpenDisposition disposition,
-    PageTransition::Type transition) {
-  return OpenURLFromTab(source,
-                        OpenURLParams(url, referrer, disposition, transition));
-}
-
-TabContents* ExternalTabContainer::OpenURLFromTab(TabContents* source,
+WebContents* ExternalTabContainer::OpenURLFromTab(WebContents* source,
                                                   const OpenURLParams& params) {
   if (pending()) {
     pending_open_url_requests_.push_back(params);
@@ -385,19 +370,24 @@ TabContents* ExternalTabContainer::OpenURLFromTab(TabContents* source,
     case NEW_WINDOW:
     case SAVE_TO_DISK:
       if (automation_) {
+        GURL referrer = GURL(WebSecurityPolicy::generateReferrerHeader(
+            params.referrer.policy,
+            params.url,
+            WebString::fromUTF8(params.referrer.url.spec())).utf8());
         automation_->Send(new AutomationMsg_OpenURL(tab_handle_,
                                                     params.url,
-                                                    params.referrer,
+                                                    referrer,
                                                     params.disposition));
         // TODO(ananta)
         // We should populate other fields in the
         // ViewHostMsg_FrameNavigate_Params structure. Another option could be
         // to refactor the UpdateHistoryForNavigation function in TabContents.
-        ViewHostMsg_FrameNavigate_Params nav_params;
-        nav_params.referrer = params.referrer;
+        content::FrameNavigateParams nav_params;
+        nav_params.referrer = content::Referrer(referrer,
+                                                params.referrer.policy);
         nav_params.url = params.url;
         nav_params.page_id = -1;
-        nav_params.transition = PageTransition::LINK;
+        nav_params.transition = content::PAGE_TRANSITION_LINK;
 
         content::LoadCommittedDetails details;
         details.did_replace_entry = false;
@@ -408,7 +398,7 @@ TabContents* ExternalTabContainer::OpenURLFromTab(TabContents* source,
         tab_contents_->history_tab_helper()->
             UpdateHistoryForNavigation(add_page_args);
 
-        return tab_contents_->tab_contents();
+        return tab_contents_->web_contents();
       }
       break;
     default:
@@ -419,21 +409,21 @@ TabContents* ExternalTabContainer::OpenURLFromTab(TabContents* source,
   return NULL;
 }
 
-void ExternalTabContainer::NavigationStateChanged(const TabContents* source,
+void ExternalTabContainer::NavigationStateChanged(const WebContents* source,
                                                   unsigned changed_flags) {
   if (automation_) {
     NavigationInfo nav_info;
-    if (InitNavigationInfo(&nav_info, NavigationType::NAV_IGNORE, 0))
+    if (InitNavigationInfo(&nav_info, content::NAVIGATION_TYPE_NAV_IGNORE, 0))
       automation_->Send(new AutomationMsg_NavigationStateChanged(
           tab_handle_, changed_flags, nav_info));
   }
 }
 
-void ExternalTabContainer::AddNewContents(TabContents* source,
-                            TabContents* new_contents,
-                            WindowOpenDisposition disposition,
-                            const gfx::Rect& initial_pos,
-                            bool user_gesture) {
+void ExternalTabContainer::AddNewContents(WebContents* source,
+                                          WebContents* new_contents,
+                                          WindowOpenDisposition disposition,
+                                          const gfx::Rect& initial_pos,
+                                          bool user_gesture) {
   if (!automation_) {
     DCHECK(pending_);
     LOG(ERROR) << "Invalid automation provider. Dropping new contents notify";
@@ -498,8 +488,11 @@ void ExternalTabContainer::AddNewContents(TabContents* source,
   }
 }
 
-void ExternalTabContainer::TabContentsCreated(TabContents* new_contents) {
-  RenderViewHost* rvh = new_contents->render_view_host();
+void ExternalTabContainer::WebContentsCreated(WebContents* source_contents,
+                                              int64 source_frame_id,
+                                              const GURL& target_url,
+                                              WebContents* new_contents) {
+  RenderViewHost* rvh = new_contents->GetRenderViewHost();
   DCHECK(rvh != NULL);
 
   // Register this render view as a pending render view, i.e. any network
@@ -508,7 +501,7 @@ void ExternalTabContainer::TabContentsCreated(TabContents* new_contents) {
   RegisterRenderViewHostForAutomation(rvh, true);
 }
 
-void ExternalTabContainer::CloseContents(TabContents* source) {
+void ExternalTabContainer::CloseContents(content::WebContents* source) {
   if (!automation_)
     return;
 
@@ -522,7 +515,7 @@ void ExternalTabContainer::CloseContents(TabContents* source) {
   }
 }
 
-void ExternalTabContainer::MoveContents(TabContents* source,
+void ExternalTabContainer::MoveContents(WebContents* source,
                                         const gfx::Rect& pos) {
   if (automation_ && is_popup_window_)
     automation_->Send(new AutomationMsg_MoveWindow(tab_handle_, pos));
@@ -533,11 +526,11 @@ TabContentsWrapper* ExternalTabContainer::GetConstrainingContentsWrapper(
   return source;
 }
 
-bool ExternalTabContainer::IsPopup(const TabContents* source) const {
+bool ExternalTabContainer::IsPopupOrPanel(const WebContents* source) const {
   return is_popup_window_;
 }
 
-void ExternalTabContainer::UpdateTargetURL(TabContents* source,
+void ExternalTabContainer::UpdateTargetURL(WebContents* source,
                                            int32 page_id,
                                            const GURL& url) {
   Browser::UpdateTargetURLHelper(source, page_id, url);
@@ -564,16 +557,19 @@ bool ExternalTabContainer::TakeFocus(bool reverse) {
   return true;
 }
 
-bool ExternalTabContainer::CanDownload(TabContents* source, int request_id) {
+bool ExternalTabContainer::CanDownload(WebContents* source, int request_id) {
   if (load_requests_via_automation_) {
     if (automation_) {
       // In case the host needs to show UI that needs to take the focus.
       ::AllowSetForegroundWindow(ASFW_ANY);
 
-      BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-          NewRunnableMethod(automation_resource_message_filter_.get(),
-              &AutomationResourceMessageFilter::SendDownloadRequestToHost,
-              0, tab_handle_, request_id));
+      BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE,
+          base::Bind(
+             base::IgnoreResult(
+                 &AutomationResourceMessageFilter::SendDownloadRequestToHost),
+             automation_resource_message_filter_.get(), 0, tab_handle_,
+             request_id));
     }
   } else {
     DLOG(WARNING) << "Downloads are only supported with host browser network "
@@ -584,30 +580,11 @@ bool ExternalTabContainer::CanDownload(TabContents* source, int request_id) {
   return false;
 }
 
-void ExternalTabContainer::ShowPageInfo(Profile* profile,
-                                        const GURL& url,
-                                        const NavigationEntry::SSLStatus& ssl,
-                                        bool show_history) {
-  POINT cursor_pos = {0};
-  GetCursorPos(&cursor_pos);
-
-  gfx::Rect bounds;
-  bounds.set_origin(gfx::Point(cursor_pos));
-
-  PageInfoBubbleView* page_info_bubble =
-      new ExternalTabPageInfoBubbleView(this, NULL, profile, url,
-                                        ssl, show_history);
-  Bubble* bubble = Bubble::Show(GetWidget(), bounds,
-                                views::BubbleBorder::TOP_LEFT,
-                                page_info_bubble, page_info_bubble);
-  page_info_bubble->set_bubble(bubble);
-}
-
 void ExternalTabContainer::RegisterRenderViewHostForAutomation(
     RenderViewHost* render_view_host, bool pending_view) {
   if (render_view_host) {
     AutomationResourceMessageFilter::RegisterRenderView(
-        render_view_host->process()->id(),
+        render_view_host->process()->GetID(),
         render_view_host->routing_id(),
         tab_handle(),
         automation_resource_message_filter_,
@@ -631,7 +608,7 @@ void ExternalTabContainer::UnregisterRenderViewHost(
   // ExternalTabContainer::RegisterRenderViewHost.
   if (render_view_host) {
     AutomationResourceMessageFilter::UnRegisterRenderView(
-      render_view_host->process()->id(),
+      render_view_host->process()->GetID(),
       render_view_host->routing_id());
   }
 }
@@ -647,7 +624,7 @@ bool ExternalTabContainer::HandleContextMenu(const ContextMenuParams& params) {
     return false;
   }
   external_context_menu_.reset(
-      new RenderViewContextMenuViews(tab_contents(), params));
+      new RenderViewContextMenuViews(web_contents(), params));
   external_context_menu_->SetExternal();
   external_context_menu_->Init();
   external_context_menu_->UpdateMenuItemStates();
@@ -658,15 +635,15 @@ bool ExternalTabContainer::HandleContextMenu(const ContextMenuParams& params) {
   POINT screen_pt = { params.x, params.y };
   MapWindowPoints(GetNativeView(), HWND_DESKTOP, &screen_pt, 1);
 
-  MiniContextMenuParams ipc_params(
-      screen_pt.x,
-      screen_pt.y,
-      params.link_url,
-      params.unfiltered_link_url,
-      params.src_url,
-      params.page_url,
-      params.keyword_url,
-      params.frame_url);
+  MiniContextMenuParams ipc_params;
+  ipc_params.screen_x = screen_pt.x;
+  ipc_params.screen_y = screen_pt.y;
+  ipc_params.link_url = params.link_url;
+  ipc_params.unfiltered_link_url = params.unfiltered_link_url;
+  ipc_params.src_url = params.src_url;
+  ipc_params.page_url = params.page_url;
+  ipc_params.keyword_url = params.keyword_url;
+  ipc_params.frame_url = params.frame_url;
 
   bool rtl = base::i18n::IsRTL();
   automation_->Send(
@@ -708,7 +685,7 @@ void ExternalTabContainer::HandleKeyboardEvent(
                             event.os_event.wParam, event.os_event.lParam);
 }
 
-void ExternalTabContainer::BeforeUnloadFired(TabContents* tab,
+void ExternalTabContainer::BeforeUnloadFired(WebContents* tab,
                                              bool proceed,
                                              bool* proceed_to_fire_unload) {
   *proceed_to_fire_unload = true;
@@ -734,50 +711,52 @@ void ExternalTabContainer::BeforeUnloadFired(TabContents* tab,
 }
 
 void ExternalTabContainer::ShowRepostFormWarningDialog(
-    TabContents* tab_contents) {
-  browser::ShowRepostFormWarningDialog(GetNativeView(), tab_contents);
+    WebContents* source) {
+  browser::ShowTabModalConfirmDialog(
+      new RepostFormWarningController(source),
+      TabContentsWrapper::GetCurrentWrapperForContents(source));
 }
 
 void ExternalTabContainer::RunFileChooser(
-    TabContents* tab, const ViewHostMsg_RunFileChooser_Params& params) {
+    WebContents* tab, const content::FileChooserParams& params) {
   Browser::RunFileChooserHelper(tab, params);
 }
 
-void ExternalTabContainer::EnumerateDirectory(TabContents* tab, int request_id,
+void ExternalTabContainer::EnumerateDirectory(WebContents* tab, int request_id,
                                               const FilePath& path) {
   Browser::EnumerateDirectoryHelper(tab, request_id, path);
 }
 
-void ExternalTabContainer::JSOutOfMemory(TabContents* tab) {
+void ExternalTabContainer::JSOutOfMemory(WebContents* tab) {
   Browser::JSOutOfMemoryHelper(tab);
 }
 
-void ExternalTabContainer::RegisterProtocolHandler(TabContents* tab,
+void ExternalTabContainer::RegisterProtocolHandler(WebContents* tab,
                                                    const std::string& protocol,
                                                    const GURL& url,
                                                    const string16& title) {
   Browser::RegisterProtocolHandlerHelper(tab, protocol, url, title);
 }
 
-void ExternalTabContainer::RegisterIntentHandler(TabContents* tab,
+void ExternalTabContainer::RegisterIntentHandler(WebContents* tab,
                                                  const string16& action,
                                                  const string16& type,
                                                  const string16& href,
-                                                 const string16& title) {
-  Browser::RegisterIntentHandlerHelper(tab, action, type, href, title);
+                                                 const string16& title,
+                                                 const string16& disposition) {
+  Browser::RegisterIntentHandlerHelper(
+      tab, action, type, href, title, disposition);
 }
 
-void ExternalTabContainer::WebIntentDispatch(TabContents* tab,
-                                             int routing_id,
-                                             const string16& action,
-                                             const string16& type,
-                                             const string16& data,
-                                             int intent_id) {
-  Browser::WebIntentDispatchHelper(tab, routing_id, action, type, data,
-                                   intent_id);
+void ExternalTabContainer::WebIntentDispatch(
+    WebContents* tab,
+    content::WebIntentsDispatcher* intents_dispatcher) {
+  // TODO(binji) How do we want to display the WebIntentPicker bubble if there
+  // is no BrowserWindow?
+  delete intents_dispatcher;
 }
 
-void ExternalTabContainer::FindReply(TabContents* tab,
+void ExternalTabContainer::FindReply(WebContents* tab,
                                      int request_id,
                                      int number_of_matches,
                                      const gfx::Rect& selection_rect,
@@ -787,7 +766,7 @@ void ExternalTabContainer::FindReply(TabContents* tab,
                            active_match_ordinal, final_update);
 }
 
-void ExternalTabContainer::CrashedPlugin(TabContents* tab,
+void ExternalTabContainer::CrashedPlugin(WebContents* tab,
                                          const FilePath& plugin_path) {
   Browser::CrashedPluginHelper(tab, plugin_path);
 }
@@ -816,8 +795,8 @@ void ExternalTabContainer::OnForwardMessageToExternalHost(
 // ExternalTabContainer, NotificationObserver implementation:
 
 void ExternalTabContainer::Observe(int type,
-                                   const NotificationSource& source,
-                                   const NotificationDetails& details) {
+                                   const content::NotificationSource& source,
+                                   const content::NotificationDetails& details) {
   if (!automation_)
     return;
 
@@ -827,8 +806,9 @@ void ExternalTabContainer::Observe(int type,
   switch (type) {
     case content::NOTIFICATION_LOAD_STOP: {
         const LoadNotificationDetails* load =
-            Details<LoadNotificationDetails>(details).ptr();
-        if (load != NULL && PageTransition::IsMainFrame(load->origin())) {
+            content::Details<LoadNotificationDetails>(details).ptr();
+        if (load != NULL &&
+            content::PageTransitionIsMainFrame(load->origin())) {
           TRACE_EVENT_END_ETW("ExternalTabContainer::Navigate", 0,
                               load->url().spec());
           automation_->Send(new AutomationMsg_TabLoaded(tab_handle_,
@@ -837,36 +817,37 @@ void ExternalTabContainer::Observe(int type,
         break;
       }
     case content::NOTIFICATION_NAV_ENTRY_COMMITTED: {
-        if (ignore_next_load_notification_) {
-          ignore_next_load_notification_ = false;
-          return;
-        }
-
-        const content::LoadCommittedDetails* commit =
-            Details<content::LoadCommittedDetails>(details).ptr();
-
-        if (commit->http_status_code >= kHttpClientErrorStart &&
-            commit->http_status_code <= kHttpServerErrorEnd) {
-          automation_->Send(new AutomationMsg_NavigationFailed(
-              tab_handle_, commit->http_status_code, commit->entry->url()));
-
-          ignore_next_load_notification_ = true;
-        } else {
-          NavigationInfo navigation_info;
-          // When the previous entry index is invalid, it will be -1, which
-          // will still make the computation come out right (navigating to the
-          // 0th entry will be +1).
-          if (InitNavigationInfo(&navigation_info, commit->type,
-                  commit->previous_entry_index -
-                  tab_contents_->controller().last_committed_entry_index()))
-            automation_->Send(new AutomationMsg_DidNavigate(tab_handle_,
-                                                            navigation_info));
-        }
-        break;
+      if (ignore_next_load_notification_) {
+        ignore_next_load_notification_ = false;
+        return;
       }
+
+      const content::LoadCommittedDetails* commit =
+          content::Details<content::LoadCommittedDetails>(details).ptr();
+
+      if (commit->http_status_code >= kHttpClientErrorStart &&
+          commit->http_status_code <= kHttpServerErrorEnd) {
+        automation_->Send(new AutomationMsg_NavigationFailed(
+            tab_handle_, commit->http_status_code, commit->entry->GetURL()));
+
+        ignore_next_load_notification_ = true;
+      } else {
+        NavigationInfo navigation_info;
+        // When the previous entry index is invalid, it will be -1, which
+        // will still make the computation come out right (navigating to the
+        // 0th entry will be +1).
+        if (InitNavigationInfo(&navigation_info, commit->type,
+                commit->previous_entry_index -
+                tab_contents_->web_contents()->
+                    GetController().GetLastCommittedEntryIndex()))
+          automation_->Send(new AutomationMsg_DidNavigate(tab_handle_,
+                                                          navigation_info));
+      }
+      break;
+    }
     case content::NOTIFICATION_FAIL_PROVISIONAL_LOAD_WITH_ERROR: {
       const ProvisionalLoadDetails* load_details =
-          Details<ProvisionalLoadDetails>(details).ptr();
+          content::Details<ProvisionalLoadDetails>(details).ptr();
       automation_->Send(new AutomationMsg_NavigationFailed(
           tab_handle_, load_details->error_code(), load_details->url()));
 
@@ -875,15 +856,22 @@ void ExternalTabContainer::Observe(int type,
     }
     case content::NOTIFICATION_RENDER_VIEW_HOST_CREATED_FOR_TAB: {
       if (load_requests_via_automation_) {
-        RenderViewHost* rvh = Details<RenderViewHost>(details).ptr();
+        RenderViewHost* rvh = content::Details<RenderViewHost>(details).ptr();
         RegisterRenderViewHostForAutomation(rvh, false);
       }
       break;
     }
     case content::NOTIFICATION_RENDER_VIEW_HOST_DELETED: {
       if (load_requests_via_automation_) {
-        RenderViewHost* rvh = Source<RenderViewHost>(source).ptr();
+        RenderViewHost* rvh = content::Source<RenderViewHost>(source).ptr();
         UnregisterRenderViewHost(rvh);
+      }
+      break;
+    }
+    case content::NOTIFICATION_RENDER_VIEW_HOST_CREATED: {
+      if (load_requests_via_automation_) {
+        RenderViewHost* rvh = content::Source<RenderViewHost>(source).ptr();
+        RegisterRenderViewHostForAutomation(rvh, false);
       }
       break;
     }
@@ -932,7 +920,7 @@ void ExternalTabContainer::RunUnloadHandlers(IPC::Message* reply_message) {
   unload_reply_message_ = reply_message;
   bool wait_for_unload_handlers =
       tab_contents_.get() &&
-      Browser::RunUnloadEventsHelper(tab_contents_->tab_contents());
+      Browser::RunUnloadEventsHelper(tab_contents_->web_contents());
   if (!wait_for_unload_handlers) {
     AutomationMsg_RunUnloadHandlers::WriteReplyParams(reply_message, true);
     automation_->Send(reply_message);
@@ -969,10 +957,11 @@ bool ExternalTabContainer::ProcessUnhandledKeyStroke(HWND window,
 }
 
 bool ExternalTabContainer::InitNavigationInfo(NavigationInfo* nav_info,
-                                              NavigationType::Type nav_type,
+                                              content::NavigationType nav_type,
                                               int relative_offset) {
   DCHECK(nav_info);
-  NavigationEntry* entry = tab_contents_->controller().GetActiveEntry();
+  NavigationEntry* entry =
+      tab_contents_->web_contents()->GetController().GetActiveEntry();
   // If this is very early in the game then we may not have an entry.
   if (!entry)
     return false;
@@ -980,17 +969,19 @@ bool ExternalTabContainer::InitNavigationInfo(NavigationInfo* nav_info,
   nav_info->navigation_type = nav_type;
   nav_info->relative_offset = relative_offset;
   nav_info->navigation_index =
-      tab_contents_->controller().GetCurrentEntryIndex();
-  nav_info->url = entry->url();
-  nav_info->referrer = entry->referrer();
-  nav_info->title =  UTF16ToWideHack(entry->title());
+      tab_contents_->web_contents()->GetController().GetCurrentEntryIndex();
+  nav_info->url = entry->GetURL();
+  nav_info->referrer = entry->GetReferrer().url;
+  nav_info->title =  UTF16ToWideHack(entry->GetTitle());
   if (nav_info->title.empty())
     nav_info->title = UTF8ToWide(nav_info->url.spec());
 
-  nav_info->security_style = entry->ssl().security_style();
+  nav_info->security_style = entry->GetSSL().security_style;
+  int content_status = entry->GetSSL().content_status;
   nav_info->displayed_insecure_content =
-      entry->ssl().displayed_insecure_content();
-  nav_info->ran_insecure_content = entry->ssl().ran_insecure_content();
+      !!(content_status & SSLStatus::DISPLAYED_INSECURE_CONTENT);
+  nav_info->ran_insecure_content =
+      !!(content_status & SSLStatus::RAN_INSECURE_CONTENT);
   return true;
 }
 
@@ -1023,46 +1014,52 @@ bool ExternalTabContainer::DrawInfoBarArrows(int* x) const {
 }
 
 bool ExternalTabContainer::AcceleratorPressed(
-    const views::Accelerator& accelerator) {
-  std::map<views::Accelerator, int>::const_iterator iter =
+    const ui::Accelerator& accelerator) {
+  std::map<ui::Accelerator, int>::const_iterator iter =
       accelerator_table_.find(accelerator);
   DCHECK(iter != accelerator_table_.end());
 
-  if (!tab_contents_.get() || !tab_contents_->render_view_host()) {
+  if (!tab_contents_.get() ||
+      !tab_contents_->web_contents()->GetRenderViewHost()) {
     NOTREACHED();
     return false;
   }
 
-  RenderViewHost* host = tab_contents_->render_view_host();
+  RenderViewHost* host = tab_contents_->web_contents()->GetRenderViewHost();
   int command_id = iter->second;
   switch (command_id) {
     case IDC_ZOOM_PLUS:
-      host->Send(new ViewMsg_Zoom(host->routing_id(), PageZoom::ZOOM_IN));
+      host->Zoom(content::PAGE_ZOOM_IN);
       break;
     case IDC_ZOOM_NORMAL:
-      host->Send(new ViewMsg_Zoom(host->routing_id(), PageZoom::RESET));
+      host->Zoom(content::PAGE_ZOOM_RESET);
       break;
     case IDC_ZOOM_MINUS:
-      host->Send(new ViewMsg_Zoom(host->routing_id(), PageZoom::ZOOM_OUT));
+      host->Zoom(content::PAGE_ZOOM_OUT);
       break;
     case IDC_DEV_TOOLS:
       DevToolsWindow::ToggleDevToolsWindow(
-          tab_contents_->render_view_host(), DEVTOOLS_TOGGLE_ACTION_NONE);
+          tab_contents_->web_contents()->GetRenderViewHost(),
+          DEVTOOLS_TOGGLE_ACTION_NONE);
       break;
     case IDC_DEV_TOOLS_CONSOLE:
       DevToolsWindow::ToggleDevToolsWindow(
-          tab_contents_->render_view_host(),
+          tab_contents_->web_contents()->GetRenderViewHost(),
           DEVTOOLS_TOGGLE_ACTION_SHOW_CONSOLE);
       break;
     case IDC_DEV_TOOLS_INSPECT:
       DevToolsWindow::ToggleDevToolsWindow(
-          tab_contents_->render_view_host(),
+          tab_contents_->web_contents()->GetRenderViewHost(),
           DEVTOOLS_TOGGLE_ACTION_INSPECT);
       break;
     default:
       NOTREACHED() << "Unsupported accelerator: " << command_id;
       return false;
   }
+  return true;
+}
+
+bool ExternalTabContainer::CanHandleAccelerators() const {
   return true;
 }
 
@@ -1074,8 +1071,9 @@ void ExternalTabContainer::Navigate(const GURL& url, const GURL& referrer) {
 
   TRACE_EVENT_BEGIN_ETW("ExternalTabContainer::Navigate", 0, url.spec());
 
-  tab_contents_->controller().LoadURL(url, referrer,
-                                      PageTransition::START_PAGE);
+  tab_contents_->web_contents()->GetController().LoadURL(
+      url, content::Referrer(referrer, WebKit::WebReferrerPolicyDefault),
+      content::PAGE_TRANSITION_START_PAGE, std::string());
 }
 
 bool ExternalTabContainer::OnGoToEntryOffset(int offset) {
@@ -1099,7 +1097,7 @@ void ExternalTabContainer::LoadAccelerators() {
     return;
   }
 
-  scoped_ptr<ACCEL> scoped_accelerators(new ACCEL[count]);
+  scoped_array<ACCEL> scoped_accelerators(new ACCEL[count]);
   ACCEL* accelerators = scoped_accelerators.get();
   DCHECK(accelerators != NULL);
 
@@ -1113,7 +1111,7 @@ void ExternalTabContainer::LoadAccelerators() {
     bool alt_down = (accelerators[i].fVirt & FALT) == FALT;
     bool ctrl_down = (accelerators[i].fVirt & FCONTROL) == FCONTROL;
     bool shift_down = (accelerators[i].fVirt & FSHIFT) == FSHIFT;
-    views::Accelerator accelerator(
+    ui::Accelerator accelerator(
         static_cast<ui::KeyboardCode>(accelerators[i].key),
         shift_down, ctrl_down, alt_down);
     accelerator_table_[accelerator] = accelerators[i].cmd;
@@ -1126,15 +1124,15 @@ void ExternalTabContainer::LoadAccelerators() {
 
 void ExternalTabContainer::OnReinitialize() {
   if (load_requests_via_automation_) {
-    RenderViewHost* rvh = tab_contents_->render_view_host();
+    RenderViewHost* rvh = tab_contents_->web_contents()->GetRenderViewHost();
     if (rvh) {
       AutomationResourceMessageFilter::ResumePendingRenderView(
-          rvh->process()->id(), rvh->routing_id(),
+          rvh->process()->GetID(), rvh->routing_id(),
           tab_handle_, automation_resource_message_filter_);
     }
   }
 
-  NavigationStateChanged(tab_contents(), 0);
+  NavigationStateChanged(web_contents(), 0);
   ServicePendingOpenURLRequests();
 }
 
@@ -1146,7 +1144,7 @@ void ExternalTabContainer::ServicePendingOpenURLRequests() {
   for (size_t index = 0; index < pending_open_url_requests_.size();
        ++index) {
     const OpenURLParams& url_request = pending_open_url_requests_[index];
-    OpenURLFromTab(tab_contents(), url_request);
+    OpenURLFromTab(web_contents(), url_request);
   }
   pending_open_url_requests_.clear();
 }
@@ -1161,7 +1159,7 @@ void ExternalTabContainer::SetupExternalTabView() {
   external_tab_view_ = new views::View();
 
   InfoBarContainerView* info_bar_container = new InfoBarContainerView(this);
-  info_bar_container->ChangeTabContents(tab_contents_.get());
+  info_bar_container->ChangeTabContents(tab_contents_->infobar_tab_helper());
 
   views::GridLayout* layout = new views::GridLayout(external_tab_view_);
   // Give this column an identifier of 0.
@@ -1181,7 +1179,7 @@ void ExternalTabContainer::SetupExternalTabView() {
   layout->AddView(tab_contents_container_);
   GetWidget()->SetContentsView(external_tab_view_);
   // Note that SetTabContents must be called after AddChildView is called
-  tab_contents_container_->ChangeTabContents(tab_contents());
+  tab_contents_container_->ChangeWebContents(web_contents());
 }
 
 TemporaryPopupExternalTabContainer::TemporaryPopupExternalTabContainer(
@@ -1194,15 +1192,8 @@ TemporaryPopupExternalTabContainer::~TemporaryPopupExternalTabContainer() {
   DVLOG(1) << __FUNCTION__;
 }
 
-TabContents* TemporaryPopupExternalTabContainer::OpenURLFromTab(
-    TabContents* source, const GURL& url, const GURL& referrer,
-    WindowOpenDisposition disposition, PageTransition::Type transition) {
-  return OpenURLFromTab(source,
-                        OpenURLParams(url, referrer, disposition, transition));
-}
-
-TabContents* TemporaryPopupExternalTabContainer::OpenURLFromTab(
-    TabContents* source,
+WebContents* TemporaryPopupExternalTabContainer::OpenURLFromTab(
+    WebContents* source,
     const OpenURLParams& params) {
   if (!automation_)
     return NULL;
@@ -1212,7 +1203,7 @@ TabContents* TemporaryPopupExternalTabContainer::OpenURLFromTab(
     DCHECK(route_all_top_level_navigations_);
     forward_params.disposition = NEW_FOREGROUND_TAB;
   }
-  TabContents* new_contents =
+  WebContents* new_contents =
       ExternalTabContainer::OpenURLFromTab(source, forward_params);
   // support only one navigation for a dummy tab before it is killed.
   ::DestroyWindow(GetNativeView());

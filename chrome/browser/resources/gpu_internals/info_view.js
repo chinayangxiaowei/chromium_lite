@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -51,9 +51,23 @@ cr.define('gpu', function() {
             value: chromeVersion
           },
           {
+            description: 'Operating system',
+            value: clientInfo.operating_system
+          },
+          {
             description: 'Software rendering list version',
             value: clientInfo.blacklist_version
+          },
+          {
+            description: 'ANGLE revision',
+            value: clientInfo.angle_revision
+          },
+          {
+            description: '2D graphics backend',
+            value: clientInfo.graphics_backend
           }]);
+
+        this.setTable_('performance-info', clientInfo.performance);
       } else {
         this.setText_('client-info', '... loading...');
       }

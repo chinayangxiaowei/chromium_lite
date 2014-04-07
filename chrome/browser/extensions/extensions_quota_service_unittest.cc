@@ -1,15 +1,19 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/message_loop.h"
+#include "base/process.h"
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "chrome/browser/extensions/extension_function.h"
 #include "chrome/browser/extensions/extensions_quota_service.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
+using content::BrowserThread;
 
 typedef QuotaLimitHeuristic::Bucket Bucket;
 typedef QuotaLimitHeuristic::Config Config;
@@ -52,15 +56,14 @@ class MockMapper : public QuotaLimitHeuristic::BucketMapper {
 class MockFunction : public ExtensionFunction {
  public:
   explicit MockFunction(const std::string& name) { set_name(name); }
-  virtual void SetArgs(const ListValue* args) {}
-  virtual const std::string GetError() { return std::string(); }
-  virtual const std::string GetResult() { return std::string(); }
-  virtual void Run() {}
-  virtual void Destruct() const { delete this; }
-  virtual bool RunImpl() { return true; }
-  virtual void SendResponse(bool) { }
-  virtual void SendNonFinalResponse() { }
-  virtual void HandleBadMessage() { }
+  virtual void SetArgs(const ListValue* args) OVERRIDE {}
+  virtual const std::string GetError() OVERRIDE { return std::string(); }
+  virtual void SetError(const std::string& error) OVERRIDE {}
+  virtual const std::string GetResult() OVERRIDE { return std::string(); }
+  virtual void Run() OVERRIDE {}
+  virtual void Destruct() const OVERRIDE { delete this; }
+  virtual bool RunImpl() OVERRIDE { return true; }
+  virtual void SendResponse(bool) OVERRIDE { }
 };
 
 class TimedLimitMockFunction : public MockFunction {
@@ -119,7 +122,7 @@ class ExtensionsQuotaServiceTest : public testing::Test {
   std::string extension_c_;
   scoped_ptr<ExtensionsQuotaService> service_;
   MessageLoop loop_;
-  BrowserThread ui_thread_;
+  content::TestBrowserThread ui_thread_;
 };
 
 class QuotaLimitHeuristicTest : public testing::Test {

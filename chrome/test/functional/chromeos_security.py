@@ -1,10 +1,9 @@
-#!/usr/bin/python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import os
-import pprint
 
 import pyauto_functional
 import pyauto
@@ -17,7 +16,6 @@ class ChromeosSecurity(pyauto.PyUITest):
   """
   def setUp(self):
     pyauto.PyUITest.setUp(self)
-    self.pp = pprint.PrettyPrinter(indent=2)
     baseline_file = os.path.abspath(os.path.join(
         pyauto.PyUITest.DataDir(), 'pyauto_private', 'chromeos',
         'security', 'extension_permission_baseline.txt'))
@@ -83,8 +81,8 @@ class ChromeosSecurity(pyauto.PyUITest):
              '\nActual extension info:\n%s' %
              (perm_type, full_expected_info['name'],
               _GetSetDifferenceMessage(expected_set, actual_set),
-              self.pp.pformat(full_expected_info),
-              self.pp.pformat(full_actual_info))))
+              self.pformat(full_expected_info),
+              self.pformat(full_actual_info))))
 
   def _AssertExtensionNamesAreExpected(self, expected_set, actual_set,
                                        ext_type, full_expected_info,
@@ -100,18 +98,24 @@ class ChromeosSecurity(pyauto.PyUITest):
       full_actual_info: A list of dictionaries describing the actual information
                         for all extensions.
     """
+    # Skip the Web Store and Bookmark Manager; they are integral to Chrome and
+    # are redundant to check on ChromeOS.  This can reduce the number of times
+    # we have to update the baseline for this test.
+    for extension_name in ['Chrome Web Store', 'Bookmark Manager']:
+      actual_set.discard(extension_name)
+
     def _GetSetDifferenceMessage(expected_set, actual_set):
       strings = []
       for missing_item in expected_set.difference(actual_set):
         strings.append('Missing item: "%s"' % missing_item)
         located_ext_info = [info for info in full_expected_info if
                             info['name'] == missing_item][0]
-        strings.append(self.pp.pformat(located_ext_info))
+        strings.append(self.pformat(located_ext_info))
       for extra_item in actual_set.difference(expected_set):
         strings.append('Unexpected (extra) item: "%s"' % extra_item)
         located_ext_info = [info for info in full_actual_info if
                             info['name'] == extra_item][0]
-        strings.append(self.pp.pformat(located_ext_info))
+        strings.append(self.pformat(located_ext_info))
       return '\n'.join(strings)
 
     self.assertEqual(
@@ -140,7 +144,7 @@ class ChromeosSecurity(pyauto.PyUITest):
           located_ext_info,
           msg=('Cannot locate extension info for "%s".\n'
                'Expected extension info:\n%s' %
-               (ext_expected_info['name'], self.pp.pformat(ext_expected_info))))
+               (ext_expected_info['name'], self.pformat(ext_expected_info))))
       ext_actual_info = located_ext_info[0]
       self._AssertPermissionSetIsExpected(
           set(ext_expected_info['effective_host_permissions']),
@@ -156,7 +160,7 @@ class ChromeosSecurity(pyauto.PyUITest):
     expected_names = [ext['name'] for ext in self._component_extension_baseline]
     ext_actual_info = self.GetExtensionsInfo()
     actual_names = [ext['name'] for ext in ext_actual_info if
-                    ext['is_component_extension']]
+                    ext['is_component']]
     self._AssertExtensionNamesAreExpected(
         set(expected_names), set(actual_names), 'Component extension',
         self._component_extension_baseline, ext_actual_info)
@@ -171,8 +175,7 @@ class ChromeosSecurity(pyauto.PyUITest):
             file_name in [x['crx_file'] for x in self._bundled_crx_baseline],
             msg='Unexpected CRX file: ' + file_name)
         crx_file = os.path.join(self._bundled_crx_directory, file_name)
-        self.assertTrue(self.InstallExtension(crx_file, False),
-                        msg='Extension install failed: %s' % crx_file)
+        self.InstallExtension(crx_file)
 
     # Verify that the permissions information in the baseline matches the
     # permissions associated with the installed bundled CRX extensions.
@@ -184,8 +187,7 @@ class ChromeosSecurity(pyauto.PyUITest):
     for file_name in os.listdir(self._bundled_crx_directory):
       if file_name.endswith('.crx'):
         crx_file = os.path.join(self._bundled_crx_directory, file_name)
-        self.assertTrue(self.InstallExtension(crx_file, False),
-                        msg='Extension install failed: %s' % crx_file)
+        self.InstallExtension(crx_file)
 
     # Ensure that the set of installed extension names precisely matches the
     # baseline.

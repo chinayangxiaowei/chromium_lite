@@ -1,12 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/plugins/ppapi/mock_plugin_delegate.h"
 
+#include "base/logging.h"
 #include "base/message_loop_proxy.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/shared_impl/ppapi_preferences.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebGamepads.h"
+#include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 
 namespace webkit {
 namespace ppapi {
@@ -17,7 +20,18 @@ MockPluginDelegate::MockPluginDelegate() {
 MockPluginDelegate::~MockPluginDelegate() {
 }
 
-void MockPluginDelegate::PluginFocusChanged(bool focused) {
+void MockPluginDelegate::PluginFocusChanged(PluginInstance* instance,
+                                            bool focused) {
+}
+
+void MockPluginDelegate::PluginTextInputTypeChanged(PluginInstance* instance) {
+}
+
+void MockPluginDelegate::PluginCaretPositionChanged(PluginInstance* instance) {
+}
+
+void MockPluginDelegate::PluginRequestedCancelComposition(
+    PluginInstance* instance) {
 }
 
 void MockPluginDelegate::PluginCrashed(PluginInstance* instance) {
@@ -59,7 +73,14 @@ MockPluginDelegate::CreateVideoCapture(
 MockPluginDelegate::PlatformAudio* MockPluginDelegate::CreateAudio(
     uint32_t sample_rate,
     uint32_t sample_count,
-    PlatformAudio::Client* client) {
+    PlatformAudioCommonClient* client) {
+  return NULL;
+}
+
+MockPluginDelegate::PlatformAudioInput* MockPluginDelegate::CreateAudioInput(
+    uint32_t sample_rate,
+    uint32_t sample_count,
+    PlatformAudioCommonClient* client) {
   return NULL;
 }
 
@@ -84,12 +105,12 @@ bool MockPluginDelegate::RunFileChooser(
 
 bool MockPluginDelegate::AsyncOpenFile(const FilePath& path,
                                        int flags,
-                                       AsyncOpenFileCallback* callback) {
+                                       const AsyncOpenFileCallback& callback) {
   return false;
 }
 
 bool MockPluginDelegate::AsyncOpenFileSystemURL(
-    const GURL& path, int flags, AsyncOpenFileCallback* callback) {
+    const GURL& path, int flags, const AsyncOpenFileCallback& callback) {
   return false;
 }
 
@@ -143,7 +164,7 @@ bool MockPluginDelegate::ReadDirectory(
 
 void MockPluginDelegate::QueryAvailableSpace(
     const GURL& origin, quota::StorageType type,
-    AvailableSpaceCallback* callback) {
+    const AvailableSpaceCallback& callback) {
 }
 
 void MockPluginDelegate::WillUpdateFile(const GURL& file_path) {
@@ -195,9 +216,6 @@ void MockPluginDelegate::SyncGetFileSystemPlatformPath(
   *platform_path = FilePath();
 }
 
-void MockPluginDelegate::PublishPolicy(const std::string& policy_json) {
-}
-
 scoped_refptr<base::MessageLoopProxy>
 MockPluginDelegate::GetFileThreadMessageLoopProxy() {
   return scoped_refptr<base::MessageLoopProxy>();
@@ -212,8 +230,61 @@ int32_t MockPluginDelegate::ConnectTcp(
 
 int32_t MockPluginDelegate::ConnectTcpAddress(
     webkit::ppapi::PPB_Flash_NetConnector_Impl* connector,
-    const struct PP_Flash_NetAddress* addr) {
+    const PP_NetAddress_Private* addr) {
   return PP_ERROR_FAILED;
+}
+
+uint32 MockPluginDelegate::TCPSocketCreate() {
+  return 0;
+}
+
+void MockPluginDelegate::TCPSocketConnect(PPB_TCPSocket_Private_Impl* socket,
+                                          uint32 socket_id,
+                                          const std::string& host,
+                                          uint16_t port) {
+}
+
+void MockPluginDelegate::TCPSocketConnectWithNetAddress(
+    PPB_TCPSocket_Private_Impl* socket,
+    uint32 socket_id,
+    const PP_NetAddress_Private& addr) {
+}
+
+void MockPluginDelegate::TCPSocketSSLHandshake(uint32 socket_id,
+                                               const std::string& server_name,
+                                               uint16_t server_port) {
+}
+
+void MockPluginDelegate::TCPSocketRead(uint32 socket_id,
+                                       int32_t bytes_to_read) {
+}
+
+void MockPluginDelegate::TCPSocketWrite(uint32 socket_id,
+                                        const std::string& buffer) {
+}
+
+void MockPluginDelegate::TCPSocketDisconnect(uint32 socket_id) {
+}
+
+uint32 MockPluginDelegate::UDPSocketCreate() {
+  return 0;
+}
+
+void MockPluginDelegate::UDPSocketBind(PPB_UDPSocket_Private_Impl* socket,
+                                       uint32 socket_id,
+                                       const PP_NetAddress_Private& addr) {
+}
+
+void MockPluginDelegate::UDPSocketRecvFrom(uint32 socket_id,
+                                           int32_t num_bytes) {
+}
+
+void MockPluginDelegate::UDPSocketSendTo(uint32 socket_id,
+                                         const std::string& buffer,
+                                         const PP_NetAddress_Private& addr) {
+}
+
+void MockPluginDelegate::UDPSocketClose(uint32 socket_id) {
 }
 
 int32_t MockPluginDelegate::ShowContextMenu(
@@ -240,9 +311,6 @@ void MockPluginDelegate::ZoomLimitsChanged(double minimum_factor,
                                            double maximum_factor) {
 }
 
-void MockPluginDelegate::SubscribeToPolicyUpdates(PluginInstance* instance) {
-}
-
 std::string MockPluginDelegate::ResolveProxy(const GURL& url) {
   return std::string();
 }
@@ -257,10 +325,6 @@ void MockPluginDelegate::SetContentRestriction(int restrictions) {
 }
 
 void MockPluginDelegate::SaveURLAs(const GURL& url) {
-}
-
-content::P2PSocketDispatcher* MockPluginDelegate::GetP2PSocketDispatcher() {
-  return NULL;
 }
 
 webkit_glue::P2PTransport* MockPluginDelegate::CreateP2PTransport() {
@@ -282,6 +346,36 @@ base::SharedMemory* MockPluginDelegate::CreateAnonymousSharedMemory(
 
 ::ppapi::Preferences MockPluginDelegate::GetPreferences() {
   return ::ppapi::Preferences();
+}
+
+bool MockPluginDelegate::LockMouse(PluginInstance* instance) {
+  return false;
+}
+
+void MockPluginDelegate::UnlockMouse(PluginInstance* instance) {
+}
+
+bool MockPluginDelegate::IsMouseLocked(PluginInstance* instance) {
+  return false;
+}
+
+void MockPluginDelegate::DidChangeCursor(PluginInstance* instance,
+                                         const WebKit::WebCursorInfo& cursor) {
+}
+
+void MockPluginDelegate::DidReceiveMouseEvent(PluginInstance* instance) {
+}
+
+void MockPluginDelegate::SampleGamepads(WebKit::WebGamepads* data) {
+  data->length = 0;
+}
+
+bool MockPluginDelegate::IsInFullscreenMode() {
+  return false;
+}
+
+bool MockPluginDelegate::IsPageVisible() const {
+  return true;
 }
 
 }  // namespace ppapi

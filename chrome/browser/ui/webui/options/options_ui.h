@@ -7,22 +7,20 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
-#include "chrome/browser/ui/webui/chrome_web_ui.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-
-class GURL;
-class PrefService;
-struct UserMetricsAction;
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_ui_controller.h"
+#include "content/public/browser/web_ui_message_handler.h"
 
 // The base class handler of Javascript messages of options pages.
-class OptionsPageUIHandler : public WebUIMessageHandler,
-                             public NotificationObserver {
+class OptionsPageUIHandler : public content::WebUIMessageHandler,
+                             public content::NotificationObserver {
  public:
   OptionsPageUIHandler();
   virtual ~OptionsPageUIHandler();
@@ -43,10 +41,10 @@ class OptionsPageUIHandler : public WebUIMessageHandler,
   // WebUIMessageHandler implementation.
   virtual void RegisterMessages() OVERRIDE {}
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE {}
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE {}
 
  protected:
   struct OptionsStringResource {
@@ -65,7 +63,7 @@ class OptionsPageUIHandler : public WebUIMessageHandler,
                             const std::string& variable_name,
                             int title_id);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(OptionsPageUIHandler);
@@ -76,19 +74,23 @@ class OptionsPageUIHandler : public WebUIMessageHandler,
 class OptionsPageUIHandlerHost {
  public:
   virtual void InitializeHandlers() = 0;
+
+ protected:
+  virtual ~OptionsPageUIHandlerHost() {}
 };
 
 // The WebUI for chrome:settings.
-class OptionsUI : public ChromeWebUI,
+class OptionsUI : public content::WebUIController,
                   public OptionsPageUIHandlerHost {
  public:
-  explicit OptionsUI(TabContents* contents);
+  explicit OptionsUI(content::WebUI* web_ui);
   virtual ~OptionsUI();
 
   static RefCountedMemory* GetFaviconResourceBytes();
 
-  // Overridden from WebUI:
+  // WebUIController implementation.
   virtual void RenderViewCreated(RenderViewHost* render_view_host) OVERRIDE;
+  virtual void RenderViewReused(RenderViewHost* render_view_host) OVERRIDE;
   virtual void DidBecomeActiveForReusedRenderView() OVERRIDE;
 
   // Overridden from OptionsPageUIHandlerHost:
@@ -99,7 +101,13 @@ class OptionsUI : public ChromeWebUI,
   void AddOptionsPageUIHandler(base::DictionaryValue* localized_strings,
                                OptionsPageUIHandler* handler);
 
+  // Sets the WebUI CommandLineString property with arguments passed while
+  // launching chrome.
+  void SetCommandLineString(RenderViewHost* render_view_host);
+
   bool initialized_handlers_;
+
+  std::vector<OptionsPageUIHandler*> handlers_;
 
   DISALLOW_COPY_AND_ASSIGN(OptionsUI);
 };

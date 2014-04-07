@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,7 +23,7 @@ class OffThreadObjectCreator {
       creator_thread.Start();
       creator_thread.message_loop()->PostTask(
           FROM_HERE,
-          NewRunnableFunction(OffThreadObjectCreator::CreateObject, &result));
+          base::Bind(OffThreadObjectCreator::CreateObject, &result));
     }
     DCHECK(result);  // We synchronized on thread destruction above.
     return result;
@@ -47,14 +48,16 @@ class BackgroundThread : public Thread {
       : Thread("owner_thread") {
   }
 
+  ~BackgroundThread() {
+    Stop();
+  }
+
   void CreateConsumerFromProducer(Consumer** consumer, Producer* producer) {
     WaitableEvent completion(true, false);
     message_loop()->PostTask(
         FROM_HERE,
-        NewRunnableFunction(&BackgroundThread::DoCreateFromProducer,
-                            consumer,
-                            producer,
-                            &completion));
+        base::Bind(&BackgroundThread::DoCreateFromProducer, consumer, producer,
+                   &completion));
     completion.Wait();
   }
 
@@ -62,10 +65,8 @@ class BackgroundThread : public Thread {
     WaitableEvent completion(true, false);
     message_loop()->PostTask(
         FROM_HERE,
-        NewRunnableFunction(&BackgroundThread::DoCreateFromConsumer,
-                            consumer,
-                            other,
-                            &completion));
+        base::Bind(&BackgroundThread::DoCreateFromConsumer, consumer, other,
+                   &completion));
     completion.Wait();
   }
 
@@ -73,9 +74,7 @@ class BackgroundThread : public Thread {
     WaitableEvent completion(true, false);
     message_loop()->PostTask(
         FROM_HERE,
-        NewRunnableFunction(&BackgroundThread::DoDeleteProducer,
-                            object,
-                            &completion));
+        base::Bind(&BackgroundThread::DoDeleteProducer, object, &completion));
     completion.Wait();
   }
 
@@ -83,9 +82,7 @@ class BackgroundThread : public Thread {
     WaitableEvent completion(true, false);
     message_loop()->PostTask(
         FROM_HERE,
-        NewRunnableFunction(&BackgroundThread::DoDeleteConsumer,
-                            object,
-                            &completion));
+        base::Bind(&BackgroundThread::DoDeleteConsumer, object, &completion));
     completion.Wait();
   }
 
@@ -94,10 +91,7 @@ class BackgroundThread : public Thread {
     Producer* result = NULL;
     message_loop()->PostTask(
         FROM_HERE,
-        NewRunnableFunction(&BackgroundThread::DoDeRef,
-                            consumer,
-                            &result,
-                            &completion));
+        base::Bind(&BackgroundThread::DoDeRef, consumer, &result, &completion));
     completion.Wait();
     return result;
   }

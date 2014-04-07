@@ -25,9 +25,10 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
   virtual ~AutofillOptionsHandler();
 
   // OptionsPageUIHandler implementation.
-  virtual void GetLocalizedValues(base::DictionaryValue* localized_strings);
-  virtual void Initialize();
-  virtual void RegisterMessages();
+  virtual void GetLocalizedValues(
+      base::DictionaryValue* localized_strings) OVERRIDE;
+  virtual void Initialize() OVERRIDE;
+  virtual void RegisterMessages() OVERRIDE;
 
   // PersonalDataManagerObserver implementation.
   virtual void OnPersonalDataChanged() OVERRIDE;
@@ -72,12 +73,11 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
   // credit card data.
   void SetCreditCard(const base::ListValue* args);
 
-  // Validates a list of phone/fax numbers.  The resulting validated list of
+  // Validates a list of phone numbers.  The resulting validated list of
   // numbers is then sent back to the WebUI.
   // |args| - an array containing the index of the modified or added number, the
   // array of numbers, and the country code string set on the profile.
   void ValidatePhoneNumbers(const base::ListValue* args);
-  void ValidateFaxNumbers(const base::ListValue* args);
 
   // The personal data manager, used to load Autofill profiles and credit cards.
   // Unowned pointer, may not be NULL.

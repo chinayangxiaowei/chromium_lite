@@ -5,15 +5,21 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_SYNC_SETUP_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_SYNC_SETUP_HANDLER_H_
 
+#include "base/memory/scoped_ptr.h"
+#include "chrome/browser/net/gaia/gaia_oauth_consumer.h"
+#include "chrome/browser/net/gaia/gaia_oauth_fetcher.h"
 #include "chrome/browser/sync/sync_setup_flow_handler.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
 
 class SyncSetupFlow;
+class ProfileManager;
 
-class SyncSetupHandler : public OptionsPageUIHandler,
+class SyncSetupHandler : public GaiaOAuthConsumer,
+                         public OptionsPageUIHandler,
                          public SyncSetupFlowHandler {
  public:
-  SyncSetupHandler();
+  // Constructs a new SyncSetupHandler. |profile_manager| may be NULL.
+  explicit SyncSetupHandler(ProfileManager* profile_manager);
   virtual ~SyncSetupHandler();
 
   // OptionsPageUIHandler implementation.
@@ -30,12 +36,18 @@ class SyncSetupHandler : public OptionsPageUIHandler,
   virtual void ShowConfigure(const base::DictionaryValue& args) OVERRIDE;
   virtual void ShowPassphraseEntry(const base::DictionaryValue& args) OVERRIDE;
   virtual void ShowSettingUp() OVERRIDE;
-  virtual void ShowSetupDone(const std::wstring& user) OVERRIDE;
+  virtual void ShowSetupDone(const string16& user) OVERRIDE;
   virtual void SetFlow(SyncSetupFlow* flow) OVERRIDE;
   virtual void Focus() OVERRIDE;
 
+  // GaiaOAuthConsumer implementation.
+  virtual void OnGetOAuthTokenSuccess(const std::string& oauth_token) OVERRIDE;
+  virtual void OnGetOAuthTokenFailure(
+      const GoogleServiceAuthError& error) OVERRIDE;
+
   static void GetStaticLocalizedValues(
-      base::DictionaryValue* localized_strings);
+      base::DictionaryValue* localized_strings,
+      content::WebUI* web_ui);
 
   // Initializes the sync setup flow and shows the setup UI.
   void OpenSyncSetup();
@@ -69,13 +81,35 @@ class SyncSetupHandler : public OptionsPageUIHandler,
 
   SyncSetupFlow* flow() { return flow_; }
 
+  // Subclasses must implement to step the SyncSetupWizard to the correct state
+  // before showing the Setup UI.
+  virtual void StepWizardForShowSetupUI() = 0;
+
   // Subclasses must implement this to show the setup UI that's appropriate
   // for the page this is contained in.
   virtual void ShowSetupUI() = 0;
 
  private:
+  // If a wizard already exists, focus it and return true.
+  bool FocusExistingWizard();
+
+  // Invokes the javascript call to close the setup overlay.
+  void CloseOverlay();
+
+  // Returns true if the given login data is valid, false otherwise. If the
+  // login data is not valid then on return |error_message| will be set to  a
+  // localized error message. Note, |error_message| must not be NULL.
+  bool IsLoginAuthDataValid(const std::string& username,
+                            string16* error_message);
+
+  // Displays the given error message in the login UI.
+  void ShowLoginErrorMessage(const string16& error_message);
+
   // Weak reference.
   SyncSetupFlow* flow_;
+  scoped_ptr<GaiaOAuthFetcher> oauth_login_;
+  // Weak reference to the profile manager.
+  ProfileManager* const profile_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncSetupHandler);
 };

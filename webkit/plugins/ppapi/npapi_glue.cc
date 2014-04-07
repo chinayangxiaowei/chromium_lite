@@ -7,18 +7,22 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/string_util.h"
+#include "webkit/plugins/ppapi/host_array_buffer_var.h"
+#include "webkit/plugins/ppapi/host_globals.h"
+#include "webkit/plugins/ppapi/host_var_tracker.h"
 #include "webkit/plugins/ppapi/npobject_var.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/plugin_object.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
 #include "third_party/npapi/bindings/npapi.h"
 #include "third_party/npapi/bindings/npruntime.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
 
 using ppapi::NPObjectVar;
+using ppapi::PpapiGlobals;
 using ppapi::StringVar;
 using ppapi::Var;
+using WebKit::WebArrayBuffer;
 using WebKit::WebBindings;
 
 namespace webkit {
@@ -71,8 +75,13 @@ bool PPVarToNPVariant(PP_Var var, NPVariant* result) {
                           *result);
       break;
     }
+    // The following types are not supported for use with PPB_Var_Deprecated,
+    // because PPB_Var_Deprecated is only for trusted plugins, and the trusted
+    // plugins we have don't need these types. We can add support in the future
+    // if it becomes necessary.
     case PP_VARTYPE_ARRAY:
     case PP_VARTYPE_DICTIONARY:
+    case PP_VARTYPE_ARRAY_BUFFER:
       VOID_TO_NPVARIANT(*result);
       break;
   }
@@ -93,7 +102,6 @@ PP_Var NPVariantToPPVar(PluginInstance* instance, const NPVariant* variant) {
       return PP_MakeDouble(NPVARIANT_TO_DOUBLE(*variant));
     case NPVariantType_String:
       return StringVar::StringToPPVar(
-          instance->module()->pp_module(),
           NPVARIANT_TO_STRING(*variant).UTF8Characters,
           NPVARIANT_TO_STRING(*variant).UTF8Length);
     case NPVariantType_Object:
@@ -118,25 +126,33 @@ NPIdentifier PPVarToNPIdentifier(PP_Var var) {
   }
 }
 
-PP_Var NPIdentifierToPPVar(PP_Module module, NPIdentifier id) {
+PP_Var NPIdentifierToPPVar(NPIdentifier id) {
   const NPUTF8* string_value = NULL;
   int32_t int_value = 0;
   bool is_string = false;
   WebBindings::extractIdentifierData(id, string_value, int_value, is_string);
   if (is_string)
-    return StringVar::StringToPPVar(module, string_value);
+    return StringVar::StringToPPVar(string_value);
 
   return PP_MakeInt32(int_value);
 }
 
 PP_Var NPObjectToPPVar(PluginInstance* instance, NPObject* object) {
   DCHECK(object);
+  WebArrayBuffer buffer;
+  // TODO(dmichael): Should I protect against duplicate Vars representing the
+  // same array buffer? It's probably not worth the trouble, since it will only
+  // affect in-process plugins.
+  if (WebBindings::getArrayBuffer(object, &buffer)) {
+    scoped_refptr<HostArrayBufferVar> buffer_var(
+        new HostArrayBufferVar(buffer));
+    return buffer_var->GetPPVar();
+  }
   scoped_refptr<NPObjectVar> object_var(
-      ResourceTracker::Get()->NPObjectVarForNPObject(instance->pp_instance(),
-                                                     object));
+      HostGlobals::Get()->host_var_tracker()->NPObjectVarForNPObject(
+          instance->pp_instance(), object));
   if (!object_var) {  // No object for this module yet, make a new one.
-    object_var = new NPObjectVar(instance->module()->pp_module(),
-                                 instance->pp_instance(), object);
+    object_var = new NPObjectVar(instance->pp_instance(), object);
   }
   return object_var->GetPPVar();
 }
@@ -159,7 +175,7 @@ PPResultAndExceptionToNPResult::~PPResultAndExceptionToNPResult() {
   // been lost.
   DCHECK(checked_exception_);
 
-  ResourceTracker::Get()->GetVarTracker()->ReleaseVar(exception_);
+  PpapiGlobals::Get()->GetVarTracker()->ReleaseVar(exception_);
 }
 
 // Call this with the return value of the PPAPI function. It will convert
@@ -184,7 +200,7 @@ bool PPResultAndExceptionToNPResult::SetResult(PP_Var result) {
   // No matter what happened, we need to release the reference to the
   // value passed in. On success, a reference to this value will be in
   // the np_result_.
-  ResourceTracker::Get()->GetVarTracker()->ReleaseVar(result);
+  PpapiGlobals::Get()->GetVarTracker()->ReleaseVar(result);
   return success_;
 }
 
@@ -236,7 +252,7 @@ PPVarArrayFromNPVariantArray::PPVarArrayFromNPVariantArray(
 }
 
 PPVarArrayFromNPVariantArray::~PPVarArrayFromNPVariantArray() {
-  ::ppapi::VarTracker* var_tracker = ResourceTracker::Get()->GetVarTracker();
+  ::ppapi::VarTracker* var_tracker = PpapiGlobals::Get()->GetVarTracker();
   for (size_t i = 0; i < size_; i++)
     var_tracker->ReleaseVar(array_[i]);
 }
@@ -248,7 +264,7 @@ PPVarFromNPObject::PPVarFromNPObject(PluginInstance* instance, NPObject* object)
 }
 
 PPVarFromNPObject::~PPVarFromNPObject() {
-  ResourceTracker::Get()->GetVarTracker()->ReleaseVar(var_);
+  PpapiGlobals::Get()->GetVarTracker()->ReleaseVar(var_);
 }
 
 // NPObjectAccessorWithIdentifier ----------------------------------------------
@@ -260,22 +276,20 @@ NPObjectAccessorWithIdentifier::NPObjectAccessorWithIdentifier(
     : object_(PluginObject::FromNPObject(object)),
       identifier_(PP_MakeUndefined()) {
   if (object_) {
-    identifier_ = NPIdentifierToPPVar(
-        object_->instance()->module()->pp_module(), identifier);
+    identifier_ = NPIdentifierToPPVar(identifier);
     if (identifier_.type == PP_VARTYPE_INT32 && !allow_integer_identifier)
       identifier_.type = PP_VARTYPE_UNDEFINED;  // Mark it invalid.
   }
 }
 
 NPObjectAccessorWithIdentifier::~NPObjectAccessorWithIdentifier() {
-  ResourceTracker::Get()->GetVarTracker()->ReleaseVar(identifier_);
+  PpapiGlobals::Get()->GetVarTracker()->ReleaseVar(identifier_);
 }
 
 // TryCatch --------------------------------------------------------------------
 
-TryCatch::TryCatch(PP_Module module, PP_Var* exception)
-    : pp_module_(module),
-      has_exception_(exception && exception->type != PP_VARTYPE_UNDEFINED),
+TryCatch::TryCatch(PP_Var* exception)
+    : has_exception_(exception && exception->type != PP_VARTYPE_UNDEFINED),
       exception_(exception) {
   WebBindings::pushExceptionHandler(&TryCatch::Catch, this);
 }
@@ -285,28 +299,11 @@ TryCatch::~TryCatch() {
 }
 
 void TryCatch::SetException(const char* message) {
-  if (!pp_module_) {
-    // Don't have a module to make the string.
-    SetInvalidObjectException();
-    return;
-  }
-
   if (!has_exception()) {
     has_exception_ = true;
     if (exception_) {
-      *exception_ = ::ppapi::StringVar::StringToPPVar(pp_module_,
-                                                      message, strlen(message));
+      *exception_ = ::ppapi::StringVar::StringToPPVar(message, strlen(message));
     }
-  }
-}
-
-void TryCatch::SetInvalidObjectException() {
-  if (!has_exception()) {
-    has_exception_ = true;
-    // TODO(brettw) bug 54504: Have a global singleton string that can hold
-    // a generic error message.
-    if (exception_)
-      *exception_ = PP_MakeInt32(1);
   }
 }
 

@@ -7,9 +7,9 @@
 
 #include <vector>
 
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "ppapi/thunk/ppb_scrollbar_api.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRect.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebRect.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScrollbarClient.h"
 #include "ui/gfx/rect.h"
 #include "webkit/plugins/ppapi/ppb_widget_impl.h"
@@ -28,16 +28,6 @@ class PPB_Scrollbar_Impl : public PPB_Widget_Impl,
   // Resource overrides.
   virtual PPB_Scrollbar_API* AsPPB_Scrollbar_API() OVERRIDE;
   virtual void InstanceWasDeleted();
-
-  // Returns a pointer to the interface implementing PPB_Scrollbar_0_3 that is
-  // exposed to the plugin. New code should use the thunk system for the new
-  // version of this API.
-  static const PPB_Scrollbar_0_3_Dev* Get0_3Interface();
-
-  // Returns a pointer to the interface implementing PPB_Scrollbar_0_4 that is
-  // exposed to the plugin. New code should use the thunk system for the new
-  // version of this API.
-  static const PPB_Scrollbar_0_4_Dev* Get0_4Interface();
 
   // PPB_Scrollbar_API implementation.
   virtual uint32_t GetThickness() OVERRIDE;
@@ -75,7 +65,7 @@ class PPB_Scrollbar_Impl : public PPB_Widget_Impl,
   scoped_ptr<WebKit::WebScrollbar> scrollbar_;
 
   // Used so that the post task for Invalidate doesn't keep an extra reference.
-  ScopedRunnableMethodFactory<PPB_Scrollbar_Impl> method_factory_;
+  base::WeakPtrFactory<PPB_Scrollbar_Impl> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PPB_Scrollbar_Impl);
 };

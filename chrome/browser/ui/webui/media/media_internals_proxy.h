@@ -7,12 +7,13 @@
 #pragma once
 
 #include "base/memory/ref_counted.h"
+#include "base/message_loop_helpers.h"
 #include "base/string16.h"
 #include "chrome/browser/media/media_internals_observer.h"
 #include "chrome/browser/net/chrome_net_log.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 class IOThread;
 class MediaInternalsMessageHandler;
@@ -28,17 +29,18 @@ class Value;
 // threads before destruction.
 class MediaInternalsProxy
     : public MediaInternalsObserver,
-      public base::RefCountedThreadSafe<MediaInternalsProxy,
-                                        BrowserThread::DeleteOnUIThread>,
+      public base::RefCountedThreadSafe<
+          MediaInternalsProxy,
+          content::BrowserThread::DeleteOnUIThread>,
       public ChromeNetLog::ThreadSafeObserverImpl,
-      public NotificationObserver {
+      public content::NotificationObserver {
  public:
   MediaInternalsProxy();
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Register a Handler and start receiving callbacks from MediaInternals.
   void Attach(MediaInternalsMessageHandler* handler);
@@ -50,7 +52,7 @@ class MediaInternalsProxy
   void GetEverything();
 
   // MediaInternalsObserver implementation. Called on the IO thread.
-  virtual void OnUpdate(const string16& update);
+  virtual void OnUpdate(const string16& update) OVERRIDE;
 
   // ChromeNetLog::ThreadSafeObserver implementation. Callable from any thread:
   virtual void OnAddEntry(net::NetLog::EventType type,
@@ -60,8 +62,9 @@ class MediaInternalsProxy
                           net::NetLog::EventParameters* params) OVERRIDE;
 
  private:
-  friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
-  friend class DeleteTask<MediaInternalsProxy>;
+  friend struct content::BrowserThread::DeleteOnThread<
+      content::BrowserThread::UI>;
+  friend class base::DeleteHelper<MediaInternalsProxy>;
   virtual ~MediaInternalsProxy();
 
   // Build a dictionary mapping constant names to values.
@@ -85,7 +88,7 @@ class MediaInternalsProxy
   MediaInternalsMessageHandler* handler_;
   IOThread* io_thread_;
   scoped_ptr<base::ListValue> pending_net_updates_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaInternalsProxy);
 };

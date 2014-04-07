@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,59 +26,46 @@ PrintPreviewWebUITest.prototype = {
    * @override
    */
   preLoad: function() {
-    // TODO(scr) remove this after tests pass consistently.
-    console.info('preLoad');
+    this.makeAndRegisterMockHandler(['getInitialSettings',
+                                     'getPrinters',
+                                     'getPreview',
+                                     'print',
+                                     'getPrinterCapabilities',
+                                     'showSystemDialog',
+                                     'morePrinters',
+                                     'signIn',
+                                     'addCloudPrinter',
+                                     'manageCloudPrinters',
+                                     'manageLocalPrinters',
+                                     'closePrintPreviewTab',
+                                     'hidePreview',
+                                     'cancelPendingPrintRequest',
+                                     'saveLastPrinter',
+                                    ]);
 
-    /**
-     * Create a handler class with empty methods to allow mocking to register
-     * expectations and for registration of handlers with chrome.send.
-     * @constructor
-     */
-    function MockPrintPreviewHandler() {}
-
-    MockPrintPreviewHandler.prototype = {
-      getDefaultPrinter: function() {},
-      getPrinters: function() {},
-      getPreview: function(settings, draft_page_count, modifiable) {},
-      print: function(settings) {},
-      getPrinterCapabilities: function(printerName) {},
-      showSystemDialog: function() {},
-      morePrinters: function() {},
-      signIn: function() {},
-      addCloudPrinter: function() {},
-      manageCloudPrinters: function() {},
-      manageLocalPrinters: function() {},
-      closePrintPreviewTab: function() {},
-      hidePreview: function() {},
-      cancelPendingPrintRequest: function() {},
-      saveLastPrinter: function(name, cloud_print_data) {},
-    };
-
-    // Create the actual mock and register stubs for methods expected to be
-    // called before tests run.  Specific expectations can be made in the
-    // tests themselves.
-    var mockHandler = this.mockHandler = mock(MockPrintPreviewHandler);
-    mockHandler.stubs().getDefaultPrinter().
+    // Register stubs for methods expected to be called before tests
+    // run. Specific expectations can be made in the tests themselves.
+    this.mockHandler.stubs().getInitialSettings().
         will(callFunction(function() {
           setDefaultPrinter('FooDevice');
         }));
-    mockHandler.stubs().getPrinterCapabilities(NOT_NULL).
+    this.mockHandler.stubs().getPrinterCapabilities(NOT_NULL).
         will(callFunction(function() {
           updateWithPrinterCapabilities({
             disableColorOption: true,
             setColorAsDefault: true,
             disableCopiesOption: true,
+            printerDefaultDuplexValue: copiesSettings.SIMPLEX,
           });
         }));
     var savedArgs = new SaveMockArguments();
-    mockHandler.stubs().getPreview(savedArgs.match(NOT_NULL)).
+    this.mockHandler.stubs().getPreview(savedArgs.match(NOT_NULL)).
         will(callFunctionWithSavedArgs(savedArgs, function(args) {
           updatePrintPreview(1, JSON.parse(args[0]).requestID);
         }));
 
-    mockHandler.stubs().getPrinters().
+    this.mockHandler.stubs().getPrinters().
         will(callFunction(function() {
-          setUseCloudPrint(false, '');
           setPrinters([{
               printerName: 'FooName',
               deviceName: 'FooDevice',
@@ -89,27 +76,11 @@ PrintPreviewWebUITest.prototype = {
           ]);
         }));
 
-    // Register mock as a handler of the chrome.send messages.
-    registerMockMessageCallbacks(mockHandler, MockPrintPreviewHandler);
-
-    /**
-     * Create a class to hold global functions to watch for.
-     * @constructor
-     */
-    function MockGlobals() {}
-
-    MockGlobals.prototype = {
-      updateWithPrinterCapabilities: function(settingInfo) {},
-    };
-
-    var mockGlobals = this.mockGlobals = mock(MockGlobals);
-    mockGlobals.stubs().updateWithPrinterCapabilities(
+    this.makeAndRegisterMockGlobals(['updateWithPrinterCapabilities']);
+    this.mockGlobals.stubs().updateWithPrinterCapabilities(
         savedArgs.match(ANYTHING)).
             will(callGlobalWithSavedArgs(
                 savedArgs, 'updateWithPrinterCapabilities'));
-
-    // Register globals to mock out for us.
-    registerMockGlobals(mockGlobals, MockGlobals);
 
     // Override checkCompatiblePluginExists to return a value consistent with
     // the state being tested and stub out the pdf viewer if it doesn't exist,
@@ -120,7 +91,12 @@ PrintPreviewWebUITest.prototype = {
       if (!this.checkCompatiblePluginExists()) {
         // TODO(scr) remove this after tests pass consistently.
         console.info('no PDF Plugin; providing fake methods.');
-        this.createPDFPlugin = self.createPDFPlugin;
+
+        // Initializing |previewArea| object here because we need to replace a
+        // method.
+        this.previewArea = print_preview.PreviewArea.getInstance();
+        this.previewArea.createOrReloadPDFPlugin =
+            self.createOrReloadPDFPlugin.bind(previewArea);
       }
 
       this.checkCompatiblePluginExists =
@@ -137,15 +113,15 @@ PrintPreviewWebUITest.prototype = {
 
   /**
    * Create the PDF plugin or reload the existing one. This function replaces
-   * createPDFPlugin defined in
-   * chrome/browser/resources/print_preview/print_preview.js when there is no
+   * createOrReloadPDFPlugin defined in
+   * chrome/browser/resources/print_preview/preview_area.js when there is no
    * official pdf plugin so that the WebUI logic can be tested. It creates and
    * attaches an HTMLDivElement to the |mainview| element with attributes and
    * empty methods, which are used by testing and that would be provided by the
    * HTMLEmbedElement when the PDF plugin exists.
    * @param {number} srcDataIndex Preview data source index.
    */
-  createPDFPlugin: function(srcDataIndex) {
+  createOrReloadPDFPlugin: function(srcDataIndex) {
     var pdfViewer = $('pdf-viewer');
     if (pdfViewer)
       return;
@@ -166,7 +142,22 @@ PrintPreviewWebUITest.prototype = {
     pdfViewer.removePrintButton = fakeFunction;
     pdfViewer.fitToHeight = fakeFunction;
     pdfViewer.grayscale = fakeFunction;
+    pdfViewer.getZoomLevel = fakeFunction;
+    pdfViewer.setZoomLevel = fakeFunction;
+    pdfViewer.pageXOffset = fakeFunction;
+    pdfViewer.pageYOffset = fakeFunction;
+    pdfViewer.setPageNumbers = fakeFunction;
+    pdfViewer.setPageXOffset = fakeFunction;
+    pdfViewer.setPageYOffset = fakeFunction;
+    pdfViewer.getHeight = fakeFunction;
+    pdfViewer.getWidth = fakeFunction;
+    pdfViewer.getPageLocationNormalized = fakeFunction;
+    pdfViewer.onScroll = fakeFunction;
+    pdfViewer.onPluginSizeChanged = fakeFunction;
+    pdfViewer.getHorizontalScrollbarThickness = fakeFunction;
+    pdfViewer.getVerticalScrollbarThickness = fakeFunction;
     $('mainview').appendChild(pdfViewer);
+    this.pdfPlugin_ = pdfViewer;
     onPDFLoad();
   },
 
@@ -179,21 +170,7 @@ PrintPreviewWebUITest.prototype = {
   },
 };
 
-GEN('#include "base/command_line.h"');
-GEN('#include "chrome/browser/ui/webui/web_ui_browsertest.h"');
-GEN('#include "chrome/common/chrome_switches.h"');
-GEN('');
-GEN('class PrintPreviewWebUITest');
-GEN('    : public WebUIBrowserTest {');
-GEN(' protected:');
-GEN('  // WebUIBrowserTest override.');
-GEN('  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {');
-GEN('    WebUIBrowserTest::SetUpCommandLine(command_line);');
-GEN('    command_line->AppendSwitch(switches::kEnablePrintPreview);');
-GEN('  }');
-GEN('');
-GEN('};');
-GEN('');
+GEN('#include "chrome/test/data/webui/print_preview.h"');
 
 /**
  * The expected length of the |printer-list| element.
@@ -234,48 +211,32 @@ TEST_F('PrintPreviewWebUITest', 'TestPrinterList', function() {
 
 // Test that the printer list is structured correctly after calling
 // addCloudPrinters with an empty list.
-TEST_F('PrintPreviewWebUITest', 'FLAKY_TestPrinterListCloudEmpty', function() {
-  addCloudPrinters([]);
+TEST_F('PrintPreviewWebUITest', 'TestPrinterListCloudEmpty', function() {
+  cloudprint.addCloudPrinters([], addDestinationListOptionAtPosition);
   var printerList = $('printer-list');
   assertNotEquals(null, printerList);
-  expectEquals(localStrings.getString('cloudPrinters'),
-               printerList.options[0].text);
-  expectEquals(localStrings.getString('addCloudPrinter'),
-               printerList.options[1].text);
-});
-
-// Test that the printer list is structured correctly after calling
-// addCloudPrinters with a null list.
-TEST_F('PrintPreviewWebUITest', 'FLAKY_TestPrinterListCloudNull', function() {
-  addCloudPrinters(null);
-  var printerList = $('printer-list');
-  assertNotEquals(null, printerList);
-  expectEquals(localStrings.getString('cloudPrinters'),
-               printerList.options[0].text);
-  expectEquals(localStrings.getString('signIn'),
-               printerList.options[1].text);
 });
 
 // Test that the printer list is structured correctly after attempting to add
 // individual cloud printers until no more can be added.
-TEST_F('PrintPreviewWebUITest', 'FLAKY_TestPrinterListCloud', function() {
+TEST_F('PrintPreviewWebUITest', 'TestPrinterListCloud', function() {
   var printerList = $('printer-list');
   assertNotEquals(null, printerList);
   var printer = new Object;
   printer['name'] = 'FooCloud';
   for (var i = 0; i < maxCloudPrinters; i++) {
     printer['id'] = String(i);
-    addCloudPrinters([printer]);
-    expectEquals(localStrings.getString('cloudPrinters'),
-                 printerList.options[0].text);
-    expectEquals('FooCloud', printerList.options[i + 1].text);
-    expectEquals(String(i), printerList.options[i + 1].value);
+    cloudprint.addCloudPrinters([printer], addDestinationListOptionAtPosition);
+    expectEquals('FooCloud', printerList.options[i].text);
+    expectEquals(String(i), printerList.options[i].value);
   }
-  printer['id'] = maxCloudPrinters + 1;
-  addCloudPrinters([printer]);
-  expectEquals('', printerList.options[maxCloudPrinters + 1].text);
-  expectEquals(localStrings.getString('morePrinters'),
-               printerList.options[maxCloudPrinters + 2].text);
+  cloudprint.addCloudPrinters([printer], addDestinationListOptionAtPosition);
+  expectNotEquals('FooCloud', printerList.options[i].text);
+  expectNotEquals(String(i), printerList.options[i].value);
+  for (var i = 0; i < maxCloudPrinters; i++) {
+    expectEquals('FooCloud', printerList.options[i].text);
+    expectEquals(String(i), printerList.options[i].value);
+  }
 });
 
 /**
@@ -298,6 +259,7 @@ TEST_F('PrintPreviewWebUITest', 'TestSectionsDisabled', function() {
           setColorAsDefault: true,
           disableCopiesOption: true,
           disableLandscapeOption: true,
+          printerDefaultDuplexValue: copiesSettings.SIMPLEX,
         });
       }));
 
@@ -317,6 +279,7 @@ TEST_F('PrintPreviewWebUITest', 'TestColorSettings', function() {
           setColorAsDefault: true,
           disableCopiesOption: false,
           disableLandscapeOption: false,
+          printerDefaultDuplexValue: copiesSettings.SIMPLEX,
         });
       }));
 
@@ -331,12 +294,63 @@ TEST_F('PrintPreviewWebUITest', 'TestColorSettings', function() {
           setColorAsDefault: false,
           disableCopiesOption: false,
           disableLandscapeOption: false,
+          printerDefaultDuplexValue: copiesSettings.SIMPLEX,
         });
       }));
 
   updateControlsWithSelectedPrinterCapabilities();
   expectFalse(colorSettings.colorRadioButton.checked);
   expectTrue(colorSettings.bwRadioButton.checked);
+});
+
+// Test to verify that duplex settings are set according to the printer
+// capabilities.
+TEST_F('PrintPreviewWebUITest', 'TestDuplexSettings', function() {
+  this.mockHandler.expects(once()).getPrinterCapabilities('FooDevice').
+      will(callFunction(function() {
+        updateWithPrinterCapabilities({
+          disableColorOption: false,
+          setColorAsDefault: false,
+          disableCopiesOption: false,
+          disableLandscapeOption: false,
+          printerDefaultDuplexValue: copiesSettings.SIMPLEX,
+        });
+      }));
+  updateControlsWithSelectedPrinterCapabilities();
+  expectEquals(copiesSettings.duplexMode, copiesSettings.SIMPLEX);
+  expectEquals(copiesSettings.twoSidedOption_.hidden, false);
+
+  // If the printer default duplex value is UNKNOWN_DUPLEX_MODE, hide the
+  // two sided option.
+  this.mockHandler.expects(once()).getPrinterCapabilities('FooDevice').
+      will(callFunction(function() {
+        updateWithPrinterCapabilities({
+          disableColorOption: false,
+          setColorAsDefault: false,
+          disableCopiesOption: false,
+          disableLandscapeOption: false,
+          printerDefaultDuplexValue: copiesSettings.UNKNOWN_DUPLEX_MODE,
+        });
+      }));
+  updateControlsWithSelectedPrinterCapabilities();
+  expectEquals(copiesSettings.duplexMode, copiesSettings.UNKNOWN_DUPLEX_MODE);
+  expectEquals(copiesSettings.twoSidedOption_.hidden, true);
+
+  this.mockHandler.expects(once()).getPrinterCapabilities('FooDevice').
+      will(callFunction(function() {
+        updateWithPrinterCapabilities({
+          disableColorOption: false,
+          setColorAsDefault: false,
+          disableCopiesOption: false,
+          disableLandscapeOption: false,
+          printerDefaultDuplexValue: copiesSettings.SIMPLEX,
+        });
+      }));
+  updateControlsWithSelectedPrinterCapabilities();
+  expectEquals(copiesSettings.twoSidedOption_.hidden, false);
+  expectEquals(copiesSettings.duplexMode, copiesSettings.SIMPLEX);
+  copiesSettings.twoSidedCheckbox.checked = true;
+  expectEquals(copiesSettings.duplexMode, copiesSettings.LONG_EDGE);
 });
 
 // Test that changing the selected printer updates the preview.
@@ -395,7 +409,7 @@ TEST_F('PrintPreviewNoPDFWebUITest', 'TestErrorMessage', function() {
   var errorButton = $('error-button');
   assertNotEquals(null, errorButton);
   expectFalse(errorButton.disabled);
-  var errorText = $('error-text');
+  var errorText = $('custom-message');
   assertNotEquals(null, errorText);
-  expectFalse(errorText.classList.contains('hidden'));
+  expectFalse(errorText.hidden);
 });

@@ -1,9 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/custom_home_pages_table_model.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/prefs/pref_service.h"
@@ -12,7 +14,7 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/web_contents.h"
 #include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/ui_resources.h"
@@ -169,11 +171,15 @@ void CustomHomePagesTableModel::SetToCurrentlyOpenPages() {
       continue;  // Skip incognito browsers.
 
     for (int tab_index = 0; tab_index < browser->tab_count(); ++tab_index) {
-      const GURL url = browser->GetTabContentsAt(tab_index)->GetURL();
+      const GURL url = browser->GetWebContentsAt(tab_index)->GetURL();
+      // TODO(tbreisacher) remove kChromeUISettingsHost  once options is deleted
+      // and replaced by options2
       if (!url.is_empty() &&
           !(url.SchemeIs(chrome::kChromeUIScheme) &&
-            url.host() == chrome::kChromeUISettingsHost))
+            (url.host() == chrome::kChromeUISettingsHost ||
+             url.host() == chrome::kChromeUIUberHost))) {
         Add(add_index++, url);
+      }
     }
   }
 }
@@ -216,14 +222,16 @@ void CustomHomePagesTableModel::LoadTitleAndFavicon(Entry* entry) {
   if (history_service) {
     entry->title_handle = history_service->QueryURL(entry->url, false,
         &history_query_consumer_,
-        NewCallback(this, &CustomHomePagesTableModel::OnGotTitle));
+        base::Bind(&CustomHomePagesTableModel::OnGotTitle,
+                   base::Unretained(this)));
   }
   FaviconService* favicon_service =
       profile_->GetFaviconService(Profile::EXPLICIT_ACCESS);
   if (favicon_service) {
     entry->favicon_handle = favicon_service->GetFaviconForURL(entry->url,
         history::FAVICON, &favicon_query_consumer_,
-        NewCallback(this, &CustomHomePagesTableModel::OnGotFavicon));
+        base::Bind(&CustomHomePagesTableModel::OnGotFavicon,
+                   base::Unretained(this)));
   }
 }
 

@@ -23,8 +23,10 @@ message ClientPhishingRequest {
   // A 5-byte SHA-256 hash prefix of the URL.  Before hashing the URL is
   // canonicalized, converted to a suffix-prefix expression and broadened
   // (www prefix is removed and everything past the last '/' is stripped).
-  // Unlike "url", this is sent for all users.
-  optional bytes hash_prefix = 10;
+  //
+  // Marked OBSOLETE because the URL is sent for all users, making the hash
+  // prefix unnecessary.
+  optional bytes OBSOLETE_hash_prefix = 10;
 
   // Score that was computed on the client.  Value is between 0.0 and 1.0.
   // The larger the value the more likely the url is phishing.
@@ -77,5 +79,93 @@ message ClientPhishingResponse {
   // expressions.  This whitelist will be empty for the vast majority
   // of the responses but might contain up to 100 entries in emergency
   // situations.
-  repeated string whitelist_expression = 2;
+  //
+  // Marked OBSOLETE because the URL is sent for all users, so the server
+  // can do whitelist matching.
+  repeated string OBSOLETE_whitelist_expression = 2;
+}
+
+message ClientDownloadRequest {
+  // The final URL of the download (after all redirects).
+  required string url = 1;
+
+  // This message contains various binary digests of the download payload.
+  message Digests {
+    optional bytes sha256 = 1;
+    optional bytes sha1 = 2;
+    optional bytes md5 = 3;
+  }
+  required Digests digests = 2;
+
+  // This is the length in bytes of the download payload.
+  required int64 length = 3;
+
+  // Type of the resources stored below.
+  enum ResourceType {
+    // The final URL of the download payload.  The resource URL should
+    // correspond to the URL field above.
+    DOWNLOAD_URL = 0;
+    // A redirect URL that was fetched before hitting the final DOWNLOAD_URL.
+    DOWNLOAD_REDIRECT = 1;
+    // The final top-level URL of the tab that triggered the download.
+    TAB_URL = 2;
+    // A redirect URL thas was fetched before hitting the final TAB_URL.
+    TAB_REDIRECT = 3;
+  }
+
+  message Resource {
+    required string url = 1;
+    required ResourceType type = 2;
+    optional bytes remote_ip = 3;
+    // This will only be set if the referrer is available and if the
+    // resource type is either TAB_URL or DOWNLOAD_URL.
+    optional string referrer = 4;
+
+    // TODO(noelutz): add the transition type?
+  }
+
+  // This repeated field will store all the redirects as well as the
+  // final URLs for the top-level tab URL (i.e., the URL that
+  // triggered the download) as well as for the download URL itself.
+  repeated Resource resources = 4;
+
+  // A trust chain of certificates.  Each chain begins with the signing
+  // certificate of the binary, and ends with a self-signed certificate,
+  // typically from a trusted root CA.  This structure is analogous to
+  // CERT_CHAIN_CONTEXT on Windows.
+  message CertificateChain {
+    // A single link in the chain.
+    message Element {
+      // DER-encoded X.509 representation of the certificate.
+      optional bytes certificate = 1;
+    }
+    repeated Element element = 1;
+  }
+
+  message SignatureInfo {
+    // All of the certificate chains for the binary's signing certificate.
+    // If no chains are present, the binary is not signed.  Multiple chains
+    // may be present if any certificate has multiple signers.
+    repeated CertificateChain certificate_chain = 1;
+
+    // True if the signature was trusted on the client.
+    optional bool trusted = 2;
+  }
+
+  // This field will only be set if the binary is signed.
+  optional SignatureInfo signature = 5;
+
+  // True if the download was user initiated.
+  optional bool user_initiated = 6;
+}
+
+message ClientDownloadResponse {
+  enum Verdict {
+    // Download is considered safe.
+    SAFE = 0;
+    // Download is considered dangerous.  Chrome should show a warning to the
+    // user.
+    DANGEROUS = 1;
+  }
+  required Verdict verdict = 1;
 }

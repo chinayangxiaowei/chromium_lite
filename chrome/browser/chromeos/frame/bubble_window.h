@@ -6,37 +6,29 @@
 #define CHROME_BROWSER_CHROMEOS_FRAME_BUBBLE_WINDOW_H_
 #pragma once
 
-#include "chrome/browser/chromeos/frame/bubble_window_style.h"
-#include "third_party/skia/include/core/SkColor.h"
-#include "views/widget/native_widget_gtk.h"
-
-namespace views {
-class WidgetDelegate;
-}
+#include "chrome/browser/ui/dialog_style.h"
+#include "ui/views/widget/widget.h"
 
 namespace chromeos {
 
+extern const SkColor kBubbleWindowBackgroundColor;
+
 // A window that uses BubbleFrameView as its frame.
-class BubbleWindow : public views::NativeWidgetGtk {
+class BubbleWindow : public views::Widget {
  public:
   static views::Widget* Create(gfx::NativeWindow parent,
-                               BubbleWindowStyle style,
+                               DialogStyle style,
                                views::WidgetDelegate* widget_delegate);
 
- protected:
-  BubbleWindow(views::Widget* window, BubbleWindowStyle style);
+  virtual ~BubbleWindow();
 
-  // Overridden from views::NativeWidgetGtk:
-  virtual void InitNativeWidget(
-      const views::Widget::InitParams& params) OVERRIDE;
+  // Overridden from views::Widget:
   virtual views::NonClientFrameView* CreateNonClientFrameView() OVERRIDE;
 
-  // Trims the window margins and rounds off the corners.
-  void TrimMargins(int margin_left, int margin_right, int margin_top,
-                   int margin_bottom, int border_radius);
-
  private:
-  BubbleWindowStyle style_;
+  explicit BubbleWindow(DialogStyle style);
+
+  DialogStyle style_;
 
   DISALLOW_COPY_AND_ASSIGN(BubbleWindow);
 };

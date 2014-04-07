@@ -8,16 +8,20 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/memory/ref_counted_memory.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/icon_messages.h"
-#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/public/browser/favicon_status.h"
+#include "content/public/browser/navigation_entry.h"
 #include "skia/ext/image_operations.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_util.h"
+
+using content::NavigationEntry;
 
 namespace {
 
@@ -48,14 +52,16 @@ bool DoUrlAndIconMatch(const FaviconURL& favicon_url,
 }  // namespace
 
 FaviconHandler::DownloadRequest::DownloadRequest()
-    : callback(NULL),
-      icon_type(history::INVALID_ICON) {
+    : icon_type(history::INVALID_ICON) {
+}
+
+FaviconHandler::DownloadRequest::~DownloadRequest() {
 }
 
 FaviconHandler::DownloadRequest::DownloadRequest(
     const GURL& url,
     const GURL& image_url,
-    FaviconTabHelper::ImageDownloadCallback* callback,
+    const FaviconTabHelper::ImageDownloadCallback& callback,
     history::IconType icon_type)
     : url(url),
       image_url(image_url),
@@ -81,8 +87,8 @@ FaviconHandler::~FaviconHandler() {
   // Call pending download callbacks with error to allow caller to clean up.
   for (DownloadRequests::iterator i = download_requests_.begin();
        i != download_requests_.end(); ++i) {
-    if (i->second.callback) {
-      i->second.callback->Run(i->first, true, SkBitmap());
+    if (!i->second.callback.is_null()) {
+      i->second.callback.Run(i->first, true, SkBitmap());
     }
   }
 }
@@ -101,7 +107,8 @@ void FaviconHandler::FetchFavicon(const GURL& url) {
   // available.
   if (GetFaviconService()) {
     GetFaviconForURL(url_, icon_types_, &cancelable_consumer_,
-        NewCallback(this, &FaviconHandler::OnFaviconDataForInitialURL));
+        base::Bind(&FaviconHandler::OnFaviconDataForInitialURL,
+                   base::Unretained(this)));
   }
 }
 
@@ -109,8 +116,7 @@ int FaviconHandler::DownloadImage(
     const GURL& image_url,
     int image_size,
     history::IconType icon_type,
-    FaviconTabHelper::ImageDownloadCallback* callback) {
-  DCHECK(callback);  // Must provide a callback.
+    const FaviconTabHelper::ImageDownloadCallback& callback) {
   return ScheduleDownload(GURL(), image_url, image_size, icon_type, callback);
 }
 
@@ -143,7 +149,7 @@ void FaviconHandler::SetFavicon(
 }
 
 void FaviconHandler::UpdateFavicon(NavigationEntry* entry,
-                                  scoped_refptr<RefCountedMemory> data) {
+                                   scoped_refptr<RefCountedMemory> data) {
   scoped_ptr<gfx::Image> image(gfx::ImageFromPNGEncodedData(data->front(),
                                                             data->size()));
   UpdateFavicon(entry, image.get());
@@ -152,12 +158,12 @@ void FaviconHandler::UpdateFavicon(NavigationEntry* entry,
 void FaviconHandler::UpdateFavicon(NavigationEntry* entry,
                                    const gfx::Image* image) {
   // No matter what happens, we need to mark the favicon as being set.
-  entry->favicon().set_is_valid(true);
+  entry->GetFavicon().valid = true;
 
   if (!image)
     return;
 
-  entry->favicon().set_bitmap(*image);
+  entry->GetFavicon().bitmap = *image;
   delegate_->NotifyFaviconUpdated();
 }
 
@@ -192,12 +198,12 @@ void FaviconHandler::OnUpdateFaviconURL(
 
   // For FAVICON.
   if (current_candidate()->icon_type == FaviconURL::FAVICON) {
-    if (!favicon_expired_ && entry->favicon().is_valid() &&
-        DoUrlAndIconMatch(*current_candidate(), entry->favicon().url(),
+    if (!favicon_expired_ && entry->GetFavicon().valid &&
+        DoUrlAndIconMatch(*current_candidate(), entry->GetFavicon().url,
                           history::FAVICON))
       return;
 
-    entry->favicon().set_url(current_candidate()->icon_url);
+    entry->GetFavicon().url = current_candidate()->icon_url;
   } else if (!favicon_expired_ && got_favicon_from_history_ &&
               history_icon_.is_valid() &&
               DoUrlAndIconMatch(
@@ -207,7 +213,7 @@ void FaviconHandler::OnUpdateFaviconURL(
   }
 
   if (got_favicon_from_history_)
-    DownloadFaviconOrAskHistory(entry->url(), current_candidate()->icon_url,
+    DownloadFaviconOrAskHistory(entry->GetURL(), current_candidate()->icon_url,
         ToHistoryIconType(current_candidate()->icon_type));
 }
 
@@ -222,8 +228,8 @@ void FaviconHandler::OnDidDownloadFavicon(int id,
     return;
   }
 
-  if (i->second.callback) {
-    i->second.callback->Run(id, errored, *(&image));
+  if (!i->second.callback.is_null()) {
+    i->second.callback.Run(id, errored, *(&image));
   } else if (current_candidate() &&
              DoUrlAndIconMatch(*current_candidate(), image_url,
                                i->second.icon_type)) {
@@ -243,7 +249,7 @@ void FaviconHandler::OnDidDownloadFavicon(int id,
 
 NavigationEntry* FaviconHandler::GetEntry() {
   NavigationEntry* entry = delegate_->GetActiveEntry();
-  if (entry && entry->url() == url_)
+  if (entry && entry->GetURL() == url_)
     return entry;
 
   // If the URL has changed out from under us (as will happen with redirects)
@@ -267,7 +273,7 @@ void FaviconHandler::UpdateFaviconMappingAndFetch(
     const GURL& icon_url,
     history::IconType icon_type,
     CancelableRequestConsumerBase* consumer,
-    FaviconService::FaviconDataCallback* callback) {
+    const FaviconService::FaviconDataCallback& callback) {
   GetFaviconService()->UpdateFaviconMappingAndFetch(page_url, icon_url,
       icon_type, consumer, callback);
 }
@@ -276,7 +282,7 @@ void FaviconHandler::GetFavicon(
     const GURL& icon_url,
     history::IconType icon_type,
     CancelableRequestConsumerBase* consumer,
-    FaviconService::FaviconDataCallback* callback) {
+    const FaviconService::FaviconDataCallback& callback) {
   GetFaviconService()->GetFavicon(icon_url, icon_type, consumer, callback);
 }
 
@@ -284,7 +290,7 @@ void FaviconHandler::GetFaviconForURL(
     const GURL& page_url,
     int icon_types,
     CancelableRequestConsumerBase* consumer,
-    FaviconService::FaviconDataCallback* callback) {
+    const FaviconService::FaviconDataCallback& callback) {
   GetFaviconService()->GetFaviconForURL(page_url, icon_types, consumer,
                                         callback);
 }
@@ -319,7 +325,7 @@ void FaviconHandler::OnFaviconDataForInitialURL(
   favicon_expired_ = (favicon.known_icon && favicon.expired);
 
   if (favicon.known_icon && favicon.icon_type == history::FAVICON &&
-      !entry->favicon().is_valid() &&
+      !entry->GetFavicon().valid &&
       (!current_candidate() ||
        DoUrlAndIconMatch(
            *current_candidate(), favicon.icon_url, favicon.icon_type))) {
@@ -327,10 +333,10 @@ void FaviconHandler::OnFaviconDataForInitialURL(
     // doesn't have an icon. Set the favicon now, and if the favicon turns out
     // to be expired (or the wrong url) we'll fetch later on. This way the
     // user doesn't see a flash of the default favicon.
-    entry->favicon().set_url(favicon.icon_url);
+    entry->GetFavicon().url = favicon.icon_url;
     if (favicon.is_valid())
       UpdateFavicon(entry, favicon.image_data);
-    entry->favicon().set_is_valid(true);
+    entry->GetFavicon().valid = true;
   }
 
   if (favicon.known_icon && !favicon.expired) {
@@ -340,14 +346,15 @@ void FaviconHandler::OnFaviconDataForInitialURL(
       // Mapping in the database is wrong. DownloadFavIconOrAskHistory will
       // update the mapping for this url and download the favicon if we don't
       // already have it.
-      DownloadFaviconOrAskHistory(entry->url(), current_candidate()->icon_url,
+      DownloadFaviconOrAskHistory(entry->GetURL(),
+          current_candidate()->icon_url,
           static_cast<history::IconType>(current_candidate()->icon_type));
     }
   } else if (current_candidate()) {
     // We know the official url for the favicon, by either don't have the
     // favicon or its expired. Continue on to DownloadFaviconOrAskHistory to
     // either download or check history again.
-    DownloadFaviconOrAskHistory(entry->url(), current_candidate()->icon_url,
+    DownloadFaviconOrAskHistory(entry->GetURL(), current_candidate()->icon_url,
         ToHistoryIconType(current_candidate()->icon_type));
   }
   // else we haven't got the icon url. When we get it we'll ask the
@@ -361,14 +368,14 @@ void FaviconHandler::DownloadFaviconOrAskHistory(
   if (favicon_expired_) {
     // We have the mapping, but the favicon is out of date. Download it now.
     ScheduleDownload(page_url, icon_url, preferred_icon_size(), icon_type,
-                     NULL);
+                     FaviconTabHelper::ImageDownloadCallback());
   } else if (GetFaviconService()) {
     // We don't know the favicon, but we may have previously downloaded the
     // favicon for another page that shares the same favicon. Ask for the
     // favicon given the favicon URL.
     if (profile_->IsOffTheRecord()) {
       GetFavicon(icon_url, icon_type, &cancelable_consumer_,
-          NewCallback(this, &FaviconHandler::OnFaviconData));
+          base::Bind(&FaviconHandler::OnFaviconData, base::Unretained(this)));
     } else {
       // Ask the history service for the icon. This does two things:
       // 1. Attempts to fetch the favicon data from the database.
@@ -378,7 +385,7 @@ void FaviconHandler::DownloadFaviconOrAskHistory(
       // Issue the request and associate the current page ID with it.
       UpdateFaviconMappingAndFetch(page_url, icon_url, icon_type,
           &cancelable_consumer_,
-          NewCallback(this, &FaviconHandler::OnFaviconData));
+          base::Bind(&FaviconHandler::OnFaviconData, base::Unretained(this)));
     }
   }
 }
@@ -401,18 +408,20 @@ void FaviconHandler::OnFaviconData(FaviconService::Handle handle,
     if (!favicon.known_icon || favicon.expired) {
       // We don't know the favicon, or it is out of date. Request the current
       // one.
-      ScheduleDownload(entry->url(), entry->favicon().url(),
+      ScheduleDownload(entry->GetURL(), entry->GetFavicon().url,
                        preferred_icon_size(),
-                       history::FAVICON, NULL);
+                       history::FAVICON,
+                       FaviconTabHelper::ImageDownloadCallback());
     }
   } else if (current_candidate() && (!favicon.known_icon || favicon.expired ||
       !(DoUrlAndIconMatch(
             *current_candidate(), favicon.icon_url, favicon.icon_type)))) {
     // We don't know the favicon, it is out of date or its type is not same as
     // one got from page. Request the current one.
-    ScheduleDownload(entry->url(), current_candidate()->icon_url,
+    ScheduleDownload(entry->GetURL(), current_candidate()->icon_url,
         preferred_icon_size(),
-        ToHistoryIconType(current_candidate()->icon_type), NULL);
+        ToHistoryIconType(current_candidate()->icon_type),
+        FaviconTabHelper::ImageDownloadCallback());
   }
   history_icon_ = favicon;
 }
@@ -422,7 +431,7 @@ int FaviconHandler::ScheduleDownload(
     const GURL& image_url,
     int image_size,
     history::IconType icon_type,
-    FaviconTabHelper::ImageDownloadCallback* callback) {
+    const FaviconTabHelper::ImageDownloadCallback& callback) {
   const int download_id = DownloadFavicon(image_url, image_size);
   if (download_id) {
     // Download ids should be unique.
@@ -440,7 +449,7 @@ gfx::Image FaviconHandler::ResizeFaviconIfNeeded(const gfx::Image& image) {
   int width = bitmap.width();
   int height = bitmap.height();
   if (width > 0 && height > 0) {
-    calc_favicon_target_size(&width, &height);
+    gfx::CalculateFaviconTargetSize(&width, &height);
     return gfx::Image(new SkBitmap(
                           skia::ImageOperations::Resize(
                               bitmap, skia::ImageOperations::RESIZE_LANCZOS3,

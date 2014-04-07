@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,24 +15,29 @@
 
 #include "ppapi/c/pp_instance.h"
 #include "ppapi/c/pp_module.h"
+#include "ppapi/c/pp_size.h"
+#include "ppapi/c/pp_rect.h"
 #include "ppapi/c/pp_var.h"
+#include "ppapi/c/ppb_core.h"
+#include "ppapi/c/ppb_graphics_2d.h"
+#include "ppapi/c/ppb_image_data.h"
 #include "ppapi/c/ppb_instance.h"
 #include "ppapi/c/ppb_messaging.h"
 #include "ppapi/c/ppb_var.h"
+#include "ppapi/c/dev/ppb_testing_dev.h"
 
 void PostTestMessage(nacl::string test_name, nacl::string message) {
   nacl::string test_message = test_name;
   test_message += ":";
   test_message += message;
-  PP_Var post_var = PPBVar()->VarFromUtf8(pp_instance(),
-                                          test_message.c_str(),
+  PP_Var post_var = PPBVar()->VarFromUtf8(test_message.c_str(),
                                           test_message.size());
   PPBMessaging()->PostMessage(pp_instance(), post_var);
   PPBVar()->Release(post_var);
 }
 
 PP_Var PP_MakeString(const char* s) {
-  return PPBVar()->VarFromUtf8(pp_module(), s, strlen(s));
+  return PPBVar()->VarFromUtf8(s, strlen(s));
 }
 
 nacl::string StringifyVar(const PP_Var& var) {
@@ -114,8 +119,7 @@ struct CallbackInfo {
 };
 
 void ReportCallbackInvocationToJS(const char* callback_name) {
-  PP_Var callback_var = PPBVar()->VarFromUtf8(pp_module(),
-                                              callback_name,
+  PP_Var callback_var = PPBVar()->VarFromUtf8(callback_name,
                                               strlen(callback_name));
   // Report using postmessage for async tests.
   PPBMessaging()->PostMessage(pp_instance(), callback_var);
@@ -151,4 +155,83 @@ PP_CompletionCallback MakeTestableCompletionCallback(
     const char* callback_name,  // Tested for by JS harness.
     PP_CompletionCallback_Func func) {
   return MakeTestableCompletionCallback(callback_name, func, NULL);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// PPAPI Helpers
+////////////////////////////////////////////////////////////////////////////////
+
+bool IsSizeInRange(PP_Size size, PP_Size min_size, PP_Size max_size) {
+  return (min_size.width <= size.width && size.width <= max_size.width &&
+          min_size.height <= size.height && size.height <= max_size.height);
+}
+
+bool IsSizeEqual(PP_Size size, PP_Size expected) {
+  return (size.width == expected.width && size.height == expected.height);
+}
+
+bool IsRectEqual(PP_Rect position, PP_Rect expected) {
+  return (position.point.x == expected.point.x &&
+          position.point.y == expected.point.y &&
+          IsSizeEqual(position.size, expected.size));
+}
+
+uint32_t FormatColor(PP_ImageDataFormat format, ColorPremul color) {
+  if (format == PP_IMAGEDATAFORMAT_BGRA_PREMUL)
+    return (color.A << 24) | (color.R << 16) | (color.G << 8) | (color.B);
+  else if (format == PP_IMAGEDATAFORMAT_RGBA_PREMUL)
+    return (color.A << 24) | (color.B << 16) | (color.G << 8) | (color.R);
+  else
+    NACL_NOTREACHED();
+}
+
+PP_Resource CreateImageData(PP_Size size, ColorPremul pixel_color, void** bmp) {
+  PP_ImageDataFormat image_format = PPBImageData()->GetNativeImageDataFormat();
+  uint32_t formatted_pixel_color = FormatColor(image_format, pixel_color);
+  PP_Resource image_data = PPBImageData()->Create(
+      pp_instance(), image_format, &size, PP_TRUE /*init_to_zero*/);
+  CHECK(image_data != kInvalidResource);
+  PP_ImageDataDesc image_desc;
+  CHECK(PPBImageData()->Describe(image_data, &image_desc) == PP_TRUE);
+  *bmp = NULL;
+  *bmp = PPBImageData()->Map(image_data);
+  CHECK(*bmp != NULL);
+  uint32_t* bmp_words = static_cast<uint32_t*>(*bmp);
+  int num_pixels = image_desc.stride / kBytesPerPixel * image_desc.size.height;
+  for (int i = 0; i < num_pixels; i++)
+    bmp_words[i] = formatted_pixel_color;
+  return image_data;
+}
+
+bool IsImageRectOnScreen(PP_Resource graphics2d,
+                         PP_Point origin,
+                         PP_Size size,
+                         ColorPremul color) {
+  PP_Size size2d;
+  PP_Bool dummy;
+  CHECK(PP_TRUE == PPBGraphics2D()->Describe(graphics2d, &size2d, &dummy));
+
+  void* bitmap = NULL;
+  PP_Resource image = CreateImageData(size2d, kOpaqueBlack, &bitmap);
+
+  PP_ImageDataDesc image_desc;
+  CHECK(PP_TRUE == PPBImageData()->Describe(image, &image_desc));
+  int32_t stride = image_desc.stride / kBytesPerPixel;  // width + padding.
+  uint32_t expected_color = FormatColor(image_desc.format, color);
+  CHECK(origin.x >= 0 && origin.y >= 0 &&
+        (origin.x + size.width) <= stride &&
+        (origin.y + size.height) <= image_desc.size.height);
+
+  CHECK(PP_TRUE == PPBTestingDev()->ReadImageData(graphics2d, image, &kOrigin));
+  bool found_error = false;
+  for (int y = origin.y; y < origin.y + size.height && !found_error; y++) {
+    for (int x = origin.x; x < origin.x + size.width && !found_error; x++) {
+      uint32_t pixel_color = static_cast<uint32_t*>(bitmap)[stride * y + x];
+      found_error = (pixel_color != expected_color);
+    }
+  }
+
+  PPBCore()->ReleaseResource(image);
+  return !found_error;
 }

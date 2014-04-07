@@ -107,8 +107,13 @@ private:
   scoped_ptr<MessageLoopForIO> message_loop_;
 };
 
+#if defined(OS_ANDROID)
+const char IPCChannelPosixTest::kConnectionSocketTestName[] =
+    "/data/local/chrome_IPCChannelPosixTest__ConnectionSocket";
+#else
 const char IPCChannelPosixTest::kConnectionSocketTestName[] =
     "/var/tmp/chrome_IPCChannelPosixTest__ConnectionSocket";
+#endif
 
 void IPCChannelPosixTest::SetUp() {
   MultiProcessTest::SetUp();
@@ -172,13 +177,19 @@ void IPCChannelPosixTest::SpinRunLoop(int milliseconds) {
   // in the case of a bad test. Usually, the run loop will quit sooner than
   // that because all tests use a IPCChannelPosixTestListener which quits the
   // current run loop on any channel activity.
-  loop->PostDelayedTask(FROM_HERE, new MessageLoop::QuitTask(), milliseconds);
+  loop->PostDelayedTask(FROM_HERE, MessageLoop::QuitClosure(), milliseconds);
   loop->Run();
 }
 
 TEST_F(IPCChannelPosixTest, BasicListen) {
+
+#if defined(OS_ANDROID)
+  const char* kChannelName = "/data/local/IPCChannelPosixTest_BasicListen";
+#else
+  const char* kChannelName = "/var/tmp/IPCChannelPosixTest_BasicListen";
+#endif
   // Test creating a socket that is listening.
-  IPC::ChannelHandle handle("/var/tmp/IPCChannelPosixTest_BasicListen");
+  IPC::ChannelHandle handle(kChannelName);
   SetUpSocket(&handle, IPC::Channel::MODE_NAMED_SERVER);
   unlink(handle.name.c_str());
   IPC::Channel channel(handle, IPC::Channel::MODE_NAMED_SERVER, NULL);
@@ -404,4 +415,3 @@ MULTIPROCESS_TEST_MAIN(IPCChannelPosixFailConnectionProc) {
   }
   return 0;
 }
-

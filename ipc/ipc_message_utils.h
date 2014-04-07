@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -94,6 +94,11 @@ enum IPCMessageStart {
   ChromeUtilityMsgStart,
   MediaStreamMsgStart,
   ChromePluginMsgStart,
+  ChromeBenchmarkingMsgStart,
+  IntentsMsgStart,
+  JavaBridgeMsgStart,
+  GamepadMsgStart,
+  ShellMsgStart,
   LastIPCMsgStart      // Must come last.
 };
 
@@ -492,6 +497,37 @@ struct ParamTraits<std::vector<char> > {
   }
   static void Log(const param_type& p, std::string* l) {
     LogBytes(p, l);
+  }
+};
+
+template <>
+struct ParamTraits<std::vector<bool> > {
+  typedef std::vector<bool> param_type;
+  static void Write(Message* m, const param_type& p) {
+    WriteParam(m, static_cast<int>(p.size()));
+    for (size_t i = 0; i < p.size(); i++)
+      WriteParam(m, p[i]);
+  }
+  static bool Read(const Message* m, void** iter, param_type* r) {
+    int size;
+    // ReadLength() checks for < 0 itself.
+    if (!m->ReadLength(iter, &size))
+      return false;
+    r->resize(size);
+    for (int i = 0; i < size; i++) {
+      bool value;
+      if (!ReadParam(m, iter, &value))
+        return false;
+      (*r)[i] = value;
+    }
+    return true;
+  }
+  static void Log(const param_type& p, std::string* l) {
+    for (size_t i = 0; i < p.size(); ++i) {
+      if (i != 0)
+        l->append(" ");
+      LogParam((p[i]), l);
+    }
   }
 };
 
@@ -966,7 +1002,7 @@ class MessageSchema {
 // defined in ipc_logging.cc
 IPC_EXPORT void GenerateLogData(const std::string& channel,
                                 const Message& message,
-                                LogData* data);
+                                LogData* data, bool get_params);
 
 
 #if defined(IPC_MESSAGE_LOG_ENABLED)
@@ -994,7 +1030,7 @@ inline void ConnectMessageAndReply(const Message* msg, Message* reply) {
     // output parameters at that point.  Instead, save its data and log it
     // with the outgoing reply message when it's sent.
     LogData* data = new LogData;
-    GenerateLogData("", *msg, data);
+    GenerateLogData("", *msg, data, true);
     msg->set_dont_log();
     reply->set_sync_log_data(data);
   }

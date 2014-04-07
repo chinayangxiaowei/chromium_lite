@@ -7,58 +7,67 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/debug/leak_tracker.h"
 #include "base/logging.h"
-#include "base/metrics/field_trial.h"
 #include "base/stl_util.h"
 #include "base/string_number_conversions.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_event_router_forwarder.h"
 #include "chrome/browser/media/media_internals.h"
-#include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/chrome_net_log.h"
+#include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/net/connect_interceptor.h"
 #include "chrome/browser/net/passive_log_collector.h"
-#include "chrome/browser/net/predictor_api.h"
-#include "chrome/browser/net/pref_proxy_config_service.h"
+#include "chrome/browser/net/pref_proxy_config_tracker.h"
 #include "chrome/browser/net/proxy_service_factory.h"
+#include "chrome/browser/net/sdch_dictionary_fetcher.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/gpu/gpu_process_host.h"
-#include "content/browser/in_process_webkit/indexed_db_key_utility_client.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/url_fetcher.h"
 #include "net/base/cert_verifier.h"
 #include "net/base/cookie_monster.h"
 #include "net/base/default_origin_bound_cert_store.h"
-#include "net/base/dnsrr_resolver.h"
 #include "net/base/host_cache.h"
 #include "net/base/host_resolver.h"
 #include "net/base/host_resolver_impl.h"
 #include "net/base/mapped_host_resolver.h"
 #include "net/base/net_util.h"
 #include "net/base/origin_bound_cert_service.h"
+#include "net/base/sdch_manager.h"
 #include "net/dns/async_host_resolver.h"
 #include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_auth_filter.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_network_layer.h"
 #include "net/http/http_network_session.h"
+#include "net/http/http_server_properties_impl.h"
 #include "net/proxy/proxy_config_service.h"
 #include "net/proxy/proxy_script_fetcher_impl.h"
 #include "net/proxy/proxy_service.h"
-#include "net/socket/dns_cert_provenance_checker.h"
-#include "webkit/glue/webkit_glue.h"
 
 #if defined(USE_NSS)
 #include "net/ocsp/nss_ocsp.h"
 #endif  // defined(USE_NSS)
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/proxy_config_service_impl.h"
+#endif  // defined(OS_CHROMEOS)
+
+using content::BrowserThread;
+
+// The IOThread object must outlive any tasks posted to the IO thread before the
+// Quit task, so base::Bind() calls are not refcounted.
 
 namespace {
 
@@ -69,7 +78,7 @@ class URLRequestContextWithUserAgent : public net::URLRequestContext {
  public:
   virtual const std::string& GetUserAgent(
       const GURL& url) const OVERRIDE {
-    return webkit_glue::GetUserAgent(url);
+    return content::GetUserAgent(url);
   }
 };
 
@@ -109,43 +118,6 @@ net::HostResolver* CreateGlobalHostResolver(net::NetLog* net_log) {
     } else {
       LOG(ERROR) << "Invalid switch for host resolver parallelism: " << s;
     }
-  } else {
-    // Set up a field trial to see what impact the total number of concurrent
-    // resolutions have on DNS resolutions.
-    base::FieldTrial::Probability kDivisor = 1000;
-    // For each option (i.e., non-default), we have a fixed probability.
-    base::FieldTrial::Probability kProbabilityPerGroup = 100;  // 10%.
-
-    // After June 30, 2011 builds, it will always be in default group
-    // (parallel_default).
-    scoped_refptr<base::FieldTrial> trial(
-        new base::FieldTrial(
-            "DnsParallelism", kDivisor, "parallel_default", 2011, 6, 30));
-
-    // List options with different counts.
-    // Firefox limits total to 8 in parallel, and default is currently 50.
-    int parallel_6 = trial->AppendGroup("parallel_6", kProbabilityPerGroup);
-    int parallel_7 = trial->AppendGroup("parallel_7", kProbabilityPerGroup);
-    int parallel_8 = trial->AppendGroup("parallel_8", kProbabilityPerGroup);
-    int parallel_9 = trial->AppendGroup("parallel_9", kProbabilityPerGroup);
-    int parallel_10 = trial->AppendGroup("parallel_10", kProbabilityPerGroup);
-    int parallel_14 = trial->AppendGroup("parallel_14", kProbabilityPerGroup);
-    int parallel_20 = trial->AppendGroup("parallel_20", kProbabilityPerGroup);
-
-    if (trial->group() == parallel_6)
-      parallelism = 6;
-    else if (trial->group() == parallel_7)
-      parallelism = 7;
-    else if (trial->group() == parallel_8)
-      parallelism = 8;
-    else if (trial->group() == parallel_9)
-      parallelism = 9;
-    else if (trial->group() == parallel_10)
-      parallelism = 10;
-    else if (trial->group() == parallel_14)
-      parallelism = 14;
-    else if (trial->group() == parallel_20)
-      parallelism = 20;
   }
 
   size_t retry_attempts = net::HostResolver::kDefaultRetryAttempts;
@@ -187,12 +159,7 @@ net::HostResolver* CreateGlobalHostResolver(net::NetLog* net_log) {
     if (command_line.HasSwitch(switches::kDisableIPv6)) {
       global_host_resolver->SetDefaultAddressFamily(net::ADDRESS_FAMILY_IPV4);
     } else {
-      net::HostResolverImpl* host_resolver_impl =
-          global_host_resolver->GetAsHostResolverImpl();
-      if (host_resolver_impl != NULL) {
-        // Use probe to decide if support is warranted.
-        host_resolver_impl->ProbeIPv6Support();
-      }
+      global_host_resolver->ProbeIPv6Support();
     }
   }
 
@@ -247,7 +214,8 @@ ConstructProxyScriptFetcherContext(IOThread::Globals* globals,
   context->set_net_log(net_log);
   context->set_host_resolver(globals->host_resolver.get());
   context->set_cert_verifier(globals->cert_verifier.get());
-  context->set_dnsrr_resolver(globals->dnsrr_resolver.get());
+  context->set_transport_security_state(
+      globals->transport_security_state.get());
   context->set_http_auth_handler_factory(
       globals->http_auth_handler_factory.get());
   context->set_proxy_service(globals->proxy_script_fetcher_proxy_service.get());
@@ -259,6 +227,9 @@ ConstructProxyScriptFetcherContext(IOThread::Globals* globals,
   context->set_origin_bound_cert_service(
       globals->system_origin_bound_cert_service.get());
   context->set_network_delegate(globals->system_network_delegate.get());
+  // TODO(rtenneti): We should probably use HttpServerPropertiesManager for the
+  // system URLRequestContext too. There's no reason this should be tied to a
+  // profile.
   return context;
 }
 
@@ -270,7 +241,8 @@ ConstructSystemRequestContext(IOThread::Globals* globals,
   context->set_net_log(net_log);
   context->set_host_resolver(globals->host_resolver.get());
   context->set_cert_verifier(globals->cert_verifier.get());
-  context->set_dnsrr_resolver(globals->dnsrr_resolver.get());
+  context->set_transport_security_state(
+      globals->transport_security_state.get());
   context->set_http_auth_handler_factory(
       globals->http_auth_handler_factory.get());
   context->set_proxy_service(globals->system_proxy_service.get());
@@ -305,7 +277,8 @@ class SystemURLRequestContextGetter : public net::URLRequestContextGetter {
 SystemURLRequestContextGetter::SystemURLRequestContextGetter(
     IOThread* io_thread)
     : io_thread_(io_thread),
-      io_message_loop_proxy_(io_thread->message_loop_proxy()) {
+      io_message_loop_proxy_(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)) {
 }
 
 SystemURLRequestContextGetter::~SystemURLRequestContextGetter() {}
@@ -322,10 +295,6 @@ SystemURLRequestContextGetter::GetIOMessageLoopProxy() const {
   return io_message_loop_proxy_;
 }
 
-// The IOThread object must outlive any tasks posted to the IO thread before the
-// Quit task.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(IOThread);
-
 IOThread::Globals::Globals() {}
 
 IOThread::Globals::~Globals() {}
@@ -340,13 +309,11 @@ IOThread::IOThread(
     PrefService* local_state,
     ChromeNetLog* net_log,
     ExtensionEventRouterForwarder* extension_event_router_forwarder)
-    : BrowserProcessSubThread(BrowserThread::IO),
-      net_log_(net_log),
+    : net_log_(net_log),
       extension_event_router_forwarder_(extension_event_router_forwarder),
       globals_(NULL),
-      speculative_interceptor_(NULL),
-      predictor_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      sdch_manager_(NULL),
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   // We call RegisterPrefs() here (instead of inside browser_prefs.cc) to make
   // sure that everything is initialized in the right order.
   RegisterPrefs(local_state);
@@ -359,22 +326,23 @@ IOThread::IOThread(
   auth_delegate_whitelist_ = local_state->GetString(
       prefs::kAuthNegotiateDelegateWhitelist);
   gssapi_library_name_ = local_state->GetString(prefs::kGSSAPILibraryName);
-  pref_proxy_config_tracker_ = new PrefProxyConfigTracker(local_state);
+  pref_proxy_config_tracker_.reset(
+      ProxyServiceFactory::CreatePrefProxyConfigTracker(local_state));
   ChromeNetworkDelegate::InitializeReferrersEnabled(&system_enable_referrers_,
                                                     local_state);
   ssl_config_service_manager_.reset(
       SSLConfigServiceManager::CreateDefaultManager(local_state));
-  MessageLoop::current()->PostTask(FROM_HERE,
-                                   method_factory_.NewRunnableMethod(
-                                       &IOThread::InitSystemRequestContext));
+
+  BrowserThread::SetDelegate(BrowserThread::IO, this);
 }
 
 IOThread::~IOThread() {
-  if (pref_proxy_config_tracker_)
+  // This isn't needed for production code, but in tests, IOThread may
+  // be multiply constructed.
+  BrowserThread::SetDelegate(BrowserThread::IO, NULL);
+
+  if (pref_proxy_config_tracker_.get())
     pref_proxy_config_tracker_->DetachFromPrefService();
-  // We cannot rely on our base class to stop the thread since we want our
-  // CleanUp function to run.
-  Stop();
   DCHECK(!globals_);
 }
 
@@ -387,31 +355,13 @@ ChromeNetLog* IOThread::net_log() {
   return net_log_;
 }
 
-void IOThread::InitNetworkPredictor(
-    bool prefetching_enabled,
-    base::TimeDelta max_dns_queue_delay,
-    size_t max_speculative_parallel_resolves,
-    const chrome_common_net::UrlList& startup_urls,
-    ListValue* referral_list,
-    bool preconnect_enabled) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  message_loop()->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(
-          this,
-          &IOThread::InitNetworkPredictorOnIOThread,
-          prefetching_enabled, max_dns_queue_delay,
-          max_speculative_parallel_resolves,
-          startup_urls, referral_list, preconnect_enabled));
-}
-
 void IOThread::ChangedToOnTheRecord() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  message_loop()->PostTask(
+  BrowserThread::PostTask(
+      BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(
-          this,
-          &IOThread::ChangedToOnTheRecordOnIOThread));
+      base::Bind(&IOThread::ChangedToOnTheRecordOnIOThread,
+                 base::Unretained(this)));
 }
 
 net::URLRequestContextGetter* IOThread::system_url_request_context_getter() {
@@ -422,23 +372,12 @@ net::URLRequestContextGetter* IOThread::system_url_request_context_getter() {
   return system_url_request_context_getter_;
 }
 
-void IOThread::ClearNetworkingHistory() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  ClearHostCache();
-  // Discard acrued data used to speculate in the future.
-  chrome_browser_net::DiscardInitialNavigationHistory();
-  if (predictor_)
-    predictor_->DiscardAllResults();
-}
-
 void IOThread::Init() {
   // Though this thread is called the "IO" thread, it actually just routes
   // messages around; it shouldn't be allowed to perform any blocking disk I/O.
   base::ThreadRestrictions::SetIOAllowed(false);
 
-  BrowserProcessSubThread::Init();
-
-  DCHECK_EQ(MessageLoop::TYPE_IO, message_loop()->type());
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
 #if defined(USE_NSS)
   net::SetMessageLoopForOCSP();
@@ -466,10 +405,11 @@ void IOThread::Init() {
   globals_->host_resolver.reset(
       CreateGlobalHostResolver(net_log_));
   globals_->cert_verifier.reset(new net::CertVerifier);
-  globals_->dnsrr_resolver.reset(new net::DnsRRResolver);
+  globals_->transport_security_state.reset(new net::TransportSecurityState(""));
   globals_->ssl_config_service = GetSSLConfigService();
   globals_->http_auth_handler_factory.reset(CreateDefaultAuthHandlerFactory(
       globals_->host_resolver.get()));
+  globals_->http_server_properties.reset(new net::HttpServerPropertiesImpl);
   // For the ProxyScriptFetcher, we use a direct ProxyService.
   globals_->proxy_script_fetcher_proxy_service.reset(
       net::ProxyService::CreateDirectWithNetLog(net_log_));
@@ -484,11 +424,18 @@ void IOThread::Init() {
   session_params.cert_verifier = globals_->cert_verifier.get();
   session_params.origin_bound_cert_service =
       globals_->system_origin_bound_cert_service.get();
+  session_params.transport_security_state =
+      globals_->transport_security_state.get();
   session_params.proxy_service =
       globals_->proxy_script_fetcher_proxy_service.get();
   session_params.http_auth_handler_factory =
       globals_->http_auth_handler_factory.get();
   session_params.network_delegate = globals_->system_network_delegate.get();
+  // TODO(rtenneti): We should probably use HttpServerPropertiesManager for the
+  // system URLRequestContext too. There's no reason this should be tied to a
+  // profile.
+  session_params.http_server_properties =
+      globals_->http_server_properties.get();
   session_params.net_log = net_log_;
   session_params.ssl_config_service = globals_->ssl_config_service;
   scoped_refptr<net::HttpNetworkSession> network_session(
@@ -500,62 +447,53 @@ void IOThread::Init() {
 
   globals_->proxy_script_fetcher_context =
       ConstructProxyScriptFetcherContext(globals_, net_log_);
+
+  sdch_manager_ = new net::SdchManager();
+  sdch_manager_->set_sdch_fetcher(new SdchDictionaryFetcher);
+
+  // InitSystemRequestContext turns right around and posts a task back
+  // to the IO thread, so we can't let it run until we know the IO
+  // thread has started.
+  //
+  // Note that since we are at BrowserThread::Init time, the UI thread
+  // is blocked waiting for the thread to start.  Therefore, posting
+  // this task to the main thread's message loop here is guaranteed to
+  // get it onto the message loop while the IOThread object still
+  // exists.  However, the message might not be processed on the UI
+  // thread until after IOThread is gone, so use a weak pointer.
+  BrowserThread::PostTask(BrowserThread::UI,
+                          FROM_HERE,
+                          base::Bind(&IOThread::InitSystemRequestContext,
+                                     weak_factory_.GetWeakPtr()));
+
+  // We constructed the weak pointer on the IO thread but it will be
+  // used on the UI thread.  Call this to avoid a thread checker
+  // error.
+  weak_factory_.DetachFromThread();
 }
 
 void IOThread::CleanUp() {
-  // Step 1: Kill all things that might be holding onto
-  // net::URLRequest/net::URLRequestContexts.
+  delete sdch_manager_;
+  sdch_manager_ = NULL;
 
 #if defined(USE_NSS)
   net::ShutdownOCSP();
 #endif  // defined(USE_NSS)
 
-  // Destroy all URLRequests started by URLFetchers.
-  URLFetcher::CancelAll();
-
-  IndexedDBKeyUtilityClient::Shutdown();
-
-  // If any child processes are still running, terminate them and
-  // and delete the BrowserChildProcessHost instances to release whatever
-  // IO thread only resources they are referencing.
-  BrowserChildProcessHost::TerminateAll();
-
   system_url_request_context_getter_ = NULL;
 
-  // Step 2: Release objects that the net::URLRequestContext could have been
-  // pointing to.
+  // Release objects that the net::URLRequestContext could have been pointing
+  // to.
 
   // This must be reset before the ChromeNetLog is destroyed.
   network_change_observer_.reset();
-
-  // Not initialized in Init().  May not be initialized.
-  if (predictor_) {
-    predictor_->Shutdown();
-
-    // TODO(willchan): Stop reference counting Predictor.  It's owned by
-    // IOThread now.
-    predictor_->Release();
-    predictor_ = NULL;
-    chrome_browser_net::FreePredictorResources();
-  }
-
-  // Deletion will unregister this interceptor.
-  delete speculative_interceptor_;
-  speculative_interceptor_ = NULL;
 
   system_proxy_config_service_.reset();
 
   delete globals_;
   globals_ = NULL;
 
-  // net::URLRequest instances must NOT outlive the IO thread.
-  base::debug::LeakTracker<net::URLRequest>::CheckForLeaks();
-
   base::debug::LeakTracker<SystemURLRequestContextGetter>::CheckForLeaks();
-
-  // This will delete the |notification_service_|.  Make sure it's done after
-  // anything else can reference it.
-  BrowserProcessSubThread::CleanUp();
 }
 
 // static
@@ -568,7 +506,6 @@ void IOThread::RegisterPrefs(PrefService* local_state) {
   local_state->RegisterStringPref(prefs::kAuthServerWhitelist, "");
   local_state->RegisterStringPref(prefs::kAuthNegotiateDelegateWhitelist, "");
   local_state->RegisterStringPref(prefs::kGSSAPILibraryName, "");
-  local_state->RegisterBooleanPref(prefs::kAllowCrossOriginAuthPrompt, false);
   local_state->RegisterBooleanPref(prefs::kEnableReferrers, true);
 }
 
@@ -599,40 +536,20 @@ net::HttpAuthHandlerFactory* IOThread::CreateDefaultAuthHandlerFactory(
       negotiate_enable_port_);
 }
 
-void IOThread::InitNetworkPredictorOnIOThread(
-    bool prefetching_enabled,
-    base::TimeDelta max_dns_queue_delay,
-    size_t max_speculative_parallel_resolves,
-    const chrome_common_net::UrlList& startup_urls,
-    ListValue* referral_list,
-    bool preconnect_enabled) {
+void IOThread::ClearHostCache() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  CHECK(!predictor_);
 
-  chrome_browser_net::EnablePredictor(prefetching_enabled);
+  net::HostCache* host_cache = globals_->host_resolver->GetHostCache();
+  if (host_cache)
+    host_cache->clear();
+}
 
-  predictor_ = new chrome_browser_net::Predictor(
-      globals_->host_resolver.get(),
-      max_dns_queue_delay,
-      max_speculative_parallel_resolves,
-      preconnect_enabled);
-  predictor_->AddRef();
-
-  // Speculative_interceptor_ is used to predict subresource usage.
-  DCHECK(!speculative_interceptor_);
-  speculative_interceptor_ = new chrome_browser_net::ConnectInterceptor;
-
-  FinalizePredictorInitialization(predictor_, startup_urls, referral_list);
+net::SSLConfigService* IOThread::GetSSLConfigService() {
+  return ssl_config_service_manager_->Get();
 }
 
 void IOThread::ChangedToOnTheRecordOnIOThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  if (predictor_) {
-    // Destroy all evidence of our OTR session.
-    // Note: OTR mode never saves InitialNavigationHistory data.
-    predictor_->Predictor::DiscardAllResults();
-  }
 
   // Clear the host cache to avoid showing entries from the OTR session
   // in about:net-internals.
@@ -644,37 +561,29 @@ void IOThread::ChangedToOnTheRecordOnIOThread() {
   net_log_->ClearAllPassivelyCapturedEvents();
 }
 
-void IOThread::ClearHostCache() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-
-  if (globals_->host_resolver->GetAsHostResolverImpl()) {
-    net::HostCache* host_cache =
-        globals_->host_resolver.get()->GetAsHostResolverImpl()->cache();
-    if (host_cache)
-      host_cache->clear();
-  }
-}
-
-net::SSLConfigService* IOThread::GetSSLConfigService() {
-  return ssl_config_service_manager_->Get();
-}
-
 void IOThread::InitSystemRequestContext() {
   if (system_url_request_context_getter_)
     return;
   // If we're in unit_tests, IOThread may not be run.
-  if (!message_loop())
+  if (!BrowserThread::IsMessageLoopValid(BrowserThread::IO))
     return;
-  system_proxy_config_service_.reset(
-      ProxyServiceFactory::CreateProxyConfigService(
-          pref_proxy_config_tracker_));
+  bool wait_for_first_update = (pref_proxy_config_tracker_.get() != NULL);
+  ChromeProxyConfigService* proxy_config_service =
+      ProxyServiceFactory::CreateProxyConfigService(wait_for_first_update);
+  system_proxy_config_service_.reset(proxy_config_service);
+  if (pref_proxy_config_tracker_.get()) {
+    pref_proxy_config_tracker_->SetChromeProxyConfigService(
+        proxy_config_service);
+  }
   system_url_request_context_getter_ =
       new SystemURLRequestContextGetter(this);
-  message_loop()->PostTask(
+  // Safe to post an unretained this pointer, since IOThread is
+  // guaranteed to outlive the IO BrowserThread.
+  BrowserThread::PostTask(
+      BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(
-          this,
-          &IOThread::InitSystemRequestContextOnIOThread));
+      base::Bind(&IOThread::InitSystemRequestContextOnIOThread,
+                 base::Unretained(this)));
 }
 
 void IOThread::InitSystemRequestContextOnIOThread() {
@@ -694,13 +603,14 @@ void IOThread::InitSystemRequestContextOnIOThread() {
   system_params.cert_verifier = globals_->cert_verifier.get();
   system_params.origin_bound_cert_service =
       globals_->system_origin_bound_cert_service.get();
-  system_params.dnsrr_resolver = globals_->dnsrr_resolver.get();
-  system_params.dns_cert_checker = NULL;
+  system_params.transport_security_state =
+      globals_->transport_security_state.get();
   system_params.ssl_host_info_factory = NULL;
   system_params.proxy_service = globals_->system_proxy_service.get();
   system_params.ssl_config_service = globals_->ssl_config_service.get();
   system_params.http_auth_handler_factory =
       globals_->http_auth_handler_factory.get();
+  system_params.http_server_properties = globals_->http_server_properties.get();
   system_params.network_delegate = globals_->system_network_delegate.get();
   system_params.net_log = net_log_;
   globals_->system_http_transaction_factory.reset(

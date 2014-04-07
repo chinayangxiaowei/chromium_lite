@@ -4,24 +4,19 @@
 
 #include "chrome/browser/chromeos/cros/cros_library.h"
 
-#include "chrome/browser/chromeos/cros/brightness_library.h"
 #include "chrome/browser/chromeos/cros/burn_library.h"
 #include "chrome/browser/chromeos/cros/cert_library.h"
 #include "chrome/browser/chromeos/cros/cryptohome_library.h"
-#include "chrome/browser/chromeos/cros/libcros_service_library.h"
 #include "chrome/browser/chromeos/cros/library_loader.h"
-#include "chrome/browser/chromeos/cros/login_library.h"
-#include "chrome/browser/chromeos/cros/mount_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/cros/power_library.h"
-#include "chrome/browser/chromeos/cros/screen_lock_library.h"
-#include "chrome/browser/chromeos/cros/speech_synthesis_library.h"
-#include "chrome/browser/chromeos/cros/update_library.h"
 #include "third_party/cros/chromeos_cros_api.h"
 
+// Pass !libcros_loaded_ to GetDefaultImpl instead of use_stub_impl_ so that
+// we load the stub impl regardless of whether use_stub was specified or the
+// library failed to load.
 #define DEFINE_GET_LIBRARY_METHOD(class_prefix, var_prefix)                    \
 class_prefix##Library* CrosLibrary::Get##class_prefix##Library() {             \
-  return var_prefix##_lib_.GetDefaultImpl(use_stub_impl_);                     \
+  return var_prefix##_lib_.GetDefaultImpl(!libcros_loaded_);                   \
 }
 
 #define DEFINE_SET_LIBRARY_METHOD(class_prefix, var_prefix)                    \
@@ -58,10 +53,12 @@ void CrosLibrary::Initialize(bool use_stub) {
   }
   // Attempt to load libcros here, so that we can log, show warnings, and
   // set load_error_string_ immediately.
-  if (g_cros_library->LoadLibcros())
+  if (g_cros_library->LoadLibcros()) {
     VLOG(1) << "CrosLibrary Initialized, version = " << kCrosAPIVersion;
-  else
-    LOG(WARNING) << "CrosLibrary failed to Initialize.";
+  } else {
+    LOG(WARNING) << "CrosLibrary failed to Initialize."
+                 << " Will use stub implementations.";
+  }
 }
 
 // static
@@ -78,18 +75,10 @@ CrosLibrary* CrosLibrary::Get() {
   return g_cros_library;
 }
 
-DEFINE_GET_LIBRARY_METHOD(Brightness, brightness);
 DEFINE_GET_LIBRARY_METHOD(Burn, burn);
 DEFINE_GET_LIBRARY_METHOD(Cert, cert);
 DEFINE_GET_LIBRARY_METHOD(Cryptohome, crypto);
-DEFINE_GET_LIBRARY_METHOD(LibCrosService, libcros_service);
-DEFINE_GET_LIBRARY_METHOD(Login, login);
-DEFINE_GET_LIBRARY_METHOD(Mount, mount);
 DEFINE_GET_LIBRARY_METHOD(Network, network);
-DEFINE_GET_LIBRARY_METHOD(Power, power);
-DEFINE_GET_LIBRARY_METHOD(ScreenLock, screen_lock);
-DEFINE_GET_LIBRARY_METHOD(SpeechSynthesis, speech_synthesis);
-DEFINE_GET_LIBRARY_METHOD(Update, update);
 
 bool CrosLibrary::LoadLibcros() {
   if (!libcros_loaded_ && !load_error_) {
@@ -128,17 +117,9 @@ void CrosLibrary::TestApi::SetLibraryLoader(LibraryLoader* loader, bool own) {
   library_->load_error_ = false;
 }
 
-DEFINE_SET_LIBRARY_METHOD(Brightness, brightness);
 DEFINE_SET_LIBRARY_METHOD(Cert, cert);
 DEFINE_SET_LIBRARY_METHOD(Burn, burn);
 DEFINE_SET_LIBRARY_METHOD(Cryptohome, crypto);
-DEFINE_SET_LIBRARY_METHOD(LibCrosService, libcros_service);
-DEFINE_SET_LIBRARY_METHOD(Login, login);
-DEFINE_SET_LIBRARY_METHOD(Mount, mount);
 DEFINE_SET_LIBRARY_METHOD(Network, network);
-DEFINE_SET_LIBRARY_METHOD(Power, power);
-DEFINE_SET_LIBRARY_METHOD(ScreenLock, screen_lock);
-DEFINE_SET_LIBRARY_METHOD(SpeechSynthesis, speech_synthesis);
-DEFINE_SET_LIBRARY_METHOD(Update, update);
 
 } // namespace chromeos

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,59 +9,81 @@
 #include <set>
 
 #include "base/time.h"
+#include "base/threading/non_thread_safe.h"
 #include "remoting/protocol/connection_to_client.h"
 #include "remoting/protocol/host_stub.h"
 #include "remoting/protocol/input_stub.h"
-#include "ui/gfx/point.h"
+#include "third_party/skia/include/core/SkPoint.h"
 
 namespace remoting {
 
 class Capturer;
-class UserAuthenticator;
 
 // A ClientSession keeps a reference to a connection to a client, and maintains
 // per-client state.
 class ClientSession : public protocol::HostStub,
                       public protocol::InputStub,
-                      public base::RefCountedThreadSafe<ClientSession> {
+                      public protocol::ConnectionToClient::EventHandler,
+                      public base::NonThreadSafe {
  public:
   // Callback interface for passing events to the ChromotingHost.
   class EventHandler {
    public:
     virtual ~EventHandler() {}
 
-    // Called to signal that local login has succeeded and ChromotingHost can
-    // proceed with the next step.
-    virtual void LocalLoginSucceeded(
-        scoped_refptr<protocol::ConnectionToClient> client) = 0;
+    // Called after authentication has finished successfully.
+    virtual void OnSessionAuthenticated(ClientSession* client) = 0;
 
-    // Called to signal that local login has failed.
-    virtual void LocalLoginFailed(
-        scoped_refptr<protocol::ConnectionToClient> client) = 0;
+    // Called after authentication has failed. Must not tear down this
+    // object. OnSessionClosed() is notified after this handler
+    // returns.
+    virtual void OnSessionAuthenticationFailed(ClientSession* client) = 0;
+
+    // Called after connection has failed or after the client closed it.
+    virtual void OnSessionClosed(ClientSession* client) = 0;
+
+    // Called to notify of each message's sequence number. The
+    // callback must not tear down this object.
+    virtual void OnSessionSequenceNumber(ClientSession* client,
+                                         int64 sequence_number) = 0;
+
+    // Called on notification of a route change event, when a channel is
+    // connected.
+    virtual void OnSessionIpAddress(ClientSession* client,
+                                    const std::string& channel_name,
+                                    const net::IPEndPoint& end_point) = 0;
   };
 
-  // Takes ownership of |user_authenticator|. Does not take ownership of
+  // Takes ownership of |connection|. Does not take ownership of
   // |event_handler|, |input_stub| or |capturer|.
   ClientSession(EventHandler* event_handler,
-                UserAuthenticator* user_authenticator,
-                scoped_refptr<protocol::ConnectionToClient> connection,
+                protocol::ConnectionToClient* connection,
                 protocol::InputStub* input_stub,
                 Capturer* capturer);
-
-  // protocol::HostStub interface.
-  virtual void BeginSessionRequest(
-      const protocol::LocalLoginCredentials* credentials, Task* done);
+  virtual ~ClientSession();
 
   // protocol::InputStub interface.
-  virtual void InjectKeyEvent(const protocol::KeyEvent& event);
-  virtual void InjectMouseEvent(const protocol::MouseEvent& event);
+  virtual void InjectKeyEvent(const protocol::KeyEvent& event) OVERRIDE;
+  virtual void InjectMouseEvent(const protocol::MouseEvent& event) OVERRIDE;
 
-  // Notifier called when the client is being disconnected.
-  // This should only be called by ChromotingHost.
-  void OnDisconnected();
+  // protocol::ConnectionToClient::EventHandler interface.
+  virtual void OnConnectionOpened(
+      protocol::ConnectionToClient* connection) OVERRIDE;
+  virtual void OnConnectionClosed(
+      protocol::ConnectionToClient* connection) OVERRIDE;
+  virtual void OnConnectionFailed(protocol::ConnectionToClient* connection,
+                                  protocol::Session::Error error) OVERRIDE;
+  virtual void OnSequenceNumberUpdated(
+      protocol::ConnectionToClient* connection, int64 sequence_number) OVERRIDE;
+  virtual void OnClientIpAddress(protocol::ConnectionToClient* connection,
+                                 const std::string& channel_name,
+                                 const net::IPEndPoint& end_point) OVERRIDE;
 
-  // Set the authenticated flag or log a failure message as appropriate.
-  void OnAuthorizationComplete(bool success);
+  // Disconnects the session and destroys the transport. Event handler
+  // is guaranteed not to be called after this method is called. Can
+  // be called multiple times. The object should not be used after
+  // this method returns.
+  void Disconnect();
 
   protocol::ConnectionToClient* connection() const {
     return connection_.get();
@@ -75,18 +97,18 @@ class ClientSession : public protocol::HostStub,
     awaiting_continue_approval_ = awaiting;
   }
 
+  const std::string& client_jid() { return client_jid_; }
+
   // Indicate that local mouse activity has been detected. This causes remote
   // inputs to be ignored for a short time so that the local user will always
   // have the upper hand in 'pointer wars'.
-  void LocalMouseMoved(const gfx::Point& new_pos);
+  void LocalMouseMoved(const SkIPoint& new_pos);
 
   bool ShouldIgnoreRemoteMouseInput(const protocol::MouseEvent& event) const;
   bool ShouldIgnoreRemoteKeyboardInput(const protocol::KeyEvent& event) const;
 
  private:
-  friend class base::RefCountedThreadSafe<ClientSession>;
   friend class ClientSessionTest_RestoreEventState_Test;
-  virtual ~ClientSession();
 
   // Keep track of input state so that we can clean up the event queue when
   // the user disconnects.
@@ -99,11 +121,10 @@ class ClientSession : public protocol::HostStub,
 
   EventHandler* event_handler_;
 
-  // A factory for user authenticators.
-  scoped_ptr<UserAuthenticator> user_authenticator_;
-
   // The connection to the client.
-  scoped_refptr<protocol::ConnectionToClient> connection_;
+  scoped_ptr<protocol::ConnectionToClient> connection_;
+
+  std::string client_jid_;
 
   // The input stub to which this object delegates.
   protocol::InputStub* input_stub_;
@@ -126,12 +147,12 @@ class ClientSession : public protocol::HostStub,
 
   // Current location of the mouse pointer. This is used to provide appropriate
   // coordinates when we release the mouse buttons after a user disconnects.
-  gfx::Point remote_mouse_pos_;
+  SkIPoint remote_mouse_pos_;
 
   // Queue of recently-injected mouse positions.  This is used to detect whether
   // mouse events from the local input monitor are echoes of injected positions,
   // or genuine mouse movements of a local input device.
-  std::list<gfx::Point> injected_mouse_positions_;
+  std::list<SkIPoint> injected_mouse_positions_;
 
   base::Time latest_local_input_time_;
 

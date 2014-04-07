@@ -47,7 +47,8 @@
         <div class="radio">
           <label>
             <input id="homepageUseNTPButton" type="radio" name="homepage"
-                value="true" metric="Options_Homepage_IsNewTabPage">
+                value="true" metric="Options_Homepage_IsNewTabPage"
+                pref="homepage_is_newtabpage">
             <span i18n-content="homepageUseNewTab"></span>
           </label>
         </div>
@@ -55,12 +56,14 @@
           <div class="radio">
             <label>
               <input id="homepageUseURLButton" type="radio" name="homepage"
-                  value="false" metric="Options_Homepage_IsNewTabPage">
+                  value="false" metric="Options_Homepage_IsNewTabPage"
+                  pref="homepage_is_newtabpage">
               <span i18n-content="homepageUseURL"></span>
             </label>
           </div>
           <div>
-            <input id="homepageURL" class="weakrtl favicon-cell" type="url">
+            <input id="homepageURL" class="weakrtl favicon-cell" type="url"
+                data-type="url" pref="homepage">
           </div>
         </div>
       </div>
@@ -94,7 +97,7 @@
                 i18n-content="defaultSearchManageEngines"></button>
           </div>
           <div id="instantOption" class="checkbox">
-            <label>
+            <label id="instantLabel">
               <!-- TODO(estade): metric? -->
               <input id="instantFieldTrialCheckbox" type="checkbox"
                   checked="checked" hidden>
@@ -118,6 +121,13 @@
             i18n-content="defaultBrowserUseAsDefault"></button>
         <div id="defaultBrowserState"
             i18n-content="defaultBrowserUnknown"></div>
+        <div id="autoLaunchOption" class="checkbox" hidden>
+          <label>
+            <input id="autoLaunch" type="checkbox">
+              <span i18n-content="autoLaunchText"></span>
+            </input>
+          </label>
+        </div>
       </div>
     </section>
 </if>

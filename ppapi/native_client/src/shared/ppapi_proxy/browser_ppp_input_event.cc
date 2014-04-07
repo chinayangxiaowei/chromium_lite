@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,8 +20,8 @@ namespace ppapi_proxy {
 namespace {
 
 PP_Bool HandleInputEvent(PP_Instance instance, PP_Resource input_event) {
-  DebugPrintf("PPP_InputEvent::HandleInputEvent: instance=%"NACL_PRIu32", "
-              "input_event = %"NACL_PRIu32"\n",
+  DebugPrintf("PPP_InputEvent::HandleInputEvent: instance=%"NACL_PRId32", "
+              "input_event = %"NACL_PRId32"\n",
               instance, input_event);
 
   PP_Var character_text = PP_MakeUndefined();
@@ -68,6 +68,14 @@ PP_Bool HandleInputEvent(PP_Instance instance, PP_Resource input_event) {
       break;
     case PP_INPUTEVENT_TYPE_UNDEFINED:
       return PP_FALSE;
+    // TODO(nfullagar): Implement support for event types below.
+    case PP_INPUTEVENT_TYPE_IME_COMPOSITION_START:
+    case PP_INPUTEVENT_TYPE_IME_COMPOSITION_UPDATE:
+    case PP_INPUTEVENT_TYPE_IME_COMPOSITION_END:
+    case PP_INPUTEVENT_TYPE_IME_TEXT:
+      DebugPrintf("   No implementation for event type %d\n",
+          data.event_type);
+      return PP_FALSE;
     // No default case; if any new types are added we should get a compile
     // warning.
   }
@@ -78,7 +86,7 @@ PP_Bool HandleInputEvent(PP_Instance instance, PP_Resource input_event) {
   DCHECK((character_text.type == PP_VARTYPE_UNDEFINED) ||
          (character_text.type == PP_VARTYPE_STRING));
   // Serialize the character_text Var.
-  uint32_t text_size = kMaxVarSize;
+  uint32_t text_size = 0;
   nacl::scoped_array<char> text_bytes(Serialize(&character_text, 1,
                                                 &text_size));
   int32_t handled;
@@ -101,7 +109,7 @@ PP_Bool HandleInputEvent(PP_Instance instance, PP_Resource input_event) {
   // or PP_TRUE. Otherwise, there's an error in the proxy.
   DCHECK((handled == static_cast<int32_t>(PP_FALSE) ||
          (handled == static_cast<int32_t>(PP_TRUE))));
-  PP_Bool handled_bool = static_cast<PP_Bool>(handled);
+  PP_Bool handled_bool = PP_FromBool(handled);
   return handled_bool;
 }
 

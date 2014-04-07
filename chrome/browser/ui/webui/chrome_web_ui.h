@@ -6,33 +6,16 @@
 #define CHROME_BROWSER_UI_WEBUI_CHROME_WEB_UI_H_
 #pragma once
 
-#include "content/browser/webui/web_ui.h"
+namespace chrome_web_ui {
 
-class Profile;
+// IsMoreWebUI returns a command line flag that tracks whether to use
+// available WebUI implementations of native dialogs.
+bool IsMoreWebUI();
 
-class ChromeWebUI : public WebUI {
- public:
-  explicit ChromeWebUI(TabContents* contents);
-  virtual ~ChromeWebUI();
+// Override the argument setting for more WebUI. If true this enables more
+// WebUI.
+void OverrideMoreWebUI(bool use_more_webui);
 
-  // Returns the profile for this WebUI.
-  Profile* GetProfile() const;
-
-  // Returns true if the bookmark bar should be forced to being visible,
-  // overriding the user's preference.
-  bool force_bookmark_bar_visible() const {
-    return force_bookmark_bar_visible_;
-  }
-
- protected:
-  void set_force_bookmark_bar_visible(bool value) {
-    force_bookmark_bar_visible_ = value;
-  }
-
- private:
-  bool force_bookmark_bar_visible_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeWebUI);
-};
+}  // namespace chrome_web_ui
 
 #endif  // CHROME_BROWSER_UI_WEBUI_CHROME_WEB_UI_H_

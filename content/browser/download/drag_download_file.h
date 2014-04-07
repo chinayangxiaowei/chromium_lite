@@ -6,23 +6,30 @@
 #define CONTENT_BROWSER_DOWNLOAD_DRAG_DOWNLOAD_FILE_H_
 #pragma once
 
+#include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/memory/linked_ptr.h"
 #include "content/browser/download/download_file.h"
-#include "content/browser/download/download_item.h"
-#include "content/browser/download/download_manager.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/download_item.h"
+#include "content/public/browser/download_manager.h"
 #include "googleurl/src/gurl.h"
+#include "net/base/file_stream.h"
 #include "ui/base/dragdrop/download_file_interface.h"
+#include "ui/base/ui_export.h"
 
-class TabContents;
+namespace content {
+class WebContents;
+}
 
 namespace net {
 class FileStream;
 }
 
-class DragDownloadFile : public ui::DownloadFileProvider,
-                         public DownloadManager::Observer,
-                         public DownloadItem::Observer {
+class CONTENT_EXPORT DragDownloadFile
+    : public ui::DownloadFileProvider,
+      public content::DownloadManager::Observer,
+      public content::DownloadItem::Observer {
  public:
   // On Windows, we need to download into a temporary file. Two threads are
   // involved: background drag-and-drop thread and UI thread.
@@ -38,25 +45,25 @@ class DragDownloadFile : public ui::DownloadFileProvider,
                    const GURL& url,
                    const GURL& referrer,
                    const std::string& referrer_encoding,
-                   TabContents* tab_contents);
+                   content::WebContents* web_contents);
 
   // DownloadFileProvider methods.
   // Called on drag-and-drop thread (Windows).
   // Called on UI thread (MacOSX).
-  virtual bool Start(ui::DownloadFileObserver* observer);
-  virtual void Stop();
+  virtual bool Start(ui::DownloadFileObserver* observer) OVERRIDE;
+  virtual void Stop() OVERRIDE;
 #if defined(OS_WIN)
   virtual IStream* GetStream() { return NULL; }
 #endif
 
   // DownloadManager::Observer methods.
   // Called on UI thread.
-  virtual void ModelChanged();
+  virtual void ModelChanged() OVERRIDE;
 
   // DownloadItem::Observer methods.
   // Called on UI thread.
-  virtual void OnDownloadUpdated(DownloadItem* download);
-  virtual void OnDownloadOpened(DownloadItem* download) { }
+  virtual void OnDownloadUpdated(content::DownloadItem* download) OVERRIDE;
+  virtual void OnDownloadOpened(content::DownloadItem* download) OVERRIDE { }
 
  private:
   // Called on drag-and-drop thread (Windows).
@@ -89,7 +96,7 @@ class DragDownloadFile : public ui::DownloadFileProvider,
   GURL url_;
   GURL referrer_;
   std::string referrer_encoding_;
-  TabContents* tab_contents_;
+  content::WebContents* web_contents_;
   MessageLoop* drag_message_loop_;
   FilePath temp_dir_path_;
 
@@ -105,9 +112,9 @@ class DragDownloadFile : public ui::DownloadFileProvider,
 #endif
 
   // Access on UI thread.
-  DownloadManager* download_manager_;
+  content::DownloadManager* download_manager_;
   bool download_manager_observer_added_;
-  DownloadItem* download_item_;
+  content::DownloadItem* download_item_;
 
   DISALLOW_COPY_AND_ASSIGN(DragDownloadFile);
 };

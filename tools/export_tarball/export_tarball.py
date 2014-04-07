@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 
+
 NONESSENTIAL_DIRS = (
     'chrome/common/extensions/docs',
     'chrome/test/data',
@@ -29,7 +30,6 @@ NONESSENTIAL_DIRS = (
     'courgette/testdata',
     'data',
     'native_client/src/trusted/service_runtime/testdata',
-    'native_client/tests',
     'src/chrome/test/data',
     'o3d/documentation',
     'o3d/samples',
@@ -58,9 +58,11 @@ NONESSENTIAL_DIRS = (
     'webkit/tools/test/reference_build',
 )
 
+
 def GetSourceDirectory():
   return os.path.realpath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+
 
 # Workaround lack of the exclude parameter in add method in python-2.4.
 # TODO(phajdan.jr): remove the workaround when it's not needed on the bot.
@@ -80,6 +82,7 @@ class MyTarFile(tarfile.TarFile):
           return
 
     tarfile.TarFile.add(self, name, arcname=arcname, recursive=recursive)
+
 
 def main(argv):
   parser = optparse.OptionParser()
@@ -109,6 +112,7 @@ def main(argv):
     archive.close()
 
   return 0
+
 
 if __name__ == "__main__":
   sys.exit(main(sys.argv[1:]))

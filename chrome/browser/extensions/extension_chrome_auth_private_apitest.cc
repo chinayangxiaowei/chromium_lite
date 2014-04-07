@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -58,19 +58,3 @@ IN_PROC_BROWSER_TEST_F(ExtensionChromeAuthPrivateApiTest,
   SetCloudPrintCredentialsFunction::SetTestMode(false);
 }
 #endif  // !defined(OS_CHROMEOS)
-
-IN_PROC_BROWSER_TEST_F(ExtensionChromeAuthPrivateApiTest,
-                       SetCloudPrintCredentialsFailureInstalled) {
-  // Run this as an installed app. Since this is not a component app, it
-  // should fail.
-  ASSERT_TRUE(RunExtensionTest("chrome_auth_private/installed_app"));
-}
-
-IN_PROC_BROWSER_TEST_F(ExtensionChromeAuthPrivateApiTest,
-                       SetCloudPrintCredentialsFailureInstalledComponent) {
-  // Run this as an installed component app. This should also fail because of
-  // the explicit URL check in the API.
-  ASSERT_TRUE(RunComponentExtensionTest(
-      "chrome_auth_private/installed_component_app"));
-}
-

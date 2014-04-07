@@ -13,17 +13,12 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/web_contents.h"
 #include "net/base/mock_host_resolver.h"
 
-// In the touch build, this fails frequently. http://crbug.com/85205
-#if defined(TOUCH_UI)
-#define MAYBE_IncognitoNoScript FLAKY_IncognitoNoScript
-#else
-#define MAYBE_IncognitoNoScript IncognitoNoScript
-#endif
+using content::WebContents;
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_IncognitoNoScript) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, IncognitoNoScript) {
   ASSERT_TRUE(StartTestServer());
 
   // Loads a simple extension which attempts to change the title of every page
@@ -38,12 +33,12 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_IncognitoNoScript) {
 
   Browser* otr_browser = BrowserList::FindTabbedBrowser(
       browser()->profile()->GetOffTheRecordProfile(), false);
-  TabContents* tab = otr_browser->GetSelectedTabContents();
+  WebContents* tab = otr_browser->GetSelectedWebContents();
 
   // Verify the script didn't run.
   bool result = false;
   ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      tab->render_view_host(), L"",
+      tab->GetRenderViewHost(), L"",
       L"window.domAutomationController.send(document.title == 'Unmodified')",
       &result));
   EXPECT_TRUE(result);
@@ -75,12 +70,12 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, IncognitoYesScript) {
 
   Browser* otr_browser = BrowserList::FindTabbedBrowser(
       browser()->profile()->GetOffTheRecordProfile(), false);
-  TabContents* tab = otr_browser->GetSelectedTabContents();
+  WebContents* tab = otr_browser->GetSelectedWebContents();
 
   // Verify the script ran.
   bool result = false;
   ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      tab->render_view_host(), L"",
+      tab->GetRenderViewHost(), L"",
       L"window.domAutomationController.send(document.title == 'modified')",
       &result));
   EXPECT_TRUE(result);
@@ -96,9 +91,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_DontCreateIncognitoProfile) {
   ASSERT_FALSE(browser()->profile()->HasOffTheRecordProfile());
 }
 
-// Tests that the APIs in an incognito-enabled extension work properly.
-// Flaky - see crbug.com/77951.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, FLAKY_Incognito) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Incognito) {
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(StartTestServer());
 
@@ -117,8 +110,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, FLAKY_Incognito) {
 
 // Tests that the APIs in an incognito-enabled split-mode extension work
 // properly.
-// Hangs flakily on mac, linux, win: http://crbug.com/53991
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_IncognitoSplitMode) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, IncognitoSplitMode) {
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(StartTestServer());
 
@@ -130,6 +122,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_IncognitoSplitMode) {
   catcher_incognito.RestrictToProfile(
       browser()->profile()->GetOffTheRecordProfile());
 
+  ExtensionTestMessageListener listener("waiting", true);
+  ExtensionTestMessageListener listener_incognito("waiting_incognito", true);
+
   // Open incognito window and navigate to test page.
   ui_test_utils::OpenURLOffTheRecord(
       browser()->profile(),
@@ -139,9 +134,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_IncognitoSplitMode) {
       .AppendASCII("incognito").AppendASCII("split")));
 
   // Wait for both extensions to be ready before telling them to proceed.
-  ExtensionTestMessageListener listener("waiting", true);
   EXPECT_TRUE(listener.WaitUntilSatisfied());
-  ExtensionTestMessageListener listener_incognito("waiting", true);
   EXPECT_TRUE(listener_incognito.WaitUntilSatisfied());
   listener.Reply("go");
   listener_incognito.Reply("go");
@@ -169,8 +162,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, IncognitoDisabled) {
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
+#if defined(OS_WIN)
+// http://crbug.com/104438.
+#define MAYBE_IncognitoPopup DISABLED_IncognitoPopup
+#else
+#define MAYBE_IncognitoPopup IncognitoPopup
+#endif
 // Test that opening a popup from an incognito browser window works properly.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, IncognitoPopup) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_IncognitoPopup) {
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(StartTestServer());
 

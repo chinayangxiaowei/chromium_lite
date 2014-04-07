@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/location.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/socket/socket.h"
@@ -21,9 +22,7 @@ MessageReader::MessageReader()
     : socket_(NULL),
       read_pending_(false),
       pending_messages_(0),
-      closed_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          read_callback_(this, &MessageReader::OnRead)) {
+      closed_(false) {
 }
 
 MessageReader::~MessageReader() {
@@ -31,8 +30,8 @@ MessageReader::~MessageReader() {
 }
 
 void MessageReader::Init(net::Socket* socket,
-                         MessageReceivedCallback* callback) {
-  message_received_callback_.reset(callback);
+                         const MessageReceivedCallback& callback) {
+  message_received_callback_ = callback;
   DCHECK(socket);
   socket_ = socket;
   DoRead();
@@ -44,7 +43,8 @@ void MessageReader::DoRead() {
   while (!closed_ && !read_pending_ && pending_messages_ == 0) {
     read_buffer_ = new net::IOBuffer(kReadBufferSize);
     int result = socket_->Read(
-        read_buffer_, kReadBufferSize, &read_callback_);
+        read_buffer_, kReadBufferSize, base::Bind(&MessageReader::OnRead,
+                                                  base::Unretained(this)));
     HandleReadResult(result);
   }
 }
@@ -95,9 +95,9 @@ void MessageReader::OnDataReceived(net::IOBuffer* data, int data_size) {
   // plugin thread if this code is compiled into a separate binary.  Fix this.
   for (std::vector<CompoundBuffer*>::iterator it = new_messages.begin();
        it != new_messages.end(); ++it) {
-    message_received_callback_->Run(*it, NewRunnableMethod(
-        this, &MessageReader::OnMessageDone, *it,
-        base::MessageLoopProxy::current()));
+    message_received_callback_.Run(*it, base::Bind(
+        &MessageReader::OnMessageDone, this,
+        *it, base::MessageLoopProxy::current()));
   }
 }
 

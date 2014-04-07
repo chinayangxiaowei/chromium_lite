@@ -4,6 +4,7 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/json/json_value_serializer.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "base/test/test_timeouts.h"
@@ -11,9 +12,9 @@
 #include "base/values.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/automation/tab_proxy.h"
+#include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/javascript_test_util.h"
 #include "chrome/test/ui/ui_perf_test.h"
-#include "content/common/json_value_serializer.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 
@@ -105,11 +106,13 @@ class SunSpiderTest : public UIPerfTest {
 
     std::string trace_name = reference_ ? "t_ref" : "t";
 
-    PrintResultMeanAndError("total", "", trace_name, total, "ms", true);
+    perf_test::PrintResultMeanAndError("total", "", trace_name, total, "ms",
+                                       true);
 
     ResultsMap::const_iterator it = results.begin();
     for (; it != results.end(); ++it)
-      PrintResultList(it->first, "", trace_name, it->second, "ms", false);
+      perf_test::PrintResultList(it->first, "", trace_name, it->second, "ms",
+                                 false);
   }
 
   DISALLOW_COPY_AND_ASSIGN(SunSpiderTest);

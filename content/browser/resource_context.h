@@ -8,24 +8,24 @@
 #include <map>
 
 #include "base/basictypes.h"
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
+#include "content/common/content_export.h"
 
+class AudioManager;
 class ChromeAppCacheService;
 class ChromeBlobStorageContext;
-class ExtensionInfoMap;
-class HostZoomMap;
 class MediaObserver;
 namespace fileapi {
 class FileSystemContext;
 }  // namespace fileapi
+namespace media_stream {
+class MediaStreamManager;
+}  // namespace media_stream
 namespace net {
 class HostResolver;
 class URLRequestContext;
 }  // namespace net
-namespace prerender {
-class PrerenderManager;
-}  // namespace prerender
 namespace quota {
 class QuotaManager;
 };  // namespace quota
@@ -35,11 +35,13 @@ class DatabaseTracker;
 
 namespace content {
 
+class HostZoomMap;
+
 // ResourceContext contains the relevant context information required for
 // resource loading. It lives on the IO thread, although it is constructed on
 // the UI thread. ResourceContext doesn't own anything it points to, it just
 // holds pointers to relevant objects to resource loading.
-class ResourceContext {
+class CONTENT_EXPORT ResourceContext {
  public:
   virtual ~ResourceContext();
 
@@ -75,15 +77,12 @@ class ResourceContext {
   MediaObserver* media_observer() const;
   void set_media_observer(MediaObserver* media_observer);
 
-  // =======================================================================
-  // TODO(willchan): These don't belong in content/. Remove them eventually.
+  media_stream::MediaStreamManager* media_stream_manager() const;
+  void set_media_stream_manager(
+      media_stream::MediaStreamManager* media_stream_manager);
 
-  // TODO(cbentzel): Kill this one.
-  const base::Callback<prerender::PrerenderManager*(void)>&
-      prerender_manager_getter() const;
-  void set_prerender_manager_getter(
-      const base::Callback<prerender::PrerenderManager*(void)>&
-          prerender_manager_getter);
+  AudioManager* audio_manager() const;
+  void set_audio_manager(AudioManager* audio_manager);
 
  protected:
   ResourceContext();
@@ -100,16 +99,12 @@ class ResourceContext {
   quota::QuotaManager* quota_manager_;
   HostZoomMap* host_zoom_map_;
   MediaObserver* media_observer_;
+  media_stream::MediaStreamManager* media_stream_manager_;
+  AudioManager* audio_manager_;
 
   // Externally-defined data accessible by key.
   typedef std::map<const void*, void*> UserDataMap;
   UserDataMap user_data_;
-
-
-  // =======================================================================
-  // TODO(willchan): These don't belong in content/. Remove them eventually.
-
-  base::Callback<prerender::PrerenderManager*(void)> prerender_manager_getter_;
 
   DISALLOW_COPY_AND_ASSIGN(ResourceContext);
 };

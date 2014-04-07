@@ -9,10 +9,12 @@
 #include "chrome/browser/sync/api/sync_error.h"
 #include "chrome/browser/sync/glue/change_processor.h"
 #include "chrome/browser/sync/glue/model_associator.h"
-#include "chrome/browser/sync/profile_sync_factory.h"
+#include "chrome/browser/sync/profile_sync_components_factory.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/syncable/model_type.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+
+using content::BrowserThread;
 
 namespace browser_sync {
 
@@ -24,7 +26,7 @@ FrontendDataTypeController::FrontendDataTypeController()
 }
 
 FrontendDataTypeController::FrontendDataTypeController(
-    ProfileSyncFactory* profile_sync_factory,
+    ProfileSyncComponentsFactory* profile_sync_factory,
     Profile* profile,
     ProfileSyncService* sync_service)
     : profile_sync_factory_(profile_sync_factory),
@@ -41,16 +43,15 @@ FrontendDataTypeController::~FrontendDataTypeController() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
-void FrontendDataTypeController::Start(StartCallback* start_callback) {
+void FrontendDataTypeController::Start(const StartCallback& start_callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(start_callback);
+  DCHECK(!start_callback.is_null());
   if (state_ != NOT_RUNNING) {
-    start_callback->Run(BUSY, FROM_HERE);
-    delete start_callback;
+    start_callback.Run(BUSY, SyncError());
     return;
   }
 
-  start_callback_.reset(start_callback);
+  start_callback_ = start_callback;
 
   state_ = MODEL_STARTING;
   if (!StartModels()) {
@@ -64,7 +65,7 @@ void FrontendDataTypeController::Start(StartCallback* start_callback) {
   state_ = ASSOCIATING;
   if (!Associate()) {
     // We failed to associate and are aborting.
-    DCHECK_EQ(state_, NOT_RUNNING);
+    DCHECK(state_ == DISABLED || state_ == NOT_RUNNING);
     return;
   }
   DCHECK_EQ(state_, RUNNING);
@@ -80,15 +81,15 @@ bool FrontendDataTypeController::StartModels() {
 bool FrontendDataTypeController::Associate() {
   DCHECK_EQ(state_, ASSOCIATING);
   CreateSyncComponents();
-
   if (!model_associator()->CryptoReadyIfNecessary()) {
-    StartFailed(NEEDS_CRYPTO, FROM_HERE);
+    StartFailed(NEEDS_CRYPTO, SyncError());
     return false;
   }
 
   bool sync_has_nodes = false;
   if (!model_associator()->SyncModelHasUserCreatedNodes(&sync_has_nodes)) {
-    StartFailed(UNRECOVERABLE_ERROR, FROM_HERE);
+    SyncError error(FROM_HERE, "Failed to load sync nodes", type());
+    StartFailed(UNRECOVERABLE_ERROR, error);
     return false;
   }
 
@@ -97,17 +98,17 @@ bool FrontendDataTypeController::Associate() {
   bool merge_success = model_associator()->AssociateModels(&error);
   RecordAssociationTime(base::TimeTicks::Now() - start_time);
   if (!merge_success) {
-    StartFailed(ASSOCIATION_FAILED, error.location());
+    StartFailed(ASSOCIATION_FAILED, error);
     return false;
   }
 
   sync_service_->ActivateDataType(type(), model_safe_group(),
-                                  change_processor_.get());
+                                  change_processor());
   state_ = RUNNING;
   // FinishStart() invokes the DataTypeManager callback, which can lead to a
   // call to Stop() if one of the other data types being started generates an
   // error.
-  FinishStart(!sync_has_nodes ? OK_FIRST_RUN : OK, FROM_HERE);
+  FinishStart(!sync_has_nodes ? OK_FIRST_RUN : OK);
   // Return false if we're not in the RUNNING state (due to Stop() being called
   // from FinishStart()).
   // TODO(zea/atwilson): Should we maybe move the call to FinishStart() out of
@@ -116,34 +117,36 @@ bool FrontendDataTypeController::Associate() {
   return state_ == RUNNING;
 }
 
-void FrontendDataTypeController::StartFailed(
-    StartResult result,
-    const tracked_objects::Location& location) {
+void FrontendDataTypeController::StartFailed(StartResult result,
+                                             const SyncError& error) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   CleanUpState();
   set_model_associator(NULL);
   change_processor_.reset();
-  state_ = NOT_RUNNING;
+  if (result == ASSOCIATION_FAILED) {
+    state_ = DISABLED;
+  } else {
+    state_ = NOT_RUNNING;
+  }
   RecordStartFailure(result);
 
   // We have to release the callback before we call it, since it's possible
   // invoking the callback will trigger a call to STOP(), which will get
   // confused by the non-NULL start_callback_.
-  scoped_ptr<StartCallback> callback(start_callback_.release());
-  // TODO(zea): Send the full SyncError on failure and handle it higher up.
-  callback->Run(result, location);
+  StartCallback callback = start_callback_;
+  start_callback_.Reset();
+  callback.Run(result, error);
 }
 
-void FrontendDataTypeController::FinishStart(
-    StartResult result,
-    const tracked_objects::Location& location) {
+void FrontendDataTypeController::FinishStart(StartResult result) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // We have to release the callback before we call it, since it's possible
   // invoking the callback will trigger a call to STOP(), which will get
   // confused by the non-NULL start_callback_.
-  scoped_ptr<StartCallback> callback(start_callback_.release());
-  callback->Run(result, location);
+  StartCallback callback = start_callback_;
+  start_callback_.Reset();
+  callback.Run(result, SyncError());
 }
 
 void FrontendDataTypeController::Stop() {
@@ -151,19 +154,19 @@ void FrontendDataTypeController::Stop() {
   // If Stop() is called while Start() is waiting for the datatype model to
   // load, abort the start.
   if (state_ == MODEL_STARTING) {
-    StartFailed(ABORTED, FROM_HERE);
+    StartFailed(ABORTED, SyncError());
     // We can just return here since we haven't performed association if we're
     // still in MODEL_STARTING.
     return;
   }
-  DCHECK(!start_callback_.get());
+  DCHECK(start_callback_.is_null());
 
   CleanUpState();
 
   sync_service_->DeactivateDataType(type());
 
   if (model_associator()) {
-    SyncError error;
+    SyncError error;  // Not used.
     model_associator()->DisassociateModels(&error);
   }
 
@@ -195,7 +198,14 @@ void FrontendDataTypeController::OnUnrecoverableError(
     const tracked_objects::Location& from_here, const std::string& message) {
   // The ProfileSyncService will invoke our Stop() method in response to this.
   RecordUnrecoverableError(from_here, message);
-  sync_service_->OnUnrecoverableError(from_here, message);
+
+  // We dont know the current state of the caller. Posting a task will allow
+  // the caller to unwind the stack before we process unrecoverable error.
+  MessageLoop::current()->PostTask(from_here,
+      base::Bind(&ProfileSyncService::OnUnrecoverableError,
+                 sync_service_->AsWeakPtr(),
+                 from_here,
+                 message));
 }
 
 AssociatorInterface* FrontendDataTypeController::model_associator() const {

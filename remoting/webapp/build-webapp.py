@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -169,10 +169,27 @@ def buildWebApp(buildtype, mimetype, destination, zip_path, plugin, files,
                  'UNIQUE_VERSION',
                  '%d.%d' % (version1, version2))
 
-  # Now massage files with our mimetype.
+  # Set the correct mimetype.
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
                  'HOST_PLUGIN_MIMETYPE',
                  mimetype)
+
+  # Set the correct OAuth2 redirect URL.
+  baseUrl = (
+      'https://talkgadget.google.com/talkgadget/oauth/chrome-remote-desktop')
+  if (buildtype == 'Official'):
+    oauth2RedirectUrlJs = (
+        "'" + baseUrl + "/rel/' + chrome.i18n.getMessage('@@extension_id')")
+    oauth2RedirectUrlJson = baseUrl + '/rel/*'
+  else:
+    oauth2RedirectUrlJs = "'" + baseUrl + "/dev'"
+    oauth2RedirectUrlJson = baseUrl + '/dev*'
+  findAndReplace(os.path.join(destination, 'plugin_settings.js'),
+                 "'OAUTH2_REDIRECT_URL'",
+                 oauth2RedirectUrlJs)
+  findAndReplace(os.path.join(destination, 'manifest.json'),
+                 "OAUTH2_REDIRECT_URL",
+                 oauth2RedirectUrlJson)
 
   # Make the zipfile.
   createZip(zip_path, destination)
@@ -183,7 +200,7 @@ def main():
     print ('Usage: build-webapp.py '
            '<build-type> <mime-type> <dst> <zip-path> <plugin> '
            '<other files...> --locales <locales...>')
-    sys.exit(1)
+    return 1
 
   reading_locales = False
   files = []
@@ -198,7 +215,8 @@ def main():
 
   buildWebApp(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],
               files, locales)
+  return 0
 
 
 if __name__ == '__main__':
-  main()
+  sys.exit(main())

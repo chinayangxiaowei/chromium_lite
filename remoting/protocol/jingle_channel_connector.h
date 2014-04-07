@@ -21,15 +21,15 @@ class RSAPrivateKey;
 namespace remoting {
 namespace protocol {
 
+class ChannelAuthenticator;
+
 class JingleChannelConnector : public base::NonThreadSafe {
  public:
   JingleChannelConnector() { }
   virtual ~JingleChannelConnector() { }
 
-  virtual void Connect(bool initiator,
-                       const std::string& local_cert,
-                       const std::string& remote_cert,
-                       crypto::RSAPrivateKey* local_private_key,
+  // Starts the connection process for the channel.
+  virtual void Connect(scoped_ptr<ChannelAuthenticator> authenticator,
                        cricket::TransportChannel* raw_channel) = 0;
 
  protected:

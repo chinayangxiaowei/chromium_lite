@@ -4,7 +4,15 @@
 
 #include "chrome/browser/ui/webui/flash_ui.h"
 
+#include <map>
+#include <string>
+#include <vector>
+
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/i18n/time_formatting.h"
+#include "base/memory/weak_ptr.h"
+#include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
@@ -17,23 +25,29 @@
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/browser/ui/webui/crashes_ui.h"
 #include "chrome/common/chrome_version_info.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
 #include "content/browser/gpu/gpu_data_manager.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/user_metrics.h"
+#include "content/public/browser/plugin_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "webkit/plugins/npapi/plugin_list.h"
 #include "webkit/plugins/webplugininfo.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
 #endif
+
+using content::PluginService;
+using content::UserMetricsAction;
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 namespace {
 
@@ -59,10 +73,11 @@ const int kTimeout = 8 * 1000;  // 8 seconds.
 
 // The handler for JavaScript messages for the about:flags page.
 class FlashDOMHandler : public WebUIMessageHandler,
-                        public CrashUploadList::Delegate {
+                        public CrashUploadList::Delegate,
+                        public GpuDataManager::Observer {
  public:
   FlashDOMHandler();
-  virtual ~FlashDOMHandler() {}
+  virtual ~FlashDOMHandler();
 
   // WebUIMessageHandler implementation.
   virtual void RegisterMessages() OVERRIDE;
@@ -70,11 +85,14 @@ class FlashDOMHandler : public WebUIMessageHandler,
   // CrashUploadList::Delegate implementation.
   virtual void OnCrashListAvailable() OVERRIDE;
 
+  // GpuDataManager::Observer implementation.
+  virtual void OnGpuInfoUpdate() OVERRIDE;
+
   // Callback for the "requestFlashInfo" message.
   void HandleRequestFlashInfo(const ListValue* args);
 
-  // Callback for the GPU information update.
-  void OnGpuInfoUpdate();
+  // Callback for the Flash plugin information.
+  void OnGotPlugins(const std::vector<webkit::WebPluginInfo>& plugins);
 
  private:
   // Called when we think we might have enough information to return data back
@@ -93,10 +111,12 @@ class FlashDOMHandler : public WebUIMessageHandler,
 
   // GPU variables.
   GpuDataManager* gpu_data_manager_;
-  Callback0::Type* gpu_info_update_callback_;
 
   // Crash list.
   scoped_refptr<CrashUploadList> upload_list_;
+
+  // Factory for the creating refs in callbacks.
+  base::WeakPtrFactory<FlashDOMHandler> weak_ptr_factory_;
 
   // Whether the list of all crashes is available.
   bool crash_list_available_;
@@ -104,23 +124,25 @@ class FlashDOMHandler : public WebUIMessageHandler,
   bool page_has_requested_data_;
   // Whether the GPU data has been collected.
   bool has_gpu_info_;
+  // Whether the plugin information is ready.
+  bool has_plugin_info_;
 
   DISALLOW_COPY_AND_ASSIGN(FlashDOMHandler);
 };
 
 FlashDOMHandler::FlashDOMHandler()
-    : crash_list_available_(false),
+    : weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      crash_list_available_(false),
       page_has_requested_data_(false),
-      has_gpu_info_(false) {
+      has_gpu_info_(false),
+      has_plugin_info_(false) {
   // Request Crash data asynchronously.
   upload_list_ = CrashUploadList::Create(this);
   upload_list_->LoadCrashListAsynchronously();
 
   // Watch for changes in GPUInfo.
   gpu_data_manager_ = GpuDataManager::GetInstance();
-  gpu_info_update_callback_ =
-      NewCallback(this, &FlashDOMHandler::OnGpuInfoUpdate);
-  gpu_data_manager_->AddGpuInfoUpdateCallback(gpu_info_update_callback_);
+  gpu_data_manager_->AddObserver(this);
 
   // Tell GpuDataManager it should have full GpuInfo. If the
   // GPU process has not run yet, this will trigger its launch.
@@ -131,15 +153,23 @@ FlashDOMHandler::FlashDOMHandler()
   if (!gpu_data_manager_->GpuAccessAllowed())
     OnGpuInfoUpdate();
 
+  PluginService::GetInstance()->GetPlugins(base::Bind(
+      &FlashDOMHandler::OnGotPlugins, weak_ptr_factory_.GetWeakPtr()));
+
   // And lastly, we fire off a timer to make sure we never get stuck at the
   // "Loading..." message.
   timeout_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(kTimeout),
                  this, &FlashDOMHandler::OnTimeout);
 }
 
+FlashDOMHandler::~FlashDOMHandler() {
+  gpu_data_manager_->RemoveObserver(this);
+}
+
 void FlashDOMHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("requestFlashInfo",
-      NewCallback(this, &FlashDOMHandler::HandleRequestFlashInfo));
+  web_ui()->RegisterMessageCallback("requestFlashInfo",
+      base::Bind(&FlashDOMHandler::HandleRequestFlashInfo,
+                 base::Unretained(this)));
 }
 
 void FlashDOMHandler::OnCrashListAvailable() {
@@ -168,11 +198,18 @@ void FlashDOMHandler::OnGpuInfoUpdate() {
   MaybeRespondToPage();
 }
 
+void FlashDOMHandler::OnGotPlugins(
+    const std::vector<webkit::WebPluginInfo>& plugins) {
+  has_plugin_info_ = true;
+  MaybeRespondToPage();
+}
+
 void FlashDOMHandler::OnTimeout() {
   // We don't set page_has_requested_data_ because that is guaranteed to appear
   // and we shouldn't be responding to the page before then.
   has_gpu_info_ = true;
   crash_list_available_ = true;
+  has_plugin_info_ = true;
   MaybeRespondToPage();
 }
 
@@ -180,8 +217,10 @@ void FlashDOMHandler::MaybeRespondToPage() {
   // We don't reply until everything is ready. The page is showing a 'loading'
   // message until then. If you add criteria to this list, please update the
   // function OnTimeout() as well.
-  if (!page_has_requested_data_ || !crash_list_available_ || !has_gpu_info_)
+  if (!page_has_requested_data_ || !crash_list_available_ || !has_gpu_info_ ||
+      !has_plugin_info_) {
     return;
+  }
 
   timeout_.Stop();
 
@@ -225,14 +264,14 @@ void FlashDOMHandler::MaybeRespondToPage() {
 
   // Obtain the version of the Flash plugins.
   std::vector<webkit::WebPluginInfo> info_array;
-  webkit::npapi::PluginList::Singleton()->GetPluginInfoArray(
-      GURL(), "application/x-shockwave-flash", false, NULL, &info_array, NULL);
+  PluginService::GetInstance()->GetPluginInfoArray(
+      GURL(), "application/x-shockwave-flash", false, &info_array, NULL);
   string16 flash_version;
   if (info_array.empty()) {
     AddPair(list, ASCIIToUTF16("Flash plugin"), "Disabled");
   } else {
     PluginPrefs* plugin_prefs =
-        PluginPrefs::GetForProfile(Profile::FromWebUI(web_ui_));
+        PluginPrefs::GetForProfile(Profile::FromWebUI(web_ui()));
     for (size_t i = 0; i < info_array.size(); ++i) {
       if (plugin_prefs->IsPluginEnabled(info_array[i])) {
         flash_version = info_array[i].version + ASCIIToUTF16(" ") +
@@ -245,7 +284,7 @@ void FlashDOMHandler::MaybeRespondToPage() {
   }
 
   // Crash information.
-  AddPair(list, ASCIIToUTF16(""), "--- Crash data ---");
+  AddPair(list, string16(), "--- Crash data ---");
   bool crash_reporting_enabled = CrashesUI::CrashReportingEnabled();
   if (crash_reporting_enabled) {
     std::vector<CrashUploadList::CrashInfo> crashes;
@@ -266,14 +305,14 @@ void FlashDOMHandler::MaybeRespondToPage() {
   }
 
   // GPU information.
-  AddPair(list, ASCIIToUTF16(""), "--- GPU information ---");
-  const GPUInfo& gpu_info = gpu_data_manager_->gpu_info();
+  AddPair(list, string16(), "--- GPU information ---");
+  const content::GPUInfo& gpu_info = gpu_data_manager_->gpu_info();
 
   if (!gpu_data_manager_->GpuAccessAllowed())
     AddPair(list, ASCIIToUTF16("WARNING:"), "GPU access is not allowed");
 #if defined(OS_WIN)
-  const DxDiagNode& node = gpu_info.dx_diagnostics;
-  for (std::map<std::string, DxDiagNode>::const_iterator it =
+  const content::DxDiagNode& node = gpu_info.dx_diagnostics;
+  for (std::map<std::string, content::DxDiagNode>::const_iterator it =
            node.children.begin();
        it != node.children.end();
        ++it) {
@@ -294,7 +333,7 @@ void FlashDOMHandler::MaybeRespondToPage() {
   }
 #endif
 
-  AddPair(list, ASCIIToUTF16(""), "--- GPU driver, more information ---");
+  AddPair(list, string16(), "--- GPU driver, more information ---");
   AddPair(list,
           ASCIIToUTF16("Vendor Id"),
           base::StringPrintf("0x%04x", gpu_info.vendor_id));
@@ -318,7 +357,7 @@ void FlashDOMHandler::MaybeRespondToPage() {
 
   DictionaryValue flashInfo;
   flashInfo.Set("flashInfo", list);
-  web_ui_->CallJavascriptFunction("returnFlashInfo", flashInfo);
+  web_ui()->CallJavascriptFunction("returnFlashInfo", flashInfo);
 }
 
 }  // namespace
@@ -329,14 +368,14 @@ void FlashDOMHandler::MaybeRespondToPage() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-FlashUI::FlashUI(TabContents* contents) : ChromeWebUI(contents) {
-  UserMetrics::RecordAction(
+FlashUI::FlashUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  content::RecordAction(
       UserMetricsAction("ViewAboutFlash"));
 
-  AddMessageHandler((new FlashDOMHandler())->Attach(this));
+  web_ui->AddMessageHandler(new FlashDOMHandler());
 
   // Set up the about:flash source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(CreateFlashUIHTMLSource());
 }
 

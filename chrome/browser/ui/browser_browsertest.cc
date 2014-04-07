@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
 #if defined(OS_MACOSX)
@@ -12,10 +13,13 @@
 #include "base/sys_info.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/command_updater.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_helper.h"
+#include "chrome/browser/first_run/first_run.h"
+#include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tabs/pinned_tab_codec.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
@@ -28,6 +32,8 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/fullscreen_controller.h"
+#include "chrome/browser/ui/fullscreen_exit_bubble_type.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
@@ -35,11 +41,17 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_source.h"
-#include "content/common/page_transition_types.h"
+#include "content/browser/tab_contents/interstitial_page.h"
+#include "content/public/browser/favicon_status.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/page_transition_types.h"
+#include "content/public/common/url_constants.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/base/mock_host_resolver.h"
@@ -50,6 +62,13 @@
 #include "base/i18n/rtl.h"
 #include "chrome/browser/browser_process.h"
 #endif
+
+using content::NavigationController;
+using content::NavigationEntry;
+using content::OpenURLParams;
+using content::Referrer;
+using content::WebContents;
+using content::WebContentsObserver;
 
 namespace {
 
@@ -92,7 +111,8 @@ std::wstring WindowCaptionFromPageTitle(std::wstring page_title) {
 // Returns the number of active RenderProcessHosts.
 int CountRenderProcessHosts() {
   int result = 0;
-  for (RenderProcessHost::iterator i(RenderProcessHost::AllHostsIterator());
+  for (content::RenderProcessHost::iterator i(
+          content::RenderProcessHost::AllHostsIterator());
        !i.IsAtEnd(); i.Advance())
     ++result;
   return result;
@@ -117,35 +137,31 @@ class MockTabStripModelObserver : public TabStripModelObserver {
 };
 
 // Used by CloseWithAppMenuOpen. Invokes CloseWindow on the supplied browser.
-class CloseWindowTask : public Task {
+void CloseWindowCallback(Browser* browser) {
+  browser->CloseWindow();
+}
+
+// Used by CloseWithAppMenuOpen. Posts a CloseWindowCallback and shows the app
+// menu.
+void RunCloseWithAppMenuCallback(Browser* browser) {
+  // ShowAppMenu is modal under views. Schedule a task that closes the window.
+  MessageLoop::current()->PostTask(
+      FROM_HERE, base::Bind(&CloseWindowCallback, browser));
+  browser->ShowAppMenu();
+}
+
+// Displays "INTERSTITIAL" while the interstitial is attached.
+// (InterstitialPage can be used in a test directly, but there would be no way
+// to visually tell if it is showing or not.)
+class TestInterstitialPage : public InterstitialPage {
  public:
-  explicit CloseWindowTask(Browser* browser) : browser_(browser) {}
+  TestInterstitialPage(WebContents* tab, bool new_navigation, const GURL& url)
+      : InterstitialPage(tab, new_navigation, url) { }
+  virtual ~TestInterstitialPage() { }
 
-  virtual void Run() {
-    browser_->CloseWindow();
+  virtual std::string GetHTMLContents() OVERRIDE {
+    return "<h1>INTERSTITIAL</h1>";
   }
-
- private:
-  Browser* browser_;
-
-  DISALLOW_COPY_AND_ASSIGN(CloseWindowTask);
-};
-
-// Used by CloseWithAppMenuOpen. Posts a CloseWindowTask and shows the app menu.
-class RunCloseWithAppMenuTask : public Task {
- public:
-  explicit RunCloseWithAppMenuTask(Browser* browser) : browser_(browser) {}
-
-  virtual void Run() {
-    // ShowAppMenu is modal under views. Schedule a task that closes the window.
-    MessageLoop::current()->PostTask(FROM_HERE, new CloseWindowTask(browser_));
-    browser_->ShowAppMenu();
-  }
-
- private:
-  Browser* browser_;
-
-  DISALLOW_COPY_AND_ASSIGN(RunCloseWithAppMenuTask);
 };
 
 }  // namespace
@@ -173,11 +189,12 @@ class BrowserTest : public ExtensionBrowserTest {
 
   // Returns the app extension aptly named "App Test".
   const Extension* GetExtension() {
-    const ExtensionList* extensions =
+    const ExtensionSet* extensions =
         browser()->profile()->GetExtensionService()->extensions();
-    for (size_t i = 0; i < extensions->size(); ++i) {
-      if ((*extensions)[i]->name() == "App Test")
-        return (*extensions)[i];
+    for (ExtensionSet::const_iterator it = extensions->begin();
+         it != extensions->end(); ++it) {
+      if ((*it)->name() == "App Test")
+        return *it;
     }
     NOTREACHED();
     return NULL;
@@ -215,12 +232,12 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, JavascriptAlertActivatesTab) {
   GURL url(ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                      FilePath(kTitle1File)));
   ui_test_utils::NavigateToURL(browser(), url);
-  AddTabAtIndex(0, url, PageTransition::TYPED);
+  AddTabAtIndex(0, url, content::PAGE_TRANSITION_TYPED);
   EXPECT_EQ(2, browser()->tab_count());
   EXPECT_EQ(0, browser()->active_index());
-  TabContents* second_tab = browser()->GetTabContentsAt(1);
+  WebContents* second_tab = browser()->GetWebContentsAt(1);
   ASSERT_TRUE(second_tab);
-  second_tab->render_view_host()->ExecuteJavascriptInWebFrame(
+  second_tab->GetRenderViewHost()->ExecuteJavascriptInWebFrame(
       string16(),
       ASCIIToUTF16("alert('Activate!');"));
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
@@ -251,7 +268,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_ThirtyFourTabs) {
 
   // There is one initial tab.
   for (int ix = 0; ix != 33; ++ix)
-    browser()->AddSelectedTabWithURL(url, PageTransition::TYPED);
+    browser()->AddSelectedTabWithURL(url, content::PAGE_TRANSITION_TYPED);
   EXPECT_EQ(34, browser()->tab_count());
 
   // See browser\renderer_host\render_process_host.cc for the algorithm to
@@ -274,10 +291,10 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, ReloadThenCancelBeforeUnload) {
   browser()->Reload(CURRENT_TAB);
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
   alert->CloseModalDialog();
-  EXPECT_FALSE(browser()->GetSelectedTabContents()->IsLoading());
+  EXPECT_FALSE(browser()->GetSelectedWebContents()->IsLoading());
 
   // Clear the beforeunload handler so the test can easily exit.
-  browser()->GetSelectedTabContents()->render_view_host()->
+  browser()->GetSelectedWebContents()->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(),
                                   ASCIIToUTF16("onbeforeunload=null;"));
 }
@@ -292,21 +309,25 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, CancelBeforeUnloadResetsURL) {
   // Navigate to a page that triggers a cross-site transition.
   ASSERT_TRUE(test_server()->Start());
   GURL url2(test_server()->GetURL("files/title1.html"));
-  browser()->OpenURL(url2, GURL(), CURRENT_TAB, PageTransition::TYPED);
+  browser()->OpenURL(OpenURLParams(
+      url2, Referrer(), CURRENT_TAB, content::PAGE_TRANSITION_TYPED, false));
+
+  ui_test_utils::WindowedNotificationObserver host_destroyed_observer(
+      content::NOTIFICATION_RENDER_WIDGET_HOST_DESTROYED,
+      content::NotificationService::AllSources());
 
   // Cancel the dialog.
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
   alert->CloseModalDialog();
-  EXPECT_FALSE(browser()->GetSelectedTabContents()->IsLoading());
+  EXPECT_FALSE(browser()->GetSelectedWebContents()->IsLoading());
 
   // Wait for the ShouldClose_ACK to arrive.  We can detect it by waiting for
   // the pending RVH to be destroyed.
-  ui_test_utils::WaitForNotification(
-      content::NOTIFICATION_RENDER_WIDGET_HOST_DESTROYED);
+  host_destroyed_observer.Wait();
   EXPECT_EQ(url.spec(), UTF16ToUTF8(browser()->toolbar_model()->GetText()));
 
   // Clear the beforeunload handler so the test can easily exit.
-  browser()->GetSelectedTabContents()->render_view_host()->
+  browser()->GetSelectedWebContents()->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(),
                                   ASCIIToUTF16("onbeforeunload=null;"));
 }
@@ -323,14 +344,14 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, CancelBeforeUnloadResetsURL) {
 // Test for crbug.com/11647.  A page closed with window.close() should not have
 // two beforeunload dialogs shown.
 IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_SingleBeforeUnloadAfterWindowClose) {
-  browser()->GetSelectedTabContents()->render_view_host()->
+  browser()->GetSelectedWebContents()->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(),
                                   ASCIIToUTF16(kOpenNewBeforeUnloadPage));
 
   // Close the new window with JavaScript, which should show a single
   // beforeunload dialog.  Then show another alert, to make it easy to verify
   // that a second beforeunload dialog isn't shown.
-  browser()->GetTabContentsAt(0)->render_view_host()->
+  browser()->GetWebContentsAt(0)->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(),
                                   ASCIIToUTF16("w.close(); alert('bar');"));
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
@@ -361,8 +382,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, NullOpenerRedirectForksProcess) {
 
   // Start with an http URL.
   ui_test_utils::NavigateToURL(browser(), http_url);
-  TabContents* oldtab = browser()->GetSelectedTabContents();
-  RenderProcessHost* process = oldtab->render_view_host()->process();
+  WebContents* oldtab = browser()->GetSelectedWebContents();
+  content::RenderProcessHost* process = oldtab->GetRenderProcessHost();
 
   // Now open a tab to a blank page, set its opener to null, and redirect it
   // cross-site.
@@ -374,26 +395,27 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, NullOpenerRedirectForksProcess) {
 
   ui_test_utils::WindowedNotificationObserver popup_observer(
         content::NOTIFICATION_TAB_ADDED,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
   ui_test_utils::WindowedNotificationObserver nav_observer(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
-  oldtab->render_view_host()->
+        content::NotificationService::AllSources());
+  oldtab->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(), ASCIIToUTF16(redirect_popup));
 
   // Wait for popup window to appear and finish navigating.
   popup_observer.Wait();
   ASSERT_EQ(2, browser()->tab_count());
-  TabContents* newtab = browser()->GetSelectedTabContents();
+  WebContents* newtab = browser()->GetSelectedWebContents();
   EXPECT_TRUE(newtab);
   EXPECT_NE(oldtab, newtab);
   nav_observer.Wait();
-  ASSERT_TRUE(newtab->controller().GetLastCommittedEntry());
+  ASSERT_TRUE(newtab->GetController().GetLastCommittedEntry());
   EXPECT_EQ(https_url.spec(),
-            newtab->controller().GetLastCommittedEntry()->url().spec());
+            newtab->GetController().GetLastCommittedEntry()->GetURL().spec());
 
   // Popup window should not be in the opener's process.
-  RenderProcessHost* popup_process = newtab->render_view_host()->process();
+  content::RenderProcessHost* popup_process =
+      newtab->GetRenderProcessHost();
   EXPECT_NE(process, popup_process);
 
   // Now open a tab to a blank page, set its opener to null, and use a
@@ -407,26 +429,27 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, NullOpenerRedirectForksProcess) {
 
   ui_test_utils::WindowedNotificationObserver popup_observer2(
         content::NOTIFICATION_TAB_ADDED,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
   ui_test_utils::WindowedNotificationObserver nav_observer2(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
-  oldtab->render_view_host()->
+        content::NotificationService::AllSources());
+  oldtab->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(), ASCIIToUTF16(refresh_popup));
 
   // Wait for popup window to appear and finish navigating.
   popup_observer2.Wait();
   ASSERT_EQ(3, browser()->tab_count());
-  TabContents* newtab2 = browser()->GetSelectedTabContents();
+  WebContents* newtab2 = browser()->GetSelectedWebContents();
   EXPECT_TRUE(newtab2);
   EXPECT_NE(oldtab, newtab2);
   nav_observer2.Wait();
-  ASSERT_TRUE(newtab2->controller().GetLastCommittedEntry());
+  ASSERT_TRUE(newtab2->GetController().GetLastCommittedEntry());
   EXPECT_EQ(https_url.spec(),
-            newtab2->controller().GetLastCommittedEntry()->url().spec());
+            newtab2->GetController().GetLastCommittedEntry()->GetURL().spec());
 
   // This popup window should also not be in the opener's process.
-  RenderProcessHost* popup_process2 = newtab2->render_view_host()->process();
+  content::RenderProcessHost* popup_process2 =
+      newtab2->GetRenderProcessHost();
   EXPECT_NE(process, popup_process2);
 }
 
@@ -447,8 +470,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, OtherRedirectsDontForkProcess) {
 
   // Start with an http URL.
   ui_test_utils::NavigateToURL(browser(), http_url);
-  TabContents* oldtab = browser()->GetSelectedTabContents();
-  RenderProcessHost* process = oldtab->render_view_host()->process();
+  WebContents* oldtab = browser()->GetSelectedWebContents();
+  content::RenderProcessHost* process = oldtab->GetRenderProcessHost();
 
   // Now open a tab to a blank page, set its opener to null, and redirect it
   // cross-site.
@@ -459,26 +482,27 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, OtherRedirectsDontForkProcess) {
 
   ui_test_utils::WindowedNotificationObserver popup_observer(
         content::NOTIFICATION_TAB_ADDED,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
   ui_test_utils::WindowedNotificationObserver nav_observer(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
-  oldtab->render_view_host()->
+        content::NotificationService::AllSources());
+  oldtab->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(), ASCIIToUTF16(dont_fork_popup));
 
   // Wait for popup window to appear and finish navigating.
   popup_observer.Wait();
   ASSERT_EQ(2, browser()->tab_count());
-  TabContents* newtab = browser()->GetSelectedTabContents();
+  WebContents* newtab = browser()->GetSelectedWebContents();
   EXPECT_TRUE(newtab);
   EXPECT_NE(oldtab, newtab);
   nav_observer.Wait();
-  ASSERT_TRUE(newtab->controller().GetLastCommittedEntry());
+  ASSERT_TRUE(newtab->GetController().GetLastCommittedEntry());
   EXPECT_EQ(https_url.spec(),
-            newtab->controller().GetLastCommittedEntry()->url().spec());
+            newtab->GetController().GetLastCommittedEntry()->GetURL().spec());
 
   // Popup window should still be in the opener's process.
-  RenderProcessHost* popup_process = newtab->render_view_host()->process();
+  content::RenderProcessHost* popup_process =
+      newtab->GetRenderProcessHost();
   EXPECT_EQ(process, popup_process);
 
   // Same thing if the current tab tries to navigate itself.
@@ -488,16 +512,16 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, OtherRedirectsDontForkProcess) {
 
   ui_test_utils::WindowedNotificationObserver nav_observer2(
         content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-        NotificationService::AllSources());
-  oldtab->render_view_host()->
+        content::NotificationService::AllSources());
+  oldtab->GetRenderViewHost()->
       ExecuteJavascriptInWebFrame(string16(), ASCIIToUTF16(navigate_str));
   nav_observer2.Wait();
-  ASSERT_TRUE(oldtab->controller().GetLastCommittedEntry());
+  ASSERT_TRUE(oldtab->GetController().GetLastCommittedEntry());
   EXPECT_EQ(https_url.spec(),
-            oldtab->controller().GetLastCommittedEntry()->url().spec());
+            oldtab->GetController().GetLastCommittedEntry()->GetURL().spec());
 
   // Original window should still be in the original process.
-  RenderProcessHost* new_process = newtab->render_view_host()->process();
+  content::RenderProcessHost* new_process = newtab->GetRenderProcessHost();
   EXPECT_EQ(process, new_process);
 }
 
@@ -508,10 +532,11 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RenderIdleTime) {
   ui_test_utils::NavigateToURL(browser(),
       ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                 FilePath(kTitle1File)));
-  RenderProcessHost::iterator it(RenderProcessHost::AllHostsIterator());
+  content::RenderProcessHost::iterator it(
+      content::RenderProcessHost::AllHostsIterator());
   for (; !it.IsAtEnd(); it.Advance()) {
     base::TimeDelta renderer_td =
-        it.GetCurrentValue()->get_child_process_idle_time();
+        it.GetCurrentValue()->GetChildProcessIdleTime();
     base::TimeDelta browser_td = base::TimeTicks::Now() - start;
     EXPECT_TRUE(browser_td >= renderer_td);
   }
@@ -594,9 +619,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, DISABLED_ConvertTabToAppShortcut) {
   ASSERT_TRUE(http_url.SchemeIs(chrome::kHttpScheme));
 
   ASSERT_EQ(1, browser()->tab_count());
-  TabContents* initial_tab = browser()->GetTabContentsAt(0);
-  TabContents* app_tab = browser()->AddSelectedTabWithURL(
-      http_url, PageTransition::TYPED)->tab_contents();
+  WebContents* initial_tab = browser()->GetWebContentsAt(0);
+  WebContents* app_tab = browser()->AddSelectedTabWithURL(
+      http_url, content::PAGE_TRANSITION_TYPED)->web_contents();
   ASSERT_EQ(2, browser()->tab_count());
   ASSERT_EQ(1u, BrowserList::GetBrowserCount(browser()->profile()));
 
@@ -621,12 +646,12 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, DISABLED_ConvertTabToAppShortcut) {
 
   // Check that the tab contents is in the new browser, and not in the old.
   ASSERT_EQ(1, browser()->tab_count());
-  ASSERT_EQ(initial_tab, browser()->GetTabContentsAt(0));
+  ASSERT_EQ(initial_tab, browser()->GetWebContentsAt(0));
 
   // Check that the appliaction browser has a single tab, and that tab contains
   // the content that we app-ified.
   ASSERT_EQ(1, app_browser->tab_count());
-  ASSERT_EQ(app_tab, app_browser->GetTabContentsAt(0));
+  ASSERT_EQ(app_tab, app_browser->GetWebContentsAt(0));
 
   // Normal tabs should accept load drops.
   EXPECT_TRUE(initial_tab->GetMutableRendererPrefs()->can_accept_load_drops);
@@ -647,9 +672,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest,
 
   ui_test_utils::NavigateToURL(browser(), url);
 
-  NavigationEntry* entry = browser()->GetSelectedTabContents()->
-      controller().GetActiveEntry();
-  EXPECT_EQ(expected_favicon_url.spec(), entry->favicon().url().spec());
+  NavigationEntry* entry = browser()->GetSelectedWebContents()->
+      GetController().GetActiveEntry();
+  EXPECT_EQ(expected_favicon_url.spec(), entry->GetFavicon().url.spec());
 }
 
 #if defined(OS_MACOSX) || defined(OS_LINUX)
@@ -667,14 +692,14 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_FaviconChange) {
   ASSERT_TRUE(file_url.SchemeIs(chrome::kFileScheme));
   ui_test_utils::NavigateToURL(browser(), file_url);
 
-  NavigationEntry* entry = browser()->GetSelectedTabContents()->
-      controller().GetActiveEntry();
+  NavigationEntry* entry = browser()->GetSelectedWebContents()->
+      GetController().GetActiveEntry();
   static const FilePath::CharType* kIcon =
       FILE_PATH_LITERAL("test1.png");
   GURL expected_favicon_url(
       ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                          FilePath(kIcon)));
-  EXPECT_EQ(expected_favicon_url.spec(), entry->favicon().url().spec());
+  EXPECT_EQ(expected_favicon_url.spec(), entry->GetFavicon().url.spec());
 }
 
 // Makes sure TabClosing is sent when uninstalling an extension that is an app
@@ -696,7 +721,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, TabClosingWhenRemovingExtension) {
                                   MSG_ROUTING_NONE, NULL, NULL);
   app_contents->extension_tab_helper()->SetExtensionApp(extension_app);
 
-  model->AddTabContents(app_contents, 0, 0, TabStripModel::ADD_NONE);
+  model->AddTabContents(app_contents, 0, content::PageTransitionFromInt(0),
+                        TabStripModel::ADD_NONE);
   model->SetTabPinned(0, true);
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -727,7 +753,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, AppIdSwitch) {
   CommandLine command_line(CommandLine::NO_PROGRAM);
   command_line.AppendSwitchASCII(switches::kAppId, extension_app->id());
 
-  BrowserInit::LaunchWithProfile launch(FilePath(), command_line);
+  BrowserInit::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
+      BrowserInit::IS_FIRST_RUN : BrowserInit::IS_NOT_FIRST_RUN;
+  BrowserInit::LaunchWithProfile launch(FilePath(), command_line, first_run);
   ASSERT_TRUE(launch.OpenApplicationWindow(browser()->profile()));
 
   // Check that the new browser has an app name.
@@ -766,12 +794,12 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_PageLanguageDetection) {
 
   // Open a new tab with a page in English.
   AddTabAtIndex(0, GURL(test_server()->GetURL("files/english_page.html")),
-                PageTransition::TYPED);
+                content::PAGE_TRANSITION_TYPED);
 
-  TabContents* current_tab = browser()->GetSelectedTabContents();
+  WebContents* current_tab = browser()->GetSelectedWebContents();
   TabContentsWrapper* wrapper = browser()->GetSelectedTabContentsWrapper();
   TranslateTabHelper* helper = wrapper->translate_tab_helper();
-  Source<TabContents> source(current_tab);
+  content::Source<WebContents> source(current_tab);
 
   ui_test_utils::WindowedNotificationObserverWithDetails<std::string>
       en_language_detected_signal(chrome::NOTIFICATION_TAB_LANGUAGE_DETERMINED,
@@ -797,60 +825,148 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_PageLanguageDetection) {
   EXPECT_EQ("fr", helper->language_state().original_language());
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserTest, TestNewTabExitsFullscreen) {
+#if defined(OS_MACOSX)
+// http://crbug.com/104265
+#define MAYBE_TestNewTabExitsFullscreen DISABLED_TestNewTabExitsFullscreen
+#else
+#define MAYBE_TestNewTabExitsFullscreen TestNewTabExitsFullscreen
+#endif
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_TestNewTabExitsFullscreen) {
   ASSERT_TRUE(test_server()->Start());
 
-  AddTabAtIndex(0, GURL("about:blank"), PageTransition::TYPED);
+  AddTabAtIndex(
+      0, GURL(chrome::kAboutBlankURL), content::PAGE_TRANSITION_TYPED);
 
-  TabContents* fullscreen_tab = browser()->GetSelectedTabContents();
+  WebContents* fullscreen_tab = browser()->GetSelectedWebContents();
 
-  browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
-  AddTabAtIndex(1, GURL("about:blank"), PageTransition::TYPED);
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
-}
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
+    fullscreen_observer.Wait();
+    ASSERT_TRUE(browser()->window()->IsFullscreen());
+  }
 
-IN_PROC_BROWSER_TEST_F(BrowserTest, TestTabExitsItselfFromFullscreen) {
-  ASSERT_TRUE(test_server()->Start());
-
-  AddTabAtIndex(0, GURL("about:blank"), PageTransition::TYPED);
-
-  TabContents* fullscreen_tab = browser()->GetSelectedTabContents();
-
-  browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
-  browser()->ToggleFullscreenModeForTab(fullscreen_tab, false);
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    AddTabAtIndex(
+        1, GURL(chrome::kAboutBlankURL), content::PAGE_TRANSITION_TYPED);
+    fullscreen_observer.Wait();
+    ASSERT_FALSE(browser()->window()->IsFullscreen());
+  }
 }
 
 #if defined(OS_MACOSX)
-IN_PROC_BROWSER_TEST_F(BrowserTest, TabEntersPresentationModeFromWindowed) {
+// http://crbug.com/100467
+#define MAYBE_TestTabExitsItselfFromFullscreen \
+        FAILS_TestTabExitsItselfFromFullscreen
+#else
+#define MAYBE_TestTabExitsItselfFromFullscreen TestTabExitsItselfFromFullscreen
+#endif
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_TestTabExitsItselfFromFullscreen) {
   ASSERT_TRUE(test_server()->Start());
 
-  AddTabAtIndex(0, GURL("about:blank"), PageTransition::TYPED);
+  AddTabAtIndex(
+      0, GURL(chrome::kAboutBlankURL), content::PAGE_TRANSITION_TYPED);
 
-  TabContents* fullscreen_tab = browser()->GetSelectedTabContents();
+  WebContents* fullscreen_tab = browser()->GetSelectedWebContents();
 
-  EXPECT_FALSE(browser()->window()->IsFullscreen());
-  EXPECT_FALSE(browser()->window()->InPresentationMode());
-  browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
-  ASSERT_TRUE(browser()->window()->InPresentationMode());
-  browser()->TogglePresentationMode();
-  ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
-  ASSERT_FALSE(browser()->window()->InPresentationMode());
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
+    fullscreen_observer.Wait();
+    ASSERT_TRUE(browser()->window()->IsFullscreen());
+  }
+
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->ToggleFullscreenModeForTab(fullscreen_tab, false);
+    fullscreen_observer.Wait();
+    ASSERT_FALSE(browser()->window()->IsFullscreen());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, TestFullscreenBubbleMouseLockState) {
+  ASSERT_TRUE(test_server()->Start());
+
+  AddTabAtIndex(0, GURL(chrome::kAboutBlankURL),
+                content::PAGE_TRANSITION_TYPED);
+  AddTabAtIndex(1, GURL(chrome::kAboutBlankURL),
+                content::PAGE_TRANSITION_TYPED);
+
+  WebContents* fullscreen_tab = browser()->GetSelectedWebContents();
+
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
+    fullscreen_observer.Wait();
+    ASSERT_TRUE(browser()->window()->IsFullscreen());
+  }
+
+  browser()->RequestToLockMouse(fullscreen_tab);
+  FullscreenExitBubbleType type =
+      browser()->fullscreen_controller_->GetFullscreenExitBubbleType();
+  bool mouse_lock = false;
+  fullscreen_bubble::PermissionRequestedByType(type, NULL, &mouse_lock);
+  ASSERT_TRUE(mouse_lock);
+
+  browser()->OnAcceptFullscreenPermission(fullscreen_tab->GetURL(), type);
+  type = browser()->fullscreen_controller_->GetFullscreenExitBubbleType();
+  ASSERT_FALSE(fullscreen_bubble::ShowButtonsForType(type));
+}
+
+#if defined(OS_MACOSX)
+// http://crbug.com/100467
+IN_PROC_BROWSER_TEST_F(
+    BrowserTest, FAILS_TabEntersPresentationModeFromWindowed) {
+  ASSERT_TRUE(test_server()->Start());
+
+  AddTabAtIndex(
+      0, GURL(chrome::kAboutBlankURL), content::PAGE_TRANSITION_TYPED);
+
+  WebContents* fullscreen_tab = browser()->GetSelectedWebContents();
+
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    EXPECT_FALSE(browser()->window()->IsFullscreen());
+    EXPECT_FALSE(browser()->window()->InPresentationMode());
+    browser()->ToggleFullscreenModeForTab(fullscreen_tab, true);
+    fullscreen_observer.Wait();
+    ASSERT_TRUE(browser()->window()->IsFullscreen());
+    ASSERT_TRUE(browser()->window()->InPresentationMode());
+  }
+
+  {
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->TogglePresentationMode(false);
+    fullscreen_observer.Wait();
+    ASSERT_FALSE(browser()->window()->IsFullscreen());
+    ASSERT_FALSE(browser()->window()->InPresentationMode());
+  }
 
   if (base::mac::IsOSLionOrLater()) {
     // Test that tab fullscreen mode doesn't make presentation mode the default
     // on Lion.
-    browser()->ToggleFullscreenMode();
-    ui_test_utils::WaitForNotification(chrome::NOTIFICATION_FULLSCREEN_CHANGED);
+    ui_test_utils::WindowedNotificationObserver fullscreen_observer(
+        chrome::NOTIFICATION_FULLSCREEN_CHANGED,
+        content::NotificationService::AllSources());
+    browser()->ToggleFullscreenMode(false);
+    fullscreen_observer.Wait();
     ASSERT_TRUE(browser()->window()->IsFullscreen());
     ASSERT_FALSE(browser()->window()->InPresentationMode());
   }
@@ -879,7 +995,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
     Browser::TabContentsFactory(browser()->profile(), NULL,
                                 MSG_ROUTING_NONE, NULL, NULL);
   app_contents->extension_tab_helper()->SetExtensionApp(extension_app);
-  model->AddTabContents(app_contents, 0, 0, TabStripModel::ADD_NONE);
+  model->AddTabContents(app_contents, 0, content::PageTransitionFromInt(0),
+                        TabStripModel::ADD_NONE);
   model->SetTabPinned(0, true);
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -888,7 +1005,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
 
   // Add a pinned non-app tab.
   browser()->NewTab();
-  ui_test_utils::NavigateToURL(browser(), GURL("about:blank"));
+  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kAboutBlankURL));
   model->SetTabPinned(2, true);
 
   // Write out the pinned tabs.
@@ -896,7 +1013,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
 
   // Simulate launching again.
   CommandLine dummy(CommandLine::NO_PROGRAM);
-  BrowserInit::LaunchWithProfile launch(FilePath(), dummy);
+  BrowserInit::IsFirstRun first_run = first_run::IsChromeFirstRun() ?
+      BrowserInit::IS_FIRST_RUN : BrowserInit::IS_NOT_FIRST_RUN;
+  BrowserInit::LaunchWithProfile launch(FilePath(), dummy, first_run);
   launch.profile_ = browser()->profile();
   launch.ProcessStartupURLs(std::vector<GURL>());
 
@@ -927,8 +1046,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
   EXPECT_TRUE(new_model->IsTabPinned(1));
   EXPECT_FALSE(new_model->IsTabPinned(2));
 
-  EXPECT_EQ(browser()->GetHomePage(),
-      new_model->GetTabContentsAt(2)->tab_contents()->GetURL());
+  EXPECT_EQ(browser()->profile()->GetHomePage(),
+      new_model->GetTabContentsAt(2)->web_contents()->GetURL());
 
   EXPECT_TRUE(
       new_model->GetTabContentsAt(0)->extension_tab_helper()->extension_app() ==
@@ -943,8 +1062,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, CloseWithAppMenuOpen) {
     return;
 
   // We need a message loop running for menus on windows.
-  MessageLoop::current()->PostTask(FROM_HERE,
-                                   new RunCloseWithAppMenuTask(browser()));
+  MessageLoop::current()->PostTask(
+      FROM_HERE, base::Bind(&RunCloseWithAppMenuCallback, browser()));
 }
 
 #if !defined(OS_MACOSX)
@@ -957,10 +1076,11 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, OpenAppWindowLikeNtp) {
   const Extension* extension_app = GetExtension();
 
   // Launch it in a window, as AppLauncherHandler::HandleLaunchApp() would.
-  TabContents* app_window =
+  WebContents* app_window =
       Browser::OpenApplication(browser()->profile(),
                                extension_app,
                                extension_misc::LAUNCH_WINDOW,
+                               GURL(),
                                NEW_WINDOW);
   ASSERT_TRUE(app_window);
 
@@ -1007,9 +1127,15 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, StartMaximized) {
   }
 }
 
+// Aura doesn't support minimized window. crbug.com/104571.
+#if defined(USE_AURA)
+#define MAYBE_StartMinimized DISABLED_StartMinimized
+#else
+#define MAYBE_StartMinimized StartMinimized
+#endif
 // Makes sure the browser doesn't crash when
 // set_show_state(ui::SHOW_STATE_MINIMIZED) has been invoked.
-IN_PROC_BROWSER_TEST_F(BrowserTest, StartMinimized) {
+IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_StartMinimized) {
   // Can't test TYPE_PANEL as they are currently created differently (and can't
   // end up minimized).
   Browser::Type types[] = { Browser::TYPE_TABBED, Browser::TYPE_POPUP };
@@ -1019,6 +1145,284 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, StartMinimized) {
     min_browser->InitBrowserWindow();
     AddBlankTabAndShow(min_browser);
   }
+}
+
+// Makes sure the forward button is disabled immediately when navigating
+// forward to a slow-to-commit page.
+IN_PROC_BROWSER_TEST_F(BrowserTest, ForwardDisabledOnForward) {
+  GURL blank_url(chrome::kAboutBlankURL);
+  ui_test_utils::NavigateToURL(browser(), blank_url);
+
+  ui_test_utils::NavigateToURL(browser(),
+      ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
+                                FilePath(kTitle1File)));
+
+  ui_test_utils::WindowedNotificationObserver back_nav_load_observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::Source<NavigationController>(
+          &browser()->GetSelectedWebContents()->GetController()));
+  browser()->GoBack(CURRENT_TAB);
+  back_nav_load_observer.Wait();
+  EXPECT_TRUE(browser()->command_updater()->IsCommandEnabled(IDC_FORWARD));
+
+  ui_test_utils::WindowedNotificationObserver forward_nav_load_observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::Source<NavigationController>(
+          &browser()->GetSelectedWebContents()->GetController()));
+  browser()->GoForward(CURRENT_TAB);
+  // This check will happen before the navigation completes, since the browser
+  // won't process the renderer's response until the Wait() call below.
+  EXPECT_FALSE(browser()->command_updater()->IsCommandEnabled(IDC_FORWARD));
+  forward_nav_load_observer.Wait();
+}
+
+#if defined(OS_WIN)
+// see http://crbug.com/105306
+#define MAYBE_DisableMenuItemsWhenIncognitoIsForced \
+    FLAKY_DisableMenuItemsWhenIncognitoIsForced
+#else
+#define MAYBE_DisableMenuItemsWhenIncognitoIsForced \
+    DisableMenuItemsWhenIncognitoIsForced
+#endif
+
+// Makes sure certain commands are disabled when Incognito mode is forced.
+IN_PROC_BROWSER_TEST_F(BrowserTest,
+                       MAYBE_DisableMenuItemsWhenIncognitoIsForced) {
+  CommandUpdater* command_updater = browser()->command_updater();
+  // At the beginning, all commands are enabled.
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_NEW_INCOGNITO_WINDOW));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+
+  // Set Incognito to FORCED.
+  IncognitoModePrefs::SetAvailability(browser()->profile()->GetPrefs(),
+                                      IncognitoModePrefs::FORCED);
+  // Bookmarks & Settings commands should get disabled.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+  // New Incognito Window command, however, should be enabled.
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_NEW_INCOGNITO_WINDOW));
+
+  // Create a new browser.
+  Browser* new_browser = Browser::Create(browser()->profile());
+  CommandUpdater* new_command_updater = new_browser->command_updater();
+  // It should have Bookmarks & Settings commands disabled by default.
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(
+      IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(IDC_OPTIONS));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_NEW_INCOGNITO_WINDOW));
+}
+
+// Makes sure New Incognito Window command is disabled when Incognito mode is
+// not available.
+IN_PROC_BROWSER_TEST_F(BrowserTest,
+                       NoNewIncognitoWindowWhenIncognitoIsDisabled) {
+  CommandUpdater* command_updater = browser()->command_updater();
+  // Set Incognito to DISABLED.
+  IncognitoModePrefs::SetAvailability(browser()->profile()->GetPrefs(),
+                                      IncognitoModePrefs::DISABLED);
+  // Make sure New Incognito Window command is disabled. All remaining commands
+  // should be enabled.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_NEW_INCOGNITO_WINDOW));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+
+  // Create a new browser.
+  Browser* new_browser = Browser::Create(browser()->profile());
+  CommandUpdater* new_command_updater = new_browser->command_updater();
+  EXPECT_FALSE(new_command_updater->IsCommandEnabled(IDC_NEW_INCOGNITO_WINDOW));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_TRUE(new_command_updater->IsCommandEnabled(IDC_OPTIONS));
+}
+
+// Makes sure Extensions and Settings commands are disabled in certain
+// circumstances even though normally they should stay enabled.
+IN_PROC_BROWSER_TEST_F(BrowserTest,
+                       DisableExtensionsAndSettingsWhenIncognitoIsDisabled) {
+  CommandUpdater* command_updater = browser()->command_updater();
+  // Disable extensions. This should disable Extensions menu.
+  browser()->profile()->GetExtensionService()->set_extensions_enabled(false);
+  // Set Incognito to DISABLED.
+  IncognitoModePrefs::SetAvailability(browser()->profile()->GetPrefs(),
+                                      IncognitoModePrefs::DISABLED);
+  // Make sure Manage Extensions command is disabled.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_NEW_WINDOW));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+
+  // Create a popup (non-main-UI-type) browser. Settings command as well
+  // as Extensions should be disabled.
+  Browser* popup_browser = browser()->CreateForType(Browser::TYPE_POPUP,
+                                                    browser()->profile());
+  CommandUpdater* popup_command_updater = popup_browser->command_updater();
+  EXPECT_FALSE(popup_command_updater->IsCommandEnabled(IDC_MANAGE_EXTENSIONS));
+  EXPECT_FALSE(popup_command_updater->IsCommandEnabled(IDC_OPTIONS));
+  EXPECT_TRUE(popup_command_updater->IsCommandEnabled(
+      IDC_SHOW_BOOKMARK_MANAGER));
+  EXPECT_FALSE(popup_command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+}
+
+// Makes sure Extensions and Settings commands are disabled in certain
+// circumstances even though normally they should stay enabled.
+IN_PROC_BROWSER_TEST_F(BrowserTest,
+                       DisableOptionsAndImportMenuItemsConsistently) {
+  // Create a popup browser.
+  Browser* popup_browser = browser()->CreateForType(Browser::TYPE_POPUP,
+                                                    browser()->profile());
+  CommandUpdater* command_updater = popup_browser->command_updater();
+  // OPTIONS and IMPORT_SETTINGS are disabled for a non-normal UI.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+
+  // Set Incognito to FORCED.
+  IncognitoModePrefs::SetAvailability(popup_browser->profile()->GetPrefs(),
+                                      IncognitoModePrefs::FORCED);
+  // OPTIONS and IMPORT_SETTINGS are disabled when Incognito is forced.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+  // Set Incognito to AVAILABLE.
+  IncognitoModePrefs::SetAvailability(popup_browser->profile()->GetPrefs(),
+                                      IncognitoModePrefs::ENABLED);
+  // OPTIONS and IMPORT_SETTINGS are still disabled since it is a non-normal UI.
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_OPTIONS));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_IMPORT_SETTINGS));
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, PageZoom) {
+  WebContents* contents = browser()->GetSelectedWebContents();
+  bool enable_plus, enable_minus;
+
+  ui_test_utils::WindowedNotificationObserver zoom_in_observer(
+      content::NOTIFICATION_ZOOM_LEVEL_CHANGED,
+      content::NotificationService::AllSources());
+  browser()->Zoom(content::PAGE_ZOOM_IN);
+  zoom_in_observer.Wait();
+  EXPECT_EQ(contents->GetZoomPercent(&enable_plus, &enable_minus), 110);
+  EXPECT_TRUE(enable_plus);
+  EXPECT_TRUE(enable_minus);
+
+  ui_test_utils::WindowedNotificationObserver zoom_reset_observer(
+      content::NOTIFICATION_ZOOM_LEVEL_CHANGED,
+      content::NotificationService::AllSources());
+  browser()->Zoom(content::PAGE_ZOOM_RESET);
+  zoom_reset_observer.Wait();
+  EXPECT_EQ(contents->GetZoomPercent(&enable_plus, &enable_minus), 100);
+  EXPECT_TRUE(enable_plus);
+  EXPECT_TRUE(enable_minus);
+
+  ui_test_utils::WindowedNotificationObserver zoom_out_observer(
+      content::NOTIFICATION_ZOOM_LEVEL_CHANGED,
+      content::NotificationService::AllSources());
+  browser()->Zoom(content::PAGE_ZOOM_OUT);
+  zoom_out_observer.Wait();
+  EXPECT_EQ(contents->GetZoomPercent(&enable_plus, &enable_minus), 90);
+  EXPECT_TRUE(enable_plus);
+  EXPECT_TRUE(enable_minus);
+
+  browser()->Zoom(content::PAGE_ZOOM_RESET);
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, InterstitialCommandDisable) {
+  ASSERT_TRUE(test_server()->Start());
+  host_resolver()->AddRule("www.example.com", "127.0.0.1");
+  GURL url(test_server()->GetURL("empty.html"));
+  ui_test_utils::NavigateToURL(browser(), url);
+
+  CommandUpdater* command_updater = browser()->command_updater();
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_VIEW_SOURCE));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_PRINT));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_ENCODING_MENU));
+
+  WebContents* contents = browser()->GetSelectedWebContents();
+  TestInterstitialPage* interstitial = new TestInterstitialPage(
+      contents, false, GURL());
+
+  ui_test_utils::WindowedNotificationObserver interstitial_observer(
+      content::NOTIFICATION_INTERSTITIAL_ATTACHED,
+      content::Source<WebContents>(contents));
+  interstitial->Show();
+  interstitial_observer.Wait();
+
+  EXPECT_TRUE(contents->ShowingInterstitialPage());
+
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_VIEW_SOURCE));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_PRINT));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));
+  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_ENCODING_MENU));
+
+  ui_test_utils::WindowedNotificationObserver interstitial_detach_observer(
+      content::NOTIFICATION_INTERSTITIAL_DETACHED,
+      content::Source<WebContents>(contents));
+  interstitial->Proceed();
+  interstitial_detach_observer.Wait();
+  // interstitial is deleted now.
+
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_VIEW_SOURCE));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_PRINT));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_ENCODING_MENU));
+
+}
+
+class MockWebContentsObserver : public WebContentsObserver {
+ public:
+  explicit MockWebContentsObserver(WebContents* web_contents)
+      : WebContentsObserver(web_contents),
+        got_user_gesture_(false) {
+  }
+
+  virtual void DidGetUserGesture() OVERRIDE {
+    got_user_gesture_ = true;
+  }
+
+  bool got_user_gesture() const {
+    return got_user_gesture_;
+  }
+
+  void set_got_user_gesture(bool got_it) {
+    got_user_gesture_ = got_it;
+  }
+
+ private:
+  bool got_user_gesture_;
+
+  DISALLOW_COPY_AND_ASSIGN(MockWebContentsObserver);
+};
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, UserGesturesReported) {
+  // Regression test for http://crbug.com/110707.  Also tests that a user
+  // gesture is sent when a normal navigation (via e.g. the omnibox) is
+  // performed.
+  WebContents* web_contents = browser()->GetSelectedWebContents();
+  MockWebContentsObserver mock_observer(web_contents);
+
+  ASSERT_TRUE(test_server()->Start());
+  GURL url(test_server()->GetURL("empty.html"));
+
+  ui_test_utils::NavigateToURL(browser(), url);
+  EXPECT_TRUE(mock_observer.got_user_gesture());
+
+  mock_observer.set_got_user_gesture(false);
+  browser()->Reload(CURRENT_TAB);
+  EXPECT_TRUE(mock_observer.got_user_gesture());
 }
 
 // TODO(ben): this test was never enabled. It has bit-rotted since being added.
@@ -1053,7 +1457,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest2, NoTabsInPopups) {
   EXPECT_EQ(1, popup_browser->tab_count());
 
   // Now try opening another tab in the popup browser.
-  AddTabWithURLParams params1(url, PageTransition::TYPED);
+  AddTabWithURLParams params1(url, content::PAGE_TRANSITION_TYPED);
   popup_browser->AddTabWithURL(&params1);
   EXPECT_EQ(popup_browser, params1.target);
 
@@ -1071,7 +1475,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest2, NoTabsInPopups) {
 
   // Now try opening another tab in the app browser.
   AddTabWithURLParams params2(GURL(chrome::kAboutBlankURL),
-                              PageTransition::TYPED);
+                              content::PAGE_TRANSITION_TYPED);
   app_browser->AddTabWithURL(&params2);
   EXPECT_EQ(app_browser, params2.target);
 
@@ -1089,7 +1493,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest2, NoTabsInPopups) {
 
   // Now try opening another tab in the app popup browser.
   AddTabWithURLParams params3(GURL(chrome::kAboutBlankURL),
-                              PageTransition::TYPED);
+                              content::PAGE_TRANSITION_TYPED);
   app_popup_browser->AddTabWithURL(&params3);
   EXPECT_EQ(app_popup_browser, params3.target);
 

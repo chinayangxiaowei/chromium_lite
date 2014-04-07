@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,13 +17,19 @@ extern const char kAuxiliaryTextVisibleKey[];
 extern const char kCandidateIdKey[];
 extern const char kCandidateKey[];
 extern const char kCandidatesKey[];
+extern const char kCheckedKey[];
 extern const char kContextIdKey[];
+extern const char kCursorKey[];
 extern const char kCursorVisibleKey[];
+extern const char kEnabledKey[];
 extern const char kEndKey[];
 extern const char kEngineIdKey[];
 extern const char kIdKey[];
+extern const char kItemsKey[];
+extern const char kKeyKey[];
 extern const char kLabelKey[];
 extern const char kPageSizeKey[];
+extern const char kParentIdKey[];
 extern const char kPropertiesKey[];
 extern const char kSegmentsKey[];
 extern const char kSelectionEndKey[];

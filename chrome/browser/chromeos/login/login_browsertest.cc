@@ -8,8 +8,6 @@
 #include "chrome/browser/chromeos/cros/mock_cryptohome_library.h"
 #include "chrome/browser/chromeos/cros/mock_library_loader.h"
 #include "chrome/browser/chromeos/cros/mock_network_library.h"
-#include "chrome/browser/chromeos/cros/mock_power_library.h"
-#include "chrome/browser/chromeos/cros/mock_screen_lock_library.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
@@ -20,16 +18,12 @@
 
 namespace chromeos {
 using ::testing::_;
-using ::testing::AnyNumber;
-using ::testing::InvokeWithoutArgs;
-using ::testing::NiceMock;
+using ::testing::AtLeast;
 using ::testing::Return;
-using ::testing::ReturnRef;
 
 class LoginTestBase : public CrosInProcessBrowserTest {
  public:
-  LoginTestBase() : mock_cryptohome_library_(NULL),
-                    mock_screen_lock_library_(NULL) {
+  LoginTestBase() : mock_cryptohome_library_(NULL) {
   }
 
  protected:
@@ -37,15 +31,12 @@ class LoginTestBase : public CrosInProcessBrowserTest {
     cros_mock_->InitStatusAreaMocks();
     cros_mock_->SetStatusAreaMocksExpectations();
     cros_mock_->InitMockCryptohomeLibrary();
-    cros_mock_->InitMockScreenLockLibrary();
     mock_cryptohome_library_ = cros_mock_->mock_cryptohome_library();
-    mock_screen_lock_library_ = cros_mock_->mock_screen_lock_library();
     EXPECT_CALL(*mock_cryptohome_library_, IsMounted())
         .WillRepeatedly(Return(true));
   }
 
   MockCryptohomeLibrary* mock_cryptohome_library_;
-  MockScreenLockLibrary* mock_screen_lock_library_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(LoginTestBase);
@@ -55,8 +46,6 @@ class LoginUserTest : public LoginTestBase {
  protected:
   virtual void SetUpInProcessBrowserTestFixture() {
     LoginTestBase::SetUpInProcessBrowserTestFixture();
-    EXPECT_CALL(*mock_screen_lock_library_, AddObserver(_))
-        .WillOnce(Return());
   }
 
   virtual void SetUpCommandLine(CommandLine* command_line) {
@@ -66,7 +55,7 @@ class LoginUserTest : public LoginTestBase {
   }
 };
 
-class LoginProfileTest : public LoginTestBase {
+class LoginProfileTest : public LoginUserTest {
  protected:
   virtual void SetUpCommandLine(CommandLine* command_line) {
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");

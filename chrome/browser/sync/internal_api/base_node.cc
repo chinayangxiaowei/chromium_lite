@@ -23,6 +23,7 @@
 #include "chrome/browser/sync/syncable/directory_manager.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/syncable/syncable_id.h"
+#include "chrome/browser/sync/util/time.h"
 
 using syncable::SPECIFICS;
 using sync_pb::AutofillProfileSpecifics;
@@ -106,8 +107,8 @@ bool BaseNode::DecryptIfNecessary() {
       std::string title = GetTitle();
       std::string server_legal_title;
       SyncAPINameToServerName(title, &server_legal_title);
-      VLOG(1) << "Reading from legacy bookmark, manually returning title "
-              << title;
+      DVLOG(1) << "Reading from legacy bookmark, manually returning title "
+               << title;
       unencrypted_data_.CopyFrom(specifics);
       unencrypted_data_.MutableExtension(sync_pb::bookmark)->set_title(
           server_legal_title);
@@ -124,9 +125,9 @@ bool BaseNode::DecryptIfNecessary() {
       syncable::ModelTypeToString(GetModelType()) << ".";
     return false;
   }
-  VLOG(2) << "Decrypted specifics of type "
-          << syncable::ModelTypeToString(GetModelType())
-          << " with content: " << plaintext_data;
+  DVLOG(2) << "Decrypted specifics of type "
+           << syncable::ModelTypeToString(GetModelType())
+           << " with content: " << plaintext_data;
   return true;
 }
 
@@ -174,7 +175,7 @@ int64 BaseNode::GetId() const {
   return GetEntry()->Get(syncable::META_HANDLE);
 }
 
-int64 BaseNode::GetModificationTime() const {
+const base::Time& BaseNode::GetModificationTime() const {
   return GetEntry()->Get(syncable::MTIME);
 }
 
@@ -200,6 +201,12 @@ GURL BaseNode::GetURL() const {
   return GURL(GetBookmarkSpecifics().url());
 }
 
+bool BaseNode::HasChildren() const {
+  syncable::Directory* dir = GetTransaction()->GetLookup();
+  syncable::BaseTransaction* trans = GetTransaction()->GetWrappedTrans();
+  return dir->HasChildren(trans, GetEntry()->Get(syncable::ID));
+}
+
 int64 BaseNode::GetPredecessorId() const {
   syncable::Id id_string = GetEntry()->Get(syncable::PREV_ID);
   if (id_string.IsRoot())
@@ -217,8 +224,11 @@ int64 BaseNode::GetSuccessorId() const {
 int64 BaseNode::GetFirstChildId() const {
   syncable::Directory* dir = GetTransaction()->GetLookup();
   syncable::BaseTransaction* trans = GetTransaction()->GetWrappedTrans();
-  syncable::Id id_string =
-      dir->GetFirstChildId(trans, GetEntry()->Get(syncable::ID));
+  syncable::Id id_string;
+  // TODO(akalin): Propagate up the error further (see
+  // http://crbug.com/100907).
+  CHECK(dir->GetFirstChildId(trans,
+                             GetEntry()->Get(syncable::ID), &id_string));
   if (id_string.IsRoot())
     return kInvalidId;
   return IdToMetahandle(GetTransaction()->GetWrappedTrans(), id_string);
@@ -235,9 +245,9 @@ DictionaryValue* BaseNode::GetSummaryAsValue() const {
 
 DictionaryValue* BaseNode::GetDetailsAsValue() const {
   DictionaryValue* node_info = GetSummaryAsValue();
-  // TODO(akalin): Return time in a better format.
-  node_info->SetString("modificationTime",
-                       base::Int64ToString(GetModificationTime()));
+  node_info->SetString(
+      "modificationTime",
+      browser_sync::GetTimeDebugString(GetModificationTime()));
   node_info->SetString("parentId", base::Int64ToString(GetParentId()));
   // Specifics are already in the Entry value, so no need to duplicate
   // it here.

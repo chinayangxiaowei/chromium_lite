@@ -7,7 +7,7 @@
 #include <GLES2/gl2.h>
 
 #include "ppapi/c/dev/ppb_testing_dev.h"
-#include "ppapi/c/ppb_opengles.h"
+#include "ppapi/c/ppb_opengles2.h"
 #include "ppapi/cpp/graphics_3d.h"
 #include "ppapi/cpp/module.h"
 #include "ppapi/tests/test_utils.h"
@@ -16,13 +16,13 @@
 REGISTER_TEST_CASE(Graphics3D);
 
 bool TestGraphics3D::Init() {
-  opengl_es2_ = reinterpret_cast<const PPB_OpenGLES2*>(
+  opengl_es2_ = static_cast<const PPB_OpenGLES2*>(
       pp::Module::Get()->GetBrowserInterface(PPB_OPENGLES2_INTERFACE));
-  return opengl_es2_ && InitTestingInterface();
+  return opengl_es2_ && CheckTestingInterface();
 }
 
-void TestGraphics3D::RunTest() {
-  RUN_TEST(Frame);
+void TestGraphics3D::RunTests(const std::string& filter) {
+  RUN_TEST(Frame, filter);
 }
 
 std::string TestGraphics3D::TestFrame() {
@@ -33,7 +33,7 @@ std::string TestGraphics3D::TestFrame() {
       PP_GRAPHICS3DATTRIB_HEIGHT, height,
       PP_GRAPHICS3DATTRIB_NONE
   };
-  pp::Graphics3D context(*instance_, pp::Graphics3D(), attribs);
+  pp::Graphics3D context(instance_, attribs);
   ASSERT_FALSE(context.is_null());
 
   // Clear color buffer to opaque red.

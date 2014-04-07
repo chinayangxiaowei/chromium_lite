@@ -17,9 +17,6 @@ class MessageLoopProxy;
 }  // namespace base
 
 namespace remoting {
-
-class ChromotocolConnection;
-
 namespace protocol {
 
 class Session;
@@ -28,7 +25,7 @@ class SessionConfig;
 class VideoReader {
  public:
   static VideoReader* Create(base::MessageLoopProxy* message_loop,
-                             const SessionConfig* config);
+                             const SessionConfig& config);
 
   // The callback is called when initialization is finished. The
   // parameter is set to true on success.
@@ -41,6 +38,7 @@ class VideoReader {
   virtual void Init(Session* session,
                     VideoStub* video_stub,
                     const InitializedCallback& callback) = 0;
+  virtual bool is_connected() = 0;
 
  protected:
   VideoReader() { }

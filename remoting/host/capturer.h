@@ -6,7 +6,7 @@
 #define REMOTING_HOST_CAPTURER_H_
 
 #include "base/basictypes.h"
-#include "base/callback_old.h"
+#include "base/callback.h"
 #include "remoting/base/capture_data.h"
 #include "third_party/skia/include/core/SkRegion.h"
 
@@ -38,12 +38,27 @@ namespace remoting {
 class Capturer {
  public:
   // CaptureCompletedCallback is called when the capturer has completed.
-  typedef Callback1<scoped_refptr<CaptureData> >::Type CaptureCompletedCallback;
+  typedef base::Callback<void(scoped_refptr<CaptureData>)>
+      CaptureCompletedCallback;
 
   virtual ~Capturer() {};
 
   // Create platform-specific capturer.
   static Capturer* Create();
+
+#if defined(OS_LINUX)
+  // Set whether the Capturer should try to use X DAMAGE support if it is
+  // available.  This needs to be called before the Capturer is created.
+  // This is used by the Virtual Me2Me host, since the XDamage extension is
+  // known to work reliably in this case.
+
+  // TODO(lambroslambrou): This currently sets a global flag, referenced during
+  // Capturer::Create().  This is a temporary solution, until the
+  // DesktopEnvironment class is refactored to allow applications to control
+  // the creation of various stubs (including the Capturer) - see
+  // http://crbug.com/104544
+  static void EnableXDamage(bool enable);
+#endif  // defined(OS_LINUX)
 
   // Called when the screen configuration is changed.
   virtual void ScreenConfigurationChanged() = 0;
@@ -58,7 +73,7 @@ class Capturer {
   virtual void InvalidateRegion(const SkRegion& invalid_region) = 0;
 
   // Invalidate the entire screen, of a given size.
-  virtual void InvalidateScreen(const gfx::Size& size) = 0;
+  virtual void InvalidateScreen(const SkISize& size) = 0;
 
   // Invalidate the entire screen, using the size of the most recently
   // captured screen.
@@ -73,10 +88,11 @@ class Capturer {
   // data of the previous capture.
   // There can be at most one concurrent read going on when this
   // method is called.
-  virtual void CaptureInvalidRegion(CaptureCompletedCallback* callback) = 0;
+  virtual void CaptureInvalidRegion(
+      const CaptureCompletedCallback& callback) = 0;
 
   // Get the size of the most recently captured screen.
-  virtual const gfx::Size& size_most_recent() const = 0;
+  virtual const SkISize& size_most_recent() const = 0;
 };
 
 }  // namespace remoting

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,16 +28,22 @@ class GL_EXPORT GLInterface {
   virtual void AttachShader(GLuint program,
                             GLuint shader) = 0;
 
+  virtual void BeginQuery(GLenum target, GLuint id) = 0;
+
   virtual void BindAttribLocation(GLuint program,
                                   GLuint index,
                                   const char* name) = 0;
 
   virtual void BindBuffer(GLenum target, GLuint buffer) = 0;
 
-  virtual void BindFragDataLocationIndexedARB(GLuint program,
-                                              GLuint colorNumber,
-                                              GLuint index,
-                                              const char* name) = 0;
+  virtual void BindFragDataLocationIndexed(GLuint program,
+                                           GLuint colorNumber,
+                                           GLuint index,
+                                           const char* name) = 0;
+
+  virtual void BindFragDataLocation(GLuint program,
+                                    GLuint colorNumber,
+                                    const char* name) = 0;
 
   virtual void BindFramebufferEXT(GLenum target, GLuint framebuffer) = 0;
 
@@ -148,6 +154,8 @@ class GL_EXPORT GLInterface {
   virtual void DeleteRenderbuffersEXT(GLsizei n,
                                       const GLuint* renderbuffers) = 0;
 
+  virtual void DeleteQueries(GLsizei n, const GLuint* ids) = 0;
+
   virtual void DeleteShader(GLuint shader) = 0;
 
   virtual void DeleteTextures(GLsizei n, const GLuint* textures) = 0;
@@ -180,9 +188,14 @@ class GL_EXPORT GLInterface {
   virtual void EGLImageTargetTexture2DOES(
       GLenum target, GLeglImageOES image) = 0;
 
+  virtual void EGLImageTargetRenderbufferStorageOES(
+      GLenum target, GLeglImageOES image) = 0;
+
   virtual void Enable(GLenum cap) = 0;
 
   virtual void EnableVertexAttribArray(GLuint index) = 0;
+
+  virtual void EndQuery(GLenum target) = 0;
 
   virtual void Finish() = 0;
 
@@ -206,6 +219,8 @@ class GL_EXPORT GLInterface {
   virtual void GenerateMipmapEXT(GLenum target) = 0;
 
   virtual void GenFramebuffersEXT(GLsizei n, GLuint* framebuffers) = 0;
+
+  virtual void GenQueries(GLsizei n, GLuint* ids) = 0;
 
   virtual void GenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) = 0;
 
@@ -259,6 +274,18 @@ class GL_EXPORT GLInterface {
                                  GLsizei* length,
                                  char* infolog) = 0;
 
+  virtual void GetQueryiv(GLenum target, GLenum pname, GLint* params) = 0;
+
+  virtual void GetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) = 0;
+
+  virtual void GetQueryObjectiv(GLuint id, GLenum pname, GLint* params) = 0;
+
+  virtual void GetQueryObjectui64v(GLuint id,
+                                   GLenum pname,
+                                   GLuint64* params) = 0;
+
+  virtual void GetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) = 0;
+
   virtual void GetRenderbufferParameterivEXT(GLenum target,
                                              GLenum pname,
                                              GLint* params) = 0;
@@ -301,6 +328,11 @@ class GL_EXPORT GLInterface {
   virtual void GetTexParameteriv(GLenum target,
                                  GLenum pname,
                                  GLint* params) = 0;
+
+  virtual void GetTranslatedShaderSourceANGLE(GLuint shader,
+                                              GLsizei bufsize,
+                                              GLsizei* length,
+                                              char* source) = 0;
 
   virtual void GetUniformfv(GLuint program,
                             GLint location,
@@ -349,6 +381,8 @@ class GL_EXPORT GLInterface {
   virtual void PixelStorei(GLenum pname, GLint param) = 0;
 
   virtual void PolygonOffset(GLfloat factor, GLfloat units) = 0;
+
+  virtual void QueryCounter(GLuint id, GLenum target) = 0;
 
   virtual void ReadBuffer(GLenum src) = 0;
 
@@ -429,6 +463,12 @@ class GL_EXPORT GLInterface {
   virtual void TexParameteriv(GLenum target,
                               GLenum pname,
                               const GLint* params) = 0;
+
+  virtual void TexStorage2DEXT(GLenum target,
+                               GLsizei levels,
+                               GLenum internalformat,
+                               GLsizei width,
+                               GLsizei height) = 0;
 
   virtual void TexSubImage2D(GLenum target,
                              GLint level,
@@ -552,6 +592,16 @@ class GL_EXPORT GLInterface {
   virtual void SetSurfaceCHROMIUM(GLuint id) = 0;
 
   virtual GLenum GetGraphicsResetStatusARB() = 0;
+
+  virtual GLsync FenceSync(GLenum condition, GLbitfield flags) = 0;
+
+  virtual void DeleteSync(GLsync sync) = 0;
+
+  virtual void GetSynciv(GLsync sync,
+                         GLenum pname,
+                         GLsizei bufSize,
+                         GLsizei* length,
+                         GLint* values) = 0;
 
  private:
   static GLInterface* interface_;

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -100,6 +100,7 @@ cr.define('options', function() {
     }
 
     pageName = targetPage.name.toLowerCase();
+    var targetPageWasVisible = targetPage.visible;
 
     // Determine if the root page is 'sticky', meaning that it
     // shouldn't change when showing a sub-page.  This can happen for special
@@ -117,14 +118,11 @@ cr.define('options', function() {
         page.willHidePage();
     }
 
-    var prevVisible = false;
-
     // Update visibilities to show only the hierarchy of the target page.
     for (var name in this.registeredPages) {
       var page = this.registeredPages[name];
       if (!page.parentPage && isRootPageLocked)
         continue;
-      prevVisible = page.visible;
       page.visible = name == pageName ||
           (!document.documentElement.classList.contains('hide-menu') &&
            page.isAncestorOfPage(targetPage));
@@ -142,10 +140,49 @@ cr.define('options', function() {
       var page = this.registeredPages[name];
       if (!page.parentPage && isRootPageLocked)
         continue;
-      if (!prevVisible && page.didShowPage && (name == pageName ||
+      if (!targetPageWasVisible && page.didShowPage && (name == pageName ||
           page.isAncestorOfPage(targetPage)))
         page.didShowPage();
     }
+  };
+
+  /**
+   * Updates the parts of the UI necessary for correctly hiding or displaying
+   * subpages.
+   * @private
+   */
+  OptionsPage.updateDisplayForShowOrHideSubpage_ = function() {
+    OptionsPage.updateSubpageBackdrop_();
+    OptionsPage.updateAriaHiddenForPages_();
+    OptionsPage.updateScrollPosition_();
+  };
+
+  /**
+   * Sets the aria-hidden attribute for pages which have been 'overlapped' by a
+   * sub-page, and removes aria-hidden from the topmost page or subpage.
+   * @private
+   */
+  OptionsPage.updateAriaHiddenForPages_ = function() {
+    var visiblePages = OptionsPage.getVisiblePages_();
+
+    // |visiblePages| is empty when switching top-level pages.
+    if (!visiblePages.length)
+      return;
+
+    var topmostPage = visiblePages.pop();
+
+    for (var i = 0; i < visiblePages.length; ++i) {
+      var page = visiblePages[i];
+      var nestingLevel = page.nestingLevel;
+      var container = nestingLevel > 0 ?
+        $('subpage-sheet-container-' + nestingLevel) : $('page-container');
+      container.setAttribute('aria-hidden', true);
+    }
+
+    var topmostPageContainer = topmostPage.nestingLevel > 0 ?
+        $('subpage-sheet-container-' + topmostPage.nestingLevel) :
+        $('page-container');
+    topmostPageContainer.removeAttribute('aria-hidden');
   };
 
   /**
@@ -154,7 +191,7 @@ cr.define('options', function() {
    * @private
    */
   OptionsPage.updateSubpageBackdrop_ = function () {
-    var topmostPage = this.getTopmostVisibleNonOverlayPage_();
+    var topmostPage = OptionsPage.getTopmostVisibleNonOverlayPage_();
     var nestingLevel = topmostPage ? topmostPage.nestingLevel : 0;
 
     var subpageBackdrop = $('subpage-backdrop');
@@ -166,6 +203,23 @@ cr.define('options', function() {
     } else {
       subpageBackdrop.hidden = true;
     }
+  };
+
+  /**
+   * Scrolls the page to the correct position (the top when opening a subpage,
+   * or the old scroll position a previously hidden subpage becomes visible).
+   * @private
+   */
+  OptionsPage.updateScrollPosition_ = function () {
+    var topmostPage = OptionsPage.getTopmostVisibleNonOverlayPage_();
+    var nestingLevel = topmostPage ? topmostPage.nestingLevel : 0;
+
+    var container = (nestingLevel > 0) ?
+       $('subpage-sheet-container-' + nestingLevel) : $('page-container');
+
+    var scrollTop = container.oldScrollTop || 0;
+    container.oldScrollTop = undefined;
+    window.scroll(document.body.scrollLeft, scrollTop);
   };
 
   /**
@@ -261,6 +315,22 @@ cr.define('options', function() {
     var overlay = this.getVisibleOverlay_();
     if (overlay)
       overlay.visible = false;
+  };
+
+  /**
+   * Returns the pages which are currently visible, ordered by nesting level
+   * (ascending).
+   * @return {Array.OptionPage} The pages which are currently visible, ordered
+   * by nesting level (ascending).
+   */
+  OptionsPage.getVisiblePages_ = function() {
+    var visiblePages = [];
+    for (var name in this.registeredPages) {
+      var page = this.registeredPages[name];
+      if (page.visible)
+        visiblePages[page.nestingLevel] = page;
+    }
+    return visiblePages;
   };
 
   /**
@@ -462,9 +532,37 @@ cr.define('options', function() {
             this.findSectionForNode_(associatedControls[0]);
       }
     }
+
+    // Reverse the button strip for views. See the documentation of
+    // reverseButtonStrip_() for an explanation of why this is necessary.
+    if (cr.isViews)
+      this.reverseButtonStrip_(overlay);
+
     overlay.tab = undefined;
     overlay.isOverlay = true;
     overlay.initializePage();
+  };
+
+  /**
+   * Reverses the child elements of a button strip. This is necessary because
+   * WebKit does not alter the tab order for elements that are visually reversed
+   * using -webkit-box-direction: reverse, and the button order is reversed for
+   * views.  See https://bugs.webkit.org/show_bug.cgi?id=62664 for more
+   * information.
+   * @param {Object} overlay The overlay containing the button strip to reverse.
+   * @private
+   */
+  OptionsPage.reverseButtonStrip_ = function(overlay) {
+    var buttonStrips = overlay.pageDiv.querySelectorAll('.button-strip');
+
+    // Reverse all button-strips in the overlay.
+    for (var j = 0; j < buttonStrips.length; j++) {
+      var buttonStrip = buttonStrips[j];
+
+      var childNodes = buttonStrip.childNodes;
+      for (var i = childNodes.length - 1; i >= 0; i--)
+        buttonStrip.appendChild(childNodes[i]);
+    }
   };
 
   /**
@@ -507,22 +605,20 @@ cr.define('options', function() {
       return;
 
     if (freeze) {
-      var scrollPosition = document.body.scrollTop;
       // Lock the width, since auto width computation may change.
       container.style.width = window.getComputedStyle(container).width;
+      container.oldScrollTop = document.body.scrollTop;
       container.classList.add('frozen');
-      container.style.top = -scrollPosition + 'px';
+      var verticalPosition =
+          container.getBoundingClientRect().top - container.oldScrollTop;
+      container.style.top = verticalPosition + 'px';
       this.updateFrozenElementHorizontalPosition_(container);
     } else {
-      var scrollPosition = - parseInt(container.style.top, 10);
       container.classList.remove('frozen');
       container.style.top = '';
       container.style.left = '';
       container.style.right = '';
       container.style.width = '';
-      // Restore the scroll position.
-      if (!container.hidden)
-        window.scroll(document.body.scrollLeft, scrollPosition);
     }
   };
 
@@ -831,7 +927,7 @@ cr.define('options', function() {
 
       var controlledByPolicy = false;
       var controlledByExtension = false;
-      var inputElements = this.pageDiv.querySelectorAll('input[controlledBy]');
+      var inputElements = this.pageDiv.querySelectorAll('input[controlled-by]');
       for (var i = 0, len = inputElements.length; i < len; i++) {
         if (inputElements[i].controlledBy == 'policy')
           controlledByPolicy = true;
@@ -840,11 +936,9 @@ cr.define('options', function() {
       }
       if (!controlledByPolicy && !controlledByExtension) {
         bannerDiv.hidden = true;
-        $('subpage-backdrop').style.top = '0';
       } else {
         bannerDiv.hidden = false;
         var height = window.getComputedStyle(bannerDiv).height;
-        $('subpage-backdrop').style.top = height;
         if (controlledByPolicy && !controlledByExtension) {
           $('managed-prefs-text').textContent =
               templateData.policyManagedPrefsBannerText;
@@ -893,19 +987,16 @@ cr.define('options', function() {
 
       OptionsPage.updatePageFreezeStates();
 
-      // A subpage was shown or hidden.
-      if (!this.isOverlay && this.nestingLevel > 0) {
-        OptionsPage.updateSubpageBackdrop_();
-        if (visible) {
-          // Scroll to the top of the newly-opened subpage.
-          window.scroll(document.body.scrollLeft, 0)
-        }
-      }
-
       // The managed prefs banner is global, so after any visibility change
       // update it based on the topmost page, not necessarily this page
       // (e.g., if an ancestor is made visible after a child).
       OptionsPage.updateManagedBannerVisibility();
+
+      // A subpage was shown or hidden.
+      if (!this.isOverlay && this.nestingLevel > 0)
+        OptionsPage.updateDisplayForShowOrHideSubpage_();
+      else if (this.isOverlay && !visible)
+        OptionsPage.updateScrollPosition_();
 
       cr.dispatchPropertyChange(this, 'visible', visible, !visible);
     },

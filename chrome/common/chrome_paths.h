@@ -50,13 +50,23 @@ enum {
   DIR_MANAGED_PREFS,            // Directory that stores the managed prefs plist
                                 // files for the current user.
 #endif
-#if defined(OS_CHROMEOS)
-  DIR_USER_EXTERNAL_EXTENSIONS,  // Directory for per-user external extensions.
-                                 // Used for OEM customization on Chrome OS.
+#if defined(OS_CHROMEOS) || defined(OS_MACOSX)
+  DIR_USER_EXTERNAL_EXTENSIONS,  // Directory for per-user external extensions
+                                 // on Chrome Mac.  On Chrome OS, this path is
+                                 // used for OEM customization.
                                  // Getting this path does not create it.
 #endif
 
   DIR_EXTERNAL_EXTENSIONS,      // Directory where installer places .crx files.
+
+#if defined(OS_MACOSX)
+  DIR_DEPRECATED_EXTERNAL_EXTENSIONS,  // Former home of external extensions.
+                                       // We read from the old path for now,
+                                       // to give users time to migrate.
+#endif
+
+  DIR_DEFAULT_APPS,             // Directory where installer places .crx files
+                                // to be installed when chrome is first run.
   FILE_RESOURCE_MODULE,         // Full path and filename of the module that
                                 // contains embedded resources (version,
                                 // strings, images, etc.).
@@ -74,6 +84,9 @@ enum {
   FILE_NACL_HELPER_BOOTSTRAP,   // ... and nacl_helper_bootstrap executable.
 #endif
   FILE_NACL_PLUGIN,             // Full path to the internal NaCl plugin file.
+  FILE_PNACL_COMPONENT,         // Full path to the PNaCl component files.
+  FILE_O3D_PLUGIN,              // Full path to the O3D Pepper plugin file.
+  FILE_GTALK_PLUGIN,            // Full path to the GTalk Pepper plugin file.
   FILE_LIBAVCODEC,              // Full path to libavcodec media decoding
                                 // library.
   FILE_LIBAVFORMAT,             // Full path to libavformat media parsing
@@ -87,8 +100,17 @@ enum {
 #endif
 
   // Valid only in development environment; TODO(darin): move these
+  DIR_GEN_TEST_DATA,            // Directory where generated test data resides.
   DIR_TEST_DATA,                // Directory where unit test data resides.
   DIR_TEST_TOOLS,               // Directory where unit test tools reside.
+  DIR_LAYOUT_TESTS,             // Returns the LayoutTests path for layout
+                                // tests. For the current git workflow, it
+                                // returns
+                                //   third_party/WebKit/LayoutTests
+                                // On svn workflow (including build machines)
+                                // and older git workflow, it returns
+                                //   chrome/test/data/layout_tests/LayoutTests
+                                // See, http://crbug.com/105104.
 
   PATH_END
 };

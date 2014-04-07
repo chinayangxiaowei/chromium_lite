@@ -6,10 +6,9 @@
 #include "ui/gfx/gl/gl_bindings_skia_in_process.h"
 
 #include "base/logging.h"
+#include "third_party/skia/include/gpu/GrGLInterface.h"
 #include "ui/gfx/gl/gl_bindings.h"
 #include "ui/gfx/gl/gl_implementation.h"
-
-#include "third_party/skia/gpu/include/GrGLInterface.h"
 
 namespace {
 
@@ -26,6 +25,10 @@ GLvoid StubGLAttachShader(GLuint program, GLuint shader) {
   glAttachShader(program, shader);
 }
 
+GLvoid StubGLBeginQuery(GLenum target, GLuint id) {
+  glBeginQuery(target, id);
+}
+
 GLvoid StubGLBindAttribLocation(GLuint program, GLuint index,
                                 const char* name) {
   glBindAttribLocation(program, index, name);
@@ -35,9 +38,14 @@ GLvoid StubGLBindBuffer(GLenum target, GLuint buffer) {
   glBindBuffer(target, buffer);
 }
 
-GLvoid StubBindFragDataLocationIndexedARB(GLuint program, GLuint colorNumber,
-                                          GLuint index, const GLchar * name) {
-  glBindFragDataLocationIndexedARB(program, colorNumber, index, name);
+GLvoid StubGLBindFragDataLocation(GLuint program, GLuint colorNumber,
+                                  const GLchar * name) {
+  glBindFragDataLocation(program, colorNumber, name);
+}
+
+GLvoid StubGLBindFragDataLocationIndexed(GLuint program, GLuint colorNumber,
+                                         GLuint index, const GLchar * name) {
+  glBindFragDataLocationIndexed(program, colorNumber, index, name);
 }
 
 GLvoid StubGLBindFramebuffer(GLenum target, GLuint framebuffer) {
@@ -132,6 +140,10 @@ GLvoid StubGLDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
   glDeleteFramebuffersEXT(n, framebuffers);
 }
 
+GLvoid StubGLDeleteQueries(GLsizei n, const GLuint* ids) {
+  glDeleteQueries(n, ids);
+}
+
 GLvoid StubGLDeleteProgram(GLuint program) {
   glDeleteProgram(program);
 }
@@ -185,6 +197,18 @@ GLvoid StubGLEnableVertexAttribArray(GLuint index) {
   glEnableVertexAttribArray(index);
 }
 
+GLvoid StubGLEndQuery(GLenum target) {
+  glEndQuery(target);
+}
+
+GLvoid StubGLFinish() {
+  glFinish();
+}
+
+GLvoid StubGLFlush() {
+  glFlush();
+}
+
 GLvoid StubGLFramebufferRenderbuffer(GLenum target, GLenum attachment,
                                      GLenum renderbuffertarget,
                                      GLuint renderbuffer) {
@@ -208,6 +232,10 @@ GLvoid StubGLGenBuffers(GLsizei n, GLuint* buffers) {
 
 GLvoid StubGLGenFramebuffers(GLsizei n, GLuint* framebuffers) {
   glGenFramebuffersEXT(n, framebuffers);
+}
+
+GLvoid StubGLGenQueries(GLsizei n, GLuint* ids) {
+  glGenQueries(n, ids);
 }
 
 GLvoid StubGLGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {
@@ -263,6 +291,26 @@ const GLubyte* StubGLGetString(GLenum name) {
   return glGetString(name);
 }
 
+GLvoid StubGLGetQueryiv(GLenum target, GLenum pname, GLint* params) {
+  glGetQueryiv(target, pname, params);
+}
+
+GLvoid StubGLGetQueryObjecti64v(GLuint id, GLenum pname, GLint64* params) {
+  glGetQueryObjecti64v(id, pname, params);
+}
+
+GLvoid StubGLGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
+  glGetQueryObjectiv(id, pname, params);
+}
+
+GLvoid StubGLGetQueryObjectui64v(GLuint id, GLenum pname, GLuint64* params) {
+  glGetQueryObjectui64v(id, pname, params);
+}
+
+GLvoid StubGLGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) {
+  glGetQueryObjectuiv(id, pname, params);
+}
+
 GLvoid StubGLGetTexLevelParameteriv(GLenum target, GLint level,
                                     GLenum pname, GLint* params) {
   glGetTexLevelParameteriv(target, level, pname, params);
@@ -286,6 +334,10 @@ void* StubGLMapBuffer(GLenum target, GLenum access) {
 
 GLvoid StubGLPixelStorei(GLenum pname, GLint param) {
   glPixelStorei(pname, param);
+}
+
+GLvoid StubGLQueryCounter(GLuint id, GLenum target) {
+  glQueryCounter(id, target);
 }
 
 GLvoid StubGLReadBuffer(GLenum src) {
@@ -353,6 +405,11 @@ GLvoid StubGLTexImage2D(GLenum target, GLint level, GLint internalformat,
 
 GLvoid StubGLTexParameteri(GLenum target, GLenum pname, GLint param) {
   glTexParameteri(target, pname, param);
+}
+
+GLvoid StubGLTexStorage2D(GLenum target, GLsizei levels, GLenum internalFormat,
+                          GLsizei width, GLsizei height) {
+  glTexStorage2DEXT(target, levels, internalFormat, width, height);
 }
 
 GLvoid StubGLTexSubImage2D(GLenum target, GLint level, GLint xoffset,
@@ -476,6 +533,7 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
       NOTREACHED();
       return NULL;
     case gfx::kGLImplementationDesktopGL:
+    case gfx::kGLImplementationAppleGL:
       binding = kDesktop_GrGLBinding;
       break;
     case gfx::kGLImplementationOSMesaGL:
@@ -497,8 +555,10 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fBindingsExported = binding;
   interface->fActiveTexture = StubGLActiveTexture;
   interface->fAttachShader = StubGLAttachShader;
+  interface->fBeginQuery = StubGLBeginQuery;
   interface->fBindAttribLocation = StubGLBindAttribLocation;
   interface->fBindBuffer = StubGLBindBuffer;
+  interface->fBindFragDataLocation = StubGLBindFragDataLocation;
   interface->fBindTexture = StubGLBindTexture;
   interface->fBlendColor = StubGLBlendColor;
   interface->fBlendFunc = StubGLBlendFunc;
@@ -515,6 +575,7 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fCullFace = StubGLCullFace;
   interface->fDeleteBuffers = StubGLDeleteBuffers;
   interface->fDeleteProgram = StubGLDeleteProgram;
+  interface->fDeleteQueries = StubGLDeleteQueries;
   interface->fDeleteShader = StubGLDeleteShader;
   interface->fDeleteTextures = StubGLDeleteTextures;
   interface->fDepthMask = StubGLDepthMask;
@@ -526,12 +587,21 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fDrawElements = StubGLDrawElements;
   interface->fEnable = StubGLEnable;
   interface->fEnableVertexAttribArray = StubGLEnableVertexAttribArray;
+  interface->fEndQuery = StubGLEndQuery;
+  interface->fFinish = StubGLFinish;
+  interface->fFlush = StubGLFlush;
   interface->fFrontFace = StubGLFrontFace;
   interface->fGenBuffers = StubGLGenBuffers;
+  interface->fGenQueries = StubGLGenQueries;
   interface->fGenTextures = StubGLGenTextures;
   interface->fGetBufferParameteriv = StubGLGetBufferParameteriv;
   interface->fGetError = StubGLGetError;
   interface->fGetIntegerv = StubGLGetIntegerv;
+  interface->fGetQueryiv = StubGLGetQueryiv;
+  interface->fGetQueryObjecti64v = StubGLGetQueryObjecti64v;
+  interface->fGetQueryObjectiv = StubGLGetQueryObjectiv;
+  interface->fGetQueryObjectui64v = StubGLGetQueryObjectui64v;
+  interface->fGetQueryObjectuiv = StubGLGetQueryObjectuiv;
   interface->fGetProgramInfoLog = StubGLGetProgramInfoLog;
   interface->fGetProgramiv = StubGLGetProgramiv;
   interface->fGetShaderInfoLog = StubGLGetShaderInfoLog;
@@ -542,6 +612,7 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fLineWidth = StubGLLineWidth;
   interface->fLinkProgram = StubGLLinkProgram;
   interface->fPixelStorei = StubGLPixelStorei;
+  interface->fQueryCounter = StubGLQueryCounter;
   interface->fReadBuffer = StubGLReadBuffer;
   interface->fReadPixels = StubGLReadPixels;
   interface->fScissor = StubGLScissor;
@@ -555,6 +626,7 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fTexImage2D = StubGLTexImage2D;
   interface->fTexParameteri = StubGLTexParameteri;
   interface->fTexSubImage2D = StubGLTexSubImage2D;
+  interface->fTexStorage2D = StubGLTexStorage2D;
   interface->fUniform1f = StubGLUniform1f;
   interface->fUniform1i = StubGLUniform1i;
   interface->fUniform1fv = StubGLUniform1fv;
@@ -597,9 +669,8 @@ GrGLInterface* CreateInProcessSkiaGLBinding() {
   interface->fMapBuffer = StubGLMapBuffer;
   interface->fUnmapBuffer = StubGLUnmapBuffer;
   interface->fBindFragDataLocationIndexed =
-    StubBindFragDataLocationIndexedARB;
+    StubGLBindFragDataLocationIndexed;
   return interface;
 }
 
 }  // namespace gfx
-

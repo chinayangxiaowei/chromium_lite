@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,18 @@
 #pragma once
 
 #include <map>
+#include <vector>
 
-#include "content/common/view_types.h"
-#include "content/renderer/render_view.h"
-#include "content/renderer/render_view_observer.h"
-#include "content/renderer/render_view_observer_tracker.h"
+#include "base/memory/linked_ptr.h"
+#include "base/memory/scoped_ptr.h"
+#include "content/public/renderer/render_view_observer.h"
+#include "content/public/renderer/render_view_observer_tracker.h"
+#include "content/public/common/view_type.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLResponse.h"
 
 class ExtensionDispatcher;
 class GURL;
+class SkBitmap;
 struct ExtensionMsg_ExecuteCode_Params;
 struct WebApplicationInfo;
 
@@ -24,13 +28,15 @@ class ListValue;
 
 namespace webkit_glue {
 class ResourceFetcher;
+class ImageResourceFetcher;
 }
 
 // RenderView-level plumbing for extension features.
-class ExtensionHelper : public RenderViewObserver,
-                        public RenderViewObserverTracker<ExtensionHelper> {
+class ExtensionHelper
+    : public content::RenderViewObserver,
+      public content::RenderViewObserverTracker<ExtensionHelper> {
  public:
-  ExtensionHelper(RenderView* render_view,
+  ExtensionHelper(content::RenderView* render_view,
                   ExtensionDispatcher* extension_dispatcher);
   virtual ~ExtensionHelper();
 
@@ -42,22 +48,22 @@ class ExtensionHelper : public RenderViewObserver,
                                                 string16* error);
 
   void InlineWebstoreInstall(int install_id,
-                             std::string webstore_item_id,
-                             GURL requestor_url);
+                             const std::string& webstore_item_id,
+                             const GURL& requestor_url);
 
   int browser_window_id() const { return browser_window_id_; }
-  ViewType::Type view_type() const { return view_type_; }
+  content::ViewType view_type() const { return view_type_; }
 
  private:
   // RenderViewObserver implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message);
-  virtual void DidFinishDocumentLoad(WebKit::WebFrame* frame);
-  virtual void DidFinishLoad(WebKit::WebFrame* frame);
-  virtual void DidCreateDocumentElement(WebKit::WebFrame* frame);
-  virtual void DidStartProvisionalLoad(WebKit::WebFrame* frame);
-  virtual void FrameDetached(WebKit::WebFrame* frame);
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  virtual void DidFinishDocumentLoad(WebKit::WebFrame* frame) OVERRIDE;
+  virtual void DidFinishLoad(WebKit::WebFrame* frame) OVERRIDE;
+  virtual void DidCreateDocumentElement(WebKit::WebFrame* frame) OVERRIDE;
+  virtual void DidStartProvisionalLoad(WebKit::WebFrame* frame) OVERRIDE;
+  virtual void FrameDetached(WebKit::WebFrame* frame) OVERRIDE;
   virtual void DidCreateDataSource(WebKit::WebFrame* frame,
-                                   WebKit::WebDataSource* ds);
+                                   WebKit::WebDataSource* ds) OVERRIDE;
 
   void OnExtensionResponse(int request_id, bool success,
                            const std::string& response,
@@ -70,7 +76,7 @@ class ExtensionHelper : public RenderViewObserver,
                                  const std::string& message);
   void OnExecuteCode(const ExtensionMsg_ExecuteCode_Params& params);
   void OnGetApplicationInfo(int page_id);
-  void OnNotifyRendererViewType(ViewType::Type view_type);
+  void OnNotifyRendererViewType(content::ViewType view_type);
   void OnUpdateBrowserWindowId(int window_id);
   void OnInlineWebstoreInstallResponse(
       int install_id, bool success, const std::string& error);
@@ -99,14 +105,16 @@ class ExtensionHelper : public RenderViewObserver,
   scoped_ptr<webkit_glue::ResourceFetcher> app_definition_fetcher_;
 
   // Used to download the icons for an application.
-  RenderView::ImageResourceFetcherList app_icon_fetchers_;
+  typedef std::vector<linked_ptr<webkit_glue::ImageResourceFetcher> >
+      ImageResourceFetcherList;
+  ImageResourceFetcherList app_icon_fetchers_;
 
   // The number of app icon requests outstanding. When this reaches zero, we're
   // done processing an app definition file.
   int pending_app_icon_requests_;
 
   // Type of view attached with RenderView.
-  ViewType::Type view_type_;
+  content::ViewType view_type_;
 
   // Id number of browser window which RenderView is attached to.
   int browser_window_id_;

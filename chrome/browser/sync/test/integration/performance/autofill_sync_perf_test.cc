@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,8 +20,13 @@ using autofill_helper::GetProfileCount;
 using autofill_helper::RemoveKey;
 using autofill_helper::SetProfiles;
 
-static const int kNumKeys = 150;
-static const int kNumProfiles = 150;
+// See comments in typed_urls_sync_perf_test.cc for reasons for these
+// magic numbers.
+//
+// TODO(akalin): If this works, decomp the magic number calculation
+// into a macro and have all the perf tests use it.
+static const int kNumKeys = 163;
+static const int kNumProfiles = 163;
 
 class AutofillSyncPerfTest : public SyncTest {
  public:
@@ -127,7 +132,7 @@ const AutofillProfile AutofillSyncPerfTest::NextAutofillProfile() {
   AutofillProfile profile;
   autofill_test::SetProfileInfoWithGuid(&profile, NextGUID().c_str(),
                                         NextName().c_str(), "", "", "", "", "",
-                                        "", "", "", "", "", "", "");
+                                        "", "", "", "", "", "");
   return profile;
 }
 
@@ -182,7 +187,10 @@ IN_PROC_BROWSER_TEST_F(AutofillSyncPerfTest, AutofillProfiles_P0) {
   SyncTimingHelper::PrintResult("autofill", "delete_autofill_profiles", dt);
 }
 
-IN_PROC_BROWSER_TEST_F(AutofillSyncPerfTest, Autofill_P0) {
+
+// Flaky, see http://crbug.com/102948
+
+IN_PROC_BROWSER_TEST_F(AutofillSyncPerfTest, FLAKY_Autofill_P0) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
 
   AddKeys(0, kNumKeys);

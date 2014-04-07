@@ -69,6 +69,10 @@ void PrefValueMap::Clear() {
   prefs_.clear();
 }
 
+void PrefValueMap::Swap(PrefValueMap* other) {
+  prefs_.swap(other->prefs_);
+}
+
 PrefValueMap::iterator PrefValueMap::begin() {
   return prefs_.begin();
 }
@@ -89,6 +93,10 @@ bool PrefValueMap::GetBoolean(const std::string& key,
                               bool* value) const {
   const Value* stored_value = NULL;
   return GetValue(key, &stored_value) && stored_value->GetAsBoolean(value);
+}
+
+void PrefValueMap::SetBoolean(const std::string& key, bool value) {
+  SetValue(key, Value::CreateBooleanValue(value));
 }
 
 bool PrefValueMap::GetString(const std::string& key,

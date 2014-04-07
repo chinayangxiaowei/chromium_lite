@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -65,9 +65,6 @@ cr.define('options', function() {
         OptionsPage.navigateToPage('cookies');
       };
 
-      if (!templateData.enable_click_to_play)
-        $('click_to_play').hidden = true;
-
       if (!templateData.enable_web_intents && $('intent-section'))
         $('intent-section').hidden = true;
     },
@@ -90,10 +87,10 @@ cr.define('options', function() {
                              dict[group]['value'] + ']').checked = true;
       var radios = document.querySelectorAll('input[type=radio][name=' +
                                              group + ']');
+      var managedBy = dict[group]['managedBy'];
       for (var i = 0, len = radios.length; i < len; i++) {
-        var managed = dict[group]['managed'];
-        radios[i].disabled = managed;
-        radios[i].controlledBy = managed ? 'policy': null;
+        radios[i].disabled = (managedBy != 'default');
+        radios[i].controlledBy = managedBy;
       }
     }
     OptionsPage.updateManagedBannerVisibility();

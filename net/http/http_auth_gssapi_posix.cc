@@ -55,6 +55,16 @@ static gss_OID_desc GSS_C_NT_EXPORT_NAME_VAL = {
 
 }  // namespace
 
+// Heimdal >= 1.4 will define the following as preprocessor macros.
+// To avoid conflicting declarations, we have to undefine these.
+#undef GSS_C_NT_USER_NAME
+#undef GSS_C_NT_MACHINE_UID_NAME
+#undef GSS_C_NT_STRING_UID_NAME
+#undef GSS_C_NT_HOSTBASED_SERVICE_X
+#undef GSS_C_NT_HOSTBASED_SERVICE
+#undef GSS_C_NT_ANONYMOUS
+#undef GSS_C_NT_EXPORT_NAME
+
 gss_OID GSS_C_NT_USER_NAME = &GSS_C_NT_USER_NAME_VAL;
 gss_OID GSS_C_NT_MACHINE_UID_NAME = &GSS_C_NT_MACHINE_UID_NAME_VAL;
 gss_OID GSS_C_NT_STRING_UID_NAME = &GSS_C_NT_STRING_UID_NAME_VAL;
@@ -431,6 +441,8 @@ base::NativeLibrary GSSAPISharedLibrary::LoadSharedLibrary() {
     static const char* kDefaultLibraryNames[] = {
 #if defined(OS_MACOSX)
       "libgssapi_krb5.dylib"  // MIT Kerberos
+#elif defined(OS_OPENBSD)
+      "libgssapi.so"          // Heimdal - OpenBSD
 #else
       "libgssapi_krb5.so.2",  // MIT Kerberos - FC, Suse10, Debian
       "libgssapi.so.4",       // Heimdal - Suse10, MDK
@@ -713,12 +725,10 @@ HttpAuth::AuthorizationResult HttpAuthGSSAPI::ParseChallenge(
   return HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
 }
 
-int HttpAuthGSSAPI::GenerateAuthToken(const string16* username,
-                                      const string16* password,
+int HttpAuthGSSAPI::GenerateAuthToken(const AuthCredentials* credentials,
                                       const std::wstring& spn,
                                       std::string* auth_token) {
   DCHECK(auth_token);
-  DCHECK(username == NULL && password == NULL);
 
   gss_buffer_desc input_token = GSS_C_EMPTY_BUFFER;
   input_token.length = decoded_server_auth_token_.length();

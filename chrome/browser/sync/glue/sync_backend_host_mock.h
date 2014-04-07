@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 
 #include <set>
 
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
 #include "chrome/browser/sync/profile_sync_test_util.h"
-#include "content/common/content_notification_types.h"
+#include "content/public/browser/notification_types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace browser_sync {
@@ -21,11 +21,12 @@ class SyncBackendHostMock : public SyncBackendHost {
   SyncBackendHostMock();
   virtual ~SyncBackendHostMock();
 
-  MOCK_METHOD5(ConfigureDataTypes,
-               void(const std::set<syncable::ModelType>&,
-                    const std::set<syncable::ModelType>&,
+  MOCK_METHOD6(ConfigureDataTypes,
+               void(syncable::ModelTypeSet,
+                    syncable::ModelTypeSet,
                     sync_api::ConfigureReason,
-                    base::Callback<void(bool)>,
+                    base::Callback<void(syncable::ModelTypeSet)>,
+                    base::Callback<void()>,
                     bool));
   MOCK_METHOD0(StartSyncingWithServer, void());
 };

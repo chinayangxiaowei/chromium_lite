@@ -1,7 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/process_util.h"
 #include "base/test/test_timeouts.h"
 #include "chrome/browser/service/service_process_control.h"
@@ -24,7 +26,7 @@ class ServiceProcessControlBrowserTest
 
 #if defined(OS_MACOSX)
   virtual void TearDown() {
-    // ForceServiceProcessShutdown removes the process from launchd on Mac.
+    // ForceServiceProcessShutdown removes the process from launched on Mac.
     ForceServiceProcessShutdown("", 0);
   }
 #endif  // OS_MACOSX
@@ -33,12 +35,11 @@ class ServiceProcessControlBrowserTest
   void LaunchServiceProcessControl() {
     // Launch the process asynchronously.
     ServiceProcessControl::GetInstance()->Launch(
-        NewRunnableMethod(
-            this,
-            &ServiceProcessControlBrowserTest::ProcessControlLaunched),
-        NewRunnableMethod(
-            this,
-            &ServiceProcessControlBrowserTest::ProcessControlLaunchFailed));
+        base::Bind(&ServiceProcessControlBrowserTest::ProcessControlLaunched,
+                   this),
+        base::Bind(
+            &ServiceProcessControlBrowserTest::ProcessControlLaunchFailed,
+            this));
 
     // Then run the message loop to keep things running.
     ui_test_utils::RunMessageLoop();
@@ -46,8 +47,9 @@ class ServiceProcessControlBrowserTest
 
   // Send a Cloud Print status request and wait for a reply from the service.
   void SendRequestAndWait() {
-    ServiceProcessControl::GetInstance()->GetCloudPrintProxyInfo(NewCallback(
-        this, &ServiceProcessControlBrowserTest::CloudPrintInfoCallback));
+    ServiceProcessControl::GetInstance()->GetCloudPrintProxyInfo(
+        base::Bind(&ServiceProcessControlBrowserTest::CloudPrintInfoCallback,
+                   base::Unretained(this)));
     ui_test_utils::RunMessageLoop();
   }
 
@@ -73,18 +75,20 @@ class ServiceProcessControlBrowserTest
     EXPECT_NE(static_cast<base::ProcessId>(0), service_pid);
     EXPECT_TRUE(base::OpenProcessHandleWithAccess(
         service_pid,
-        base::kProcessAccessWaitForTermination,
+        base::kProcessAccessWaitForTermination |
+        // we need query permission to get exit code
+        base::kProcessAccessQueryInformation,
         &service_process_handle_));
     // Quit the current message. Post a QuitTask instead of just calling Quit()
     // because this can get invoked in the context of a Launch() call and we
     // may not be in Run() yet.
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
+    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
   }
 
   void ProcessControlLaunchFailed() {
     ADD_FAILURE();
     // Quit the current message.
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
+    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
   }
 
  private:
@@ -99,7 +103,7 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
   LaunchServiceProcessControl();
 
   // Make sure we are connected to the service process.
-  EXPECT_TRUE(ServiceProcessControl::GetInstance()->is_connected());
+  EXPECT_TRUE(ServiceProcessControl::GetInstance()->IsConnected());
   SendRequestAndWait();
 
   // And then shutdown the service process.
@@ -113,12 +117,12 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, LaunchTwice) {
   LaunchServiceProcessControl();
 
   // Make sure we are connected to the service process.
-  EXPECT_TRUE(ServiceProcessControl::GetInstance()->is_connected());
+  EXPECT_TRUE(ServiceProcessControl::GetInstance()->IsConnected());
   SendRequestAndWait();
 
   // Launch the service process again.
   LaunchServiceProcessControl();
-  EXPECT_TRUE(ServiceProcessControl::GetInstance()->is_connected());
+  EXPECT_TRUE(ServiceProcessControl::GetInstance()->IsConnected());
   SendRequestAndWait();
 
   // And then shutdown the service process.
@@ -128,7 +132,7 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, LaunchTwice) {
 static void DecrementUntilZero(int* count) {
   (*count)--;
   if (!(*count))
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask());
+    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
 }
 
 // Invoke multiple Launch calls in succession and ensure that all the tasks
@@ -139,9 +143,8 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
   int launch_count = 5;
   for (int i = 0; i < launch_count; i++) {
     // Launch the process asynchronously.
-    process->Launch(
-        NewRunnableFunction(&DecrementUntilZero, &launch_count),
-        new MessageLoop::QuitTask());
+    process->Launch(base::Bind(&DecrementUntilZero, &launch_count),
+                    MessageLoop::QuitClosure());
   }
   // Then run the message loop to keep things running.
   ui_test_utils::RunMessageLoop();
@@ -156,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, SameLaunchTask) {
   int launch_count = 5;
   for (int i = 0; i < launch_count; i++) {
     // Launch the process asynchronously.
-    Task * task = NewRunnableFunction(&DecrementUntilZero, &launch_count);
+    base::Closure task = base::Bind(&DecrementUntilZero, &launch_count);
     process->Launch(task, task);
   }
   // Then run the message loop to keep things running.
@@ -173,7 +176,7 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
   // Launch the service process.
   LaunchServiceProcessControl();
   // Make sure we are connected to the service process.
-  EXPECT_TRUE(ServiceProcessControl::GetInstance()->is_connected());
+  EXPECT_TRUE(ServiceProcessControl::GetInstance()->IsConnected());
   Disconnect();
   WaitForShutdown();
 }
@@ -183,7 +186,7 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
   // Launch the service process.
   LaunchServiceProcessControl();
   // Make sure we are connected to the service process.
-  EXPECT_TRUE(ServiceProcessControl::GetInstance()->is_connected());
+  EXPECT_TRUE(ServiceProcessControl::GetInstance()->IsConnected());
   base::ProcessId service_pid;
   EXPECT_TRUE(GetServiceProcessData(NULL, &service_pid));
   EXPECT_NE(static_cast<base::ProcessId>(0), service_pid);
@@ -202,5 +205,3 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, CheckPid) {
   // Disconnect from service process.
   ServiceProcessControl::GetInstance()->Disconnect();
 }
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(ServiceProcessControlBrowserTest);

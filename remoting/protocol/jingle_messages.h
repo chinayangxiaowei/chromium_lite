@@ -29,9 +29,19 @@ struct JingleMessage {
     UNKNOWN_ACTION,
     SESSION_INITIATE,
     SESSION_ACCEPT,
-    SESSION_REJECT,
     SESSION_TERMINATE,
+    SESSION_INFO,
     TRANSPORT_INFO,
+  };
+
+  enum Reason {
+    // Currently only termination reasons that can be sent by the host
+    // are understood. All others are converted to UNKNOWN_REASON.
+    UNKNOWN_REASON,
+    SUCCESS,
+    DECLINE,
+    GENERAL_ERROR,
+    INCOMPATIBLE_PARAMETERS,
   };
 
   JingleMessage();
@@ -57,7 +67,13 @@ struct JingleMessage {
   scoped_ptr<ContentDescription> description;
   std::list<cricket::Candidate> candidates;
 
-  buzz::QName termination_reason;
+  // Content of session-info messages.
+  scoped_ptr<buzz::XmlElement> info;
+
+  // Value from the <reason> tag if it is present in the
+  // message. Useful mainly for session-terminate messages, but Jingle
+  // spec allows it in any message.
+  Reason reason;
 };
 
 struct JingleMessageReply {
@@ -71,6 +87,7 @@ struct JingleMessageReply {
     NOT_IMPLEMENTED,
     INVALID_SID,
     UNEXPECTED_REQUEST,
+    UNSUPPORTED_INFO,
   };
 
   JingleMessageReply();

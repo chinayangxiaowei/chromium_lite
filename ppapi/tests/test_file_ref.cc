@@ -41,19 +41,19 @@ std::string ReportMismatch(const std::string& method_name,
 }  // namespace
 
 bool TestFileRef::Init() {
-  return InitTestingInterface() && EnsureRunningOverHTTP();
+  return CheckTestingInterface() && EnsureRunningOverHTTP();
 }
 
-void TestFileRef::RunTest() {
-  RUN_TEST_FORCEASYNC_AND_NOT(Create);
-  RUN_TEST_FORCEASYNC_AND_NOT(GetFileSystemType);
-  RUN_TEST_FORCEASYNC_AND_NOT(GetName);
-  RUN_TEST_FORCEASYNC_AND_NOT(GetPath);
-  RUN_TEST_FORCEASYNC_AND_NOT(GetParent);
-  RUN_TEST_FORCEASYNC_AND_NOT(MakeDirectory);
-  RUN_TEST_FORCEASYNC_AND_NOT(QueryAndTouchFile);
-  RUN_TEST_FORCEASYNC_AND_NOT(DeleteFileAndDirectory);
-  RUN_TEST_FORCEASYNC_AND_NOT(RenameFileAndDirectory);
+void TestFileRef::RunTests(const std::string& filter) {
+  RUN_TEST_FORCEASYNC_AND_NOT(Create, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(GetFileSystemType, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(GetName, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(GetPath, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(GetParent, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(MakeDirectory, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(QueryAndTouchFile, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(DeleteFileAndDirectory, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(RenameFileAndDirectory, filter);
 }
 
 std::string TestFileRef::TestCreate() {

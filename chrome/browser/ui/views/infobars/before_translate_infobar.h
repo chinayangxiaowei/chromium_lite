@@ -9,7 +9,7 @@
 #include "chrome/browser/translate/languages_menu_model.h"
 #include "chrome/browser/translate/options_menu_model.h"
 #include "chrome/browser/ui/views/infobars/translate_infobar_base.h"
-#include "views/controls/menu/view_menu_delegate.h"
+#include "ui/views/controls/menu/view_menu_delegate.h"
 
 class TranslateInfoBarDelegate;
 namespace views {
@@ -19,7 +19,7 @@ class MenuButton;
 class BeforeTranslateInfoBar : public TranslateInfoBarBase,
                                public views::ViewMenuDelegate {
  public:
-  BeforeTranslateInfoBar(TabContentsWrapper* owner,
+  BeforeTranslateInfoBar(InfoBarTabHelper* owner,
                          TranslateInfoBarDelegate* delegate);
 
  private:

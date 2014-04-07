@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,7 +67,7 @@ class NET_EXPORT ClientSocketPool {
                             const void* params,
                             RequestPriority priority,
                             ClientSocketHandle* handle,
-                            CompletionCallback* callback,
+                            const CompletionCallback& callback,
                             const BoundNetLog& net_log) = 0;
 
   // RequestSockets is used to request that |num_sockets| be connected in the
@@ -139,8 +139,11 @@ class NET_EXPORT ClientSocketPool {
   // UMA_HISTOGRAM_* macros because they are callsite static.
   virtual ClientSocketPoolHistograms* histograms() const = 0;
 
-  static int unused_idle_socket_timeout();
-  static void set_unused_idle_socket_timeout(int timeout);
+  static base::TimeDelta unused_idle_socket_timeout();
+  static void set_unused_idle_socket_timeout(base::TimeDelta timeout);
+
+  static base::TimeDelta used_idle_socket_timeout();
+  static void set_used_idle_socket_timeout(base::TimeDelta timeout);
 
  protected:
   ClientSocketPool();

@@ -46,6 +46,13 @@ const char* kFinalStatusNames[] = {
   "Cancelled",
   "SSL Error",
   "Cross-Site Navigation Pending",
+  "DevTools Attached To The Tab",
+  "Session Storage Namespace Mismatch",
+  "No Use Group",
+  "Match Complete Dummy",
+  "Duplicate",
+  "OpenURL",
+  "WouldHaveBeenUsed",
   "Max",
 };
 COMPILE_ASSERT(arraysize(kFinalStatusNames) == FINAL_STATUS_MAX + 1,
@@ -54,8 +61,8 @@ COMPILE_ASSERT(arraysize(kFinalStatusNames) == FINAL_STATUS_MAX + 1,
 }
 
 const char* NameFromFinalStatus(FinalStatus final_status) {
-  DCHECK(static_cast<int>(final_status) >= 0 &&
-         static_cast<int>(final_status) <= FINAL_STATUS_MAX);
+  DCHECK_LT(static_cast<unsigned int>(final_status),
+            arraysize(kFinalStatusNames));
   return kFinalStatusNames[final_status];
 }
 

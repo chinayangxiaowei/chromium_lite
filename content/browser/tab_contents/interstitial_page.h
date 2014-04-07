@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,21 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
-#include "content/browser/renderer_host/render_view_host_delegate.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/renderer_preferences.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/render_view_host_delegate.h"
+#include "content/public/common/renderer_preferences.h"
 #include "googleurl/src/gurl.h"
 #include "ui/gfx/size.h"
 
-class NavigationEntry;
 class TabContents;
-class TabContentsView;
+
+namespace content {
+class NavigationEntry;
+class WebContents;
+class WebContentsView;
+}
 
 // This class is a base class for interstitial pages, pages that show some
 // informative message asking for user validation before reaching the target
@@ -40,8 +45,8 @@ enum ResourceRequestAction {
   CANCEL
 };
 
-class InterstitialPage : public NotificationObserver,
-                         public RenderViewHostDelegate {
+class CONTENT_EXPORT InterstitialPage : public content::NotificationObserver,
+                                        public content::RenderViewHostDelegate {
  public:
   // The different state of actions the user can take in an interstitial.
   enum ActionState {
@@ -56,7 +61,9 @@ class InterstitialPage : public NotificationObserver,
   // added to the navigation controller (so the interstitial page appears as a
   // new navigation entry). |new_navigation| should be false when the
   // interstitial was triggered by a loading a sub-resource in a page.
-  InterstitialPage(TabContents* tab, bool new_navigation, const GURL& url);
+  InterstitialPage(content::WebContents* tab,
+                   bool new_navigation,
+                   const GURL& url);
   virtual ~InterstitialPage();
 
   // Shows the interstitial page in the tab.
@@ -66,8 +73,9 @@ class InterstitialPage : public NotificationObserver,
   void Hide();
 
   // Retrieves the InterstitialPage if any associated with the specified
-  // |tab_contents| (used by ui tests).
-  static InterstitialPage* GetInterstitialPage(TabContents* tab_contents);
+  // |web_contents| (used by ui tests).
+  static InterstitialPage* GetInterstitialPage(
+      content::WebContents* web_contents);
 
   // Sub-classes should return the HTML that should be displayed in the page.
   virtual std::string GetHTMLContents();
@@ -101,7 +109,9 @@ class InterstitialPage : public NotificationObserver,
   // Called when tab traversing.
   void FocusThroughTabTraversal(bool reverse);
 
-  virtual ViewType::Type GetRenderViewType() const;
+  virtual content::ViewType GetRenderViewType() const OVERRIDE;
+
+  virtual gfx::Rect GetRootWindowResizerRect() const OVERRIDE;
 
   // See description above field.
   void set_reload_on_dont_proceed(bool value) {
@@ -110,10 +120,10 @@ class InterstitialPage : public NotificationObserver,
   bool reload_on_dont_proceed() const { return reload_on_dont_proceed_; }
 
  protected:
-  // NotificationObserver method:
+  // content::NotificationObserver method:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // RenderViewHostDelegate implementation:
   virtual View* GetViewDelegate() OVERRIDE;
@@ -128,21 +138,26 @@ class InterstitialPage : public NotificationObserver,
                            int32 page_id,
                            const string16& title,
                            base::i18n::TextDirection title_direction) OVERRIDE;
-  virtual RendererPreferences GetRendererPrefs(
+  virtual content::RendererPreferences GetRendererPrefs(
       content::BrowserContext* browser_context) const OVERRIDE;
+  virtual WebPreferences GetWebkitPrefs() OVERRIDE;
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut) OVERRIDE;
+  virtual void HandleKeyboardEvent(
+      const NativeWebKeyboardEvent& event) OVERRIDE;
 
   // Invoked with the NavigationEntry that is going to be added to the
   // navigation controller.
   // Gives an opportunity to sub-classes to set states on the |entry|.
   // Note that this is only called if the InterstitialPage was constructed with
   // |create_navigation_entry| set to true.
-  virtual void UpdateEntry(NavigationEntry* entry) {}
+  virtual void UpdateEntry(content::NavigationEntry* entry) {}
 
   bool enabled() const { return enabled_; }
-  TabContents* tab() const { return tab_; }
+  content::WebContents* tab() const;
   const GURL& url() const { return url_; }
   RenderViewHost* render_view_host() const { return render_view_host_; }
-  void set_renderer_preferences(const RendererPreferences& prefs) {
+  void set_renderer_preferences(const content::RendererPreferences& prefs) {
     renderer_preferences_ = prefs;
   }
 
@@ -150,12 +165,12 @@ class InterstitialPage : public NotificationObserver,
   // Overriden in unit tests.
   virtual RenderViewHost* CreateRenderViewHost();
 
-  // Creates the TabContentsView that shows the interstitial RVH.
+  // Creates the WebContentsView that shows the interstitial RVH.
   // Overriden in unit tests.
-  virtual TabContentsView* CreateTabContentsView();
+  virtual content::WebContentsView* CreateWebContentsView();
 
   // Notification magic.
-  NotificationRegistrar notification_registrar_;
+  content::NotificationRegistrar notification_registrar_;
 
  private:
   // AutomationProvider needs access to Proceed and DontProceed to simulate
@@ -238,7 +253,7 @@ class InterstitialPage : public NotificationObserver,
   static InterstitialPageMap* tab_to_interstitial_page_;
 
   // Settings passed to the renderer.
-  RendererPreferences renderer_preferences_;
+  content::RendererPreferences renderer_preferences_;
 
   DISALLOW_COPY_AND_ASSIGN(InterstitialPage);
 };

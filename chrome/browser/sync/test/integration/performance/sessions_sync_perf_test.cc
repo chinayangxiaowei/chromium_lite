@@ -9,9 +9,12 @@
 #include "chrome/browser/sync/test/integration/sessions_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 
+using content::OpenURLParams;
 using sessions_helper::GetLocalSession;
 using sessions_helper::GetSessionData;
 using sessions_helper::OpenMultipleTabs;
+using sessions_helper::SyncedSessionVector;
+using sessions_helper::SessionWindowMap;
 using sessions_helper::WaitForTabsToLoad;
 
 static const int kNumTabs = 150;
@@ -60,7 +63,11 @@ void SessionsSyncPerfTest::UpdateTabs(int profile) {
     browser->SelectNumberedTab(i);
     url = NextURL();
     browser->OpenURL(
-        OpenURLParams(url, GURL("www.google.com"), CURRENT_TAB, 0));
+        OpenURLParams(url,
+        content::Referrer(GURL("http://localhost"),
+                          WebKit::WebReferrerPolicyDefault),
+        CURRENT_TAB,
+        content::PageTransitionFromInt(0), false));
     urls.push_back(url);
   }
   WaitForTabsToLoad(profile, urls);
@@ -76,23 +83,23 @@ int SessionsSyncPerfTest::GetTabCount(int profile) {
   SyncedSessionVector sessions;
 
   if (!GetLocalSession(profile, &local_session)) {
-    VLOG(1) << "GetLocalSession returned false";
+    DVLOG(1) << "GetLocalSession returned false";
     return -1;
   }
 
   if (!GetSessionData(profile, &sessions)) {
     // Foreign session data may be empty.  In this case we only count tabs in
     // the local session.
-    VLOG(1) << "GetSessionData returned false";
+    DVLOG(1) << "GetSessionData returned false";
   }
 
   sessions.push_back(local_session);
   for (SyncedSessionVector::const_iterator it = sessions.begin();
        it != sessions.end(); ++it) {
-    for (SessionWindowVector::const_iterator win_it = (*it)->windows.begin();
+    for (SessionWindowMap::const_iterator win_it = (*it)->windows.begin();
          win_it != (*it)->windows.end();
          ++win_it) {
-      tab_count += (*win_it)->tabs.size();
+      tab_count += win_it->second->tabs.size();
     }
   }
   return tab_count;
@@ -103,10 +110,11 @@ GURL SessionsSyncPerfTest::NextURL() {
 }
 
 GURL SessionsSyncPerfTest::IntToURL(int n) {
-  return GURL(StringPrintf("http://history%d.google.com/", n));
+  return GURL(StringPrintf("http://localhost/%d", n));
 }
 
-IN_PROC_BROWSER_TEST_F(SessionsSyncPerfTest, P0) {
+// TODO(lipalani): Re-enable after crbug.com/96921 is fixed.
+IN_PROC_BROWSER_TEST_F(SessionsSyncPerfTest, DISABLED_P0) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
 
   AddTabs(0, kNumTabs);

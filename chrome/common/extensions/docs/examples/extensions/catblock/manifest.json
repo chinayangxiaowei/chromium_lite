@@ -2,6 +2,12 @@
   "name": "CatBlock",
   "version": "1.0",
   "description": "I can't has cheezburger!",
-  "permissions": ["experimental"],
-  "background_page": "background.html"
+  "permissions": ["webRequest", "webRequestBlocking",
+                  "http://icanhascheezburger.files.wordpress.com/*",
+                  "http://chzmemebase.files.wordpress.com/*"],
+  "background": {
+    "scripts": ["loldogs.js", "background.js"]
+  },
+
+  "manifest_version": 2
 }

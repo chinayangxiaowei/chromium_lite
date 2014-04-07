@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/callback.h"
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
@@ -19,20 +19,23 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
+#include "chrome/browser/profiles/profile_info_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/sync/sync_setup_flow.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/ui/webui/web_ui_util.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -50,18 +53,20 @@
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #endif  // defined(TOOLKIT_GTK)
 
+using content::UserMetricsAction;
+
 PersonalOptionsHandler::PersonalOptionsHandler() {
   multiprofile_ = ProfileManager::IsMultipleProfilesEnabled();
 #if defined(OS_CHROMEOS)
   registrar_.Add(this,
                  chrome::NOTIFICATION_LOGIN_USER_IMAGE_CHANGED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
 #endif
 }
 
 PersonalOptionsHandler::~PersonalOptionsHandler() {
-  ProfileSyncService* sync_service =
-      Profile::FromWebUI(web_ui_)->GetProfileSyncService();
+  ProfileSyncService* sync_service(ProfileSyncServiceFactory::
+      GetInstance()->GetForProfile(Profile::FromWebUI(web_ui())));
   if (sync_service)
     sync_service->RemoveObserver(this);
 }
@@ -78,13 +83,11 @@ void PersonalOptionsHandler::GetLocalizedValues(
       "syncOverview",
       l10n_util::GetStringFUTF16(IDS_SYNC_OVERVIEW,
                                  l10n_util::GetStringUTF16(IDS_PRODUCT_NAME)));
-  localized_strings->SetString(
-      "syncFurtherOverview",
-      l10n_util::GetStringUTF16(IDS_SYNC_FURTHER_OVERVIEW));
   localized_strings->SetString("syncSection",
       l10n_util::GetStringUTF16(IDS_SYNC_OPTIONS_GROUP_NAME));
   localized_strings->SetString("customizeSync",
       l10n_util::GetStringUTF16(IDS_SYNC_CUSTOMIZE_BUTTON_LABEL));
+  localized_strings->SetString("syncLearnMoreURL", chrome::kSyncLearnMoreURL);
 
   localized_strings->SetString("profiles",
       l10n_util::GetStringUTF16(IDS_PROFILES_OPTIONS_GROUP_NAME));
@@ -94,8 +97,13 @@ void PersonalOptionsHandler::GetLocalizedValues(
       l10n_util::GetStringUTF16(IDS_PROFILES_MANAGE_BUTTON_LABEL));
   localized_strings->SetString("profilesDelete",
       l10n_util::GetStringUTF16(IDS_PROFILES_DELETE_BUTTON_LABEL));
+  localized_strings->SetString("profilesDeleteSingle",
+      l10n_util::GetStringUTF16(IDS_PROFILES_DELETE_SINGLE_BUTTON_LABEL));
   localized_strings->SetString("profilesListItemCurrent",
       l10n_util::GetStringUTF16(IDS_PROFILES_LIST_ITEM_CURRENT));
+  localized_strings->SetString("profilesSingleUser",
+      l10n_util::GetStringFUTF16(IDS_PROFILES_SINGLE_USER_MESSAGE,
+                                 l10n_util::GetStringUTF16(IDS_PRODUCT_NAME)));
 
   localized_strings->SetString("passwords",
       l10n_util::GetStringUTF16(IDS_OPTIONS_PASSWORDS_GROUP_NAME));
@@ -105,6 +113,13 @@ void PersonalOptionsHandler::GetLocalizedValues(
       l10n_util::GetStringUTF16(IDS_OPTIONS_PASSWORDS_NEVERSAVE));
   localized_strings->SetString("manage_passwords",
       l10n_util::GetStringUTF16(IDS_OPTIONS_PASSWORDS_MANAGE_PASSWORDS));
+#if defined(OS_MACOSX)
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  if (profile_manager->GetNumberOfProfiles() > 1) {
+    localized_strings->SetString("macPasswordsWarning",
+        l10n_util::GetStringUTF16(IDS_OPTIONS_PASSWORDS_MAC_WARNING));
+  }
+#endif
   localized_strings->SetString("autologinEnabled",
       l10n_util::GetStringUTF16(IDS_OPTIONS_PASSWORDS_AUTOLOGIN));
 
@@ -133,9 +148,9 @@ void PersonalOptionsHandler::GetLocalizedValues(
   localized_strings->SetString("themesSetClassic",
       l10n_util::GetStringUTF16(IDS_THEMES_SET_CLASSIC));
   localized_strings->SetString("showWindowDecorations",
-      l10n_util::GetStringUTF16(IDS_SHOW_WINDOW_DECORATIONS_RADIO));
+      l10n_util::GetStringUTF16(IDS_SHOW_WINDOW_DECORATIONS));
   localized_strings->SetString("hideWindowDecorations",
-      l10n_util::GetStringUTF16(IDS_HIDE_WINDOW_DECORATIONS_RADIO));
+      l10n_util::GetStringUTF16(IDS_HIDE_WINDOW_DECORATIONS));
 #else
   localized_strings->SetString("themes",
       l10n_util::GetStringUTF16(IDS_THEMES_GROUP_NAME));
@@ -180,10 +195,8 @@ void PersonalOptionsHandler::GetLocalizedValues(
       l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_THEMES));
   localized_strings->SetString("syncapps",
       l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_APPS));
-  localized_strings->SetString("syncsearchengines",
-      l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_SEARCH_ENGINES));
   localized_strings->SetString("syncsessions",
-      l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_SESSIONS));
+      l10n_util::GetStringUTF16(IDS_SYNC_DATATYPE_TABS));
 
 #if defined(OS_CHROMEOS)
   localized_strings->SetString("account",
@@ -192,29 +205,34 @@ void PersonalOptionsHandler::GetLocalizedValues(
       l10n_util::GetStringUTF16(IDS_OPTIONS_ENABLE_SCREENLOCKER_CHECKBOX));
   localized_strings->SetString("changePicture",
       l10n_util::GetStringUTF16(IDS_OPTIONS_CHANGE_PICTURE));
-  localized_strings->SetString("userEmail",
-      chromeos::UserManager::Get()->logged_in_user().email());
+  if (chromeos::UserManager::Get()->user_is_logged_in()) {
+    localized_strings->SetString("username",
+        chromeos::UserManager::Get()->logged_in_user().email());
+  }
 #endif
 }
 
 void PersonalOptionsHandler::RegisterMessages() {
-  DCHECK(web_ui_);
-  web_ui_->RegisterMessageCallback(
+  web_ui()->RegisterMessageCallback(
       "themesReset",
-      NewCallback(this, &PersonalOptionsHandler::ThemesReset));
+      base::Bind(&PersonalOptionsHandler::ThemesReset,
+                 base::Unretained(this)));
 #if defined(TOOLKIT_GTK)
-  web_ui_->RegisterMessageCallback(
+  web_ui()->RegisterMessageCallback(
       "themesSetGTK",
-      NewCallback(this, &PersonalOptionsHandler::ThemesSetGTK));
+      base::Bind(&PersonalOptionsHandler::ThemesSetGTK,
+                 base::Unretained(this)));
 #endif
-  web_ui_->RegisterMessageCallback(
+  web_ui()->RegisterMessageCallback(
       "createProfile",
-      NewCallback(this, &PersonalOptionsHandler::CreateProfile));
+      base::Bind(&PersonalOptionsHandler::CreateProfile,
+                 base::Unretained(this)));
 }
 
-void PersonalOptionsHandler::Observe(int type,
-                                     const NotificationSource& source,
-                                     const NotificationDetails& details) {
+void PersonalOptionsHandler::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_BROWSER_THEME_CHANGED) {
     ObserveThemeChanged();
   } else if (multiprofile_ &&
@@ -232,28 +250,14 @@ void PersonalOptionsHandler::Observe(int type,
 void PersonalOptionsHandler::OnStateChanged() {
   string16 status_label;
   string16 link_label;
-  ProfileSyncService* service =
-      Profile::FromWebUI(web_ui_)->GetProfileSyncService();
+  ProfileSyncService* service(ProfileSyncServiceFactory::
+      GetInstance()->GetForProfile(Profile::FromWebUI(web_ui())));
   DCHECK(service);
   bool managed = service->IsManaged();
   bool sync_setup_completed = service->HasSyncSetupCompleted();
   bool status_has_error = sync_ui_util::GetStatusLabels(
-      service, &status_label, &link_label) == sync_ui_util::SYNC_ERROR;
-  browser_sync::SyncBackendHost::StatusSummary summary =
-      service->QuerySyncStatusSummary();
-
-  // TODO(jhawkins): This is terribly hacky. Sync should pass us this state, but
-  // we have to fix the other callers of
-  // sync_ui_util::GetSyncedStateStatusLabel() to handle returned HTML.
-  if (!status_has_error &&
-      summary == browser_sync::SyncBackendHost::Status::READY &&
-      service->HasSyncSetupCompleted()) {
-    string16 user_name(service->GetAuthenticatedUsername());
-    status_label.assign(l10n_util::GetStringFUTF16(
-        IDS_SYNC_ACCOUNT_SYNCING_TO_USER,
-        user_name,
-        ASCIIToUTF16(chrome::kSyncGoogleDashboardURL)));
-  }
+      service, sync_ui_util::WITH_HTML, &status_label, &link_label) ==
+          sync_ui_util::SYNC_ERROR;
 
   string16 start_stop_button_label;
   bool is_start_stop_button_visible = false;
@@ -274,66 +278,73 @@ void PersonalOptionsHandler::OnStateChanged() {
     is_start_stop_button_enabled = false;
   } else {
     start_stop_button_label =
-        l10n_util::GetStringUTF16(IDS_SYNC_START_SYNC_BUTTON_LABEL);
+        l10n_util::GetStringFUTF16(IDS_SYNC_START_SYNC_BUTTON_LABEL,
+            l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_NAME));
     is_start_stop_button_visible = true;
     is_start_stop_button_enabled = !managed;
   }
 
   scoped_ptr<Value> completed(Value::CreateBooleanValue(sync_setup_completed));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setSyncSetupCompleted",
-                                  *completed);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setSyncSetupCompleted",
+                                   *completed);
 
   scoped_ptr<Value> label(Value::CreateStringValue(status_label));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setSyncStatus", *label);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setSyncStatus", *label);
 
   scoped_ptr<Value> enabled(
       Value::CreateBooleanValue(is_start_stop_button_enabled));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setStartStopButtonEnabled",
-                                  *enabled);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setStartStopButtonEnabled",
+                                   *enabled);
 
   scoped_ptr<Value> visible(
       Value::CreateBooleanValue(is_start_stop_button_visible));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setStartStopButtonVisible",
-                                  *visible);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setStartStopButtonVisible",
+                                   *visible);
 
   label.reset(Value::CreateStringValue(start_stop_button_label));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setStartStopButtonLabel",
-                                  *label);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setStartStopButtonLabel",
+                                   *label);
 
   label.reset(Value::CreateStringValue(link_label));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setSyncActionLinkLabel",
-                                  *label);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setSyncActionLinkLabel",
+                                   *label);
 
   enabled.reset(Value::CreateBooleanValue(!managed));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setSyncActionLinkEnabled",
-                                  *enabled);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setSyncActionLinkEnabled",
+                                   *enabled);
 
   visible.reset(Value::CreateBooleanValue(status_has_error));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setSyncStatusErrorVisible",
-                                  *visible);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setSyncStatusErrorVisible",
+                                   *visible);
+
+  enabled.reset(Value::CreateBooleanValue(
+      !service->unrecoverable_error_detected()));
+  web_ui()->CallJavascriptFunction(
+      "PersonalOptions.setCustomizeSyncButtonEnabled",
+      *enabled);
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableAutologin)) {
     visible.reset(Value::CreateBooleanValue(
         service->AreCredentialsAvailable()));
-    web_ui_->CallJavascriptFunction("PersonalOptions.setAutoLoginVisible",
-                                    *visible);
+    web_ui()->CallJavascriptFunction("PersonalOptions.setAutoLoginVisible",
+                                     *visible);
   }
 
   // Set profile creation text and button if multi-profiles switch is on.
   visible.reset(Value::CreateBooleanValue(multiprofile_));
-  web_ui_->CallJavascriptFunction("PersonalOptions.setProfilesSectionVisible",
-                                  *visible);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setProfilesSectionVisible",
+                                   *visible);
   if (multiprofile_)
     SendProfilesInfo();
 }
 
 void PersonalOptionsHandler::ObserveThemeChanged() {
-  Profile* profile = Profile::FromWebUI(web_ui_);
+  Profile* profile = Profile::FromWebUI(web_ui());
 #if defined(TOOLKIT_GTK)
   GtkThemeService* theme_service = GtkThemeService::GetFrom(profile);
   bool is_gtk_theme = theme_service->UsingNativeTheme();
   base::FundamentalValue gtk_enabled(!is_gtk_theme);
-  web_ui_->CallJavascriptFunction(
+  web_ui()->CallJavascriptFunction(
       "options.PersonalOptions.setGtkThemeButtonEnabled", gtk_enabled);
 #else
   ThemeService* theme_service = ThemeServiceFactory::GetForProfile(profile);
@@ -342,40 +353,41 @@ void PersonalOptionsHandler::ObserveThemeChanged() {
 
   bool is_classic_theme = !is_gtk_theme && theme_service->UsingDefaultTheme();
   base::FundamentalValue enabled(!is_classic_theme);
-  web_ui_->CallJavascriptFunction(
+  web_ui()->CallJavascriptFunction(
       "options.PersonalOptions.setThemesResetButtonEnabled", enabled);
 }
 
 void PersonalOptionsHandler::Initialize() {
-  Profile* profile = Profile::FromWebUI(web_ui_);
+  Profile* profile = Profile::FromWebUI(web_ui());
 
   // Listen for theme installation.
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 Source<ThemeService>(ThemeServiceFactory::GetForProfile(
-                     profile)));
+                 content::Source<ThemeService>(
+                     ThemeServiceFactory::GetForProfile(profile)));
   registrar_.Add(this, chrome::NOTIFICATION_PROFILE_CACHED_INFO_CHANGED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
   ObserveThemeChanged();
 
-  ProfileSyncService* sync_service = profile->GetProfileSyncService();
+  ProfileSyncService* sync_service(ProfileSyncServiceFactory::
+      GetInstance()->GetForProfile(profile));
   if (sync_service) {
     sync_service->AddObserver(this);
     OnStateChanged();
   } else {
-    web_ui_->CallJavascriptFunction("options.PersonalOptions.hideSyncSection");
+    web_ui()->CallJavascriptFunction("options.PersonalOptions.hideSyncSection");
   }
 }
 
 void PersonalOptionsHandler::ThemesReset(const ListValue* args) {
-  UserMetrics::RecordAction(UserMetricsAction("Options_ThemesReset"));
-  Profile* profile = Profile::FromWebUI(web_ui_);
+  content::RecordAction(UserMetricsAction("Options_ThemesReset"));
+  Profile* profile = Profile::FromWebUI(web_ui());
   ThemeServiceFactory::GetForProfile(profile)->UseDefaultTheme();
 }
 
 #if defined(TOOLKIT_GTK)
 void PersonalOptionsHandler::ThemesSetGTK(const ListValue* args) {
-  UserMetrics::RecordAction(UserMetricsAction("Options_GtkThemeSet"));
-  Profile* profile = Profile::FromWebUI(web_ui_);
+  content::RecordAction(UserMetricsAction("Options_GtkThemeSet"));
+  Profile* profile = Profile::FromWebUI(web_ui());
   ThemeServiceFactory::GetForProfile(profile)->SetNativeTheme();
 }
 #endif
@@ -384,10 +396,10 @@ void PersonalOptionsHandler::ThemesSetGTK(const ListValue* args) {
 void PersonalOptionsHandler::UpdateAccountPicture() {
   std::string email = chromeos::UserManager::Get()->logged_in_user().email();
   if (!email.empty()) {
-    web_ui_->CallJavascriptFunction("PersonalOptions.updateAccountPicture");
+    web_ui()->CallJavascriptFunction("PersonalOptions.updateAccountPicture");
     base::StringValue email_value(email);
-    web_ui_->CallJavascriptFunction("AccountsOptions.updateAccountPicture",
-                                    email_value);
+    web_ui()->CallJavascriptFunction("AccountsOptions.updateAccountPicture",
+                                     email_value);
   }
 }
 #endif
@@ -397,24 +409,33 @@ void PersonalOptionsHandler::SendProfilesInfo() {
       g_browser_process->profile_manager()->GetProfileInfoCache();
   ListValue profile_info_list;
   FilePath current_profile_path =
-      web_ui_->tab_contents()->browser_context()->GetPath();
+      web_ui()->GetWebContents()->GetBrowserContext()->GetPath();
   for (size_t i = 0, e = cache.GetNumberOfProfiles(); i < e; ++i) {
-    DictionaryValue *profile_value = new DictionaryValue();
-    size_t icon_index = cache.GetAvatarIconIndexOfProfileAtIndex(i);
+    DictionaryValue* profile_value = new DictionaryValue();
     FilePath profile_path = cache.GetPathOfProfileAtIndex(i);
     profile_value->SetString("name", cache.GetNameOfProfileAtIndex(i));
-    profile_value->SetString("iconURL",
-                             cache.GetDefaultAvatarIconUrl(icon_index));
-    profile_value->Set("filePath",
-                       base::CreateFilePathValue(
-                          profile_path));
+    profile_value->Set("filePath", base::CreateFilePathValue(profile_path));
     profile_value->SetBoolean("isCurrentProfile",
                               profile_path == current_profile_path);
+
+    bool is_gaia_picture =
+        cache.IsUsingGAIAPictureOfProfileAtIndex(i) &&
+        cache.GetGAIAPictureOfProfileAtIndex(i);
+    if (is_gaia_picture) {
+      gfx::Image icon = profiles::GetAvatarIconForWebUI(
+          cache.GetAvatarIconOfProfileAtIndex(i), true);
+      profile_value->SetString("iconURL", web_ui_util::GetImageDataUrl(icon));
+    } else {
+      size_t icon_index = cache.GetAvatarIconIndexOfProfileAtIndex(i);
+      profile_value->SetString("iconURL",
+                               cache.GetDefaultAvatarIconUrl(icon_index));
+    }
+
     profile_info_list.Append(profile_value);
   }
 
-  web_ui_->CallJavascriptFunction("PersonalOptions.setProfilesInfo",
-                                  profile_info_list);
+  web_ui()->CallJavascriptFunction("PersonalOptions.setProfilesInfo",
+                                   profile_info_list);
 }
 
 void PersonalOptionsHandler::CreateProfile(const ListValue* args) {

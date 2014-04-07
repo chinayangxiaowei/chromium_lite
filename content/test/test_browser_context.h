@@ -7,8 +7,11 @@
 #pragma once
 
 #include "base/compiler_specific.h"
+#include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
-#include "content/browser/browser_context.h"
+#include "base/scoped_temp_dir.h"
+#include "content/public/browser/browser_context.h"
 
 class WebKitContext;
 
@@ -20,16 +23,16 @@ class TestBrowserContext : public content::BrowserContext {
   virtual FilePath GetPath() OVERRIDE;
   virtual bool IsOffTheRecord() OVERRIDE;
   virtual SSLHostState* GetSSLHostState() OVERRIDE;
-  virtual DownloadManager* GetDownloadManager() OVERRIDE;
-  virtual bool HasCreatedDownloadManager() const OVERRIDE;
+  virtual content::DownloadManager* GetDownloadManager() OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContext() OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContextForRenderProcess(
       int renderer_child_id) OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContextForMedia() OVERRIDE;
   virtual const content::ResourceContext& GetResourceContext() OVERRIDE;
-  virtual HostZoomMap* GetHostZoomMap() OVERRIDE;
-  virtual GeolocationPermissionContext* GetGeolocationPermissionContext()
-      OVERRIDE;
+  virtual content::HostZoomMap* GetHostZoomMap() OVERRIDE;
+  virtual content::GeolocationPermissionContext*
+      GetGeolocationPermissionContext() OVERRIDE;
+  virtual SpeechInputPreferences* GetSpeechInputPreferences() OVERRIDE;
   virtual bool DidLastSessionExitCleanly() OVERRIDE;
   virtual quota::QuotaManager* GetQuotaManager() OVERRIDE;
   virtual WebKitContext* GetWebKitContext() OVERRIDE;
@@ -39,8 +42,13 @@ class TestBrowserContext : public content::BrowserContext {
   virtual fileapi::FileSystemContext* GetFileSystemContext() OVERRIDE;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(DOMStorageTest, SessionOnly);
+  FRIEND_TEST_ALL_PREFIXES(DOMStorageTest, SaveSessionState);
+
   // WebKitContext, lazily initialized by GetWebKitContext().
   scoped_refptr<WebKitContext> webkit_context_;
+
+  ScopedTempDir browser_context_dir_;
 
   DISALLOW_COPY_AND_ASSIGN(TestBrowserContext);
 };

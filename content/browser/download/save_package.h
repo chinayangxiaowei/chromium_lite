@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,26 +16,23 @@
 #include "base/hash_tables.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task.h"
-#include "content/browser/download/download_manager.h"
-#include "content/browser/tab_contents/tab_contents_observer.h"
+#include "base/time.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/download_item.h"
+#include "content/public/browser/save_page_type.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "googleurl/src/gurl.h"
 
 class GURL;
-class MessageLoop;
-class PrefService;
 class SaveFileManager;
 class SaveItem;
 class SavePackage;
-class TabContents;
 struct SaveFileCreateInfo;
-struct SavePackageParam;
 
-namespace base {
-class Thread;
-class Time;
+namespace content {
+class DownloadManager;
+class WebContents;
 }
-
 
 // The SavePackage object manages the process of saving a page as only-html or
 // complete-html and providing the information for displaying saving status.
@@ -49,20 +46,12 @@ class Time;
 // saved. Each file is represented by a SaveItem, and all SaveItems are owned
 // by the SavePackage. SaveItems are created when a user initiates a page
 // saving job, and exist for the duration of one tab's life time.
-class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
-                    public TabContentsObserver,
-                    public DownloadItem::Observer,
-                    public base::SupportsWeakPtr<SavePackage> {
+class CONTENT_EXPORT SavePackage
+    : public base::RefCountedThreadSafe<SavePackage>,
+      public content::WebContentsObserver,
+      public content::DownloadItem::Observer,
+      public base::SupportsWeakPtr<SavePackage> {
  public:
-  enum SavePackageType {
-    // The value of the save type before its set by the user.
-    SAVE_TYPE_UNKNOWN = -1,
-    // User chose to save only the HTML of the page.
-    SAVE_AS_ONLY_HTML = 0,
-    // User chose to save complete-html page.
-    SAVE_AS_COMPLETE_HTML = 1
-  };
-
   enum WaitState {
     // State when created but not initialized.
     INITIALIZE = 0,
@@ -90,8 +79,8 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   // This contructor is used only for testing. We can bypass the file and
   // directory name generation / sanitization by providing well known paths
   // better suited for tests.
-  SavePackage(TabContents* tab_contents,
-              SavePackageType save_type,
+  SavePackage(content::WebContents* web_contents,
+              content::SavePageType save_type,
               const FilePath& file_full_path,
               const FilePath& directory_full_path);
 
@@ -117,28 +106,15 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   // total size).
   int PercentComplete();
 
-  // Called by the embedder once a path is chosen by the user.
-  void OnPathPicked(const FilePath& final_name, SavePackageType type);
-
   bool canceled() const { return user_canceled_ || disk_error_occurred_; }
   bool finished() const { return finished_; }
-  SavePackageType save_type() const { return save_type_; }
+  content::SavePageType save_type() const { return save_type_; }
   int tab_id() const { return tab_id_; }
   int id() const { return unique_id_; }
-  TabContents* tab_contents() const {
-    return TabContentsObserver::tab_contents();
-  }
+  TabContents* tab_contents() const;
+  content::WebContents* web_contents() const;
 
   void GetSaveInfo();
-
-  // Statics -------------------------------------------------------------------
-
-  // Check whether we can do the saving page operation for the specified URL.
-  static bool IsSavableURL(const GURL& url);
-
-  // Check whether we can do the saving page operation for the contents which
-  // have the specified MIME type.
-  static bool IsSavableContents(const std::string& contents_mime_type);
 
  private:
   friend class base::RefCountedThreadSafe<SavePackage>;
@@ -158,12 +134,12 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   void SaveNextFile(bool process_all_remainder_items);
   void DoSavingProcess();
 
-  // TabContentsObserver implementation.
+  // content::WebContentsObserver implementation.
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
   // DownloadItem::Observer implementation.
-  virtual void OnDownloadUpdated(DownloadItem* download) OVERRIDE;
-  virtual void OnDownloadOpened(DownloadItem* download) OVERRIDE {}
+  virtual void OnDownloadUpdated(content::DownloadItem* download) OVERRIDE;
+  virtual void OnDownloadOpened(content::DownloadItem* download) OVERRIDE {}
 
   // Update the download history of this item upon completion.
   void FinalizeDownloadEntry();
@@ -210,7 +186,7 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
                                    const std::string& accept_langs);
   void ContinueGetSaveInfo(const FilePath& suggested_path,
                            bool can_save_as_complete);
-
+  void OnPathPicked(const FilePath& final_name, content::SavePageType type);
   void OnReceivedSavableResourceLinksForCurrentPage(
       const std::vector<GURL>& resources_list,
       const std::vector<GURL>& referrers_list,
@@ -237,6 +213,13 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
     return static_cast<int>(saved_success_items_.size() +
                             saved_failed_items_.size());
   }
+
+  // The current speed in files per second. This is used to update the
+  // DownloadItem associated to this SavePackage. The files per second is
+  // presented by the DownloadItem to the UI as bytes per second, which is
+  // not correct but matches the way the total and received number of files is
+  // presented as the total and received bytes.
+  int64 CurrentSpeed() const;
 
   // Helper function for preparing suggested name for the SaveAs Dialog. The
   // suggested name is determined by the web document's title.
@@ -271,8 +254,8 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   SaveFileManager* file_manager_;
 
   // DownloadManager owns the DownloadItem and handles history and UI.
-  DownloadManager* download_manager_;
-  DownloadItem* download_;
+  content::DownloadManager* download_manager_;
+  content::DownloadItem* download_;
 
   // The URL of the page the user wants to save.
   GURL page_url_;
@@ -281,6 +264,9 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
 
   // The title of the page the user wants to save.
   string16 title_;
+
+  // Used to calculate package download speed (in files per second).
+  base::TimeTicks start_tick_;
 
   // Indicates whether the actual saving job is finishing or not.
   bool finished_;
@@ -292,7 +278,7 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   bool disk_error_occurred_;
 
   // Type about saving page as only-html or complete-html.
-  SavePackageType save_type_;
+  content::SavePageType save_type_;
 
   // Number of all need to be saved resources.
   size_t all_save_items_count_;
@@ -319,8 +305,6 @@ class SavePackage : public base::RefCountedThreadSafe<SavePackage>,
   friend class SavePackageTest;
   FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestSuggestedSaveNames);
   FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestLongSafePureFilename);
-
-  ScopedRunnableMethodFactory<SavePackage> method_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(SavePackage);
 };

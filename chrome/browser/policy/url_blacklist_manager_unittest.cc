@@ -10,8 +10,7 @@
 #include "base/message_loop.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_pref_service.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_service.h"
+#include "content/test/test_browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,6 +22,7 @@ namespace {
 using ::testing::_;
 using ::testing::Invoke;
 using ::testing::Mock;
+using content::BrowserThread;
 
 class TestingURLBlacklistManager : public URLBlacklistManager {
  public:
@@ -35,11 +35,6 @@ class TestingURLBlacklistManager : public URLBlacklistManager {
 
   // Make this method public for testing.
   using URLBlacklistManager::ScheduleUpdate;
-
-  // Post tasks without a delay during tests.
-  virtual void PostUpdateTask(Task* task) OVERRIDE {
-    MessageLoop::current()->PostTask(FROM_HERE, task);
-  }
 
   // Makes a direct call to UpdateOnIO during tests.
   void UpdateOnIO() {
@@ -96,9 +91,9 @@ class URLBlacklistManagerTest : public testing::Test {
   scoped_ptr<TestingURLBlacklistManager> blacklist_manager_;
 
  private:
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
-  BrowserThread io_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
+  content::TestBrowserThread io_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(URLBlacklistManagerTest);
 };

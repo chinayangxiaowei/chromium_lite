@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,14 +21,17 @@
 
 #include <vector>
 
-#include "base/callback.h"
+#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
 #include "base/id_map.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/synchronization/lock.h"
+#include "content/common/content_export.h"
 #include "content/common/p2p_sockets.h"
-#include "content/renderer/render_view_observer.h"
+#include "content/public/renderer/render_view_observer.h"
 #include "net/base/net_util.h"
+
+class RenderViewImpl;
 
 namespace base {
 class MessageLoopProxy;
@@ -46,7 +49,7 @@ class P2PSocketClient;
 // P2PSocketDispatcher works on the renderer thread. It dispatches all
 // messages on that thread, and all its methods must be called on the
 // same thread.
-class P2PSocketDispatcher : public RenderViewObserver {
+class CONTENT_EXPORT P2PSocketDispatcher : public content::RenderViewObserver {
  public:
   class NetworkListObserver {
    public:
@@ -62,7 +65,7 @@ class P2PSocketDispatcher : public RenderViewObserver {
     DISALLOW_COPY_AND_ASSIGN(NetworkListObserver);
   };
 
-  explicit P2PSocketDispatcher(RenderView* render_view);
+  explicit P2PSocketDispatcher(RenderViewImpl* render_view);
   virtual ~P2PSocketDispatcher();
 
   // Add a new network list observer. Each observer is called
@@ -74,11 +77,12 @@ class P2PSocketDispatcher : public RenderViewObserver {
   void RemoveNetworkListObserver(NetworkListObserver* network_list_observer);
 
   // RenderViewObserver overrides.
-  virtual bool OnMessageReceived(const IPC::Message& message);
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
  private:
   friend class P2PHostAddressRequest;
   friend class P2PSocketClient;
+  class AsyncMessageSender;
 
   base::MessageLoopProxy* message_loop();
 
@@ -111,6 +115,8 @@ class P2PSocketDispatcher : public RenderViewObserver {
   bool network_notifications_started_;
   scoped_refptr<ObserverListThreadSafe<NetworkListObserver> >
       network_list_observers_;
+
+  scoped_refptr<AsyncMessageSender> async_message_sender_;
 
   DISALLOW_COPY_AND_ASSIGN(P2PSocketDispatcher);
 };

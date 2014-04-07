@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,18 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/location.h"
 #include "base/message_loop_proxy.h"
 #include "remoting/base/constants.h"
-#include "remoting/jingle_glue/host_resolver.h"
-#include "remoting/jingle_glue/http_port_allocator.h"
 #include "remoting/jingle_glue/javascript_signal_strategy.h"
 #include "remoting/jingle_glue/xmpp_signal_strategy.h"
-#include "remoting/protocol/auth_token_utils.h"
-#include "remoting/protocol/client_message_dispatcher.h"
+#include "remoting/protocol/auth_util.h"
+#include "remoting/protocol/authenticator.h"
+#include "remoting/protocol/client_control_dispatcher.h"
+#include "remoting/protocol/client_event_dispatcher.h"
 #include "remoting/protocol/client_stub.h"
-#include "remoting/protocol/host_control_sender.h"
-#include "remoting/protocol/input_sender.h"
 #include "remoting/protocol/jingle_session_manager.h"
+#include "remoting/protocol/pepper_session_manager.h"
 #include "remoting/protocol/video_reader.h"
 #include "remoting/protocol/video_stub.h"
 #include "remoting/protocol/util.h"
@@ -27,60 +27,52 @@ namespace protocol {
 
 ConnectionToHost::ConnectionToHost(
     base::MessageLoopProxy* message_loop,
-    talk_base::NetworkManager* network_manager,
-    talk_base::PacketSocketFactory* socket_factory,
-    HostResolverFactory* host_resolver_factory,
-    PortAllocatorSessionFactory* session_factory,
+    pp::Instance* pp_instance,
     bool allow_nat_traversal)
     : message_loop_(message_loop),
-      network_manager_(network_manager),
-      socket_factory_(socket_factory),
-      host_resolver_factory_(host_resolver_factory),
-      port_allocator_session_factory_(session_factory),
+      pp_instance_(pp_instance),
       allow_nat_traversal_(allow_nat_traversal),
       event_callback_(NULL),
       client_stub_(NULL),
       video_stub_(NULL),
-      state_(STATE_EMPTY),
-      control_connected_(false),
-      input_connected_(false),
-      video_connected_(false) {
+      state_(CONNECTING),
+      error_(OK) {
 }
 
 ConnectionToHost::~ConnectionToHost() {
 }
 
 InputStub* ConnectionToHost::input_stub() {
-  return input_sender_.get();
-}
-
-HostStub* ConnectionToHost::host_stub() {
-  return host_control_sender_.get();
+  return &event_forwarder_;
 }
 
 void ConnectionToHost::Connect(scoped_refptr<XmppProxy> xmpp_proxy,
-                               const std::string& your_jid,
+                               const std::string& local_jid,
                                const std::string& host_jid,
                                const std::string& host_public_key,
-                               const std::string& access_code,
+                               scoped_ptr<Authenticator> authenticator,
                                HostEventCallback* event_callback,
                                ClientStub* client_stub,
                                VideoStub* video_stub) {
   event_callback_ = event_callback;
   client_stub_ = client_stub;
   video_stub_ = video_stub;
-  access_code_ = access_code;
+  authenticator_ = authenticator.Pass();
 
   // Save jid of the host. The actual connection is created later after
   // |signal_strategy_| is connected.
   host_jid_ = host_jid;
   host_public_key_ = host_public_key;
 
-  // Initialize |signal_strategy_|.
-  JavascriptSignalStrategy* strategy = new JavascriptSignalStrategy(your_jid);
+  JavascriptSignalStrategy* strategy = new JavascriptSignalStrategy(local_jid);
   strategy->AttachXmppProxy(xmpp_proxy);
   signal_strategy_.reset(strategy);
-  signal_strategy_->Init(this);
+  signal_strategy_->AddListener(this);
+  signal_strategy_->Connect();
+
+  session_manager_.reset(new PepperSessionManager(pp_instance_));
+  session_manager_->Init(signal_strategy_.get(), this,
+                         NetworkSettings(allow_nat_traversal_));
 }
 
 void ConnectionToHost::Disconnect(const base::Closure& shutdown_task) {
@@ -99,67 +91,41 @@ void ConnectionToHost::Disconnect(const base::Closure& shutdown_task) {
   if (session_manager_.get())
     session_manager_.reset();
 
-  if (signal_strategy_.get())
+  if (signal_strategy_.get()) {
+    signal_strategy_->RemoveListener(this);
     signal_strategy_.reset();
+  }
 
   shutdown_task.Run();
 }
 
-void ConnectionToHost::InitSession() {
-  DCHECK(message_loop_->BelongsToCurrentThread());
-
-  // Initialize chromotocol |session_manager_|.
-  JingleSessionManager* session_manager =
-      JingleSessionManager::CreateSandboxed(
-          message_loop_, network_manager_.release(), socket_factory_.release(),
-          host_resolver_factory_.release(),
-          port_allocator_session_factory_.release());
-
-  // TODO(ajwong): Make this a command switch when we're more stable.
-  session_manager->set_allow_local_ips(true);
-
-  session_manager_.reset(session_manager);
-  session_manager_->Init(
-      local_jid_, signal_strategy_.get(), this, NULL, "", allow_nat_traversal_);
-}
-
-const SessionConfig* ConnectionToHost::config() {
+const SessionConfig& ConnectionToHost::config() {
   return session_->config();
 }
 
-void ConnectionToHost::OnStateChange(
-    SignalStrategy::StatusObserver::State state) {
+void ConnectionToHost::OnSignalStrategyStateChange(
+    SignalStrategy::State state) {
   DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK(event_callback_);
 
-  if (state == SignalStrategy::StatusObserver::CONNECTED) {
-    VLOG(1) << "Connected as: " << local_jid_;
-    InitSession();
-  } else if (state == SignalStrategy::StatusObserver::CLOSED) {
+  if (state == SignalStrategy::CONNECTED) {
+    VLOG(1) << "Connected as: " << signal_strategy_->GetLocalJid();
+  } else if (state == SignalStrategy::DISCONNECTED) {
     VLOG(1) << "Connection closed.";
-    event_callback_->OnConnectionClosed(this);
+    CloseOnError(NETWORK_FAILURE);
   }
 }
 
-void ConnectionToHost::OnJidChange(const std::string& full_jid) {
-  DCHECK(message_loop_->BelongsToCurrentThread());
-  local_jid_ = full_jid;
-}
-
-void ConnectionToHost::OnSessionManagerInitialized() {
+void ConnectionToHost::OnSessionManagerReady() {
   DCHECK(message_loop_->BelongsToCurrentThread());
 
   // After SessionManager is initialized we can try to connect to the host.
-  CandidateSessionConfig* candidate_config =
+  scoped_ptr<CandidateSessionConfig> candidate_config =
       CandidateSessionConfig::CreateDefault();
-  std::string client_token =
-      protocol::GenerateSupportAuthToken(local_jid_, access_code_);
-  session_.reset(session_manager_->Connect(
-      host_jid_, host_public_key_, client_token, candidate_config,
-      NewCallback(this, &ConnectionToHost::OnSessionStateChange)));
-
-  // Set the shared-secret for securing SSL channels.
-  session_->set_shared_secret(access_code_);
+  session_ = session_manager_->Connect(
+      host_jid_, authenticator_.Pass(), candidate_config.Pass(),
+      base::Bind(&ConnectionToHost::OnSessionStateChange,
+                 base::Unretained(this)));
 }
 
 void ConnectionToHost::OnIncomingSession(
@@ -170,94 +136,110 @@ void ConnectionToHost::OnIncomingSession(
   *response = SessionManager::DECLINE;
 }
 
+ConnectionToHost::State ConnectionToHost::state() const {
+  return state_;
+}
+
 void ConnectionToHost::OnSessionStateChange(
     Session::State state) {
   DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK(event_callback_);
 
   switch (state) {
-    case Session::FAILED:
-      CloseOnError();
+    case Session::INITIALIZING:
+    case Session::CONNECTING:
+    case Session::CONNECTED:
+      // Don't care about these events.
+      break;
+
+    case Session::AUTHENTICATED:
+      video_reader_.reset(VideoReader::Create(
+          message_loop_, session_->config()));
+      video_reader_->Init(session_.get(), video_stub_, base::Bind(
+          &ConnectionToHost::OnChannelInitialized, base::Unretained(this)));
+
+      control_dispatcher_.reset(new ClientControlDispatcher());
+      control_dispatcher_->Init(session_.get(), base::Bind(
+          &ConnectionToHost::OnChannelInitialized, base::Unretained(this)));
+      control_dispatcher_->set_client_stub(client_stub_);
+
+      event_dispatcher_.reset(new ClientEventDispatcher());
+      event_dispatcher_->Init(session_.get(), base::Bind(
+          &ConnectionToHost::OnChannelInitialized, base::Unretained(this)));
       break;
 
     case Session::CLOSED:
-      state_ = STATE_CLOSED;
       CloseChannels();
-      event_callback_->OnConnectionClosed(this);
+      SetState(CLOSED, OK);
       break;
 
-    case Session::CONNECTED:
-      // Initialize reader and writer.
-      video_reader_.reset(
-          VideoReader::Create(message_loop_, session_->config()));
-      video_reader_->Init(
-          session_.get(), video_stub_,
-          base::Bind(&ConnectionToHost::OnVideoChannelInitialized,
-                     base::Unretained(this)));
-      break;
-
-    case Session::CONNECTED_CHANNELS:
-      state_ = STATE_CONNECTED;
-      host_control_sender_.reset(
-          new HostControlSender(message_loop_, session_->control_channel()));
-      dispatcher_.reset(new ClientMessageDispatcher());
-      dispatcher_->Initialize(session_.get(), client_stub_);
-
-      control_connected_ = true;
-      input_connected_ = true;
-      NotifyIfChannelsReady();
-      break;
-
-    default:
-      // Ignore the other states by default.
+    case Session::FAILED:
+      switch (session_->error()) {
+        case Session::PEER_IS_OFFLINE:
+          CloseOnError(HOST_IS_OFFLINE);
+          break;
+        case Session::SESSION_REJECTED:
+        case Session::AUTHENTICATION_FAILED:
+          CloseOnError(SESSION_REJECTED);
+          break;
+        case Session::INCOMPATIBLE_PROTOCOL:
+          CloseOnError(INCOMPATIBLE_PROTOCOL);
+          break;
+        case Session::CHANNEL_CONNECTION_ERROR:
+        case Session::UNKNOWN_ERROR:
+          CloseOnError(NETWORK_FAILURE);
+          break;
+        case Session::OK:
+          DLOG(FATAL) << "Error code isn't set";
+          CloseOnError(NETWORK_FAILURE);
+      }
       break;
   }
 }
 
-void ConnectionToHost::OnVideoChannelInitialized(bool successful) {
+void ConnectionToHost::OnChannelInitialized(bool successful) {
   if (!successful) {
     LOG(ERROR) << "Failed to connect video channel";
-    CloseOnError();
+    CloseOnError(NETWORK_FAILURE);
     return;
   }
 
-  video_connected_ = true;
   NotifyIfChannelsReady();
 }
 
 void ConnectionToHost::NotifyIfChannelsReady() {
-  if (control_connected_ && input_connected_ && video_connected_)
-    event_callback_->OnConnectionOpened(this);
+  if (control_dispatcher_.get() && control_dispatcher_->is_connected() &&
+      event_dispatcher_.get() && event_dispatcher_->is_connected() &&
+      video_reader_.get() && video_reader_->is_connected() &&
+      state_ == CONNECTING) {
+    // Start forwarding input events to |event_dispatcher_|.
+    event_forwarder_.set_input_stub(event_dispatcher_.get());
+    SetState(CONNECTED, OK);
+  }
 }
 
-void ConnectionToHost::CloseOnError() {
-  state_ = STATE_FAILED;
+void ConnectionToHost::CloseOnError(Error error) {
   CloseChannels();
-  event_callback_->OnConnectionFailed(this);
+  SetState(FAILED, error);
 }
 
 void ConnectionToHost::CloseChannels() {
-  if (input_sender_.get())
-    input_sender_->Close();
-
-  if (host_control_sender_.get())
-    host_control_sender_->Close();
-
+  control_dispatcher_.reset();
+  event_dispatcher_.reset();
+  event_forwarder_.set_input_stub(NULL);
   video_reader_.reset();
 }
 
-void ConnectionToHost::OnClientAuthenticated() {
-  // TODO(hclam): Don't send anything except authentication request if it is
-  // not authenticated.
-  state_ = STATE_AUTHENTICATED;
+void ConnectionToHost::SetState(State state, Error error) {
+  DCHECK(message_loop_->BelongsToCurrentThread());
+  // |error| should be specified only when |state| is set to FAILED.
+  DCHECK(state == FAILED || error == OK);
 
-  // Create and enable the input stub now that we're authenticated.
-  input_sender_.reset(
-      new InputSender(message_loop_, session_->event_channel()));
-}
-
-ConnectionToHost::State ConnectionToHost::state() const {
-  return state_;
+  if (state != state_) {
+    state_ = state;
+    error_ = error;
+    event_callback_->OnConnectionState(state_, error_);
+  }
 }
 
 }  // namespace protocol

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,21 @@
 #define CHROME_BROWSER_SYNC_INTERNAL_API_SYNC_MANAGER_H_
 
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
-#include "base/callback_old.h"
-#include "base/memory/linked_ptr.h"
+#include "base/callback_forward.h"
+#include "base/time.h"
+#include "base/threading/thread_checker.h"
+#include "chrome/browser/sync/internal_api/includes/unrecoverable_error_handler.h"
+#include "chrome/browser/sync/internal_api/change_record.h"
 #include "chrome/browser/sync/internal_api/configure_reason.h"
-#include "chrome/browser/sync/protocol/password_specifics.pb.h"
 #include "chrome/browser/sync/protocol/sync_protocol_error.h"
 #include "chrome/browser/sync/syncable/model_type.h"
-#include "chrome/browser/sync/weak_handle.h"
+#include "chrome/browser/sync/util/weak_handle.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
 
 class FilePath;
-
-namespace base {
-class DictionaryValue;
-}  // namespace base
 
 namespace browser_sync {
 class JsBackend;
@@ -38,7 +37,7 @@ class SyncNotifier;
 }  // namespace sync_notifier
 
 namespace sync_pb {
-class PasswordSpecificsData;
+class EncryptedData;
 }  // namespace sync_pb
 
 namespace sync_api {
@@ -63,62 +62,27 @@ enum PassphraseRequiredReason {
                                        // was unsuccessful.
 };
 
+
 // Contains everything needed to talk to and identify a user account.
 struct SyncCredentials {
   std::string email;
   std::string sync_token;
 };
 
-// SyncManager encapsulates syncable::DirectoryManager and serves as the parent
-// of all other objects in the sync API.  SyncManager is thread-safe.  If
-// multiple threads interact with the same local sync repository (i.e. the
-// same sqlite database), they should share a single SyncManager instance.  The
-// caller should typically create one SyncManager for the lifetime of a user
-// session.
+// SyncManager encapsulates syncable::DirectoryManager and serves as
+// the parent of all other objects in the sync API.  If multiple
+// threads interact with the same local sync repository (i.e. the same
+// sqlite database), they should share a single SyncManager instance.
+// The caller should typically create one SyncManager for the lifetime
+// of a user session.
+//
+// Unless stated otherwise, all methods of SyncManager should be
+// called on the same thread.
 class SyncManager {
  public:
   // SyncInternal contains the implementation of SyncManager, while abstracting
   // internal types from clients of the interface.
   class SyncInternal;
-
-  // TODO(zea): One day get passwords playing nicely with the rest of encryption
-  // and get rid of this.
-  class ExtraPasswordChangeRecordData {
-   public:
-    ExtraPasswordChangeRecordData();
-    explicit ExtraPasswordChangeRecordData(
-        const sync_pb::PasswordSpecificsData& data);
-    virtual ~ExtraPasswordChangeRecordData();
-
-    // Transfers ownership of the DictionaryValue to the caller.
-    virtual base::DictionaryValue* ToValue() const;
-
-    const sync_pb::PasswordSpecificsData& unencrypted() const;
-   private:
-    sync_pb::PasswordSpecificsData unencrypted_;
-  };
-
-  // ChangeRecord indicates a single item that changed as a result of a sync
-  // operation.  This gives the sync id of the node that changed, and the type
-  // of change.  To get the actual property values after an ADD or UPDATE, the
-  // client should get the node with InitByIdLookup(), using the provided id.
-  struct ChangeRecord {
-    enum Action {
-      ACTION_ADD,
-      ACTION_DELETE,
-      ACTION_UPDATE,
-    };
-    ChangeRecord();
-    ~ChangeRecord();
-
-    // Transfers ownership of the DictionaryValue to the caller.
-    base::DictionaryValue* ToValue(const BaseTransaction* trans) const;
-
-    int64 id;
-    Action action;
-    sync_pb::EntitySpecifics specifics;
-    linked_ptr<ExtraPasswordChangeRecordData> extra;
-  };
 
   // Status encapsulates detailed state about the internals of the SyncManager.
   struct Status {
@@ -140,8 +104,6 @@ class SyncManager {
       SYNCING,
       // Connected, no pending changes.
       READY,
-      // Internal sync error.
-      CONFLICT,
       // Can't connect to server, and we haven't completed the initial
       // sync yet.  So there's nothing we can do but wait for the server.
       OFFLINE_UNUSABLE,
@@ -157,8 +119,6 @@ class SyncManager {
     bool server_up;          // True if we have received at least one good
                              // reply from the server.
     bool server_reachable;   // True if we received any reply from the server.
-    bool server_broken;      // True of the syncer is stopped because of server
-                             // issues.
     bool notifications_enabled;  // True only if subscribed for notifications.
 
     // Notifications counters updated by the actions in synapi.
@@ -170,14 +130,15 @@ class SyncManager {
 
     browser_sync::SyncProtocolError sync_protocol_error;
 
+    // Number of unsynced items counted at the start of most recent sync cycle.
     int unsynced_count;
 
+    // Number of conflicting items counted during most recent sync cycle.
     int conflicting_count;
+
     bool syncing;
     // True after a client has done a first sync.
     bool initial_sync_ended;
-    // True if any syncer is stuck.
-    bool syncer_stuck;
 
     // Total updates available.  If zero, nothing left to download.
     int64 updates_available;
@@ -186,7 +147,6 @@ class SyncManager {
 
     // Of updates_received, how many were tombstones.
     int tombstone_updates_received;
-    bool disk_full;
 
     // Total number of overwrites due to conflict resolver since browser start.
     int num_local_overwrites_total;
@@ -204,19 +164,17 @@ class SyncManager {
     syncable::ModelTypeSet encrypted_types;
     bool cryptographer_ready;
     bool crypto_has_pending_keys;
+
+    // The unique identifer for this client.
+    std::string unique_id;
   };
 
-  // An interface the embedding application implements to receive notifications
-  // from the SyncManager.  Register an observer via SyncManager::AddObserver.
-  // This observer is an event driven model as the events may be raised from
-  // different internal threads, and simply providing an "OnStatusChanged" type
-  // notification complicates things such as trying to determine "what changed",
-  // if different members of the Status object are modified from different
-  // threads.  This way, the event is explicit, and it is safe for the Observer
-  // to dispatch to a native thread or synchronize accordingly.
-  class Observer {
+  // An interface the embedding application implements to be notified
+  // on change events.  Note that these methods may be called on *any*
+  // thread.
+  class ChangeDelegate {
    public:
-    // Notify the observer that changes have been applied to the sync model.
+    // Notify the delegate that changes have been applied to the sync model.
     //
     // This will be invoked on the same thread as on which ApplyChanges was
     // called. |changes| is an array of size |change_count|, and contains the
@@ -241,10 +199,10 @@ class SyncManager {
     // forward dependencies.  But since deletions come before reparent
     // operations, a delete may temporarily orphan a node that is
     // updated later in the list.
-    virtual void OnChangesApplied(syncable::ModelType model_type,
-                                  const BaseTransaction* trans,
-                                  const ChangeRecord* changes,
-                                  int change_count) = 0;
+    virtual void OnChangesApplied(
+        syncable::ModelType model_type,
+        const BaseTransaction* trans,
+        const ImmutableChangeRecordList& changes) = 0;
 
     // OnChangesComplete gets called when the TransactionComplete event is
     // posted (after OnChangesApplied finishes), after the transaction lock
@@ -259,6 +217,48 @@ class SyncManager {
     // I/O to when it no longer holds any lock).
     virtual void OnChangesComplete(syncable::ModelType model_type) = 0;
 
+   protected:
+    virtual ~ChangeDelegate();
+  };
+
+  // Like ChangeDelegate, except called only on the sync thread and
+  // not while a transaction is held.  For objects that want to know
+  // when changes happen, but don't need to process them.
+  class ChangeObserver {
+   public:
+    // Ids referred to in |changes| may or may not be in the write
+    // transaction specified by |write_transaction_id|.  If they're
+    // not, that means that the node didn't actually change, but we
+    // marked them as changed for some other reason (e.g., siblings of
+    // re-ordered nodes).
+    //
+    // TODO(sync, long-term): Ideally, ChangeDelegate/Observer would
+    // be passed a transformed version of EntryKernelMutation instead
+    // of a transaction that would have to be used to look up the
+    // changed nodes.  That is, ChangeDelegate::OnChangesApplied()
+    // would still be called under the transaction, but all the needed
+    // data will be passed down.
+    //
+    // Even more ideally, we would have sync semantics such that we'd
+    // be able to apply changes without being under a transaction.
+    // But that's a ways off...
+    virtual void OnChangesApplied(
+        syncable::ModelType model_type,
+        int64 write_transaction_id,
+        const ImmutableChangeRecordList& changes) = 0;
+
+    virtual void OnChangesComplete(syncable::ModelType model_type) = 0;
+
+   protected:
+    virtual ~ChangeObserver();
+  };
+
+  // An interface the embedding application implements to receive
+  // notifications from the SyncManager.  Register an observer via
+  // SyncManager::AddObserver.  All methods are called only on the
+  // sync thread.
+  class Observer {
+   public:
     // A round-trip sync-cycle took place and the syncer has resolved any
     // conflicts that may have arisen.
     virtual void OnSyncCycleCompleted(
@@ -277,14 +277,27 @@ class SyncManager {
     //   already been encrypted, |reason| will be REASON_DECRYPTION.
     // - If the passphrase is required because decryption failed, and a new
     //   passphrase is required, |reason| will be REASON_SET_PASSPHRASE_FAILED.
-    virtual void OnPassphraseRequired(PassphraseRequiredReason reason) = 0;
+    //
+    // |pending_keys| is a copy of the cryptographer's pending keys, that may be
+    // cached by the frontend for subsequent use by the UI.
+    virtual void OnPassphraseRequired(
+        PassphraseRequiredReason reason,
+        const sync_pb::EncryptedData& pending_keys) = 0;
 
     // Called when the passphrase provided by the user has been accepted and is
-    // now used to encrypt sync data.  |bootstrap_token| is an opaque base64
-    // encoded representation of the key generated by the accepted passphrase,
-    // and is provided to the observer for persistence purposes and use in a
-    // future initialization of sync (e.g. after restart).
-    virtual void OnPassphraseAccepted(const std::string& bootstrap_token) = 0;
+    // now used to encrypt sync data.
+    virtual void OnPassphraseAccepted() = 0;
+
+    // |bootstrap_token| is an opaque base64 encoded representation of the key
+    // generated by the current passphrase, and is provided to the observer for
+    // persistence purposes and use in a future initialization of sync (e.g.
+    // after restart). The boostrap token will always be derived from the most
+    // recent GAIA password (for accounts with implicit passphrases), even if
+    // the data is still encrypted with an older GAIA password. For accounts
+    // with explicit passphrases, it will be the most recently seen custom
+    // passphrase.
+    virtual void OnBootstrapTokenUpdated(
+        const std::string& bootstrap_token) = 0;
 
     // Called when initialization is complete to the point that SyncManager can
     // process changes. This does not necessarily mean authentication succeeded
@@ -378,19 +391,36 @@ class SyncManager {
     virtual void OnClearServerDataSucceeded() = 0;
     virtual void OnClearServerDataFailed() = 0;
 
-    // Called after we finish encrypting all appropriate datatypes.
-    virtual void OnEncryptionComplete(
-        const syncable::ModelTypeSet& encrypted_types) = 0;
+    // Called when the set of encrypted types or the encrypt
+    // everything flag has been changed.  Note that encryption isn't
+    // complete until the OnEncryptionComplete() notification has been
+    // sent (see below).
+    //
+    // |encrypted_types| will always be a superset of
+    // Cryptographer::SensitiveTypes().  If |encrypt_everything| is
+    // true, |encrypted_types| will be the set of all known types.
+    //
+    // Until this function is called, observers can assume that the
+    // set of encrypted types is Cryptographer::SensitiveTypes() and
+    // that the encrypt everything flag is false.
+    //
+    // Called from within a transaction.
+    virtual void OnEncryptedTypesChanged(
+        syncable::ModelTypeSet encrypted_types,
+        bool encrypt_everything) = 0;
+
+    // Called after we finish encrypting the current set of encrypted
+    // types.
+    //
+    // Called from within a transaction.
+    virtual void OnEncryptionComplete() = 0;
 
     virtual void OnActionableError(
-        const browser_sync::SyncProtocolError& sync_protocol_error)
-            = 0;
+        const browser_sync::SyncProtocolError& sync_protocol_error) = 0;
 
    protected:
     virtual ~Observer();
   };
-
-  typedef Callback0::Type ModeChangeCallback;
 
   // Create an uninitialized SyncManager.  Callers must Init() before using.
   explicit SyncManager(const std::string& name);
@@ -419,20 +449,22 @@ class SyncManager {
             bool use_ssl,
             HttpPostProviderFactory* post_factory,
             browser_sync::ModelSafeWorkerRegistrar* registrar,
+            ChangeDelegate* change_delegate,
             const std::string& user_agent,
             const SyncCredentials& credentials,
             sync_notifier::SyncNotifier* sync_notifier,
             const std::string& restored_key_for_bootstrapping,
-            bool setup_for_test_mode);
+            bool setup_for_test_mode,
+            browser_sync::UnrecoverableErrorHandler*
+                unrecoverbale_error_handler);
 
-  // Returns the username last used for a successful authentication.
-  // Returns empty if there is no such username.
-  const std::string& GetAuthenticatedUsername();
+  // Checks if the sync server is reachable.
+  void CheckServerReachable();
 
   // Check if the database has been populated with a full "initial" download of
   // sync items for each data type currently present in the routing info.
   // Prerequisite for calling this is that OnInitializationComplete has been
-  // called.
+  // called.  May be called from any thread.
   bool InitialSyncEndedForAllEnabledTypes();
 
   // Update tokens that we're using in Sync. Email must stay the same.
@@ -443,7 +475,7 @@ class SyncManager {
 
   // Conditionally sets the flag in the Nigori node which instructs other
   // clients to start syncing tabs.
-  void MaybeSetSyncTabsInNigoriNode(const syncable::ModelTypeSet enabled_types);
+  void MaybeSetSyncTabsInNigoriNode(syncable::ModelTypeSet enabled_types);
 
   // Put the syncer in normal mode ready to perform nudges and polls.
   void StartSyncingNormally();
@@ -455,22 +487,29 @@ class SyncManager {
   // If the passphrase in invalid, OnPassphraseRequired will be fired.
   // Calling this metdod again is the appropriate course of action to "retry"
   // with a new passphrase.
-  // |is_explicit| is true if the call is in response to the user explicitly
-  // setting a passphrase as opposed to implicitly (from the users' perspective)
-  // using their Google Account password.  An implicit SetPassphrase will *not*
-  // *not* override an explicit passphrase set previously.
-  void SetPassphrase(const std::string& passphrase, bool is_explicit);
+  // |is_explicit| is true if the call is in response to the user setting a
+  // custom explicit passphrase as opposed to implicitly (from the users'
+  // perspective) using their Google Account password. An implicit SetPassphrase
+  // will *not* override an explicit passphrase set previously. Note that
+  // if the data is encrypted with an old Google Account password, the user
+  // may still have to provide a "implicit" passphrase.
+  // |user_provided| corresponds to the user having manually provided this
+  // passphrase. It should only be false for passphrases intercepted from the
+  // Google Sign-in Success notification and true otherwise.
+  void SetPassphrase(const std::string& passphrase,
+                     bool is_explicit,
+                     bool user_provided);
 
   // Puts the SyncScheduler into a mode where no normal nudge or poll traffic
   // will occur, but calls to RequestConfig will be supported.  If |callback|
   // is provided, it will be invoked (from the internal SyncScheduler) when
   // the thread has changed to configuration mode.
-  void StartConfigurationMode(ModeChangeCallback* callback);
+  void StartConfigurationMode(const base::Closure& callback);
 
   // Switches the mode of operation to CONFIGURATION_MODE and
   // schedules a config task to fetch updates for |types|.
-  void RequestConfig(const syncable::ModelTypeBitSet& types,
-     sync_api::ConfigureReason reason);
+  void RequestConfig(syncable::ModelTypeSet types,
+                     sync_api::ConfigureReason reason);
 
   void RequestCleanupDisabledTypes();
 
@@ -489,57 +528,74 @@ class SyncManager {
 
   // Status-related getters. Typically GetStatusSummary will suffice, but
   // GetDetailedSyncStatus can be useful for gathering debug-level details of
-  // the internals of the sync engine.
+  // the internals of the sync engine.  May be called on any thread.
   Status::Summary GetStatusSummary() const;
   Status GetDetailedStatus() const;
 
   // Whether or not the Nigori node is encrypted using an explicit passphrase.
+  // May be called on any thread.
   bool IsUsingExplicitPassphrase();
-
-  // Get the internal implementation for use by BaseTransaction, etc.
-  SyncInternal* GetImpl() const;
 
   // Call periodically from a database-safe thread to persist recent changes
   // to the syncapi model.
   void SaveChanges();
 
-  void RequestEarlyExit();
+  // Initiates shutdown of various components in the sync engine.  Must be
+  // called from the main thread to allow preempting ongoing tasks on the sync
+  // loop (that may be blocked on I/O).  The semantics of |callback| are the
+  // same as with StartConfigurationMode. If provided and a scheduler / sync
+  // loop exists, it will be invoked from the sync loop by the scheduler to
+  // notify that all work has been flushed + cancelled, and it is idle.
+  // If no scheduler exists, the callback is run immediately (from the loop
+  // this was created on, which is the sync loop), as sync is effectively
+  // stopped.
+  void StopSyncingForShutdown(const base::Closure& callback);
 
-  // Issue a final SaveChanges, close sqlite handles, and stop running threads.
-  // Must be called from the same thread that called Init().
-  void Shutdown();
+  // Issue a final SaveChanges, and close sqlite handles.
+  void ShutdownOnSyncThread();
 
+  // May be called from any thread.
   UserShare* GetUserShare() const;
 
-  // Inform the cryptographer of the most recent passphrase and set of encrypted
-  // types (from nigori node), then ensure all data that needs encryption is
-  // encrypted with the appropriate passphrase.
-  // Note: opens a transaction and can trigger ON_PASSPHRASE_REQUIRED, so must
-  // only be called after syncapi has been initialized.
-  void RefreshEncryption();
+  // Inform the cryptographer of the most recent passphrase and set of
+  // encrypted types (from nigori node), then ensure all data that
+  // needs encryption is encrypted with the appropriate passphrase.
+  //
+  // May trigger OnPassphraseRequired().  Otherwise, it will trigger
+  // OnEncryptedTypesChanged() if necessary (see comments for
+  // OnEncryptedTypesChanged()), and then OnEncryptionComplete().
+  //
+  // Also updates or adds device information to the nigori node.
+  //
+  // Note: opens a transaction, so must only be called after syncapi
+  // has been initialized.
+  void RefreshNigori(const base::Closure& done_callback);
 
-  // Enable encryption of all sync data. Once enabled, it can never be disabled
-  // without clearing the server data.
+  // Enable encryption of all sync data. Once enabled, it can never be
+  // disabled without clearing the server data.
+  //
+  // This will trigger OnEncryptedTypesChanged() if necessary (see
+  // comments for OnEncryptedTypesChanged()).  It then may trigger
+  // OnPassphraseRequired(), but otherwise it will trigger
+  // OnEncryptionComplete().
   void EnableEncryptEverything();
 
-  // Returns true if we are currently encrypting all sync data.
-  bool EncryptEverythingEnabled() const;
+  // Returns true if we are currently encrypting all sync data.  May
+  // be called on any thread.
+  bool EncryptEverythingEnabledForTest() const;
 
   // Gets the set of encrypted types from the cryptographer
-  // Note: opens a transaction.
-  syncable::ModelTypeSet GetEncryptedDataTypes() const;
+  // Note: opens a transaction.  May be called from any thread.
+  syncable::ModelTypeSet GetEncryptedDataTypesForTest() const;
 
   // Reads the nigori node to determine if any experimental types should be
   // enabled.
-  // Note: opens a transaction.
+  // Note: opens a transaction.  May be called on any thread.
   bool ReceivedExperimentalTypes(syncable::ModelTypeSet* to_add) const;
 
   // Uses a read-only transaction to determine if the directory being synced has
-  // any remaining unsynced items.
+  // any remaining unsynced items.  May be called on any thread.
   bool HasUnsyncedItems() const;
-
-  // Logs the list of unsynced meta handles.
-  void LogUnsyncedItems(int level) const;
 
   // Functions used for testing.
 
@@ -547,9 +603,24 @@ class SyncManager {
       bool notifications_enabled);
 
   void TriggerOnIncomingNotificationForTest(
-      const syncable::ModelTypeBitSet& model_types);
+      syncable::ModelTypeSet model_types);
+
+  static const int kDefaultNudgeDelayMilliseconds;
+  static const int kPreferencesNudgeDelayMilliseconds;
+  static const int kPiggybackNudgeDelay;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SyncManagerTest, NudgeDelayTest);
+
+  // For unit tests.
+  base::TimeDelta GetNudgeDelayTimeDelta(const syncable::ModelType& model_type);
+
+  base::ThreadChecker thread_checker_;
+
+  // Internal callback of RefreshNigori.
+  void DoneRefreshNigori(const base::Closure& done_callback,
+                         bool is_ready);
+
   // An opaque pointer to the nested private class.
   SyncInternal* data_;
 
@@ -558,9 +629,13 @@ class SyncManager {
 
 bool InitialSyncEndedForTypes(syncable::ModelTypeSet types, UserShare* share);
 
+syncable::ModelTypeSet GetTypesWithEmptyProgressMarkerToken(
+    syncable::ModelTypeSet types,
+    sync_api::UserShare* share);
+
 // Returns the string representation of a PassphraseRequiredReason value.
 std::string PassphraseRequiredReasonToString(PassphraseRequiredReason reason);
 
-} // namespace sync_api
+}  // namespace sync_api
 
 #endif  // CHROME_BROWSER_SYNC_INTERNAL_API_SYNC_MANAGER_H_

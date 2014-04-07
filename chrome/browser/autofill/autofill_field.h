@@ -11,9 +11,9 @@
 #include "base/basictypes.h"
 #include "base/string16.h"
 #include "chrome/browser/autofill/field_types.h"
-#include "webkit/glue/form_field.h"
+#include "webkit/forms/form_field.h"
 
-class AutofillField : public webkit_glue::FormField {
+class AutofillField : public webkit::forms::FormField {
  public:
   enum PhonePart {
     IGNORED = 0,
@@ -22,7 +22,7 @@ class AutofillField : public webkit_glue::FormField {
   };
 
   AutofillField();
-  AutofillField(const webkit_glue::FormField& field,
+  AutofillField(const webkit::forms::FormField& field,
                 const string16& unique_name);
   virtual ~AutofillField();
 
@@ -37,7 +37,7 @@ class AutofillField : public webkit_glue::FormField {
   // Sets the heuristic type of this field, validating the input.
   void set_section(const string16& section) { section_ = section; }
   void set_heuristic_type(AutofillFieldType type);
-  void set_server_type(AutofillFieldType type) { server_type_ = type; }
+  void set_server_type(AutofillFieldType type);
   void set_possible_types(const FieldTypeSet& possible_types) {
     possible_types_ = possible_types;
   }

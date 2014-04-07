@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,14 @@
 // This way if a test hangs the test launcher can reliably terminate it.
 #if defined(HAS_OUT_OF_PROC_TEST_RUNNER)
 
+#include "base/bind.h"
+#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "base/threading/thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "views/widget/widget_delegate.h"
-
-class Task;
+#include "ui/views/widget/widget_delegate.h"
 
 namespace gfx {
 class Size;
@@ -56,7 +57,7 @@ class Size;
 //   // Schedule the mouse move at a location slightly different from where
 //   // you really want to move to.
 //   ui_controls::SendMouseMoveNotifyWhenDone(loc.x + 10, loc.y,
-//       NewRunnableMethod(this, YYY));
+//       base::Bind(&YYY, this));
 //   // Then use this to schedule another mouse move.
 //   ScheduleMouseMoveInBackground(loc.x, loc.y);
 
@@ -70,10 +71,10 @@ class ViewEventTestBase : public views::WidgetDelegate,
   void Done();
 
   // Creates a window.
-  virtual void SetUp();
+  virtual void SetUp() OVERRIDE;
 
   // Destroys the window.
-  virtual void TearDown();
+  virtual void TearDown() OVERRIDE;
 
   // Overridden from views::WidgetDelegate:
   virtual bool CanResize() const OVERRIDE;
@@ -81,7 +82,7 @@ class ViewEventTestBase : public views::WidgetDelegate,
   virtual const views::Widget* GetWidget() const OVERRIDE;
   virtual views::Widget* GetWidget() OVERRIDE;
 
-  // Overriden to do nothing so that this class can be used in runnable tasks.
+  // Overridden to do nothing so that this class can be used in runnable tasks.
   void AddRef() {}
   void Release() {}
   static bool ImplementsThreadSafeReferenceCounting() { return false; }
@@ -108,9 +109,9 @@ class ViewEventTestBase : public views::WidgetDelegate,
   // method is called in such a way that if there are any test failures
   // Done is invoked.
   template <class T, class Method>
-  Task* CreateEventTask(T* target, Method method) {
-    return NewRunnableMethod(this, &ViewEventTestBase::RunTestMethod,
-                             NewRunnableMethod(target, method));
+  base::Closure CreateEventTask(T* target, Method method) {
+    return base::Bind(&ViewEventTestBase::RunTestMethod, this,
+                      base::Bind(method, target));
   }
 
   // Spawns a new thread posts a MouseMove in the background.
@@ -124,7 +125,7 @@ class ViewEventTestBase : public views::WidgetDelegate,
 
   // Callback from CreateEventTask. Stops the background thread, runs the
   // supplied task and if there are failures invokes Done.
-  void RunTestMethod(Task* task);
+  void RunTestMethod(const base::Closure& task);
 
   // The content of the Window.
   views::View* content_view_;
@@ -134,8 +135,7 @@ class ViewEventTestBase : public views::WidgetDelegate,
 
   MessageLoopForUI message_loop_;
 
-  // Method factory used for time-outs.
-  ScopedRunnableMethodFactory<ViewEventTestBase> method_factory_;
+  content::TestBrowserThread ui_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(ViewEventTestBase);
 };

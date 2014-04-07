@@ -1,21 +1,31 @@
 <!DOCTYPE HTML>
 <!--
-  -- Copyright (c) 2011 The Chromium Authors. All rights reserved.
+  -- Copyright (c) 2012 The Chromium Authors. All rights reserved.
   -- Use of this source code is governed by a BSD-style license that can be
   -- found in the LICENSE file.
   -->
 <html i18n-values="dir:textdirection;">
   <head>
     <meta charset="utf-8">
-    <include src="../content_security_policy.html"/>
-    <title i18n-content="TITLE"></title>
-    <script src="chrome://tasks/includes.js"></script>
-    <script src="chrome://tasks/main.js"></script>
+    <title i18n-content="title"></title>
+    <script src="measure_time.js"></script>
+
+    <script src="includes.js"></script>
+    <script src="main.js"></script>
     <script src="chrome://tasks/strings.js"></script>
+
+    <!-- For accurate load performance tracking
+         place all scripts above this line -->
+    <script>
+      measureTime.recordInterval('Load.Script');
+    </script>
+
     <link rel="stylesheet" href="task_manager.css">
   </head>
   <body>
-    <div class="dialog-title" i18n-content="TITLE"></div>
+    <if expr="pp_ifdef('chromeos')">
+      <div class="dialog-title" id="dialog-title" i18n-content="title"></div>
+    </if>
     <div class="dialog-body">
       <div class="list-container">
         <div class="detail-table"></div>
@@ -23,15 +33,15 @@
     </div>
     <div class="dialog-footer">
       <div class="footer-left-container">
-        <a href="#" id="about-memory-link" i18n-content="ABOUT_MEMORY_LINK"></a>
+        <a href="#" id="about-memory-link" i18n-content="aboutMemoryLink"></a>
       </div>
       <div class="footer-right-container">
-        <button id="kill-process" i18n-content="KILL_CHROMEOS"></button>
-        <button id="close-window" i18n-content="CLOSE_WINDOW"></button>
+        <button id="kill-process"
+            i18n-content="killChromeOS" disabled></button>
+        <if expr="pp_ifdef('chromeos')">
+          <button id="close-window" i18n-content="closeWindow"></button>
+        </if>
       </div>
     </div>
-    <script src="chrome://resources/js/i18n_template.js"></script>
-    <script src="chrome://resources/js/i18n_process.js"></script>
   </body>
 </html>
-

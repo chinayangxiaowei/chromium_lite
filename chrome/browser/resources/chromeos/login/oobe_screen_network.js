@@ -46,11 +46,11 @@ cr.define('oobe', function() {
     },
 
     onBeforeShow: function(data) {
-      cr.ui.DropDown.setActive('networks-list', true);
+      cr.ui.DropDown.show('networks-list', true, -1);
     },
 
     onBeforeHide: function() {
-      cr.ui.DropDown.setActive('networks-list', false);
+      cr.ui.DropDown.hide('networks-list');
     },
 
     /**
@@ -73,6 +73,7 @@ cr.define('oobe', function() {
       continueButton.textContent = localStrings.getString('continueButton');
       continueButton.addEventListener('click', function(e) {
         chrome.send('networkOnExit', []);
+        e.stopPropagation();
       });
       buttons.push(continueButton);
 

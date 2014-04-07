@@ -24,9 +24,8 @@ void FakeSignalStrategy::Connect(FakeSignalStrategy* peer1,
 FakeSignalStrategy::FakeSignalStrategy(const std::string& jid)
     : jid_(jid),
       peer_(NULL),
-      listener_(NULL),
       last_id_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
 
 }
 
@@ -37,36 +36,48 @@ FakeSignalStrategy::~FakeSignalStrategy() {
   }
 }
 
-void FakeSignalStrategy::Init(StatusObserver* observer) {
-  observer->OnStateChange(StatusObserver::START);
-  observer->OnStateChange(StatusObserver::CONNECTING);
-  observer->OnJidChange(jid_);
-  observer->OnStateChange(StatusObserver::CONNECTED);
-}
-
-void FakeSignalStrategy::Close() {
+void FakeSignalStrategy::Connect() {
   DCHECK(CalledOnValidThread());
-  listener_ = NULL;
+  FOR_EACH_OBSERVER(Listener, listeners_,
+                    OnSignalStrategyStateChange(CONNECTED));
 }
 
-void FakeSignalStrategy::SetListener(Listener* listener) {
+void FakeSignalStrategy::Disconnect() {
   DCHECK(CalledOnValidThread());
-
-  // Don't overwrite an listener without explicitly going
-  // through "NULL" first.
-  DCHECK(listener_ == NULL || listener == NULL);
-  listener_ = listener;
+  FOR_EACH_OBSERVER(Listener, listeners_,
+                    OnSignalStrategyStateChange(DISCONNECTED));
 }
 
-void FakeSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
+SignalStrategy::State FakeSignalStrategy::GetState() const {
+  return CONNECTED;
+}
+
+std::string FakeSignalStrategy::GetLocalJid() const {
+  DCHECK(CalledOnValidThread());
+  return jid_;
+}
+
+void FakeSignalStrategy::AddListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.AddObserver(listener);
+}
+
+void FakeSignalStrategy::RemoveListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.RemoveObserver(listener);
+}
+
+bool FakeSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
   DCHECK(CalledOnValidThread());
 
   stanza->SetAttr(buzz::QN_FROM, jid_);
 
   if (peer_) {
     peer_->OnIncomingMessage(stanza);
+    return true;
   } else {
     delete stanza;
+    return false;
   }
 }
 
@@ -75,17 +86,11 @@ std::string FakeSignalStrategy::GetNextId() {
   return base::IntToString(last_id_);
 }
 
-IqRequest* FakeSignalStrategy::CreateIqRequest() {
-  DCHECK(CalledOnValidThread());
-
-  return new JavascriptIqRequest(this, &iq_registry_);
-}
-
 void FakeSignalStrategy::OnIncomingMessage(buzz::XmlElement* stanza) {
   pending_messages_.push(stanza);
   MessageLoop::current()->PostTask(
-      FROM_HERE, task_factory_.NewRunnableMethod(
-          &FakeSignalStrategy::DeliverIncomingMessages));
+      FROM_HERE, base::Bind(&FakeSignalStrategy::DeliverIncomingMessages,
+                            weak_factory_.GetWeakPtr()));
 }
 
 void FakeSignalStrategy::DeliverIncomingMessages() {
@@ -99,9 +104,12 @@ void FakeSignalStrategy::DeliverIncomingMessages() {
       return;
     }
 
-    if (listener_)
-      listener_->OnIncomingStanza(stanza);
-    iq_registry_.OnIncomingStanza(stanza);
+    ObserverListBase<Listener>::Iterator it(listeners_);
+    Listener* listener;
+    while ((listener = it.GetNext()) != NULL) {
+      if (listener->OnSignalStrategyIncomingStanza(stanza))
+        break;
+    }
 
     pending_messages_.pop();
     delete stanza;

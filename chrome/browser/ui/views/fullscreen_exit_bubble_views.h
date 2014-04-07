@@ -7,9 +7,13 @@
 #pragma once
 
 #include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/fullscreen_exit_bubble.h"
-#include "views/controls/link_listener.h"
 
+class GURL;
+namespace ui {
+class SlideAnimation;
+}
 namespace views {
 class View;
 class Widget;
@@ -19,16 +23,22 @@ class Widget;
 // screen in fullscreen mode, telling users how to exit and providing a click
 // target. The bubble auto-hides, and re-shows when the user moves to the
 // screen top.
-class FullscreenExitBubbleViews : public views::LinkListener,
-                                  public FullscreenExitBubble {
+class FullscreenExitBubbleViews : public FullscreenExitBubble {
  public:
-  FullscreenExitBubbleViews(
-      views::Widget* frame,
-      CommandUpdater::CommandUpdaterDelegate* delegate);
+  FullscreenExitBubbleViews(views::Widget* frame,
+                            Browser* browser,
+                            const GURL& url,
+                            FullscreenExitBubbleType bubble_type);
   virtual ~FullscreenExitBubbleViews();
 
- protected:
+  void UpdateContent(const GURL& url, FullscreenExitBubbleType bubble_type);
+
+ private:
+  class FullscreenExitView;
+
   // FullScreenExitBubble
+  virtual void AnimationProgressed(const ui::Animation* animation) OVERRIDE;
+  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
   virtual gfx::Rect GetPopupRect(bool ignore_animation_state) const OVERRIDE;
   virtual gfx::Point GetCursorScreenPoint() OVERRIDE;
   virtual bool WindowContainsPoint(gfx::Point pos) OVERRIDE;
@@ -37,11 +47,7 @@ class FullscreenExitBubbleViews : public views::LinkListener,
   virtual void Show() OVERRIDE;
   virtual bool IsAnimating() OVERRIDE;
 
- private:
-  class FullscreenExitView;
-
-  // views::LinkListener:
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void StartWatchingMouseIfNecessary();
 
   // The root view containing us.
   views::View* root_view_;
@@ -50,10 +56,6 @@ class FullscreenExitBubbleViews : public views::LinkListener,
 
   // Animation controlling sliding into/out of the top of the screen.
   scoped_ptr<ui::SlideAnimation> size_animation_;
-
-  // ui::AnimationDelegate:
-  virtual void AnimationProgressed(const ui::Animation* animation) OVERRIDE;
-  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
 
   // The contents of the popup.
   FullscreenExitView* view_;

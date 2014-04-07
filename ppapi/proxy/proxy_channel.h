@@ -24,16 +24,16 @@ class TestSink;
 namespace ppapi {
 namespace proxy {
 
-class VarSerializationRules;
-
 class PPAPI_PROXY_EXPORT ProxyChannel
     : public IPC::Channel::Listener,
       public IPC::Message::Sender {
  public:
   typedef void (*ShutdownModuleFunc)();
 
-  class Delegate {
+  class PPAPI_PROXY_EXPORT Delegate {
    public:
+    virtual ~Delegate() {}
+
     // Returns the dedicated message loop for processing IPC requests.
     virtual base::MessageLoopProxy* GetIPCMessageLoop() = 0;
 
@@ -71,11 +71,11 @@ class PPAPI_PROXY_EXPORT ProxyChannel
   }
 
 #if defined(OS_POSIX)
-  int GetRendererFD();
+  int TakeRendererFD();
 #endif
 
  protected:
-  ProxyChannel(base::ProcessHandle remote_process_handle);
+  explicit ProxyChannel(base::ProcessHandle remote_process_handle);
 
   // You must call this function before anything else. Returns true on success.
   // The delegate pointer must outlive this class, ownership is not

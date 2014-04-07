@@ -16,24 +16,12 @@
 #include "ppapi/shared_impl/function_group_base.h"
 
 struct PPB_Proxy_Private;
-struct PPB_Var_Deprecated;
-
-namespace base {
-class WaitableEvent;
-}
-
-namespace IPC {
-class SyncChannel;
-}
 
 namespace ppapi {
 
 struct Preferences;
 
 namespace proxy {
-
-class InterfaceProxy;
-class VarSerialization;
 
 class PPAPI_PROXY_EXPORT HostDispatcher : public Dispatcher {
  public:
@@ -80,18 +68,11 @@ class PPAPI_PROXY_EXPORT HostDispatcher : public Dispatcher {
   // if the plugin supports the given interface (with caching) and returns the
   // pointer to the proxied interface if it is supported. Returns NULL if the
   // given interface isn't supported by the plugin or the proxy.
-  const void* GetProxiedInterface(const std::string& interface);
-
-  // Returns the proxy object associated with the given interface ID, creating
-  // it if necessary. This is used in cases where a proxy needs to access code
-  // in the proxy for another interface. It's assumed that the interface always
-  // exists, so this is only used for browser proxies.
-  //
-  // Will return NULL if an interface isn't supported.
-  InterfaceProxy* GetOrCreatePPBInterfaceProxy(InterfaceID id);
+  const void* GetProxiedInterface(const std::string& iface_name);
 
   // See the value below. Call this when processing a scripting message from
-  // the plugin that can be reentered.
+  // the plugin that can be reentered. This is set to false at the beginning
+  // of processing of each message from the plugin.
   void set_allow_plugin_reentrancy() {
     allow_plugin_reentrancy_ = true;
   }
@@ -99,28 +80,22 @@ class PPAPI_PROXY_EXPORT HostDispatcher : public Dispatcher {
   // Returns the proxy interface for talking to the implementation.
   const PPB_Proxy_Private* ppb_proxy() const { return ppb_proxy_; }
 
- private:
-  friend class HostDispatcherTest;
+ protected:
+  // Overridden from Dispatcher.
+  virtual void OnInvalidMessageReceived();
 
-  // Makes an instance of the given PPB interface proxy, storing it in the
-  // target_proxies_ array. An proxy for this interface must not exist yet.
-  InterfaceProxy* CreatePPBInterfaceProxy(const InterfaceProxy::Info* info);
+ private:
+  void OnHostMsgLogWithSource(PP_Instance instance,
+                              int int_log_level,
+                              const std::string& source,
+                              const std::string& value);
 
   PP_Module pp_module_;
 
-  typedef std::map<std::string, bool> PluginIFSupportedMap;
   // Maps interface name to whether that interface is supported. If an interface
   // name is not in the map, that implies that we haven't queried for it yet.
-  std::map<std::string, bool> plugin_if_supported_;
-
-  // All target proxies currently created. These are ones that receive
-  // messages. They are created on demand when we receive messages.
-  scoped_ptr<InterfaceProxy> target_proxies_[INTERFACE_ID_COUNT];
-
-  // Function proxies created for "new-style" FunctionGroups.
-  // TODO(brettw) this is in progress. It should be merged with the target
-  // proxies so there is one list to consult.
-  scoped_ptr<FunctionGroupBase> function_proxies_[INTERFACE_ID_COUNT];
+  typedef base::hash_map<std::string, bool> PluginSupportedMap;
+  PluginSupportedMap plugin_supported_;
 
   // Guaranteed non-NULL.
   const PPB_Proxy_Private* ppb_proxy_;
@@ -143,7 +118,7 @@ class PPAPI_PROXY_EXPORT HostDispatcher : public Dispatcher {
 // since that's what most callers have.
 class ScopedModuleReference {
  public:
-  ScopedModuleReference(Dispatcher* dispatcher);
+  explicit ScopedModuleReference(Dispatcher* dispatcher);
   ~ScopedModuleReference();
 
  private:

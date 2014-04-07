@@ -50,6 +50,8 @@ function load() {
       options.ContentSettingsRadio);
   cr.ui.decorate('#content-settings-page input[type=radio].handler-radio',
       options.HandlersEnabledRadio);
+  cr.ui.decorate('span.controlled-setting-indicator',
+      options.ControlledSettingIndicator);
 
   var menuOffPattern = /(^\?|&)menu=off($|&)/;
   var menuDisabled = menuOffPattern.test(window.location.search);
@@ -101,7 +103,10 @@ function load() {
                         templateData.languagePinyinPageTabTitle,
                         'languagePinyinPage'),
         LanguageOptions.getInstance());
-    if (cr.isTouch) {
+    // Only use the VirtualKeyboardManager if the keyboard DOM elements (which
+    // it will assume exists) are present (i.e. if we were built with
+    // USE_VIRTUAL_KEYBOARD).
+    if ($('language-options-virtual-keyboard')) {
       OptionsPage.registerSubPage(VirtualKeyboardManager.getInstance(),
                                   LanguageOptions.getInstance());
     }
@@ -167,7 +172,6 @@ function load() {
                               PersonalOptions.getInstance());
   OptionsPage.registerOverlay(ManageProfileOverlay.getInstance(),
                               PersonalOptions.getInstance());
-
   OptionsPage.register(ExtensionSettings.getInstance());
   OptionsPage.registerOverlay(PackExtensionOverlay.getInstance(),
                               ExtensionSettings.getInstance());
@@ -193,6 +197,11 @@ function load() {
     OptionsPage.registerOverlay(languageModifierKeysOverlay,
                                 SystemOptions.getInstance(),
                                 [$('modifier-keys-button')]);
+    OptionsPage.registerOverlay(BluetoothOptions.getInstance(),
+                                SystemOptions.getInstance(),
+                                [$('bluetooth-add-device')]);
+    OptionsPage.registerOverlay(BluetoothPairing.getInstance(),
+                                SystemOptions.getInstance());
   }
 
   Preferences.getInstance().initialize();

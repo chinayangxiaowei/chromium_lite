@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,10 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "chrome/browser/sync/internal_api/sync_manager.h"
 #include "chrome/browser/sync/protocol/sync_protocol_error.h"
-#include "chrome/browser/sync/weak_handle.h"
+#include "chrome/browser/sync/util/weak_handle.h"
 
 namespace tracked_objects {
 class Location;
@@ -31,29 +32,27 @@ class JsSyncManagerObserver : public sync_api::SyncManager::Observer {
   void SetJsEventHandler(const WeakHandle<JsEventHandler>& event_handler);
 
   // sync_api::SyncManager::Observer implementation.
-  virtual void OnChangesApplied(
-      syncable::ModelType model_type,
-      const sync_api::BaseTransaction* trans,
-      const sync_api::SyncManager::ChangeRecord* changes,
-      int change_count);
-  virtual void OnChangesComplete(syncable::ModelType model_type);
   virtual void OnSyncCycleCompleted(
-      const sessions::SyncSessionSnapshot* snapshot);
-  virtual void OnAuthError(const GoogleServiceAuthError& auth_error);
-  virtual void OnUpdatedToken(const std::string& token);
-  virtual void OnPassphraseRequired(sync_api::PassphraseRequiredReason reason);
-  virtual void OnPassphraseAccepted(const std::string& bootstrap_token);
-  virtual void OnEncryptionComplete(
-      const syncable::ModelTypeSet& encrypted_types);
+      const sessions::SyncSessionSnapshot* snapshot) OVERRIDE;
+  virtual void OnAuthError(const GoogleServiceAuthError& auth_error) OVERRIDE;
+  virtual void OnUpdatedToken(const std::string& token) OVERRIDE;
+  virtual void OnPassphraseRequired(
+      sync_api::PassphraseRequiredReason reason,
+      const sync_pb::EncryptedData& pending_keys) OVERRIDE;
+  virtual void OnPassphraseAccepted() OVERRIDE;
+  virtual void OnBootstrapTokenUpdated(
+      const std::string& bootstrap_token) OVERRIDE;
+  virtual void OnEncryptedTypesChanged(
+      syncable::ModelTypeSet encrypted_types,
+      bool encrypt_everything) OVERRIDE;
+  virtual void OnEncryptionComplete() OVERRIDE;
   virtual void OnInitializationComplete(
-      const WeakHandle<JsBackend>& js_backend,
-      bool success);
-  virtual void OnStopSyncingPermanently();
-  virtual void OnClearServerDataSucceeded();
-  virtual void OnClearServerDataFailed();
-  virtual void OnMigrationNeededForTypes(const syncable::ModelTypeSet& types);
+      const WeakHandle<JsBackend>& js_backend, bool success) OVERRIDE;
+  virtual void OnStopSyncingPermanently() OVERRIDE;
+  virtual void OnClearServerDataSucceeded() OVERRIDE;
+  virtual void OnClearServerDataFailed() OVERRIDE;
   virtual void OnActionableError(
-      const browser_sync::SyncProtocolError& sync_protocol_error);
+      const browser_sync::SyncProtocolError& sync_protocol_error) OVERRIDE;
 
  private:
   void HandleJsEvent(const tracked_objects::Location& from_here,

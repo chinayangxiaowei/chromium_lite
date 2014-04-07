@@ -10,16 +10,15 @@
 #include <set>
 
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/views/frame/browser_frame_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/browser/accessibility/browser_accessibility_state.h"
 #include "grit/theme_resources.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/font.h"
-#include "views/views_delegate.h"
-#include "views/widget/native_widget_win.h"
-#include "views/widget/widget.h"
-#include "views/window/non_client_view.h"
+#include "ui/views/views_delegate.h"
+#include "ui/views/widget/native_widget_win.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/window/non_client_view.h"
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -126,7 +125,7 @@ void BrowserFrameWin::OnScreenReaderDetected() {
 
 bool BrowserFrameWin::ShouldUseNativeFrame() const {
   // App panel windows draw their own frame.
-  if (browser_view_->IsBrowserTypePanel())
+  if (browser_view_->IsPanel())
     return false;
 
   // We don't theme popup or app windows, so regardless of whether or not a
@@ -193,8 +192,7 @@ void BrowserFrameWin::UpdateDWMFrame() {
     if (!browser_view_->IsFullscreen()) {
       gfx::Rect tabstrip_bounds(
           browser_frame_->GetBoundsForTabStrip(browser_view_->tabstrip()));
-      margins.cyTopHeight = (browser_view_->UseVerticalTabs() ?
-          tabstrip_bounds.y() : tabstrip_bounds.bottom()) + kDWMFrameTopOffset;
+      margins.cyTopHeight = tabstrip_bounds.bottom() + kDWMFrameTopOffset;
     }
   } else {
     // For popup and app windows we want to use the default margins.
@@ -219,8 +217,5 @@ const gfx::Font& BrowserFrame::GetTitleFont() {
 NativeBrowserFrame* NativeBrowserFrame::CreateNativeBrowserFrame(
     BrowserFrame* browser_frame,
     BrowserView* browser_view) {
-  if (views::Widget::IsPureViews() &&
-      views::ViewsDelegate::views_delegate->GetDefaultParentView())
-    return new BrowserFrameViews(browser_frame, browser_view);
   return new BrowserFrameWin(browser_frame, browser_view);
 }

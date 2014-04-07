@@ -28,21 +28,23 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/guid.h"
 #include "chrome/test/base/thread_observer_helper.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_service.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/glue/form_field.h"
+#include "webkit/forms/form_field.h"
 
 using base::Time;
 using base::TimeDelta;
 using base::WaitableEvent;
+using content::BrowserThread;
 using testing::_;
 using testing::DoDefault;
 using testing::ElementsAreArray;
 using testing::Pointee;
 using testing::Property;
+using webkit_glue::WebIntentServiceData;
 
 typedef std::vector<AutofillChange> AutofillChangeList;
 
@@ -57,13 +59,13 @@ class AutofillDBThreadObserverHelper : public DBThreadObserverHelper {
   virtual void RegisterObservers() {
     registrar_.Add(&observer_,
                    chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
     registrar_.Add(&observer_,
                    chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
     registrar_.Add(&observer_,
                    chrome::NOTIFICATION_AUTOFILL_CREDIT_CARD_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
   }
 };
 
@@ -87,13 +89,13 @@ class WebDataServiceTest : public testing::Test {
       wds_->Shutdown();
 
     db_thread_.Stop();
-    MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask);
+    MessageLoop::current()->PostTask(FROM_HERE, MessageLoop::QuitClosure());
     MessageLoop::current()->Run();
   }
 
   MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread db_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread db_thread_;
   FilePath profile_dir_;
   scoped_refptr<WebDataService> wds_;
   ScopedTempDir temp_dir_;
@@ -127,8 +129,8 @@ class WebDataServiceAutofillTest : public WebDataServiceTest {
 
   void AppendFormField(const string16& name,
                        const string16& value,
-                       std::vector<webkit_glue::FormField>* form_fields) {
-    webkit_glue::FormField field;
+                       std::vector<webkit::forms::FormField>* form_fields) {
+    webkit::forms::FormField field;
     field.name = name;
     field.value = value;
     form_fields->push_back(field);
@@ -146,15 +148,16 @@ class WebDataServiceAutofillTest : public WebDataServiceTest {
 
 // Simple consumer for WebIntents data. Stores the result data and quits UI
 // message loop when callback is invoked.
-class WebIntentsConsumer: public WebDataServiceConsumer {
+class WebIntentsConsumer : public WebDataServiceConsumer {
  public:
   virtual void OnWebDataServiceRequestDone(WebDataService::Handle h,
                                            const WDTypedResult* result) {
-    intents.clear();
+    services_.clear();
     if (result) {
       DCHECK(result->GetType() == WEB_INTENTS_RESULT);
-      intents = static_cast<
-          const WDResult<std::vector<WebIntentData> >*>(result)->GetValue();
+      services_ = static_cast<
+          const WDResult<std::vector<WebIntentServiceData> >*>(result)->
+              GetValue();
     }
 
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -168,7 +171,41 @@ class WebIntentsConsumer: public WebDataServiceConsumer {
     MessageLoop::current()->Run();
   }
 
-  std::vector<WebIntentData> intents; // Result data from completion callback.
+  // Result data from completion callback.
+  std::vector<WebIntentServiceData> services_;
+};
+
+// Simple consumer for Keywords data. Stores the result data and quits UI
+// message loop when callback is invoked.
+class KeywordsConsumer : public WebDataServiceConsumer {
+ public:
+  KeywordsConsumer() : load_succeeded(false) {}
+
+  virtual void OnWebDataServiceRequestDone(WebDataService::Handle h,
+                                           const WDTypedResult* result) {
+    if (result) {
+      load_succeeded = true;
+      DCHECK(result->GetType() == KEYWORDS_RESULT);
+      keywords_result =
+          reinterpret_cast<const WDResult<WDKeywordsResult>*>(
+              result)->GetValue();
+    }
+
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+    MessageLoop::current()->Quit();
+  }
+
+  // Run the current message loop. OnWebDataServiceRequestDone will invoke
+  // MessageLoop::Quit on completion, so this call will finish at that point.
+  static void WaitUntilCalled() {
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+    MessageLoop::current()->Run();
+  }
+
+  // True if keywords data was loaded successfully.
+  bool load_succeeded;
+  // Result data from completion callback.
+  WDKeywordsResult keywords_result;
 };
 
 TEST_F(WebDataServiceAutofillTest, FormFillAdd) {
@@ -182,12 +219,12 @@ TEST_F(WebDataServiceAutofillTest, FormFillAdd) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillChangeList>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillChangeList>::ptr,
                        Pointee(ElementsAreArray(expected_changes))))).
       WillOnce(SignalEvent(&done_event_));
 
-  std::vector<webkit_glue::FormField> form_fields;
+  std::vector<webkit::forms::FormField> form_fields;
   AppendFormField(name1_, value1_, &form_fields);
   AppendFormField(name2_, value2_, &form_fields);
   wds_->AddFormFields(form_fields);
@@ -213,7 +250,7 @@ TEST_F(WebDataServiceAutofillTest, FormFillRemoveOne) {
   // First add some values to autofill.
   EXPECT_CALL(*observer_helper_->observer(), Observe(_, _, _)).
       WillOnce(SignalEvent(&done_event_));
-  std::vector<webkit_glue::FormField> form_fields;
+  std::vector<webkit::forms::FormField> form_fields;
   AppendFormField(name1_, value1_, &form_fields);
   wds_->AddFormFields(form_fields);
 
@@ -228,8 +265,8 @@ TEST_F(WebDataServiceAutofillTest, FormFillRemoveOne) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillChangeList>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillChangeList>::ptr,
                        Pointee(ElementsAreArray(expected_changes))))).
       WillOnce(SignalEvent(&done_event_));
   wds_->RemoveFormValueForElementName(name1_, value1_);
@@ -244,7 +281,7 @@ TEST_F(WebDataServiceAutofillTest, FormFillRemoveMany) {
 
   EXPECT_CALL(*observer_helper_->observer(), Observe(_, _, _)).
       WillOnce(SignalEvent(&done_event_));
-  std::vector<webkit_glue::FormField> form_fields;
+  std::vector<webkit::forms::FormField> form_fields;
   AppendFormField(name1_, value1_, &form_fields);
   AppendFormField(name2_, value2_, &form_fields);
   wds_->AddFormFields(form_fields);
@@ -261,8 +298,8 @@ TEST_F(WebDataServiceAutofillTest, FormFillRemoveMany) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_ENTRIES_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillChangeList>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillChangeList>::ptr,
                        Pointee(ElementsAreArray(expected_changes))))).
       WillOnce(SignalEvent(&done_event_));
   wds_->RemoveFormElementsAddedBetween(t, t + one_day);
@@ -280,8 +317,8 @@ TEST_F(WebDataServiceAutofillTest, ProfileAdd) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillProfileChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillProfileChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -323,8 +360,8 @@ TEST_F(WebDataServiceAutofillTest, ProfileRemove) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillProfileChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillProfileChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -371,8 +408,8 @@ TEST_F(WebDataServiceAutofillTest, ProfileUpdate) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillProfileChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillProfileChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -401,8 +438,8 @@ TEST_F(WebDataServiceAutofillTest, CreditAdd) {
       *observer_helper_->observer(),
       Observe(
           int(chrome::NOTIFICATION_AUTOFILL_CREDIT_CARD_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillCreditCardChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillCreditCardChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -444,8 +481,8 @@ TEST_F(WebDataServiceAutofillTest, CreditCardRemove) {
       *observer_helper_->observer(),
       Observe(
           int(chrome::NOTIFICATION_AUTOFILL_CREDIT_CARD_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillCreditCardChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillCreditCardChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
   wds_->RemoveCreditCard(credit_card.guid());
@@ -492,8 +529,8 @@ TEST_F(WebDataServiceAutofillTest, CreditUpdate) {
       *observer_helper_->observer(),
       Observe(
           int(chrome::NOTIFICATION_AUTOFILL_CREDIT_CARD_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillCreditCardChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillCreditCardChange>::ptr,
                        Pointee(expected_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -554,8 +591,8 @@ TEST_F(WebDataServiceAutofillTest, AutofillRemoveModifiedBetween) {
   EXPECT_CALL(
       *observer_helper_->observer(),
       Observe(int(chrome::NOTIFICATION_AUTOFILL_PROFILE_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillProfileChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillProfileChange>::ptr,
                        Pointee(expected_profile_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -566,8 +603,8 @@ TEST_F(WebDataServiceAutofillTest, AutofillRemoveModifiedBetween) {
       *observer_helper_->observer(),
       Observe(
           int(chrome::NOTIFICATION_AUTOFILL_CREDIT_CARD_CHANGED),
-              Source<WebDataService>(wds_.get()),
-              Property(&Details<const AutofillCreditCardChange>::ptr,
+              content::Source<WebDataService>(wds_.get()),
+              Property(&content::Details<const AutofillCreditCardChange>::ptr,
                        Pointee(expected_card_change)))).
       WillOnce(SignalEvent(&done_event_));
 
@@ -597,67 +634,102 @@ TEST_F(WebDataServiceAutofillTest, AutofillRemoveModifiedBetween) {
 TEST_F(WebDataServiceTest, WebIntents) {
   WebIntentsConsumer consumer;
 
-  wds_->GetWebIntents(ASCIIToUTF16("share"), &consumer);
+  wds_->GetWebIntentServices(ASCIIToUTF16("share"), &consumer);
   WebIntentsConsumer::WaitUntilCalled();
-  EXPECT_EQ(0U, consumer.intents.size());
+  EXPECT_EQ(0U, consumer.services_.size());
 
-  WebIntentData intent;
-  intent.service_url = GURL("http://google.com");
-  intent.action = ASCIIToUTF16("share");
-  intent.type = ASCIIToUTF16("image/*");
-  wds_->AddWebIntent(intent);
+  WebIntentServiceData service;
+  service.service_url = GURL("http://google.com");
+  service.action = ASCIIToUTF16("share1");
+  service.type = ASCIIToUTF16("image/*");
+  wds_->AddWebIntentService(service);
 
-  intent.type = ASCIIToUTF16("video/*");
-  wds_->AddWebIntent(intent);
+  service.action = ASCIIToUTF16("share");
+  service.type = ASCIIToUTF16("image/*");
+  wds_->AddWebIntentService(service);
 
-  wds_->GetWebIntents(ASCIIToUTF16("share"), &consumer);
+  service.type = ASCIIToUTF16("video/*");
+  wds_->AddWebIntentService(service);
+
+  wds_->GetWebIntentServices(ASCIIToUTF16("share"), &consumer);
   WebIntentsConsumer::WaitUntilCalled();
-  ASSERT_EQ(2U, consumer.intents.size());
+  ASSERT_EQ(2U, consumer.services_.size());
 
-  if (consumer.intents[0].type != ASCIIToUTF16("image/*"))
-    std::swap(consumer.intents[0],consumer.intents[1]);
+  if (consumer.services_[0].type != ASCIIToUTF16("image/*"))
+    std::swap(consumer.services_[0], consumer.services_[1]);
 
-  EXPECT_EQ(intent.service_url, consumer.intents[0].service_url);
-  EXPECT_EQ(intent.action, consumer.intents[0].action);
-  EXPECT_EQ(ASCIIToUTF16("image/*"), consumer.intents[0].type);
-  EXPECT_EQ(intent.service_url, consumer.intents[1].service_url);
-  EXPECT_EQ(intent.action, consumer.intents[1].action);
-  EXPECT_EQ(intent.type, consumer.intents[1].type);
+  EXPECT_EQ(service.service_url, consumer.services_[0].service_url);
+  EXPECT_EQ(service.action, consumer.services_[0].action);
+  EXPECT_EQ(ASCIIToUTF16("image/*"), consumer.services_[0].type);
+  EXPECT_EQ(service.service_url, consumer.services_[1].service_url);
+  EXPECT_EQ(service.action, consumer.services_[1].action);
+  EXPECT_EQ(service.type, consumer.services_[1].type);
 
-  intent.type = ASCIIToUTF16("image/*");
-  wds_->RemoveWebIntent(intent);
+  service.type = ASCIIToUTF16("image/*");
+  wds_->RemoveWebIntentService(service);
 
-  wds_->GetWebIntents(ASCIIToUTF16("share"), &consumer);
+  wds_->GetWebIntentServices(ASCIIToUTF16("share"), &consumer);
   WebIntentsConsumer::WaitUntilCalled();
-  ASSERT_EQ(1U, consumer.intents.size());
+  ASSERT_EQ(1U, consumer.services_.size());
 
-  intent.type = ASCIIToUTF16("video/*");
-  EXPECT_EQ(intent.service_url, consumer.intents[0].service_url);
-  EXPECT_EQ(intent.action, consumer.intents[0].action);
-  EXPECT_EQ(intent.type, consumer.intents[0].type);
+  service.type = ASCIIToUTF16("video/*");
+  EXPECT_EQ(service.service_url, consumer.services_[0].service_url);
+  EXPECT_EQ(service.action, consumer.services_[0].action);
+  EXPECT_EQ(service.type, consumer.services_[0].type);
+}
+
+TEST_F(WebDataServiceTest, WebIntentsForURL) {
+  WebIntentsConsumer consumer;
+
+  WebIntentServiceData service;
+  service.service_url = GURL("http://google.com");
+  service.action = ASCIIToUTF16("share1");
+  service.type = ASCIIToUTF16("image/*");
+  wds_->AddWebIntentService(service);
+
+  service.action = ASCIIToUTF16("share");
+  service.type = ASCIIToUTF16("image/*");
+  wds_->AddWebIntentService(service);
+
+  wds_->GetWebIntentServicesForURL(
+      UTF8ToUTF16(service.service_url.spec()),
+      &consumer);
+  WebIntentsConsumer::WaitUntilCalled();
+  ASSERT_EQ(2U, consumer.services_.size());
+  EXPECT_EQ(service, consumer.services_[0]);
+  service.action = ASCIIToUTF16("share1");
+  EXPECT_EQ(service, consumer.services_[1]);
 }
 
 TEST_F(WebDataServiceTest, WebIntentsGetAll) {
   WebIntentsConsumer consumer;
 
-  WebIntentData intent;
-  intent.service_url = GURL("http://google.com");
-  intent.action = ASCIIToUTF16("share");
-  intent.type = ASCIIToUTF16("image/*");
-  wds_->AddWebIntent(intent);
+  WebIntentServiceData service;
+  service.service_url = GURL("http://google.com");
+  service.action = ASCIIToUTF16("share");
+  service.type = ASCIIToUTF16("image/*");
+  wds_->AddWebIntentService(service);
 
-  intent.action = ASCIIToUTF16("edit");
-  wds_->AddWebIntent(intent);
+  service.action = ASCIIToUTF16("edit");
+  wds_->AddWebIntentService(service);
 
-  wds_->GetAllWebIntents(&consumer);
+  wds_->GetAllWebIntentServices(&consumer);
   WebIntentsConsumer::WaitUntilCalled();
-  ASSERT_EQ(2U, consumer.intents.size());
+  ASSERT_EQ(2U, consumer.services_.size());
 
-  if (consumer.intents[0].action != ASCIIToUTF16("edit"))
-    std::swap(consumer.intents[0],consumer.intents[1]);
+  if (consumer.services_[0].action != ASCIIToUTF16("edit"))
+    std::swap(consumer.services_[0],consumer.services_[1]);
 
-  EXPECT_EQ(intent, consumer.intents[0]);
-  intent.action = ASCIIToUTF16("share");
-  EXPECT_EQ(intent, consumer.intents[1]);
+  EXPECT_EQ(service, consumer.services_[0]);
+  service.action = ASCIIToUTF16("share");
+  EXPECT_EQ(service, consumer.services_[1]);
 }
 
+TEST_F(WebDataServiceTest, DidDefaultSearchProviderChangeOnNewProfile) {
+  KeywordsConsumer consumer;
+  wds_->GetKeywords(&consumer);
+  KeywordsConsumer::WaitUntilCalled();
+  ASSERT_TRUE(consumer.load_succeeded);
+  EXPECT_FALSE(consumer.keywords_result.did_default_search_provider_change);
+  EXPECT_EQ(NULL, consumer.keywords_result.default_search_provider_backup);
+}

@@ -41,6 +41,11 @@
 #endif
 
 #define GL_SERVICE_LOG(args) DLOG(INFO) << args;
+#if !defined(NDEBUG)
+  #define GL_SERVICE_LOG_CODE_BLOCK(code)
+#else
+  #define GL_SERVICE_LOG_CODE_BLOCK(code) code
+#endif
 
 // Forward declare OSMesa types.
 typedef struct osmesa_context *OSMesaContext;
@@ -65,6 +70,10 @@ typedef void* GLeglImageOES;
 typedef HDC     EGLNativeDisplayType;
 typedef HBITMAP EGLNativePixmapType;
 typedef HWND    EGLNativeWindowType;
+#elif defined(OS_ANDROID)
+typedef void                       *EGLNativeDisplayType;
+typedef struct egl_native_pixmap_t *EGLNativePixmapType;
+typedef struct ANativeWindow       *EGLNativeWindowType;
 #elif defined(USE_WAYLAND)
 typedef struct wl_display     *EGLNativeDisplayType;
 typedef struct wl_egl_pixmap  *EGLNativePixmapType;
@@ -86,6 +95,8 @@ typedef Window   EGLNativeWindowType;
 #elif defined(USE_X11)
 #include "gl_bindings_autogen_egl.h"
 #include "gl_bindings_autogen_glx.h"
+#elif defined(OS_ANDROID)
+#include "gl_bindings_autogen_egl.h"
 #endif
 
 namespace gfx {

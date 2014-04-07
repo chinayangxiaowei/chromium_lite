@@ -22,7 +22,7 @@
       'target_name': 'libxslt',
       'conditions': [
         ['os_posix == 1 and OS != "mac" and use_system_libxml', {
-          'type': 'settings',
+          'type': 'none',
           'direct_dependent_settings': {
             'cflags': [
               '<!@(pkg-config --cflags libxslt)',
@@ -108,6 +108,17 @@
           },
           'conditions': [
             ['OS!="win"', {'product_name': 'xslt'}],
+            ['clang == 1', {
+              'xcode_settings': {
+                'WARNING_CFLAGS': [
+                  # libxslt stores a char[3] in a `const unsigned char*`.
+                  '-Wno-pointer-sign',
+                ],
+              },
+              'cflags': [
+                '-Wno-pointer-sign',
+              ],
+            }],
           ],
         }],
       ],

@@ -22,32 +22,40 @@ class EditSearchEngineControllerDelegate;
 class Extension;
 class FindBar;
 class GURL;
-class BubbleDelegate;
 class Profile;
 class TabContents;
 class TabContentsWrapper;
 class TemplateURL;
 
+namespace content {
+struct SSLStatus;
+}
+
 namespace gfx {
-class Rect;
 class Size;
 }
 
 namespace views {
+class View;
 class Widget;
 }
 
 namespace browser {
 
-// Shows or hides the global bookmark bubble for the star button.
-void ShowBookmarkBubbleView(views::Widget* parent,
-                            const gfx::Rect& bounds,
-                            BubbleDelegate* delegate,
+// Shows or hides the bookmark bubble anchored to the supplied view.
+void ShowBookmarkBubbleView(views::View* anchor_view,
                             Profile* profile,
                             const GURL& url,
                             bool newly_bookmarked);
 void HideBookmarkBubbleView();
 bool IsBookmarkBubbleViewShowing();
+
+// Shows the page info bubble anchored to the supplied view.
+void ShowPageInfoBubble(views::View* anchor_view,
+                        Profile* profile,
+                        const GURL& url,
+                        const content::SSLStatus& ssl,
+                        bool show_history);
 
 // Shows the about dialog. See AboutChromeView.
 views::Widget* ShowAboutChromeView(gfx::NativeWindow parent,
@@ -77,14 +85,9 @@ void EditSearchEngine(gfx::NativeWindow parent,
                       EditSearchEngineControllerDelegate* delegate,
                       Profile* profile);
 
-// Shows the repost form confirmation dialog box.
-void ShowRepostFormWarningDialog(gfx::NativeWindow parent_window,
-                                 TabContents* tab_contents);
-
 // Shows the collected cookies dialog box.
 void ShowCollectedCookiesDialog(gfx::NativeWindow parent_window,
                                 TabContentsWrapper* tab_contents);
-
 
 // Shows the create web app shortcut dialog box.
 void ShowCreateWebAppShortcutsDialog(gfx::NativeWindow parent_window,

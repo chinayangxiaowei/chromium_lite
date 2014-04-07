@@ -4,13 +4,14 @@
 
 #include "content/browser/download/download_persistent_store_info.h"
 
-#include "content/browser/download/download_item.h"
+#include "content/public/browser/download_item.h"
 
 DownloadPersistentStoreInfo::DownloadPersistentStoreInfo()
     : received_bytes(0),
       total_bytes(0),
       state(0),
-      db_handle(0) {
+      db_handle(0),
+      opened(false) {
 }
 
 DownloadPersistentStoreInfo::DownloadPersistentStoreInfo(
@@ -18,18 +19,22 @@ DownloadPersistentStoreInfo::DownloadPersistentStoreInfo(
     const GURL& url,
     const GURL& referrer,
     const base::Time& start,
+    const base::Time& end,
     int64 received,
     int64 total,
     int32 download_state,
-    int64 handle)
+    int64 handle,
+    bool download_opened)
     : path(path),
       url(url),
       referrer_url(referrer),
       start_time(start),
+      end_time(end),
       received_bytes(received),
       total_bytes(total),
       state(download_state),
-      db_handle(handle) {
+      db_handle(handle),
+      opened(download_opened) {
 }
 
 DownloadPersistentStoreInfo::~DownloadPersistentStoreInfo() {

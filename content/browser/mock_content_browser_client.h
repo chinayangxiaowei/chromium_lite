@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,40 +8,50 @@
 
 #include <string>
 
+#include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "content/browser/content_browser_client.h"
+#include "base/scoped_temp_dir.h"
+#include "content/public/browser/content_browser_client.h"
 
 namespace content {
 
 // Base for unit tests that need to mock the ContentBrowserClient.
 class MockContentBrowserClient : public ContentBrowserClient {
  public:
+  MockContentBrowserClient();
   virtual ~MockContentBrowserClient();
 
   virtual BrowserMainParts* CreateBrowserMainParts(
-      const MainFunctionParams& parameters) OVERRIDE;
-  virtual TabContentsView* CreateTabContentsView(
-      TabContents* tab_contents) OVERRIDE;
+      const content::MainFunctionParams& parameters) OVERRIDE;
+  virtual WebContentsView* CreateWebContentsView(
+      WebContents* web_contents) OVERRIDE;
   virtual void RenderViewHostCreated(
       RenderViewHost* render_view_host) OVERRIDE;
-  virtual void BrowserRenderProcessHostCreated(
-      BrowserRenderProcessHost* host) OVERRIDE;
-  virtual void PluginProcessHostCreated(PluginProcessHost* host) OVERRIDE;
-  virtual void WorkerProcessHostCreated(WorkerProcessHost* host) OVERRIDE;
-  virtual WebUIFactory* GetWebUIFactory() OVERRIDE;
+  virtual void RenderProcessHostCreated(
+      RenderProcessHost* host) OVERRIDE;
+  virtual WebUIControllerFactory* GetWebUIControllerFactory() OVERRIDE;
   virtual GURL GetEffectiveURL(content::BrowserContext* browser_context,
                                const GURL& url) OVERRIDE;
   virtual bool ShouldUseProcessPerSite(BrowserContext* browser_context,
                                        const GURL& effective_url) OVERRIDE;
   virtual bool IsURLSameAsAnySiteInstance(const GURL& url) OVERRIDE;
+  virtual bool IsHandledURL(const GURL& url) OVERRIDE;
+  virtual bool IsSuitableHost(RenderProcessHost* process_host,
+                              const GURL& site_url) OVERRIDE;
+  virtual void SiteInstanceGotProcess(SiteInstance* site_instance) OVERRIDE;
+  virtual void SiteInstanceDeleting(SiteInstance* site_instance) OVERRIDE;
+  virtual bool ShouldSwapProcessesForNavigation(const GURL& current_url,
+                                                const GURL& new_url) OVERRIDE;
   virtual std::string GetCanonicalEncodingNameByAliasName(
       const std::string& alias_name) OVERRIDE;
   virtual void AppendExtraCommandLineSwitches(CommandLine* command_line,
                                               int child_process_id) OVERRIDE;
   virtual std::string GetApplicationLocale() OVERRIDE;
-  virtual std::string GetAcceptLangs(const TabContents* tab) OVERRIDE;
+  virtual std::string GetAcceptLangs(
+      content::BrowserContext* context) OVERRIDE;
   virtual SkBitmap* GetDefaultFavicon() OVERRIDE;
   virtual bool AllowAppCache(const GURL& manifest_url,
+                             const GURL& first_party,
                              const content::ResourceContext& context) OVERRIDE;
   virtual bool AllowGetCookie(const GURL& url,
                               const GURL& first_party,
@@ -58,6 +68,17 @@ class MockContentBrowserClient : public ContentBrowserClient {
                               net::CookieOptions* options) OVERRIDE;
   virtual bool AllowSaveLocalState(
       const content::ResourceContext& context) OVERRIDE;
+  virtual bool AllowWorkerDatabase(
+      int worker_route_id,
+      const GURL& url,
+      const string16& name,
+      const string16& display_name,
+      unsigned long estimated_size,
+      WorkerProcessHost* worker_process_host) OVERRIDE;
+  virtual bool AllowWorkerFileSystem(
+      int worker_route_id,
+      const GURL& url,
+      WorkerProcessHost* worker_process_host) OVERRIDE;
   virtual net::URLRequestContext* OverrideRequestContextForURL(
       const GURL& url, const content::ResourceContext& context) OVERRIDE;
   virtual QuotaPermissionContext* CreateQuotaPermissionContext() OVERRIDE;
@@ -66,7 +87,8 @@ class MockContentBrowserClient : public ContentBrowserClient {
   virtual void AllowCertificateError(
       SSLCertErrorHandler* handler,
       bool overridable,
-      Callback2<SSLCertErrorHandler*, bool>::Type* callback) OVERRIDE;
+      const base::Callback<void(SSLCertErrorHandler*, bool)>& callback)
+      OVERRIDE;
   virtual void SelectClientCertificate(
       int render_process_id,
       int render_view_id,
@@ -83,10 +105,11 @@ class MockContentBrowserClient : public ContentBrowserClient {
       int render_view_id) OVERRIDE;
   virtual WebKit::WebNotificationPresenter::Permission
       CheckDesktopNotificationPermission(
-          const GURL& source_url,
-          const content::ResourceContext& context) OVERRIDE;
+          const GURL& source_origin,
+          const content::ResourceContext& context,
+          int render_process_id) OVERRIDE;
   virtual void ShowDesktopNotification(
-      const DesktopNotificationHostMsg_Show_Params& params,
+      const content::ShowDesktopNotificationHostMsgParams& params,
       int render_process_id,
       int render_view_id,
       bool worker) OVERRIDE;
@@ -95,22 +118,20 @@ class MockContentBrowserClient : public ContentBrowserClient {
       int render_view_id,
       int notification_id) OVERRIDE;
   virtual bool CanCreateWindow(
-      const GURL& source_url,
+      const GURL& source_origin,
       WindowContainerType container_type,
-      const content::ResourceContext& context) OVERRIDE;
+      const content::ResourceContext& context,
+      int render_process_id) OVERRIDE;
   virtual std::string GetWorkerProcessTitle(
       const GURL& url, const content::ResourceContext& context) OVERRIDE;
-  virtual ResourceDispatcherHost* GetResourceDispatcherHost() OVERRIDE;
+  virtual void ResourceDispatcherHostCreated() OVERRIDE;
   virtual ui::Clipboard* GetClipboard() OVERRIDE;
   virtual MHTMLGenerationManager* GetMHTMLGenerationManager() OVERRIDE;
-  virtual DevToolsManager* GetDevToolsManager() OVERRIDE;
   virtual net::NetLog* GetNetLog() OVERRIDE;
   virtual speech_input::SpeechInputManager* GetSpeechInputManager() OVERRIDE;
   virtual AccessTokenStore* CreateAccessTokenStore() OVERRIDE;
   virtual bool IsFastShutdownPossible() OVERRIDE;
-  virtual WebPreferences GetWebkitPrefs(
-      content::BrowserContext* browser_context,
-      bool is_web_ui) OVERRIDE;
+  virtual WebPreferences GetWebkitPrefs(RenderViewHost* rvh) OVERRIDE;
   virtual void UpdateInspectorSetting(RenderViewHost* rvh,
                                       const std::string& key,
                                       const std::string& value) OVERRIDE;
@@ -119,12 +140,11 @@ class MockContentBrowserClient : public ContentBrowserClient {
   virtual void ClearCache(RenderViewHost* rvh)  OVERRIDE;
   virtual void ClearCookies(RenderViewHost* rvh)  OVERRIDE;
   virtual FilePath GetDefaultDownloadDirectory() OVERRIDE;
-  virtual net::URLRequestContextGetter*
-      GetDefaultRequestContextDeprecatedCrBug64339() OVERRIDE;
-  virtual net::URLRequestContextGetter* GetSystemRequestContext() OVERRIDE;
+  virtual std::string GetDefaultDownloadName() OVERRIDE;
+  virtual bool AllowSocketAPI(const GURL& url) OVERRIDE;
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
-  virtual int GetCrashSignalFD(const std::string& process_type) OVERRIDE;
+  virtual int GetCrashSignalFD(const CommandLine& command_line) OVERRIDE;
 #endif
 
 #if defined(OS_WIN)
@@ -136,6 +156,12 @@ class MockContentBrowserClient : public ContentBrowserClient {
       crypto::CryptoModuleBlockingPasswordDelegate* GetCryptoPasswordDelegate(
           const GURL& url) OVERRIDE;
 #endif
+
+ private:
+  // Temporary directory for GetDefaultDownloadDirectory.
+  ScopedTempDir download_dir_;
+
+  DISALLOW_COPY_AND_ASSIGN(MockContentBrowserClient);
 };
 
 }  // namespace content

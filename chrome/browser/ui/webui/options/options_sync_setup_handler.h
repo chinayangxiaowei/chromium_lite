@@ -10,8 +10,14 @@
 // The handler for Javascript messages related to sync setup UI in the options
 // page.
 class OptionsSyncSetupHandler : public SyncSetupHandler {
+ public:
+  explicit OptionsSyncSetupHandler(ProfileManager* profile_manager);
+  virtual ~OptionsSyncSetupHandler();
+
  protected:
-  virtual void ShowSetupUI();
+  virtual void StepWizardForShowSetupUI() OVERRIDE;
+
+  virtual void ShowSetupUI() OVERRIDE;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_OPTIONS_SYNC_SETUP_HANDLER_H_

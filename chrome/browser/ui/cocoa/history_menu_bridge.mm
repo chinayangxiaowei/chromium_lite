@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/cocoa/history_menu_bridge.h"
 
-#include "base/callback.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/stl_util.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
@@ -18,8 +19,8 @@
 #import "chrome/browser/ui/cocoa/history_menu_cocoa_controller.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
@@ -40,11 +41,11 @@ const NSUInteger kMaximumMenuWidthInChars = 50;
 // When trimming, use this many chars from each side.
 const NSUInteger kMenuTrimSizeInChars = 25;
 
-// Number of days to consider when getting the number of most visited items.
-const int kMostVisitedScope = 90;
+// Number of days to consider when getting the number of visited items.
+const int kVisitedScope = 90;
 
-// The number of most visisted results to get.
-const int kMostVisitedCount = 9;
+// The number of visisted results to get.
+const int kVisitedCount = 15;
 
 // The number of recently closed items to get.
 const unsigned int kRecentlyClosedCount = 10;
@@ -104,7 +105,8 @@ HistoryMenuBridge::HistoryMenuBridge(Profile* profile)
   // The service is not ready for use yet, so become notified when it does.
   if (!history_service_) {
     registrar_.Add(
-        this, chrome::NOTIFICATION_HISTORY_LOADED, Source<Profile>(profile_));
+        this, chrome::NOTIFICATION_HISTORY_LOADED,
+        content::Source<Profile>(profile_));
   }
 }
 
@@ -113,15 +115,17 @@ HistoryMenuBridge::HistoryMenuBridge(Profile* profile)
 // task cancellation is not done manually here in the dtor.
 HistoryMenuBridge::~HistoryMenuBridge() {
   // Unregister ourselves as observers and notifications.
+  DCHECK(profile_);
   if (history_service_) {
-    const NotificationSource& src = NotificationService::AllSources();
     registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_TYPED_URLS_MODIFIED,
-                      src);
-    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URL_VISITED, src);
-    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED, src);
+                      content::Source<Profile>(profile_));
+    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URL_VISITED,
+                      content::Source<Profile>(profile_));
+    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
+                      content::Source<Profile>(profile_));
   } else {
-    registrar_.Remove(
-        this, chrome::NOTIFICATION_HISTORY_LOADED, Source<Profile>(profile_));
+    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_LOADED,
+                      content::Source<Profile>(profile_));
   }
 
   if (tab_restore_service_)
@@ -137,8 +141,8 @@ HistoryMenuBridge::~HistoryMenuBridge() {
 }
 
 void HistoryMenuBridge::Observe(int type,
-                                const NotificationSource& source,
-                                const NotificationDetails& details) {
+                                const content::NotificationSource& source,
+                                const content::NotificationDetails& details) {
   // A history service is now ready. Check to see if it's the one for the main
   // profile. If so, perform final initialization.
   if (type == chrome::NOTIFICATION_HISTORY_LOADED) {
@@ -151,7 +155,7 @@ void HistoryMenuBridge::Observe(int type,
       // Found our HistoryService, so stop listening for this notification.
       registrar_.Remove(this,
                         chrome::NOTIFICATION_HISTORY_LOADED,
-                        Source<Profile>(profile_));
+                        content::Source<Profile>(profile_));
     }
   }
 
@@ -261,7 +265,7 @@ void HistoryMenuBridge::TabRestoreServiceDestroyed(
 
 void HistoryMenuBridge::ResetMenu() {
   NSMenu* menu = HistoryMenu();
-  ClearMenuSection(menu, kMostVisited);
+  ClearMenuSection(menu, kVisited);
   ClearMenuSection(menu, kRecentlyClosed);
 }
 
@@ -364,11 +368,12 @@ NSMenuItem* HistoryMenuBridge::AddItemToMenu(HistoryItem* item,
 }
 
 void HistoryMenuBridge::Init() {
-  const NotificationSource& source = NotificationService::AllSources();
   registrar_.Add(this, chrome::NOTIFICATION_HISTORY_TYPED_URLS_MODIFIED,
-                 source);
-  registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URL_VISITED, source);
-  registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED, source);
+                 content::Source<Profile>(profile_));
+  registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URL_VISITED,
+                 content::Source<Profile>(profile_));
+  registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
+                 content::Source<Profile>(profile_));
 }
 
 void HistoryMenuBridge::CreateMenu() {
@@ -379,35 +384,39 @@ void HistoryMenuBridge::CreateMenu() {
   need_recreate_ = false;
 
   DCHECK(history_service_);
-  history_service_->QuerySegmentUsageSince(
+
+  history::QueryOptions options;
+  options.max_count = kVisitedCount;
+  options.SetRecentDayRange(kVisitedScope);
+
+  history_service_->QueryHistory(
+      string16(),
+      options,
       &cancelable_request_consumer_,
-      base::Time::Now() - base::TimeDelta::FromDays(kMostVisitedScope),
-      kMostVisitedCount,
-      NewCallback(this, &HistoryMenuBridge::OnVisitedHistoryResults));
+      base::Bind(&HistoryMenuBridge::OnVisitedHistoryResults,
+                 base::Unretained(this)));
 }
 
 void HistoryMenuBridge::OnVisitedHistoryResults(
     CancelableRequestProvider::Handle handle,
-    std::vector<PageUsageData*>* results) {
+    history::QueryResults* results) {
   NSMenu* menu = HistoryMenu();
-  ClearMenuSection(menu, kMostVisited);
-  NSInteger top_item = [menu indexOfItemWithTag:kMostVisitedTitle] + 1;
+  ClearMenuSection(menu, kVisited);
+  NSInteger top_item = [menu indexOfItemWithTag:kVisitedTitle] + 1;
 
   size_t count = results->size();
   for (size_t i = 0; i < count; ++i) {
-    PageUsageData* history_item = (*results)[i];
+    const history::URLResult& result = (*results)[i];
 
-    HistoryItem* item = new HistoryItem();
-    item->title = history_item->GetTitle();
-    item->url = history_item->GetURL();
-    if (history_item->HasFavicon()) {
-      const SkBitmap* icon = history_item->GetFavicon();
-      item->icon.reset([gfx::SkBitmapToNSImage(*icon) retain]);
-    } else {
-      GetFaviconForHistoryItem(item);
-    }
+    HistoryItem* item = new HistoryItem;
+    item->title = result.title();
+    item->url = result.url();
+
+    // Need to explicitly get the favicon for each row.
+    GetFaviconForHistoryItem(item);
+
     // This will add |item| to the |menu_item_map_|, which takes ownership.
-    AddItemToMenu(item, HistoryMenu(), kMostVisited, top_item + i);
+    AddItemToMenu(item, HistoryMenu(), kVisited, top_item + i);
   }
 
   // We are already invalid by the time we finished, darn.
@@ -419,14 +428,10 @@ void HistoryMenuBridge::OnVisitedHistoryResults(
 
 HistoryMenuBridge::HistoryItem* HistoryMenuBridge::HistoryItemForTab(
     const TabRestoreService::Tab& entry) {
-  if (entry.navigations.empty())
-    return NULL;
+  DCHECK(!entry.navigations.empty());
 
   const TabNavigation& current_navigation =
       entry.navigations.at(entry.current_navigation_index);
-  if (current_navigation.virtual_url() == GURL(chrome::kChromeUINewTabURL))
-    return NULL;
-
   HistoryItem* item = new HistoryItem();
   item->title = current_navigation.title();
   item->url = current_navigation.virtual_url();
@@ -441,9 +446,9 @@ HistoryMenuBridge::HistoryItem* HistoryMenuBridge::HistoryItemForTab(
 void HistoryMenuBridge::GetFaviconForHistoryItem(HistoryItem* item) {
   FaviconService* service =
       profile_->GetFaviconService(Profile::EXPLICIT_ACCESS);
-  FaviconService::Handle handle = service->GetFaviconForURL(item->url,
-      history::FAVICON, &favicon_consumer_,
-      NewCallback(this, &HistoryMenuBridge::GotFaviconData));
+  FaviconService::Handle handle = service->GetFaviconForURL(
+      item->url, history::FAVICON, &favicon_consumer_,
+      base::Bind(&HistoryMenuBridge::GotFaviconData, base::Unretained(this)));
   favicon_consumer_.SetClientData(service, handle, item);
   item->icon_handle = handle;
   item->icon_requested = true;

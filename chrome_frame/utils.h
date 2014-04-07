@@ -43,6 +43,7 @@ extern const wchar_t kRenderInHostUrlList[];
 extern const wchar_t kEnableGCFRendererByDefault[];
 extern const wchar_t kIexploreProfileName[];
 extern const wchar_t kRundllProfileName[];
+extern const wchar_t kUseBackgroundThreadForSubResources[];
 
 // This function is very similar to the AtlRegisterTypeLib function except
 // that it takes a parameter that specifies whether to register the typelib
@@ -162,6 +163,7 @@ typedef enum IEVersion {
   IE_7,
   IE_8,
   IE_9,
+  IE_10,
 };
 
 // The renderer to be used for a page.  Values for Chrome also convey the
@@ -385,6 +387,9 @@ STDMETHODIMP QueryInterfaceIfDelegateSupports(void* obj, REFIID iid,
 class STAThread : public base::Thread {
  public:
   explicit STAThread(const char *name) : Thread(name) {}
+  ~STAThread() {
+    Stop();
+  }
   bool Start() {
     return StartWithOptions(Options(MessageLoop::TYPE_UI, 0));
   }

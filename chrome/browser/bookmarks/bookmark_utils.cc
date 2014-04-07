@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/i18n/case_conversion.h"
+#include "base/i18n/string_search.h"
+#include "base/metrics/histogram.h"
 #include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/time.h"
@@ -22,11 +24,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/tab_contents/page_navigator.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/ui_strings.h"
@@ -41,10 +41,10 @@
 
 #if defined(TOOLKIT_VIEWS)
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "views/drag_utils.h"
-#include "views/events/event.h"
-#include "views/widget/native_widget.h"
-#include "views/widget/widget.h"
+#include "ui/views/drag_utils.h"
+#include "ui/views/events/event.h"
+#include "ui/views/widget/native_widget.h"
+#include "ui/views/widget/widget.h"
 #endif
 
 #if defined(TOOLKIT_GTK)
@@ -52,6 +52,9 @@
 #endif
 
 using base::Time;
+using content::OpenURLParams;
+using content::PageNavigator;
+using content::WebContents;
 
 namespace {
 
@@ -71,16 +74,7 @@ class NewBrowserPageNavigator : public PageNavigator {
 
   Browser* browser() const { return browser_; }
 
-  // Deprecated. Please use one-argument variant.
-  // TODO(adriansc): Remove this method once refactoring changed all call sites.
-  virtual TabContents* OpenURL(const GURL& url,
-                               const GURL& referrer,
-                               WindowOpenDisposition disposition,
-                               PageTransition::Type transition) OVERRIDE {
-    return OpenURL(OpenURLParams(url, referrer, disposition, transition));
-  }
-
-  virtual TabContents* OpenURL(const OpenURLParams& params) OVERRIDE {
+  virtual WebContents* OpenURL(const OpenURLParams& params) OVERRIDE {
     if (!browser_) {
       Profile* profile = (params.disposition == OFF_THE_RECORD) ?
           profile_->GetOffTheRecordProfile() : profile_;
@@ -154,15 +148,16 @@ void OpenAllImpl(const BookmarkNode* node,
       disposition = NEW_BACKGROUND_TAB;
     else
       disposition = initial_disposition;
-    (*navigator)->OpenURL(OpenURLParams(node->url(), GURL(), disposition,
-                          PageTransition::AUTO_BOOKMARK));
+    (*navigator)->OpenURL(OpenURLParams(node->url(), content::Referrer(),
+                          disposition, content::PAGE_TRANSITION_AUTO_BOOKMARK,
+                          false));
     if (!*opened_url) {
       *opened_url = true;
       // We opened the first URL which may have opened a new window or clobbered
       // the current page, reset the navigator just to be sure.
       Browser* new_browser = BrowserList::GetLastActiveWithProfile(profile);
       if (new_browser) {
-        TabContents* current_tab = new_browser->GetSelectedTabContents();
+        WebContents* current_tab = new_browser->GetSelectedWebContents();
         DCHECK(new_browser && current_tab);
         if (new_browser && current_tab)
           *navigator = current_tab;
@@ -204,7 +199,7 @@ bool MoreRecentlyModified(const BookmarkNode* n1, const BookmarkNode* n2) {
 bool DoesBookmarkTextContainWords(const string16& text,
                                   const std::vector<string16>& words) {
   for (size_t i = 0; i < words.size(); ++i) {
-    if (text.find(words[i]) == string16::npos)
+    if (!base::i18n::StringSearchIgnoringCaseAndAccents(words[i], text))
       return false;
   }
   return true;
@@ -216,13 +211,11 @@ bool DoesBookmarkContainWords(const BookmarkNode* node,
                               const std::vector<string16>& words,
                               const std::string& languages) {
   return
-      DoesBookmarkTextContainWords(
-          base::i18n::ToLower(node->GetTitle()), words) ||
-      DoesBookmarkTextContainWords(
-          base::i18n::ToLower(UTF8ToUTF16(node->url().spec())), words) ||
-      DoesBookmarkTextContainWords(base::i18n::ToLower(
-          net::FormatUrl(node->url(), languages, net::kFormatUrlOmitNothing,
-                         UnescapeRule::NORMAL, NULL, NULL, NULL)), words);
+      DoesBookmarkTextContainWords(node->GetTitle(), words) ||
+      DoesBookmarkTextContainWords(UTF8ToUTF16(node->url().spec()), words) ||
+      DoesBookmarkTextContainWords(net::FormatUrl(
+          node->url(), languages, net::kFormatUrlOmitNothing,
+          net::UnescapeRule::NORMAL, NULL, NULL, NULL), words);
 }
 
 }  // namespace
@@ -392,14 +385,14 @@ void OpenAll(gfx::NativeWindow parent,
   NewBrowserPageNavigator navigator_impl(profile);
   if (!navigator) {
     Browser* browser = BrowserList::FindTabbedBrowser(profile, false);
-    if (!browser || !browser->GetSelectedTabContents()) {
+    if (!browser || !browser->GetSelectedWebContents()) {
       navigator = &navigator_impl;
     } else {
       if (initial_disposition != NEW_WINDOW &&
           initial_disposition != OFF_THE_RECORD) {
         browser->window()->Activate();
       }
-      navigator = browser->GetSelectedTabContents();
+      navigator = browser->GetSelectedWebContents();
     }
   }
 
@@ -463,17 +456,24 @@ bool CanPasteFromClipboard(const BookmarkNode* node) {
 
 string16 GetNameForURL(const GURL& url) {
   if (url.is_valid()) {
-    return net::GetSuggestedFilename(url, "", "", "", "", string16());
+    return net::GetSuggestedFilename(url, "", "", "", "", std::string());
   } else {
     return l10n_util::GetStringUTF16(IDS_APP_UNTITLED_SHORTCUT_FILE_NAME);
   }
+}
+
+// This is used with a tree iterator to skip subtrees which are not visible.
+static bool PruneInvisibleFolders(const BookmarkNode* node) {
+  return !node->IsVisible();
 }
 
 std::vector<const BookmarkNode*> GetMostRecentlyModifiedFolders(
     BookmarkModel* model,
     size_t max_count) {
   std::vector<const BookmarkNode*> nodes;
-  ui::TreeNodeIterator<const BookmarkNode> iterator(model->root_node());
+  ui::TreeNodeIterator<const BookmarkNode>
+      iterator(model->root_node(), PruneInvisibleFolders);
+
   while (iterator.has_next()) {
     const BookmarkNode* parent = iterator.Next();
     if (parent->is_folder() && parent->date_folder_modified() > base::Time()) {
@@ -494,21 +494,19 @@ std::vector<const BookmarkNode*> GetMostRecentlyModifiedFolders(
   }
 
   if (nodes.size() < max_count) {
-    // Add the bookmark bar and other nodes if there is space.
-    if (find(nodes.begin(), nodes.end(), model->bookmark_bar_node()) ==
-        nodes.end()) {
-      nodes.push_back(model->bookmark_bar_node());
-    }
+    // Add the permanent nodes if there is space. The permanent nodes are the
+    // only children of the root_node.
+    const BookmarkNode* root_node = model->root_node();
 
-    if (nodes.size() < max_count &&
-        find(nodes.begin(), nodes.end(), model->other_node()) == nodes.end()) {
-      nodes.push_back(model->other_node());
-    }
+    for (int i = 0; i < root_node->child_count(); ++i) {
+      const BookmarkNode* node = root_node->GetChild(i);
+      if (node->IsVisible() &&
+          std::find(nodes.begin(), nodes.end(), node) == nodes.end()) {
+        nodes.push_back(node);
 
-    if (nodes.size() < max_count && model->synced_node()->IsVisible() &&
-        find(nodes.begin(), nodes.end(),
-             model->synced_node()) == nodes.end()) {
-      nodes.push_back(model->synced_node());
+        if (nodes.size() == max_count)
+          break;
+      }
     }
   }
   return nodes;
@@ -643,14 +641,6 @@ void ToggleWhenVisible(Profile* profile) {
 
   // The user changed when the bookmark bar is shown, update the preferences.
   prefs->SetBoolean(prefs::kShowBookmarkBar, always_show);
-  prefs->ScheduleSavePersistentPrefs();
-
-  // And notify the notification service.
-  Source<Profile> source(profile);
-  NotificationService::current()->Notify(
-      chrome::NOTIFICATION_BOOKMARK_BAR_VISIBILITY_PREF_CHANGED,
-      source,
-      NotificationService::NoDetails());
 }
 
 void RegisterUserPrefs(PrefService* prefs) {
@@ -662,21 +652,21 @@ void RegisterUserPrefs(PrefService* prefs) {
                              PrefService::UNSYNCABLE_PREF);
 }
 
-void GetURLAndTitleToBookmark(TabContents* tab_contents,
+void GetURLAndTitleToBookmark(WebContents* web_contents,
                               GURL* url,
                               string16* title) {
-  *url = tab_contents->GetURL();
-  *title = tab_contents->GetTitle();
+  *url = web_contents->GetURL();
+  *title = web_contents->GetTitle();
 }
 
 void GetURLAndTitleToBookmarkFromCurrentTab(Profile* profile,
                                             GURL* url,
                                             string16* title) {
   Browser* browser = BrowserList::GetLastActiveWithProfile(profile);
-  TabContents* tab_contents = browser ? browser->GetSelectedTabContents()
+  WebContents* web_contents = browser ? browser->GetSelectedWebContents()
                                         : NULL;
-  if (tab_contents)
-    GetURLAndTitleToBookmark(tab_contents, url, title);
+  if (web_contents)
+    GetURLAndTitleToBookmark(web_contents, url, title);
 }
 
 void GetURLsForOpenTabs(
@@ -684,7 +674,7 @@ void GetURLsForOpenTabs(
     std::vector<std::pair<GURL, string16> >* urls) {
   for (int i = 0; i < browser->tab_count(); ++i) {
     std::pair<GURL, string16> entry;
-    GetURLAndTitleToBookmark(browser->GetTabContentsAt(i), &(entry.first),
+    GetURLAndTitleToBookmark(browser->GetWebContentsAt(i), &(entry.first),
                              &(entry.second));
     urls->push_back(entry);
   }
@@ -775,6 +765,15 @@ void RemoveAllBookmarks(BookmarkModel* model, const GURL& url) {
     if (index > -1)
       model->Remove(node->parent(), index);
   }
+}
+
+void RecordBookmarkLaunch(BookmarkLaunchLocation location) {
+#if defined(OS_WIN)
+  // TODO(estade): do this on other platforms too. For now it's compiled out
+  // so that stats from platforms for which this is incompletely implemented
+  // don't mix in with Windows, where it should be implemented exhaustively.
+  UMA_HISTOGRAM_ENUMERATION("Bookmarks.LaunchLocation", location, LAUNCH_LIMIT);
+#endif
 }
 
 }  // namespace bookmark_utils

@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_vector.h"
-#include "base/test/mock_time_provider.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/test/mock_time_provider.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/history/history.h"
@@ -15,21 +17,22 @@
 #include "chrome/browser/search_engines/search_host_to_urls_map.h"
 #include "chrome/browser/search_engines/search_terms_data.h"
 #include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_prepopulate_data.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_test_util.h"
-#include "chrome/browser/search_engines/template_url_prepopulate_data.h"
 #include "chrome/browser/webdata/web_database.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_pref_service.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
 using base::TimeDelta;
+using content::BrowserThread;
 using ::testing::Return;
 using ::testing::StrictMock;
 
@@ -147,8 +150,8 @@ class TemplateURLServiceTest : public testing::Test {
   void NotifyManagedPrefsHaveChanged() {
     model()->Observe(
         chrome::NOTIFICATION_PREF_CHANGED,
-        Source<PrefService>(profile()->GetTestingPrefService()),
-        Details<std::string>(NULL));
+        content::Source<PrefService>(profile()->GetTestingPrefService()),
+        content::Details<std::string>(NULL));
   }
 
   // Verifies the two TemplateURLs are equal.
@@ -497,9 +500,8 @@ TEST_F(TemplateURLServiceTest, GenerateSearchURLUsingTermsData) {
 
   test_util_.StartIOThread();
   BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)->PostTask(
-          FROM_HERE,
-          NewRunnableMethod(test_generate_search_url.get(),
-                            &TestGenerateSearchURL::RunTest));
+          FROM_HERE, base::Bind(&TestGenerateSearchURL::RunTest,
+                                test_generate_search_url.get()));
   TemplateURLServiceTestUtil::BlockTillIOThreadProcessesRequests();
   EXPECT_TRUE(test_generate_search_url->passed());
 }
@@ -840,7 +842,7 @@ TEST_F(TemplateURLServiceTest, UpdateKeywordSearchTermsForURL) {
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(data); ++i) {
     history::URLVisitedDetails details;
     details.row = history::URLRow(GURL(data[i].url));
-    details.transition = 0;
+    details.transition = content::PageTransitionFromInt(0);
     model()->UpdateKeywordSearchTermsForURL(details);
     EXPECT_EQ(data[i].term, GetAndClearSearchTerm());
   }
@@ -862,7 +864,7 @@ TEST_F(TemplateURLServiceTest, DontUpdateKeywordSearchForNonReplaceable) {
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(data); ++i) {
     history::URLVisitedDetails details;
     details.row = history::URLRow(GURL(data[i].url));
-    details.transition = 0;
+    details.transition = content::PageTransitionFromInt(0);
     model()->UpdateKeywordSearchTermsForURL(details);
     ASSERT_EQ(string16(), GetAndClearSearchTerm());
   }
@@ -931,8 +933,8 @@ TEST_F(TemplateURLServiceTest, GenerateVisitOnKeyword) {
   history->AddPage(
       GURL(t_url->url()->ReplaceSearchTerms(*t_url, ASCIIToUTF16("blah"), 0,
                                             string16())),
-      NULL, 0, GURL(), PageTransition::KEYWORD, history::RedirectList(),
-      history::SOURCE_BROWSED, false);
+      NULL, 0, GURL(), content::PAGE_TRANSITION_KEYWORD,
+      history::RedirectList(), history::SOURCE_BROWSED, false);
 
   // Wait for history to finish processing the request.
   profile()->BlockUntilHistoryProcessesPendingRequests();
@@ -941,7 +943,8 @@ TEST_F(TemplateURLServiceTest, GenerateVisitOnKeyword) {
   CancelableRequestConsumer consumer;
   QueryHistoryCallbackImpl callback;
   history->QueryURL(GURL("http://keyword"), true, &consumer,
-      NewCallback(&callback, &QueryHistoryCallbackImpl::Callback));
+      base::Bind(&QueryHistoryCallbackImpl::Callback,
+                 base::Unretained(&callback)));
 
   // Wait for the request to be processed.
   profile()->BlockUntilHistoryProcessesPendingRequests();
@@ -950,8 +953,8 @@ TEST_F(TemplateURLServiceTest, GenerateVisitOnKeyword) {
   EXPECT_TRUE(callback.success);
   EXPECT_NE(0, callback.row.id());
   ASSERT_EQ(1U, callback.visits.size());
-  EXPECT_EQ(PageTransition::KEYWORD_GENERATED,
-            PageTransition::StripQualifier(callback.visits[0].transition));
+  EXPECT_EQ(content::PAGE_TRANSITION_KEYWORD_GENERATED,
+      content::PageTransitionStripQualifier(callback.visits[0].transition));
 }
 
 // Make sure that the load routine deletes prepopulated engines that no longer
@@ -1243,4 +1246,32 @@ TEST_F(TemplateURLServiceTest, TestManagedDefaultSearch) {
   VerifyLoad();
   EXPECT_TRUE(model()->is_default_search_managed());
   EXPECT_TRUE(model()->GetDefaultSearchProvider() == NULL);
+}
+
+// Test that if we load a TemplateURL with an empty GUID, the load process
+// assigns it a newly generated GUID.
+TEST_F(TemplateURLServiceTest, PatchEmptySyncGUID) {
+  // Add a new TemplateURL.
+  VerifyLoad();
+  const size_t initial_count = model()->GetTemplateURLs().size();
+
+  TemplateURL* t_url = new TemplateURL();
+  t_url->SetURL("http://www.google.com/foo/bar", 0, 0);
+  t_url->set_keyword(ASCIIToUTF16("keyword"));
+  t_url->set_short_name(ASCIIToUTF16("google"));
+  t_url->set_sync_guid("");  // force an empty GUID
+  model()->Add(t_url);
+
+  VerifyObserverCount(1);
+  BlockTillServiceProcessesRequests();
+  ASSERT_EQ(1 + initial_count, model()->GetTemplateURLs().size());
+
+  // Reload the model to verify it was actually saved to the database and
+  // assigned a new GUID when brought back.
+  ResetModel(true);
+  ASSERT_EQ(1 + initial_count, model()->GetTemplateURLs().size());
+  const TemplateURL* loaded_url =
+      model()->GetTemplateURLForKeyword(ASCIIToUTF16("keyword"));
+  ASSERT_TRUE(loaded_url != NULL);
+  ASSERT_FALSE(loaded_url->sync_guid().empty());
 }

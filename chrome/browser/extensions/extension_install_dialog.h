@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,12 +20,18 @@ namespace base {
 class DictionaryValue;
 }
 
-// The implementations of this function are platform-specific.
 void ShowExtensionInstallDialog(Profile* profile,
                                 ExtensionInstallUI::Delegate* delegate,
                                 const Extension* extension,
                                 SkBitmap* icon,
                                 const ExtensionInstallUI::Prompt& prompt);
+
+// The implementations of this function are platform-specific.
+void ShowExtensionInstallDialogImpl(Profile* profile,
+                                    ExtensionInstallUI::Delegate* delegate,
+                                    const Extension* extension,
+                                    SkBitmap* icon,
+                                    const ExtensionInstallUI::Prompt& prompt);
 
 // Wrapper around ShowExtensionInstallDialog that shows the install dialog for
 // a given manifest (that corresponds to an extension about to be installed with
@@ -35,7 +41,9 @@ void ShowExtensionInstallDialog(Profile* profile,
 // that's parsed is returned via |dummy_extension|. |prompt| should be fully
 // populated except for the permissions field, which will be extracted from the
 // extension.
-void ShowExtensionInstallDialogForManifest(
+// Returns true if |dummy_extension| is valid and delegate methods will be
+// called.
+bool ShowExtensionInstallDialogForManifest(
     Profile *profile,
     ExtensionInstallUI::Delegate* delegate,
     const base::DictionaryValue* manifest,
@@ -45,11 +53,5 @@ void ShowExtensionInstallDialogForManifest(
     SkBitmap* icon,
     const ExtensionInstallUI::Prompt& prompt,
     scoped_refptr<Extension>* dummy_extension);
-
-// For use only in tests - sets a flag that makes invocations of
-// ShowExtensionInstallDialogForManifest skip putting up a real dialog, and
-// instead act as if the dialog choice was to proceed or abort.
-void SetExtensionInstallDialogForManifestAutoConfirmForTests(
-    bool should_proceed);
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_INSTALL_DIALOG_H_

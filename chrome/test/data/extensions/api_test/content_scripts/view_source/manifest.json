@@ -2,7 +2,10 @@
   "name": "View source content scripts test",
   "description": "Detect when a view source page opens, checking that content scripts don't run.",
   "version": "0.3",
-  "background_page": "background.html",
+  "manifest_version": 2,
+  "background": {
+    "scripts": ["background.js"]
+  },
   "permissions": ["tabs", "http://*/*"],
   "content_scripts": [
     {

@@ -11,7 +11,6 @@
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/time.h"
-#include "base/task.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_handle.h"
@@ -59,10 +58,9 @@ HANDLE LaunchCommandDirectly(const std::wstring& command_field) {
 HANDLE LaunchCommandViaProcessLauncher(const std::wstring& command_field) {
   HANDLE launched_process = NULL;
 
-  scoped_ptr<CommandLine> command_line(
-      chrome_launcher::CreateUpdateCommandLine(command_field));
-
-  if (command_line != NULL) {
+  scoped_ptr<CommandLine> command_line;
+  if (chrome_launcher::CreateUpdateCommandLine(command_field, &command_line)) {
+    DCHECK(command_line != NULL);
     base::LaunchOptions options;
     options.start_hidden = true;
     base::LaunchProcess(*command_line, options, &launched_process);

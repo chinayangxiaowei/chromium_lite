@@ -16,7 +16,7 @@
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputElement.h"
-#include "webkit/glue/form_data.h"
+#include "webkit/forms/form_data.h"
 
 namespace {
 
@@ -39,8 +39,7 @@ const AutofillFieldType kProfileFieldTypes[] = {
   ADDRESS_HOME_STATE,
   ADDRESS_HOME_ZIP,
   ADDRESS_HOME_COUNTRY,
-  PHONE_HOME_WHOLE_NUMBER,
-  PHONE_FAX_WHOLE_NUMBER,
+  PHONE_HOME_WHOLE_NUMBER
 };
 
 // Serializes the |profiles| into a string.
@@ -129,7 +128,7 @@ class AutofillMergeTest : public testing::Test,
   // sequentially, and fills |merged_profiles| with the serialized result.
   void MergeProfiles(const std::string& profiles, std::string* merged_profiles);
 
-  scoped_refptr<PersonalDataManagerMock> personal_data_;
+  PersonalDataManagerMock personal_data_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AutofillMergeTest);
@@ -143,8 +142,6 @@ AutofillMergeTest::~AutofillMergeTest() {
 
 void AutofillMergeTest::SetUp() {
   autofill_test::DisableSystemServices(NULL);
-
-  personal_data_ = new PersonalDataManagerMock();
 }
 
 void AutofillMergeTest::GenerateResults(const std::string& input,
@@ -155,10 +152,10 @@ void AutofillMergeTest::GenerateResults(const std::string& input,
 void AutofillMergeTest::MergeProfiles(const std::string& profiles,
                                       std::string* merged_profiles) {
   // Start with no saved profiles.
-  personal_data_->Reset();
+  personal_data_.Reset();
 
   // Create a test form.
-  webkit_glue::FormData form;
+  webkit::forms::FormData form;
   form.name = ASCIIToUTF16("MyTestForm");
   form.method = ASCIIToUTF16("POST");
   form.origin = GURL("https://www.example.com/origin.html");
@@ -178,7 +175,7 @@ void AutofillMergeTest::MergeProfiles(const std::string& profiles,
       string16 field_type = UTF8ToUTF16(line.substr(0, separator_pos));
       string16 value = UTF8ToUTF16(line.substr(separator_pos + kFieldOffset));
 
-      webkit_glue::FormField field;
+      webkit::forms::FormField field;
       field.label = field_type;
       field.name = field_type;
       field.value = value;
@@ -203,15 +200,15 @@ void AutofillMergeTest::MergeProfiles(const std::string& profiles,
 
       // Import the profile.
       const CreditCard* imported_credit_card;
-      personal_data_->ImportFormData(form_structure, &imported_credit_card);
-      EXPECT_FALSE(imported_credit_card);
+      personal_data_.ImportFormData(form_structure, &imported_credit_card);
+      EXPECT_EQ(static_cast<const CreditCard*>(NULL), imported_credit_card);
 
       // Clear the |form| to start a new profile.
       form.fields.clear();
     }
   }
 
-  *merged_profiles = SerializeProfiles(personal_data_->web_profiles());
+  *merged_profiles = SerializeProfiles(personal_data_.web_profiles());
 }
 
 TEST_F(AutofillMergeTest, DataDrivenMergeProfiles) {

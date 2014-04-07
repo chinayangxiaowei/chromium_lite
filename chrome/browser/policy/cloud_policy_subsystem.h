@@ -8,7 +8,7 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
-#include "content/common/notification_observer.h"
+#include "content/public/browser/notification_observer.h"
 #include "net/base/network_change_notifier.h"
 
 class PrefService;
@@ -26,7 +26,7 @@ class PolicyNotifier;
 // policy. It glues together the backend, the policy controller and manages the
 // life cycle of the policy providers.
 class CloudPolicySubsystem
-    : public NotificationObserver,
+    : public content::NotificationObserver,
       public net::NetworkChangeNotifier::IPAddressObserver {
  public:
   enum PolicySubsystemState {
@@ -72,9 +72,6 @@ class CloudPolicySubsystem
                        CloudPolicyCacheBase* policy_cache);
   virtual ~CloudPolicySubsystem();
 
-  // net::NetworkChangeNotifier::IPAddressObserver:
-  virtual void OnIPAddressChanged() OVERRIDE;
-
   // Initializes the subsystem. The first network request will only be made
   // after |delay_milliseconds|. It can be scheduled to be happen earlier by
   // calling |ScheduleInitialization|.
@@ -92,6 +89,10 @@ class CloudPolicySubsystem
   // Resets the subsystem back to unenrolled state and cancels any pending
   // retry operations.
   void Reset();
+
+  // Refreshes the policies retrieved by this subsystem. This triggers new
+  // policy fetches if possible, otherwise it keeps the current set of policies.
+  void RefreshPolicies();
 
   // Registers cloud policy related prefs.
   static void RegisterPrefs(PrefService* pref_service);
@@ -123,10 +124,13 @@ class CloudPolicySubsystem
   virtual void CreateDeviceTokenFetcher();
   virtual void CreateCloudPolicyController();
 
-  // NotificationObserver overrides.
+  // content::NotificationObserver overrides.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  // net::NetworkChangeNotifier::IPAddressObserver:
+  virtual void OnIPAddressChanged() OVERRIDE;
 
   // Name of the preference to read the refresh rate from.
   const char* refresh_pref_name_;

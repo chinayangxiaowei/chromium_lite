@@ -8,7 +8,9 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
+#include "content/common/content_export.h"
 #include "net/base/completion_callback.h"
 #include "third_party/libjingle/source/talk/base/sigslot.h"
 #include "webkit/glue/p2p_transport.h"
@@ -33,11 +35,11 @@ class PacketSocketFactory;
 
 namespace content {
 
-class P2PPortAllocator;
 class P2PSocketDispatcher;
 
-class P2PTransportImpl : public webkit_glue::P2PTransport,
-                         public sigslot::has_slots<> {
+class CONTENT_EXPORT P2PTransportImpl
+    : NON_EXPORTED_BASE(public webkit_glue::P2PTransport),
+      public sigslot::has_slots<> {
  public:
   // Creates P2PTransportImpl using specified NetworkManager and
   // PacketSocketFactory. Takes ownership of |network_manager| and
@@ -53,7 +55,8 @@ class P2PTransportImpl : public webkit_glue::P2PTransport,
   virtual ~P2PTransportImpl();
 
   // webkit_glue::P2PTransport interface.
-  virtual bool Init(const std::string& name,
+  virtual bool Init(WebKit::WebFrame* web_frame,
+                    const std::string& name,
                     Protocol protocol,
                     const Config& config,
                     EventHandler* event_handler) OVERRIDE;
@@ -84,8 +87,6 @@ class P2PTransportImpl : public webkit_glue::P2PTransport,
 
   scoped_ptr<jingle_glue::TransportChannelSocketAdapter> channel_adapter_;
   scoped_ptr<jingle_glue::PseudoTcpAdapter> pseudo_tcp_adapter_;
-
-  net::CompletionCallbackImpl<P2PTransportImpl> connect_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(P2PTransportImpl);
 };

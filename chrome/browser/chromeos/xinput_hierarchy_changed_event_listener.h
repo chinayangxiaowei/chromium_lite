@@ -6,10 +6,14 @@
 #define CHROME_BROWSER_CHROMEOS_XINPUT_HIERARCHY_CHANGED_EVENT_LISTENER_H_
 #pragma once
 
+#if defined(TOOLKIT_USES_GTK)
 #include <gdk/gdk.h>
+#endif
 
 #include "base/memory/singleton.h"
 #include "base/message_loop.h"
+#include "base/observer_list.h"
+#include "chrome/browser/chromeos/device_hierarchy_observer.h"
 
 typedef union _XEvent XEvent;
 
@@ -25,6 +29,9 @@ class XInputHierarchyChangedEventListener : public MessageLoopForUI::Observer {
 
   void Stop();
 
+  void AddObserver(DeviceHierarchyObserver* observer);
+  void RemoveObserver(DeviceHierarchyObserver* observer);
+
  private:
   // Defines the delete on exit Singleton traits we like.  Best to have this
   // and const/dest private as recommended for Singletons.
@@ -33,13 +40,13 @@ class XInputHierarchyChangedEventListener : public MessageLoopForUI::Observer {
   XInputHierarchyChangedEventListener();
   virtual ~XInputHierarchyChangedEventListener();
 
-#if defined(TOUCH_UI)
-  // MessageLoopForUI::Observer overrides.
-  virtual EventStatus WillProcessXEvent(XEvent* xevent) OVERRIDE;
-#else
-  // When TOUCH_UI is not defined, WillProcessXEvent() will not be called
-  // automatically. We have to call the function manually by adding the Gdk
-  // event filter.
+  void Init();
+  void StopImpl();
+
+#if defined(TOOLKIT_USES_GTK)
+  // When GTK events are processed, WillProcessXEvent() is not called
+  // automatically. It is necessary to call the function manually by adding the
+  // Gdk event filter.
   static GdkFilterReturn GdkEventFilter(GdkXEvent* gxevent,
                                         GdkEvent* gevent,
                                         gpointer data);
@@ -47,13 +54,23 @@ class XInputHierarchyChangedEventListener : public MessageLoopForUI::Observer {
   // MessageLoopForUI::Observer overrides.
   virtual void WillProcessEvent(GdkEvent* event) OVERRIDE {}
   virtual void DidProcessEvent(GdkEvent* event) OVERRIDE {}
+#else
+  // MessageLoopForUI::Observer overrides.
+  virtual base::EventStatus WillProcessEvent(
+      const base::NativeEvent& event) OVERRIDE;
+  virtual void DidProcessEvent(const base::NativeEvent& event) OVERRIDE;
 #endif
 
   // Returns true if the event was processed, false otherwise.
   virtual bool ProcessedXEvent(XEvent* xevent);
 
+  // Notify observers that a device has been added/removed.
+  void NotifyDeviceHierarchyChanged();
+
   bool stopped_;
   int xiopcode_;
+
+  ObserverList<DeviceHierarchyObserver> observer_list_;
 
   DISALLOW_COPY_AND_ASSIGN(XInputHierarchyChangedEventListener);
 };

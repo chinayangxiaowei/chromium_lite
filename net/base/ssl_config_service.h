@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/string_piece.h"
+#include "net/base/cert_status_flags.h"
+#include "net/base/crl_set.h"
 #include "net/base/net_export.h"
 #include "net/base/x509_certificate.h"
 
@@ -27,12 +29,12 @@ struct NET_EXPORT SSLConfig {
   // Returns true if |cert| is one of the certs in |allowed_bad_certs|.
   // The expected cert status is written to |cert_status|. |*cert_status| can
   // be NULL if user doesn't care about the cert status.
-  bool IsAllowedBadCert(X509Certificate* cert, int* cert_status) const;
+  bool IsAllowedBadCert(X509Certificate* cert, CertStatus* cert_status) const;
 
   // Same as above except works with DER encoded certificates instead
   // of X509Certificate.
   bool IsAllowedBadCert(const base::StringPiece& der_cert,
-                        int* cert_status) const;
+                        CertStatus* cert_status) const;
 
   bool rev_checking_enabled;  // True if server certificate revocation
                               // checking is enabled.
@@ -77,7 +79,7 @@ struct NET_EXPORT SSLConfig {
     ~CertAndStatus();
 
     std::string der_cert;
-    int cert_status;
+    CertStatus cert_status;
   };
 
   // Add any known-bad SSL certificate (with its cert status) to
@@ -95,12 +97,12 @@ struct NET_EXPORT SSLConfig {
                        // needs to clear tls1_enabled).
 
   // The list of application level protocols supported. If set, this will
-  // enable Next Protocol Negotiation (if supported). This is a list of 8-bit
-  // length prefixed strings. The order of the protocols doesn't matter expect
-  // for one case: if the server supports Next Protocol Negotiation, but there
-  // is no overlap between the server's and client's protocol sets, then the
-  // first protocol in this list will be requested by the client.
-  std::string next_protos;
+  // enable Next Protocol Negotiation (if supported). The order of the
+  // protocols doesn't matter expect for one case: if the server supports Next
+  // Protocol Negotiation, but there is no overlap between the server's and
+  // client's protocol sets, then the first protocol in this list will be
+  // requested by the client.
+  std::vector<std::string> next_protos;
 
   scoped_refptr<X509Certificate> client_cert;
 };
@@ -130,13 +132,6 @@ class NET_EXPORT SSLConfigService
 
   SSLConfigService();
 
-  // Create an instance of SSLConfigService which retrieves the configuration
-  // from the system SSL configuration, or an instance of
-  // SSLConfigServiceDefaults if the current system does not have a system SSL
-  // configuration.  Note: this does not handle SSLConfigService implementations
-  // that are not native to their platform, such as preference-backed ones.
-  static SSLConfigService* CreateSystemSSLConfigService();
-
   // May not be thread-safe, should only be called on the IO thread.
   virtual void GetSSLConfig(SSLConfig* config) = 0;
 
@@ -144,23 +139,18 @@ class NET_EXPORT SSLConfigService
   // False Start.
   static bool IsKnownFalseStartIncompatibleServer(const std::string& hostname);
 
-  // Disables False Start in SSL connections.
-  static void DisableFalseStart();
-  // True if we use False Start for SSL and TLS.
-  static bool false_start_enabled();
-
   // Enables DNS side checks for certificates.
   static void EnableDNSCertProvenanceChecking();
   static bool dns_cert_provenance_checking_enabled();
+
+  // Sets and gets the current, global CRL set.
+  static void SetCRLSet(scoped_refptr<CRLSet> crl_set);
+  static scoped_refptr<CRLSet> GetCRLSet();
 
   // Enables the TLS cached info extension, which allows the server to send
   // just a digest of its certificate chain.
   static void EnableCachedInfo();
   static bool cached_info_enabled();
-
-  // Enables the TLS origin bound cert extension.
-  static void EnableOriginBoundCerts();
-  static bool origin_bound_certs_enabled();
 
   // Is SNI available in this configuration?
   static bool IsSNIAvailable(SSLConfigService* service);

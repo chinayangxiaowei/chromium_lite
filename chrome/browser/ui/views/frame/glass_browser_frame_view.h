@@ -9,17 +9,15 @@
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/views/frame/browser_frame_win.h"
 #include "chrome/browser/ui/views/frame/browser_non_client_frame_view.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "views/controls/button/button.h"
-#include "views/window/non_client_view.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/window/non_client_view.h"
 
 class BrowserView;
-class AvatarMenuButton;
-class SkBitmap;
 
 class GlassBrowserFrameView : public BrowserNonClientFrameView,
-                              public NotificationObserver {
+                              public content::NotificationObserver {
  public:
   // Constructs a non-client view for an BrowserFrame.
   GlassBrowserFrameView(BrowserFrame* frame, BrowserView* browser_view);
@@ -38,7 +36,6 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   virtual int NonClientHitTest(const gfx::Point& point) OVERRIDE;
   virtual void GetWindowMask(const gfx::Size& size, gfx::Path* window_mask)
       OVERRIDE { }
-  virtual void EnableClose(bool enable) OVERRIDE { }
   virtual void ResetWindowControls() OVERRIDE { }
   virtual void UpdateWindowIcon() OVERRIDE { }
 
@@ -59,10 +56,8 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
 
   // Returns the height of the entire nonclient top border, including the window
   // frame, any title area, and any connected client edge.  If |restored| is
-  // true, acts as if the window is restored regardless of the real mode.  If
-  // |ignore_vertical_tabs| is true, acts as if vertical tabs are off regardless
-  // of the real state.
-  int NonClientTopBorderHeight(bool restored, bool ignore_vertical_tabs) const;
+  // true, acts as if the window is restored regardless of the real mode.
+  int NonClientTopBorderHeight(bool restored) const;
 
   // Paint various sub-components of this view.
   void PaintToolbarBackground(gfx::Canvas* canvas);
@@ -85,29 +80,16 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   // Displays the next throbber frame.
   void DisplayNextThrobberFrame();
 
-  // NotificationObserver implementation:
+  // content::NotificationObserver implementation:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
-
-  // Updates the title and icon of the avatar button.
-  void UpdateAvatarInfo();
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // The layout rect of the avatar icon, if visible.
   gfx::Rect avatar_bounds_;
 
-  // The frame that hosts this view.
-  BrowserFrame* frame_;
-
-  // The BrowserView hosted within this View.
-  BrowserView* browser_view_;
-
   // The bounds of the ClientView.
   gfx::Rect client_view_bounds_;
-
-  // Menu button that displays that either the incognito icon or the profile
-  // icon.
-  scoped_ptr<AvatarMenuButton> avatar_button_;
 
   // Whether or not the window throbber is currently animating.
   bool throbber_running_;
@@ -115,7 +97,7 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView,
   // The index of the current frame of the throbber animation.
   int throbber_frame_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   static const int kThrobberIconCount = 24;
   static HICON throbber_icons_[kThrobberIconCount];

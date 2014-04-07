@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -513,11 +513,7 @@ std::string DumpIPNumber(const IPAddressNumber& v) {
 void RunGenerateFileNameTestCase(const GenerateFilenameCase* test_case,
                                  size_t iteration,
                                  const char* suite) {
-#if defined(OS_WIN)
-  string16 default_filename(test_case->default_filename);
-#else
-  string16 default_filename(WideToUTF16(test_case->default_filename));
-#endif
+  std::string default_filename(WideToUTF8(test_case->default_filename));
   FilePath file_path = GenerateFileName(
       GURL(test_case->url), test_case->content_disp_header,
       test_case->referrer_charset, test_case->suggested_filename,
@@ -752,246 +748,6 @@ TEST(NetUtilTest, GetSpecificHeader) {
   }
 }
 
-TEST(NetUtilTest, GetHeaderParamValue) {
-  const HeaderParamCase tests[] = {
-    {"Content-type", "charset", "utf-8"},
-    {"content-disposition", "filename", "download.pdf"},
-    {"Content-Type", "badparam", ""},
-    {"X-Malformed", "arg", "test\""},
-    {"X-Malformed2", "arg", ""},
-    {"X-Test", "arg1", "val1"},
-    {"X-Test", "arg2", "val2"},
-    {"Bad-Header", "badparam", ""},
-    {"Bad-Header", "", ""},
-    {"", "badparam", ""},
-    {"", "", ""},
-  };
-  // TODO(mpcomplete): add tests for other formats of headers.
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    std::string header_value =
-        GetSpecificHeader(google_headers, tests[i].header_name);
-    std::string result =
-        GetHeaderParamValue(header_value, tests[i].param_name,
-                            QuoteRule::REMOVE_OUTER_QUOTES);
-    EXPECT_EQ(result, tests[i].expected);
-  }
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    std::string header_value =
-      GetSpecificHeader(std::string(), tests[i].header_name);
-    std::string result =
-        GetHeaderParamValue(header_value, tests[i].param_name,
-                            QuoteRule::REMOVE_OUTER_QUOTES);
-    EXPECT_EQ(result, std::string());
-  }
-}
-
-TEST(NetUtilTest, GetHeaderParamValueQuotes) {
-  struct {
-    const char* header;
-    const char* expected_with_quotes;
-    const char* expected_without_quotes;
-  } tests[] = {
-    {"filename=foo", "foo", "foo"},
-    {"filename=\"foo\"", "\"foo\"", "foo"},
-    {"filename=foo\"", "foo\"", "foo\""},
-    {"filename=fo\"o", "fo\"o", "fo\"o"},
-  };
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    std::string actual_with_quotes =
-        GetHeaderParamValue(tests[i].header, "filename",
-                            QuoteRule::KEEP_OUTER_QUOTES);
-    std::string actual_without_quotes =
-        GetHeaderParamValue(tests[i].header, "filename",
-                            QuoteRule::REMOVE_OUTER_QUOTES);
-    EXPECT_EQ(tests[i].expected_with_quotes, actual_with_quotes)
-        << "Failed while processing: " << tests[i].header;
-    EXPECT_EQ(tests[i].expected_without_quotes, actual_without_quotes)
-        << "Failed while processing: " << tests[i].header;
-  }
-}
-
-TEST(NetUtilTest, GetFileNameFromCD) {
-  const FileNameCDCase tests[] = {
-    // Test various forms of C-D header fields emitted by web servers.
-    {"content-disposition: inline; filename=\"abcde.pdf\"", "", L"abcde.pdf"},
-    {"content-disposition: inline; name=\"abcde.pdf\"", "", L"abcde.pdf"},
-    {"content-disposition: attachment; filename=abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: attachment; name=abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: attachment; filename=abc,de.pdf", "", L"abc,de.pdf"},
-    {"content-disposition: filename=abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: filename= abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: filename =abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: filename = abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: filename\t=abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: filename \t\t  =abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: name=abcde.pdf", "", L"abcde.pdf"},
-    {"content-disposition: inline; filename=\"abc%20de.pdf\"", "",
-     L"abc de.pdf"},
-    // Unbalanced quotation mark
-    {"content-disposition: filename=\"abcdef.pdf", "", L"abcdef.pdf"},
-    // Whitespaces are converted to a space.
-    {"content-disposition: inline; filename=\"abc  \t\nde.pdf\"", "",
-     L"abc    de.pdf"},
-    // %-escaped UTF-8
-    {"Content-Disposition: attachment; filename=\"%EC%98%88%EC%88%A0%20"
-     "%EC%98%88%EC%88%A0.jpg\"", "", L"\xc608\xc220 \xc608\xc220.jpg"},
-    {"Content-Disposition: attachment; filename=\"%F0%90%8C%B0%F0%90%8C%B1"
-     "abc.jpg\"", "", L"\U00010330\U00010331abc.jpg"},
-    {"Content-Disposition: attachment; filename=\"%EC%98%88%EC%88%A0 \n"
-     "%EC%98%88%EC%88%A0.jpg\"", "", L"\xc608\xc220  \xc608\xc220.jpg"},
-    // RFC 2047 with various charsets and Q/B encodings
-    {"Content-Disposition: attachment; filename=\"=?EUC-JP?Q?=B7=DD=BD="
-     "D13=2Epng?=\"", "", L"\x82b8\x8853" L"3.png"},
-    {"Content-Disposition: attachment; filename==?eUc-Kr?b?v7m8+iAzLnBuZw==?=",
-     "", L"\xc608\xc220 3.png"},
-    {"Content-Disposition: attachment; filename==?utf-8?Q?=E8=8A=B8=E8"
-     "=A1=93_3=2Epng?=", "", L"\x82b8\x8853 3.png"},
-    {"Content-Disposition: attachment; filename==?utf-8?Q?=F0=90=8C=B0"
-     "_3=2Epng?=", "", L"\U00010330 3.png"},
-    {"Content-Disposition: inline; filename=\"=?iso88591?Q?caf=e9_=2epng?=\"",
-     "", L"caf\x00e9 .png"},
-    // Space after an encoded word should be removed.
-    {"Content-Disposition: inline; filename=\"=?iso88591?Q?caf=E9_?= .png\"",
-     "", L"caf\x00e9 .png"},
-    // Two encoded words with different charsets (not very likely to be emitted
-    // by web servers in the wild). Spaces between them are removed.
-    {"Content-Disposition: inline; filename=\"=?euc-kr?b?v7m8+iAz?="
-     " =?ksc5601?q?=BF=B9=BC=FA=2Epng?=\"", "",
-     L"\xc608\xc220 3\xc608\xc220.png"},
-    {"Content-Disposition: attachment; filename=\"=?windows-1252?Q?caf=E9?="
-     "  =?iso-8859-7?b?4eI=?= .png\"", "", L"caf\x00e9\x03b1\x03b2.png"},
-    // Non-ASCII string is passed through and treated as UTF-8 as long as
-    // it's valid as UTF-8 and regardless of |referrer_charset|.
-    {"Content-Disposition: attachment; filename=caf\xc3\xa9.png",
-     "iso-8859-1", L"caf\x00e9.png"},
-    {"Content-Disposition: attachment; filename=caf\xc3\xa9.png",
-     "", L"caf\x00e9.png"},
-    // Non-ASCII/Non-UTF-8 string. Fall back to the referrer charset.
-    {"Content-Disposition: attachment; filename=caf\xe5.png",
-     "windows-1253", L"caf\x03b5.png"},
-#if 0
-    // Non-ASCII/Non-UTF-8 string. Fall back to the native codepage.
-    // TODO(jungshik): We need to set the OS default codepage
-    // to a specific value before testing. On Windows, we can use
-    // SetThreadLocale().
-    {"Content-Disposition: attachment; filename=\xb0\xa1\xb0\xa2.png",
-     "", L"\xac00\xac01.png"},
-#endif
-    // Failure cases
-    // Invalid hex-digit "G"
-    {"Content-Disposition: attachment; filename==?iiso88591?Q?caf=EG?=", "",
-     L""},
-    // Incomplete RFC 2047 encoded-word (missing '='' at the end)
-    {"Content-Disposition: attachment; filename==?iso88591?Q?caf=E3?", "", L""},
-    // Extra character at the end of an encoded word
-    {"Content-Disposition: attachment; filename==?iso88591?Q?caf=E3?==",
-     "", L""},
-    // Extra token at the end of an encoded word
-    {"Content-Disposition: attachment; filename==?iso88591?Q?caf=E3?=?",
-     "", L""},
-    {"Content-Disposition: attachment; filename==?iso88591?Q?caf=E3?=?=",
-     "",  L""},
-    // Incomplete hex-escaped chars
-    {"Content-Disposition: attachment; filename==?windows-1252?Q?=63=61=E?=",
-     "", L""},
-    {"Content-Disposition: attachment; filename=%EC%98%88%EC%88%A", "", L""},
-    // %-escaped non-UTF-8 encoding is an "error"
-    {"Content-Disposition: attachment; filename=%B7%DD%BD%D1.png", "", L""},
-    // Two RFC 2047 encoded words in a row without a space is an error.
-    {"Content-Disposition: attachment; filename==?windows-1252?Q?caf=E3?="
-     "=?iso-8859-7?b?4eIucG5nCg==?=", "", L""},
-
-    // RFC 5987 tests with Filename*  : see http://tools.ietf.org/html/rfc5987
-    {"Content-Disposition: attachment; filename*=foo.html", "", L""},
-    {"Content-Disposition: attachment; filename*=foo'.html", "", L""},
-    {"Content-Disposition: attachment; filename*=''foo'.html", "", L""},
-    {"Content-Disposition: attachment; filename*=''foo.html'", "", L""},
-    {"Content-Disposition: attachment; filename*=''f\"oo\".html'", "", L""},
-    {"Content-Disposition: attachment; filename*=bogus_charset''foo.html'",
-     "", L""},
-    {"Content-Disposition: attachment; filename*='en'foo.html'", "", L""},
-    {"Content-Disposition: attachment; filename*=iso-8859-1'en'foo.html", "",
-      L"foo.html"},
-    {"Content-Disposition: attachment; filename*=utf-8'en'foo.html", "",
-      L"foo.html"},
-    // charset cannot be omitted.
-    {"Content-Disposition: attachment; filename*='es'f\xfa.html'", "", L""},
-    // Non-ASCII bytes are not allowed.
-    {"Content-Disposition: attachment; filename*=iso-8859-1'es'f\xfa.html", "",
-      L""},
-    {"Content-Disposition: attachment; filename*=utf-8'es'f\xce\xba.html", "",
-      L""},
-    // TODO(jshin): Space should be %-encoded, but currently, we allow
-    // spaces.
-    {"Content-Disposition: inline; filename*=iso88591''cafe foo.png", "",
-      L"cafe foo.png"},
-
-    // Filename* tests converted from Q-encoded tests above.
-    {"Content-Disposition: attachment; filename*=EUC-JP''%B7%DD%BD%D13%2Epng",
-     "", L"\x82b8\x8853" L"3.png"},
-    {"Content-Disposition: attachment; filename*=utf-8''"
-      "%E8%8A%B8%E8%A1%93%203%2Epng", "", L"\x82b8\x8853 3.png"},
-    {"Content-Disposition: attachment; filename*=utf-8''%F0%90%8C%B0 3.png", "",
-      L"\U00010330 3.png"},
-    {"Content-Disposition: inline; filename*=Euc-Kr'ko'%BF%B9%BC%FA%2Epng", "",
-     L"\xc608\xc220.png"},
-    {"Content-Disposition: attachment; filename*=windows-1252''caf%E9.png", "",
-      L"caf\x00e9.png"},
-
-    // http://greenbytes.de/tech/tc2231/ filename* test cases.
-    // attwithisofn2231iso
-    {"Content-Disposition: attachment; filename*=iso-8859-1''foo-%E4.html", "",
-      L"foo-\xe4.html"},
-    // attwithfn2231utf8
-    {"Content-Disposition: attachment; filename*="
-      "UTF-8''foo-%c3%a4-%e2%82%ac.html", "", L"foo-\xe4-\x20ac.html"},
-    // attwithfn2231noc : no encoding specified but UTF-8 is used.
-    {"Content-Disposition: attachment; filename*=''foo-%c3%a4-%e2%82%ac.html",
-      "", L""},
-    // attwithfn2231utf8comp
-    {"Content-Disposition: attachment; filename*=UTF-8''foo-a%cc%88.html", "",
-      L"foo-\xe4.html"},
-#ifdef ICU_SHOULD_FAIL_CONVERSION_ON_INVALID_CHARACTER
-    // This does not work because we treat ISO-8859-1 synonymous with
-    // Windows-1252 per HTML5. For HTTP, in theory, we're not
-    // supposed to.
-    // attwithfn2231utf8-bad
-    {"Content-Disposition: attachment; filename*="
-      "iso-8859-1''foo-%c3%a4-%e2%82%ac.html", "", L""},
-#endif
-    // attwithfn2231ws1
-    {"Content-Disposition: attachment; filename *=UTF-8''foo-%c3%a4.html", "",
-      L""},
-    // attwithfn2231ws2
-    {"Content-Disposition: attachment; filename*= UTF-8''foo-%c3%a4.html", "",
-      L"foo-\xe4.html"},
-    // attwithfn2231ws3
-    {"Content-Disposition: attachment; filename* =UTF-8''foo-%c3%a4.html", "",
-      L"foo-\xe4.html"},
-    // attwithfn2231quot
-    {"Content-Disposition: attachment; filename*=\"UTF-8''foo-%c3%a4.html\"",
-      "", L""},
-    // attfnboth
-    {"Content-Disposition: attachment; filename=\"foo-ae.html\"; "
-      "filename*=UTF-8''foo-%c3%a4.html", "", L"foo-\xe4.html"},
-    // attfnboth2
-    {"Content-Disposition: attachment; filename*=UTF-8''foo-%c3%a4.html; "
-      "filename=\"foo-ae.html\"", "", L"foo-\xe4.html"},
-    // attnewandfn
-    {"Content-Disposition: attachment; foobar=x; filename=\"foo.html\"", "",
-      L"foo.html"},
-  };
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    EXPECT_EQ(tests[i].expected,
-              UTF8ToWide(GetFileNameFromCD(tests[i].header_field,
-                                           tests[i].referrer_charset)))
-        << "Failed on input: " << tests[i].header_field;
-  }
-}
-
 TEST(NetUtilTest, IDNToUnicodeFast) {
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(idn_cases); i++) {
     for (size_t j = 0; j < arraysize(kLanguages); j++) {
@@ -1212,20 +968,21 @@ TEST(NetUtilTest, GenerateSafeFileName) {
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(safe_tests); ++i) {
     FilePath file_path(safe_tests[i].filename);
-    GenerateSafeFileName(safe_tests[i].mime_type, &file_path);
+    GenerateSafeFileName(safe_tests[i].mime_type, false, &file_path);
     EXPECT_EQ(safe_tests[i].expected_filename, file_path.value())
         << "Iteration " << i;
   }
 }
 
 TEST(NetUtilTest, GenerateFileName) {
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
   // This test doesn't run when the locale is not UTF-8 because some of the
   // string conversions fail. This is OK (we have the default value) but they
   // don't match our expectations.
   std::string locale = setlocale(LC_CTYPE, NULL);
   StringToLowerASCII(&locale);
-  EXPECT_NE(std::string::npos, locale.find("utf-8"))
+  EXPECT_TRUE(locale.find("utf-8") != std::string::npos ||
+              locale.find("utf8") != std::string::npos)
       << "Your locale (" << locale << ") must be set to UTF-8 "
       << "for this test to pass!";
 #endif
@@ -1236,7 +993,7 @@ TEST(NetUtilTest, GenerateFileName) {
   const GenerateFilenameCase selection_tests[] = {
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=test.html",
+      "attachment; filename=test.html",
       "",
       "",
       "",
@@ -1245,7 +1002,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=\"test.html\"",
+      "attachment; filename=\"test.html\"",
       "",
       "",
       "",
@@ -1254,7 +1011,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename= \"test.html\"",
+      "attachment; filename= \"test.html\"",
       "",
       "",
       "",
@@ -1263,7 +1020,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename   =   \"test.html\"",
+      "attachment; filename   =   \"test.html\"",
       "",
       "",
       "",
@@ -1272,7 +1029,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // filename is whitespace.  Should failover to URL host
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=  ",
+      "attachment; filename=  ",
       "",
       "",
       "",
@@ -1281,7 +1038,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // No filename.
       "http://www.google.com/path/test.html",
-      "Content-disposition: attachment",
+      "attachment",
       "",
       "",
       "",
@@ -1290,7 +1047,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Ditto
       "http://www.google.com/path/test.html",
-      "Content-disposition: attachment;",
+      "attachment;",
       "",
       "",
       "",
@@ -1364,7 +1121,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // C-D should override default
       "http://www.google.com/",
-      "Content-disposition: attachment; filename =\"test.html\"",
+      "attachment; filename =\"test.html\"",
       "",
       "",
       "",
@@ -1382,7 +1139,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=\"../test.html\"",
+      "attachment; filename=\"../test.html\"",
       "",
       "",
       "",
@@ -1391,7 +1148,16 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=\"..\\test.html\"",
+      "attachment; filename=\"..\\test.html\"",
+      "",
+      "",
+      "",
+      L"",
+      L"test.html"
+    },
+    {
+      "http://www.google.com/",
+      "attachment; filename=\"..\\\\test.html\"",
       "",
       "",
       "",
@@ -1400,7 +1166,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Filename disappears after leading and trailing periods are removed.
       "http://www.google.com/",
-      "Content-disposition: attachment; filename=\"..\"",
+      "attachment; filename=\"..\"",
       "",
       "",
       "",
@@ -1409,7 +1175,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // C-D specified filename disappears.  Failover to final filename.
       "http://www.google.com/test.html",
-      "Content-disposition: attachment; filename=\"..\"",
+      "attachment; filename=\"..\"",
       "",
       "",
       "",
@@ -1419,7 +1185,7 @@ TEST(NetUtilTest, GenerateFileName) {
     // Below is a small subset of cases taken from GetFileNameFromCD test above.
     {
       "http://www.google.com/",
-      "Content-Disposition: attachment; filename=\"%EC%98%88%EC%88%A0%20"
+      "attachment; filename=\"%EC%98%88%EC%88%A0%20"
       "%EC%98%88%EC%88%A0.jpg\"",
       "",
       "",
@@ -1438,7 +1204,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-disposition: attachment;",
+      "attachment;",
       "",
       "",
       "",
@@ -1447,7 +1213,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/",
-      "Content-Disposition: attachment; filename=\"=?EUC-JP?Q?=B7=DD=BD="
+      "attachment; filename=\"=?EUC-JP?Q?=B7=DD=BD="
       "D13=2Epng?=\"",
       "",
       "",
@@ -1457,7 +1223,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/images?id=3",
-      "Content-Disposition: attachment; filename=caf\xc3\xa9.png",
+      "attachment; filename=caf\xc3\xa9.png",
       "iso-8859-1",
       "",
       "",
@@ -1466,7 +1232,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/images?id=3",
-      "Content-Disposition: attachment; filename=caf\xe5.png",
+      "attachment; filename=caf\xe5.png",
       "windows-1253",
       "",
       "",
@@ -1475,7 +1241,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/file?id=3",
-      "Content-Disposition: attachment; name=\xcf\xc2\xd4\xd8.zip",
+      "attachment; name=\xcf\xc2\xd4\xd8.zip",
       "GBK",
       "",
       "",
@@ -1484,7 +1250,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Invalid C-D header. Extracts filename from url.
       "http://www.google.com/test.html",
-      "Content-Disposition: attachment; filename==?iiso88591?Q?caf=EG?=",
+      "attachment; filename==?iiso88591?Q?caf=EG?=",
       "",
       "",
       "",
@@ -1557,7 +1323,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // The content-disposition has higher precedence over the suggested name.
       "http://www.google.com/test",
-      "Content-disposition: attachment; filename=test.html",
+      "attachment; filename=test.html",
       "",
       "suggested",
       "",
@@ -1580,7 +1346,7 @@ TEST(NetUtilTest, GenerateFileName) {
     // Raw 8bit characters in C-D
     {
       "http://www.example.com/images?id=3",
-      "Content-Disposition: attachment; filename=caf\xc3\xa9.png",
+      "attachment; filename=caf\xc3\xa9.png",
       "iso-8859-1",
       "",
       "image/png",
@@ -1589,7 +1355,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/images?id=3",
-      "Content-Disposition: attachment; filename=caf\xe5.png",
+      "attachment; filename=caf\xe5.png",
       "windows-1253",
       "",
       "image/png",
@@ -1598,7 +1364,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // No 'filename' keyword in the disposition, use the URL
       "http://www.evil.com/my_download.txt",
-      "Content-Dispostion: a_file_name.txt",
+      "a_file_name.txt",
       "",
       "",
       "text/plain",
@@ -1607,7 +1373,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Spaces in the disposition file name
       "http://www.frontpagehacker.com/a_download.exe",
-      "Content-Dispostion: filename=My Downloaded File.exe",
+      "filename=My Downloaded File.exe",
       "",
       "",
       "application/octet-stream",
@@ -1616,7 +1382,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // % encoded
       "http://www.examples.com/",
-      "Content-Dispostion: attachment; "
+      "attachment; "
       "filename=\"%EC%98%88%EC%88%A0%20%EC%98%88%EC%88%A0.jpg\"",
       "",
       "",
@@ -1626,7 +1392,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // name= parameter
       "http://www.examples.com/q.cgi?id=abc",
-      "Content-Dispostion: attachment; name=abc de.pdf",
+      "attachment; name=abc de.pdf",
       "",
       "",
       "application/octet-stream",
@@ -1635,7 +1401,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/path",
-      "Content-Dispostion: filename=\"=?EUC-JP?Q?=B7=DD=BD=D13=2Epng?=\"",
+      "filename=\"=?EUC-JP?Q?=B7=DD=BD=D13=2Epng?=\"",
       "",
       "",
       "image/png",
@@ -1645,7 +1411,7 @@ TEST(NetUtilTest, GenerateFileName) {
     { // The following two have invalid CD headers and filenames come from the
       // URL.
       "http://www.example.com/test%20123",
-      "Content-Dispostion: attachment; filename==?iiso88591?Q?caf=EG?=",
+      "attachment; filename==?iiso88591?Q?caf=EG?=",
       "",
       "",
       "image/jpeg",
@@ -1654,7 +1420,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.google.com/%EC%98%88%EC%88%A0%20%EC%98%88%EC%88%A0.jpg",
-      "Content-Dispostion: malformed_disposition",
+      "malformed_disposition",
       "",
       "",
       "image/jpeg",
@@ -1663,7 +1429,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Invalid C-D. No filename from URL. Falls back to 'download'.
       "http://www.google.com/path1/path2/",
-      "Content-Dispostion: attachment; filename==?iso88591?Q?caf=E3?",
+      "attachment; filename==?iso88591?Q?caf=E3?",
       "",
       "",
       "image/jpeg",
@@ -1706,7 +1472,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Disposition has relative paths, remove directory separators
       "http://www.evil.com/my_download.txt",
-      "Content-Dispostion: filename=../../../../././../a_file_name.txt",
+      "filename=../../../../././../a_file_name.txt",
       "",
       "",
       "text/plain",
@@ -1715,7 +1481,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Disposition has parent directories, remove directory separators
       "http://www.evil.com/my_download.txt",
-      "Content-Dispostion: filename=dir1/dir2/a_file_name.txt",
+      "filename=dir1/dir2/a_file_name.txt",
       "",
       "",
       "text/plain",
@@ -1724,7 +1490,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Disposition has relative paths, remove directory separators
       "http://www.evil.com/my_download.txt",
-      "Content-Dispostion: filename=..\\..\\..\\..\\.\\.\\..\\a_file_name.txt",
+      "filename=..\\..\\..\\..\\.\\.\\..\\a_file_name.txt",
       "",
       "",
       "text/plain",
@@ -1733,7 +1499,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Disposition has parent directories, remove directory separators
       "http://www.evil.com/my_download.txt",
-      "Content-Dispostion: filename=dir1\\dir2\\a_file_name.txt",
+      "filename=dir1\\dir2\\a_file_name.txt",
       "",
       "",
       "text/plain",
@@ -1751,7 +1517,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Filename looks like HTML?
       "http://www.evil.com/get/malware/here",
-      "Content-Disposition: filename=\"<blink>Hello kitty</blink>\"",
+      "filename=\"<blink>Hello kitty</blink>\"",
       "",
       "",
       "text/plain",
@@ -1769,7 +1535,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Extension generation
       "http://www.example.com/my-cat",
-      "Content-Disposition: filename=my-cat",
+      "filename=my-cat",
       "",
       "",
       "image/jpeg",
@@ -1778,7 +1544,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/my-cat",
-      "Content-Dispostion: filename=my-cat",
+      "filename=my-cat",
       "",
       "",
       "text/plain",
@@ -1787,7 +1553,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/my-cat",
-      "Content-Dispostion: filename=my-cat",
+      "filename=my-cat",
       "",
       "",
       "text/html",
@@ -1796,7 +1562,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Unknown MIME type
       "http://www.example.com/my-cat",
-      "Content-Dispostion: filename=my-cat",
+      "filename=my-cat",
       "",
       "",
       "dance/party",
@@ -1805,7 +1571,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/my-cat.jpg",
-      "Content-Dispostion: filename=my-cat.jpg",
+      "filename=my-cat.jpg",
       "",
       "",
       "text/plain",
@@ -1816,7 +1582,7 @@ TEST(NetUtilTest, GenerateFileName) {
 #if defined(OS_WIN)
     {
       "http://www.goodguy.com/evil.exe",
-      "Content-Dispostion: filename=evil.exe",
+      "filename=evil.exe",
       "",
       "",
       "image/jpeg",
@@ -1825,7 +1591,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/ok.exe",
-      "Content-Dispostion: filename=ok.exe",
+      "filename=ok.exe",
       "",
       "",
       "binary/octet-stream",
@@ -1834,7 +1600,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/evil.dll",
-      "Content-Dispostion: filename=evil.dll",
+      "filename=evil.dll",
       "",
       "",
       "dance/party",
@@ -1843,7 +1609,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/evil.exe",
-      "Content-Dispostion: filename=evil",
+      "filename=evil",
       "",
       "",
       "application/rss+xml",
@@ -1853,16 +1619,16 @@ TEST(NetUtilTest, GenerateFileName) {
     // Test truncation of trailing dots and spaces
     {
       "http://www.goodguy.com/evil.exe ",
-      "Content-Dispostion: filename=evil.exe ",
+      "filename=evil.exe ",
       "",
       "",
       "binary/octet-stream",
       L"download",
-      L"evil.exe-"
+      L"evil.exe"
     },
     {
       "http://www.goodguy.com/evil.exe.",
-      "Content-Dispostion: filename=evil.exe.",
+      "filename=evil.exe.",
       "",
       "",
       "binary/octet-stream",
@@ -1871,7 +1637,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/evil.exe.  .  .",
-      "Content-Dispostion: filename=evil.exe.  .  .",
+      "filename=evil.exe.  .  .",
       "",
       "",
       "binary/octet-stream",
@@ -1880,7 +1646,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/evil.",
-      "Content-Dispostion: filename=evil.",
+      "filename=evil.",
       "",
       "",
       "binary/octet-stream",
@@ -1889,7 +1655,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/. . . . .",
-      "Content-Dispostion: filename=. . . . .",
+      "filename=. . . . .",
       "",
       "",
       "binary/octet-stream",
@@ -1908,7 +1674,7 @@ TEST(NetUtilTest, GenerateFileName) {
 #endif  // OS_WIN
     {
       "http://www.goodguy.com/utils.js",
-      "Content-Dispostion: filename=utils.js",
+      "filename=utils.js",
       "",
       "",
       "application/x-javascript",
@@ -1917,7 +1683,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/contacts.js",
-      "Content-Dispostion: filename=contacts.js",
+      "filename=contacts.js",
       "",
       "",
       "application/json",
@@ -1926,7 +1692,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/utils.js",
-      "Content-Dispostion: filename=utils.js",
+      "filename=utils.js",
       "",
       "",
       "text/javascript",
@@ -1935,7 +1701,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/utils.js",
-      "Content-Dispostion: filename=utils.js",
+      "filename=utils.js",
       "",
       "",
       "text/javascript;version=2",
@@ -1944,7 +1710,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/utils.js",
-      "Content-Dispostion: filename=utils.js",
+      "filename=utils.js",
       "",
       "",
       "application/ecmascript",
@@ -1953,7 +1719,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/utils.js",
-     "Content-Dispostion: filename=utils.js",
+     "filename=utils.js",
      "",
      "",
      "application/ecmascript;version=4",
@@ -1962,7 +1728,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/program.exe",
-      "Content-Dispostion: filename=program.exe",
+      "filename=program.exe",
       "",
       "",
       "application/foo-bar",
@@ -1971,7 +1737,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/../foo.txt",
-      "Content-Dispostion: filename=../foo.txt",
+      "filename=../foo.txt",
       "",
       "",
       "text/plain",
@@ -1980,7 +1746,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/..\\foo.txt",
-      "Content-Dispostion: filename=..\\foo.txt",
+      "filename=..\\foo.txt",
       "",
       "",
       "text/plain",
@@ -1989,7 +1755,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/.hidden",
-      "Content-Dispostion: filename=.hidden",
+      "filename=.hidden",
       "",
       "",
       "text/plain",
@@ -1998,7 +1764,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/trailing.",
-      "Content-Disposition: filename=trailing.",
+      "filename=trailing.",
       "",
       "",
       "dance/party",
@@ -2011,7 +1777,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/trailing.",
-      "Content-Disposition: filename=trailing.",
+      "filename=trailing.",
       "",
       "",
       "text/plain",
@@ -2024,7 +1790,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/.",
-      "Content-Dispostion: filename=.",
+      "filename=.",
       "",
       "",
       "dance/party",
@@ -2033,7 +1799,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/..",
-      "Content-Dispostion: filename=..",
+      "filename=..",
       "",
       "",
       "dance/party",
@@ -2042,7 +1808,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/...",
-      "Content-Dispostion: filename=...",
+      "filename=...",
       "",
       "",
       "dance/party",
@@ -2051,7 +1817,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Note that this one doesn't have "filename=" on it.
       "http://www.evil.com/",
-      "Content-Dispostion: a_file_name.txt",
+      "a_file_name.txt",
       "",
       "",
       "image/jpeg",
@@ -2060,7 +1826,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.evil.com/",
-      "Content-Dispostion: filename=",
+      "filename=",
       "",
       "",
       "image/jpeg",
@@ -2069,7 +1835,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/simple",
-      "Content-Dispostion: filename=simple",
+      "filename=simple",
       "",
       "",
       "application/octet-stream",
@@ -2079,7 +1845,7 @@ TEST(NetUtilTest, GenerateFileName) {
     // Reserved words on Windows
     {
       "http://www.goodguy.com/COM1",
-      "Content-Dispostion: filename=COM1",
+      "filename=COM1",
       "",
       "",
       "application/foo-bar",
@@ -2092,7 +1858,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/COM4.txt",
-      "Content-Dispostion: filename=COM4.txt",
+      "filename=COM4.txt",
       "",
       "",
       "text/plain",
@@ -2105,7 +1871,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/lpt1.TXT",
-      "Content-Dispostion: filename=lpt1.TXT",
+      "filename=lpt1.TXT",
       "",
       "",
       "text/plain",
@@ -2118,7 +1884,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/clock$.txt",
-      "Content-Dispostion: filename=clock$.txt",
+      "filename=clock$.txt",
       "",
       "",
       "text/plain",
@@ -2131,7 +1897,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // Validation should also apply to sugested name
       "http://www.goodguy.com/blah$.txt",
-      "Content-Dispostion: filename=clock$.txt",
+      "filename=clock$.txt",
       "",
       "clock$.txt",
       "text/plain",
@@ -2144,7 +1910,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.goodguy.com/mycom1.foo",
-      "Content-Dispostion: filename=mycom1.foo",
+      "filename=mycom1.foo",
       "",
       "",
       "text/plain",
@@ -2153,7 +1919,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.badguy.com/Setup.exe.local",
-      "Content-Dispostion: filename=Setup.exe.local",
+      "filename=Setup.exe.local",
       "",
       "",
       "application/foo-bar",
@@ -2179,7 +1945,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.badguy.com/Setup.exe.lnk",
-      "Content-Dispostion: filename=Setup.exe.lnk",
+      "filename=Setup.exe.lnk",
       "",
       "",
       "application/foo-bar",
@@ -2192,7 +1958,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.badguy.com/Desktop.ini",
-      "Content-Dispostion: filename=Desktop.ini",
+      "filename=Desktop.ini",
       "",
       "",
       "application/foo-bar",
@@ -2205,7 +1971,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.badguy.com/Thumbs.db",
-      "Content-Dispostion: filename=Thumbs.db",
+      "filename=Thumbs.db",
       "",
       "",
       "application/foo-bar",
@@ -2218,7 +1984,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.hotmail.com",
-      "Content-Dispostion: filename=source.jpg",
+      "filename=source.jpg",
       "",
       "",
       "application/x-javascript",
@@ -2227,7 +1993,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // http://crbug.com/5772.
       "http://www.example.com/foo.tar.gz",
-      "Content-Dispostion: ",
+      "",
       "",
       "",
       "application/x-tar",
@@ -2236,7 +2002,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // http://crbug.com/52250.
       "http://www.example.com/foo.tgz",
-      "Content-Dispostion: ",
+      "",
       "",
       "",
       "application/x-tar",
@@ -2245,7 +2011,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // http://crbug.com/7337.
       "http://maged.lordaeron.org/blank.reg",
-      "Content-Dispostion: ",
+      "",
       "",
       "",
       "text/x-registry",
@@ -2254,7 +2020,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     {
       "http://www.example.com/bar.tar",
-      "Content-Dispostion: ",
+      "",
       "",
       "",
       "application/x-tar",
@@ -2272,7 +2038,7 @@ TEST(NetUtilTest, GenerateFileName) {
     },
     { // http://crbug.com/20337
       "http://www.example.com/.download.txt",
-      "Content-Dispostion: filename=.download.txt",
+      "filename=.download.txt",
       "",
       "",
       "text/plain",
@@ -2288,6 +2054,33 @@ TEST(NetUtilTest, GenerateFileName) {
       L"download",
       L"bar.sh"
     },
+    { // http://crbug.com/61571
+      "http://www.example.com/npdf.php?fn=foobar.pdf",
+      "",
+      "",
+      "",
+      "text/plain",
+      L"download",
+      L"npdf" TXT_EXT
+    },
+    { // Shouldn't overwrite C-D specified extension.
+      "http://www.example.com/npdf.php?fn=foobar.pdf",
+      "filename=foobar.jpg",
+      "",
+      "",
+      "text/plain",
+      L"download",
+      L"foobar.jpg"
+    },
+    { // http://crbug.com/87719
+      "http://www.example.com/image.aspx?id=blargh",
+      "",
+      "",
+      "",
+      "image/jpeg",
+      L"download",
+      L"image" JPEG_EXT
+    }
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(selection_tests); ++i)
@@ -3185,12 +2978,12 @@ TEST(NetUtilTest, SetExplicitlyAllowedPortsTest) {
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(invalid); ++i) {
     SetExplicitlyAllowedPorts(invalid[i]);
-    EXPECT_EQ(0, static_cast<int>(explicitly_allowed_ports.size()));
+    EXPECT_EQ(0, static_cast<int>(GetCountOfExplicitlyAllowedPorts()));
   }
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(valid); ++i) {
     SetExplicitlyAllowedPorts(valid[i]);
-    EXPECT_EQ(i, explicitly_allowed_ports.size());
+    EXPECT_EQ(i, GetCountOfExplicitlyAllowedPorts());
   }
 }
 

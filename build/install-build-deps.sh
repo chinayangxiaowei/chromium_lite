@@ -14,6 +14,8 @@ usage() {
   echo "--[no-]syms: enable or disable installation of debugging symbols"
   echo "--[no-]gold: enable or disable installation of gold linker"
   echo "--[no-]lib32: enable or disable installation of 32 bit libraries"
+  echo "--[no-]restore-usr-bin-ld: enable or disable restoring /usr/bin/ld to"
+  echo "                           ld.bfd if it is currently gold"
   echo "Script will prompt interactively if options not given."
   exit 1
 }
@@ -21,12 +23,14 @@ usage() {
 while test "$1" != ""
 do
   case "$1" in
-  --syms)     do_inst_syms=1;;
-  --no-syms)  do_inst_syms=0;;
-  --gold)     do_inst_gold=1;;
-  --no-gold)  do_inst_gold=0;;
-  --lib32)    do_inst_lib32=1;;
-  --no-lib32) do_inst_lib32=0;;
+  --syms)                   do_inst_syms=1;;
+  --no-syms)                do_inst_syms=0;;
+  --gold)                   do_inst_gold=1;;
+  --no-gold)                do_inst_gold=0;;
+  --lib32)                  do_inst_lib32=1;;
+  --no-lib32)               do_inst_lib32=0;;
+  --restore-usr-bin-ld)     do_restore_usr_bin_ld=1;;
+  --no-restore-usr-bin-ld)  do_restore_usr_bin_ld=0;;
   *) usage;;
   esac
   shift
@@ -59,29 +63,26 @@ install_gold() {
 
   tar -xjvf $BINUTILS.tar.bz2
   cd $BINUTILS
-  ./configure --prefix=/usr/local/gold --enable-gold --enable-threads
-  make maybe-all-binutils maybe-all-gold -j4
-  if sudo make maybe-install-binutils maybe-install-gold
+  ./configure --prefix=/usr/local/gold --enable-gold=default --enable-threads \
+    --enable-bfd=yes
+  NCPU=`cat /proc/cpuinfo |grep ^processor|wc -l`
+  make maybe-all-binutils maybe-all-gold maybe-all-ld -j${NCPU}
+  if sudo make maybe-install-binutils maybe-install-gold maybe-install-ld
   then
     # Still need to figure out graceful way of pointing gyp to use
     # /usr/local/gold/bin/ld without requiring him to set environment
-    # variables.  That will go into bootstrap-linux.sh when it's ready.
-    echo "Installing gold as /usr/bin/ld."
-    echo "To uninstall, do 'cd /usr/bin; sudo rm ld; sudo mv ld.orig ld'"
-    test -f /usr/bin/ld && test ! -f /usr/bin/ld.orig && \
-        sudo mv /usr/bin/ld /usr/bin/ld.orig
-    sudo strip /usr/local/gold/bin/ld
-    sudo ln -fs /usr/local/gold/bin/ld /usr/bin/ld.gold
-    sudo ln -fs /usr/bin/ld.gold /usr/bin/ld
+    # variables.
+    sudo strip /usr/local/gold/bin/ld.gold
+    sudo strip /usr/local/gold/bin/ld.bfd
   else
     echo "make install failed, not installing gold"
   fi
 }
 
 if ! egrep -q \
-    'Ubuntu (10\.04|10\.10|11\.04|lucid|maverick|natty)' \
+    'Ubuntu (10\.04|10\.10|11\.04|11\.10|lucid|maverick|natty|oneiric)' \
     /etc/issue; then
-  echo "Only Ubuntu 10.04 (lucid) through 11.04 (natty) are currently" \
+  echo "Only Ubuntu 10.04 (lucid) through 11.10 (oneiric) are currently" \
       "supported" >&2
   exit 1
 fi
@@ -101,16 +102,17 @@ fi
 chromeos_dev_list="libpulse-dev"
 
 # Packages need for development
-dev_list="apache2.2-bin bison fakeroot flex g++ gperf language-pack-fr
-          libapache2-mod-php5 libasound2-dev libbz2-dev libcairo2-dev
-          libcups2-dev libdbus-glib-1-dev libelf-dev libgconf2-dev
-          libgl1-mesa-dev libglu1-mesa-dev libglib2.0-dev libgnome-keyring-dev
-          libgtk2.0-dev libjpeg62-dev libkrb5-dev libnspr4-dev libnss3-dev
-          libpam0g-dev libsctp-dev libsqlite3-dev libxslt1-dev libxss-dev
-          libxtst-dev mesa-common-dev msttcorefonts patch perl libwww-perl
-          php5-cgi pkg-config python python-dev rpm subversion ttf-dejavu-core
-          ttf-kochi-gothic ttf-kochi-mincho wdiff ruby libcurl4-gnutls-dev
-          ttf-indic-fonts ttf-thai-tlwg
+dev_list="apache2.2-bin bison curl elfutils fakeroot flex g++ gperf
+          language-pack-fr libapache2-mod-php5 libasound2-dev libbz2-dev
+          libcairo2-dev libcups2-dev libcurl4-gnutls-dev libdbus-glib-1-dev
+          libelf-dev libgconf2-dev libgl1-mesa-dev libglib2.0-dev
+          libglu1-mesa-dev libgnome-keyring-dev libgtk2.0-dev libjpeg62-dev
+          libkrb5-dev libnspr4-dev libnss3-dev libpam0g-dev libsctp-dev
+          libsqlite3-dev libssl-dev libudev-dev libwww-perl libxslt1-dev
+          libxss-dev libxt-dev libxtst-dev mesa-common-dev msttcorefonts patch
+          perl php5-cgi pkg-config python python-cherrypy3 python-dev
+          python-psutil rpm ruby subversion ttf-dejavu-core ttf-indic-fonts
+          ttf-kochi-gothic ttf-kochi-mincho ttf-thai-tlwg wdiff
           $chromeos_dev_list"
 
 # Run-time libraries required by chromeos only
@@ -120,13 +122,13 @@ chromeos_lib_list="libpulse0 libbz2-1.0 libcurl4-gnutls-dev"
 lib_list="libatk1.0-0 libc6 libasound2 libcairo2 libcups2 libdbus-glib-1-2
           libexpat1 libfontconfig1 libfreetype6 libglib2.0-0 libgnome-keyring0
           libgtk2.0-0 libpam0g libpango1.0-0 libpcre3 libpixman-1-0
-          libpng12-0 libstdc++6 libsqlite3-0 libx11-6 libxau6 libxcb1
+          libpng12-0 libstdc++6 libsqlite3-0 libudev0 libx11-6 libxau6 libxcb1
           libxcomposite1 libxcursor1 libxdamage1 libxdmcp6 libxext6 libxfixes3
           libxi6 libxinerama1 libxrandr2 libxrender1 libxtst6 zlib1g
           $chromeos_lib_list"
 
 # Debugging symbols for all of the run-time libraries
-dbg_list="libatk1.0-dbg libc6-dbg libcairo2-dbg
+dbg_list="libatk1.0-dbg libc6-dbg libcairo2-dbg libdbus-glib-1-2-dbg
           libfontconfig1-dbg libglib2.0-0-dbg libgtk2.0-0-dbg
           libpango1.0-0-dbg libpcre3-dbg libpixman-1-0-dbg
           libsqlite3-0-dbg
@@ -252,32 +254,73 @@ fi
 # So install from source if we don't have a good version.
 
 case `ld --version` in
-*gold*2.2[1-9].*) ;;
-* )
+*gold*2.2[1-9].*)
+  echo "*** Warning ***"
+  echo "If the default linker is gold, linking may fail for:"
+  echo "the Linux kernel, kernel modules, Valgrind, and Wine."
+  echo "If you previously installed gold as the default linker,"
+  echo "you can restore the original linker by running:"
+  echo "'cd /usr/bin; sudo rm ld; sudo mv ld.orig ld'"
+  echo
+  if [ "$do_restore_usr_bin_ld" = "" ]
+  then
+    echo -n "Restore /usr/bin/ld to the original linker? (Y/n) "
+    if yes_no 0
+    then
+      do_restore_usr_bin_ld=1
+    fi
+    echo
+  fi
+  if [ "$do_restore_usr_bin_ld" = "1" ]
+  then
+    if sudo mv /usr/bin/ld.orig /usr/bin/ld
+    then
+      echo "Restored /usr/bin/ld.orig as /usr/bin/ld"
+    else
+      echo "Failed to restore /usr/bin/ld.orig as /usr/bin/ld"
+    fi
+    echo
+  fi
+  ;;
+esac
+
+# Check the gold version first.
+gold_up_to_date="1"
+if [ -x "/usr/local/gold/bin/ld" ]
+then
+  case `/usr/local/gold/bin/ld --version` in
+  *gold*2.2[1-9].*) ;;
+  * )
+    gold_up_to_date="0"
+  esac
+fi
+
+# Then check and make sure ld.bfd exists.
+if [ "$gold_up_to_date" = "1" ] && [ ! -x "/usr/local/gold/bin/ld.bfd" ]
+then
+  gold_up_to_date="0"
+fi
+
+if [ "$gold_up_to_date" = "0" ]
+then
   if test "$do_inst_gold" = ""
   then
-    echo "Gold is a new linker that links Chrome 5x faster than ld."
-    echo "Don't use it if you need to link other apps (e.g. valgrind, wine)"
-    echo -n "REPLACE SYSTEM LINKER ld with gold and back up ld? (y/N) "
+    echo "Gold is a new linker that links Chrome 5x faster than GNU ld."
+    echo -n "*** To use the gold linker, "
+    echo "you must pass -B/usr/local/gold/bin/ to g++ ***"
+    echo -n "Install the gold linker? (y/N) "
     if yes_no 1; then
       do_inst_gold=1
     fi
   fi
   if test "$do_inst_gold" = "1"
   then
-    # If the system provides a good version of gold, just install it.
-    if apt-cache show binutils-gold | grep -Eq 'Version: 2.2[1-9].*'; then
-      echo "Installing binutils-gold. Backing up ld as ld.single."
-      sudo apt-get install binutils-gold
-    else
-      # FIXME: avoid installing as /usr/bin/ld
-      echo "Building binutils. Backing up ld as ld.orig."
-      install_gold || exit 99
-    fi
+    echo "Building binutils with gold..."
+    install_gold || exit 99
   else
     echo "Not installing gold."
   fi
-esac
+fi
 
 # Install 32bit backwards compatibility support for 64bit systems
 if [ "$(uname -m)" = "x86_64" ]; then
@@ -295,8 +338,8 @@ if [ "$(uname -m)" = "x86_64" ]; then
     echo "/usr/lib/debug/usr/lib32. If you ever need to uninstall these files,"
     echo "look for packages named *-ia32.deb."
     echo "Do you want me to download all packages needed to build new 32bit"
-    echo -n "package files (Y/n) "
-    if yes_no 0; then
+    echo -n "package files (y/N) "
+    if yes_no 1; then
       do_inst_lib32=1
     fi
   fi
@@ -308,8 +351,13 @@ if [ "$(uname -m)" = "x86_64" ]; then
 
   # Standard 32bit compatibility libraries
   echo "First, installing the limited existing 32-bit support..."
-  cmp_list="ia32-libs lib32asound2-dev lib32readline5-dev lib32stdc++6 lib32z1
+  cmp_list="ia32-libs lib32asound2-dev lib32stdc++6 lib32z1
             lib32z1-dev libc6-dev-i386 libc6-i386 g++-multilib"
+  if [ -n "`apt-cache search lib32readline-gplv2-dev 2>/dev/null`" ]; then
+    cmp_list="${cmp_list} lib32readline-gplv2-dev"
+  else
+    cmp_list="${cmp_list} lib32readline5-dev"
+  fi
   sudo apt-get install $cmp_list
 
   tmp=/tmp/install-32bit.$$

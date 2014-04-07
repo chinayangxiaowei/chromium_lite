@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_P2P_SOCKET_HOST_UDP_H_
 #define CONTENT_BROWSER_RENDERER_HOST_P2P_SOCKET_HOST_UDP_H_
 
+#include <deque>
 #include <set>
 #include <vector>
 
@@ -13,13 +14,14 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "content/browser/renderer_host/p2p/socket_host.h"
+#include "content/common/content_export.h"
 #include "content/common/p2p_sockets.h"
 #include "net/base/ip_endpoint.h"
 #include "net/udp/udp_server_socket.h"
 
 namespace content {
 
-class P2PSocketHostUdp : public P2PSocketHost {
+class CONTENT_EXPORT P2PSocketHostUdp : public P2PSocketHost {
  public:
   P2PSocketHostUdp(IPC::Message::Sender* message_sender,
                    int routing_id, int id);
@@ -38,8 +40,17 @@ class P2PSocketHostUdp : public P2PSocketHost {
 
   typedef std::set<net::IPEndPoint> ConnectedPeerSet;
 
+  struct PendingPacket {
+    PendingPacket(const net::IPEndPoint& to, const std::vector<char>& content);
+    ~PendingPacket();
+    net::IPEndPoint to;
+    scoped_refptr<net::IOBuffer> data;
+    int size;
+  };
+
   void OnError();
   void DoRead();
+  void DoSend(const PendingPacket& packet);
   void DidCompleteRead(int result);
 
   // Callbacks for RecvFrom() and SendTo().
@@ -49,14 +60,14 @@ class P2PSocketHostUdp : public P2PSocketHost {
   scoped_ptr<net::DatagramServerSocket> socket_;
   scoped_refptr<net::IOBuffer> recv_buffer_;
   net::IPEndPoint recv_address_;
+
+  std::deque<PendingPacket> send_queue_;
+  int send_queue_bytes_;
   bool send_pending_;
 
   // Set of peer for which we have received STUN binding request or
   // response or relay allocation request or response.
   ConnectedPeerSet connected_peers_;
-
-  net::CompletionCallbackImpl<P2PSocketHostUdp> recv_callback_;
-  net::CompletionCallbackImpl<P2PSocketHostUdp> send_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(P2PSocketHostUdp);
 };

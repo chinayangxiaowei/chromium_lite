@@ -50,8 +50,8 @@ static void ProcessReply(XPointer thread,
   if (data->category == XRecordFromServer) {
     xEvent* event = reinterpret_cast<xEvent*>(data->data);
     if (event->u.u.type == MotionNotify) {
-      gfx::Point pos(event->u.keyButtonPointer.rootX,
-                     event->u.keyButtonPointer.rootY);
+      SkIPoint pos(SkIPoint::Make(event->u.keyButtonPointer.rootX,
+                                  event->u.keyButtonPointer.rootY));
       reinterpret_cast<LocalInputMonitorThread*>(thread)->LocalMouseMoved(pos);
     } else {
       reinterpret_cast<LocalInputMonitorThread*>(thread)->LocalKeyPressed(
@@ -162,7 +162,7 @@ void LocalInputMonitorThread::Run() {
   display_ = NULL;
 }
 
-void LocalInputMonitorThread::LocalMouseMoved(const gfx::Point& pos) {
+void LocalInputMonitorThread::LocalMouseMoved(const SkIPoint& pos) {
   host_->LocalMouseMoved(pos);
 }
 
@@ -173,7 +173,7 @@ void LocalInputMonitorThread::LocalKeyPressed(int key_code, bool down) {
   } else if (key_sym == XK_Alt_L || key_sym == XK_Alt_R) {
     alt_pressed_ = down;
   } else if (alt_pressed_ && ctrl_pressed_ && key_sym == XK_Escape && down) {
-    host_->Shutdown(NULL);
+    host_->Shutdown(base::Closure());
   }
 }
 

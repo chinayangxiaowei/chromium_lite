@@ -28,17 +28,17 @@ class ContentDescription : public cricket::ContentDescription {
  public:
   static const char kChromotingContentName[];
 
-  ContentDescription(const CandidateSessionConfig* config,
-                     const std::string& auth_token,
-                     const std::string& certificate);
+  ContentDescription(scoped_ptr<CandidateSessionConfig> config,
+                     scoped_ptr<buzz::XmlElement> authenticator_message);
   virtual ~ContentDescription();
 
   const CandidateSessionConfig* config() const {
     return candidate_config_.get();
   }
 
-  const std::string& auth_token() const { return auth_token_; }
-  const std::string& certificate() const { return certificate_; }
+  const buzz::XmlElement* authenticator_message() const {
+    return authenticator_message_.get();
+  }
 
   buzz::XmlElement* ToXml() const;
 
@@ -46,12 +46,7 @@ class ContentDescription : public cricket::ContentDescription {
 
  private:
   scoped_ptr<const CandidateSessionConfig> candidate_config_;
-
-  // This may contain the initiating, or the accepting token depending on
-  // context.
-  std::string auth_token_;
-
-  std::string certificate_;
+  scoped_ptr<const buzz::XmlElement> authenticator_message_;
 };
 
 }  // namespace protocol

@@ -121,9 +121,9 @@ ChangeReorderBuffer::ChangeReorderBuffer() {
 ChangeReorderBuffer::~ChangeReorderBuffer() {
 }
 
-void ChangeReorderBuffer::GetAllChangesInTreeOrder(
+bool ChangeReorderBuffer::GetAllChangesInTreeOrder(
     const BaseTransaction* sync_trans,
-    vector<ChangeRecord>* changelist) {
+    ImmutableChangeRecordList* changes) {
   syncable::BaseTransaction* trans = sync_trans->GetWrappedTrans();
 
   // Step 1: Iterate through the operations, doing three things:
@@ -132,6 +132,8 @@ void ChangeReorderBuffer::GetAllChangesInTreeOrder(
   // (c) Construct a set of all parent nodes of any position changes.
   set<int64> parents_of_position_changes;
   Traversal traversal;
+
+  ChangeRecordList changelist;
 
   OperationMap::const_iterator i;
   for (i = operations_.begin(); i != operations_.end(); ++i) {
@@ -143,7 +145,7 @@ void ChangeReorderBuffer::GetAllChangesInTreeOrder(
         record.specifics = specifics_[record.id];
       if (extra_data_.find(record.id) != extra_data_.end())
         record.extra = extra_data_[record.id];
-      changelist->push_back(record);
+      changelist.push_back(record);
     } else {
       traversal.ExpandToInclude(trans, i->first);
       if (i->second == OP_ADD ||
@@ -181,7 +183,7 @@ void ChangeReorderBuffer::GetAllChangesInTreeOrder(
         record.specifics = specifics_[record.id];
       if (extra_data_.find(record.id) != extra_data_.end())
         record.extra = extra_data_[record.id];
-      changelist->push_back(record);
+      changelist.push_back(record);
     }
 
     // Now add the children of |next| to |to_visit|.
@@ -199,8 +201,12 @@ void ChangeReorderBuffer::GetAllChangesInTreeOrder(
       // There were ordering changes on the children of this parent, so
       // enumerate all the children in the sibling order.
       syncable::Entry parent(trans, syncable::GET_BY_HANDLE, next);
-      syncable::Id id = trans->directory()->
-          GetFirstChildId(trans, parent.Get(syncable::ID));
+      syncable::Id id;
+      if (!trans->directory()->GetFirstChildId(
+              trans, parent.Get(syncable::ID), &id)) {
+        *changes = ImmutableChangeRecordList();
+        return false;
+      }
       while (!id.IsRoot()) {
         syncable::Entry child(trans, syncable::GET_BY_ID, id);
         CHECK(child.good());
@@ -215,6 +221,9 @@ void ChangeReorderBuffer::GetAllChangesInTreeOrder(
       }
     }
   }
+
+  *changes = ImmutableChangeRecordList(&changelist);
+  return true;
 }
 
 }  // namespace sync_api

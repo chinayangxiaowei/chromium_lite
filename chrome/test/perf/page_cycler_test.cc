@@ -9,6 +9,7 @@
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/string_number_conversions.h"
+#include "base/string_piece.h"
 #include "base/sys_string_conversions.h"
 #include "base/test/test_timeouts.h"
 #include "base/utf_string_conversions.h"
@@ -20,6 +21,7 @@
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/base/chrome_process_util.h"
 #include "chrome/test/base/test_switches.h"
+#include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/ui_perf_test.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
@@ -197,6 +199,11 @@ class PageCyclerTest : public UIPerfTest {
     pages->assign(UTF8ToWide(cookie));
     ASSERT_FALSE(pages->empty());
 
+    // Wait for the report.html to be loaded.
+    ASSERT_TRUE(WaitUntilCookieValue(
+        tab.get(), test_url, "__navigated_to_report",
+        TestTimeouts::action_max_timeout_ms(), "1"));
+
     // Get the timing cookie value from the DOM automation.
     std::wstring wcookie;
     ASSERT_TRUE(tab->ExecuteAndExtractString(L"",
@@ -235,16 +242,16 @@ class PageCyclerTest : public UIPerfTest {
     if (!print_times_only_) {
       PrintMemoryUsageInfo(suffix);
       PrintIOPerfInfo(suffix);
-      PrintSystemCommitCharge(suffix, stop_size - start_size,
-                              false /* not important */);
+      perf_test::PrintSystemCommitCharge(suffix, stop_size - start_size,
+                                         false /* not important */);
     }
 
     std::string trace_name = "t" + std::string(suffix);
 
     printf("Pages: [%s]\n", base::SysWideToNativeMB(pages).c_str());
 
-    PrintResultList(graph, "", trace_name, timings, "ms",
-                    true /* important */);
+    perf_test::PrintResultList(graph, "", trace_name, timings, "ms",
+                               true /* important */);
   }
 
   void RunTest(const char* graph, const char* name, bool use_http) {
@@ -326,8 +333,8 @@ static bool HasDatabaseErrors(const std::string timings) {
     new_pos = timings.find(',', pos);
     if (new_pos == std::string::npos)
       new_pos = timings.length();
-    if (!base::StringToInt(timings.begin() + pos,
-                           timings.begin() + new_pos,
+    if (!base::StringToInt(base::StringPiece(timings.begin() + pos,
+                                             timings.begin() + new_pos),
                            &time)) {
       LOG(ERROR) << "Invalid time reported: " << time_str;
       return true;
@@ -442,20 +449,18 @@ TEST_F(PageCyclerReferenceTest, name) { \
 
 // This macro simplifies setting up regular and reference build tests
 // for HTML5 database tests.
-// FLAKY http://crbug.com/67918
 #define PAGE_CYCLER_DATABASE_TESTS(test, name) \
-TEST_F(PageCyclerDatabaseTest, FLAKY_Database##name##File) { \
+TEST_F(PageCyclerDatabaseTest, Database##name##File) { \
   RunTest(test, test, false); \
 } \
-TEST_F(PageCyclerDatabaseReferenceTest, FLAKY_Database##name##File) { \
+TEST_F(PageCyclerDatabaseReferenceTest, Database##name##File) { \
   RunTest(test, test, false); \
 }
 
 // This macro simplifies setting up regular and reference build tests
 // for HTML5 Indexed DB tests.
-// FLAKY http://crbug.com/67918
 #define PAGE_CYCLER_IDB_TESTS(test, name) \
-TEST_F(PageCyclerIndexedDatabaseTest, FLAKY_IndexedDB##name##File) { \
+TEST_F(PageCyclerIndexedDatabaseTest, IndexedDB##name##File) { \
   RunTest(test, test, false); \
 } \
 TEST_F(PageCyclerIndexedDatabaseReferenceTest, IndexedDB##name##File) { \

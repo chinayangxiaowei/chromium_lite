@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #define CHROME_BROWSER_AUTOMATION_TESTING_AUTOMATION_PROVIDER_H_
 #pragma once
 
+#include <map>
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -17,22 +19,34 @@
 #include "chrome/browser/importer/importer_list_observer.h"
 #include "chrome/browser/sync/profile_sync_service_harness.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/page_type.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/common/page_type.h"
+#include "content/public/common/security_style.h"
+#include "net/base/cert_status_flags.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
 
+#if defined(OS_CHROMEOS)
+// TODO(sque): move to a ChromeOS-specific class. See crosbug.com/22081.
+class PowerManagerClientObserverForTesting;
+#endif  // defined(OS_CHROMEOS)
+
+class AutofillProfile;
+class CreditCard;
 class ImporterList;
-class TemplateURLService;
 
 namespace base {
 class DictionaryValue;
+}
+
+namespace webkit {
+struct WebPluginInfo;
 }
 
 // This is an automation provider containing testing calls.
 class TestingAutomationProvider : public AutomationProvider,
                                   public BrowserList::Observer,
                                   public importer::ImporterListObserver,
-                                  public NotificationObserver {
+                                  public content::NotificationObserver {
  public:
   explicit TestingAutomationProvider(Profile* profile);
 
@@ -63,16 +77,19 @@ class TestingAutomationProvider : public AutomationProvider,
   // importer::ImporterListObserver:
   virtual void OnSourceProfilesLoaded() OVERRIDE;
 
-  // NotificationObserver:
+  // content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // IPC Message callbacks.
   void CloseBrowser(int handle, IPC::Message* reply_message);
   void CloseBrowserAsync(int browser_handle);
   void ActivateTab(int handle, int at_index, int* status);
   void AppendTab(int handle, const GURL& url, IPC::Message* reply_message);
+  void AppendBackgroundTab(int handle, const GURL& url,
+                           IPC::Message* reply_message);
+  void GetMachPortCount(int* port_count);
   void GetActiveTabIndex(int handle, int* active_tab_index);
   void CloseTab(int tab_handle, bool wait_until_closed,
                 IPC::Message* reply_message);
@@ -196,12 +213,14 @@ class TestingAutomationProvider : public AutomationProvider,
   void WaitForTabToBeRestored(int tab_handle, IPC::Message* reply_message);
 
   // Gets the security state for the tab associated to the specified |handle|.
-  void GetSecurityState(int handle, bool* success,
-                        SecurityStyle* security_style, int* ssl_cert_status,
+  void GetSecurityState(int handle,
+                        bool* success,
+                        content::SecurityStyle* security_style,
+                        net::CertStatus* ssl_cert_status,
                         int* insecure_content_status);
 
   // Gets the page type for the tab associated to the specified |handle|.
-  void GetPageType(int handle, bool* success, PageType* page_type);
+  void GetPageType(int handle, bool* success, content::PageType* page_type);
 
   // Gets the duration in ms of the last event matching |event_name|.
   // |duration_ms| is -1 if the event hasn't occurred yet.
@@ -244,11 +263,12 @@ class TestingAutomationProvider : public AutomationProvider,
   void HandleFindWindowLocationRequest(int handle, int* x, int* y);
 
   // Get the visibility state of the Bookmark bar.
-  void GetBookmarkBarVisibility(int handle, bool* visible, bool* animating);
+  void GetBookmarkBarVisibility(
+      int handle, bool* visible, bool* animating, bool* detached);
 
   // Get the bookmarks as a JSON string.
   void GetBookmarksAsJSON(int handle, std::string* bookmarks_as_json,
-                          bool *success);
+                          bool* success);
 
   // Wait for the bookmark model to load.
   void WaitForBookmarkModelToLoad(int handle, IPC::Message* reply_message);
@@ -371,11 +391,11 @@ class TestingAutomationProvider : public AutomationProvider,
                            base::DictionaryValue* args,
                            IPC::Message* reply_message);
 
-  // Get info about infobars in the given TabContents object.
+  // Get info about infobars in the given WebContents object.
   // This includes info about the type of infobars, the message text,
   // buttons, etc.
   // Caller owns the returned object.
-  ListValue* GetInfobarsInfo(TabContents* tc);
+  ListValue* GetInfobarsInfo(content::WebContents* tc);
 
   // Perform actions on an infobar like dismiss, accept, cancel.
   // Uses the JSON interface for input/output.
@@ -383,10 +403,26 @@ class TestingAutomationProvider : public AutomationProvider,
                               base::DictionaryValue* args,
                               IPC::Message* reply_message);
 
+  // Create a new profile and open a new browser window with this profile. Uses
+  // the JSON interface for input/output.
+  void OpenNewBrowserWindowWithNewProfile(
+      base::DictionaryValue* args,
+      IPC::Message* reply_message);
+
+  // Get info about multi-profile users.
+  // Uses the JSON interface for input/output.
+  void GetMultiProfileInfo(
+      base::DictionaryValue* args,
+      IPC::Message* reply_message);
+
   // Get info about the chromium/chrome in use.
   // This includes things like version, executable name, executable path.
   // Uses the JSON interface for input/output.
   void GetBrowserInfo(base::DictionaryValue* args,
+                      IPC::Message* reply_message);
+
+  // Get info about browser-related processes that currently exist.
+  void GetProcessInfo(base::DictionaryValue* args,
                       IPC::Message* reply_message);
 
   // Get info about the state of navigation in a given tab.
@@ -454,28 +490,36 @@ class TestingAutomationProvider : public AutomationProvider,
                                    base::DictionaryValue* args,
                                    IPC::Message* reply_message);
 
+  // Get ProtectorService state.
+  // Uses the JSON interface for input/output.
+  void GetProtectorState(Browser* browser,
+                         base::DictionaryValue* args,
+                         IPC::Message* reply_message);
+
+  // Perform a given action on the ProtectorService.
+  // Uses the JSON interface for input/output.
+  void PerformProtectorAction(Browser* browser,
+                              base::DictionaryValue* args,
+                              IPC::Message* reply_message);
+
   // Get info about preferences stored in Local State.
   // Uses the JSON interface for input/output.
-  void GetLocalStatePrefsInfo(Browser* browser,
-                              base::DictionaryValue* args,
+  void GetLocalStatePrefsInfo(base::DictionaryValue* args,
                               IPC::Message* reply_message);
 
   // Set local state prefs.
   // Uses the JSON interface for input/output.
-  void SetLocalStatePrefs(Browser* browser,
-                          base::DictionaryValue* args,
+  void SetLocalStatePrefs(base::DictionaryValue* args,
                           IPC::Message* reply_message);
 
   // Get info about preferences.
   // Uses the JSON interface for input/output.
-  void GetPrefsInfo(Browser* browser,
-                    base::DictionaryValue* args,
+  void GetPrefsInfo(base::DictionaryValue* args,
                     IPC::Message* reply_message);
 
   // Set prefs.
   // Uses the JSON interface for input/output.
-  void SetPrefs(Browser* browser,
-                base::DictionaryValue* args,
+  void SetPrefs(base::DictionaryValue* args,
                 IPC::Message* reply_message);
 
   // Return load times of initial tabs.
@@ -492,6 +536,10 @@ class TestingAutomationProvider : public AutomationProvider,
   void GetPluginsInfo(Browser* browser,
                       base::DictionaryValue* args,
                       IPC::Message* reply_message);
+  void GetPluginsInfoCallback(Browser* browser,
+      base::DictionaryValue* args,
+      IPC::Message* reply_message,
+      const std::vector<webkit::WebPluginInfo>& plugins);
 
   // Enable a plugin.
   // Uses the JSON interface for input/output.
@@ -597,25 +645,37 @@ class TestingAutomationProvider : public AutomationProvider,
                     base::DictionaryValue* args,
                     IPC::Message* reply_message);
 
+  // Install the given unpacked/packed extension.
+  // Uses the JSON interface for input/output.
+  void InstallExtension(base::DictionaryValue* args,
+                        IPC::Message* reply_message);
+
   // Get info about all intalled extensions.
   // Uses the JSON interface for input/output.
-  void GetExtensionsInfo(Browser* browser,
-                         base::DictionaryValue* args,
+  void GetExtensionsInfo(base::DictionaryValue* args,
                          IPC::Message* reply_message);
 
   // Uninstalls the extension with the given id.
   // Uses the JSON interface for input/output.
-  void UninstallExtensionById(Browser* browser,
-                              base::DictionaryValue* args,
+  void UninstallExtensionById(base::DictionaryValue* args,
                               IPC::Message* reply_message);
 
   // Set extension states:
   //   Enable/disable extension.
   //   Allow/disallow extension in incognito mode.
   // Uses the JSON interface for input/output.
-  void SetExtensionStateById(Browser* browser,
-                             base::DictionaryValue* args,
+  void SetExtensionStateById(base::DictionaryValue* args,
                              IPC::Message* reply_message);
+
+  // Trigger page action asynchronously in the active tab.
+  // Uses the JSON interface for input/output.
+  void TriggerPageActionById(base::DictionaryValue* args,
+                             IPC::Message* reply_message);
+
+  // Trigger browser action asynchronously in the active tab.
+  // Uses the JSON interface for input/output.
+  void TriggerBrowserActionById(base::DictionaryValue* args,
+                                IPC::Message* reply_message);
 
   // Responds to the Find request and returns the match count.
   void FindInPage(Browser* browser,
@@ -690,9 +750,9 @@ class TestingAutomationProvider : public AutomationProvider,
 
   // Waits for the ongoing sync cycle to complete.
   // Uses the JSON interface for input/output.
-  void AwaitSyncCycleCompletion(Browser* browser,
-                                base::DictionaryValue* args,
-                                IPC::Message* reply_message);
+  void AwaitFullSyncCompletion(Browser* browser,
+                               base::DictionaryValue* args,
+                               IPC::Message* reply_message);
 
   // Waits for sync to reinitialize (for example, after a browser restart).
   // Uses the JSON interface for input/output.
@@ -737,11 +797,11 @@ class TestingAutomationProvider : public AutomationProvider,
   static std::map<AutofillFieldType, std::string>
       GetCreditCardFieldToStringMap();
 
-  // Get a list of active HTML5 notifications.
+  // Get ordered list of all active and queued HTML5 notifications.
   // Uses the JSON interface for input/output.
-  void GetActiveNotifications(Browser* browser,
-                              base::DictionaryValue* args,
-                              IPC::Message* reply_message);
+  void GetAllNotifications(Browser* browser,
+                           base::DictionaryValue* args,
+                           IPC::Message* reply_message);
 
   // Close an active HTML5 notification.
   // Uses the JSON interface for input/output.
@@ -810,29 +870,7 @@ class TestingAutomationProvider : public AutomationProvider,
   // A key press is a combination of a "key down" event and a "key up" event.
   // This function does not wait before returning.
   void SendWebKeyPressEventAsync(int key_code,
-                                 TabContents* tab_contents);
-
-  // Determines whether each relevant section of the NTP is in thumbnail mode.
-  void GetNTPThumbnailMode(Browser* browser,
-                           base::DictionaryValue* args,
-                           IPC::Message* reply_message);
-
-  // Puts or removes the specified section of the NTP into/from thumbnail mode.
-  // If the section is put into thumbnail mode, all other relevant sections are
-  // removed from thumbnail mode.
-  void SetNTPThumbnailMode(Browser* browser,
-                           base::DictionaryValue* args,
-                           IPC::Message* reply_message);
-
-  // Determines whether each relevant section of the NTP is in menu mode.
-  void GetNTPMenuMode(Browser* browser,
-                      base::DictionaryValue* args,
-                      IPC::Message* reply_message);
-
-  // Puts or removes the specified section of the NTP into/from menu mode.
-  void SetNTPMenuMode(Browser* browser,
-                      base::DictionaryValue* args,
-                      IPC::Message* reply_message);
+                                 content::WebContents* web_contents);
 
   // Launches the specified app from the currently-selected tab.
   void LaunchApp(Browser* browser,
@@ -844,9 +882,9 @@ class TestingAutomationProvider : public AutomationProvider,
                         base::DictionaryValue* args,
                         IPC::Message* reply_message);
 
-  // Waits for all tabs to stop loading or a modal dialog to become active.
-  void WaitForAllTabsToStopLoading(base::DictionaryValue* args,
-                                   IPC::Message* reply_message);
+  // Waits for all views to stop loading or a modal dialog to become active.
+  void WaitForAllViewsToStopLoading(base::DictionaryValue* args,
+                                    IPC::Message* reply_message);
 
   // Gets the browser and tab index of the given tab. Uses the JSON interface.
   // Either "tab_id" or "tab_handle" must be specified, but not both. "tab_id"
@@ -861,9 +899,12 @@ class TestingAutomationProvider : public AutomationProvider,
                          IPC::Message* reply_message);
 
   // Navigates to the given URL. Uses the JSON interface.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 3,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "url": "http://www.google.com",
   //            "navigation_count": 1  // number of navigations to wait for
   //          }
@@ -873,9 +914,12 @@ class TestingAutomationProvider : public AutomationProvider,
   // Executes javascript in the specified frame. Uses the JSON interface.
   // Waits for a result from the |DOMAutomationController|. The javascript
   // must send a string.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "frame_xpath": "//frames[1]",
   //            "javascript":
   //                "window.domAutomationController.send(window.name)",
@@ -907,44 +951,52 @@ class TestingAutomationProvider : public AutomationProvider,
       base::DictionaryValue* args, IPC::Message* reply_message);
 
   // Goes forward in the specified tab. Uses the JSON interface.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" }
+  //          }
   //   output: { "did_go_forward": true,                      // optional
   //             "result": AUTOMATION_MSG_NAVIGATION_SUCCESS  // optional
   //           }
   void GoForward(base::DictionaryValue* args, IPC::Message* reply_message);
 
   // Goes back in the specified tab. Uses the JSON interface.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" }
+  //          }
   //   output: { "did_go_back": true,                         // optional
   //             "result": AUTOMATION_MSG_NAVIGATION_SUCCESS  // optional
   //           }
   void GoBack(base::DictionaryValue* args, IPC::Message* reply_message);
 
   // Reload the specified tab. Uses the JSON interface.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" }
+  //          }
   //   output: { "result": AUTOMATION_MSG_NAVIGATION_SUCCESS  // optional }
   void ReloadJSON(base::DictionaryValue* args, IPC::Message* reply_message);
 
-  // Get the current url of the specified tab. Uses the JSON interface.
-  // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
-  //   output: { "url": "http://www.google.com" }
-  void GetTabURLJSON(base::DictionaryValue* args, IPC::Message* reply_message);
-
-  // Get the current url of the specified tab. Uses the JSON interface.
-  // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
-  //   output: { "title": "Google" }
-  void GetTabTitleJSON(base::DictionaryValue* args,
-                       IPC::Message* reply_message);
-
   // Captures the entire page of the the specified tab, including the
   // non-visible portions of the page, and saves the PNG to a file.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
-  //   input: { "windex": 1, "tab_index": 1, "path":"/tmp/foo.png"}
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
+  //            "path": "/tmp/foo.png"
+  //          }
   //   output: none
   void CaptureEntirePageJSON(
       base::DictionaryValue* args, IPC::Message* reply_message);
@@ -1005,8 +1057,20 @@ class TestingAutomationProvider : public AutomationProvider,
   // Gets the ID for every open tab. This ID is unique per session.
   // Example:
   //   input: none
-  //   output: { "ids": [4124, 213, 1] }
+  //   output: { "ids": [213, 1] }
   void GetTabIds(base::DictionaryValue* args, IPC::Message* reply_message);
+
+  // Gets info about all open views. Each view ID is unique per session.
+  // Example:
+  //   input: none
+  //   output: { "views": [
+  //               {
+  //                 "auto_id": { "type": 0, "id": "awoein" },
+  //                 "extension_id": "askjeoias3"  // optional
+  //               }
+  //             ]
+  //           }
+  void GetViews(base::DictionaryValue* args, IPC::Message* reply_message);
 
   // Checks if the given tab ID refers to an open tab.
   // Example:
@@ -1014,16 +1078,46 @@ class TestingAutomationProvider : public AutomationProvider,
   //   output: { "is_valid": false }
   void IsTabIdValid(base::DictionaryValue* args, IPC::Message* reply_message);
 
-  // Closes the specified tab.
+  // Checks if the given automation ID refers to an actual object.
   // Example:
-  //   input: { "windex": 1, "tab_index": 1 }
-  //   output: none
-  void CloseTabJSON(base::DictionaryValue* args, IPC::Message* reply_message);
+  //   input: { "auto_id": { "type": 0, "id": "awoein" } }
+  //   output: { "does_exist": false }
+  void DoesAutomationObjectExist(
+      base::DictionaryValue* args, IPC::Message* reply_message);
 
-  // Sends the WebKit events for a mouse click at a given coordinate.
+  // Closes the specified tab.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" }
+  //          }
+  //   output: none
+  void CloseTabJSON(base::DictionaryValue* args, IPC::Message* reply_message);
+
+  // Sets the specified web view bounds.
+  // The single |auto_id| must be given to specify the view.
+  // This method currently is only supported for tabs.
+  // Example:
+  //   input: { "auto_id": { "type": 0, "id": "awoein" },
+  //            "bounds": {
+  //              "x": 100,
+  //              "y": 200,
+  //              "width": 500,
+  //              "height": 800
+  //            }
+  //          }
+  //   output: none
+  void SetViewBounds(base::DictionaryValue* args, IPC::Message* reply_message);
+
+  // Sends the WebKit events for a mouse click at a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
+  // Example:
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "button": automation::kLeftButton,
   //            "x": 100,
   //            "y": 100
@@ -1033,9 +1127,12 @@ class TestingAutomationProvider : public AutomationProvider,
                         IPC::Message* message);
 
   // Sends the WebKit event for a mouse move to a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "x": 100,
   //            "y": 100
   //          }
@@ -1044,9 +1141,12 @@ class TestingAutomationProvider : public AutomationProvider,
                        IPC::Message* message);
 
   // Sends the WebKit events for a mouse drag between two coordinates.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "start_x": 100,
   //            "start_y": 100,
   //            "end_x": 100,
@@ -1057,9 +1157,12 @@ class TestingAutomationProvider : public AutomationProvider,
                        IPC::Message* message);
 
   // Sends the WebKit events for a mouse button down at a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "x": 100,
   //            "y": 100
   //          }
@@ -1068,9 +1171,12 @@ class TestingAutomationProvider : public AutomationProvider,
                              IPC::Message* message);
 
   // Sends the WebKit events for a mouse button up at a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "x": 100,
   //            "y": 100
   //          }
@@ -1079,9 +1185,12 @@ class TestingAutomationProvider : public AutomationProvider,
                            IPC::Message* message);
 
   // Sends the WebKit events for a mouse double click at a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "x": 100,
   //            "y": 100
   //          }
@@ -1090,9 +1199,12 @@ class TestingAutomationProvider : public AutomationProvider,
                               IPC::Message* message);
 
   // Drag and drop file paths at a given coordinate.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "x": 100,
   //            "y": 100,
   //            "paths": [
@@ -1104,9 +1216,12 @@ class TestingAutomationProvider : public AutomationProvider,
                             IPC::Message* message);
 
   // Sends the WebKit key event with the specified properties.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "type": automation::kRawKeyDownType,
   //            "nativeKeyCode": ui::VKEY_X,
   //            "windowsKeyCode": ui::VKEY_X,
@@ -1122,15 +1237,36 @@ class TestingAutomationProvider : public AutomationProvider,
   // Sends the key event from the OS level to the browser window,
   // allowing it to be preprocessed by some external application (ie. IME).
   // Will switch to the tab specified by tab_index before sending the event.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
   //            "keyCode": ui::VKEY_X,
   //            "modifiers": automation::kShiftKeyMask,
   //          }
   //   output: none
   void SendOSLevelKeyEventToTab(base::DictionaryValue* args,
                                 IPC::Message* message);
+
+  // Processes the WebKit mouse event with the specified properties.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the render view.
+  // Example:
+  //   input: { "windex": 1,
+  //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" },
+  //            "type": automation::kMouseDown,
+  //            "button": automation::kLeftButton,
+  //            "x": 100,
+  //            "y": 200,
+  //            "click_count": 1,
+  //            "modifiers": automation::kShiftKeyMask,
+  //          }
+  //   output: none
+  void ProcessWebMouseEvent(base::DictionaryValue* args,
+                            IPC::Message* message);
 
   // Method used as a Task that sends a success AutomationJSONReply.
   void SendSuccessReply(IPC::Message* reply_message);
@@ -1153,9 +1289,12 @@ class TestingAutomationProvider : public AutomationProvider,
       base::DictionaryValue* args, IPC::Message* reply_message);
 
   // Activates the given tab.
+  // The pair |windex| and |tab_index| or the single |auto_id| must be given
+  // to specify the tab.
   // Example:
   //   input: { "windex": 1,
   //            "tab_index": 1,
+  //            "auto_id": { "type": 0, "id": "awoein" }
   //          }
   //   output: none
   void ActivateTabJSON(base::DictionaryValue* args, IPC::Message* message);
@@ -1172,6 +1311,15 @@ class TestingAutomationProvider : public AutomationProvider,
   void UpdateExtensionsNow(base::DictionaryValue* args,
                            IPC::Message* reply_message);
 
+  // Determines whether the extension page action is visible in the given tab.
+  // Example:
+  //   input: { "auto_id": { "type": 0, "id": "awoein" },
+  //            "extension_id": "byzaaoiea",
+  //          }
+  //   output: none
+  void IsPageActionVisible(base::DictionaryValue* args,
+                           IPC::Message* reply_message);
+
   // Creates a new |TestingAutomationProvider| that opens a server channel
   // for the given |channel_id|.
   // The server channel will be available for connection when this returns.
@@ -1179,6 +1327,46 @@ class TestingAutomationProvider : public AutomationProvider,
   //   input: { "channel_id": "testChannel123" }
   void CreateNewAutomationProvider(base::DictionaryValue* args,
                                    IPC::Message* reply_message);
+
+  // Enforces the policies in |args|. The policies are provided as a dictionary
+  // of policy names to their values. The top-level dictionary maps the policy
+  // provider level to its dictionary.
+  // Example:
+  //   input: { "managed_platform": {
+  //                                  "ShowHomeButton": true,
+  //                                  "SafeBrowsingEnabled": false,
+  //                                },
+  //            "recommended_platform": {
+  //                                      ...
+  //                                    },
+  //            "managed_cloud": {
+  //                               ...
+  //                             },
+  //            "recommended_cloud": {
+  //                                   ...
+  //                                 }
+  //          }
+  //  output: none
+  void SetPolicies(base::DictionaryValue* args,
+                   IPC::Message* reply_message);
+
+  // Gets a list of supported policies. The output is a map of policy name to
+  // its value type.
+  // Example:
+  //   input: none
+  //   output: { "ShowHomeButton": "bool",
+  //             "DefaultSearchProviderSearchURL": "str"
+  //           }
+  void GetPolicyDefinitionList(base::DictionaryValue* args,
+                               IPC::Message* reply_message);
+
+  // Triggers a policy update on the platform and cloud providers, if they
+  // exist. Returns after the update notifications are received.
+  // Example:
+  //   input: none
+  //   output: none
+  void RefreshPolicies(base::DictionaryValue* args,
+                       IPC::Message* reply_message);
 
 #if defined(OS_CHROMEOS)
   // Login.
@@ -1210,11 +1398,19 @@ class TestingAutomationProvider : public AutomationProvider,
   void ToggleNetworkDevice(base::DictionaryValue* args,
                            IPC::Message* reply_message);
 
-  void GetProxySettings(base::DictionaryValue* args,
+  void GetProxySettings(Browser* browser,
+                        base::DictionaryValue* args,
                         IPC::Message* reply_message);
 
-  void SetProxySettings(base::DictionaryValue* args,
+  void SetProxySettings(Browser* browser,
+                        base::DictionaryValue* args,
                         IPC::Message* reply_message);
+
+  void ConnectToCellularNetwork(base::DictionaryValue* args,
+                            IPC::Message* reply_message);
+
+  void DisconnectFromCellularNetwork(base::DictionaryValue* args,
+                                 IPC::Message* reply_message);
 
   void ConnectToWifiNetwork(base::DictionaryValue* args,
                             IPC::Message* reply_message);
@@ -1241,9 +1437,6 @@ class TestingAutomationProvider : public AutomationProvider,
 
   // Enterprise policy.
   void IsEnterpriseDevice(DictionaryValue* args, IPC::Message* reply_message);
-
-  void FetchEnterprisePolicy(DictionaryValue* args,
-                             IPC::Message* reply_message);
 
   void EnrollEnterpriseDevice(DictionaryValue* args,
                               IPC::Message* reply_message);
@@ -1277,6 +1470,9 @@ class TestingAutomationProvider : public AutomationProvider,
   void CaptureProfilePhoto(Browser* browser,
                            DictionaryValue* args,
                            IPC::Message* reply_message);
+
+  void AddChromeosObservers();
+  void RemoveChromeosObservers();
 #endif  // defined(OS_CHROMEOS)
 
   void WaitForTabCountToBecome(int browser_handle,
@@ -1328,6 +1524,12 @@ class TestingAutomationProvider : public AutomationProvider,
   PopupMenuWaiter* popup_menu_waiter_;
 #endif  // defined(TOOLKIT_VIEWS)
 
+#if defined(OS_CHROMEOS)
+  // Avoid scoped ptr here to avoid having to define it completely in the
+  // non-ChromeOS code.
+  PowerManagerClientObserverForTesting* power_manager_observer_;
+#endif  // defined(OS_CHROMEOS)
+
   // Used to wait on various browser sync events.
   scoped_ptr<ProfileSyncServiceHarness> sync_waiter_;
 
@@ -1337,7 +1539,7 @@ class TestingAutomationProvider : public AutomationProvider,
   // query in progress.
   HistoryService::Handle redirect_query_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Used to enumerate browser profiles.
   scoped_refptr<ImporterList> importer_list_;

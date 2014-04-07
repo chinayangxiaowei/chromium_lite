@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,46 +11,12 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/hash_tables.h"
 #include "base/logging.h"
 #include "chrome/browser/net/preconnect.h" // TODO: remove this.
+#include "chrome/browser/net/pref_proxy_config_tracker.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "content/browser/browser_context.h"
-
-namespace base {
-class Time;
-}
-
-namespace chrome {
-class ChromeContentBrowserClient;
-}
-
-namespace chromeos {
-class LibCrosServiceLibraryImpl;
-class ResetDefaultProxyConfigServiceTask;
-}
-
-namespace fileapi {
-class FileSystemContext;
-class SandboxedFileSystemContext;
-}
-
-namespace history {
-class TopSites;
-class ShortcutsBackend;
-}
-
-namespace net {
-class TransportSecurityState;
-class SSLConfigService;
-}
-
-namespace prerender {
-class PrerenderManager;
-}
-
-namespace speech_input {
-class SpeechRecognizer;
-}
+#include "content/public/browser/browser_context.h"
 
 class AutocompleteClassifier;
 class BookmarkModel;
@@ -61,36 +27,60 @@ class ExtensionDevToolsManager;
 class ExtensionEventRouter;
 class ExtensionInfoMap;
 class ExtensionMessageService;
-class ExtensionPrefValueMap;
 class ExtensionProcessManager;
 class ExtensionService;
 class ExtensionSpecialStoragePolicy;
 class FaviconService;
-class FindBarState;
+class GAIAInfoUpdateService;
 class HistoryService;
 class HostContentSettingsMap;
-class NavigationController;
 class PasswordStore;
-class PersonalDataManager;
-class PrefProxyConfigTracker;
 class PrefService;
-class ProfileSyncFactory;
 class ProfileSyncService;
 class PromoCounter;
-class PromoResourceService;
 class ProtocolHandlerRegistry;
-class SQLitePersistentCookieStore;
-class SSLConfigServiceManager;
-class SpellCheckHost;
+class SpeechInputPreferences;
 class TemplateURLFetcher;
+class TestingProfile;
 class TokenService;
-class TransportSecurityPersister;
 class UserScriptMaster;
 class UserStyleSheetWatcher;
-class VisitedLinkEventListener;
 class VisitedLinkMaster;
 class WebDataService;
+
+namespace base {
+class Time;
+}
+
+namespace chromeos {
+class LibCrosServiceLibraryImpl;
+class ResetDefaultProxyConfigServiceTask;
+}
+
+namespace chrome_browser_net {
+class Predictor;
+}
+
+namespace content {
 class WebUI;
+}
+
+namespace android {
+class TabContentsProvider;
+}
+
+namespace fileapi {
+class FileSystemContext;
+}
+
+namespace history {
+class TopSites;
+class ShortcutsBackend;
+}
+
+namespace net {
+class SSLConfigService;
+}
 
 #if !defined(OS_MACOSX) && !defined(OS_CHROMEOS) && defined(OS_POSIX)
 // Local profile ids are used to associate resources stored outside the profile
@@ -127,6 +117,15 @@ class Profile : public content::BrowserContext {
     IMPLICIT_ACCESS
   };
 
+  enum CreateStatus {
+    // Profile services were not created.
+    CREATE_STATUS_FAIL,
+    // Profile created but before initializing extensions and promo resources.
+    CREATE_STATUS_CREATED,
+    // Profile is created, extensions and promo resources are initialized.
+    CREATE_STATUS_INITIALIZED,
+  };
+
   class Delegate {
    public:
     // Called when creation of the profile is finished.
@@ -137,13 +136,8 @@ class Profile : public content::BrowserContext {
   class Deprecated {
    private:
     friend bool IsGoogleGAIACookieInstalled();
-    friend void chrome_browser_net::PreconnectOnIOThread(
-        const GURL&,
-        chrome_browser_net::UrlInfo::ResolutionMotivation,
-        int);
 
     friend class AutofillDownloadManager;
-    friend class ChromePluginMessageFilter;
     friend class BrowserListTabContentsProvider;
     friend class MetricsService;
     friend class SafeBrowsingServiceTestHelper;
@@ -151,7 +145,7 @@ class Profile : public content::BrowserContext {
     friend class SyncTest;
     friend class Toolbar5Importer;
     friend class TranslateManager;
-    friend class chrome::ChromeContentBrowserClient;
+    friend class android::TabContentsProvider;
     friend class chromeos::LibCrosServiceLibraryImpl;
     friend class chromeos::ResetDefaultProxyConfigServiceTask;
 
@@ -186,21 +180,22 @@ class Profile : public content::BrowserContext {
   static Profile* FromBrowserContext(content::BrowserContext* browser_context);
 
   // Returns the profile corresponding to the given WebUI.
-  static Profile* FromWebUI(WebUI* web_ui);
+  static Profile* FromWebUI(content::WebUI* web_ui);
 
   // content::BrowserContext implementation ------------------------------------
 
   virtual FilePath GetPath() = 0;
   virtual SSLHostState* GetSSLHostState() = 0;
-  virtual DownloadManager* GetDownloadManager() = 0;
-  virtual bool HasCreatedDownloadManager() const = 0;
+  virtual content::DownloadManager* GetDownloadManager() = 0;
   virtual net::URLRequestContextGetter* GetRequestContext() = 0;
   virtual net::URLRequestContextGetter* GetRequestContextForRenderProcess(
       int renderer_child_id) = 0;
   virtual net::URLRequestContextGetter* GetRequestContextForMedia() = 0;
   virtual const content::ResourceContext& GetResourceContext() = 0;
-  virtual HostZoomMap* GetHostZoomMap() = 0;
-  virtual GeolocationPermissionContext* GetGeolocationPermissionContext() = 0;
+  virtual content::HostZoomMap* GetHostZoomMap() = 0;
+  virtual content::GeolocationPermissionContext*
+      GetGeolocationPermissionContext() = 0;
+  virtual SpeechInputPreferences* GetSpeechInputPreferences() = 0;
   virtual quota::QuotaManager* GetQuotaManager() = 0;
   virtual webkit_database::DatabaseTracker* GetDatabaseTracker() = 0;
   virtual WebKitContext* GetWebKitContext() = 0;
@@ -209,6 +204,9 @@ class Profile : public content::BrowserContext {
   virtual fileapi::FileSystemContext* GetFileSystemContext() = 0;
 
   // content::BrowserContext implementation ------------------------------------
+
+  // Typesafe upcast.
+  virtual TestingProfile* AsTestingProfile();
 
   // Returns the name associated with this profile. This name is displayed in
   // the browser frame.
@@ -220,6 +218,10 @@ class Profile : public content::BrowserContext {
   // Return the incognito version of this profile. The returned pointer
   // is owned by the receiving profile. If the receiving profile is off the
   // record, the same profile is returned.
+  //
+  // WARNING: This will create the OffTheRecord profile if it doesn't already
+  // exist. If this isn't what you want, you need to check
+  // HasOffTheRecordProfile() first.
   virtual Profile* GetOffTheRecordProfile() = 0;
 
   // Destroys the incognito profile.
@@ -272,11 +274,6 @@ class Profile : public content::BrowserContext {
   virtual ExtensionSpecialStoragePolicy*
       GetExtensionSpecialStoragePolicy() = 0;
 
-  // Retrieves a pointer to the TransportSecurityState associated with
-  // this profile.  The TransportSecurityState is lazily created the
-  // first time that this method is called.
-  virtual net::TransportSecurityState* GetTransportSecurityState() = 0;
-
   // Retrieves a pointer to the FaviconService associated with this
   // profile.  The FaviconService is lazily created the first time
   // that this method is called.
@@ -289,6 +286,9 @@ class Profile : public content::BrowserContext {
   // |access| defines what the caller plans to do with the service. See
   // the ServiceAccessType definition above.
   virtual FaviconService* GetFaviconService(ServiceAccessType access) = 0;
+
+  // Accessor. The instance is created upon first access.
+  virtual GAIAInfoUpdateService* GetGAIAInfoUpdateService() = 0;
 
   // Retrieves a pointer to the HistoryService associated with this
   // profile.  The HistoryService is lazily created the first time
@@ -348,9 +348,6 @@ class Profile : public content::BrowserContext {
   // profile.
   virtual TemplateURLFetcher* GetTemplateURLFetcher() = 0;
 
-  // Returns the PersonalDataManager associated with this profile.
-  virtual PersonalDataManager* GetPersonalDataManager() = 0;
-
   // Returns the request context used for extension-related requests.  This
   // is only used for a separate cookie store currently.
   virtual net::URLRequestContextGetter* GetRequestContextForExtensions() = 0;
@@ -384,12 +381,9 @@ class Profile : public content::BrowserContext {
   // Returns the user style sheet watcher.
   virtual UserStyleSheetWatcher* GetUserStyleSheetWatcher() = 0;
 
-  // Returns the find bar state for this profile.  The find bar state is lazily
-  // created the first time that this method is called.
-  virtual FindBarState* GetFindBarState() = 0;
-
   // Returns true if this profile has a profile sync service.
-  virtual bool HasProfileSyncService() const = 0;
+  // TODO(tim): Bug 93922 - remove this.
+  virtual bool HasProfileSyncService() = 0;
 
   // Returns true if the last time this profile was open it was exited cleanly.
   virtual bool DidLastSessionExitCleanly() = 0;
@@ -404,12 +398,8 @@ class Profile : public content::BrowserContext {
   virtual TokenService* GetTokenService() = 0;
 
   // Returns the ProfileSyncService, creating if not yet created.
+  // TODO(tim): Bug 93922 - remove this.
   virtual ProfileSyncService* GetProfileSyncService() = 0;
-
-  // Returns the ProfileSyncService, creating if not yet created, with
-  // the specified CrOS username.
-  virtual ProfileSyncService* GetProfileSyncService(
-      const std::string& cros_user) = 0;
 
   // Return whether 2 profiles are the same. 2 profiles are the same if they
   // represent the same profile. This can happen if there is pointer equality
@@ -422,14 +412,6 @@ class Profile : public content::BrowserContext {
   // this profile. For the single profile case, this corresponds to the time
   // the user started chrome.
   virtual base::Time GetStartTime() const = 0;
-
-  // May return NULL.
-  virtual SpellCheckHost* GetSpellCheckHost() = 0;
-
-  // If |force| is false, and the spellchecker is already initialized (or is in
-  // the process of initializing), then do nothing. Otherwise clobber the
-  // current spellchecker and replace it with a new one.
-  virtual void ReinitializeSpellCheckHost(bool force) = 0;
 
   // Marks the profile as cleanly shutdown.
   //
@@ -492,9 +474,20 @@ class Profile : public content::BrowserContext {
   // access to the the proxy configuration possibly defined by preferences.
   virtual PrefProxyConfigTracker* GetProxyConfigTracker() = 0;
 
-  // Returns the PrerenderManager used to prerender entire webpages for this
-  // profile.
-  virtual prerender::PrerenderManager* GetPrerenderManager() = 0;
+  // Returns the Predictor object used for dns prefetch.
+  virtual chrome_browser_net::Predictor* GetNetworkPredictor() = 0;
+
+  // Deletes all network related data since |time|. It deletes transport
+  // security state since |time| and it also delete HttpServerProperties data.
+  // The implementation is free to run this on a background thread, so when this
+  // method returns data is not guaranteed to be deleted.
+  virtual void ClearNetworkingHistorySince(base::Time time) = 0;
+
+  // Returns the home page for this profile.
+  virtual GURL GetHomePage() = 0;
+
+  // Makes the session state, e.g., cookies, persistent across the next restart.
+  virtual void SaveSessionState() {}
 
   std::string GetDebugName();
 
@@ -514,10 +507,6 @@ class Profile : public content::BrowserContext {
   }
   bool restored_last_session() const {
     return restored_last_session_;
-  }
-
-  bool first_launched() const {
-    return first_launched_;
   }
 
   // Stop sending accessibility events until ResumeAccessibilityEvents().
@@ -560,9 +549,6 @@ class Profile : public content::BrowserContext {
 
   bool restored_last_session_;
 
-  // True only for the very first profile launched in a Chrome session.
-  bool first_launched_;
-
   // Accessibility events will only be propagated when the pause
   // level is zero.  PauseAccessibilityEvents and ResumeAccessibilityEvents
   // increment and decrement the level, respectively, rather than set it to
@@ -571,7 +557,7 @@ class Profile : public content::BrowserContext {
 };
 
 #if defined(COMPILER_GCC)
-namespace __gnu_cxx {
+namespace BASE_HASH_NAMESPACE {
 
 template<>
 struct hash<Profile*> {
@@ -580,7 +566,7 @@ struct hash<Profile*> {
   }
 };
 
-}  // namespace __gnu_cxx
+}  // namespace BASE_HASH_NAMESPACE
 #endif
 
 #endif  // CHROME_BROWSER_PROFILES_PROFILE_H_

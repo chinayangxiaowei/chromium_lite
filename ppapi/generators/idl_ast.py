@@ -1,15 +1,14 @@
-#!/usr/bin/python
-#
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Nodes for PPAPI IDL AST."""
 
-from idl_namespace import IDLNamespace, IDLVersionMap
+from idl_namespace import IDLNamespace
 from idl_node import IDLAttribute, IDLFile, IDLNode
 from idl_option import GetOption
 from idl_visitor import IDLVisitor
+from idl_release import IDLReleaseList, IDLReleaseMap
 
 #
 # IDL Predefined types
@@ -32,10 +31,8 @@ class IDLNamespaceLabelResolver(IDLVisitor):
   # node is named, then place it in the appropriate namespace.
   #
   def Arrive(self, node, parent_namespace):
-    # Set version min and max based on properties
-    vmin = node.GetProperty('version')
-    vmax = node.GetProperty('deprecate')
-    node.SetVersionRange(vmin, vmax)
+    # If we are entering a parent, clear the local Label\
+    if node.IsA('File'): self.release_map = None
 
     # If this object is not a namespace aware object, use the parent's one
     if node.cls not in self.NamespaceSet:
@@ -47,6 +44,13 @@ class IDLNamespaceLabelResolver(IDLVisitor):
 
     # If this node is named, place it in its parent's namespace
     if parent_namespace and node.cls in IDLNode.NamedSet:
+      # Set version min and max based on properties
+      if self.release_map:
+        vmin = node.GetProperty('version')
+        vmax = node.GetProperty('deprecate')
+        rmin = self.release_map.GetRelease(vmin)
+        rmax = self.release_map.GetRelease(vmax)
+        node.SetReleaseRange(rmin, rmax)
       parent_namespace.AddNode(node)
 
     # Pass this namespace to each child in case they inherit it
@@ -62,10 +66,11 @@ class IDLNamespaceLabelResolver(IDLVisitor):
     if node.IsA('LabelItem'):
       return (node.GetName(), node.GetProperty('VALUE'))
     if node.IsA('Label') and node.GetName() == GetOption('label'):
-      vmap = IDLVersionMap()
-      for release, version in childdata:
-        vmap.AddReleaseVersionMapping(release, float(version))
-      node.parent.SetProperty("LABEL", vmap)
+      try:
+        self.release_map = IDLReleaseMap(childdata)
+        node.parent.release_map = self.release_map
+      except Exception as err:
+        node.Error('Unable to build release map: %s' % str(err))
     return None
 
 
@@ -89,22 +94,6 @@ class IDLFileTypeResolver(IDLVisitor):
     return filenode
 
 
-class IDLReleaseResolver(IDLVisitor):
-  def VisitFilter(self, node, data):
-    return node.IsA('AST','File', 'Label')
-
-  def Depart(self, node, data, childdata):
-    if node.IsA('Label'):
-      return set([child.name for child in GetListOf('LabelItem')])
-    return childdata
-
-class IDLVersionMapDefault(IDLVersionMap):
-  def GetRelease(self, version):
-    return 'M13'
-
-  def GetVersion(self, release):
-    return float(0.0)
-
 #
 # IDLAst
 #
@@ -114,17 +103,7 @@ class IDLVersionMapDefault(IDLVersionMap):
 #
 class IDLAst(IDLNode):
   def __init__(self, children):
-    objs = []
-
-    builtin = None
-    extranodes = []
-    for filenode in children:
-      if filenode.GetProperty('NAME') == 'pp_stdint.idl':
-        builtin = filenode
-        break
-
-    IDLNode.__init__(self, 'AST', 'BuiltIn', 1, 0, extranodes + children)
-    self.SetProperty('LABEL', IDLVersionMapDefault())
+    IDLNode.__init__(self, 'AST', 'BuiltIn', 1, 0, children)
     self.Resolve()
 
   def Resolve(self):
@@ -136,13 +115,10 @@ class IDLAst(IDLNode):
     # Build an ordered list of all releases
     self.releases = set()
     for filenode in self.GetListOf('File'):
-      vmap = filenode.GetProperty('LABEL')
-      self.releases |= set(vmap.releases)
+      self.releases |= set(filenode.release_map.GetReleases())
     self.releases = sorted(self.releases)
 
   def SetTypeInfo(self, name, properties):
     node = self.namespace[name]
     for prop in properties:
       node.properties[prop] = properties[prop]
-
-

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 #include "base/logging.h"
 #include "jingle/notifier/base/gaia_token_pre_xmpp_auth.h"
 #include "remoting/jingle_glue/jingle_thread.h"
-#include "remoting/jingle_glue/xmpp_iq_request.h"
 #include "remoting/jingle_glue/xmpp_socket_adapter.h"
 #include "third_party/libjingle/source/talk/base/asyncsocket.h"
 #include "third_party/libjingle/source/talk/xmpp/prexmppauth.h"
 #include "third_party/libjingle/source/talk/xmpp/saslcookiemechanism.h"
+
+namespace {
+const char kDefaultResourceName[] = "chromoting";
+}  // namespace
 
 namespace remoting {
 
@@ -20,29 +23,31 @@ XmppSignalStrategy::XmppSignalStrategy(JingleThread* jingle_thread,
                                        const std::string& auth_token,
                                        const std::string& auth_token_service)
    : thread_(jingle_thread),
-     listener_(NULL),
      username_(username),
      auth_token_(auth_token),
      auth_token_service_(auth_token_service),
+     resource_name_(kDefaultResourceName),
      xmpp_client_(NULL),
-     observer_(NULL) {
+     state_(DISCONNECTED) {
 }
 
 XmppSignalStrategy::~XmppSignalStrategy() {
-  DCHECK(listener_ == NULL);
-  Close();
+  DCHECK_EQ(listeners_.size(), 0U);
+  Disconnect();
 }
 
-void XmppSignalStrategy::Init(StatusObserver* observer) {
-  observer_ = observer;
+void XmppSignalStrategy::Connect() {
+  DCHECK(CalledOnValidThread());
 
-  buzz::Jid login_jid(username_);
+  // Disconnect first if we are currently connected.
+  Disconnect();
 
   buzz::XmppClientSettings settings;
+  buzz::Jid login_jid(username_);
   settings.set_user(login_jid.node());
   settings.set_host(login_jid.domain());
-  settings.set_resource("chromoting");
-  settings.set_use_tls(true);
+  settings.set_resource(resource_name_);
+  settings.set_use_tls(buzz::TLS_ENABLED);
   settings.set_token_service(auth_token_service_);
   settings.set_auth_cookie(auth_token_);
   settings.set_server(talk_base::SocketAddress("talk.google.com", 5222));
@@ -55,15 +60,15 @@ void XmppSignalStrategy::Init(StatusObserver* observer) {
       this, &XmppSignalStrategy::OnConnectionStateChanged);
   xmpp_client_->engine()->AddStanzaHandler(this, buzz::XmppEngine::HL_TYPE);
   xmpp_client_->Start();
+
+  SetState(CONNECTING);
 }
 
-void XmppSignalStrategy::Close() {
+void XmppSignalStrategy::Disconnect() {
+  DCHECK(CalledOnValidThread());
+
   if (xmpp_client_) {
     xmpp_client_->engine()->RemoveStanzaHandler(this);
-
-    // TODO(sergeyu): XmppClient::Disconnect() should call
-    // Abort(). Remove this line when it's fixed in libjingle.
-    xmpp_client_->Abort();
 
     xmpp_client_->Disconnect();
 
@@ -73,53 +78,92 @@ void XmppSignalStrategy::Close() {
   }
 }
 
-void XmppSignalStrategy::SetListener(Listener* listener) {
-  // Don't overwrite an listener without explicitly going
-  // through "NULL" first.
-  DCHECK(listener_ == NULL || listener == NULL);
-  listener_ = listener;
+SignalStrategy::State XmppSignalStrategy::GetState() const {
+  DCHECK(CalledOnValidThread());
+  return state_;
 }
 
-void XmppSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
-  xmpp_client_->SendStanza(stanza);
+std::string XmppSignalStrategy::GetLocalJid() const {
+  DCHECK(CalledOnValidThread());
+  return xmpp_client_->jid().Str();
+}
+
+void XmppSignalStrategy::AddListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.AddObserver(listener);
+}
+
+void XmppSignalStrategy::RemoveListener(Listener* listener) {
+  DCHECK(CalledOnValidThread());
+  listeners_.RemoveObserver(listener);
+}
+
+bool XmppSignalStrategy::SendStanza(buzz::XmlElement* stanza) {
+  DCHECK(CalledOnValidThread());
+  if (!xmpp_client_) {
+    LOG(INFO) << "Dropping signalling message because XMPP "
+        "connection has been terminated.";
+    delete stanza;
+    return false;
+  }
+
+  buzz::XmppReturnStatus status = xmpp_client_->SendStanza(stanza);
+  return status == buzz::XMPP_RETURN_OK || status == buzz::XMPP_RETURN_PENDING;
 }
 
 std::string XmppSignalStrategy::GetNextId() {
+  DCHECK(CalledOnValidThread());
+  if (!xmpp_client_) {
+    // If the connection has been terminated then it doesn't matter
+    // what Id we return.
+    return "";
+  }
   return xmpp_client_->NextId();
 }
 
-IqRequest* XmppSignalStrategy::CreateIqRequest() {
-  return new XmppIqRequest(thread_->message_loop(), xmpp_client_);
+bool XmppSignalStrategy::HandleStanza(const buzz::XmlElement* stanza) {
+  DCHECK(CalledOnValidThread());
+  ObserverListBase<Listener>::Iterator it(listeners_);
+  Listener* listener;
+  while ((listener = it.GetNext()) != NULL) {
+    if (listener->OnSignalStrategyIncomingStanza(stanza))
+      return true;
+  }
+  return false;
 }
 
-bool XmppSignalStrategy::HandleStanza(const buzz::XmlElement* stanza) {
-  if (listener_)
-    return listener_->OnIncomingStanza(stanza);
-  return false;
+void XmppSignalStrategy::SetAuthInfo(const std::string& username,
+                                     const std::string& auth_token,
+                                     const std::string& auth_token_service) {
+  DCHECK(CalledOnValidThread());
+  username_ = username;
+  auth_token_ = auth_token;
+  auth_token_service_ = auth_token_service;
+}
+
+void XmppSignalStrategy::SetResourceName(const std::string &resource_name) {
+  DCHECK(CalledOnValidThread());
+  resource_name_ = resource_name;
 }
 
 void XmppSignalStrategy::OnConnectionStateChanged(
     buzz::XmppEngine::State state) {
-  switch (state) {
-    case buzz::XmppEngine::STATE_START:
-      observer_->OnStateChange(StatusObserver::START);
-      break;
-    case buzz::XmppEngine::STATE_OPENING:
-      observer_->OnStateChange(StatusObserver::CONNECTING);
-      break;
-    case buzz::XmppEngine::STATE_OPEN:
-      observer_->OnJidChange(xmpp_client_->jid().Str());
-      observer_->OnStateChange(StatusObserver::CONNECTED);
-      break;
-    case buzz::XmppEngine::STATE_CLOSED:
-      observer_->OnStateChange(StatusObserver::CLOSED);
-      // Client is destroyed by the TaskRunner after the client is
-      // closed. Reset the pointer so we don't try to use it later.
-      xmpp_client_ = NULL;
-      break;
-    default:
-      NOTREACHED();
-      break;
+  DCHECK(CalledOnValidThread());
+  if (state == buzz::XmppEngine::STATE_OPEN) {
+    SetState(CONNECTED);
+  } else if (state == buzz::XmppEngine::STATE_CLOSED) {
+    // Client is destroyed by the TaskRunner after the client is
+    // closed. Reset the pointer so we don't try to use it later.
+    xmpp_client_ = NULL;
+    SetState(DISCONNECTED);
+  }
+}
+
+void XmppSignalStrategy::SetState(State new_state) {
+  if (state_ != new_state) {
+    state_ = new_state;
+    FOR_EACH_OBSERVER(Listener, listeners_,
+                      OnSignalStrategyStateChange(new_state));
   }
 }
 
@@ -133,10 +177,7 @@ buzz::PreXmppAuth* XmppSignalStrategy::CreatePreXmppAuth(
   }
 
   return new notifier::GaiaTokenPreXmppAuth(
-      jid.Str(),
-      settings.auth_cookie(),
-      settings.token_service(),
-      mechanism);
+      jid.Str(), settings.auth_cookie(), settings.token_service(), mechanism);
 }
 
 }  // namespace remoting

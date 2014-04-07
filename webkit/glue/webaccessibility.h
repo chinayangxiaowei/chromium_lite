@@ -11,9 +11,9 @@
 
 #include "base/string16.h"
 #include "ui/gfx/rect.h"
+#include "webkit/glue/webkit_glue_export.h"
 
 namespace WebKit {
-class WebAccessibilityCache;
 class WebAccessibilityObject;
 }
 
@@ -22,14 +22,18 @@ namespace webkit_glue {
 // A compact representation of the accessibility information for a
 // single web object, in a form that can be serialized and sent from
 // the renderer process to the browser process.
-struct WebAccessibility {
+struct WEBKIT_GLUE_EXPORT WebAccessibility {
  public:
-  // An alphabetical enumeration of accessibility roles.
+  // An enumeration of accessibility roles.
   enum Role {
-    ROLE_NONE = 0,
+    ROLE_UNKNOWN = 0,
 
-    ROLE_UNKNOWN,
+    // Used by Chromium to distinguish between the root of the tree
+    // for this page, and a web area for a frame within this page.
+    ROLE_ROOT_WEB_AREA,
 
+    // These roles all directly correspond to WebKit accessibility roles,
+    // keep these alphabetical.
     ROLE_ALERT,
     ROLE_ALERT_DIALOG,
     ROLE_ANNOTATION,
@@ -186,9 +190,13 @@ struct WebAccessibility {
   };
 
   enum IntAttribute {
-    // Document attributes.
-    ATTR_DOC_SCROLLX,
-    ATTR_DOC_SCROLLY,
+    // Scrollable container attributes.
+    ATTR_SCROLL_X,
+    ATTR_SCROLL_X_MIN,
+    ATTR_SCROLL_X_MAX,
+    ATTR_SCROLL_Y,
+    ATTR_SCROLL_Y_MIN,
+    ATTR_SCROLL_Y_MAX,
 
     // Editable text attributes.
     ATTR_TEXT_SEL_START,
@@ -206,6 +214,9 @@ struct WebAccessibility {
 
     // Tree control attributes.
     ATTR_HIERARCHICAL_LEVEL,
+
+    // Relationships between this element and other elements.
+    ATTR_TITLE_UI_ELEMENT,
   };
 
   enum FloatAttribute {
@@ -233,28 +244,30 @@ struct WebAccessibility {
 
     // ARIA readonly flag.
     ATTR_ARIA_READONLY,
+
+    // Writeable attributes
+    ATTR_CAN_SET_VALUE,
   };
 
   // Empty constructor, for serialization.
   WebAccessibility();
 
   // Construct from a WebAccessibilityObject. Recursively creates child
-  // nodes as needed to complete the tree. Adds |src| to |cache| and
-  // stores its cache ID.
+  // nodes as needed to complete the tree.
   WebAccessibility(const WebKit::WebAccessibilityObject& src,
-                   WebKit::WebAccessibilityCache* cache,
                    bool include_children);
 
   ~WebAccessibility();
 
 #ifndef NDEBUG
-  std::string DebugString(bool recursive);
+  std::string DebugString(bool recursive,
+                          int render_routing_id,
+                          int notification_type) const;
 #endif
 
  private:
   // Initialize an already-created struct, same as the constructor above.
   void Init(const WebKit::WebAccessibilityObject& src,
-            WebKit::WebAccessibilityCache* cache,
             bool include_children);
 
   // Returns true if |ancestor| is the first unignored parent of |child|,

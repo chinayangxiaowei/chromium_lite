@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/string_util.h"
+#include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
@@ -17,29 +17,40 @@
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_view.h"
 #include "chrome/browser/autocomplete/keyword_provider.h"
+#include "chrome/browser/autocomplete/network_action_predictor.h"
+#include "chrome/browser/autocomplete/network_action_predictor_factory.h"
 #include "chrome/browser/autocomplete/search_provider.h"
+#include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/extensions/extension_omnibox_api.h"
 #include "chrome/browser/google/google_url_tracker.h"
 #include "chrome/browser/instant/instant_controller.h"
-#include "chrome/browser/net/predictor_api.h"
+#include "chrome/browser/net/predictor.h"
 #include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/prerender/prerender_field_trial.h"
 #include "chrome/browser/prerender/prerender_manager.h"
+#include "chrome/browser/prerender/prerender_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_prepopulate_data.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/sessions/restore_tab_helper.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_service.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
 #include "googleurl/src/gurl.h"
 #include "googleurl/src/url_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+
+using content::UserMetricsAction;
 
 ///////////////////////////////////////////////////////////////////////////////
 // AutocompleteEditController
@@ -85,8 +96,7 @@ AutocompleteEditModel::AutocompleteEditModel(
       profile_(profile),
       in_revert_(false),
       allow_exact_keyword_match_(false),
-      instant_complete_behavior_(INSTANT_COMPLETE_DELAYED),
-      network_action_predictor_(profile) {
+      instant_complete_behavior_(INSTANT_COMPLETE_DELAYED) {
 }
 
 AutocompleteEditModel::~AutocompleteEditModel() {
@@ -208,22 +218,32 @@ bool AutocompleteEditModel::AcceptCurrentInstantPreview() {
 
 void AutocompleteEditModel::OnChanged() {
   const AutocompleteMatch current_match = CurrentMatch();
-  string16 suggested_text;
 
-  // Confer with the NetworkActionPredictor to determine what action, if any,
-  // we should take. Get the recommended action here even if we don't need it
-  // so we can get stats for anyone who is opted in to UMA.
   NetworkActionPredictor::Action recommended_action =
-      network_action_predictor_.RecommendAction(user_text_, current_match);
+      NetworkActionPredictor::ACTION_NONE;
+  NetworkActionPredictor* network_action_predictor =
+      user_input_in_progress() ?
+      NetworkActionPredictorFactory::GetForProfile(profile_) : NULL;
+  if (network_action_predictor) {
+    network_action_predictor->RegisterTransitionalMatches(user_text_,
+                                                          result());
+    // Confer with the NetworkActionPredictor to determine what action, if any,
+    // we should take. Get the recommended action here even if we don't need it
+    // so we can get stats for anyone who is opted in to UMA, but only get it if
+    // the user has actually typed something to avoid constructing it before
+    // it's needed. Note: This event is triggered as part of startup when the
+    // initial tab transitions to the start page.
+    recommended_action =
+        network_action_predictor->RecommendAction(user_text_, current_match);
+  }
+
   UMA_HISTOGRAM_ENUMERATION("NetworkActionPredictor.Action", recommended_action,
                             NetworkActionPredictor::LAST_PREDICT_ACTION);
-  if (!DoInstant(current_match, &suggested_text)) {
-    // Ignore the recommended action if the flag is not set.
-    if (!CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kPrerenderFromOmnibox)) {
-      recommended_action = NetworkActionPredictor::ACTION_NONE;
-    }
+  string16 suggested_text;
 
+  if (DoInstant(current_match, &suggested_text)) {
+    SetSuggestedText(suggested_text, instant_complete_behavior_);
+  } else {
     switch (recommended_action) {
       case NetworkActionPredictor::ACTION_PRERENDER:
         DoPrerender(current_match);
@@ -243,8 +263,6 @@ void AutocompleteEditModel::OnChanged() {
 
     // No need to wait any longer for instant.
     FinalizeInstantQuery(string16(), string16(), false);
-  } else {
-    SetSuggestedText(suggested_text, instant_complete_behavior_);
   }
 
   controller_->OnChanged();
@@ -316,7 +334,7 @@ bool AutocompleteEditModel::CurrentTextIsURL() const {
 
   AutocompleteMatch match;
   GetInfoForCurrentText(&match, NULL);
-  return match.transition == PageTransition::TYPED;
+  return match.transition == content::PAGE_TRANSITION_TYPED;
 }
 
 AutocompleteMatch::Type AutocompleteEditModel::CurrentTextType() const {
@@ -351,7 +369,7 @@ void AutocompleteEditModel::AdjustTextForCopy(int sel_min,
   AutocompleteMatch match;
   profile_->GetAutocompleteClassifier()->Classify(*text, string16(),
         KeywordIsSelected(), true, &match, NULL);
-  if (match.transition != PageTransition::TYPED)
+  if (match.transition != content::PAGE_TRANSITION_TYPED)
     return;
   *url = match.destination_url;
 
@@ -375,6 +393,8 @@ void AutocompleteEditModel::SetInputInProgress(bool in_progress) {
     return;
 
   user_input_in_progress_ = in_progress;
+  if (user_input_in_progress_)
+    time_user_first_modified_omnibox_ = base::TimeTicks::Now();
   controller_->OnInputInProgress(in_progress);
 }
 
@@ -387,6 +407,10 @@ void AutocompleteEditModel::Revert() {
   has_temporary_text_ = false;
   view_->SetWindowTextAndCaretPos(permanent_text_,
                                   has_focus_ ? permanent_text_.length() : 0);
+  NetworkActionPredictor* network_action_predictor =
+      NetworkActionPredictorFactory::GetForProfile(profile_);
+  if (network_action_predictor)
+    network_action_predictor->ClearTransitionalMatches();
 }
 
 void AutocompleteEditModel::StartAutocomplete(
@@ -445,8 +469,9 @@ void AutocompleteEditModel::AcceptInput(WindowOpenDisposition disposition,
   if (!match.destination_url.is_valid())
     return;
 
-  if ((match.transition == PageTransition::TYPED) && (match.destination_url ==
-      URLFixerUpper::FixupURL(UTF16ToUTF8(permanent_text_), std::string()))) {
+  if ((match.transition == content::PAGE_TRANSITION_TYPED) &&
+      (match.destination_url ==
+       URLFixerUpper::FixupURL(UTF16ToUTF8(permanent_text_), std::string()))) {
     // When the user hit enter on the existing permanent URL, treat it like a
     // reload for scoring purposes.  We could detect this by just checking
     // user_input_in_progress_, but it seems better to treat "edits" that end
@@ -456,13 +481,13 @@ void AutocompleteEditModel::AcceptInput(WindowOpenDisposition disposition,
     // different from the current URL, even if it wound up at the same place
     // (e.g. manually retyping the same search query), and it seems wrong to
     // treat this as a reload.
-    match.transition = PageTransition::RELOAD;
+    match.transition = content::PAGE_TRANSITION_RELOAD;
   } else if (for_drop || ((paste_state_ != NONE) &&
                           match.is_history_what_you_typed_match)) {
     // When the user pasted in a URL and hit enter, score it like a link click
     // rather than a normal typed URL, so it doesn't get inline autocompleted
     // as aggressively later.
-    match.transition = PageTransition::LINK;
+    match.transition = content::PAGE_TRANSITION_LINK;
   }
 
   if (match.template_url && match.template_url->url() &&
@@ -488,16 +513,41 @@ void AutocompleteEditModel::OpenMatch(const AutocompleteMatch& match,
   // We only care about cases where there is a selection (i.e. the popup is
   // open).
   if (popup_->IsOpen()) {
-    AutocompleteLog log(autocomplete_controller_->input().text(),
-                        autocomplete_controller_->input().type(),
-                        popup_->selected_line(), 0, result());
+    AutocompleteLog log(
+        autocomplete_controller_->input().text(),
+        autocomplete_controller_->input().type(),
+        popup_->selected_line(),
+        -1,  // don't yet know tab ID; set later if appropriate
+        base::TimeDelta::FromMilliseconds(-1),  // typing duration; usually
+                                                // over-written later
+        0,  // inline autocomplete length; possibly set later
+        result());
     if (index != AutocompletePopupModel::kNoMatch)
       log.selected_index = index;
     else if (!has_temporary_text_)
       log.inline_autocompleted_length = inline_autocomplete_text_.length();
-    NotificationService::current()->Notify(
-        chrome::NOTIFICATION_OMNIBOX_OPENED_URL, Source<Profile>(profile_),
-        Details<AutocompleteLog>(&log));
+    if (disposition == CURRENT_TAB) {
+      // If we know the destination is being opened in the curren tab,
+      // we can easily get the tab ID.  (If it's being opened in a new
+      // tab, we don't know the tab ID yet.)
+      log.tab_id = controller_->GetTabContentsWrapper()->
+                       restore_tab_helper()->session_id().id();
+    }
+    if (user_input_in_progress_) {
+      // This case should happen every time except possibly in unit tests.
+      // If we somehow got into OpenMatch() by selecting an autocomplete
+      // match without going through user_input_in_progress_, that
+      // means we never properly set time_user_first_modified_omnibox_
+      // (because we didn't know the user started typing!).  In that
+      // case, leave the elapsed_time_since_user_first_modified_omnibox
+      // set to -1 ms.
+      log.elapsed_time_since_user_first_modified_omnibox =
+          base::TimeTicks::Now() - time_user_first_modified_omnibox_;
+    }
+    content::NotificationService::current()->Notify(
+        chrome::NOTIFICATION_OMNIBOX_OPENED_URL,
+        content::Source<Profile>(profile_),
+        content::Details<AutocompleteLog>(&log));
   }
 
   TemplateURLService* template_url_service =
@@ -526,12 +576,31 @@ void AutocompleteEditModel::OpenMatch(const AutocompleteMatch& match,
     }
 
     if (template_url) {
-      UserMetrics::RecordAction(UserMetricsAction("AcceptedKeyword"));
+      content::RecordAction(UserMetricsAction("AcceptedKeyword"));
       template_url_service->IncrementUsageCount(template_url);
+
+      if (match.transition == content::PAGE_TRANSITION_KEYWORD ||
+          match.transition == content::PAGE_TRANSITION_KEYWORD_GENERATED) {
+        // NOTE: Non-prepopulated engines will all have ID 0, which is fine as
+        // the prepopulate IDs start at 1.  Distribution-specific engines will
+        // all have IDs above the maximum, and will be automatically lumped
+        // together in an "overflow" bucket in the histogram.
+        UMA_HISTOGRAM_ENUMERATION(
+            "Omnibox.SearchEngine", template_url->prepopulate_id(),
+            TemplateURLPrepopulateData::kMaxPrepopulatedEngineID);
+      }
     }
 
     // NOTE: We purposefully don't increment the usage count of the default
     // search engine, if applicable; see comments in template_url.h.
+  }
+
+  if (match.transition == content::PAGE_TRANSITION_GENERATED &&
+      match.template_url) {
+    // See comment above.
+    UMA_HISTOGRAM_ENUMERATION(
+        "Omnibox.SearchEngine", match.template_url->prepopulate_id(),
+        TemplateURLPrepopulateData::kMaxPrepopulatedEngineID);
   }
 
   if (disposition != NEW_BACKGROUND_TAB) {
@@ -545,6 +614,9 @@ void AutocompleteEditModel::OpenMatch(const AutocompleteMatch& match,
     controller_->OnAutocompleteAccept(match.destination_url, disposition,
                                       match.transition, alternate_nav_url);
   }
+
+  if (match.starred)
+    bookmark_utils::RecordBookmarkLaunch(bookmark_utils::LAUNCH_OMNIBOX);
 
   InstantController* instant = controller_->GetInstant();
   if (instant && !popup_->IsOpen())
@@ -563,7 +635,7 @@ bool AutocompleteEditModel::AcceptKeyword() {
                                // since the edit contents have disappeared.  It
                                // doesn't really matter, but we clear it to be
                                // consistent.
-  UserMetrics::RecordAction(UserMetricsAction("AcceptedKeywordHint"));
+  content::RecordAction(UserMetricsAction("AcceptedKeywordHint"));
   return true;
 }
 
@@ -832,10 +904,8 @@ void AutocompleteEditModel::OnResultChanged(bool default_match_changed) {
             match->fill_into_edit.substr(match->inline_autocomplete_offset);
       }
 
-      if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kPrerenderFromOmnibox)) {
+      if (!prerender::IsOmniboxEnabled(profile_))
         DoPreconnect(*match);
-      }
 
       // We could prefetch the alternate nav URL, if any, but because there
       // can be many of these as a user types an initial series of characters,
@@ -989,34 +1059,39 @@ bool AutocompleteEditModel::DoInstant(const AutocompleteMatch& match,
   if (!instant)
     return false;
 
+  // It's possible the tab strip does not have an active tab contents, for
+  // instance if the tab has been closed or on return from a sleep state
+  // (http://crbug.com/105689)
   TabContentsWrapper* tab = controller_->GetTabContentsWrapper();
+  if (!tab)
+    return false;
 
   if (user_input_in_progress() && popup_->IsOpen()) {
-    if (match.destination_url == PermanentURL()) {
-      // The destination is the same as the current url. This typically
-      // happens if the user presses the down arrow in the omnibox, in which
-      // case we don't want to load a preview.
-      instant->DestroyPreviewContentsAndLeaveActive();
-    } else {
-      instant->Update(tab, match, view_->GetText(), UseVerbatimInstant(),
-                      suggested_text);
-    }
-  } else {
-    instant->DestroyPreviewContents();
+    return instant->Update(tab, match, view_->GetText(), UseVerbatimInstant(),
+                           suggested_text);
   }
 
-  return instant->MightSupportInstant();
+  instant->Hide();
+  return false;
 }
 
 void AutocompleteEditModel::DoPrerender(const AutocompleteMatch& match) {
   // Do not prerender if the destination URL is the same as the current URL.
   if (match.destination_url == PermanentURL())
     return;
+  // It's possible the tab strip does not have an active tab contents, for
+  // instance if the tab has been closed or on return from a sleep state
+  // (http://crbug.com/105689)
   TabContentsWrapper* tab = controller_->GetTabContentsWrapper();
+  if (!tab)
+    return;
   prerender::PrerenderManager* prerender_manager =
-      tab->profile()->GetPrerenderManager();
-  if (prerender_manager)
-    prerender_manager->AddPrerenderFromOmnibox(match.destination_url);
+      prerender::PrerenderManagerFactory::GetForProfile(tab->profile());
+  if (prerender_manager) {
+    RenderViewHost* current_host = tab->web_contents()->GetRenderViewHost();
+    prerender_manager->AddPrerenderFromOmnibox(
+        match.destination_url, current_host->session_storage_namespace());
+  }
 }
 
 void AutocompleteEditModel::DoPreconnect(const AutocompleteMatch& match) {
@@ -1024,8 +1099,11 @@ void AutocompleteEditModel::DoPreconnect(const AutocompleteMatch& match) {
     // Warm up DNS Prefetch cache, or preconnect to a search service.
     UMA_HISTOGRAM_ENUMERATION("Autocomplete.MatchType", match.type,
                               AutocompleteMatch::NUM_TYPES);
-    chrome_browser_net::AnticipateOmniboxUrl(match.destination_url,
-        NetworkActionPredictor::IsPreconnectable(match));
+    if (profile_->GetNetworkPredictor()) {
+      profile_->GetNetworkPredictor()->AnticipateOmniboxUrl(
+          match.destination_url,
+          NetworkActionPredictor::IsPreconnectable(match));
+    }
     // We could prefetch the alternate nav URL, if any, but because there
     // can be many of these as a user types an initial series of characters,
     // the OS DNS cache could suffer eviction problems for minimal gain.

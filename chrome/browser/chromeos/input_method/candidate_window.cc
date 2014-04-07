@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,19 +16,20 @@
 #include "base/stringprintf.h"
 #include "base/timer.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/chromeos/input_method/candidate_window_view.h"
 #include "chrome/browser/chromeos/input_method/ibus_ui_controller.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/screen.h"
-#include "views/controls/label.h"
-#include "views/controls/textfield/textfield.h"
-#include "views/events/event.h"
-#include "views/layout/fill_layout.h"
-#include "views/layout/grid_layout.h"
-#include "views/widget/widget.h"
-#include "views/window/non_client_view.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/events/event.h"
+#include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/grid_layout.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/window/non_client_view.h"
 
 namespace chromeos {
 namespace input_method {
@@ -79,6 +80,10 @@ const int kInfolistHideDelayMilliSeconds = 500;
 // VerticalCandidateLabel is used for rendering candidate text in
 // the vertical candidate window.
 class VerticalCandidateLabel : public views::Label {
+ public:
+  VerticalCandidateLabel() {}
+
+ private:
   virtual ~VerticalCandidateLabel() {}
 
   // Returns the preferred size, but guarantees that the width has at
@@ -97,6 +102,8 @@ class VerticalCandidateLabel : public views::Label {
     }
     return size;
   }
+
+  DISALLOW_COPY_AND_ASSIGN(VerticalCandidateLabel);
 };
 
 // Wraps the given view with some padding, and returns it.
@@ -119,26 +126,20 @@ views::View* WrapWithPadding(views::View* view, const gfx::Insets& insets) {
 }
 
 // Creates shortcut text from the given index and the orientation.
-std::wstring CreateShortcutText(
-    int index,
-    InputMethodLookupTable::Orientation orientation) {
+string16 CreateShortcutText(int index,
+                            InputMethodLookupTable::Orientation orientation) {
   // Choose the character used for the shortcut label.
-  const wchar_t kShortcutCharacters[] = L"1234567890ABCDEF";
+  const char kShortcutCharacters[] = "1234567890ABCDEF";
   // The default character should not be used but just in case.
-  wchar_t shortcut_character = L'?';
+  char shortcut_character = L'?';
   // -1 to exclude the null character at the end.
-  if (index < static_cast<int>(arraysize(kShortcutCharacters) - 1)) {
+  if (index < static_cast<int>(arraysize(kShortcutCharacters) - 1))
     shortcut_character = kShortcutCharacters[index];
-  }
 
-  std::wstring shortcut_text;
-  if (orientation == InputMethodLookupTable::kVertical) {
-    shortcut_text = base::StringPrintf(L"%lc", shortcut_character);
-  } else {
-    shortcut_text = base::StringPrintf(L"%lc.", shortcut_character);
-  }
-
-  return shortcut_text;
+  std::string shortcut_text(1, shortcut_character);
+  if (orientation != InputMethodLookupTable::kVertical)
+    shortcut_text += '.';
+  return ASCIIToUTF16(shortcut_text);
 }
 
 // Creates the shortcut label, and returns it (never returns NULL).
@@ -159,7 +160,8 @@ views::Label* CreateShortcutLabel(
   }
   // TODO(satorux): Maybe we need to use language specific fonts for
   // candidate_label, like Chinese font for Chinese input method?
-  shortcut_label->SetColor(kShortcutColor);
+  shortcut_label->SetEnabledColor(kShortcutColor);
+  shortcut_label->SetDisabledColor(kDisabledShortcutColor);
 
   return shortcut_label;
 }
@@ -186,6 +188,8 @@ views::View* CreateWrappedShortcutLabel(
     wrapped_shortcut_label->set_background(
         views::Background::CreateSolidBackground(
             kShortcutBackgroundColor));
+    shortcut_label->SetBackgroundColor(
+        wrapped_shortcut_label->background()->get_color());
   }
 
   return wrapped_shortcut_label;
@@ -223,7 +227,7 @@ views::Label* CreateAnnotationLabel(
   // Change the font size and color.
   annotation_label->SetFont(
       annotation_label->font().DeriveFont(kFontSizeDelta));
-  annotation_label->SetColor(kAnnotationColor);
+  annotation_label->SetEnabledColor(kAnnotationColor);
   annotation_label->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
 
   return annotation_label;
@@ -243,8 +247,7 @@ int ComputeShortcutColumnWidth(
   // Compute the max width in shortcut labels.
   // We'll create temporary shortcut labels, and choose the largest width.
   for (int i = 0; i < lookup_table.page_size; ++i) {
-    shortcut_label->SetText(
-        CreateShortcutText(i, lookup_table.orientation));
+    shortcut_label->SetText(CreateShortcutText(i, lookup_table.orientation));
     shortcut_column_width =
         std::max(shortcut_column_width,
                  wrapped_shortcut_label->GetPreferredSize().width());
@@ -281,7 +284,7 @@ int ComputeCandidateColumnWidth(
     const size_t index = start_from + i;
 
     candidate_label->SetText(
-        UTF8ToWide(lookup_table.candidates[index]));
+        UTF8ToUTF16(lookup_table.candidates[index]));
     candidate_column_width =
         std::max(candidate_column_width,
                  candidate_label->GetPreferredSize().width());
@@ -308,7 +311,7 @@ int ComputeAnnotationColumnWidth(const InputMethodLookupTable& lookup_table) {
     const size_t index = start_from + i;
 
     annotation_label->SetText(
-        UTF8ToWide(lookup_table.annotations[index]));
+        UTF8ToUTF16(lookup_table.annotations[index]));
     annotation_column_width =
         std::max(annotation_column_width,
                  annotation_label->GetPreferredSize().width());
@@ -316,6 +319,8 @@ int ComputeAnnotationColumnWidth(const InputMethodLookupTable& lookup_table) {
 
   return annotation_column_width;
 }
+
+}  // namespace
 
 // HidableArea is used as an area to place optional information that can be
 // turned displaying off if it is unnecessary.
@@ -372,6 +377,8 @@ class HidableArea : public views::View {
  private:
   scoped_ptr<views::View> contents_;
   scoped_ptr<views::View> place_holder_;
+
+  DISALLOW_COPY_AND_ASSIGN(HidableArea);
 };
 
 // InformationTextArea is a HidableArea having a single Label in it.
@@ -392,11 +399,12 @@ class InformationTextArea : public HidableArea {
         views::Background::CreateVerticalGradientBackground(
             kFooterTopColor,
             kFooterBottomColor));
+    label_->SetBackgroundColor(contents->background()->get_color());
   }
 
   // Set the displayed text.
   void SetText(const std::string& utf8_text) {
-    label_->SetText(UTF8ToWide(utf8_text));
+    label_->SetText(UTF8ToUTF16(utf8_text));
   }
 
  protected:
@@ -413,173 +421,8 @@ class InformationTextArea : public HidableArea {
  private:
   views::Label* label_;
   int minWidth_;
-};
 
-}  // namespace
-
-class CandidateView;
-
-// CandidateWindowView is the main container of the candidate window UI.
-class CandidateWindowView : public views::View {
- public:
-  // The object can be monitored by the observer.
-  class Observer {
-   public:
-    virtual ~Observer() {}
-    // The function is called when a candidate is committed.
-    // See comments at NotifyCandidateClicked() in chromeos_input_method_ui.h
-    // for details about the parameters.
-    virtual void OnCandidateCommitted(int index, int button, int flag) = 0;
-  };
-
-  explicit CandidateWindowView(views::Widget* parent_frame);
-  virtual ~CandidateWindowView() {}
-  void Init();
-
-  // Adds the given observer. The ownership is not transferred.
-  void AddObserver(Observer* observer) {
-    observers_.AddObserver(observer);
-  }
-
-  // Removes the given observer.
-  void RemoveObserver(Observer* observer) {
-    observers_.RemoveObserver(observer);
-  }
-
-  // Selects the candidate specified by the index in the current page
-  // (zero-origin).  Changes the appearance of the selected candidate,
-  // updates the information in the candidate window as needed.
-  void SelectCandidateAt(int index_in_page);
-
-  // The function is called when a candidate is being dragged. From the
-  // given point, locates the candidate under the mouse cursor, and
-  // selects it.
-  void OnCandidatePressed(const gfx::Point& point);
-
-  // Commits the candidate currently being selected.
-  void CommitCandidate();
-
-  // Hides the lookup table.
-  void HideLookupTable();
-
-  // Hides the auxiliary text.
-  void HideAuxiliaryText();
-
-  // Hides the preedit text.
-  void HidePreeditText();
-
-  // Hides whole the candidate window.
-  void HideAll();
-
-  // Shows the lookup table.
-  void ShowLookupTable();
-
-  // Shows the auxiliary text.
-  void ShowAuxiliaryText();
-
-  // Shows the preedit text.
-  void ShowPreeditText();
-
-  // Updates the auxiliary text.
-  void UpdateAuxiliaryText(const std::string& utf8_text);
-
-  // Updates the preedit text.
-  void UpdatePreeditText(const std::string& utf8_text);
-
-  // Returns true if we should update candidate views in the window.  For
-  // instance, if we are going to show the same candidates as before, we
-  // don't have to update candidate views. This happens when the user just
-  // moves the cursor in the same page in the candidate window.
-  bool ShouldUpdateCandidateViews(
-      const InputMethodLookupTable& old_table,
-      const InputMethodLookupTable& new_table);
-
-  // Updates candidates of the candidate window from |lookup_table|.
-  // Candidates are arranged per |orientation|.
-  void UpdateCandidates(const InputMethodLookupTable& lookup_table);
-
-  // Resizes and moves the parent frame. The two actions should be
-  // performed consecutively as resizing may require the candidate window
-  // to move. For instance, we may need to move the candidate window from
-  // below the cursor to above the cursor, if the candidate window becomes
-  // too big to be shown near the bottom of the screen.  This function
-  // needs to be called when the visible contents of the candidate window
-  // are modified.
-  void ResizeAndMoveParentFrame();
-
-  // Returns the horizontal offset used for placing the vertical candidate
-  // window so that the first candidate is aligned with the the text being
-  // converted like:
-  //
-  //      XXX           <- The user is converting XXX
-  //   +-----+
-  //   |1 XXX|
-  //   |2 YYY|
-  //   |3 ZZZ|
-  //
-  // Returns 0 if no candidate is present.
-  int GetHorizontalOffset();
-
-  void set_cursor_location(const gfx::Rect& cursor_location) {
-    cursor_location_ = cursor_location;
-  }
-
-  const gfx::Rect& cursor_location() const { return cursor_location_; }
-
- protected:
-  // Override View::VisibilityChanged()
-  virtual void VisibilityChanged(View* starting_from, bool is_visible) OVERRIDE;
-
-  // Override View::OnBoundsChanged()
-  virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
-
- private:
-  // Initializes the candidate views if needed.
-  void MaybeInitializeCandidateViews(
-      const InputMethodLookupTable& lookup_table);
-
-  // Returns the appropriate area (header or footer) to put auxiliary texts.
-  InformationTextArea* GetAuxiliaryTextArea();
-
-  // The lookup table (candidates).
-  InputMethodLookupTable lookup_table_;
-
-  // The index in the current page of the candidate currently being selected.
-  int selected_candidate_index_in_page_;
-
-  // The observers of the object.
-  ObserverList<Observer> observers_;
-
-  // The parent frame.
-  views::Widget* parent_frame_;
-
-  // Views created in the class will be part of tree of |this|, so these
-  // child views will be deleted when |this| is deleted.
-
-  // The preedit area is where the preedit text is shown, if it is needed
-  // in cases such as the focus is on a plugin that doesn't support in-line
-  // preedit drawing.
-  InformationTextArea* preedit_area_;
-  // The header area is where the auxiliary text is shown, if the
-  // orientation is horizontal. If the auxiliary text is not provided, we
-  // show nothing.  For instance, we show pinyin text like "zhong'guo".
-  InformationTextArea* header_area_;
-  // The candidate area is where candidates are rendered.
-  HidableArea* candidate_area_;
-  // The candidate views are used for rendering candidates.
-  std::vector<CandidateView*> candidate_views_;
-  // The footer area is where the auxiliary text is shown, if the
-  // orientation is vertical. Usually the auxiliary text is used for
-  // showing candidate number information like 2/19.
-  InformationTextArea* footer_area_;
-
-  // Current columns width in |candidate_area_|.
-  int previous_shortcut_column_width_;
-  int previous_candidate_column_width_;
-  int previous_annotation_column_width_;
-
-  // The last cursor location.
-  gfx::Rect cursor_location_;
+  DISALLOW_COPY_AND_ASSIGN(InformationTextArea);
 };
 
 // CandidateRow renderes a row of a candidate.
@@ -596,13 +439,13 @@ class CandidateView : public views::View {
             int annotation_column_width);
 
   // Sets candidate text to the given text.
-  void SetCandidateText(const std::wstring& text);
+  void SetCandidateText(const string16& text);
 
   // Sets shortcut text to the given text.
-  void SetShortcutText(const std::wstring& text);
+  void SetShortcutText(const string16& text);
 
   // Sets annotation text to the given text.
-  void SetAnnotationText(const std::wstring& text);
+  void SetAnnotationText(const string16& text);
 
   // Sets infolist icon.
   void SetInfolistIcon(bool enable);
@@ -626,6 +469,10 @@ class CandidateView : public views::View {
   // Overridden from View:
   virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE;
 
+  // Notifies labels of their new background colors.  Called whenever the view's
+  // background color changes.
+  void UpdateLabelBackgroundColors();
+
   // Zero-origin index in the current page.
   int index_in_page_;
 
@@ -648,6 +495,8 @@ class CandidateView : public views::View {
   // The infolist icon.
   views::Label* infolist_label_;
   bool infolist_icon_enabled_;
+
+  DISALLOW_COPY_AND_ASSIGN(CandidateView);
 };
 
 class InfolistView;
@@ -655,9 +504,8 @@ class InfolistView;
 // InfolistWindowView is the main container of the infolist window UI.
 class InfolistWindowView : public views::View {
  public:
-
-  InfolistWindowView(
-      views::Widget* parent_frame, views::Widget* candidate_window_frame);
+  InfolistWindowView(views::Widget* parent_frame,
+                     views::Widget* candidate_window_frame);
   virtual ~InfolistWindowView();
   void Init();
   void Show();
@@ -698,6 +546,8 @@ class InfolistWindowView : public views::View {
   bool visible_;
 
   base::OneShotTimer<InfolistWindowView> show_hide_timer_;
+
+  DISALLOW_COPY_AND_ASSIGN(InfolistWindowView);
 };
 
 // InfolistRow renderes a row of a infolist.
@@ -723,6 +573,10 @@ class InfolistView : public views::View {
   void Unselect();
 
  private:
+  // Notifies labels of their new background colors.  Called whenever the view's
+  // background color changes.
+  void UpdateLabelBackgroundColors();
+
   // The parent candidate window that contains this view.
   InfolistWindowView* parent_infolist_window_;
 
@@ -733,8 +587,9 @@ class InfolistView : public views::View {
   views::Label* title_label_;
   // The description label.
   views::Label* description_label_;
-};
 
+  DISALLOW_COPY_AND_ASSIGN(InfolistView);
+};
 
 // The implementation of CandidateWindowController.
 // CandidateWindowController controls the CandidateWindow.
@@ -747,11 +602,16 @@ class CandidateWindowController::Impl : public CandidateWindowView::Observer,
   // Initializes the candidate window. Returns true on success.
   bool Init();
 
+  void AddObserver(CandidateWindowController::Observer* observer);
+  void RemoveObserver(CandidateWindowController::Observer* observer);
+
  private:
   // CandidateWindowView::Observer implementation.
   virtual void OnCandidateCommitted(int index,
                                     int button,
                                     int flags);
+  virtual void OnCandidateWindowOpened();
+  virtual void OnCandidateWindowClosed();
 
   // Creates the candidate window view.
   void CreateView();
@@ -784,6 +644,10 @@ class CandidateWindowController::Impl : public CandidateWindowView::Observer,
   // This is the outer frame of the infolist window view. The frame will
   // own |infolist_window_|.
   scoped_ptr<views::Widget> infolist_frame_;
+
+  ObserverList<CandidateWindowController::Observer> observers_;
+
+  DISALLOW_COPY_AND_ASSIGN(Impl);
 };
 
 CandidateView::CandidateView(
@@ -862,40 +726,36 @@ void CandidateView::Init(int shortcut_column_width,
     layout->AddView(WrapWithPadding(infolist_label_,
         gfx::Insets(2, 0, 2, 0)));
   }
+  UpdateLabelBackgroundColors();
 }
 
-void CandidateView::SetCandidateText(const std::wstring& text) {
+void CandidateView::SetCandidateText(const string16& text) {
   candidate_label_->SetText(text);
 }
 
-void CandidateView::SetShortcutText(const std::wstring& text) {
+void CandidateView::SetShortcutText(const string16& text) {
   shortcut_label_->SetText(text);
 }
 
-void CandidateView::SetAnnotationText(const std::wstring& text) {
+void CandidateView::SetAnnotationText(const string16& text) {
   annotation_label_->SetText(text);
 }
 
 void CandidateView::SetInfolistIcon(bool enable) {
-  if (!infolist_label_) {
+  if (!infolist_label_ || (infolist_icon_enabled_ == enable))
     return;
-  }
-  if (enable) {
-    infolist_label_->set_background(
-        views::Background::CreateSolidBackground(kSelectedRowFrameColor));
-  } else {
-    infolist_label_->set_background(NULL);
-  }
-  if (infolist_icon_enabled_ != enable) {
-    SchedulePaint();
-  }
   infolist_icon_enabled_ = enable;
+  infolist_label_->set_background(enable ?
+      views::Background::CreateSolidBackground(kSelectedRowFrameColor) : NULL);
+  UpdateLabelBackgroundColors();
+  SchedulePaint();
 }
 
 void CandidateView::Select() {
   set_background(
       views::Background::CreateSolidBackground(kSelectedRowBackgroundColor));
   set_border(views::Border::CreateSolidBorder(1, kSelectedRowFrameColor));
+  UpdateLabelBackgroundColors();
   // Need to call SchedulePaint() for background and border color changes.
   SchedulePaint();
 }
@@ -903,12 +763,12 @@ void CandidateView::Select() {
 void CandidateView::Unselect() {
   set_background(NULL);
   set_border(NULL);
+  UpdateLabelBackgroundColors();
   SchedulePaint();  // See comments at Select().
 }
 
 void CandidateView::SetRowEnabled(bool enabled) {
-  shortcut_label_->SetColor(
-      enabled ? kShortcutColor : kDisabledShortcutColor);
+  shortcut_label_->SetEnabled(enabled);
 }
 
 gfx::Point CandidateView::GetCandidateLabelPosition() const {
@@ -958,8 +818,20 @@ bool CandidateView::OnMousePressed(const views::MouseEvent& event) {
   return false;
 }
 
-CandidateWindowView::CandidateWindowView(
-    views::Widget* parent_frame)
+void CandidateView::UpdateLabelBackgroundColors() {
+  SkColor color = background() ?
+      background()->get_color() : kDefaultBackgroundColor;
+  if (orientation_ != InputMethodLookupTable::kVertical)
+    shortcut_label_->SetBackgroundColor(color);
+  candidate_label_->SetBackgroundColor(color);
+  annotation_label_->SetBackgroundColor(color);
+  if (infolist_label_) {
+    infolist_label_->SetBackgroundColor(infolist_label_->background() ?
+        infolist_label_->background()->get_color() : color);
+  }
+}
+
+CandidateWindowView::CandidateWindowView(views::Widget* parent_frame)
     : selected_candidate_index_in_page_(0),
       parent_frame_(parent_frame),
       preedit_area_(NULL),
@@ -968,7 +840,12 @@ CandidateWindowView::CandidateWindowView(
       footer_area_(NULL),
       previous_shortcut_column_width_(0),
       previous_candidate_column_width_(0),
-      previous_annotation_column_width_(0) {
+      previous_annotation_column_width_(0),
+      is_suggestion_window_location_available_(false),
+      was_candidate_window_open_(false) {
+}
+
+CandidateWindowView::~CandidateWindowView() {
 }
 
 void CandidateWindowView::Init() {
@@ -1011,47 +888,66 @@ void CandidateWindowView::Init() {
 
 void CandidateWindowView::HideAll() {
   parent_frame_->Hide();
+  NotifyIfCandidateWindowOpenedOrClosed();
+}
+
+void CandidateWindowView::UpdateParentArea() {
+  if (candidate_area_->IsShown() ||
+      header_area_->IsShown() ||
+      footer_area_->IsShown() ||
+      preedit_area_->IsShown()) {
+    ResizeAndMoveParentFrame();
+    parent_frame_->Show();
+  } else {
+    parent_frame_->Hide();
+  }
+  NotifyIfCandidateWindowOpenedOrClosed();
 }
 
 void CandidateWindowView::HideLookupTable() {
   candidate_area_->Hide();
-  if (preedit_area_->IsShown())
-    ResizeAndMoveParentFrame();
-  else
-    parent_frame_->Hide();
-}
-
-InformationTextArea* CandidateWindowView::GetAuxiliaryTextArea() {
-  return (lookup_table_.orientation == InputMethodLookupTable::kHorizontal ?
-          header_area_ : footer_area_);
+  UpdateParentArea();
 }
 
 void CandidateWindowView::HideAuxiliaryText() {
-  GetAuxiliaryTextArea()->Hide();
-  ResizeAndMoveParentFrame();
+  header_area_->Hide();
+  footer_area_->Hide();
+  UpdateParentArea();
 }
 
 void CandidateWindowView::ShowAuxiliaryText() {
-  GetAuxiliaryTextArea()->Show();
-  ResizeAndMoveParentFrame();
+  // If candidate_area is not shown, shows auxiliary text at header_area.
+  // We expect both header_area_ and footer_area_ contain same value.
+  if (!candidate_area_->IsShown()) {
+    header_area_->Show();
+    footer_area_->Hide();
+  } else {
+    // If candidate_area is shown, shows auxiliary text with orientation.
+    if (lookup_table_.orientation == InputMethodLookupTable::kHorizontal) {
+      header_area_->Show();
+      footer_area_->Hide();
+    } else {
+      footer_area_->Show();
+      header_area_->Hide();
+    }
+  }
+  UpdateParentArea();
 }
 
 void CandidateWindowView::UpdateAuxiliaryText(const std::string& utf8_text) {
-  GetAuxiliaryTextArea()->SetText(utf8_text);
+  header_area_->SetText(utf8_text);
+  footer_area_->SetText(utf8_text);
+  ShowAuxiliaryText();
 }
 
 void CandidateWindowView::HidePreeditText() {
   preedit_area_->Hide();
-  if (candidate_area_->IsShown())
-    ResizeAndMoveParentFrame();
-  else
-    parent_frame_->Hide();
+  UpdateParentArea();
 }
 
 void CandidateWindowView::ShowPreeditText() {
   preedit_area_->Show();
-  ResizeAndMoveParentFrame();
-  parent_frame_->Show();
+  UpdateParentArea();
 }
 
 void CandidateWindowView::UpdatePreeditText(const std::string& utf8_text) {
@@ -1060,13 +956,40 @@ void CandidateWindowView::UpdatePreeditText(const std::string& utf8_text) {
 
 void CandidateWindowView::ShowLookupTable() {
   candidate_area_->Show();
-  ResizeAndMoveParentFrame();
-  parent_frame_->Show();
+  UpdateParentArea();
+}
+
+void CandidateWindowView::NotifyIfCandidateWindowOpenedOrClosed() {
+  bool is_open = IsCandidateWindowOpen();
+  if (!was_candidate_window_open_ && is_open) {
+    FOR_EACH_OBSERVER(Observer, observers_, OnCandidateWindowOpened());
+  } else if (was_candidate_window_open_ && !is_open) {
+    FOR_EACH_OBSERVER(Observer, observers_, OnCandidateWindowClosed());
+  }
+  was_candidate_window_open_ = is_open;
 }
 
 bool CandidateWindowView::ShouldUpdateCandidateViews(
     const InputMethodLookupTable& old_table,
     const InputMethodLookupTable& new_table) {
+
+  // Check if mozc lookup table location is changed.
+  if (old_table.mozc_candidates.has_window_location() ||
+      new_table.mozc_candidates.has_window_location()) {
+
+    if (!old_table.mozc_candidates.IsInitialized() ||
+        !new_table.mozc_candidates.IsInitialized()) {
+      return true;
+    }
+
+    std::string old_serialized_msg;
+    std::string new_serialized_msg;
+
+    old_table.mozc_candidates.SerializeToString(&old_serialized_msg);
+    new_table.mozc_candidates.SerializeToString(&new_serialized_msg);
+    return old_serialized_msg != new_serialized_msg;
+  }
+
   // Check if most table contents are identical.
   if (old_table.page_size == new_table.page_size &&
       old_table.orientation == new_table.orientation &&
@@ -1091,6 +1014,24 @@ void CandidateWindowView::UpdateCandidates(
     // Initialize candidate views if necessary.
     MaybeInitializeCandidateViews(new_lookup_table);
 
+    // Store mozc specific window location.
+    if (new_lookup_table.mozc_candidates.has_window_location() &&
+        new_lookup_table.mozc_candidates.window_location() ==
+            mozc::commands::Candidates::COMPOSITION) {
+      DCHECK(new_lookup_table.mozc_candidates.has_composition_rectangle());
+      suggestion_window_location_.set_x(
+          new_lookup_table.mozc_candidates.composition_rectangle().x());
+      suggestion_window_location_.set_y(
+          new_lookup_table.mozc_candidates.composition_rectangle().y());
+      suggestion_window_location_.set_width(
+          new_lookup_table.mozc_candidates.composition_rectangle().width());
+      suggestion_window_location_.set_height(
+          new_lookup_table.mozc_candidates.composition_rectangle().height());
+      is_suggestion_window_location_available_ = true;
+    } else {
+      is_suggestion_window_location_available_ = false;
+    }
+
     // Compute the index of the current page.
     const int current_page_index = ComputePageIndex(new_lookup_table);
     if (current_page_index < 0) {
@@ -1106,14 +1047,14 @@ void CandidateWindowView::UpdateCandidates(
     // case, we should not show shortcut labels.
     const bool no_shortcut_mode =
         (start_from < new_lookup_table.labels.size() &&
-         new_lookup_table.labels[start_from] == "");
+         new_lookup_table.labels[start_from].empty());
     for (size_t i = 0; i < candidate_views_.size(); ++i) {
       const size_t index_in_page = i;
       const size_t candidate_index = start_from + index_in_page;
       CandidateView* candidate_view = candidate_views_[index_in_page];
       // Set the shortcut text.
       if (no_shortcut_mode) {
-        candidate_view->SetShortcutText(L"");
+        candidate_view->SetShortcutText(string16());
       } else {
         // At this moment, we don't use labels sent from engines for UX
         // reasons. First, we want to show shortcut labels in empty rows
@@ -1127,9 +1068,9 @@ void CandidateWindowView::UpdateCandidates(
       if (candidate_index < new_lookup_table.candidates.size() &&
           candidate_index < new_lookup_table.annotations.size()) {
         candidate_view->SetCandidateText(
-            UTF8ToWide(new_lookup_table.candidates[candidate_index]));
+            UTF8ToUTF16(new_lookup_table.candidates[candidate_index]));
         candidate_view->SetAnnotationText(
-            UTF8ToWide(new_lookup_table.annotations[candidate_index]));
+            UTF8ToUTF16(new_lookup_table.annotations[candidate_index]));
         candidate_view->SetRowEnabled(true);
 
         if ((new_lookup_table.mozc_candidates.candidate_size() >
@@ -1142,8 +1083,8 @@ void CandidateWindowView::UpdateCandidates(
         }
       } else {
         // Disable the empty row.
-        candidate_view->SetCandidateText(L"");
-        candidate_view->SetAnnotationText(L"");
+        candidate_view->SetCandidateText(string16());
+        candidate_view->SetAnnotationText(string16());
         candidate_view->SetRowEnabled(false);
         candidate_view->SetInfolistIcon(false);
       }
@@ -1263,6 +1204,11 @@ void CandidateWindowView::MaybeInitializeCandidateViews(
   layout->Layout(candidate_area_contents);
 }
 
+bool CandidateWindowView::IsCandidateWindowOpen() const {
+  return !is_suggestion_window_location_available_ &&
+      candidate_area_->visible() && candidate_area_->IsShown();
+}
+
 void CandidateWindowView::SelectCandidateAt(int index_in_page) {
   const int current_page_index = ComputePageIndex(lookup_table_);
   if (current_page_index < 0) {
@@ -1315,8 +1261,16 @@ void CandidateWindowView::CommitCandidate() {
 }
 
 void CandidateWindowView::ResizeAndMoveParentFrame() {
-  const int x = cursor_location_.x();
-  const int y = cursor_location_.y();
+  // If rendering operation comes from mozc-engine, uses mozc specific location,
+  // otherwise lookup table is shown under the cursor.
+  const int x = is_suggestion_window_location_available_ ?
+      suggestion_window_location_.x() : cursor_location_.x();
+  // To avoid lookup-table overlapping, uses maximum y-position of mozc specific
+  // location and cursor location, because mozc-engine does not consider about
+  // multi-line composition.
+  const int y = is_suggestion_window_location_available_ ?
+      std::max(suggestion_window_location_.y(), cursor_location_.y()) :
+      cursor_location_.y();
   const int height = cursor_location_.height();
   const int horizontal_offset = GetHorizontalOffset();
 
@@ -1413,23 +1367,24 @@ void InfolistView::Init() {
   layout->AddView(wrapped_title_label);
   layout->StartRow(0, 0);
   layout->AddView(wrapped_description_label);
+  UpdateLabelBackgroundColors();
 }
 
 
 void InfolistView::SetTitleText(const std::wstring& text) {
-  title_label_->SetText(text);
+  title_label_->SetText(WideToUTF16Hack(text));
 }
 
 void InfolistView::SetDescriptionText(const std::wstring& text) {
-  description_label_->SetText(text);
+  description_label_->SetText(WideToUTF16Hack(text));
 }
 
 void InfolistView::Select() {
-  set_background(
-      views::Background::CreateSolidBackground(
-          kSelectedInfolistRowBackgroundColor));
+  set_background(views::Background::CreateSolidBackground(
+      kSelectedInfolistRowBackgroundColor));
   set_border(
       views::Border::CreateSolidBorder(1, kSelectedInfolistRowFrameColor));
+  UpdateLabelBackgroundColors();
   // Need to call SchedulePaint() for background and border color changes.
   SchedulePaint();
 }
@@ -1437,11 +1392,19 @@ void InfolistView::Select() {
 void InfolistView::Unselect() {
   set_background(NULL);
   set_border(NULL);
+  UpdateLabelBackgroundColors();
   SchedulePaint();  // See comments at Select().
 }
 
-InfolistWindowView::InfolistWindowView(
-    views::Widget* parent_frame, views::Widget* candidate_window_frame)
+void InfolistView::UpdateLabelBackgroundColors() {
+  SkColor color = background() ?
+      background()->get_color() : kDefaultBackgroundColor;
+  title_label_->SetBackgroundColor(color);
+  description_label_->SetBackgroundColor(color);
+}
+
+InfolistWindowView::InfolistWindowView(views::Widget* parent_frame,
+                                       views::Widget* candidate_window_frame)
     : parent_frame_(parent_frame),
       candidate_window_frame_(candidate_window_frame),
       infolist_area_(NULL),
@@ -1480,12 +1443,13 @@ void InfolistWindowView::Init() {
   caption_label->SetFont(caption_label->font().DeriveFont(kFontSizeDelta - 2));
   caption_label->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   caption_label->SetText(
-      UTF16ToWide(
-          l10n_util::GetStringUTF16(IDS_INPUT_METHOD_INFOLIST_WINDOW_TITLE)));
+      l10n_util::GetStringUTF16(IDS_INPUT_METHOD_INFOLIST_WINDOW_TITLE));
   views::View* wrapped_caption_label =
       WrapWithPadding(caption_label, gfx::Insets(2, 2, 2, 2));
   wrapped_caption_label->set_background(
       views::Background::CreateSolidBackground(kInfolistTitleBackgroundColor));
+  caption_label->SetBackgroundColor(
+      wrapped_caption_label->background()->get_color());
   layout->AddView(wrapped_caption_label);
 
   layout->StartRow(0, 0);
@@ -1651,8 +1615,10 @@ void CandidateWindowController::Impl::CreateView() {
   // Create a non-decorated frame.
   frame_.reset(new views::Widget);
   // The size is initially zero.
-  frame_->Init(
-      views::Widget::InitParams(views::Widget::InitParams::TYPE_POPUP));
+  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  // Show the candidate window always on top
+  params.keep_on_top = true;
+  frame_->Init(params);
 
   // Create the candidate window.
   candidate_window_ = new CandidateWindowView(frame_.get());
@@ -1664,8 +1630,7 @@ void CandidateWindowController::Impl::CreateView() {
 
   // Create the infolist window.
   infolist_frame_.reset(new views::Widget);
-  infolist_frame_->Init(
-      views::Widget::InitParams(views::Widget::InitParams::TYPE_POPUP));
+  infolist_frame_->Init(params);
   infolist_window_ = new InfolistWindowView(
       infolist_frame_.get(), frame_.get());
   infolist_window_->Init();
@@ -1785,6 +1750,26 @@ void CandidateWindowController::Impl::OnCandidateCommitted(int index,
   ibus_ui_controller_->NotifyCandidateClicked(index, button, flags);
 }
 
+void CandidateWindowController::Impl::OnCandidateWindowOpened() {
+  FOR_EACH_OBSERVER(CandidateWindowController::Observer, observers_,
+                    CandidateWindowOpened());
+}
+
+void CandidateWindowController::Impl::OnCandidateWindowClosed() {
+  FOR_EACH_OBSERVER(CandidateWindowController::Observer, observers_,
+                    CandidateWindowClosed());
+}
+
+void CandidateWindowController::Impl::AddObserver(
+    CandidateWindowController::Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void CandidateWindowController::Impl::RemoveObserver(
+    CandidateWindowController::Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
 void CandidateWindowController::Impl::OnConnectionChange(bool connected) {
   if (!connected) {
     candidate_window_->HideAll();
@@ -1802,6 +1787,16 @@ CandidateWindowController::~CandidateWindowController() {
 
 bool CandidateWindowController::Init() {
   return impl_->Init();
+}
+
+void CandidateWindowController::AddObserver(
+    CandidateWindowController::Observer* observer) {
+  impl_->AddObserver(observer);
+}
+
+void CandidateWindowController::RemoveObserver(
+    CandidateWindowController::Observer* observer) {
+  impl_->RemoveObserver(observer);
 }
 
 }  // namespace input_method

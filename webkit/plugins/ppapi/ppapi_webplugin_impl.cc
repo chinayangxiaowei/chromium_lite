@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,8 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginParams.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebPoint.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRect.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebPoint.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebRect.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "webkit/plugins/ppapi/message_channel.h"
 #include "webkit/plugins/ppapi/npobject_var.h"
@@ -99,6 +99,10 @@ void WebPluginImpl::destroy() {
 }
 
 NPObject* WebPluginImpl::scriptableObject() {
+  // Call through the plugin to get its instance object. Note that we "leak" a
+  // reference here. But we want to keep the instance object alive so long as
+  // the instance is alive, so it's okay. It will get cleaned up when all
+  // NPObjectVars are "force freed" at instance shutdown.
   scoped_refptr<NPObjectVar> object(
       NPObjectVar::FromPPVar(instance_->GetInstanceObject()));
   // GetInstanceObject talked to the plugin which may have removed the instance
@@ -117,12 +121,12 @@ NPObject* WebPluginImpl::scriptableObject() {
   return message_channel_np_object;
 }
 
-bool WebPluginImpl::getFormValue(WebString* value) {
+bool WebPluginImpl::getFormValue(WebString& value) {
   return false;
 }
 
 void WebPluginImpl::paint(WebCanvas* canvas, const WebRect& rect) {
-  if (!instance_->IsFullscreenOrPending())
+  if (!instance_->FlashIsFullscreenOrPending())
     instance_->Paint(canvas, plugin_rect_, rect);
 }
 
@@ -132,7 +136,7 @@ void WebPluginImpl::updateGeometry(
     const WebVector<WebRect>& cut_outs_rects,
     bool is_visible) {
   plugin_rect_ = window_rect;
-  if (!instance_->IsFullscreenOrPending())
+  if (!instance_->FlashIsFullscreenOrPending())
     instance_->ViewChanged(plugin_rect_, clip_rect);
 }
 
@@ -149,7 +153,7 @@ bool WebPluginImpl::acceptsInputEvents() {
 
 bool WebPluginImpl::handleInputEvent(const WebKit::WebInputEvent& event,
                                      WebKit::WebCursorInfo& cursor_info) {
-  if (instance_->IsFullscreenOrPending())
+  if (instance_->FlashIsFullscreenOrPending())
     return false;
   return instance_->HandleInputEvent(event, &cursor_info);
 }
@@ -238,6 +242,10 @@ bool WebPluginImpl::supportsPaginatedPrint() {
   return instance_->SupportsPrintInterface();
 }
 
+bool WebPluginImpl::isPrintScalingDisabled() {
+  return instance_->IsPrintScalingDisabled();
+}
+
 int WebPluginImpl::printBegin(const WebKit::WebRect& printable_area,
                               int printer_dpi) {
   return instance_->PrintBegin(printable_area, printer_dpi);
@@ -250,6 +258,14 @@ bool WebPluginImpl::printPage(int page_number,
 
 void WebPluginImpl::printEnd() {
   return instance_->PrintEnd();
+}
+
+bool WebPluginImpl::canRotateView() {
+  return instance_->CanRotateView();
+}
+
+void WebPluginImpl::rotateView(RotationType type) {
+  instance_->RotateView(type);
 }
 
 }  // namespace ppapi

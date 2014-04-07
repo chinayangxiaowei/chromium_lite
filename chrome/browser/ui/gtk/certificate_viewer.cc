@@ -1,8 +1,6 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "chrome/browser/ui/gtk/certificate_viewer.h"
 
 #include <gtk/gtk.h>
 
@@ -14,7 +12,8 @@
 #include "base/string_number_conversions.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/ui/gtk/certificate_dialogs.h"
+#include "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/ui/certificate_dialogs.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/common/net/x509_certificate_model.h"
 #include "grit/generated_resources.h"
@@ -22,6 +21,7 @@
 #include "ui/base/gtk/gtk_hig_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/gtk_util.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace {
 
@@ -148,15 +148,16 @@ CertificateViewer::CertificateViewer(
       GTK_STOCK_CLOSE,
       GTK_RESPONSE_CLOSE,
       NULL);
-  gtk_box_set_spacing(GTK_BOX(GTK_DIALOG(dialog_)->vbox),
-                      ui::kContentAreaSpacing);
+
+  GtkWidget* content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog_));
+  gtk_box_set_spacing(GTK_BOX(content_area), ui::kContentAreaSpacing);
 
   x509_certificate_model::RegisterDynamicOids();
   InitGeneralPage();
   InitDetailsPage();
 
   notebook_ = gtk_notebook_new();
-  gtk_container_add(GTK_CONTAINER(GTK_DIALOG(dialog_)->vbox), notebook_);
+  gtk_container_add(GTK_CONTAINER(content_area), notebook_);
 
   gtk_notebook_append_page(
       GTK_NOTEBOOK(notebook_),
@@ -708,14 +709,14 @@ void CertificateViewer::Show() {
 
 } // namespace
 
-void ShowCertificateViewer(gfx::NativeWindow parent,
-                           net::X509Certificate::OSCertHandle cert) {
+void ShowNativeCertificateViewer(gfx::NativeWindow parent,
+                                 net::X509Certificate::OSCertHandle cert) {
   net::X509Certificate::OSCertHandles cert_chain;
   x509_certificate_model::GetCertChainFromCert(cert, &cert_chain);
   (new CertificateViewer(parent, cert_chain))->Show();
 }
 
-void ShowCertificateViewer(gfx::NativeWindow parent,
-                           net::X509Certificate* cert) {
-  ShowCertificateViewer(parent, cert->os_cert_handle());
+void ShowNativeCertificateViewer(gfx::NativeWindow parent,
+                                 net::X509Certificate* cert) {
+  ShowNativeCertificateViewer(parent, cert->os_cert_handle());
 }

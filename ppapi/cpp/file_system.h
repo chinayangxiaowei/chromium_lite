@@ -15,17 +15,18 @@
 /// @file
 /// This file defines the API to create a file system associated with a file.
 
-struct PP_FileInfo;
-
 namespace pp {
 
 class CompletionCallback;
-class FileRef;
 
 /// The <code>FileSystem</code> class identifies the file system type
 /// associated with a file.
 class FileSystem : public Resource {
  public:
+  /// Constructs an is_null() filesystem resource. If you use this constructor,
+  /// you will have to assign it to a "real" FileSystem object before you can
+  /// use it.
+  FileSystem();
 
   /// This constructor creates a file system object of the given type.
   ///

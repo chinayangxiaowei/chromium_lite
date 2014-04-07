@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,12 +18,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_view.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "net/test/test_server.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+
+using content::NavigationController;
 
 namespace {
 
@@ -82,12 +84,12 @@ const wchar_t* GetBoolString(bool value) {
 }
 
 // A class to help wait for the finish of a key event test.
-class TestFinishObserver : public NotificationObserver {
+class TestFinishObserver : public content::NotificationObserver {
  public:
   explicit TestFinishObserver(RenderViewHost* render_view_host)
       : finished_(false), waiting_(false) {
     registrar_.Add(this, chrome::NOTIFICATION_DOM_OPERATION_RESPONSE,
-                   Source<RenderViewHost>(render_view_host));
+                   content::Source<RenderViewHost>(render_view_host));
   }
 
   bool WaitForFinish() {
@@ -100,10 +102,10 @@ class TestFinishObserver : public NotificationObserver {
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     DCHECK(type == chrome::NOTIFICATION_DOM_OPERATION_RESPONSE);
-    Details<DomOperationNotificationDetails> dom_op_details(details);
+    content::Details<DomOperationNotificationDetails> dom_op_details(details);
     // We might receive responses for other script execution, but we only
     // care about the test finished message.
     if (dom_op_details->json() == "\"FINISHED\"") {
@@ -116,7 +118,7 @@ class TestFinishObserver : public NotificationObserver {
  private:
   bool finished_;
   bool waiting_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(TestFinishObserver);
 };
@@ -143,7 +145,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     bool actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"",
         base::StringPrintf(kSuppressEventJS, type, GetBoolString(!suppress)),
         &actual));
@@ -169,7 +171,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
   void GetResultLength(int tab_index, int* length) {
     ASSERT_LT(tab_index, browser()->tab_count());
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractInt(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"", kGetResultLengthJS, length));
   }
 
@@ -181,7 +183,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     for (int i = 0; i < actual_length; ++i) {
       std::string actual;
       ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-          browser()->GetTabContentsAt(tab_index)->render_view_host(),
+          browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
           L"", base::StringPrintf(kGetResultJS, i), &actual));
 
       // If more events were received than expected, then the additional events
@@ -197,7 +199,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     std::string actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"", kGetFocusedElementJS, &actual));
     ASSERT_EQ(WideToUTF8(focused), actual);
   }
@@ -206,7 +208,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     bool actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"",
         base::StringPrintf(kSetFocusedElementJS, focused),
         &actual));
@@ -218,7 +220,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     std::string actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"",
         base::StringPrintf(kGetTextBoxValueJS, id),
         &actual));
@@ -230,7 +232,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     std::string actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"",
         base::StringPrintf(kSetTextBoxValueJS, id, value),
         &actual));
@@ -241,7 +243,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     ASSERT_LT(tab_index, browser()->tab_count());
     bool actual;
     ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
-        browser()->GetTabContentsAt(tab_index)->render_view_host(),
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost(),
         L"", base::StringPrintf(kStartTestJS, result_length), &actual));
     ASSERT_TRUE(actual);
   }
@@ -261,7 +263,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
     // because the test finished message might be arrived before returning
     // from the SendKeyPressSync() method.
     TestFinishObserver finish_observer(
-        browser()->GetTabContentsAt(tab_index)->render_view_host());
+        browser()->GetWebContentsAt(tab_index)->GetRenderViewHost());
 
     ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
         browser(), test.key, test.ctrl, test.shift, test.alt, test.command));
@@ -509,8 +511,8 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, FLAKY_CommandKeyEvents) {
 }
 #endif
 
-// http://crbug.com/81451
 #if defined(OS_MACOSX)
+// http://crbug.com/81451 for mac
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, DISABLED_AccessKeys) {
 #else
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
@@ -614,8 +616,11 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
   // TODO(isherman): This is an experimental change to help diagnose
   // http://crbug.com/55713
   ui_test_utils::RunAllPendingInMessageLoop();
-
+#if defined(USE_AURA)
+  EXPECT_TRUE(IsViewFocused(VIEW_ID_OMNIBOX));
+#else
   EXPECT_TRUE(IsViewFocused(VIEW_ID_LOCATION_BAR));
+#endif
   // No element should be focused, as Alt+D was handled by the browser.
   EXPECT_NO_FATAL_FAILURE(CheckFocusedElement(tab_index, L""));
 
@@ -649,8 +654,13 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
 #endif
 }
 
-// Disabled, http://crbug.com/69475.
-IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
+// Flaky, http://crbug.com/69475.
+#if defined(OS_LINUX)
+#define MAYBE_ReservedAccelerators FLAKY_ReservedAccelerators
+#else
+#define MAYBE_ReservedAccelerators ReservedAccelerators
+#endif
+IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, MAYBE_ReservedAccelerators) {
   ASSERT_TRUE(test_server()->Start());
 
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
@@ -676,7 +686,7 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
 
   ui_test_utils::WindowedNotificationObserver wait_for_new_tab(
       content::NOTIFICATION_TAB_PARENTED,
-      NotificationService::AllSources());
+      content::NotificationService::AllSources());
 
   // Press Ctrl/Cmd+T, which will open a new tab. It cannot be suppressed.
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlOrCmdT));
@@ -702,8 +712,9 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
   ASSERT_NO_FATAL_FAILURE(SuppressAllEvents(1, true));
 
   ui_test_utils::WindowedNotificationObserver wait_for_tab_closed(
-      content::NOTIFICATION_TAB_CLOSED, Source<NavigationController>(
-          &browser()->GetTabContentsAt(1)->controller()));
+      content::NOTIFICATION_TAB_CLOSED,
+      content::Source<NavigationController>(
+          &browser()->GetWebContentsAt(1)->GetController()));
 
   // Press Ctrl/Cmd+W, which will close the tab.
 #if defined(OS_MACOSX)

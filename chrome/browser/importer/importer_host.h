@@ -7,20 +7,20 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/bookmarks/base_bookmark_model_observer.h"
 #include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/importer/profile_writer.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "ui/gfx/native_widget_types.h"
 
 class FirefoxProfileLock;
 class Importer;
 class Profile;
-class Task;
 
 namespace importer {
 class ImporterProgressObserver;
@@ -31,7 +31,7 @@ class ImporterProgressObserver;
 // the import process is done, ImporterHost deletes itself.
 class ImporterHost : public base::RefCountedThreadSafe<ImporterHost>,
                      public BaseBookmarkModelObserver,
-                     public NotificationObserver {
+                     public content::NotificationObserver {
  public:
   ImporterHost();
 
@@ -101,15 +101,6 @@ class ImporterHost : public base::RefCountedThreadSafe<ImporterHost>,
   // Profile we're importing from.
   Profile* profile_;
 
-  // TODO(mirandac): |task_| and |importer_| should be private. Can't just put
-  // them there without changing the order of construct/destruct, so do this
-  // after main CL has been committed.
-  // The task is the process of importing settings from other browsers.
-  Task* task_;
-
-  // The importer used in the task.
-  Importer* importer_;
-
   // True if we're waiting for the model to finish loading.
   bool waiting_for_bookmarkbar_model_;
 
@@ -120,7 +111,7 @@ class ImporterHost : public base::RefCountedThreadSafe<ImporterHost>,
   bool is_source_readable_;
 
   // Receives notification when the TemplateURLService has loaded.
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Writes data from the importer back to the profile.
   scoped_refptr<ProfileWriter> writer_;
@@ -142,11 +133,17 @@ class ImporterHost : public base::RefCountedThreadSafe<ImporterHost>,
   virtual void BookmarkModelBeingDeleted(BookmarkModel* model) OVERRIDE;
   virtual void BookmarkModelChanged() OVERRIDE;
 
-  // NotificationObserver:
+  // content::NotificationObserver:
   // Called when TemplateURLService has been loaded.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
+  // The task is the process of importing settings from other browsers.
+  base::Closure task_;
+
+  // The importer used in the task.
+  Importer* importer_;
 
   // True if UI is not to be shown.
   bool headless_;

@@ -14,7 +14,7 @@
 #include "grit/generated_resources.h"
 #include "grit/ui_strings.h"
 #include "ui/base/l10n/l10n_util_mac.h"
-#include "ui/base/message_box_flags.h"
+#include "ui/base/ui_base_types.h"
 
 // Helper object that receives the notification that the dialog/sheet is
 // going away. Is responsible for cleaning itself up.
@@ -105,11 +105,11 @@ JSModalDialogCocoa::JSModalDialogCocoa(JavaScriptAppModalDialog* dialog)
   NSString* other_button = l10n_util::GetNSStringWithFixup(IDS_APP_CANCEL);
   bool text_field = false;
   bool one_button = false;
-  switch (dialog_->dialog_flags()) {
-    case ui::MessageBoxFlags::kIsJavascriptAlert:
+  switch (dialog_->javascript_message_type()) {
+    case ui::JAVASCRIPT_MESSAGE_TYPE_ALERT:
       one_button = true;
       break;
-    case ui::MessageBoxFlags::kIsJavascriptConfirm:
+    case ui::JAVASCRIPT_MESSAGE_TYPE_CONFIRM:
       if (dialog_->is_before_unload_dialog()) {
         default_button = l10n_util::GetNSStringWithFixup(
             IDS_BEFOREUNLOAD_MESSAGEBOX_OK_BUTTON_LABEL);
@@ -117,7 +117,7 @@ JSModalDialogCocoa::JSModalDialogCocoa(JavaScriptAppModalDialog* dialog)
             IDS_BEFOREUNLOAD_MESSAGEBOX_CANCEL_BUTTON_LABEL);
       }
       break;
-    case ui::MessageBoxFlags::kIsJavascriptPrompt:
+    case ui::JAVASCRIPT_MESSAGE_TYPE_PROMPT:
       text_field = true;
       break;
 
@@ -166,10 +166,9 @@ int JSModalDialogCocoa::GetAppModalDialogButtons() const {
   int num_buttons = [[alert_ buttons] count];
   switch (num_buttons) {
     case 1:
-      return ui::MessageBoxFlags::DIALOGBUTTON_OK;
+      return ui::DIALOG_BUTTON_OK;
     case 2:
-      return ui::MessageBoxFlags::DIALOGBUTTON_OK |
-             ui::MessageBoxFlags::DIALOGBUTTON_CANCEL;
+      return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
     default:
       NOTREACHED();
       return 0;

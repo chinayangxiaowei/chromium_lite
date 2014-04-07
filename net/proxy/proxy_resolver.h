@@ -11,6 +11,7 @@
 #include "base/string16.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/completion_callback.h"
+#include "net/base/load_states.h"
 #include "net/base/net_export.h"
 #include "net/proxy/proxy_resolver_script_data.h"
 
@@ -42,12 +43,18 @@ class NET_EXPORT_PRIVATE ProxyResolver {
   // |*request| is written to, and can be passed to CancelRequest().
   virtual int GetProxyForURL(const GURL& url,
                              ProxyInfo* results,
-                             CompletionCallback* callback,
+                             const net::CompletionCallback& callback,
                              RequestHandle* request,
                              const BoundNetLog& net_log) = 0;
 
   // Cancels |request|.
   virtual void CancelRequest(RequestHandle request) = 0;
+
+  // Gets the LoadState for |request|.
+  virtual LoadState GetLoadState(RequestHandle request) const = 0;
+
+  // Gets the LoadState for |request|. May be called from another thread.
+  virtual LoadState GetLoadStateThreadSafe(RequestHandle request) const = 0;
 
   // The PAC script backend can be specified to the ProxyResolver either via
   // URL, or via the javascript text itself.  If |expects_pac_bytes| is true,
@@ -67,7 +74,7 @@ class NET_EXPORT_PRIVATE ProxyResolver {
   // the result through |callback|.
   virtual int SetPacScript(
       const scoped_refptr<ProxyResolverScriptData>& pac_script,
-      CompletionCallback* callback) = 0;
+      const net::CompletionCallback& callback) = 0;
 
   // Optional shutdown code to be run before destruction. This is only used
   // by the multithreaded runner to signal cleanup from origin thread

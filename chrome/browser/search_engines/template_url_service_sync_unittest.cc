@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,13 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sync/protocol/search_engine_specifics.pb.h"
+#include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/test/base/testing_pref_service.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/browser/notification_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
@@ -22,7 +27,7 @@ std::string GetGUID(const SyncData& sync_data) {
       sync_pb::search_engine).sync_guid();
 }
 
-// Extract the keyword from a search engine SyncData.
+// Extract the URL from a search engine SyncData.
 std::string GetURL(const SyncData& sync_data) {
   return sync_data.GetSpecifics().GetExtension(
       sync_pb::search_engine).url();
@@ -32,6 +37,51 @@ std::string GetURL(const SyncData& sync_data) {
 std::string GetKeyword(const SyncData& sync_data) {
   return sync_data.GetSpecifics().GetExtension(
       sync_pb::search_engine).keyword();
+}
+
+// TODO(stevet): Share these with template_url_service_unittest.
+// Set the managed preferences for the default search provider and trigger
+// notification.
+void SetManagedDefaultSearchPreferences(TemplateURLService* turl_service,
+                                        TestingProfile* profile,
+                                        bool enabled,
+                                        const char* name,
+                                        const char* search_url,
+                                        const char* suggest_url,
+                                        const char* icon_url,
+                                        const char* encodings,
+                                        const char* keyword) {
+  TestingPrefService* pref_service = profile->GetTestingPrefService();
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderEnabled,
+                               Value::CreateBooleanValue(enabled));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderName,
+                               Value::CreateStringValue(name));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderSearchURL,
+                               Value::CreateStringValue(search_url));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderSuggestURL,
+                               Value::CreateStringValue(suggest_url));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderIconURL,
+                               Value::CreateStringValue(icon_url));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderEncodings,
+                               Value::CreateStringValue(encodings));
+  pref_service->SetManagedPref(prefs::kDefaultSearchProviderKeyword,
+                               Value::CreateStringValue(keyword));
+}
+
+// Remove all the managed preferences for the default search provider and
+// trigger notification.
+void RemoveManagedDefaultSearchPreferences(TemplateURLService* turl_service,
+                                           TestingProfile* profile) {
+  TestingPrefService* pref_service = profile->GetTestingPrefService();
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderSearchURL);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderEnabled);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderName);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderSuggestURL);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderIconURL);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderEncodings);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderKeyword);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderID);
+  pref_service->RemoveManagedPref(prefs::kDefaultSearchProviderPrepopulateID);
 }
 
 // Dummy SyncChangeProcessor used to help review what SyncChanges are pushed
@@ -87,9 +137,13 @@ class TemplateURLServiceSyncTest : public testing::Test {
 
   virtual void SetUp() {
     profile_a_.reset(new TestingProfile);
+    TemplateURLServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+        profile_a_.get());
     model_a_.reset(new TemplateURLService(profile_a_.get()));
     model_a_->Load();
     profile_b_.reset(new TestingProfile);
+    TemplateURLServiceFactory::GetInstance()->RegisterUserPrefsOnProfile(
+        profile_b_.get());
     model_b_.reset(new TemplateURLService(profile_b_.get()));
     model_b_->Load();
   }
@@ -277,6 +331,29 @@ TEST_F(TemplateURLServiceSyncTest, GetAllSyncDataNoExtensions) {
   }
 }
 
+TEST_F(TemplateURLServiceSyncTest, GetAllSyncDataNoManagedEngines) {
+  model()->Add(CreateTestTemplateURL("key1", "http://key1.com"));
+  model()->Add(CreateTestTemplateURL("key2", "http://key2.com"));
+  TemplateURL* managed_turl = CreateTestTemplateURL(
+      "key3", "http://key3.com");
+  managed_turl->set_created_by_policy(true);
+  model()->Add(managed_turl);
+  SyncDataList all_sync_data =
+      model()->GetAllSyncData(syncable::SEARCH_ENGINES);
+
+  EXPECT_EQ(2U, all_sync_data.size());
+
+  for (SyncDataList::const_iterator iter = all_sync_data.begin();
+      iter != all_sync_data.end(); ++iter) {
+    std::string guid = GetGUID(*iter);
+    const TemplateURL* service_turl = model()->GetTemplateURLForGUID(guid);
+    scoped_ptr<TemplateURL> deserialized(
+        TemplateURLService::CreateTemplateURLFromSyncData(*iter));
+    ASSERT_FALSE(service_turl->created_by_policy());
+    AssertEquals(*service_turl, *deserialized);
+  }
+}
+
 TEST_F(TemplateURLServiceSyncTest, UniquifyKeyword) {
   model()->Add(CreateTestTemplateURL("key1", "http://key1.com"));
   // Create a key that conflicts with something in the model.
@@ -340,13 +417,19 @@ TEST_F(TemplateURLServiceSyncTest, ResolveSyncKeywordConflict) {
   changes.clear();
 
   // Sync is newer. Original TemplateURL keyword is uniquified, no SyncChange
-  // is added.
+  // is added. Also ensure that this does not change the safe_for_autoreplace
+  // flag or the TemplateURLID in the original.
+  EXPECT_TRUE(original_turl->safe_for_autoreplace());
+  original_turl->set_id(1337);
+  sync_turl->set_id(1);
   sync_turl->set_keyword(original_turl->keyword());
   sync_keyword = sync_turl->keyword();
   sync_turl->set_last_modified(Time::FromTimeT(9001));
   EXPECT_TRUE(model()->ResolveSyncKeywordConflict(sync_turl.get(), &changes));
   EXPECT_EQ(sync_keyword, sync_turl->keyword());
   EXPECT_NE(original_turl_keyword, original_turl->keyword());
+  EXPECT_TRUE(original_turl->safe_for_autoreplace());
+  EXPECT_EQ(1337, original_turl->id());
   EXPECT_EQ(NULL, model()->GetTemplateURLForKeyword(sync_turl->keyword()));
   EXPECT_EQ(0U, changes.size());
 
@@ -363,6 +446,19 @@ TEST_F(TemplateURLServiceSyncTest, ResolveSyncKeywordConflict) {
   EXPECT_NE(original_turl_keyword, original_turl->keyword());
   EXPECT_EQ(NULL, model()->GetTemplateURLForKeyword(sync_turl->keyword()));
   EXPECT_EQ(0U, changes.size());
+
+  // Sync is newer, but original TemplateURL is created by policy, so it wins.
+  // Sync keyword is uniquified, and a SyncChange is added.
+  original_turl_keyword = original_turl->keyword();
+  sync_turl->set_keyword(original_turl->keyword());
+  sync_turl->set_last_modified(Time::FromTimeT(9999));
+  original_turl->set_created_by_policy(true);
+  EXPECT_TRUE(model()->ResolveSyncKeywordConflict(sync_turl.get(), &changes));
+  EXPECT_NE(sync_keyword, sync_turl->keyword());
+  EXPECT_EQ(original_turl_keyword, original_turl->keyword());
+  EXPECT_EQ(NULL, model()->GetTemplateURLForKeyword(sync_turl->keyword()));
+  EXPECT_EQ(1U, changes.size());
+  changes.clear();
 }
 
 TEST_F(TemplateURLServiceSyncTest, FindDuplicateOfSyncTemplateURL) {
@@ -1024,4 +1120,184 @@ TEST_F(TemplateURLServiceSyncTest, MergeTwiceWithSameSyncData) {
   const TemplateURL* reupdated_turl = model()->GetTemplateURLForGUID("key1");
   ASSERT_TRUE(reupdated_turl);
   AssertEquals(updated_turl, *reupdated_turl);
+}
+
+TEST_F(TemplateURLServiceSyncTest, SyncedDefaultGUIDArrivesFirst) {
+  SyncDataList initial_data = CreateInitialSyncData();
+  model()->MergeDataAndStartSyncing(
+      syncable::SEARCH_ENGINES,
+      initial_data,
+      processor());
+  model()->SetDefaultSearchProvider(model()->GetTemplateURLForGUID("key2"));
+
+  EXPECT_EQ(3U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  const TemplateURL* default_search = model()->GetDefaultSearchProvider();
+  ASSERT_TRUE(default_search);
+
+  // Change kSyncedDefaultSearchProviderGUID to a GUID that does not exist in
+  // the model yet. Ensure that the default has not changed in any way.
+  profile_a_->GetTestingPrefService()->SetString(
+      prefs::kSyncedDefaultSearchProviderGUID,
+      "newdefault");
+
+  ASSERT_EQ(default_search, model()->GetDefaultSearchProvider());
+
+  // Bring in a random new search engine with a different GUID. Ensure that
+  // it doesn't change the default.
+  SyncChangeList changes1;
+  changes1.push_back(CreateTestSyncChange(
+      SyncChange::ACTION_ADD,
+      CreateTestTemplateURL("random", "http://random.com", "random")));
+  model()->ProcessSyncChanges(FROM_HERE, changes1);
+
+  EXPECT_EQ(4U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  ASSERT_EQ(default_search, model()->GetDefaultSearchProvider());
+
+  // Finally, bring in the expected entry with the right GUID. Ensure that
+  // the default has changed to the new search engine.
+  SyncChangeList changes2;
+  changes2.push_back(CreateTestSyncChange(
+      SyncChange::ACTION_ADD,
+      CreateTestTemplateURL("new", "http://new.com", "newdefault")));
+  model()->ProcessSyncChanges(FROM_HERE, changes2);
+
+  EXPECT_EQ(5U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  ASSERT_NE(default_search, model()->GetDefaultSearchProvider());
+  ASSERT_EQ("newdefault", model()->GetDefaultSearchProvider()->sync_guid());
+}
+
+TEST_F(TemplateURLServiceSyncTest, SyncedDefaultArrivesAfterStartup) {
+  // Start with the default set to something in the model before we start
+  // syncing.
+  model()->Add(CreateTestTemplateURL(
+      "what", "http://thewhat.com", "initdefault"));
+  model()->SetDefaultSearchProvider(
+      model()->GetTemplateURLForGUID("initdefault"));
+
+  const TemplateURL* default_search = model()->GetDefaultSearchProvider();
+  ASSERT_TRUE(default_search);
+
+  // Set kSyncedDefaultSearchProviderGUID to something that is not yet in
+  // the model but is expected in the initial sync. Ensure that this doesn't
+  // change our default since we're not quite syncing yet.
+  profile_a_->GetTestingPrefService()->SetString(
+      prefs::kSyncedDefaultSearchProviderGUID,
+      "key2");
+
+  EXPECT_EQ(default_search, model()->GetDefaultSearchProvider());
+
+  // Now sync the initial data, which will include the search engine entry
+  // destined to become the new default.
+  SyncDataList initial_data = CreateInitialSyncData();
+  model()->MergeDataAndStartSyncing(
+      syncable::SEARCH_ENGINES,
+      initial_data,
+      processor());
+
+  // Ensure that the new default has been set.
+  EXPECT_EQ(4U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  ASSERT_NE(default_search, model()->GetDefaultSearchProvider());
+  ASSERT_EQ("key2", model()->GetDefaultSearchProvider()->sync_guid());
+}
+
+TEST_F(TemplateURLServiceSyncTest, SyncedDefaultAlreadySetOnStartup) {
+  // Start with the default set to something in the model before we start
+  // syncing.
+  const char kGUID[] = "initdefault";
+  model()->Add(CreateTestTemplateURL("what", "http://thewhat.com", kGUID));
+  model()->SetDefaultSearchProvider(model()->GetTemplateURLForGUID(kGUID));
+
+  const TemplateURL* default_search = model()->GetDefaultSearchProvider();
+  ASSERT_TRUE(default_search);
+
+  // Set kSyncedDefaultSearchProviderGUID to the current default.
+  profile_a_->GetTestingPrefService()->SetString(
+      prefs::kSyncedDefaultSearchProviderGUID,
+      kGUID);
+
+  EXPECT_EQ(default_search, model()->GetDefaultSearchProvider());
+
+  // Now sync the initial data.
+  SyncDataList initial_data = CreateInitialSyncData();
+  model()->MergeDataAndStartSyncing(
+      syncable::SEARCH_ENGINES,
+      initial_data,
+      processor());
+
+  // Ensure that the new entries were added and the default has not changed.
+  EXPECT_EQ(4U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  ASSERT_EQ(default_search, model()->GetDefaultSearchProvider());
+}
+
+TEST_F(TemplateURLServiceSyncTest, SyncWithManagedDefaultSearch) {
+  // First start off with a few entries and make sure we can set an unmanaged
+  // default search provider.
+  SyncDataList initial_data = CreateInitialSyncData();
+  model()->MergeDataAndStartSyncing(
+      syncable::SEARCH_ENGINES,
+      initial_data,
+      processor());
+  model()->SetDefaultSearchProvider(model()->GetTemplateURLForGUID("key2"));
+
+  EXPECT_EQ(3U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  ASSERT_FALSE(model()->is_default_search_managed());
+  ASSERT_TRUE(model()->GetDefaultSearchProvider());
+
+  // Change the default search provider to a managed one.
+  const char kName[] = "manageddefault";
+  const char kSearchURL[] = "http://manageddefault.com/search?t={searchTerms}";
+  const char kIconURL[] = "http://manageddefault.com/icon.jpg";
+  const char kEncodings[] = "UTF-16;UTF-32";
+  SetManagedDefaultSearchPreferences(model(), profile_a_.get(), true, kName,
+                                     kSearchURL, "", kIconURL, kEncodings, "");
+  const TemplateURL* dsp_turl = model()->GetDefaultSearchProvider();
+
+  EXPECT_TRUE(model()->is_default_search_managed());
+
+  // Add a new entry from Sync. It should still sync in despite the default
+  // being managed.
+  SyncChangeList changes;
+  changes.push_back(CreateTestSyncChange(
+      SyncChange::ACTION_ADD,
+      CreateTestTemplateURL("newkeyword", "http://new.com", "newdefault")));
+  model()->ProcessSyncChanges(FROM_HERE, changes);
+
+  EXPECT_EQ(4U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+
+  // Change kSyncedDefaultSearchProviderGUID to point to the new entry and
+  // ensure that the DSP remains managed.
+  profile_a_->GetTestingPrefService()->SetString(
+      prefs::kSyncedDefaultSearchProviderGUID,
+      "newdefault");
+
+  EXPECT_EQ(dsp_turl, model()->GetDefaultSearchProvider());
+  EXPECT_TRUE(model()->is_default_search_managed());
+
+  // Go unmanaged. Ensure that the DSP changes to the expected pending entry
+  // from Sync.
+  const TemplateURL* expected_default =
+      model()->GetTemplateURLForGUID("newdefault");
+  RemoveManagedDefaultSearchPreferences(model(), profile_a_.get());
+
+  EXPECT_EQ(expected_default, model()->GetDefaultSearchProvider());
+}
+
+TEST_F(TemplateURLServiceSyncTest, SyncMergeDeletesDefault) {
+  // If the value from Sync is a duplicate of the local default and is newer, it
+  // should safely replace the local value and set as the new default.
+  TemplateURL* default_turl =
+      CreateTestTemplateURL("key1", "http://key1.com", "whateverguid", 10);
+  model()->Add(default_turl);
+  model()->SetDefaultSearchProvider(default_turl);
+
+  // The key1 entry should be a duplicate of the default.
+  model()->MergeDataAndStartSyncing(
+      syncable::SEARCH_ENGINES,
+      CreateInitialSyncData(),
+      processor());
+
+  EXPECT_EQ(3U, model()->GetAllSyncData(syncable::SEARCH_ENGINES).size());
+  EXPECT_FALSE(model()->GetTemplateURLForGUID("whateverguid"));
+  EXPECT_EQ(model()->GetDefaultSearchProvider(),
+            model()->GetTemplateURLForGUID("key1"));
 }

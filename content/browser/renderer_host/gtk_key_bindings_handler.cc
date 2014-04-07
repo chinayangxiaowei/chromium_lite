@@ -10,7 +10,7 @@
 
 #include "base/logging.h"
 #include "base/string_util.h"
-#include "content/common/native_web_keyboard_event.h"
+#include "content/public/browser/native_web_keyboard_event.h"
 
 GtkKeyBindingsHandler::GtkKeyBindingsHandler(GtkWidget* parent_widget)
     : handler_(CreateNewHandler()) {
@@ -33,7 +33,7 @@ bool GtkKeyBindingsHandler::Match(const NativeWebKeyboardEvent& wke,
   edit_commands_.clear();
   // If this key event matches a predefined key binding, corresponding signal
   // will be emitted.
-  gtk_bindings_activate_event(GTK_OBJECT(handler_.get()), wke.os_event);
+  gtk_bindings_activate_event(GTK_OBJECT(handler_.get()), &wke.os_event->key);
 
   bool matched = !edit_commands_.empty();
   if (edit_commands)

@@ -1,6 +1,5 @@
-#!/usr/bin/python
-
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -55,6 +54,10 @@ class FetchPrebuilt(object):
       sys.exit(2)
     self._outdir = self._options.outdir
     self._url = self._args[0]
+    # Chromium continuous build archive has a non-standard format.
+    if 'index.html?path=' in self._url:
+      self._url = self._url.replace('index.html?path=', '')
+    self._url = self._url.rstrip('/')
 
     # Determine name of zip.
     if not self._options.platform.startswith('linux'):
@@ -78,6 +81,7 @@ class FetchPrebuilt(object):
 
     # Setup urls to download.
     self._chrome_zip_url = '%s/%s.zip' % (self._url, self._chrome_zip_name)
+    self._remoting_zip_url = self._url + '/' + 'remoting-webapp.zip'
     chrome_test_url = '%s/%s.test' % (self._url, self._chrome_zip_name)
     self._pyautolib_py_url = '%s/pyautolib.py' % chrome_test_url
     if self._options.platform == 'win':
@@ -94,7 +98,10 @@ class FetchPrebuilt(object):
     parsed = urlparse.urlparse(url)
     conn = httplib.HTTPConnection(parsed.netloc)
     conn.request('HEAD', parsed.path)
-    return conn.getresponse().status == 200
+    response = conn.getresponse()
+    if response.status == 302:  # Redirect; follow it.
+      return self._DoesURLExist(response.getheader('location'))
+    return response.status == 200
 
   def Cleanup(self):
     """Remove old binaries, if any."""
@@ -104,22 +111,37 @@ class FetchPrebuilt(object):
     self._ParseArgs()
     if not os.path.isdir(self._outdir):
       os.makedirs(self._outdir)
+    get_remoting = self._DoesURLExist(self._remoting_zip_url)
 
     # Fetch chrome & pyauto binaries
-    print 'Fetching'
-    print self._chrome_zip_url
-    print self._pyautolib_py_url
-    print self._pyautolib_so_url
-    print self._chromedriver_url
+    print 'Fetching', self._chrome_zip_url
     chrome_zip = urllib.urlretrieve(self._chrome_zip_url)[0]
+
+    if get_remoting:
+      print 'Fetching', self._remoting_zip_url
+      remoting_zip = urllib.urlretrieve(self._remoting_zip_url)[0]
+    else:
+      print 'Warning: %s does not exist.' % self._remoting_zip_url
+
+    print 'Fetching', self._pyautolib_py_url
     pyautolib_py = urllib.urlretrieve(self._pyautolib_py_url)[0]
+
+    print 'Fetching', self._pyautolib_so_url
     pyautolib_so = urllib.urlretrieve(self._pyautolib_so_url)[0]
+
+    print 'Fetching', self._chromedriver_url
     chromedriver = urllib.urlretrieve(self._chromedriver_url)[0]
+
     chrome_unzip_dir = os.path.join(self._outdir, self._chrome_zip_name)
     if os.path.exists(chrome_unzip_dir):
       print 'Cleaning', chrome_unzip_dir
       pyauto_utils.RemovePath(chrome_unzip_dir)
+    print 'Unzipping'
     pyauto_utils.UnzipFilenameToDir(chrome_zip, self._outdir)
+    if get_remoting:
+      pyauto_utils.UnzipFilenameToDir(remoting_zip, self._outdir)
+      shutil.move(self._outdir + '/remoting-webapp',
+                  self._outdir + '/remoting/remoting.webapp')
 
     # Copy over the binaries to outdir
     items_to_copy = {
@@ -157,7 +179,8 @@ class FetchPrebuilt(object):
       os.symlink(framework, dest)
 
     print 'Prepared binaries in "%s"' % self._outdir
+    return 0
 
 
 if __name__ == '__main__':
-  FetchPrebuilt().Run()
+  sys.exit(FetchPrebuilt().Run())

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,14 @@
 #define REMOTING_PROTOCOL_JINGLE_SESSION_H_
 
 #include "base/memory/ref_counted.h"
-#include "base/task.h"
-#include "crypto/rsa_private_key.h"
+#include "base/memory/weak_ptr.h"
 #include "net/base/completion_callback.h"
+#include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/session.h"
 #include "third_party/libjingle/source/talk/base/sigslot.h"
 #include "third_party/libjingle/source/talk/p2p/base/session.h"
 
 namespace remoting {
-
 namespace protocol {
 
 class JingleChannelConnector;
@@ -26,26 +25,25 @@ class JingleSessionManager;
 class JingleSession : public protocol::Session,
                       public sigslot::has_slots<> {
  public:
+  virtual ~JingleSession();
+
   // Session interface.
-  virtual void SetStateChangeCallback(StateChangeCallback* callback) OVERRIDE;
+  virtual void SetStateChangeCallback(
+      const StateChangeCallback& callback) OVERRIDE;
+  virtual void SetRouteChangeCallback(
+      const RouteChangeCallback& callback) OVERRIDE;
+  virtual Error error() OVERRIDE;
   virtual void CreateStreamChannel(
       const std::string& name,
       const StreamChannelCallback& callback) OVERRIDE;
   virtual void CreateDatagramChannel(
       const std::string& name,
       const DatagramChannelCallback& callback) OVERRIDE;
-  virtual net::Socket* control_channel() OVERRIDE;
-  virtual net::Socket* event_channel() OVERRIDE;
+  virtual void CancelChannelCreation(const std::string& name) OVERRIDE;
   virtual const std::string& jid() OVERRIDE;
   virtual const CandidateSessionConfig* candidate_config() OVERRIDE;
-  virtual const SessionConfig* config() OVERRIDE;
-  virtual void set_config(const SessionConfig* config) OVERRIDE;
-  virtual const std::string& initiator_token() OVERRIDE;
-  virtual void set_initiator_token(const std::string& initiator_token) OVERRIDE;
-  virtual const std::string& receiver_token() OVERRIDE;
-  virtual void set_receiver_token(const std::string& receiver_token) OVERRIDE;
-  virtual void set_shared_secret(const std::string& secret) OVERRIDE;
-  virtual const std::string& shared_secret() OVERRIDE;
+  virtual const SessionConfig& config() OVERRIDE;
+  virtual void set_config(const SessionConfig& config) OVERRIDE;
   virtual void Close() OVERRIDE;
 
  private:
@@ -53,34 +51,23 @@ class JingleSession : public protocol::Session,
   friend class JingleSessionManager;
   friend class JingleStreamConnector;
 
-  // Create a JingleSession used in client mode. A server certificate is
-  // required.
-  static JingleSession* CreateClientSession(JingleSessionManager* manager,
-                                            const std::string& host_public_key);
+  typedef std::map<std::string, JingleChannelConnector*> ChannelConnectorsMap;
 
-  // Create a JingleSession used in server mode. A server certificate and
-  // private key is provided. |key| is copied in the constructor.
-  //
-  // TODO(sergeyu): Remove |certificate| and |key| when we stop using TLS.
-  static JingleSession* CreateServerSession(
-      JingleSessionManager* manager,
-      const std::string& certificate,
-      crypto::RSAPrivateKey* key);
-
-  // TODO(sergeyu): Change type of |peer_public_key| to RSAPublicKey.
   JingleSession(JingleSessionManager* jingle_session_manager,
-                const std::string& local_cert,
-                crypto::RSAPrivateKey* local_private_key,
-                const std::string& peer_public_key);
-  virtual ~JingleSession();
+                cricket::Session* cricket_session,
+                scoped_ptr<Authenticator> authenticator);
 
   // Called by JingleSessionManager.
-  void set_candidate_config(const CandidateSessionConfig* candidate_config);
-  const std::string& local_certificate() const;
-  void Init(cricket::Session* cricket_session);
+  void set_candidate_config(
+      scoped_ptr<CandidateSessionConfig> candidate_config);
 
-  // Close all the channels and terminate the session.
-  void CloseInternal(int result, bool failed);
+  // Sends session-initiate for new session.
+  void SendSessionInitiate();
+
+  // Close all the channels and terminate the session. |result|
+  // defines error code that should returned to currently opened
+  // channels. |error| specified new value for error().
+  void CloseInternal(int result, Error error);
 
   bool HasSession(cricket::Session* cricket_session);
   cricket::Session* ReleaseSession();
@@ -90,12 +77,15 @@ class JingleSession : public protocol::Session,
   bool InitializeConfigFromDescription(
       const cricket::SessionDescription* description);
 
-  // Used for Session.SignalState sigslot.
+  // Handlers for |cricket_session_| signals.
   void OnSessionState(cricket::BaseSession* session,
                       cricket::BaseSession::State state);
-  // Used for Session.SignalError sigslot.
   void OnSessionError(cricket::BaseSession* session,
                       cricket::BaseSession::Error error);
+  void OnSessionInfoMessage(cricket::Session* session,
+                            const buzz::XmlElement* message);
+  void OnTerminateReason(cricket::Session* session,
+                         const std::string& reason);
 
   void OnInitiate();
   void OnAccept();
@@ -104,6 +94,8 @@ class JingleSession : public protocol::Session,
   // Notifies upper layer about incoming connection and
   // accepts/rejects connection.
   void AcceptConnection();
+
+  void ProcessAuthenticationStep();
 
   void AddChannelConnector(const std::string& name,
                            JingleChannelConnector* connector);
@@ -114,41 +106,30 @@ class JingleSession : public protocol::Session,
   void OnChannelConnectorFinished(const std::string& name,
                                   JingleChannelConnector* connector);
 
-  // Creates channels after session has been accepted.
-  // TODO(sergeyu): Don't create channels in JingleSession.
-  void CreateChannels();
-
-  // Callbacks for the channels created in JingleSession.
-  // TODO(sergeyu): Remove this method once *_channel() methods are
-  // removed from Session interface.
-  void OnChannelConnected(scoped_ptr<net::Socket>* socket_container,
-                          net::StreamSocket* socket);
+  void OnRouteChange(cricket::TransportChannel* channel,
+                     const cricket::Candidate& candidate);
 
   const cricket::ContentInfo* GetContentInfo() const;
 
   void SetState(State new_state);
 
+  static Error RejectionReasonToError(Authenticator::RejectionReason reason);
+
+  static scoped_ptr<cricket::SessionDescription> CreateSessionDescription(
+      scoped_ptr<CandidateSessionConfig> candidate_config,
+      scoped_ptr<buzz::XmlElement> authenticator_message);
+
   // JingleSessionManager that created this session. Guaranteed to
   // exist throughout the lifetime of the session.
   JingleSessionManager* jingle_session_manager_;
 
-  // Certificates used for connection. Currently only receiving side
-  // has a certificate.
-  std::string local_cert_;
-  std::string remote_cert_;
-
-  // Private key used in SSL server sockets.
-  scoped_ptr<crypto::RSAPrivateKey> local_private_key_;
-
-  // Public key of the peer.
-  std::string peer_public_key_;
-
-  // Shared secret to use in channel authentication.  This is currently only
-  // used in IT2Me.
-  std::string shared_secret_;
+  scoped_ptr<Authenticator> authenticator_;
 
   State state_;
-  scoped_ptr<StateChangeCallback> state_change_callback_;
+  StateChangeCallback state_change_callback_;
+  RouteChangeCallback route_change_callback_;
+
+  Error error_;
 
   bool closing_;
 
@@ -159,21 +140,21 @@ class JingleSession : public protocol::Session,
   // The corresponding libjingle session.
   cricket::Session* cricket_session_;
 
-  scoped_ptr<const SessionConfig> config_;
-
-  std::string initiator_token_;
-  std::string receiver_token_;
+  SessionConfig config_;
+  bool config_set_;
 
   // These data members are only set on the receiving side.
   scoped_ptr<const CandidateSessionConfig> candidate_config_;
 
   // Channels that are currently being connected.
-  std::map<std::string, JingleChannelConnector*> channel_connectors_;
+  ChannelConnectorsMap channel_connectors_;
 
-  scoped_ptr<net::Socket> control_channel_socket_;
-  scoped_ptr<net::Socket> event_channel_socket_;
+  // Termination reason. Needs to be stored because
+  // SignalReceivedTerminateReason handler is not allowed to destroy
+  // the object.
+  std::string terminate_reason_;
 
-  ScopedRunnableMethodFactory<JingleSession> task_factory_;
+  base::WeakPtrFactory<JingleSession> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(JingleSession);
 };

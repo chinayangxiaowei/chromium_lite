@@ -1,4 +1,5 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// -*- c++ -*-
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,9 +33,9 @@
 #include "ppapi/cpp/rect.h"
 #include "ppapi/cpp/url_loader.h"
 #include "ppapi/cpp/var.h"
+#include "ppapi/cpp/view.h"
 
 struct NaClSrpcChannel;
-struct NaClDesc;
 
 namespace nacl {
 class DescWrapper;
@@ -43,6 +44,7 @@ class DescWrapperFactory;
 
 namespace pp {
 class Find_Dev;
+class MouseLock;
 class Printing_Dev;
 class Selection_Dev;
 class URLLoader;
@@ -83,7 +85,7 @@ class Plugin : public pp::InstancePrivate {
   virtual bool Init(uint32_t argc, const char* argn[], const char* argv[]);
 
   // Handles view changes from the browser.
-  virtual void DidChangeView(const pp::Rect& position, const pp::Rect& clip);
+  virtual void DidChangeView(const pp::View& view);
 
   // Handles gaining or losing focus.
   virtual void DidChangeFocus(bool has_focus);
@@ -127,7 +129,8 @@ class Plugin : public pp::InstancePrivate {
   //
   // Updates nacl_module_origin() and nacl_module_url().
   bool LoadNaClModule(nacl::DescWrapper* wrapper, ErrorInfo* error_info,
-                      pp::CompletionCallback init_done_cb);
+                      pp::CompletionCallback init_done_cb,
+                      pp::CompletionCallback crash_cb);
 
   // Finish hooking interfaces up, after low-level initialization is
   // complete.
@@ -147,6 +150,7 @@ class Plugin : public pp::InstancePrivate {
   // Does not update nacl_module_origin().
   // Returns kInvalidNaClSubprocessId or the ID of the new helper NaCl module.
   NaClSubprocessId LoadHelperNaClModule(nacl::DescWrapper* wrapper,
+                                        const Manifest* manifest,
                                         ErrorInfo* error_info);
 
   // Returns the argument value for the specified key, or NULL if not found.
@@ -165,15 +169,27 @@ class Plugin : public pp::InstancePrivate {
   void ReportLoadError(const ErrorInfo& error_info);
   // Report loading a module was aborted, typically due to user action.
   void ReportLoadAbort();
+
   // Dispatch a JavaScript event to indicate a key step in loading.
   // |event_type| is a character string indicating which type of progress
   // event (loadstart, progress, error, abort, load, loadend).  Events are
   // enqueued on the JavaScript event loop, which then calls back through
   // DispatchProgressEvent.
+  void EnqueueProgressEvent(const char* event_type);
   void EnqueueProgressEvent(const char* event_type,
+                            const nacl::string& url,
                             LengthComputable length_computable,
                             uint64_t loaded_bytes,
                             uint64_t total_bytes);
+
+  // Progress event types.
+  static const char* const kProgressEventLoadStart;
+  static const char* const kProgressEventProgress;
+  static const char* const kProgressEventError;
+  static const char* const kProgressEventAbort;
+  static const char* const kProgressEventLoad;
+  static const char* const kProgressEventLoadEnd;
+  static const char* const kProgressEventCrash;
 
   // Report the error code that sel_ldr produces when starting a nexe.
   void ReportSelLdrLoadStatus(int status);
@@ -224,6 +240,10 @@ class Plugin : public pp::InstancePrivate {
   void set_nacl_ready_state(ReadyState nacl_ready_state) {
     nacl_ready_state_ = nacl_ready_state;
   }
+  bool nexe_error_reported() const { return nexe_error_reported_; }
+  void set_nexe_error_reported(bool val) {
+    nexe_error_reported_ = val;
+  }
 
   // Get the NaCl module subprocess that was assigned the ID |id|.
   NaClSubprocess* nacl_subprocess(NaClSubprocessId id) const {
@@ -242,8 +262,16 @@ class Plugin : public pp::InstancePrivate {
   void RequestNaClManifest(const nacl::string& url);
 
   // Start up proxied execution of the browser API.
+  //
+  // NB: this is currently invoked from the main thread.  If we ever
+  // move it off the main thread (eliminate the possibility of a
+  // malicious nexe that isn't linked against / doesn't use our
+  // ppapi_proxy code that blocks the main thread on the RPCs used
+  // here), then we will need to take care to ensure that the error
+  // and crash reporting state machine (see NexeDidCrash comment)
+  // continues to work.
   bool StartProxiedExecution(NaClSrpcChannel* srpc_channel,
-                               ErrorInfo* error_info);
+                             ErrorInfo* error_info);
 
   // Determines whether experimental APIs are usable.
   static bool ExperimentalJavaScriptApisAreEnabled();
@@ -271,8 +299,13 @@ class Plugin : public pp::InstancePrivate {
   // Requests a URL asynchronously resulting in a call to pp_callback with
   // a PP_Error indicating status. On success an open file descriptor
   // corresponding to the url body is recorded for further lookup.
-  // This is used by SRPC-based StreamAsFile().
-  bool StreamAsFile(const nacl::string& url, PP_CompletionCallback pp_callback);
+  // permits_extension_urls determines whether a call to stream as file
+  // should be allowed to load URLs that are outside of the origin of the
+  // plugin.  This is used by, e.g., the pnacl coordinator, which loads
+  // llc, ld, and various object files from a chrome extension URL.
+  bool StreamAsFile(const nacl::string& url,
+                    bool permits_extension_urls,
+                    PP_CompletionCallback pp_callback);
   // Returns an open POSIX file descriptor retrieved by StreamAsFile()
   // or NACL_NO_FILE_DESC. The caller must take ownership of the descriptor.
   int32_t GetPOSIXFileDesc(const nacl::string& url);
@@ -294,12 +327,19 @@ class Plugin : public pp::InstancePrivate {
   const nacl::string& mime_type() const { return mime_type_; }
   // The default MIME type for the NaCl plugin.
   static const char* const kNaClMIMEType;
-  // Tests if the MIME type is not a NaCl MIME type.
-  bool IsForeignMIMEType() const;
   // Returns true if PPAPI Dev interfaces should be allowed.
   bool enable_dev_interfaces() { return enable_dev_interfaces_; }
 
   Manifest const* manifest() const { return manifest_.get(); }
+  const pp::URLUtil_Dev* url_util() const { return url_util_; }
+
+  // Extracts the exit status from the (main) service runtime.
+  int exit_status() const {
+    if (NULL == main_service_runtime()) {
+      return -1;
+    }
+    return main_service_runtime()->exit_status();
+  }
 
  private:
   NACL_DISALLOW_COPY_AND_ASSIGN(Plugin);
@@ -341,8 +381,11 @@ class Plugin : public pp::InstancePrivate {
   // This will fully initialize the |subprocess| if the load was successful.
   bool LoadNaClModuleCommon(nacl::DescWrapper* wrapper,
                             NaClSubprocess* subprocess,
+                            const Manifest* manifest,
+                            bool should_report_uma,
                             ErrorInfo* error_info,
-                            pp::CompletionCallback init_done_cb);
+                            pp::CompletionCallback init_done_cb,
+                            pp::CompletionCallback crash_cb);
   bool StartSrpcServices(NaClSubprocess* subprocess, ErrorInfo* error_info);
   bool StartSrpcServicesCommon(NaClSubprocess* subprocess,
                                ErrorInfo* error_info);
@@ -350,14 +393,23 @@ class Plugin : public pp::InstancePrivate {
 
   MethodInfo* GetMethodInfo(uintptr_t method_id, CallType call_type);
 
-  // Check url and decide if PPAPI Dev interfaces are required.
-  bool RequiresDevInterfaces(const nacl::string& manifest_url);
-
   // Callback used when getting the URL for the .nexe file.  If the URL loading
   // is successful, the file descriptor is opened and can be passed to sel_ldr
   // with the sandbox on.
   void NexeFileDidOpen(int32_t pp_error);
   void NexeFileDidOpenContinuation(int32_t pp_error);
+
+  // Callback used when the reverse channel closes.  This is an
+  // asynchronous event that might turn into a JavaScript error or
+  // crash event -- this is controlled by the two state variables
+  // nacl_ready_state_ and nexe_error_reported_: If an error or crash
+  // had already been reported, no additional crash event is
+  // generated.  If no error has been reported but nacl_ready_state_
+  // is not DONE, then the loadend event has not been reported, and we
+  // enqueue an error event followed by loadend.  If nacl_ready_state_
+  // is DONE, then we are in the post-loadend (we need temporal
+  // predicate symbols), and we enqueue a crash event.
+  void NexeDidCrash(int32_t pp_error);
 
   // Callback used when a .nexe is translated from bitcode.  If the translation
   // is successful, the file descriptor is opened and can be passed to sel_ldr
@@ -398,13 +450,6 @@ class Plugin : public pp::InstancePrivate {
                                     ErrorInfo* error_info,
                                     bool* is_portable);
 
-  // TODO(jvoung): get rid of these once we find a better way to store / install
-  // the pnacl translator nexes.
-  bool SelectLLCURLFromManifest(nacl::string* result,
-                                ErrorInfo* error_info);
-  bool SelectLDURLFromManifest(nacl::string* result,
-                               ErrorInfo* error_info);
-
   // Logs timing information to a UMA histogram, and also logs the same timing
   // information divided by the size of the nexe to another histogram.
   void HistogramStartupTimeSmall(const std::string& name, float dt);
@@ -412,6 +457,10 @@ class Plugin : public pp::InstancePrivate {
 
   // Determines the appropriate nexe for the sandbox and requests a load.
   void RequestNexeLoad();
+
+  // This NEXE is being used as a content type handler rather than directly by
+  // an HTML document.
+  bool NexeIsContentHandler() const;
 
   // Callback used when loading a URL for SRPC-based StreamAsFile().
   void UrlDidOpenForStreamAsFile(int32_t pp_error,
@@ -436,6 +485,7 @@ class Plugin : public pp::InstancePrivate {
   nacl::string manifest_base_url_;
   nacl::string manifest_url_;
   ReadyState nacl_ready_state_;
+  bool nexe_error_reported_;  // error or crash reported
 
   nacl::DescWrapperFactory* wrapper_factory_;
 
@@ -450,15 +500,15 @@ class Plugin : public pp::InstancePrivate {
   FileDownloader nexe_downloader_;
   pp::CompletionCallbackFactory<Plugin> callback_factory_;
 
-  PnaclCoordinator pnacl_;
+  nacl::scoped_ptr<PnaclCoordinator> pnacl_coordinator_;
 
   // The manifest dictionary.  Used for looking up resources to be loaded.
   nacl::scoped_ptr<Manifest> manifest_;
   // URL processing interface for use in looking up resources in manifests.
   const pp::URLUtil_Dev* url_util_;
 
-  // A string containing the text description of the last error produced by
-  // this plugin.
+  // A string containing the text description of the last error
+  // produced by this plugin.
   nacl::string last_error_string_;
 
   // A pointer to the browser end of a proxy pattern connecting the
@@ -471,15 +521,14 @@ class Plugin : public pp::InstancePrivate {
   bool enable_dev_interfaces_;
 
   // If we get a DidChangeView event before the nexe is loaded, we store it and
-  // replay it to nexe after it's loaded.
-  bool replayDidChangeView;
-  pp::Rect replayDidChangeViewPosition;
-  pp::Rect replayDidChangeViewClip;
+  // replay it to nexe after it's loaded. We need to replay when this View
+  // resource is non-is_null().
+  pp::View view_to_replay_;
 
   // If we get a HandleDocumentLoad event before the nexe is loaded, we store
-  // it and replay it to nexe after it's loaded.
-  bool replayHandleDocumentLoad;
-  pp::URLLoader replayHandleDocumentLoadURLLoader;
+  // it and replay it to nexe after it's loaded. We need to replay when this
+  // URLLoader resource is non-is_null().
+  pp::URLLoader document_load_to_replay_;
 
   nacl::string mime_type_;
 
@@ -495,6 +544,7 @@ class Plugin : public pp::InstancePrivate {
   // Adapter class constructors require a reference to 'this', so we can't
   // contain them directly.
   nacl::scoped_ptr<pp::Find_Dev> find_adapter_;
+  nacl::scoped_ptr<pp::MouseLock> mouse_lock_adapter_;
   nacl::scoped_ptr<pp::Printing_Dev> printing_adapter_;
   nacl::scoped_ptr<pp::Selection_Dev> selection_adapter_;
   nacl::scoped_ptr<pp::WidgetClient_Dev> widget_client_adapter_;
@@ -507,7 +557,8 @@ class Plugin : public pp::InstancePrivate {
   int64_t ready_time_;
   size_t nexe_size_;
 
-  static void UpdateNexeDownloadProgress(
+  // Callback to receive .nexe and .dso download progress notifications.
+  static void UpdateDownloadProgress(
       PP_Instance pp_instance,
       PP_Resource pp_resource,
       int64_t bytes_sent,
@@ -515,7 +566,12 @@ class Plugin : public pp::InstancePrivate {
       int64_t bytes_received,
       int64_t total_bytes_to_be_received);
 
-  int64_t last_event_bytes_received_;
+  // Finds the file downloader which owns the given URL loader. This is used
+  // in UpdateDownloadProgress to map a url loader back to the URL being
+  // downloaded.
+  const FileDownloader* FindFileDownloader(PP_Resource url_loader) const;
+
+  int64_t time_of_last_progress_event_;
 };
 
 }  // namespace plugin

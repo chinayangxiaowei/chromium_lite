@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,27 @@
 #define CHROME_BROWSER_BROWSING_DATA_REMOVER_H_
 #pragma once
 
-#include <vector>
+#include <set>
 
 #include "base/memory/ref_counted.h"
+#include "base/message_loop_helpers.h"
 #include "base/observer_list.h"
 #include "base/synchronization/waitable_event_watcher.h"
 #include "base/time.h"
+#include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "content/browser/cancelable_request.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "webkit/quota/quota_types.h"
 
 class ExtensionSpecialStoragePolicy;
 class IOThread;
-class PluginDataRemover;
 class Profile;
+
+namespace content {
+class PluginDataRemover;
+}
 
 namespace disk_cache {
 class Backend;
@@ -32,10 +36,6 @@ namespace net {
 class URLRequestContextGetter;
 }
 
-namespace webkit_database {
-class DatabaseTracker;
-}
-
 namespace quota {
 class QuotaManager;
 }
@@ -43,7 +43,7 @@ class QuotaManager;
 // BrowsingDataRemover is responsible for removing data related to browsing:
 // visits in url database, downloads, cookies ...
 
-class BrowsingDataRemover : public NotificationObserver,
+class BrowsingDataRemover : public content::NotificationObserver,
                             public base::WaitableEventWatcher::Delegate {
  public:
   // Time period ranges available when doing browsing data removals.
@@ -67,15 +67,34 @@ class BrowsingDataRemover : public NotificationObserver,
     REMOVE_HISTORY = 1 << 6,
     REMOVE_INDEXEDDB = 1 << 7,
     REMOVE_LOCAL_STORAGE = 1 << 8,
-    REMOVE_LSO_DATA = 1 << 9,
+    REMOVE_PLUGIN_DATA = 1 << 9,
     REMOVE_PASSWORDS = 1 << 10,
     REMOVE_WEBSQL = 1 << 11,
+    REMOVE_ORIGIN_BOUND_CERTS = 1 << 12,
 
     // "Site data" includes cookies, appcache, file systems, indexedDBs, local
-    // storage, webSQL, and LSO data.
+    // storage, webSQL, and plugin data.
     REMOVE_SITE_DATA = REMOVE_APPCACHE | REMOVE_COOKIES | REMOVE_FILE_SYSTEMS |
                        REMOVE_INDEXEDDB | REMOVE_LOCAL_STORAGE |
-                       REMOVE_LSO_DATA | REMOVE_WEBSQL
+                       REMOVE_PLUGIN_DATA | REMOVE_WEBSQL |
+                       REMOVE_ORIGIN_BOUND_CERTS
+  };
+
+  // When BrowsingDataRemover successfully removes data, a notification of type
+  // NOTIFICATION_BROWSING_DATA_REMOVED is triggered with a Details object of
+  // this type.
+  struct NotificationDetails {
+    NotificationDetails();
+    NotificationDetails(const NotificationDetails& details);
+    NotificationDetails(base::Time removal_begin,
+                       int removal_mask);
+    ~NotificationDetails();
+
+    // The beginning of the removal time range.
+    base::Time removal_begin;
+
+    // The removal mask (see the RemoveDataMask enum for details)
+    int removal_mask;
   };
 
   // Observer is notified when the removal is done. Done means keywords have
@@ -112,7 +131,7 @@ class BrowsingDataRemover : public NotificationObserver,
  private:
   // The clear API needs to be able to toggle removing_ in order to test that
   // only one BrowsingDataRemover instance can be called at a time.
-  FRIEND_TEST_ALL_PREFIXES(ExtensionApiTest, ClearOneAtATime);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionClearTest, OneAtATime);
 
   enum CacheState {
     STATE_NONE,
@@ -126,19 +145,21 @@ class BrowsingDataRemover : public NotificationObserver,
   // BrowsingDataRemover deletes itself (using DeleteTask) and is not supposed
   // to be deleted by other objects so make destructor private and DeleteTask
   // a friend.
-  friend class DeleteTask<BrowsingDataRemover>;
+  friend class base::DeleteHelper<BrowsingDataRemover>;
   virtual ~BrowsingDataRemover();
 
-  // NotificationObserver method. Callback when TemplateURLService has finished
-  // loading. Deletes the entries from the model, and if we're not waiting on
-  // anything else notifies observers and deletes this BrowsingDataRemover.
+  // content::NotificationObserver method. Callback when TemplateURLService has
+  // finished loading. Deletes the entries from the model, and if we're not
+  // waiting on anything else notifies observers and deletes this
+  // BrowsingDataRemover.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // WaitableEventWatcher implementation.
   // Called when plug-in data has been cleared. Invokes NotifyAndDeleteIfDone.
-  virtual void OnWaitableEventSignaled(base::WaitableEvent* waitable_event);
+  virtual void OnWaitableEventSignaled(
+      base::WaitableEvent* waitable_event) OVERRIDE;
 
   // If we're not waiting on anything, notifies observers and deletes this
   // object.
@@ -189,6 +210,14 @@ class BrowsingDataRemover : public NotificationObserver,
   // Invoked on the IO thread to delete cookies.
   void ClearCookiesOnIOThread(net::URLRequestContextGetter* rq_context);
 
+  // Invoked on the IO thread to delete origin bound certs.
+  void ClearOriginBoundCertsOnIOThread(
+      net::URLRequestContextGetter* rq_context);
+
+  // Callback when origin bound certs have been deleted. Invokes
+  // NotifyAndDeleteIfDone.
+  void OnClearedOriginBoundCerts();
+
   // Calculate the begin time for the deletion range specified by |time_period|.
   base::Time CalculateBeginDeleteTime(TimePeriod time_period);
 
@@ -197,16 +226,17 @@ class BrowsingDataRemover : public NotificationObserver,
     return registrar_.IsEmpty() && !waiting_for_clear_cache_ &&
            !waiting_for_clear_cookies_&&
            !waiting_for_clear_history_ &&
-           !waiting_for_clear_quota_managed_data_ &&
            !waiting_for_clear_networking_history_ &&
-           !waiting_for_clear_lso_data_;
+           !waiting_for_clear_origin_bound_certs_ &&
+           !waiting_for_clear_plugin_data_ &&
+           !waiting_for_clear_quota_managed_data_;
   }
 
   // Setter for removing_; DCHECKs that we can only start removing if we're not
   // already removing, and vice-versa.
   static void set_removing(bool removing);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Profile we're to remove from.
   Profile* profile_;
@@ -227,8 +257,6 @@ class BrowsingDataRemover : public NotificationObserver,
   // True if Remove has been invoked.
   static bool removing_;
 
-  // Used to delete data from the HTTP caches.
-  net::CompletionCallbackImpl<BrowsingDataRemover> cache_callback_;
   CacheState next_cache_state_;
   disk_cache::Backend* cache_;
 
@@ -237,30 +265,31 @@ class BrowsingDataRemover : public NotificationObserver,
   scoped_refptr<net::URLRequestContextGetter> media_context_getter_;
 
   // Used to delete plugin data.
-  scoped_refptr<PluginDataRemover> plugin_data_remover_;
+  scoped_ptr<content::PluginDataRemover> plugin_data_remover_;
   base::WaitableEventWatcher watcher_;
 
   // True if we're waiting for various data to be deleted.
   // These may only be accessed from UI thread in order to avoid races!
-  bool waiting_for_clear_history_;
-  bool waiting_for_clear_quota_managed_data_;
-  bool waiting_for_clear_networking_history_;
-  bool waiting_for_clear_cookies_;
   bool waiting_for_clear_cache_;
-  bool waiting_for_clear_lso_data_;
+  bool waiting_for_clear_cookies_;
+  bool waiting_for_clear_history_;
+  bool waiting_for_clear_networking_history_;
+  bool waiting_for_clear_origin_bound_certs_;
+  bool waiting_for_clear_plugin_data_;
+  bool waiting_for_clear_quota_managed_data_;
 
   // Tracking how many origins need to be deleted, and whether we're finished
   // gathering origins.
   int quota_managed_origins_to_delete_count_;
   int quota_managed_storage_types_to_delete_count_;
 
+  // The removal mask for the current removal operation.
+  int remove_mask_;
+
   ObserverList<Observer> observer_list_;
 
   // Used if we need to clear history.
   CancelableRequestConsumer request_consumer_;
-
-  // Keeps track of whether clearing LSO data is supported.
-  BooleanPrefMember clear_plugin_lso_data_enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowsingDataRemover);
 };

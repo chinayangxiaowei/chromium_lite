@@ -4,6 +4,7 @@
 
 #include "net/url_request/url_request_job.h"
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/message_loop.h"
 #include "base/string_number_conversions.h"
@@ -31,10 +32,10 @@ URLRequestJob::URLRequestJob(URLRequest* request)
       has_handled_response_(false),
       expected_content_size_(-1),
       deferred_redirect_status_code_(-1),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   base::SystemMonitor* system_monitor = base::SystemMonitor::Get();
   if (system_monitor)
-    base::SystemMonitor::Get()->AddObserver(this);
+    base::SystemMonitor::Get()->AddPowerObserver(this);
 }
 
 void URLRequestJob::SetUpload(UploadData* upload) {
@@ -44,7 +45,7 @@ void URLRequestJob::SetExtraRequestHeaders(const HttpRequestHeaders& headers) {
 }
 
 void URLRequestJob::Kill() {
-  method_factory_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
   // Make sure the request is notified that we are done.  We assume that the
   // request took care of setting its error status before calling Kill.
   if (request_)
@@ -153,8 +154,7 @@ void URLRequestJob::GetAuthChallengeInfo(
   NOTREACHED();
 }
 
-void URLRequestJob::SetAuth(const string16& username,
-                            const string16& password) {
+void URLRequestJob::SetAuth(const AuthCredentials& credentials) {
   // This will only be called if NeedsAuth() returns true, in which
   // case the derived class should implement this!
   NOTREACHED();
@@ -214,10 +214,13 @@ void URLRequestJob::OnSuspend() {
   Kill();
 }
 
+void URLRequestJob::NotifyURLRequestDestroyed() {
+}
+
 URLRequestJob::~URLRequestJob() {
   base::SystemMonitor* system_monitor = base::SystemMonitor::Get();
   if (system_monitor)
-    base::SystemMonitor::Get()->RemoveObserver(this);
+    base::SystemMonitor::Get()->RemovePowerObserver(this);
 }
 
 void URLRequestJob::NotifyCertificateRequested(
@@ -228,12 +231,12 @@ void URLRequestJob::NotifyCertificateRequested(
   request_->NotifyCertificateRequested(cert_request_info);
 }
 
-void URLRequestJob::NotifySSLCertificateError(int cert_error,
-                                              X509Certificate* cert) {
+void URLRequestJob::NotifySSLCertificateError(const SSLInfo& ssl_info,
+                                              bool fatal) {
   if (!request_)
     return;  // The request was destroyed, so there is no more work to do.
 
-  request_->NotifySSLCertificateError(cert_error, cert);
+  request_->NotifySSLCertificateError(ssl_info, fatal);
 }
 
 bool URLRequestJob::CanGetCookies(const CookieList& cookie_list) const {
@@ -412,7 +415,7 @@ void URLRequestJob::NotifyDone(const URLRequestStatus &status) {
         request_->net_log().AddEvent(
             NetLog::TYPE_FAILED,
             make_scoped_refptr(new NetLogIntegerParameter("net_error",
-                                                          status.os_error())));
+                                                          status.error())));
       }
       request_->set_status(status);
     }
@@ -422,7 +425,8 @@ void URLRequestJob::NotifyDone(const URLRequestStatus &status) {
   // delegate if we're done because of a synchronous call.
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      method_factory_.NewRunnableMethod(&URLRequestJob::CompleteNotifyDone));
+      base::Bind(&URLRequestJob::CompleteNotifyDone,
+                 weak_factory_.GetWeakPtr()));
 }
 
 void URLRequestJob::CompleteNotifyDone() {

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -2542,6 +2542,38 @@ error::Error GLES2DecoderImpl::HandleRenderbufferStorageMultisampleEXT(
   return error::kNoError;
 }
 
+error::Error GLES2DecoderImpl::HandleTexStorage2DEXT(
+    uint32 immediate_data_size, const gles2::TexStorage2DEXT& c) {
+  GLenum target = static_cast<GLenum>(c.target);
+  GLsizei levels = static_cast<GLsizei>(c.levels);
+  GLenum internalFormat = static_cast<GLenum>(c.internalFormat);
+  GLsizei width = static_cast<GLsizei>(c.width);
+  GLsizei height = static_cast<GLsizei>(c.height);
+  if (!validators_->texture_target.IsValid(target)) {
+    SetGLError(GL_INVALID_ENUM, "glTexStorage2DEXT: target GL_INVALID_ENUM");
+    return error::kNoError;
+  }
+  if (levels < 0) {
+    SetGLError(GL_INVALID_VALUE, "glTexStorage2DEXT: levels < 0");
+    return error::kNoError;
+  }
+  if (!validators_->texture_internal_format_storage.IsValid(internalFormat)) {
+    SetGLError(
+        GL_INVALID_ENUM, "glTexStorage2DEXT: internalFormat GL_INVALID_ENUM");
+    return error::kNoError;
+  }
+  if (width < 0) {
+    SetGLError(GL_INVALID_VALUE, "glTexStorage2DEXT: width < 0");
+    return error::kNoError;
+  }
+  if (height < 0) {
+    SetGLError(GL_INVALID_VALUE, "glTexStorage2DEXT: height < 0");
+    return error::kNoError;
+  }
+  DoTexStorage2DEXT(target, levels, internalFormat, width, height);
+  return error::kNoError;
+}
+
 error::Error GLES2DecoderImpl::HandleGetMaxValueInBufferCHROMIUM(
     uint32 immediate_data_size, const gles2::GetMaxValueInBufferCHROMIUM& c) {
   GLuint buffer_id = c.buffer_id;
@@ -2568,21 +2600,30 @@ error::Error GLES2DecoderImpl::HandleGetMaxValueInBufferCHROMIUM(
   return error::kNoError;
 }
 
-error::Error GLES2DecoderImpl::HandlePlaceholder447CHROMIUM(
-    uint32 immediate_data_size, const gles2::Placeholder447CHROMIUM& c) {
-  return error::kUnknownCommand;
+error::Error GLES2DecoderImpl::HandleTexImageIOSurface2DCHROMIUM(
+    uint32 immediate_data_size, const gles2::TexImageIOSurface2DCHROMIUM& c) {
+  GLenum target = static_cast<GLenum>(c.target);
+  GLsizei width = static_cast<GLsizei>(c.width);
+  GLsizei height = static_cast<GLsizei>(c.height);
+  GLuint ioSurfaceId = static_cast<GLuint>(c.ioSurfaceId);
+  GLuint plane = static_cast<GLuint>(c.plane);
+  if (!validators_->texture_bind_target.IsValid(target)) {
+    SetGLError(
+        GL_INVALID_ENUM,
+        "glTexImageIOSurface2DCHROMIUM: target GL_INVALID_ENUM");
+    return error::kNoError;
+  }
+  if (width < 0) {
+    SetGLError(GL_INVALID_VALUE, "glTexImageIOSurface2DCHROMIUM: width < 0");
+    return error::kNoError;
+  }
+  if (height < 0) {
+    SetGLError(GL_INVALID_VALUE, "glTexImageIOSurface2DCHROMIUM: height < 0");
+    return error::kNoError;
+  }
+  DoTexImageIOSurface2DCHROMIUM(target, width, height, ioSurfaceId, plane);
+  return error::kNoError;
 }
-error::Error GLES2DecoderImpl::HandlePlaceholder451CHROMIUM(
-    uint32 immediate_data_size, const gles2::Placeholder451CHROMIUM& c) {
-  return error::kUnknownCommand;
-}
-error::Error GLES2DecoderImpl::HandlePlaceholder452CHROMIUM(
-    uint32 immediate_data_size, const gles2::Placeholder452CHROMIUM& c) {
-  return error::kUnknownCommand;
-}
-error::Error GLES2DecoderImpl::HandlePlaceholder453CHROMIUM(
-    uint32 immediate_data_size, const gles2::Placeholder453CHROMIUM& c) {
-  return error::kUnknownCommand;
-}
+
 #endif  // GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_AUTOGEN_H_
 

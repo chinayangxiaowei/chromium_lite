@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,17 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "content/browser/mock_content_browser_client.h"
-#include "content/common/content_client.h"
-#include "content/common/content_paths.h"
-#include "content/common/notification_service.h"
+#include "content/browser/notification_service_impl.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_paths.h"
 #include "content/test/test_content_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_paths.h"
+
+#if defined(OS_MACOSX)
+#include "base/mac/scoped_nsautorelease_pool.h"
+#endif
+#include "ui/gfx/compositor/compositor_setup.h"
 
 namespace {
 
@@ -22,7 +27,7 @@ class TestContentClientInitializer : public testing::EmptyTestEventListener {
   }
 
   virtual void OnTestStart(const testing::TestInfo& test_info) OVERRIDE {
-    notification_service_.reset(new NotificationService());
+    notification_service_.reset(new NotificationServiceImpl());
 
     DCHECK(!content::GetContentClient());
     content_client_.reset(new TestContentClient);
@@ -43,7 +48,7 @@ class TestContentClientInitializer : public testing::EmptyTestEventListener {
   }
 
  private:
-  scoped_ptr<NotificationService> notification_service_;
+  scoped_ptr<NotificationServiceImpl> notification_service_;
   scoped_ptr<content::ContentClient> content_client_;
   scoped_ptr<content::ContentBrowserClient> content_browser_client_;
 
@@ -60,12 +65,20 @@ ContentTestSuite::~ContentTestSuite() {
 }
 
 void ContentTestSuite::Initialize() {
+#if defined(OS_MACOSX)
+  base::mac::ScopedNSAutoreleasePool autorelease_pool;
+#endif
+
   base::TestSuite::Initialize();
 
   content::RegisterPathProvider();
   ui::RegisterPathProvider();
 
+  // Mock out the compositor on platforms that use it.
+  ui::SetupTestCompositor();
+
   testing::TestEventListeners& listeners =
       testing::UnitTest::GetInstance()->listeners();
   listeners.Append(new TestContentClientInitializer);
 }
+

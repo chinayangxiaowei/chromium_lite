@@ -7,9 +7,8 @@
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_job_worker.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
-#include "googleurl/src/gurl.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_service.h"
 #include "printing/printed_pages_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -17,11 +16,8 @@ namespace {
 
 class TestSource : public printing::PrintedPagesSource {
  public:
-  virtual string16 RenderSourceName() {
+  virtual string16 RenderSourceName() OVERRIDE {
     return string16();
-  }
-  virtual GURL RenderSourceUrl() {
-    return GURL();
   }
 };
 
@@ -59,6 +55,7 @@ class TestOwner : public printing::PrintJobWorkerOwner {
   virtual int cookie() const {
     return 42;
   }
+
  private:
   printing::PrintSettings settings_;
 };
@@ -74,12 +71,12 @@ class TestPrintJob : public printing::PrintJob {
   volatile bool* check_;
 };
 
-class TestPrintNotifObserv : public NotificationObserver {
+class TestPrintNotifObserv : public content::NotificationObserver {
  public:
-  // NotificationObserver
+  // content::NotificationObserver
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     ADD_FAILURE();
   }
 };
@@ -95,10 +92,10 @@ TEST_F(PrintJobTest, SimplePrint) {
   // This message loop is actually never run.
   MessageLoop current;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
   TestPrintNotifObserv observ;
   registrar_.Add(&observ, content::NOTIFICATION_ALL,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
   volatile bool check = false;
   scoped_refptr<printing::PrintJob> job(new TestPrintJob(&check));
   EXPECT_EQ(MessageLoop::current(), job->message_loop());

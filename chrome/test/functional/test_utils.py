@@ -1,16 +1,17 @@
-#!/usr/bin/python
-
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import copy
+import ctypes
 import email
 import logging
 import os
 import platform
+import shutil
 import smtplib
 import subprocess
+import sys
 import types
 
 import pyauto_functional
@@ -19,6 +20,17 @@ import pyauto_utils
 
 
 """Commonly used functions for PyAuto tests."""
+
+def CopyFileFromDataDirToDownloadDir(test, file_path):
+  """Copy a file from data directory to downloads directory.
+
+  Args:
+    test: derived from pyauto.PyUITest - base class for UI test cases.
+    path: path of the file relative to the data directory
+  """
+  data_file = os.path.join(test.DataDir(), file_path)
+  download_dir = test.GetDownloadDirectory().value()
+  shutil.copy(data_file, download_dir)
 
 def DownloadFileFromDownloadsDataDir(test, file_name):
   """Download a file from downloads data directory, in first tab, first window.
@@ -69,11 +81,9 @@ def GoogleAccountsLogin(test, username, password, tab_index=0, windex=0):
              'window.domAutomationController.send("done")' % username
   password = 'document.getElementById("Passwd").value = "%s"; ' \
              'window.domAutomationController.send("done")' % password
-  test.ExecuteJavascript(email_id, windex, tab_index);
-  test.ExecuteJavascript(password, windex, tab_index);
-  test.ExecuteJavascript('document.getElementById("gaia_loginform").submit();'
-                         'window.domAutomationController.send("done")',
-                         windex, tab_index)
+  test.ExecuteJavascript(email_id, tab_index, windex)
+  test.ExecuteJavascript(password, tab_index, windex)
+  test.assertTrue(test.SubmitForm('gaia_loginform', tab_index, windex))
 
 
 def VerifyGoogleAccountCredsFilled(test, username, password, tab_index=0,
@@ -88,9 +98,9 @@ def VerifyGoogleAccountCredsFilled(test, username, password, tab_index=0,
     windex: The window index, default is 0.
   """
   email_value = test.GetDOMValue('document.getElementById("Email").value',
-                                 windex, tab_index)
+                                 tab_index, windex)
   passwd_value = test.GetDOMValue('document.getElementById("Passwd").value',
-                                  windex, tab_index)
+                                  tab_index, windex)
   test.assertEqual(email_value, username)
   # Not using assertEqual because if it fails it would end up dumping the
   # password (which is supposed to be private)
@@ -154,6 +164,18 @@ def SendMail(send_from, send_to, subject, text, smtp, file_to_send=None):
   smtp_obj = smtplib.SMTP(smtp)
   smtp_obj.sendmail(send_from, send_to, msg.as_string())
   smtp_obj.close()
+
+
+def GetFreeSpace(path):
+  """Returns the free space (in bytes) on the drive containing |path|."""
+  if sys.platform == 'win32':
+    free_bytes = ctypes.c_ulonglong(0)
+    ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+        ctypes.c_wchar_p(os.path.dirname(path)), None, None,
+        ctypes.pointer(free_bytes))
+    return free_bytes.value
+  fs_stat = os.statvfs(path)
+  return fs_stat.f_bsize * fs_stat.f_bavail
 
 
 def StripUnmatchedKeys(item_to_strip, reference_item):
@@ -304,3 +326,39 @@ def GetCredsKey():
   node = platform.uname()[1].split('.')[0]
   creds_key = 'test_google_acct_%s_%s' % (system_name, node)
   return creds_key
+
+
+def SignInToSyncAndVerifyState(test, account_key):
+  """Sign into sync and verify that it was successful.
+
+  Args:
+    test: derived from pyauto.PyUITest - base class for UI test cases.
+    account_key: the credentials key in the private account dictionary file.
+  """
+  creds = test.GetPrivateInfo()[account_key]
+  username = creds['username']
+  password = creds['password']
+  test.assertTrue(test.GetSyncInfo()['summary'] == 'OFFLINE_UNUSABLE')
+  test.assertTrue(test.GetSyncInfo()['last synced'] == 'Never')
+  test.assertTrue(test.SignInToSync(username, password))
+  test.assertTrue(test.GetSyncInfo()['summary'] == 'READY')
+  test.assertTrue(test.GetSyncInfo()['last synced'] == 'Just now')
+
+
+def LoginToDevice(test, test_account='test_google_account'):
+  """Login to the Chromeos device using the given test account.
+
+  If no test account is specified, we use test_google_account as the default.
+  You can choose test accounts from -
+  chrome/test/data/pyauto_private/private_tests_info.txt 
+
+  Args:
+    test_account: The account used to login to the Chromeos device.
+  """
+  if not test.GetLoginInfo()['is_logged_in']:
+    credentials = test.GetPrivateInfo()[test_account]
+    test.Login(credentials['username'], credentials['password'])
+    login_info = test.GetLoginInfo()
+    test.assertTrue(login_info['is_logged_in'], msg='Login failed.')
+  else:
+    test.fail(msg='Another user is already logged in. Please logout first.')

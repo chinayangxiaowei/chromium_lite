@@ -17,15 +17,16 @@ class NullDirectoryChangeDelegate : public DirectoryChangeDelegate {
   virtual ~NullDirectoryChangeDelegate();
 
   virtual void HandleCalculateChangesChangeEventFromSyncApi(
-      const EntryKernelMutationSet& mutations,
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) OVERRIDE;
   virtual void HandleCalculateChangesChangeEventFromSyncer(
-      const EntryKernelMutationSet& mutations,
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) OVERRIDE;
-  virtual ModelTypeBitSet HandleTransactionEndingChangeEvent(
+  virtual ModelTypeSet HandleTransactionEndingChangeEvent(
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) OVERRIDE;
   virtual void HandleTransactionCompleteChangeEvent(
-      const ModelTypeBitSet& models_with_changes) OVERRIDE;
+      ModelTypeSet models_with_changes) OVERRIDE;
 };
 
 }  // namespace syncable

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,14 @@
 #include "base/file_path.h"
 #include "base/platform_file.h"
 #include "base/values.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/update_manifest.h"
-#include "content/common/common_param_traits.h"
-#include "content/common/serialized_script_value.h"
+#include "content/public/common/common_param_traits.h"
+#include "content/public/common/serialized_script_value.h"
 #include "ipc/ipc_message_macros.h"
 #include "printing/backend/print_backend.h"
 #include "printing/page_range.h"
+#include "printing/pdf_render_settings.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/rect.h"
 
@@ -52,8 +54,11 @@ IPC_STRUCT_TRAITS_END()
 // These are messages from the browser to the utility process.
 // Tell the utility process to unpack the given extension file in its
 // directory and verify that it is valid.
-IPC_MESSAGE_CONTROL1(ChromeUtilityMsg_UnpackExtension,
-                     FilePath /* extension_filename */)
+IPC_MESSAGE_CONTROL4(ChromeUtilityMsg_UnpackExtension,
+                     FilePath /* extension_filename */,
+                     std::string /* extension_id */,
+                     int /* Extension::Location */,
+                     int /* InitFromValue flags */)
 
 // Tell the utility process to parse the given JSON data and verify its
 // validity.
@@ -74,11 +79,10 @@ IPC_MESSAGE_CONTROL1(ChromeUtilityMsg_DecodeImageBase64,
                      std::string)  // base64 encoded image contents
 
 // Tell the utility process to render the given PDF into a metafile.
-IPC_MESSAGE_CONTROL5(ChromeUtilityMsg_RenderPDFPagesToMetafile,
+IPC_MESSAGE_CONTROL4(ChromeUtilityMsg_RenderPDFPagesToMetafile,
                      base::PlatformFile,       // PDF file
                      FilePath,                 // Location for output metafile
-                     gfx::Rect,                // Render Area
-                     int,                      // DPI
+                     printing::PdfRenderSettings,  // PDF render settitngs
                      std::vector<printing::PageRange>)
 
 // Tell the utility process to parse a JSON string into a Value object.
@@ -106,7 +110,7 @@ IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_UnpackExtension_Succeeded,
 // Reply when the utility process has failed while unpacking an extension.
 // |error_message| is a user-displayable explanation of what went wrong.
 IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_UnpackExtension_Failed,
-                     std::string /* error_message, if any */)
+                     string16 /* error_message, if any */)
 
 // Reply when the utility process is done unpacking and parsing JSON data
 // from a web resource.
@@ -137,18 +141,12 @@ IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_DecodeImage_Succeeded,
 IPC_MESSAGE_CONTROL0(ChromeUtilityHostMsg_DecodeImage_Failed)
 
 // Reply when the utility process has succeeded in rendering the PDF.
-IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_RenderPDFPagesToMetafile_Succeeded,
-                     int)       // Highest rendered page number
+IPC_MESSAGE_CONTROL2(ChromeUtilityHostMsg_RenderPDFPagesToMetafile_Succeeded,
+                     int,          // Highest rendered page number
+                     double)       // Scale factor
 
 // Reply when an error occured rendering the PDF.
 IPC_MESSAGE_CONTROL0(ChromeUtilityHostMsg_RenderPDFPagesToMetafile_Failed)
-
-#if defined(OS_WIN)
-// Request that the given font be loaded by the host so it's cached by the
-// OS. Please see ChildProcessHost::PreCacheFont for details.
-IPC_SYNC_MESSAGE_CONTROL1_0(ChromeUtilityHostMsg_PreCacheFont,
-                            LOGFONT /* font data */)
-#endif  // defined(OS_WIN)
 
 // Reply when the utility process successfully parsed a JSON string.
 //

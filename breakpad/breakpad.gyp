@@ -40,7 +40,7 @@
             'src/common/mac/SimpleStringDictionary.mm',
             'src/common/string_conversion.cc',
             'src/common/mac/string_utilities.cc',
-            'src/common/md5.c',
+            'src/common/md5.cc',
           ],
         },
         {
@@ -53,9 +53,11 @@
             'breakpad_utilities',
           ],
           'include_dirs': [
+            'src/client/apple/Framework',
             'src/common/mac',
           ],
           'sources': [
+            'src/client/mac/crash_generation/ConfigFile.mm',
             'src/client/mac/crash_generation/Inspector.mm',
             'src/client/mac/crash_generation/InspectorMain.mm',
           ],
@@ -79,6 +81,7 @@
           'sources': [
             'src/common/mac/HTTPMultipartUpload.m',
             'src/client/mac/sender/crash_report_sender.m',
+            'src/client/mac/sender/uploader.mm',
             'src/common/mac/GTMLogger.m',
           ],
           'mac_bundle_resources': [
@@ -104,12 +107,6 @@
         {
           'target_name': 'dump_syms',
           'type': 'executable',
-          'variables': {
-            # Turn off PIE because it may interfere with dump_syms' ability to
-            # allocate a contiguous region in memory large enough to mmap the
-            # entire unstripped framework in a 32-bit dump_syms process.
-            'mac_pie': 0,
-          },
           'include_dirs++': [
             # ++ ensures this comes before src brought in from target_defaults.
             'pending/src',
@@ -135,15 +132,24 @@
             'src/common/stabs_reader.cc',
             'src/common/stabs_to_module.cc',
             'src/tools/mac/dump_syms/dump_syms_tool.mm',
-            'src/common/md5.c',
+            'src/common/md5.cc',
           ],
           'defines': [
             # For src/common/stabs_reader.h.
             'HAVE_MACH_O_NLIST_H',
           ],
           'xcode_settings': {
+            # Like ld, dump_syms needs to operate on enough data that it may
+            # actually need to be able to address more than 4GB. Use x86_64.
+            # Don't worry! An x86_64 dump_syms is perfectly able to dump
+            # 32-bit files.
+            'ARCHS': [
+              'x86_64',
+            ],
+
             # The DWARF utilities require -funsigned-char.
             'GCC_CHAR_IS_UNSIGNED_CHAR': 'YES',
+
             # dwarf2reader.cc uses dynamic_cast.
             'GCC_ENABLE_CPP_RTTI': 'YES',
           },
@@ -188,6 +194,14 @@
             'crash_inspector',
             'crash_report_sender',
           ],
+          'include_dirs': [
+            'src/client/apple/Framework',
+          ],
+          'direct_dependent_settings': {
+            'include_dirs': [
+              'src/client/apple/Framework',
+            ],
+          },
           'defines': [
             'USE_PROTECTED_ALLOCATIONS=1',
           ],
@@ -268,6 +282,8 @@
                 'src/common/linux/elf_symbols_to_module.h',
                 'src/common/linux/file_id.cc',
                 'src/common/linux/file_id.h',
+                'src/common/linux/memory_mapped_file.cc',
+                'src/common/linux/memory_mapped_file.h',
                 'src/common/linux/guid_creator.h',
                 'src/common/module.cc',
                 'src/common/module.h',
@@ -304,8 +320,12 @@
             'src/client/linux/handler/exception_handler.cc',
             'src/client/linux/minidump_writer/directory_reader.h',
             'src/client/linux/minidump_writer/line_reader.h',
+            'src/client/linux/minidump_writer/linux_core_dumper.cc',
+            'src/client/linux/minidump_writer/linux_core_dumper.h',
             'src/client/linux/minidump_writer/linux_dumper.cc',
             'src/client/linux/minidump_writer/linux_dumper.h',
+            'src/client/linux/minidump_writer/linux_ptrace_dumper.cc',
+            'src/client/linux/minidump_writer/linux_ptrace_dumper.h',
             'src/client/linux/minidump_writer/minidump_writer.cc',
             'src/client/linux/minidump_writer/minidump_writer.h',
             'src/client/minidump_file_writer-inl.h',
@@ -313,6 +333,8 @@
             'src/client/minidump_file_writer.h',
             'src/common/convert_UTF.c',
             'src/common/convert_UTF.h',
+            'src/common/linux/elf_core_dump.cc',
+            'src/common/linux/elf_core_dump.h',
             'src/common/linux/file_id.cc',
             'src/common/linux/file_id.h',
             'src/common/linux/google_crashdump_uploader.cc',
@@ -322,6 +344,10 @@
             'src/common/linux/libcurl_wrapper.cc',
             'src/common/linux/libcurl_wrapper.h',
             'src/common/linux/linux_libc_support.h',
+            'src/common/linux/memory_mapped_file.cc',
+            'src/common/linux/memory_mapped_file.h',
+            'src/common/linux/safe_readlink.cc',
+            'src/common/linux/safe_readlink.h',
             'src/common/memory.h',
             'src/common/string_conversion.cc',
             'src/common/string_conversion.h',
@@ -379,6 +405,7 @@
             '../testing/gmock.gyp:gmock',
             'breakpad_client',
             'breakpad_processor_support',
+            'linux_dumper_unittest_helper',
           ],
 
           'sources': [
@@ -386,13 +413,22 @@
             'src/client/linux/handler/exception_handler_unittest.cc',
             'src/client/linux/minidump_writer/directory_reader_unittest.cc',
             'src/client/linux/minidump_writer/line_reader_unittest.cc',
-            'src/client/linux/minidump_writer/linux_dumper_unittest.cc',
+            'src/client/linux/minidump_writer/linux_core_dumper_unittest.cc',
+            'src/client/linux/minidump_writer/linux_ptrace_dumper_unittest.cc',
             'src/client/linux/minidump_writer/minidump_writer_unittest.cc',
+            'src/common/linux/elf_core_dump_unittest.cc',
             'src/common/linux/file_id_unittest.cc',
             'src/common/linux/linux_libc_support_unittest.cc',
             'src/common/linux/synth_elf.cc',
+            'src/common/linux/tests/crash_generator.cc',
+            'src/common/linux/tests/crash_generator.h',
+            'src/common/memory_range.h',
             'src/common/memory_unittest.cc',
             'src/common/test_assembler.cc',
+            'src/common/tests/file_utils.cc',
+            'src/common/tests/file_utils.h',
+            'src/tools/linux/md2core/minidump_memory_range.h',
+            'src/tools/linux/md2core/minidump_memory_range_unittest.cc',
           ],
 
           'include_dirs': [
@@ -400,6 +436,19 @@
             'src',
             '..',
             '.',
+          ],
+        },
+        {
+          'target_name': 'linux_dumper_unittest_helper',
+          'type': 'executable',
+          'dependencies': [
+          ],
+          'sources': [
+            'src/client/linux/minidump_writer/linux_dumper_unittest_helper.cc',
+          ],
+
+          'include_dirs': [
+            '..',
           ],
         },
         {
@@ -425,6 +474,27 @@
 
           'sources': [
             'src/tools/linux/md2core/minidump-2-core.cc'
+          ],
+
+          'dependencies': [
+            'breakpad_client',
+          ],
+
+          'include_dirs': [
+            '..',
+            'src',
+          ],
+        },
+        {
+          'target_name': 'core-2-minidump',
+          'type': 'executable',
+
+          'sources': [
+            'src/tools/linux/core2md/core2md.cc'
+          ],
+
+          'dependencies': [
+            'breakpad_client',
           ],
 
           'include_dirs': [

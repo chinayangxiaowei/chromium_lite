@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,14 @@
 
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
-#include "content/browser/browser_child_process_host.h"
-#include "content/browser/browser_thread.h"
+#include "base/process_util.h"
+#include "base/memory/weak_ptr.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/browser_child_process_host_delegate.h"
+#include "content/public/browser/browser_thread.h"
+#include "ipc/ipc_message.h"
+
+class BrowserChildProcessHostImpl;
 
 // This class acts as the browser-side host to a utility child process.  A
 // utility process is a short-lived sandboxed process that is created to run
@@ -21,12 +27,18 @@
 // If you need multiple batches of work to be done in the sandboxed process,
 // use StartBatchMode(), then multiple calls to StartFooBar(p),
 // then finish with EndBatchMode().
-class UtilityProcessHost : public BrowserChildProcessHost {
+//
+// Note: If your class keeps a ptr to an object of this type, grab a weak ptr to
+// avoid a use after free.  See http://crbug.com/108871.
+class CONTENT_EXPORT UtilityProcessHost
+    : public content::BrowserChildProcessHostDelegate,
+      public IPC::Message::Sender,
+      public base::SupportsWeakPtr<UtilityProcessHost> {
  public:
   // An interface to be implemented by consumers of the utility process to
   // get results back.  All functions are called on the thread passed along
   // to UtilityProcessHost.
-  class Client : public base::RefCountedThreadSafe<Client> {
+  class CONTENT_EXPORT Client : public base::RefCountedThreadSafe<Client> {
    public:
     Client();
 
@@ -47,11 +59,12 @@ class UtilityProcessHost : public BrowserChildProcessHost {
     DISALLOW_COPY_AND_ASSIGN(Client);
   };
 
-  UtilityProcessHost(Client* client, BrowserThread::ID client_thread_id);
+  UtilityProcessHost(Client* client,
+                     content::BrowserThread::ID client_thread_id);
   virtual ~UtilityProcessHost();
 
-  // BrowserChildProcessHost override
-  virtual bool Send(IPC::Message* message);
+  // IPC::Message::Sender implementation:
+  virtual bool Send(IPC::Message* message) OVERRIDE;
 
   // Starts utility process in batch mode. Caller must call EndBatchMode()
   // to finish the utility process.
@@ -61,6 +74,12 @@ class UtilityProcessHost : public BrowserChildProcessHost {
   void EndBatchMode();
 
   void set_exposed_dir(const FilePath& dir) { exposed_dir_ = dir; }
+  void set_no_sandbox(bool flag) { no_sandbox_ = flag; }
+  void set_child_flags(int flags) { child_flags_ = flags; }
+  void set_use_linux_zygote(bool flag) { use_linux_zygote_ = flag; }
+#if defined(OS_POSIX)
+  void set_env(const base::environment_vector& env) { env_ = env; }
+#endif
 
  protected:
   // Allow these methods to be overridden for tests.
@@ -71,16 +90,13 @@ class UtilityProcessHost : public BrowserChildProcessHost {
   // has already been started via StartBatchMode().
   bool StartProcess();
 
-  // IPC messages:
-  virtual bool OnMessageReceived(const IPC::Message& message);
-
   // BrowserChildProcessHost:
-  virtual void OnProcessCrashed(int exit_code);
-  virtual bool CanShutdown();
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  virtual void OnProcessCrashed(int exit_code) OVERRIDE;
 
   // A pointer to our client interface, who will be informed of progress.
   scoped_refptr<Client> client_;
-  BrowserThread::ID client_thread_id_;
+  content::BrowserThread::ID client_thread_id_;
   // True when running in batch mode, i.e., StartBatchMode() has been called
   // and the utility process will run until EndBatchMode().
   bool is_batch_mode_;
@@ -89,7 +105,22 @@ class UtilityProcessHost : public BrowserChildProcessHost {
   // the operation.
   FilePath exposed_dir_;
 
+  // Whether to pass switches::kNoSandbox to the child.
+  bool no_sandbox_;
+
+  // Flags defined in ChildProcessHost with which to start the process.
+  int child_flags_;
+
+  // If the |no_sandbox_| flag is off, and we are on Linux, launch the
+  // utility process from the zygote. Defaults to false.
+  // Can only be used for tasks that do not require FS access.
+  bool use_linux_zygote_;
+
+  base::environment_vector env_;
+
   bool started_;
+
+  scoped_ptr<BrowserChildProcessHostImpl> process_;
 
   DISALLOW_COPY_AND_ASSIGN(UtilityProcessHost);
 };

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -17,11 +18,13 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/custom_handlers/protocol_handler.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/child_process_security_policy.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
 #include "net/base/network_delegate.h"
 #include "net/url_request/url_request_redirect_job.h"
+
+using content::BrowserThread;
 
 // ProtocolHandlerRegistry -----------------------------------------------------
 
@@ -122,7 +125,7 @@ void ProtocolHandlerRegistry::Enable() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(this, &ProtocolHandlerRegistry::EnableIO));
+      base::Bind(&ProtocolHandlerRegistry::EnableIO, this));
   ProtocolHandlerMap::const_iterator p;
   for (p = default_handlers_.begin(); p != default_handlers_.end(); ++p) {
     delegate_->RegisterExternalHandler(p->first);
@@ -140,7 +143,7 @@ void ProtocolHandlerRegistry::Disable() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(this, &ProtocolHandlerRegistry::DisableIO));
+      base::Bind(&ProtocolHandlerRegistry::DisableIO, this));
   ProtocolHandlerMap::const_iterator p;
   for (p = default_handlers_.begin(); p != default_handlers_.end(); ++p) {
     delegate_->DeregisterExternalHandler(p->first);
@@ -201,8 +204,8 @@ void ProtocolHandlerRegistry::Load() {
     BrowserThread::PostTask(
         BrowserThread::IO,
         FROM_HERE,
-        NewRunnableMethod(this, enabled_ ? &ProtocolHandlerRegistry::EnableIO :
-                          &ProtocolHandlerRegistry::DisableIO));
+        base::Bind(enabled_ ? &ProtocolHandlerRegistry::EnableIO :
+                   &ProtocolHandlerRegistry::DisableIO, this));
   }
   std::vector<const DictionaryValue*> registered_handlers =
       GetHandlersFromPref(prefs::kRegisteredProtocolHandlers);
@@ -254,7 +257,6 @@ void ProtocolHandlerRegistry::Save() {
   profile_->GetPrefs()->Set(prefs::kIgnoredProtocolHandlers,
       *ignored_protocol_handlers);
   profile_->GetPrefs()->Set(prefs::kCustomHandlersEnabled, *enabled);
-  profile_->GetPrefs()->ScheduleSavePersistentPrefs();
 }
 
 bool ProtocolHandlerRegistry::CanSchemeBeOverridden(
@@ -305,12 +307,41 @@ bool ProtocolHandlerRegistry::IsRegistered(
       handlers->end();
 }
 
+bool ProtocolHandlerRegistry::HasRegisteredEquivalent(
+    const ProtocolHandler& handler) const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  const ProtocolHandlerList* handlers = GetHandlerList(handler.protocol());
+  if (!handlers) {
+    return false;
+  }
+  ProtocolHandlerList::const_iterator i;
+  for (i = handlers->begin(); i != handlers->end(); ++i) {
+    if (handler.IsEquivalent(*i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ProtocolHandlerRegistry::IsIgnored(const ProtocolHandler& handler) const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   ProtocolHandlerList::const_iterator i;
   for (i = ignored_protocol_handlers_.begin();
        i != ignored_protocol_handlers_.end(); ++i) {
     if (*i == handler) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ProtocolHandlerRegistry::HasIgnoredEquivalent(
+    const ProtocolHandler& handler) const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  ProtocolHandlerList::const_iterator i;
+  for (i = ignored_protocol_handlers_.begin();
+       i != ignored_protocol_handlers_.end(); ++i) {
+    if (handler.IsEquivalent(*i)) {
       return true;
     }
   }
@@ -341,8 +372,8 @@ void ProtocolHandlerRegistry::RemoveHandler(
     } else {
       BrowserThread::PostTask(
           BrowserThread::IO, FROM_HERE,
-          NewRunnableMethod(this, &ProtocolHandlerRegistry::ClearDefaultIO,
-                            q->second.protocol()));
+          base::Bind(&ProtocolHandlerRegistry::ClearDefaultIO, this,
+                     q->second.protocol()));
       default_handlers_.erase(q);
     }
   }
@@ -399,6 +430,20 @@ Value* ProtocolHandlerRegistry::EncodeIgnoredHandlers() {
   return handlers;
 }
 
+bool ProtocolHandlerRegistry::SilentlyHandleRegisterHandlerRequest(
+    const ProtocolHandler& handler) {
+  if (handler.IsEmpty() || !CanSchemeBeOverridden(handler.protocol()))
+    return true;
+
+  if (!enabled() || IsRegistered(handler) || HasIgnoredEquivalent(handler))
+    return true;
+
+  if (AttemptReplace(handler))
+    return true;
+
+  return false;
+}
+
 void ProtocolHandlerRegistry::OnAcceptRegisterProtocolHandler(
     const ProtocolHandler& handler) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -424,6 +469,43 @@ void ProtocolHandlerRegistry::OnIgnoreRegisterProtocolHandler(
   NotifyChanged();
 }
 
+bool ProtocolHandlerRegistry::AttemptReplace(const ProtocolHandler& handler) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  ProtocolHandler old_default = GetHandlerFor(handler.protocol());
+  bool make_new_handler_default = handler.IsSameOrigin(old_default);
+  ProtocolHandlerList to_replace(GetReplacedHandlers(handler));
+  if (to_replace.empty())
+    return false;
+  for (ProtocolHandlerList::iterator p = to_replace.begin();
+       p != to_replace.end(); ++p) {
+    RemoveHandler(*p);
+  }
+  if (make_new_handler_default) {
+    OnAcceptRegisterProtocolHandler(handler);
+  } else {
+    InsertHandler(handler);
+    NotifyChanged();
+  }
+  return true;
+}
+
+ProtocolHandlerRegistry::ProtocolHandlerList
+ProtocolHandlerRegistry::GetReplacedHandlers(
+    const ProtocolHandler& handler) const {
+  ProtocolHandlerList replaced_handlers;
+  const ProtocolHandlerList* handlers = GetHandlerList(handler.protocol());
+  if (!handlers)
+    return replaced_handlers;
+  for (ProtocolHandlerList::const_iterator p = handlers->begin();
+       p != handlers->end(); p++) {
+    if (handler.IsSameOrigin(*p)) {
+      replaced_handlers.push_back(*p);
+    }
+  }
+  return replaced_handlers;
+}
+
+
 // static
 void ProtocolHandlerRegistry::RegisterPrefs(PrefService* pref_service) {
   pref_service->RegisterListPref(prefs::kRegisteredProtocolHandlers,
@@ -448,7 +530,7 @@ void ProtocolHandlerRegistry::SetDefault(const ProtocolHandler& handler) {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(this, &ProtocolHandlerRegistry::SetDefaultIO, handler));
+      base::Bind(&ProtocolHandlerRegistry::SetDefaultIO, this, handler));
 }
 
 void ProtocolHandlerRegistry::ClearDefault(const std::string& scheme) {
@@ -457,8 +539,7 @@ void ProtocolHandlerRegistry::ClearDefault(const std::string& scheme) {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &ProtocolHandlerRegistry::ClearDefaultIO, scheme));
+      base::Bind(&ProtocolHandlerRegistry::ClearDefaultIO, this, scheme));
   Save();
   NotifyChanged();
 }
@@ -505,10 +586,10 @@ void ProtocolHandlerRegistry::PromoteHandler(const ProtocolHandler& handler) {
 
 void ProtocolHandlerRegistry::NotifyChanged() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  NotificationService::current()->Notify(
+  content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_PROTOCOL_HANDLER_REGISTRY_CHANGED,
-      Source<Profile>(profile_),
-      NotificationService::NoDetails());
+      content::Source<Profile>(profile_),
+      content::NotificationService::NoDetails());
 }
 
 // IO thread methods -----------------------------------------------------------

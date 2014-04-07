@@ -51,6 +51,9 @@ class BrowserProxy : public AutomationResourceProxy {
   // Returns true if successful.
   bool AppendTab(const GURL& tab_url) WARN_UNUSED_RESULT;
 
+  // Appends a new tab in the background (as if middle-clicking).
+  bool AppendBackgroundTab(const GURL& tab_url) WARN_UNUSED_RESULT;
+
   // Gets the (zero-based) index of the currently active tab. Returns true if
   // successful.
   bool GetActiveTabIndex(int* active_tab_index) const WARN_UNUSED_RESULT;
@@ -138,9 +141,12 @@ class BrowserProxy : public AutomationResourceProxy {
   bool RunCommand(int browser_command) const WARN_UNUSED_RESULT;
 
   // Returns whether the Bookmark bar is visible and whether we are animating
-  // it into position. Returns false on failure.
+  // it into position. Also returns whether it is currently detached from the
+  // location bar, as in the NTP.
+  // Returns false on failure.
   bool GetBookmarkBarVisibility(bool* is_visible,
-                                bool* is_animating) WARN_UNUSED_RESULT;
+                                bool* is_animating,
+                                bool* is_detached) WARN_UNUSED_RESULT;
 
   // Get the bookmarks as a JSON string and put it in |json_string|.
   // Return true on success.
@@ -229,8 +235,11 @@ class BrowserProxy : public AutomationResourceProxy {
   // the time when loading stopped into |max_stop_time| (should be similar to
   // the delay that WaitForInitialLoads waits for), and a list of all
   // finished timestamps into |stop_times|. Returns true on success.
-  bool GetInitialLoadTimes(float* min_start_time, float* max_stop_time,
-                           std::vector<float>* stop_times);
+  bool GetInitialLoadTimes(
+      int timeout_ms,
+      float* min_start_time,
+      float* max_stop_time,
+      std::vector<float>* stop_times);
 
 
  protected:

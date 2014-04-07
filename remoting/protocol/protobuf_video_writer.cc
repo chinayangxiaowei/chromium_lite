@@ -5,11 +5,9 @@
 #include "remoting/protocol/protobuf_video_writer.h"
 
 #include "base/bind.h"
-#include "base/task.h"
 #include "net/socket/stream_socket.h"
 #include "remoting/base/constants.h"
 #include "remoting/proto/video.pb.h"
-#include "remoting/protocol/rtp_writer.h"
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/util.h"
 
@@ -17,16 +15,20 @@ namespace remoting {
 namespace protocol {
 
 ProtobufVideoWriter::ProtobufVideoWriter(base::MessageLoopProxy* message_loop)
-    : buffered_writer_(new BufferedSocketWriter(message_loop)) {
+    : session_(NULL),
+      buffered_writer_(new BufferedSocketWriter(message_loop)) {
 }
 
-ProtobufVideoWriter::~ProtobufVideoWriter() { }
+ProtobufVideoWriter::~ProtobufVideoWriter() {
+  Close();
+}
 
 void ProtobufVideoWriter::Init(protocol::Session* session,
                                const InitializedCallback& callback) {
+  session_ = session;
   initialized_callback_ = callback;
 
-  session->CreateStreamChannel(
+  session_->CreateStreamChannel(
       kVideoChannelName,
       base::Bind(&ProtobufVideoWriter::OnChannelReady, base::Unretained(this)));
 }
@@ -40,7 +42,7 @@ void ProtobufVideoWriter::OnChannelReady(net::StreamSocket* socket) {
   DCHECK(!channel_.get());
   channel_.reset(socket);
   // TODO(sergeyu): Provide WriteFailedCallback for the buffered writer.
-  buffered_writer_->Init(socket, NULL);
+  buffered_writer_->Init(socket, BufferedSocketWriter::WriteFailedCallback());
 
   initialized_callback_.Run(true);
 }
@@ -48,10 +50,18 @@ void ProtobufVideoWriter::OnChannelReady(net::StreamSocket* socket) {
 void ProtobufVideoWriter::Close() {
   buffered_writer_->Close();
   channel_.reset();
+  if (session_) {
+    session_->CancelChannelCreation(kVideoChannelName);
+    session_ = NULL;
+  }
+}
+
+bool ProtobufVideoWriter::is_connected() {
+  return channel_.get() != NULL;
 }
 
 void ProtobufVideoWriter::ProcessVideoPacket(const VideoPacket* packet,
-                                             Task* done) {
+                                             const base::Closure& done) {
   buffered_writer_->Write(SerializeAndFrameMessage(*packet), done);
 }
 

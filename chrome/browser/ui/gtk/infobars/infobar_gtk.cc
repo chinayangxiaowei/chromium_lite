@@ -1,10 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/gtk/infobars/infobar_gtk.h"
 
+#include "base/debug/trace_event.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/infobars/infobar_tab_helper.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
@@ -13,9 +16,12 @@
 #include "chrome/browser/ui/gtk/infobars/infobar_container_gtk.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/gtk/gtk_expanded_container.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
+#include "ui/base/gtk/gtk_signal_registrar.h"
+#include "ui/base/models/menu_model.h"
 #include "ui/gfx/gtk_util.h"
 #include "ui/gfx/image/image.h"
 
@@ -44,9 +50,11 @@ const int InfoBar::kDefaultBarTargetHeight = 36;
 // static
 const int InfoBarGtk::kEndOfLabelSpacing = 6;
 
-InfoBarGtk::InfoBarGtk(TabContentsWrapper* owner, InfoBarDelegate* delegate)
+InfoBarGtk::InfoBarGtk(InfoBarTabHelper* owner, InfoBarDelegate* delegate)
     : InfoBar(owner, delegate),
-      theme_service_(GtkThemeService::GetFrom(owner->profile())) {
+      theme_service_(GtkThemeService::GetFrom(Profile::FromBrowserContext(
+          owner->web_contents()->GetBrowserContext()))),
+      signals_(new ui::GtkSignalRegistrar) {
   DCHECK(delegate);
   // Create |hbox_| and pad the sides.
   hbox_ = gtk_hbox_new(FALSE, kElementPadding);
@@ -77,8 +85,8 @@ InfoBarGtk::InfoBarGtk(TabContentsWrapper* owner, InfoBarDelegate* delegate)
 
   close_button_.reset(CustomDrawButton::CloseButton(theme_service_));
   gtk_util::CenterWidgetInHBox(hbox_, close_button_->widget(), true, 0);
-  g_signal_connect(close_button_->widget(), "clicked",
-                   G_CALLBACK(OnCloseButtonThunk), this);
+  signals_->Connect(close_button_->widget(), "clicked",
+                    G_CALLBACK(OnCloseButtonThunk), this);
 
   widget_.Own(gtk_expanded_container_new());
   gtk_container_add(GTK_CONTAINER(widget_.get()), bg_box_);
@@ -89,7 +97,7 @@ InfoBarGtk::InfoBarGtk(TabContentsWrapper* owner, InfoBarDelegate* delegate)
                    this);
 
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 Source<ThemeService>(theme_service_));
+                 content::Source<ThemeService>(theme_service_));
   UpdateBorderColor();
 }
 
@@ -106,6 +114,10 @@ GdkColor InfoBarGtk::GetBorderColor() const {
 
 int InfoBarGtk::AnimatingHeight() const {
   return animation().is_animating() ? bar_target_height() : 0;
+}
+
+ui::GtkSignalRegistrar* InfoBarGtk::Signals() {
+  return signals_.get();
 }
 
 GtkWidget* InfoBarGtk::CreateLabel(const std::string& text) {
@@ -130,7 +142,7 @@ void InfoBarGtk::AddLabelWithInlineLink(const string16& display_text,
   gtk_util::ForceFontSizePixels(
       GTK_CHROME_LINK_BUTTON(link_button)->label, 13.4);
   DCHECK(callback);
-  g_signal_connect(link_button, "clicked", callback, this);
+  signals_->Connect(link_button, "clicked", callback, this);
   gtk_util::SetButtonTriggersNavigation(link_button);
 
   GtkWidget* hbox = gtk_hbox_new(FALSE, 0);
@@ -157,6 +169,14 @@ void InfoBarGtk::AddLabelWithInlineLink(const string16& display_text,
   gtk_box_pack_start(GTK_BOX(hbox), initial_label, FALSE, FALSE, 0);
   gtk_util::CenterWidgetInHBox(hbox, link_button, false, 0);
   gtk_box_pack_start(GTK_BOX(hbox), trailing_label, FALSE, FALSE, 0);
+}
+
+void InfoBarGtk::ShowMenuWithModel(GtkWidget* sender,
+                                   MenuGtk::Delegate* delegate,
+                                   ui::MenuModel* model) {
+  menu_model_.reset(model);
+  menu_.reset(new MenuGtk(delegate, menu_model_.get()));
+  menu_->PopupForWidget(sender, 1, gtk_get_current_event_time());
 }
 
 void InfoBarGtk::GetTopColor(InfoBarDelegate::Type type,
@@ -193,7 +213,11 @@ void InfoBarGtk::OnCloseButton(GtkWidget* button) {
 
 gboolean InfoBarGtk::OnBackgroundExpose(GtkWidget* sender,
                                         GdkEventExpose* event) {
-  const int height = sender->allocation.height;
+  TRACE_EVENT0("ui::gtk", "InfoBarGtk::OnBackgroundExpose");
+
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(sender, &allocation);
+  const int height = allocation.height;
 
   cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(sender->window));
   gdk_cairo_rectangle(cr, &event->area);
@@ -219,9 +243,8 @@ gboolean InfoBarGtk::OnBackgroundExpose(GtkWidget* sender,
                        border_color.green / 65535.0,
                        border_color.blue / 65535.0);
   cairo_set_line_width(cr, 1.0);
-  int y = sender->allocation.height;
-  cairo_move_to(cr, 0, y - 0.5);
-  cairo_rel_line_to(cr, sender->allocation.width, 0);
+  cairo_move_to(cr, 0, allocation.height - 0.5);
+  cairo_rel_line_to(cr, allocation.width, 0);
   cairo_stroke(cr);
 
   cairo_destroy(cr);
@@ -238,8 +261,17 @@ void InfoBarGtk::PlatformSpecificShow(bool animate) {
   gtk_widget_show_all(widget_.get());
   gtk_widget_set_size_request(widget_.get(), -1, bar_height());
 
-  if (bg_box_->window)
-    gdk_window_lower(bg_box_->window);
+  GdkWindow* gdk_window = gtk_widget_get_window(bg_box_);
+  if (gdk_window)
+    gdk_window_lower(gdk_window);
+}
+
+void InfoBarGtk::PlatformSpecificOnCloseSoon() {
+  // We must close all menus and prevent any signals from being emitted while
+  // we are animating the info bar closed.
+  menu_.reset();
+  menu_model_.reset();
+  signals_.reset();
 }
 
 void InfoBarGtk::PlatformSpecificOnHeightsRecalculated() {
@@ -253,8 +285,8 @@ void InfoBarGtk::PlatformSpecificOnHeightsRecalculated() {
 }
 
 void InfoBarGtk::Observe(int type,
-                         const NotificationSource& source,
-                         const NotificationDetails& details) {
+                         const content::NotificationSource& source,
+                         const content::NotificationDetails& details) {
   UpdateBorderColor();
 }
 

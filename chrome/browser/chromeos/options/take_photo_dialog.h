@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 #define CHROME_BROWSER_CHROMEOS_OPTIONS_TAKE_PHOTO_DIALOG_H_
 #pragma once
 
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/chromeos/login/camera_controller.h"
 #include "chrome/browser/chromeos/login/take_photo_view.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "views/window/dialog_delegate.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "ui/views/window/dialog_delegate.h"
 
 namespace views {
 class View;
@@ -24,7 +25,7 @@ namespace chromeos {
 class TakePhotoDialog : public views::DialogDelegateView,
                         public TakePhotoView::Delegate,
                         public CameraController::Delegate,
-                        public NotificationObserver {
+                        public content::NotificationObserver {
  public:
   class Delegate {
    public:
@@ -37,26 +38,25 @@ class TakePhotoDialog : public views::DialogDelegateView,
   explicit TakePhotoDialog(Delegate* delegate);
   virtual ~TakePhotoDialog();
 
-  // views::DialogDelegate overrides.
-  virtual bool IsDialogButtonEnabled(
-      MessageBoxFlags::DialogButton button) const;
-  virtual bool Cancel();
-  virtual bool Accept();
+  // views::DialogDelegateView overrides.
+  virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
+  virtual bool Cancel() OVERRIDE;
+  virtual bool Accept() OVERRIDE;
 
-  // views::WindowDelegate overrides.
-  virtual bool IsModal() const;
-  virtual views::View* GetContentsView();
+  // views::WidgetDelegate overrides.
+  virtual ui::ModalType GetModalType() const OVERRIDE;
+  virtual views::View* GetContentsView() OVERRIDE;
 
   // views::View overrides.
-  virtual void GetAccessibleState(ui::AccessibleViewState* state);
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // TakePhotoView::Delegate overrides.
-  virtual void OnCapturingStarted();
-  virtual void OnCapturingStopped();
+  virtual void OnCapturingStarted() OVERRIDE;
+  virtual void OnCapturingStopped() OVERRIDE;
 
   // CameraController::Delegate implementation:
-  virtual void OnCaptureSuccess();
-  virtual void OnCaptureFailure();
+  virtual void OnCaptureSuccess() OVERRIDE;
+  virtual void OnCaptureFailure() OVERRIDE;
 
   // Interface that observers of this dialog must implement in order
   // to receive notification for capture success/failure.
@@ -86,15 +86,15 @@ class TakePhotoDialog : public views::DialogDelegateView,
   void NotifyOnCaptureFailure();
   void NotifyOnCapturingStopped();
 
-  // NotificationObserver implementation:
+  // content::NotificationObserver implementation:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  protected:
   // views::View overrides:
-  virtual void Layout();
-  virtual gfx::Size GetPreferredSize();
+  virtual void Layout() OVERRIDE;
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
 
  private:
   // Starts initializing the camera and shows the appropriate status on the
@@ -105,7 +105,7 @@ class TakePhotoDialog : public views::DialogDelegateView,
 
   CameraController camera_controller_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   Delegate* delegate_;
 

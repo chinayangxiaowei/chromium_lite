@@ -8,31 +8,34 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cstddef>
 #include <iosfwd>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/atomicops.h"
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/gtest_prod_util.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/observer_list_threadsafe.h"
 #include "base/synchronization/lock.h"
 #include "base/time.h"
-#include "base/tracked.h"
+#include "chrome/browser/sync/internal_api/includes/unrecoverable_error_handler.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
 #include "chrome/browser/sync/syncable/blob.h"
 #include "chrome/browser/sync/syncable/dir_open_result.h"
 #include "chrome/browser/sync/syncable/directory_event.h"
 #include "chrome/browser/sync/syncable/syncable_id.h"
 #include "chrome/browser/sync/syncable/model_type.h"
-#include "chrome/browser/sync/util/dbgq.h"
-
-struct PurgeInfo;
+#include "chrome/browser/sync/util/immutable.h"
+#include "chrome/browser/sync/util/time.h"
+#include "chrome/browser/sync/util/weak_handle.h"
 
 namespace base {
 class DictionaryValue;
@@ -56,8 +59,14 @@ class DirectoryBackingStore;
 
 static const int64 kInvalidMetaHandle = 0;
 
-// Update syncable_enum_conversions{.h,.cc,_unittest.cc} if you change
-// any fields in this file.
+// Things you need to update if you change any of the fields below:
+//  - EntryKernel struct in syncable.h (this file)
+//  - syncable_columns.h
+//  - syncable_enum_conversions{.h,.cc,_unittest.cc}
+//  - EntryKernel::EntryKernel(), EntryKernel::ToValue(), operator<<
+//    for Entry in syncable.cc
+//  - BindFields() and UnpackEntry() in directory_backing_store.cc
+//  - TestSimpleFieldsPreservedDuringSaveChanges in syncable_unittest.cc
 
 enum {
   BEGIN_FIELDS = 0,
@@ -78,10 +87,6 @@ enum BaseVersion {
 
 enum Int64Field {
   SERVER_VERSION = BASE_VERSION + 1,
-  MTIME,
-  SERVER_MTIME,
-  CTIME,
-  SERVER_CTIME,
 
   // A numeric position value that indicates the relative ordering of
   // this object among its siblings.
@@ -94,8 +99,21 @@ enum Int64Field {
 };
 
 enum {
-  INT64_FIELDS_COUNT = INT64_FIELDS_END,
-  ID_FIELDS_BEGIN = INT64_FIELDS_END,
+  INT64_FIELDS_COUNT = INT64_FIELDS_END - INT64_FIELDS_BEGIN,
+  TIME_FIELDS_BEGIN = INT64_FIELDS_END,
+};
+
+enum TimeField {
+  MTIME = TIME_FIELDS_BEGIN,
+  SERVER_MTIME,
+  CTIME,
+  SERVER_CTIME,
+  TIME_FIELDS_END,
+};
+
+enum {
+  TIME_FIELDS_COUNT = TIME_FIELDS_END - TIME_FIELDS_BEGIN,
+  ID_FIELDS_BEGIN = TIME_FIELDS_END,
 };
 
 enum IdField {
@@ -160,6 +178,7 @@ enum {
 enum ProtoField {
   SPECIFICS = PROTO_FIELDS_BEGIN,
   SERVER_SPECIFICS,
+  BASE_SERVER_SPECIFICS,
   PROTO_FIELDS_END,
 };
 
@@ -223,6 +242,8 @@ enum CreateNewUpdateItem {
 
 typedef std::set<int64> MetahandleSet;
 
+// TODO(akalin): Move EntryKernel and related into its own header file.
+
 // Why the singular enums?  So the code compile-time dispatches instead of
 // runtime dispatches as it would with a single enum and an if() statement.
 
@@ -232,6 +253,7 @@ struct EntryKernel {
   std::string string_fields[STRING_FIELDS_COUNT];
   sync_pb::EntitySpecifics specifics_fields[PROTO_FIELDS_COUNT];
   int64 int64_fields[INT64_FIELDS_COUNT];
+  base::Time time_fields[TIME_FIELDS_COUNT];
   Id id_fields[ID_FIELDS_COUNT];
   std::bitset<BIT_FIELDS_COUNT> bit_fields;
   std::bitset<BIT_TEMPS_COUNT> bit_temps;
@@ -273,6 +295,13 @@ struct EntryKernel {
   inline void put(Int64Field field, int64 value) {
     int64_fields[field - INT64_FIELDS_BEGIN] = value;
   }
+  inline void put(TimeField field, const base::Time& value) {
+    // Round-trip to proto time format and back so that we have
+    // consistent time resolutions (ms).
+    time_fields[field - TIME_FIELDS_BEGIN] =
+        browser_sync::ProtoTimeToTime(
+            browser_sync::TimeToProtoTime(value));
+  }
   inline void put(IdField field, const Id& value) {
     id_fields[field - ID_FIELDS_BEGIN] = value;
   }
@@ -304,6 +333,9 @@ struct EntryKernel {
   }
   inline int64 ref(Int64Field field) const {
     return int64_fields[field - INT64_FIELDS_BEGIN];
+  }
+  inline const base::Time& ref(TimeField field) const {
+    return time_fields[field - TIME_FIELDS_BEGIN];
   }
   inline const Id& ref(IdField field) const {
     return id_fields[field - ID_FIELDS_BEGIN];
@@ -340,6 +372,8 @@ struct EntryKernel {
   inline Id& mutable_ref(IdField field) {
     return id_fields[field - ID_FIELDS_BEGIN];
   }
+
+  syncable::ModelType GetServerModelType() const;
 
   // Does a case in-sensitive search for a given string, which must be
   // lower case.
@@ -381,6 +415,10 @@ class Entry {
     return kernel_->ref(field);
   }
   inline int64 Get(Int64Field field) const {
+    DCHECK(kernel_);
+    return kernel_->ref(field);
+  }
+  inline const base::Time& Get(TimeField field) const {
     DCHECK(kernel_);
     return kernel_->ref(field);
   }
@@ -443,20 +481,16 @@ class Entry {
   friend class sync_api::ReadNode;
   void* operator new(size_t size) { return (::operator new)(size); }
 
-  inline Entry(BaseTransaction* trans)
+  inline explicit Entry(BaseTransaction* trans)
       : basetrans_(trans),
         kernel_(NULL) { }
 
  protected:
-
   BaseTransaction* const basetrans_;
 
   EntryKernel* kernel_;
 
  private:
-  // Like GetServerModelType() but without the DCHECKs.
-  ModelType GetServerModelTypeHelper() const;
-
   DISALLOW_COPY_AND_ASSIGN(Entry);
 };
 
@@ -467,6 +501,7 @@ class MutableEntry : public Entry {
   friend class Directory;
   void Init(WriteTransaction* trans, const Id& parent_id,
       const std::string& name);
+
  public:
   MutableEntry(WriteTransaction* trans, Create, const Id& parent_id,
                const std::string& name);
@@ -485,6 +520,7 @@ class MutableEntry : public Entry {
   // that putting the value would have caused a duplicate in the index.
   // TODO(chron): Remove some of these unecessary return values.
   bool Put(Int64Field field, const int64& value);
+  bool Put(TimeField field, const base::Time& value);
   bool Put(IdField field, const Id& value);
 
   // Do a simple property-only update if the PARENT_ID field.  Use with caution.
@@ -530,7 +566,7 @@ class MutableEntry : public Entry {
 
   // Adjusts the successor and predecessor entries so that they no longer
   // refer to this entry.
-  void UnlinkFromOrder();
+  bool UnlinkFromOrder();
 
   // Kind of redundant. We should reduce the number of pointers
   // floating around if at all possible. Could we store this in Directory?
@@ -557,21 +593,57 @@ typedef std::set<EntryKernel, EntryKernelLessByMetaHandle> EntryKernelSet;
 struct EntryKernelMutation {
   EntryKernel original, mutated;
 };
-class EntryKernelMutationLessByMetaHandle {
- public:
-  inline bool operator()(const EntryKernelMutation& a,
-                         const EntryKernelMutation& b) const {
-    DCHECK_EQ(a.original.ref(META_HANDLE), a.mutated.ref(META_HANDLE));
-    DCHECK_EQ(b.original.ref(META_HANDLE), b.mutated.ref(META_HANDLE));
-    return a.original.ref(META_HANDLE) < b.original.ref(META_HANDLE);
-  }
+typedef std::map<int64, EntryKernelMutation> EntryKernelMutationMap;
+
+typedef browser_sync::Immutable<EntryKernelMutationMap>
+    ImmutableEntryKernelMutationMap;
+
+// A WriteTransaction has a writer tag describing which body of code is doing
+// the write. This is defined up here since WriteTransactionInfo also contains
+// one.
+enum WriterTag {
+  INVALID,
+  SYNCER,
+  AUTHWATCHER,
+  UNITTEST,
+  VACUUM_AFTER_SAVE,
+  PURGE_ENTRIES,
+  SYNCAPI
 };
-typedef std::set<EntryKernelMutation, EntryKernelMutationLessByMetaHandle>
-    EntryKernelMutationSet;
+
+// Make sure to update this if you update WriterTag.
+std::string WriterTagToString(WriterTag writer_tag);
+
+struct WriteTransactionInfo {
+  WriteTransactionInfo(int64 id,
+                       tracked_objects::Location location,
+                       WriterTag writer,
+                       ImmutableEntryKernelMutationMap mutations);
+  WriteTransactionInfo();
+  ~WriteTransactionInfo();
+
+  // Caller owns the return value.
+  base::DictionaryValue* ToValue(size_t max_mutations_size) const;
+
+  int64 id;
+  // If tracked_objects::Location becomes assignable, we can use that
+  // instead.
+  std::string location_string;
+  WriterTag writer;
+  ImmutableEntryKernelMutationMap mutations;
+};
+
+typedef
+    browser_sync::Immutable<WriteTransactionInfo>
+    ImmutableWriteTransactionInfo;
 
 // Caller owns the return value.
-base::ListValue* EntryKernelMutationSetToValue(
-    const EntryKernelMutationSet& mutations);
+base::DictionaryValue* EntryKernelMutationToValue(
+    const EntryKernelMutation& mutation);
+
+// Caller owns the return value.
+base::ListValue* EntryKernelMutationMapToValue(
+    const EntryKernelMutationMap& mutations);
 
 // How syncable indices & Indexers work.
 //
@@ -643,22 +715,6 @@ struct Index {
   typedef std::set<EntryKernel*, typename Indexer::Comparator> Set;
 };
 
-// a WriteTransaction has a writer tag describing which body of code is doing
-// the write. This is defined up here since DirectoryChangeEvent also contains
-// one.
-enum WriterTag {
-  INVALID,
-  SYNCER,
-  AUTHWATCHER,
-  UNITTEST,
-  VACUUM_AFTER_SAVE,
-  PURGE_ENTRIES,
-  SYNCAPI
-};
-
-// Make sure to update this if you update WriterTag.
-std::string WriterTagToString(WriterTag writer_tag);
-
 // The name Directory in this case means the entire directory
 // structure within a single user account.
 //
@@ -684,7 +740,6 @@ std::string WriterTagToString(WriterTag writer_tag);
 // be held before acquiring the kernel lock.
 class ScopedKernelLock;
 class IdFilter;
-class DirectoryManager;
 
 class Directory {
   friend class BaseTransaction;
@@ -719,7 +774,7 @@ class Directory {
     // Last sync timestamp fetched from the server.
     sync_pb::DataTypeProgressMarker download_progress[MODEL_TYPE_COUNT];
     // true iff we ever reached the end of the changelog.
-    ModelTypeBitSet initial_sync_ended;
+    ModelTypeSet initial_sync_ended;
     // The store birthday we were given by the server. Contents are opaque to
     // the client.
     std::string store_birthday;
@@ -760,17 +815,21 @@ class Directory {
     MetahandleSet metahandles_to_purge;
   };
 
-  Directory();
+  explicit Directory(
+      browser_sync::UnrecoverableErrorHandler* unrecoverable_error_handler);
   virtual ~Directory();
 
   // Does not take ownership of |delegate|, which must not be NULL.
   // Starts sending events to |delegate| if the returned result is
   // OPENED.  Note that events to |delegate| may be sent from *any*
-  // thread.
+  // thread.  |transaction_observer| must be initialized.
   DirOpenResult Open(const FilePath& file_path, const std::string& name,
-                     DirectoryChangeDelegate* delegate);
+                     DirectoryChangeDelegate* delegate,
+                     const browser_sync::WeakHandle<TransactionObserver>&
+                         transaction_observer);
 
-  // Stops sending events to the delegate.
+  // Stops sending events to the delegate and the transaction
+  // observer.
   void Close();
 
   int64 NextMetahandle();
@@ -811,11 +870,17 @@ class Directory {
   // Unique to each account / client pair.
   std::string cache_guid() const;
 
-  // These are backed by a thread-safe observer list, and so can be
-  // called on any thread, and events will be sent to the observer on
-  // the same thread that it was added on.
-  void AddTransactionObserver(TransactionObserver* observer);
-  void RemoveTransactionObserver(TransactionObserver* observer);
+  // Returns true if the directory had encountered an unrecoverable error.
+  // Note: Any function in |Directory| that can be called without holding a
+  // transaction need to check if the Directory already has an unrecoverable
+  // error on it.
+  bool unrecoverable_error_set(const BaseTransaction* trans) const;
+
+  // Called to set the unrecoverable error on the directory and to propagate
+  // the error to upper layers.
+  void OnUnrecoverableError(const BaseTransaction* trans,
+                            const tracked_objects::Location& location,
+                            const std::string & message);
 
  protected:  // for friends, mainly used by Entry constructors
   virtual EntryKernel* GetEntryByHandle(int64 handle);
@@ -825,13 +890,15 @@ class Directory {
   EntryKernel* GetEntryByServerTag(const std::string& tag);
   virtual EntryKernel* GetEntryByClientTag(const std::string& tag);
   EntryKernel* GetRootEntry();
-  bool ReindexId(EntryKernel* const entry, const Id& new_id);
-  void ReindexParentId(EntryKernel* const entry, const Id& new_parent_id);
+  bool ReindexId(WriteTransaction* trans, EntryKernel* const entry,
+                 const Id& new_id);
+  bool ReindexParentId(WriteTransaction* trans, EntryKernel* const entry,
+                       const Id& new_parent_id);
   void ClearDirtyMetahandles();
 
   // These don't do semantic checking.
   // The semantic checking is implemented higher up.
-  void UnlinkEntryFromOrder(EntryKernel* entry,
+  bool UnlinkEntryFromOrder(EntryKernel* entry,
                             WriteTransaction* trans,
                             ScopedKernelLock* lock);
 
@@ -845,28 +912,45 @@ class Directory {
   // before calling.
   EntryKernel* GetEntryById(const Id& id, ScopedKernelLock* const lock);
 
-  DirOpenResult OpenImpl(const FilePath& file_path, const std::string& name,
-                         DirectoryChangeDelegate* delegate);
+  DirOpenResult OpenImpl(
+      const FilePath& file_path, const std::string& name,
+      DirectoryChangeDelegate* delegate,
+      const browser_sync::WeakHandle<TransactionObserver>&
+          transaction_observer);
 
   template <class T> void TestAndSet(T* kernel_data, const T* data_to_set);
 
  public:
   typedef std::vector<int64> ChildHandles;
 
-  // Returns the child meta handles for given parent id.  Clears
-  // |result| if there are no children.
-  void GetChildHandlesById(BaseTransaction*, const Id& parent_id,
+  // Returns the child meta handles (even those for deleted/unlinked
+  // nodes) for given parent id.  Clears |result| if there are no
+  // children.
+  bool GetChildHandlesById(BaseTransaction*, const Id& parent_id,
       ChildHandles* result);
 
-  // Returns the child meta handles for given meta handle.  Clears
-  // |result| if there are no children.
-  void GetChildHandlesByHandle(BaseTransaction*, int64 handle,
+  // Returns the child meta handles (even those for deleted/unlinked
+  // nodes) for given meta handle.  Clears |result| if there are no
+  // children.
+  bool GetChildHandlesByHandle(BaseTransaction*, int64 handle,
       ChildHandles* result);
 
-  // Find the first or last child in the positional ordering under a parent,
-  // and return its id.  Returns a root Id if parent has no children.
-  virtual Id GetFirstChildId(BaseTransaction* trans, const Id& parent_id);
-  Id GetLastChildId(BaseTransaction* trans, const Id& parent_id);
+  // Returns true iff |id| has children.
+  bool HasChildren(BaseTransaction* trans, const Id& id);
+
+  // Find the first child in the positional ordering under a parent,
+  // and fill in |*first_child_id| with its id.  Fills in a root Id if
+  // parent has no children.  Returns true if the first child was
+  // successfully found, or false if an error was encountered.
+  bool GetFirstChildId(BaseTransaction* trans, const Id& parent_id,
+                       Id* first_child_id) WARN_UNUSED_RESULT;
+
+  // Find the last child in the positional ordering under a parent,
+  // and fill in |*first_child_id| with its id.  Fills in a root Id if
+  // parent has no children.  Returns true if the first child was
+  // successfully found, or false if an error was encountered.
+  bool GetLastChildIdForTest(BaseTransaction* trans, const Id& parent_id,
+                             Id* last_child_id) WARN_UNUSED_RESULT;
 
   // Compute a local predecessor position for |update_item|.  The position
   // is determined by the SERVER_POSITION_IN_PARENT value of |update_item|,
@@ -900,9 +984,17 @@ class Directory {
   void GetUnsyncedMetaHandles(BaseTransaction* trans,
                               UnsyncedMetaHandles* result);
 
-  // Get all the metahandles for unapplied updates
+  // Returns all server types with unapplied updates.  A subset of
+  // those types can then be passed into
+  // GetUnappliedUpdateMetaHandles() below.
+  FullModelTypeSet GetServerTypesWithUnappliedUpdates(
+      BaseTransaction* trans) const;
+
+  // Get all the metahandles for unapplied updates for a given set of
+  // server types.
   typedef std::vector<int64> UnappliedUpdateMetaHandles;
   void GetUnappliedUpdateMetaHandles(BaseTransaction* trans,
+                                     FullModelTypeSet server_types,
                                      UnappliedUpdateMetaHandles* result);
 
   // Checks tree metadata consistency.
@@ -911,13 +1003,13 @@ class Directory {
   // If full_scan is true, all entries will be pulled from the database.
   // No return value, CHECKs will be triggered if we're given bad
   // information.
-  void CheckTreeInvariants(syncable::BaseTransaction* trans,
+  bool CheckTreeInvariants(syncable::BaseTransaction* trans,
                            bool full_scan);
 
-  void CheckTreeInvariants(syncable::BaseTransaction* trans,
-                           const EntryKernelMutationSet& mutations);
+  bool CheckTreeInvariants(syncable::BaseTransaction* trans,
+                           const EntryKernelMutationMap& mutations);
 
-  void CheckTreeInvariants(syncable::BaseTransaction* trans,
+  bool CheckTreeInvariants(syncable::BaseTransaction* trans,
                            const MetahandleSet& handles,
                            const IdFilter& idfilter);
 
@@ -928,7 +1020,7 @@ class Directory {
   // entries, which means something different in the syncable namespace.
   // WARNING! This can be real slow, as it iterates over all entries.
   // WARNING! Performs synchronous I/O.
-  virtual void PurgeEntriesWithTypeIn(const std::set<ModelType>& types);
+  virtual void PurgeEntriesWithTypeIn(ModelTypeSet types);
 
  private:
   // Helper to prime ids_index, parent_id_and_names_index, unsynced_metahandles
@@ -943,19 +1035,21 @@ class Directory {
   // Purges from memory any unused, safe to remove entries that were
   // successfully deleted on disk as a result of the SaveChanges that processed
   // |snapshot|.  See SaveChanges() for more information.
-  void VacuumAfterSaveChanges(const SaveChangesSnapshot& snapshot);
+  bool VacuumAfterSaveChanges(const SaveChangesSnapshot& snapshot);
 
   // Rolls back dirty bits in the event that the SaveChanges that
   // processed |snapshot| failed, for example, due to no disk space.
   void HandleSaveChangesFailure(const SaveChangesSnapshot& snapshot);
 
   // For new entry creation only
-  void InsertEntry(EntryKernel* entry, ScopedKernelLock* lock);
-  void InsertEntry(EntryKernel* entry);
+  bool InsertEntry(WriteTransaction* trans,
+                   EntryKernel* entry, ScopedKernelLock* lock);
+  bool InsertEntry(WriteTransaction* trans, EntryKernel* entry);
 
   // Used by CheckTreeInvariants
   void GetAllMetaHandles(BaseTransaction* trans, MetahandleSet* result);
-  bool SafeToPurgeFromMemory(const EntryKernel* const entry) const;
+  bool SafeToPurgeFromMemory(WriteTransaction* trans,
+                             const EntryKernel* const entry) const;
 
   // Internal setters that do not acquire a lock internally.  These are unsafe
   // on their own; caller must guarantee exclusive access manually by holding
@@ -980,15 +1074,22 @@ class Directory {
   typedef Index<ClientTagIndexer>::Set ClientTagIndex;
 
  protected:
-  // Used by tests.
-  void InitKernel(const std::string& name, DirectoryChangeDelegate* delegate);
+  // Used by tests. |delegate| must not be NULL.
+  // |transaction_observer| must be initialized.
+  void InitKernelForTest(
+      const std::string& name,
+      DirectoryChangeDelegate* delegate,
+      const browser_sync::WeakHandle<TransactionObserver>&
+          transaction_observer);
 
  private:
-
   struct Kernel {
-    // |delegate| can be NULL.
+    // |delegate| must not be NULL.  |transaction_observer| must be
+    // initialized.
     Kernel(const FilePath& db_path, const std::string& name,
-           const KernelLoadInfo& info, DirectoryChangeDelegate* delegate);
+           const KernelLoadInfo& info, DirectoryChangeDelegate* delegate,
+           const browser_sync::WeakHandle<TransactionObserver>&
+               transaction_observer);
 
     ~Kernel();
 
@@ -1001,6 +1102,9 @@ class Directory {
 
     // Implements ReadTransaction / WriteTransaction using a simple lock.
     base::Lock transaction_mutex;
+
+    // Protected by transaction_mutex.  Used by WriteTransactions.
+    int64 next_write_transaction_id;
 
     // The name of this directory.
     std::string const name;
@@ -1024,7 +1128,8 @@ class Directory {
     EntryKernel needle;
 
     // 3 in-memory indices on bits used extremely frequently by the syncer.
-    MetahandleSet* const unapplied_update_metahandles;
+    // |unapplied_update_metahandles| is keyed by the server model type.
+    MetahandleSet unapplied_update_metahandles[MODEL_TYPE_COUNT];
     MetahandleSet* const unsynced_metahandles;
     // Contains metahandles that are most likely dirty (though not
     // necessarily).  Dirtyness is confirmed in TakeSnapshotForSaveChanges().
@@ -1045,7 +1150,7 @@ class Directory {
 
     // A unique identifier for this account's cache db, used to generate
     // unique server IDs. No need to lock, only written at init time.
-    std::string cache_guid;
+    const std::string cache_guid;
 
     // It doesn't make sense for two threads to run SaveChanges at the same
     // time; this mutex protects that activity.
@@ -1054,15 +1159,11 @@ class Directory {
     // The next metahandle is protected by kernel mutex.
     int64 next_metahandle;
 
-    // Keep a history of recently flushed metahandles for debugging
-    // purposes.  Protected by the save_changes_mutex.
-    DebugQueue<int64, 1000> flushed_metahandles;
-
-    // The delegate for directory change events.  Can be NULL.
+    // The delegate for directory change events.  Must not be NULL.
     DirectoryChangeDelegate* const delegate;
 
-    // The transaction observers.
-    scoped_refptr<ObserverListThreadSafe<TransactionObserver> > observers;
+    // The transaction observer.
+    const browser_sync::WeakHandle<TransactionObserver> transaction_observer;
   };
 
   // Helper method used to do searches on |parent_id_child_index|.
@@ -1089,9 +1190,24 @@ class Directory {
       const ScopedKernelLock& lock,
       const Id& parent_id, Directory::ChildHandles* result);
 
+  // Return a pointer to what is probably (but not certainly) the
+  // first child of |parent_id|, or NULL if |parent_id| definitely has
+  // no children.
+  EntryKernel* GetPossibleFirstChild(
+      const ScopedKernelLock& lock, const Id& parent_id);
+
+  // Return a pointer to what is probably (but not certainly) the last
+  // child of |parent_id|, or NULL if |parent_id| definitely has no
+  // children.
+  EntryKernel* GetPossibleLastChildForTest(
+      const ScopedKernelLock& lock, const Id& parent_id);
+
   Kernel* kernel_;
 
   DirectoryBackingStore* store_;
+
+  browser_sync::UnrecoverableErrorHandler* unrecoverable_error_handler_;
+  bool unrecoverable_error_set_;
 };
 
 class ScopedKernelLock {
@@ -1113,6 +1229,16 @@ class BaseTransaction {
 
   virtual ~BaseTransaction();
 
+  // This should be called when a database corruption is detected and there is
+  // no way for us to recover short of wiping the database clean. When this is
+  // called we set a bool in the transaction. The caller has to unwind the
+  // stack. When the destructor for the transaction is called it acts upon the
+  // bool and calls the Directory to handle the unrecoverable error.
+  void OnUnrecoverableError(const tracked_objects::Location& location,
+                            const std::string& message);
+
+  bool unrecoverable_error_set() const;
+
  protected:
   BaseTransaction(const tracked_objects::Location& from_here,
                   const char* name,
@@ -1122,12 +1248,22 @@ class BaseTransaction {
   void Lock();
   void Unlock();
 
+  // This should be called before unlocking because it calls the Direcotry's
+  // OnUnrecoverableError method which is not protected by locks and could
+  // be called from any thread. Holding the transaction lock ensures only one
+  // thread could call the method at a time.
+  void HandleUnrecoverableErrorIfSet();
+
   const tracked_objects::Location from_here_;
   const char* const name_;
   WriterTag writer_;
   Directory* const directory_;
   Directory::Kernel* const dirkernel_;  // for brevity
-  base::TimeTicks time_acquired_;
+
+  // Error information.
+  bool unrecoverable_error_set_;
+  tracked_objects::Location unrecoverable_error_location_;
+  std::string unrecoverable_error_msg_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(BaseTransaction);
@@ -1165,32 +1301,28 @@ class WriteTransaction : public BaseTransaction {
 
  protected:
   // Overridden by tests.
-  virtual void NotifyTransactionComplete(
-      ModelTypeBitSet models_with_changes);
+  virtual void NotifyTransactionComplete(ModelTypeSet models_with_changes);
 
  private:
-  EntryKernelMutationSet RecordMutations();
+  // Clears |mutations_|.
+  ImmutableEntryKernelMutationMap RecordMutations();
 
-  void UnlockAndNotify(const EntryKernelMutationSet& mutations);
+  void UnlockAndNotify(const ImmutableEntryKernelMutationMap& mutations);
 
-  ModelTypeBitSet NotifyTransactionChangingAndEnding(
-      const EntryKernelMutationSet& mutations);
+  ModelTypeSet NotifyTransactionChangingAndEnding(
+      const ImmutableEntryKernelMutationMap& mutations);
 
-  EntryKernelSet originals_;
+  // Only the original fields are filled in until |RecordMutations()|.
+  // We use a mutation map instead of a kernel set to avoid copying.
+  EntryKernelMutationMap mutations_;
 
   DISALLOW_COPY_AND_ASSIGN(WriteTransaction);
 };
 
 bool IsLegalNewParent(BaseTransaction* trans, const Id& id, const Id& parentid);
 
-int64 Now();
-
 // This function sets only the flags needed to get this entry to sync.
-void MarkForSyncing(syncable::MutableEntry* e);
-
-// This is not a reset.  It just sets the numeric fields which are not
-// initialized by the constructor to zero.
-void ZeroFields(EntryKernel* entry, int first_field);
+bool MarkForSyncing(syncable::MutableEntry* e);
 
 }  // namespace syncable
 

@@ -19,8 +19,8 @@ class MenuRunner;
 
 class RenderViewContextMenuViews : public RenderViewContextMenu {
  public:
-  RenderViewContextMenuViews(TabContents* tab_contents,
-                           const ContextMenuParams& params);
+  RenderViewContextMenuViews(content::WebContents* tab_contents,
+                             const ContextMenuParams& params);
 
   virtual ~RenderViewContextMenuViews();
 
@@ -37,6 +37,7 @@ class RenderViewContextMenuViews : public RenderViewContextMenu {
   // RenderViewContextMenuDelegate implementation.
   virtual void UpdateMenuItem(int command_id,
                               bool enabled,
+                              bool hidden,
                               const string16& title) OVERRIDE;
 
  protected:

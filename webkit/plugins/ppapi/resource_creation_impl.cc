@@ -1,18 +1,20 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/plugins/ppapi/resource_creation_impl.h"
 
 #include "ppapi/c/pp_size.h"
-#include "ppapi/shared_impl/audio_config_impl.h"
-#include "ppapi/shared_impl/input_event_impl.h"
+#include "ppapi/shared_impl/ppb_audio_config_shared.h"
+#include "ppapi/shared_impl/private/ppb_font_shared.h"
+#include "ppapi/shared_impl/ppb_input_event_shared.h"
+#include "ppapi/shared_impl/ppb_resource_array_shared.h"
 #include "ppapi/shared_impl/var.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/ppb_audio_impl.h"
+#include "webkit/plugins/ppapi/ppb_audio_input_impl.h"
 #include "webkit/plugins/ppapi/ppb_broker_impl.h"
 #include "webkit/plugins/ppapi/ppb_buffer_impl.h"
-#include "webkit/plugins/ppapi/ppb_context_3d_impl.h"
 #include "webkit/plugins/ppapi/ppb_directory_reader_impl.h"
 #include "webkit/plugins/ppapi/ppb_file_chooser_impl.h"
 #include "webkit/plugins/ppapi/ppb_file_io_impl.h"
@@ -20,21 +22,24 @@
 #include "webkit/plugins/ppapi/ppb_file_system_impl.h"
 #include "webkit/plugins/ppapi/ppb_flash_menu_impl.h"
 #include "webkit/plugins/ppapi/ppb_flash_net_connector_impl.h"
-#include "webkit/plugins/ppapi/ppb_font_impl.h"
 #include "webkit/plugins/ppapi/ppb_graphics_2d_impl.h"
 #include "webkit/plugins/ppapi/ppb_graphics_3d_impl.h"
 #include "webkit/plugins/ppapi/ppb_image_data_impl.h"
 #include "webkit/plugins/ppapi/ppb_scrollbar_impl.h"
-#include "webkit/plugins/ppapi/ppb_surface_3d_impl.h"
+#include "webkit/plugins/ppapi/ppb_tcp_socket_private_impl.h"
 #include "webkit/plugins/ppapi/ppb_transport_impl.h"
+#include "webkit/plugins/ppapi/ppb_udp_socket_private_impl.h"
 #include "webkit/plugins/ppapi/ppb_url_loader_impl.h"
 #include "webkit/plugins/ppapi/ppb_url_request_info_impl.h"
 #include "webkit/plugins/ppapi/ppb_video_capture_impl.h"
 #include "webkit/plugins/ppapi/ppb_video_decoder_impl.h"
 #include "webkit/plugins/ppapi/ppb_video_layer_impl.h"
+#include "webkit/plugins/ppapi/ppb_websocket_impl.h"
+#include "webkit/plugins/ppapi/resource_helper.h"
 
 using ppapi::InputEventData;
-using ppapi::InputEventImpl;
+using ppapi::PPB_InputEvent_Shared;
+using ppapi::PPB_ResourceArray_Shared;
 using ppapi::StringVar;
 
 namespace webkit {
@@ -64,13 +69,27 @@ PP_Resource ResourceCreationImpl::CreateAudioConfig(
     PP_Instance instance,
     PP_AudioSampleRate sample_rate,
     uint32_t sample_frame_count) {
-  return ::ppapi::AudioConfigImpl::CreateAsImpl(instance, sample_rate,
-                                                sample_frame_count);
+  return ::ppapi::PPB_AudioConfig_Shared::CreateAsImpl(instance, sample_rate,
+                                                       sample_frame_count);
 }
 
 PP_Resource ResourceCreationImpl::CreateAudioTrusted(
     PP_Instance instance) {
   return (new PPB_Audio_Impl(instance))->GetReference();
+}
+
+PP_Resource ResourceCreationImpl::CreateAudioInput(
+    PP_Instance instance,
+    PP_Resource config_id,
+    PPB_AudioInput_Callback audio_input_callback,
+    void* user_data) {
+  return PPB_AudioInput_Impl::Create(instance, config_id,
+      audio_input_callback, user_data);
+}
+
+PP_Resource ResourceCreationImpl::CreateAudioInputTrusted(
+    PP_Instance instance) {
+  return (new PPB_AudioInput_Impl(instance))->GetReference();
 }
 
 PP_Resource ResourceCreationImpl::CreateBroker(PP_Instance instance) {
@@ -82,24 +101,6 @@ PP_Resource ResourceCreationImpl::CreateBuffer(PP_Instance instance,
   return PPB_Buffer_Impl::Create(instance, size);
 }
 
-PP_Resource ResourceCreationImpl::CreateContext3D(
-    PP_Instance instance,
-    PP_Config3D_Dev config,
-    PP_Resource share_context,
-    const int32_t* attrib_list) {
-  return PPB_Context3D_Impl::Create(instance, config, share_context,
-                                    attrib_list);
-}
-
-PP_Resource ResourceCreationImpl::CreateContext3DRaw(
-    PP_Instance instance,
-    PP_Config3D_Dev config,
-    PP_Resource share_context,
-    const int32_t* attrib_list) {
-  return PPB_Context3D_Impl::CreateRaw(instance, config, share_context,
-                                       attrib_list);
-}
-
 PP_Resource ResourceCreationImpl::CreateDirectoryReader(
     PP_Resource directory_ref) {
   return PPB_DirectoryReader_Impl::Create(directory_ref);
@@ -108,7 +109,7 @@ PP_Resource ResourceCreationImpl::CreateDirectoryReader(
 PP_Resource ResourceCreationImpl::CreateFileChooser(
     PP_Instance instance,
     PP_FileChooserMode_Dev mode,
-    const PP_Var& accept_mime_types) {
+    const char* accept_mime_types) {
   return PPB_FileChooser_Impl::Create(instance, mode, accept_mime_types);
 }
 
@@ -139,16 +140,15 @@ PP_Resource ResourceCreationImpl::CreateFlashNetConnector(
   return (new PPB_Flash_NetConnector_Impl(instance))->GetReference();
 }
 
-PP_Resource ResourceCreationImpl::CreateFlashTCPSocket(
-    PP_Instance instance) {
-  // Creating TCP socket resource at the renderer side is not supported.
-  return 0;
-}
-
 PP_Resource ResourceCreationImpl::CreateFontObject(
     PP_Instance instance,
     const PP_FontDescription_Dev* description) {
-  return PPB_Font_Impl::Create(instance, *description);
+  PluginInstance* plugin_instance =
+      ResourceHelper::PPInstanceToPluginInstance(instance);
+  if (!plugin_instance)
+    return 0;
+  return ::ppapi::PPB_Font_Shared::CreateAsImpl(
+      instance, *description, plugin_instance->delegate()->GetPreferences());
 }
 
 PP_Resource ResourceCreationImpl::CreateGraphics2D(
@@ -204,8 +204,8 @@ PP_Resource ResourceCreationImpl::CreateKeyboardInputEvent(
     data.character_text = string_var->value();
   }
 
-  return (new InputEventImpl(InputEventImpl::InitAsImpl(),
-                             instance, data))->GetReference();
+  return (new PPB_InputEvent_Shared(PPB_InputEvent_Shared::InitAsImpl(),
+                                    instance, data))->GetReference();
 }
 
 PP_Resource ResourceCreationImpl::CreateMouseInputEvent(
@@ -233,8 +233,8 @@ PP_Resource ResourceCreationImpl::CreateMouseInputEvent(
   data.mouse_click_count = click_count;
   data.mouse_movement = *mouse_movement;
 
-  return (new InputEventImpl(InputEventImpl::InitAsImpl(),
-                             instance, data))->GetReference();
+  return (new PPB_InputEvent_Shared(PPB_InputEvent_Shared::InitAsImpl(),
+                                    instance, data))->GetReference();
 }
 
 PP_Resource ResourceCreationImpl::CreateScrollbar(PP_Instance instance,
@@ -242,17 +242,31 @@ PP_Resource ResourceCreationImpl::CreateScrollbar(PP_Instance instance,
   return PPB_Scrollbar_Impl::Create(instance, PP_ToBool(vertical));
 }
 
-PP_Resource ResourceCreationImpl::CreateSurface3D(
+PP_Resource ResourceCreationImpl::CreateResourceArray(
     PP_Instance instance,
-    PP_Config3D_Dev config,
-    const int32_t* attrib_list) {
-  return PPB_Surface3D_Impl::Create(instance, config, attrib_list);
+    const PP_Resource elements[],
+    uint32_t size) {
+  PPB_ResourceArray_Shared* object = new PPB_ResourceArray_Shared(
+      PPB_ResourceArray_Shared::InitAsImpl(), instance, elements, size);
+  return object->GetReference();
+}
+
+PP_Resource ResourceCreationImpl::CreateTCPSocketPrivate(PP_Instance instance) {
+  return PPB_TCPSocket_Private_Impl::CreateResource(instance);
 }
 
 PP_Resource ResourceCreationImpl::CreateTransport(PP_Instance instance,
                                                   const char* name,
-                                                  const char* proto) {
-  return PPB_Transport_Impl::Create(instance, name, proto);
+                                                  PP_TransportType type) {
+#if defined(ENABLE_P2P_APIS)
+  return PPB_Transport_Impl::Create(instance, name, type);
+#else
+  return 0;
+#endif
+}
+
+PP_Resource ResourceCreationImpl::CreateUDPSocketPrivate(PP_Instance instance) {
+  return PPB_UDPSocket_Private_Impl::CreateResource(instance);
 }
 
 PP_Resource ResourceCreationImpl::CreateURLLoader(PP_Instance instance) {
@@ -275,14 +289,18 @@ PP_Resource ResourceCreationImpl::CreateVideoCapture(PP_Instance instance) {
 
 PP_Resource ResourceCreationImpl::CreateVideoDecoder(
     PP_Instance instance,
-    PP_Resource context3d_id,
+    PP_Resource graphics3d_id,
     PP_VideoDecoder_Profile profile) {
-  return PPB_VideoDecoder_Impl::Create(instance, context3d_id, profile);
+  return PPB_VideoDecoder_Impl::Create(instance, graphics3d_id, profile);
 }
 
 PP_Resource ResourceCreationImpl::CreateVideoLayer(PP_Instance instance,
                                                    PP_VideoLayerMode_Dev mode) {
   return PPB_VideoLayer_Impl::Create(instance, mode);
+}
+
+PP_Resource ResourceCreationImpl::CreateWebSocket(PP_Instance instance) {
+  return PPB_WebSocket_Impl::Create(instance);
 }
 
 PP_Resource ResourceCreationImpl::CreateWheelInputEvent(
@@ -300,8 +318,8 @@ PP_Resource ResourceCreationImpl::CreateWheelInputEvent(
   data.wheel_ticks = *wheel_ticks;
   data.wheel_scroll_by_page = PP_ToBool(scroll_by_page);
 
-  return (new InputEventImpl(InputEventImpl::InitAsImpl(),
-                             instance, data))->GetReference();
+  return (new PPB_InputEvent_Shared(PPB_InputEvent_Shared::InitAsImpl(),
+                                    instance, data))->GetReference();
 }
 
 }  // namespace ppapi

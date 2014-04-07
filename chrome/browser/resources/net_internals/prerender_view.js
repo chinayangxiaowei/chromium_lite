@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,6 @@
  */
 var PrerenderView = (function() {
   'use strict';
-
-  // IDs for special HTML elements in prerender_view.html
-  var MAIN_BOX_ID = 'prerender-view-tab-content';
-  var ENABLED_SPAN_ID = 'prerender-view-enabled-span';
-  var HISTORY_DIV_ID = 'prerender-view-history-div';
-  var ACTIVE_DIV_ID = 'prerender-view-active-div';
 
   // We inherit from DivView.
   var superClass = DivView;
@@ -24,16 +18,25 @@ var PrerenderView = (function() {
     assertFirstConstructorCall(PrerenderView);
 
     // Call superclass's constructor.
-    superClass.call(this, MAIN_BOX_ID);
+    superClass.call(this, PrerenderView.MAIN_BOX_ID);
 
-    g_browser.addPrerenderInfoObserver(this);
-    this.prerenderEnabledSpan_ = $(ENABLED_SPAN_ID);
-    this.prerenderHistoryDiv_ = $(HISTORY_DIV_ID);
-    this.prerenderActiveDiv_ = $(ACTIVE_DIV_ID);
+    g_browser.addPrerenderInfoObserver(this, true);
+    this.prerenderEnabledSpan_ = $(PrerenderView.ENABLED_SPAN_ID);
+    this.prerenderOmniboxEnabledSpan_ =
+        $(PrerenderView.OMNIBOX_ENABLED_SPAN_ID);
+    this.prerenderHistoryDiv_ = $(PrerenderView.HISTORY_DIV_ID);
+    this.prerenderActiveDiv_ = $(PrerenderView.ACTIVE_DIV_ID);
   }
 
   // ID for special HTML element in category_tabs.html
   PrerenderView.TAB_HANDLE_ID = 'tab-handle-prerender';
+
+  // IDs for special HTML elements in prerender_view.html
+  PrerenderView.MAIN_BOX_ID = 'prerender-view-tab-content';
+  PrerenderView.ENABLED_SPAN_ID = 'prerender-view-enabled-span';
+  PrerenderView.OMNIBOX_ENABLED_SPAN_ID = 'prerender-view-omnibox-enabled-span';
+  PrerenderView.HISTORY_DIV_ID = 'prerender-view-history-div';
+  PrerenderView.ACTIVE_DIV_ID = 'prerender-view-active-div';
 
   cr.addSingletonGetter(PrerenderView);
 
@@ -47,6 +50,7 @@ var PrerenderView = (function() {
 
     onPrerenderInfoChanged: function(prerenderInfo) {
       this.prerenderEnabledSpan_.textContent = '';
+      this.prerenderOmniboxEnabledSpan_.textContent = '';
       this.prerenderHistoryDiv_.innerHTML = '';
       this.prerenderActiveDiv_.innerHTML = '';
 
@@ -57,6 +61,11 @@ var PrerenderView = (function() {
           this.prerenderEnabledSpan_.textContent +=
               ' ' + prerenderInfo.disabled_reason;
         }
+      }
+
+      if (prerenderInfo && ('omnibox_enabled' in prerenderInfo)) {
+        this.prerenderOmniboxEnabledSpan_.textContent =
+            prerenderInfo.omnibox_enabled.toString();
       }
 
       if (!isValidPrerenderInfo(prerenderInfo))

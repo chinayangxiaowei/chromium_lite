@@ -28,9 +28,9 @@ bool ReadInt(base::JSONReader::Token& token, bool can_have_leading_zeros) {
   wchar_t first = token.NextChar();
   int len = 0;
 
-  // Read in more digits
+  // Read in more digits.
   wchar_t c = first;
-  while ('\0' != c && '0' <= c && c <= '9') {
+  while ('\0' != c && IsAsciiDigit(c)) {
     ++token.length;
     ++len;
     c = token.NextChar();
@@ -51,9 +51,7 @@ bool ReadInt(base::JSONReader::Token& token, bool can_have_leading_zeros) {
 bool ReadHexDigits(base::JSONReader::Token& token, int digits) {
   for (int i = 1; i <= digits; ++i) {
     wchar_t c = *(token.begin + token.length + i);
-    if ('\0' == c)
-      return false;
-    if (!IsHexDigit(c))
+    if (c == '\0' || !IsHexDigit(c))
       return false;
   }
 

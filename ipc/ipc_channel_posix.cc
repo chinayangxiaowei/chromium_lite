@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,10 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 
+#if defined(OS_OPENBSD)
+#include <sys/uio.h>
+#endif
+
 #include <string>
 #include <map>
 
@@ -20,10 +24,12 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/global_descriptors_posix.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/process_util.h"
+#include "base/rand_util.h"
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/synchronization/lock.h"
@@ -102,15 +108,9 @@ class PipeMap {
 
   // Remove the mapping for the given channel id. No error is signaled if the
   // channel_id doesn't exist
-  void RemoveAndClose(const std::string& channel_id) {
+  void Remove(const std::string& channel_id) {
     base::AutoLock locked(lock_);
-
-    ChannelToFDMap::iterator i = map_.find(channel_id);
-    if (i != map_.end()) {
-      if (HANDLE_EINTR(close(i->second)) < 0)
-        PLOG(ERROR) << "close " << channel_id;
-      map_.erase(i);
-    }
+    map_.erase(channel_id);
   }
 
   // Insert a mapping from @channel_id to @fd. It's a fatal error to insert a
@@ -171,6 +171,8 @@ bool CreateServerUnixDomainSocket(const std::string& pipe_name,
   FilePath path(pipe_name);
   FilePath dir_path = path.DirName();
   if (!file_util::CreateDirectory(dir_path)) {
+    if (HANDLE_EINTR(close(fd)) < 0)
+      PLOG(ERROR) << "close " << pipe_name;
     return false;
   }
 
@@ -403,7 +405,7 @@ bool Channel::ChannelImpl::CreatePipe(
         // Case 3 from comment above.
         // We only allow one connection.
         local_pipe = HANDLE_EINTR(dup(local_pipe));
-        PipeMap::GetInstance()->RemoveAndClose(pipe_name_);
+        PipeMap::GetInstance()->Remove(pipe_name_);
       } else {
         // Case 4a from comment above.
         // Guard against inappropriate reuse of the initial IPC channel.  If
@@ -426,6 +428,7 @@ bool Channel::ChannelImpl::CreatePipe(
         LOG(ERROR) << "Server already exists for " << pipe_name_;
         return false;
       }
+      base::AutoLock lock(client_pipe_lock_);
       if (!SocketPair(&local_pipe, &client_pipe_))
         return false;
       PipeMap::GetInstance()->Insert(pipe_name_, client_pipe_);
@@ -529,10 +532,7 @@ bool Channel::ChannelImpl::ProcessIncomingMessages() {
     }
     DCHECK(bytes_read);
 
-    if (client_pipe_ != -1) {
-      PipeMap::GetInstance()->RemoveAndClose(pipe_name_);
-      client_pipe_ = -1;
-    }
+    CloseClientFileDescriptor();
 
     // a pointer to an array of |num_wire_fds| file descriptors from the read
     const int* wire_fds = NULL;
@@ -916,8 +916,29 @@ bool Channel::ChannelImpl::Send(Message* message) {
   return true;
 }
 
-int Channel::ChannelImpl::GetClientFileDescriptor() const {
+int Channel::ChannelImpl::GetClientFileDescriptor() {
+  base::AutoLock lock(client_pipe_lock_);
   return client_pipe_;
+}
+
+int Channel::ChannelImpl::TakeClientFileDescriptor() {
+  base::AutoLock lock(client_pipe_lock_);
+  int fd = client_pipe_;
+  if (client_pipe_ != -1) {
+    PipeMap::GetInstance()->Remove(pipe_name_);
+    client_pipe_ = -1;
+  }
+  return fd;
+}
+
+void Channel::ChannelImpl::CloseClientFileDescriptor() {
+  base::AutoLock lock(client_pipe_lock_);
+  if (client_pipe_ != -1) {
+    PipeMap::GetInstance()->Remove(pipe_name_);
+    if (HANDLE_EINTR(close(client_pipe_)) < 0)
+      PLOG(ERROR) << "close " << pipe_name_;
+    client_pipe_ = -1;
+  }
 }
 
 bool Channel::ChannelImpl::AcceptsConnections() const {
@@ -930,7 +951,7 @@ bool Channel::ChannelImpl::HasAcceptedConnection() const {
 
 bool Channel::ChannelImpl::GetClientEuid(uid_t* client_euid) const {
   DCHECK(HasAcceptedConnection());
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_OPENBSD)
   uid_t peer_euid;
   gid_t peer_gid;
   if (getpeereid(pipe_, &peer_euid, &peer_gid) != 0) {
@@ -948,7 +969,7 @@ bool Channel::ChannelImpl::GetClientEuid(uid_t* client_euid) const {
     PLOG(ERROR) << "getsockopt " << pipe_;
     return false;
   }
-  if (cred_len < sizeof(cred)) {
+  if (static_cast<unsigned>(cred_len) < sizeof(cred)) {
     NOTREACHED() << "Truncated ucred from SO_PEERCRED?";
     return false;
   }
@@ -1173,10 +1194,7 @@ void Channel::ChannelImpl::Close() {
     server_listen_connection_watcher_.StopWatchingFileDescriptor();
   }
 
-  if (client_pipe_ != -1) {
-    PipeMap::GetInstance()->RemoveAndClose(pipe_name_);
-    client_pipe_ = -1;
-  }
+  CloseClientFileDescriptor();
 }
 
 //------------------------------------------------------------------------------
@@ -1210,6 +1228,10 @@ int Channel::GetClientFileDescriptor() const {
   return channel_impl_->GetClientFileDescriptor();
 }
 
+int Channel::TakeClientFileDescriptor() {
+  return channel_impl_->TakeClientFileDescriptor();
+}
+
 bool Channel::AcceptsConnections() const {
   return channel_impl_->AcceptsConnections();
 }
@@ -1230,6 +1252,19 @@ void Channel::ResetToAcceptingConnectionState() {
 bool Channel::IsNamedServerInitialized(const std::string& channel_id) {
   return ChannelImpl::IsNamedServerInitialized(channel_id);
 }
+
+// static
+std::string Channel::GenerateVerifiedChannelID(const std::string& prefix) {
+  // A random name is sufficient validation on posix systems, so we don't need
+  // an additional shared secret.
+
+  std::string id = prefix;
+  if (!id.empty())
+    id.append(".");
+
+  return id.append(GenerateUniqueRandomChannelID());
+}
+
 
 #if defined(OS_LINUX)
 // static

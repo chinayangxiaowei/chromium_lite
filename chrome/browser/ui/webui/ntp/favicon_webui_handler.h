@@ -6,23 +6,21 @@
 #define CHROME_BROWSER_UI_WEBUI_NTP_FAVICON_WEBUI_HANDLER_H_
 #pragma once
 
+#include <map>
 #include <string>
 
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/favicon/favicon_service.h"
-#include "content/browser/webui/web_ui.h"
+#include "content/public/browser/web_ui_message_handler.h"
 
 class ExtensionIconColorManager;
-class GURL;
-class Profile;
 
 namespace base {
 class ListValue;
-class StringValue;
 }
 
-class FaviconWebUIHandler : public WebUIMessageHandler {
+class FaviconWebUIHandler : public content::WebUIMessageHandler {
  public:
   FaviconWebUIHandler();
   virtual ~FaviconWebUIHandler();
@@ -45,8 +43,6 @@ class FaviconWebUIHandler : public WebUIMessageHandler {
   // Called when favicon data is available from the history backend.
   void OnFaviconDataAvailable(FaviconService::Handle request_handle,
                               history::FaviconData favicon);
-  base::StringValue* GetDominantColorCssString(
-      scoped_refptr<RefCountedMemory> png);
 
   CancelableRequestConsumerTSimple<int> consumer_;
 

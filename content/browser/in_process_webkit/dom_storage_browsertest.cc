@@ -11,6 +11,8 @@
 #include "content/browser/in_process_webkit/dom_storage_context.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
 
+using content::BrowserThread;
+
 typedef InProcessBrowserTest DOMStorageBrowserTest;
 
 // In proc browser test is needed here because ClearLocalState indirectly calls
@@ -38,13 +40,15 @@ IN_PROC_BROWSER_TEST_F(DOMStorageBrowserTest, ClearLocalState) {
   {
     TestingProfile profile;
     WebKitContext *webkit_context = profile.GetWebKitContext();
-    webkit_context->dom_storage_context()->set_data_path(temp_dir.path());
+    webkit_context->dom_storage_context()->
+        set_data_path_for_testing(temp_dir.path());
     webkit_context->set_clear_local_state_on_exit(true);
   }
   // Make sure we wait until the destructor has run.
   scoped_refptr<base::ThreadTestHelper> helper(
       new base::ThreadTestHelper(
-          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::WEBKIT)));
+          BrowserThread::GetMessageLoopProxyForThread(
+              BrowserThread::WEBKIT_DEPRECATED)));
   ASSERT_TRUE(helper->Run());
 
   // Because we specified https for scheme to be skipped the second file

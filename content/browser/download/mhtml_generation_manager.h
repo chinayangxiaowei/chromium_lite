@@ -10,35 +10,41 @@
 #include "base/memory/ref_counted.h"
 #include "base/platform_file.h"
 #include "base/process.h"
-#include "content/browser/browser_thread.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/browser_thread.h"
 #include "ipc/ipc_platform_file.h"
 
 class FilePath;
-class TabContents;
 
-class MHTMLGenerationManager
-    : public base::RefCountedThreadSafe<MHTMLGenerationManager,
-                                        BrowserThread::DeleteOnUIThread> {
+namespace content {
+class WebContents;
+}
+
+class CONTENT_EXPORT MHTMLGenerationManager
+    : public base::RefCountedThreadSafe<
+          MHTMLGenerationManager, content::BrowserThread::DeleteOnUIThread> {
  public:
   MHTMLGenerationManager();
   ~MHTMLGenerationManager();
 
+  typedef base::Callback<void(const FilePath& /* path to the MHTML file */,
+      int64 /* size of the file */)> GenerateMHTMLCallback;
+
   // Instructs the render view to generate a MHTML representation of the current
-  // page for |tab_contents|.
-  void GenerateMHTML(TabContents* tab_contents, const FilePath& file);
+  // page for |web_contents|.
+  void GenerateMHTML(content::WebContents* web_contents,
+                     const FilePath& file,
+                     const GenerateMHTMLCallback& callback);
 
-  // Notification from the renderer that the MHTML generation succeeded/failed.
-  void MHTMLGenerated(int job_id, bool success);
-
-  // The details sent along with the MHTML_GENERATED notification.
-  struct NotificationDetails {
-    FilePath file_path;
-    bool success;
-  };
+  // Notification from the renderer that the MHTML generation finished.
+  // |mhtml_data_size| contains the size in bytes of the generated MHTML data,
+  // or -1 in case of failure.
+  void MHTMLGenerated(int job_id, int64 mhtml_data_size);
 
  private:
   struct Job{
     Job();
+    ~Job();
 
     FilePath file_path;
 
@@ -50,6 +56,9 @@ class MHTMLGenerationManager
     // The IDs mapping to a specific tab.
     int process_id;
     int routing_id;
+
+    // The callback to call once generation is complete.
+    GenerateMHTMLCallback callback;
   };
 
   // Called on the file thread to create |file|.
@@ -70,7 +79,8 @@ class MHTMLGenerationManager
 
   // Called on the UI thread when a job has been processed (successfully or
   // not).  Closes the file and removes the job from the job map.
-  void JobFinished(int job_id, bool success);
+  // |mhtml_data_size| is -1 if the MHTML generation failed.
+  void JobFinished(int job_id, int64 mhtml_data_size);
 
   typedef std::map<int, Job> IDToJobMap;
   IDToJobMap id_to_job_;

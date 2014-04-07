@@ -4,7 +4,7 @@
 
 #include "ui/base/l10n/l10n_util.h"
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(USE_X11)
 #include <glib/gutils.h>
 #endif
 
@@ -279,7 +279,6 @@ bool CheckAndResolveLocale(const std::string& locale,
       } else {
         tmp_locale.append("-CN");
       }
-#if defined(OS_CHROMEOS)
     } else if (LowerCaseEqualsASCII(lang, "en")) {
       // Map Australian, Canadian, New Zealand and South African English
       // to British English for now.
@@ -293,7 +292,6 @@ bool CheckAndResolveLocale(const std::string& locale,
       } else {
         tmp_locale.append("-US");
       }
-#endif
     }
     if (IsLocaleAvailable(tmp_locale)) {
       resolved_locale->swap(tmp_locale);
@@ -333,7 +331,7 @@ bool CheckAndResolveLocale(const std::string& locale,
 // if "foo bar" is RTL. So this function prepends the necessary RLM in such
 // cases.
 void AdjustParagraphDirectionality(string16* paragraph) {
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
   if (base::i18n::IsRTL() &&
       base::i18n::StringContainsStrongRTLChars(*paragraph)) {
     paragraph->insert(0, 1, static_cast<char16>(base::i18n::kRightToLeftMark));
@@ -406,7 +404,13 @@ std::string GetApplicationLocale(const std::string& pref_locale) {
   if (!pref_locale.empty())
     candidates.push_back(pref_locale);
 
-#elif defined(OS_POSIX) && defined(TOOLKIT_USES_GTK)
+#elif defined(OS_ANDROID)
+
+  // TODO(jcivelli): use the application locale preference for now.
+  if (!pref_locale.empty())
+    candidates.push_back(pref_locale);
+
+#elif !defined(OS_MACOSX)
 
   // GLib implements correct environment variable parsing with
   // the precedence order: LANGUAGE, LC_ALL, LC_MESSAGES and LANG.
@@ -474,12 +478,12 @@ string16 GetDisplayNameForLocale(const std::string& locale,
     locale_code = "zh-Hant";
 
   UErrorCode error = U_ZERO_ERROR;
-  const int buffer_size = 1024;
+  const int kBufferSize = 1024;
 
   string16 display_name;
   int actual_size = uloc_getDisplayName(locale_code.c_str(),
       display_locale.c_str(),
-      WriteInto(&display_name, buffer_size + 1), buffer_size, &error);
+      WriteInto(&display_name, kBufferSize), kBufferSize - 1, &error);
   DCHECK(U_SUCCESS(error));
   display_name.resize(actual_size);
   // Add an RTL mark so parentheses are properly placed.
@@ -776,7 +780,7 @@ void SortStrings16(const std::string& locale,
 }
 
 const std::vector<std::string>& GetAvailableLocales() {
-  static std::vector<std::string> locales;
+  CR_DEFINE_STATIC_LOCAL(std::vector<std::string>, locales, ());
   if (locales.empty()) {
     int num_locales = uloc_countAvailable();
     for (int i = 0; i < num_locales; ++i) {

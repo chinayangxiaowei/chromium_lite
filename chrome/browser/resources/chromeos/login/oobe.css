@@ -1,4 +1,4 @@
-/* Copyright (c) 2011 The Chromium Authors. All rights reserved.
+/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -36,11 +36,11 @@ button {
 }
 
 #oobe {
-  margin-bottom: 140px;  /* Make content higher than absolute vertical center */
+  margin-bottom: 60px;  /* Compensate top header to center content. */
 }
 
 #inner-container {
-  -webkit-transition: height .2s ease-in-out;
+  -webkit-transition: height 200ms ease-in-out;
   height: 294px;
   padding: 20px;
   position: relative;
@@ -60,7 +60,6 @@ button {
 hr.shadow {
   -webkit-mask: -webkit-linear-gradient(left, rgba(0,0,0,0),
                                         black 50%, rgba(0,0,0,0));
-  -webkit-mask-clip: padding-box;
   border: none;
   opacity: 0.3
 }
@@ -72,10 +71,10 @@ hr.top {
 }
 
 hr.bottom {
-  background: -webkit-linear-gradient(bottom, top,
-                                      rgba(0,0,0,0.2)), rgba(0,0,0,0.0));
+  background: -webkit-linear-gradient(bottom,
+                                      rgba(0,0,0,0.2), rgba(0,0,0,0.0));
   border-bottom: 1px solid rgba(0,0,0,0.5);
-  height: 2px;
+  height: 4px;
   z-index: 0;
 }
 
@@ -98,9 +97,9 @@ hr.bottom {
 }
 
 #header span,
-#logging span,
 #user-image-screen-curtain p,
-.label {
+.label,
+.menu-control {
   cursor: default;
 }
 
@@ -117,14 +116,14 @@ hr.bottom {
 }
 
 .header-section {
-  -webkit-transition: left .2s, opacity .2s ease-in-out;
+  -webkit-transition: left 200ms, opacity 200ms ease-in-out;
   position: absolute;
   text-transform: lowercase;
   width: 20em;
 }
 
 html[dir=rtl] .header-section {
-  -webkit-transition: right .2s, opacity .2s ease-in-out;
+  -webkit-transition: right 200ms, opacity 200ms ease-in-out;
 }
 
 .header-section.right {
@@ -151,12 +150,12 @@ html[dir=rtl]  .header-section.left {
 }
 
 html[dir=ltr] .step {
-  -webkit-transition: left .2s, opacity .2s, visibility .2s ease-in-out;
+  -webkit-transition: left 200ms, opacity 200ms, visibility 200ms ease-in-out;
   left: 0;
 }
 
 html[dir=rtl] .step {
-  -webkit-transition: right .2s, opacity .2s, visibility .2s ease-in-out;
+  -webkit-transition: right 200ms, opacity 200ms, visibility 200ms ease-in-out;
   right: 0;
 }
 
@@ -222,6 +221,7 @@ html[dir=rtl]  .step.left {
 .menu-control {
   font-family: inherit;
   line-height: 20px;
+  position: relative;
   width: 250px;
 }
 
@@ -241,6 +241,20 @@ html[dir=rtl]  .step.left {
   clear: both;
   font-size: small;
   margin-top: 20px;
+  width: 500px;
+}
+
+#logging div {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+#usage-stats {
+  -webkit-margin-end: 10px;
+}
+
+#user-image {
+  margin: 0 20px;
 }
 
 #user-image-grid {
@@ -260,7 +274,7 @@ html[dir=rtl]  .step.left {
   width: 50px;
 }
 
-#user-image-grid span[role=listitem] {
+#user-image-grid [role=listitem] {
   border-radius: 4px;
   border: 1px solid rgba(0, 0, 0, 0.15);
   display: inline-block;
@@ -268,21 +282,61 @@ html[dir=rtl]  .step.left {
   padding: 3px;
 }
 
-#user-image-grid span[selected] {
+#user-image-grid [selected] {
   border: 2px solid rgb(0, 102, 204);
   padding: 2px;
+}
+
+#profile-image {
+  position: relative;
+}
+
+/* White background for spinner styled like user image */
+#profile-image .spinner-bg {
+  background-color: white;
+  height: 50px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  visibility: hidden;
+  width: 50px;
+}
+
+.profile-image-loading #profile-image .spinner-bg {
+  visibility: visible;
+}
+
+#profile-image .spinner {
+  position: absolute;
+  left: 14px;
+  top: 14px;
 }
 
 #user-image-preview {
   border-radius: 4px;
   float: right;
-  height: 220px;
   margin: 4px;
-  width: 220px;
+  max-width: 220px;
 }
 
 html[dir=rtl] #user-image-preview {
   float: left;
+}
+
+#user-image-preview-img {
+  max-height: 220px;
+  max-width: 220px;
+}
+
+.default-image #user-image-preview-img {
+  border: solid 1px #cacaca;
+  background: white;
+}
+
+#user-image-preview-caption {
+  color: dimGray;
+  font-size: smaller;
+  margin: 8px 4px;
 }
 
 #footer {
@@ -307,6 +361,8 @@ html[dir=rtl] #user-image-preview {
 #oobe.signin #signin-button,
 #oobe.user-image #ok-button,
 #oobe.oauth-enrollment #oauth-enroll-cancel-button,
+#oobe.oauth-enrollment #oauth-enroll-try-again-button,
+#oobe.oauth-enrollment #oauth-enroll-explain-button,
 #oobe.oauth-enrollment #oauth-enroll-done-button {
   display: block;
 }
@@ -457,7 +513,7 @@ button {
 #popup-overlay {
   -webkit-box-align: center;
   -webkit-box-pack: center;
-  -webkit-transition: 0.25s opacity;
+  -webkit-transition: 250ms opacity;
   background: rgba(255, 255, 255, .75);
   bottom: 0;
   display: -webkit-box;
@@ -548,13 +604,25 @@ button {
 }
 
 #oauth-enroll-signin-frame {
-  bottom: 0;
-  display: -webkit-box;
+  border: 0 none;
   height: 100%;
-  left: 0;
+  width: 100%;
+}
+
+#oauth-enroll-signin-frame-container {
+  box-sizing: border-box;
+  height: 100%;
+  padding-bottom: 20px;
+  width: 100%;
+}
+
+#oauth-enroll-signin-link-container {
+  bottom: 0;
   position: absolute;
   right: 0;
-  top: 0;
+}
+
+#oauth-enroll-step-signin {
   width: 100%;
 }
 
@@ -592,7 +660,11 @@ button {
   vertical-align: top;
 }
 
-#oauth-enroll-error-retry {
+#oauth-enroll-explain-message {
+  white-space: pre-line;
+}
+
+.oauth-enroll-link {
   color: -webkit-link;
   cursor: pointer;
   text-decoration: underline;
@@ -603,7 +675,7 @@ button {
 }
 
 #bubble {
-  -webkit-transition: 0.25s opacity;
+  -webkit-transition: 250ms opacity;
 }
 
 html[dir=rtl] #header {
@@ -611,7 +683,7 @@ html[dir=rtl] #header {
 }
 
 body.login-display #oobe hr.shadow {
-  -webkit-transition: all .8s ease;
+  -webkit-transition: all 800ms ease;
   width: 1100px;  /* Necessary. Otherwise hr shrinks to 0 first when switching
                      from 640px to full width. */
 }
@@ -665,7 +737,7 @@ html[dir=rtl] .error-message {
 }
 
 #version-labels {
-  -webkit-transition: all .5s linear;
+  -webkit-transition: all 500ms linear;
   bottom: 10px;
   color: #999;
   font-size: 11px;

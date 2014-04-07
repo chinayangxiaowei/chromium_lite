@@ -19,13 +19,13 @@
 #include "net/base/net_log.h"
 #include "net/base/ssl_config_service.h"
 #include "net/base/transport_security_state.h"
+#include "net/http/http_server_properties.h"
 #include "net/ftp/ftp_auth_cache.h"
 
 namespace net {
 class CertVerifier;
 class CookieStore;
-class DnsCertProvenanceChecker;
-class DnsRRResolver;
+class FraudulentCertificateReporter;
 class FtpTransactionFactory;
 class HostResolver;
 class HttpAuthHandlerFactory;
@@ -86,19 +86,12 @@ class NET_EXPORT URLRequestContext
     origin_bound_cert_service_ = origin_bound_cert_service;
   }
 
-  DnsRRResolver* dnsrr_resolver() const {
-    return dnsrr_resolver_;
+  FraudulentCertificateReporter* fraudulent_certificate_reporter() const {
+    return fraudulent_certificate_reporter_;
   }
-
-  void set_dnsrr_resolver(DnsRRResolver* dnsrr_resolver) {
-    dnsrr_resolver_ = dnsrr_resolver;
-  }
-
-  DnsCertProvenanceChecker* dns_cert_checker() const {
-    return dns_cert_checker_;
-  }
-  void set_dns_cert_checker(DnsCertProvenanceChecker* dns_cert_checker) {
-    dns_cert_checker_ = dns_cert_checker;
+  void set_fraudulent_certificate_reporter(
+      FraudulentCertificateReporter* fraudulent_certificate_reporter) {
+    fraudulent_certificate_reporter_ = fraudulent_certificate_reporter;
   }
 
   // Get the proxy service for this context.
@@ -142,6 +135,14 @@ class NET_EXPORT URLRequestContext
     network_delegate_ = network_delegate;
   }
   NetworkDelegate* network_delegate() const { return network_delegate_; }
+
+  void set_http_server_properties(
+      HttpServerProperties* http_server_properties) {
+    http_server_properties_ = http_server_properties;
+  }
+  HttpServerProperties* http_server_properties() const {
+    return http_server_properties_;
+  }
 
   // Gets the cookie store for this context (may be null, in which case
   // cookies are not stored).
@@ -207,14 +208,14 @@ class NET_EXPORT URLRequestContext
   HostResolver* host_resolver_;
   CertVerifier* cert_verifier_;
   OriginBoundCertService* origin_bound_cert_service_;
-  DnsRRResolver* dnsrr_resolver_;
-  DnsCertProvenanceChecker* dns_cert_checker_;
+  FraudulentCertificateReporter* fraudulent_certificate_reporter_;
   HttpAuthHandlerFactory* http_auth_handler_factory_;
   ProxyService* proxy_service_;
   scoped_refptr<SSLConfigService> ssl_config_service_;
   NetworkDelegate* network_delegate_;
+  HttpServerProperties* http_server_properties_;
   scoped_refptr<CookieStore> cookie_store_;
-  scoped_refptr<TransportSecurityState> transport_security_state_;
+  TransportSecurityState* transport_security_state_;
   scoped_ptr<FtpAuthCache> ftp_auth_cache_;
   std::string accept_language_;
   std::string accept_charset_;

@@ -9,52 +9,43 @@
 #include "base/compiler_specific.h"
 #include "chrome/browser/page_info_model.h"
 #include "chrome/browser/page_info_model_observer.h"
-#include "chrome/browser/ui/views/bubble/bubble.h"
-#include "ui/base/animation/animation_delegate.h"
 #include "ui/base/animation/slide_animation.h"
-#include "views/controls/link_listener.h"
-#include "views/view.h"
+#include "ui/views/bubble/bubble_delegate.h"
+#include "ui/views/controls/link_listener.h"
 
-namespace views {
-class Label;
+namespace content {
+struct SSLStatus;
 }
 
-class PageInfoBubbleView : public views::View,
+class PageInfoBubbleView : public views::BubbleDelegateView,
                            public PageInfoModelObserver,
-                           public BubbleDelegate,
-                           public views::LinkListener,
-                           public ui::AnimationDelegate {
+                           public views::LinkListener {
  public:
-  PageInfoBubbleView(gfx::NativeWindow parent_window,
+  PageInfoBubbleView(views::View* anchor_view,
                      Profile* profile,
                      const GURL& url,
-                     const NavigationEntry::SSLStatus& ssl,
+                     const content::SSLStatus& ssl,
                      bool show_history);
   virtual ~PageInfoBubbleView();
 
   // Show the certificate dialog.
   void ShowCertDialog();
 
-  void set_bubble(Bubble* bubble) { bubble_ = bubble; }
-
   // views::View methods:
-  virtual gfx::Size GetPreferredSize();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
 
   // PageInfoModelObserver methods:
   virtual void OnPageInfoModelChanged() OVERRIDE;
 
-  // BubbleDelegate methods:
-  virtual void BubbleClosing(Bubble* bubble, bool closed_by_escape);
-  virtual bool CloseOnEscape();
-  virtual bool FadeInOnShow();
-  virtual std::wstring accessible_name();
+  // views::BubbleDelegate methods:
+  virtual gfx::Rect GetAnchorRect() OVERRIDE;
 
   // views::LinkListener methods:
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
 
   // ui::AnimationDelegate methods:
-  virtual void AnimationEnded(const ui::Animation* animation);
-  virtual void AnimationProgressed(const ui::Animation* animation);
+  virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
+  virtual void AnimationProgressed(const ui::Animation* animation) OVERRIDE;
 
  private:
   // Gets the size of the separator, including padding.
@@ -69,14 +60,8 @@ class PageInfoBubbleView : public views::View,
   // Layout the sections within the bubble.
   void LayoutSections();
 
-  // Global pointer to the bubble that is hosting our view.
-  static Bubble* bubble_;
-
   // The model providing the various section info.
   PageInfoModel model_;
-
-  // The parent window of the Bubble showing this view.
-  gfx::NativeWindow parent_window_;
 
   // The id of the certificate for this page.
   int cert_id_;

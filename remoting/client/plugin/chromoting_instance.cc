@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,73 +8,47 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/json/json_reader.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task.h"
 #include "base/threading/thread.h"
-#include "base/values.h"
-// TODO(sergeyu): We should not depend on renderer here. Instead P2P
-// Pepper API should be used. Remove this dependency.
-// crbug.com/74951
-#include "content/renderer/p2p/ipc_network_manager.h"
-#include "content/renderer/p2p/ipc_socket_factory.h"
 #include "media/base/media.h"
-#include "ppapi/c/dev/ppb_query_policy_dev.h"
 #include "ppapi/cpp/completion_callback.h"
 #include "ppapi/cpp/input_event.h"
 #include "ppapi/cpp/rect.h"
 // TODO(wez): Remove this when crbug.com/86353 is complete.
 #include "ppapi/cpp/private/var_private.h"
-#include "remoting/base/task_thread_proxy.h"
 #include "remoting/base/util.h"
 #include "remoting/client/client_config.h"
 #include "remoting/client/chromoting_client.h"
-#include "remoting/client/ipc_host_resolver.h"
+#include "remoting/client/frame_consumer_proxy.h"
+#include "remoting/client/mouse_input_filter.h"
 #include "remoting/client/plugin/chromoting_scriptable_object.h"
 #include "remoting/client/plugin/pepper_input_handler.h"
-#include "remoting/client/plugin/pepper_port_allocator_session.h"
 #include "remoting/client/plugin/pepper_view.h"
-#include "remoting/client/plugin/pepper_view_proxy.h"
 #include "remoting/client/plugin/pepper_xmpp_proxy.h"
 #include "remoting/client/rectangle_update_decoder.h"
-#include "remoting/proto/auth.pb.h"
 #include "remoting/protocol/connection_to_host.h"
 #include "remoting/protocol/host_stub.h"
-// TODO(sergeyu): This is a hack: plugin should not depend on webkit
-// glue. It is used here to get P2PPacketDispatcher corresponding to
-// the current RenderView. Use P2P Pepper API for connection and
-// remove these includes.
-// crbug.com/74951
-#include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
+#include "remoting/protocol/key_event_tracker.h"
 
 namespace remoting {
-
-namespace {
-
-const char kClientFirewallTraversalPolicyName[] =
-    "remote_access.client_firewall_traversal";
-
-}  // namespace
-
-PPP_PolicyUpdate_Dev ChromotingInstance::kPolicyUpdatedInterface = {
-  &ChromotingInstance::PolicyUpdatedThunk,
-};
 
 // This flag blocks LOGs to the UI if we're already in the middle of logging
 // to the UI. This prevents a potential infinite loop if we encounter an error
 // while sending the log message to the UI.
 static bool g_logging_to_plugin = false;
 static bool g_has_logging_instance = false;
-static base::Lock g_logging_lock;
 static ChromotingInstance* g_logging_instance = NULL;
 static logging::LogMessageHandlerFunction g_logging_old_handler = NULL;
 
-const char* ChromotingInstance::kMimeType = "pepper-application/x-chromoting";
+const char ChromotingInstance::kMimeType[] = "pepper-application/x-chromoting";
+
+static base::LazyInstance<base::Lock>::Leaky
+    g_logging_lock = LAZY_INSTANCE_INITIALIZER;
 
 ChromotingInstance::ChromotingInstance(PP_Instance pp_instance)
     : pp::InstancePrivate(pp_instance),
@@ -83,13 +57,9 @@ ChromotingInstance::ChromotingInstance(PP_Instance pp_instance)
           new PluginMessageLoopProxy(&plugin_thread_delegate_)),
       context_(plugin_message_loop_),
       scale_to_fit_(false),
-      enable_client_nat_traversal_(false),
-      initial_policy_received_(false),
-      task_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
+      thread_proxy_(new ScopedThreadProxy(plugin_message_loop_)) {
   RequestInputEvents(PP_INPUTEVENT_CLASS_MOUSE | PP_INPUTEVENT_CLASS_WHEEL);
   RequestFilteringInputEvents(PP_INPUTEVENT_CLASS_KEYBOARD);
-
-  log_proxy_ = new TaskThreadProxy(MessageLoop::current());
 
   // Resister this instance to handle debug log messsages.
   RegisterLoggingInstance();
@@ -100,7 +70,7 @@ ChromotingInstance::~ChromotingInstance() {
 
   // Detach the log proxy so we don't log anything else to the UI.
   // This needs to be done before the instance is unregistered for logging.
-  log_proxy_->Detach();
+  thread_proxy_->Detach();
 
   // Unregister this instance so that debug log messages will no longer be sent
   // to it. This will stop all logging in all Chromoting instances.
@@ -113,13 +83,18 @@ ChromotingInstance::~ChromotingInstance() {
     done_event.Wait();
   }
 
-  // Stopping the context shutdown all chromoting threads. This is a requirement
-  // before we can call Detach() on |view_proxy_|.
+  // Stopping the context shuts down all chromoting threads.
   context_.Stop();
 
-  if (view_proxy_.get()) {
-    view_proxy_->Detach();
+  // Detach the |consumer_proxy_|, so that any queued tasks don't touch |view_|
+  // after we've deleted it.
+  if (consumer_proxy_.get()) {
+    consumer_proxy_->Detach();
   }
+
+  // Delete |thread_proxy_| before we detach |plugin_message_loop_|,
+  // otherwise ScopedThreadProxy may DCHECK when being destroyed.
+  thread_proxy_.reset();
 
   plugin_message_loop_->Detach();
 }
@@ -142,13 +117,13 @@ bool ChromotingInstance::Init(uint32_t argc,
   // Start all the threads.
   context_.Start();
 
-  SubscribeToNatTraversalPolicy();
-
   // Create the chromoting objects that don't depend on the network connection.
+  // Because we decode on a separate thread we need a FrameConsumerProxy to
+  // bounce calls from the RectangleUpdateDecoder back to the plugin thread.
   view_.reset(new PepperView(this, &context_));
-  view_proxy_ = new PepperViewProxy(this, view_.get(), plugin_message_loop_);
+  consumer_proxy_ = new FrameConsumerProxy(view_.get(), plugin_message_loop_);
   rectangle_decoder_ = new RectangleUpdateDecoder(
-      context_.decode_message_loop(), view_proxy_);
+      context_.decode_message_loop(), consumer_proxy_.get());
 
   // Default to a medium grey.
   view_->SetSolidFill(0xFFCDCDCD);
@@ -159,51 +134,23 @@ bool ChromotingInstance::Init(uint32_t argc,
 void ChromotingInstance::Connect(const ClientConfig& config) {
   DCHECK(plugin_message_loop_->BelongsToCurrentThread());
 
-  // This can only happen at initialization if the Javascript connect call
-  // occurs before the enterprise policy is read.  We are guaranteed that the
-  // enterprise policy is pushed at least once, we we delay the connect call.
-  if (!initial_policy_received_) {
-    LOG(INFO) << "Delaying connect until initial policy is read.";
-    delayed_connect_.reset(
-        task_factory_.NewRunnableMethod(&ChromotingInstance::Connect,
-                                          config));
-    return;
-  }
-
-  webkit::ppapi::PluginInstance* plugin_instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(pp_instance());
-
-  content::P2PSocketDispatcher* socket_dispatcher =
-      plugin_instance->delegate()->GetP2PSocketDispatcher();
-
-  content::IpcNetworkManager* network_manager = NULL;
-  content::IpcPacketSocketFactory* socket_factory = NULL;
-  HostResolverFactory* host_resolver_factory = NULL;
-  PortAllocatorSessionFactory* session_factory =
-      CreatePepperPortAllocatorSessionFactory(
-          this, plugin_message_loop_, context_.network_message_loop());
-
-  // If we don't have socket dispatcher for IPC (e.g. P2P API is
-  // disabled), then JingleSessionManager will try to use physical sockets.
-  if (socket_dispatcher) {
-    VLOG(1) << "Creating IpcNetworkManager and IpcPacketSocketFactory.";
-    network_manager = new content::IpcNetworkManager(socket_dispatcher);
-    socket_factory = new content::IpcPacketSocketFactory(socket_dispatcher);
-    host_resolver_factory = new IpcHostResolverFactory(socket_dispatcher);
-  }
-
   host_connection_.reset(new protocol::ConnectionToHost(
-      context_.network_message_loop(), network_manager, socket_factory,
-      host_resolver_factory, session_factory, enable_client_nat_traversal_));
-  input_handler_.reset(new PepperInputHandler(&context_,
-                                              host_connection_.get(),
-                                              view_proxy_));
-
+      context_.network_message_loop(), this, true));
   client_.reset(new ChromotingClient(config, &context_, host_connection_.get(),
-                                     view_proxy_, rectangle_decoder_.get(),
-                                     input_handler_.get(), NULL));
+                                     view_.get(), rectangle_decoder_.get(),
+                                     base::Closure()));
 
-  LOG(INFO) << "Connecting.";
+  // Construct the input pipeline
+  mouse_input_filter_.reset(
+      new MouseInputFilter(host_connection_->input_stub()));
+  mouse_input_filter_->set_input_size(view_->get_view_size());
+  key_event_tracker_.reset(
+      new protocol::KeyEventTracker(mouse_input_filter_.get()));
+  input_handler_.reset(
+      new PepperInputHandler(key_event_tracker_.get()));
+
+  LOG(INFO) << "Connecting to " << config.host_jid
+            << ". Local jid: " << config.local_jid << ".";
 
   // Setup the XMPP Proxy.
   ChromotingScriptableObject* scriptable_object = GetScriptableObject();
@@ -216,9 +163,10 @@ void ChromotingInstance::Connect(const ClientConfig& config) {
   // Kick off the connection.
   client_->Start(xmpp_proxy);
 
-  LOG(INFO) << "Connection status: Initializing";
-  GetScriptableObject()->SetConnectionInfo(STATUS_INITIALIZING,
-                                           QUALITY_UNKNOWN);
+  VLOG(1) << "Connection status: Initializing";
+  GetScriptableObject()->SetConnectionStatus(
+      ChromotingScriptableObject::STATUS_INITIALIZING,
+      ChromotingScriptableObject::ERROR_NONE);
 }
 
 void ChromotingInstance::Disconnect() {
@@ -235,91 +183,44 @@ void ChromotingInstance::Disconnect() {
   }
 
   input_handler_.reset();
+  key_event_tracker_.reset();
+  mouse_input_filter_.reset();
   host_connection_.reset();
 
-  GetScriptableObject()->SetConnectionInfo(STATUS_CLOSED, QUALITY_UNKNOWN);
+  GetScriptableObject()->SetConnectionStatus(
+      ChromotingScriptableObject::STATUS_CLOSED,
+      ChromotingScriptableObject::ERROR_NONE);
 }
 
 void ChromotingInstance::DidChangeView(const pp::Rect& position,
                                        const pp::Rect& clip) {
   DCHECK(plugin_message_loop_->BelongsToCurrentThread());
 
-  view_->SetPluginSize(gfx::Size(position.width(), position.height()));
-
-  // TODO(wez): Pass the dimensions of the plugin to the RectangleDecoder
-  //            and let it generate the necessary refresh events.
-  // If scale-to-fit is enabled then update the scaling ratios.
-  // We also force a full-frame refresh, in case the ratios changed.
-  if (scale_to_fit_) {
-    rectangle_decoder_->SetScaleRatios(view_->GetHorizontalScaleRatio(),
-                                       view_->GetVerticalScaleRatio());
-    rectangle_decoder_->RefreshFullFrame();
+  SkISize new_size = SkISize::Make(position.width(), position.height());
+  if (view_->SetViewSize(new_size)) {
+    if (mouse_input_filter_.get()) {
+      mouse_input_filter_->set_input_size(new_size);
+    }
+    rectangle_decoder_->SetOutputSize(new_size);
   }
 
-  // Notify the RectangleDecoder of the new clip rect.
   rectangle_decoder_->UpdateClipRect(
-      gfx::Rect(clip.x(), clip.y(), clip.width(), clip.height()));
+      SkIRect::MakeXYWH(clip.x(), clip.y(), clip.width(), clip.height()));
 }
 
 bool ChromotingInstance::HandleInputEvent(const pp::InputEvent& event) {
   DCHECK(plugin_message_loop_->BelongsToCurrentThread());
-  if (!input_handler_.get()) {
+
+  if (!input_handler_.get())
     return false;
-  }
 
-  PepperInputHandler* pih
-      = static_cast<PepperInputHandler*>(input_handler_.get());
+  // TODO(wez): When we have a good hook into Host dimensions changes, move
+  // this there.
+  // If |input_handler_| is valid, then |mouse_input_filter_| must also be
+  // since they are constructed together as part of the input pipeline
+  mouse_input_filter_->set_output_size(view_->get_host_size());
 
-  switch (event.GetType()) {
-    case PP_INPUTEVENT_TYPE_MOUSEDOWN: {
-      pih->HandleMouseButtonEvent(true, pp::MouseInputEvent(event));
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_MOUSEUP: {
-      pih->HandleMouseButtonEvent(false, pp::MouseInputEvent(event));
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_MOUSEMOVE:
-    case PP_INPUTEVENT_TYPE_MOUSEENTER:
-    case PP_INPUTEVENT_TYPE_MOUSELEAVE: {
-      pih->HandleMouseMoveEvent(pp::MouseInputEvent(event));
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_CONTEXTMENU: {
-      // We need to return true here or else we'll get a local (plugin) context
-      // menu instead of the mouseup event for the right click.
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_KEYDOWN: {
-      pp::KeyboardInputEvent key = pp::KeyboardInputEvent(event);
-      VLOG(3) << "PP_INPUTEVENT_TYPE_KEYDOWN" << " key=" << key.GetKeyCode();
-      pih->HandleKeyEvent(true, key);
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_KEYUP: {
-      pp::KeyboardInputEvent key = pp::KeyboardInputEvent(event);
-      VLOG(3) << "PP_INPUTEVENT_TYPE_KEYUP" << " key=" << key.GetKeyCode();
-      pih->HandleKeyEvent(false, key);
-      return true;
-    }
-
-    case PP_INPUTEVENT_TYPE_CHAR: {
-      pih->HandleCharacterEvent(pp::KeyboardInputEvent(event));
-      return true;
-    }
-
-    default: {
-      LOG(INFO) << "Unhandled input event: " << event.GetType();
-      break;
-    }
-  }
-
-  return false;
+  return input_handler_->HandleInputEvent(event);
 }
 
 ChromotingScriptableObject* ChromotingInstance::GetScriptableObject() {
@@ -333,47 +234,9 @@ ChromotingScriptableObject* ChromotingInstance::GetScriptableObject() {
   return NULL;
 }
 
-void ChromotingInstance::SubmitLoginInfo(const std::string& username,
-                                         const std::string& password) {
-  if (host_connection_->state() !=
-      protocol::ConnectionToHost::STATE_CONNECTED) {
-    LOG(INFO) << "Client not connected or already authenticated.";
-    return;
-  }
-
-  protocol::LocalLoginCredentials* credentials =
-      new protocol::LocalLoginCredentials();
-  credentials->set_type(protocol::PASSWORD);
-  credentials->set_username(username);
-  credentials->set_credential(password.data(), password.length());
-
-  host_connection_->host_stub()->BeginSessionRequest(
-      credentials,
-      new DeleteTask<protocol::LocalLoginCredentials>(credentials));
-}
-
-void ChromotingInstance::SetScaleToFit(bool scale_to_fit) {
-  DCHECK(plugin_message_loop_->BelongsToCurrentThread());
-
-  if (scale_to_fit == scale_to_fit_)
-    return;
-
-  scale_to_fit_ = scale_to_fit;
-  if (scale_to_fit) {
-    rectangle_decoder_->SetScaleRatios(view_->GetHorizontalScaleRatio(),
-                                       view_->GetVerticalScaleRatio());
-  } else {
-    rectangle_decoder_->SetScaleRatios(1.0, 1.0);
-  }
-
-  // TODO(wez): The RectangleDecoder should generate refresh events
-  //            as necessary in response to any scaling change.
-  rectangle_decoder_->RefreshFullFrame();
-}
-
 // static
 void ChromotingInstance::RegisterLogMessageHandler() {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
   VLOG(1) << "Registering global log handler";
 
@@ -386,7 +249,7 @@ void ChromotingInstance::RegisterLogMessageHandler() {
 }
 
 void ChromotingInstance::RegisterLoggingInstance() {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
   // Register this instance as the one that will handle all logging calls
   // and display them to the user.
@@ -397,7 +260,7 @@ void ChromotingInstance::RegisterLoggingInstance() {
 }
 
 void ChromotingInstance::UnregisterLoggingInstance() {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
   // Don't unregister unless we're the currently registered instance.
   if (this != g_logging_instance)
@@ -427,15 +290,24 @@ bool ChromotingInstance::LogToUI(int severity, const char* file, int line,
   // the lock and check |g_logging_instance| unnecessarily. This is not
   // problematic because we always set |g_logging_instance| inside a lock.
   if (g_has_logging_instance) {
-    base::AutoLock lock(g_logging_lock);
-    if (g_logging_instance) {
+    // Do not LOG anything while holding this lock or else the code will
+    // deadlock while trying to re-get the lock we're already in.
+    base::AutoLock lock(g_logging_lock.Get());
+    if (g_logging_instance &&
+        // If |g_logging_to_plugin| is set and we're on the logging thread, then
+        // this LOG message came from handling a previous LOG message and we
+        // should skip it to avoid an infinite loop of LOG messages.
+        // We don't have a lock around |g_in_processtoui|, but that's OK since
+        // the value is only read/written on the logging thread.
+        (!g_logging_instance->plugin_message_loop_->BelongsToCurrentThread() ||
+         !g_logging_to_plugin)) {
       std::string message = remoting::GetTimestampString();
       message += (str.c_str() + message_start);
-      // |log_proxy_| is safe to use here because we detach the proxy before
+      // |thread_proxy_| is safe to use here because we detach it before
       // tearing down the |g_logging_instance|.
-      g_logging_instance->log_proxy_->Call(
-          base::Bind(&ChromotingInstance::ProcessLogToUI,
-                     base::Unretained(g_logging_instance), message));
+      g_logging_instance->thread_proxy_->PostTask(
+          FROM_HERE, base::Bind(&ChromotingInstance::ProcessLogToUI,
+                                base::Unretained(g_logging_instance), message));
     }
   }
 
@@ -445,14 +317,16 @@ bool ChromotingInstance::LogToUI(int severity, const char* file, int line,
 }
 
 void ChromotingInstance::ProcessLogToUI(const std::string& message) {
-  if (!g_logging_to_plugin) {
-    ChromotingScriptableObject* cso = GetScriptableObject();
-    if (cso) {
-      g_logging_to_plugin = true;
-      cso->LogDebugInfo(message);
-      g_logging_to_plugin = false;
-    }
-  }
+  DCHECK(plugin_message_loop_->BelongsToCurrentThread());
+
+  // This flag (which is set only here) is used to prevent LogToUI from posting
+  // new tasks while we're in the middle of servicing a LOG call. This can
+  // happen if the call to LogDebugInfo tries to LOG anything.
+  g_logging_to_plugin = true;
+  ChromotingScriptableObject* cso = GetScriptableObject();
+  if (cso)
+    cso->LogDebugInfo(message);
+  g_logging_to_plugin = false;
 }
 
 pp::Var ChromotingInstance::GetInstanceObject() {
@@ -475,83 +349,9 @@ ChromotingStats* ChromotingInstance::GetStats() {
 }
 
 void ChromotingInstance::ReleaseAllKeys() {
-  if (!input_handler_.get()) {
-    return;
+  if (key_event_tracker_.get()) {
+    key_event_tracker_->ReleaseAllKeys();
   }
-
-  input_handler_->ReleaseAllKeys();
-}
-
-// static
-void ChromotingInstance::PolicyUpdatedThunk(PP_Instance pp_instance,
-                                            PP_Var pp_policy_json) {
-  ChromotingInstance* instance = static_cast<ChromotingInstance*>(
-      pp::Module::Get()->InstanceForPPInstance(pp_instance));
-  std::string policy_json =
-      pp::Var(pp::Var::DontManage(), pp_policy_json).AsString();
-  instance->HandlePolicyUpdate(policy_json);
-}
-
-void ChromotingInstance::SubscribeToNatTraversalPolicy() {
-  pp::Module::Get()->AddPluginInterface(PPP_POLICY_UPDATE_DEV_INTERFACE,
-                                        &kPolicyUpdatedInterface);
-  const PPB_QueryPolicy_Dev* query_policy_interface =
-      static_cast<PPB_QueryPolicy_Dev const*>(
-          pp::Module::Get()->GetBrowserInterface(
-              PPB_QUERY_POLICY_DEV_INTERFACE));
-  query_policy_interface->SubscribeToPolicyUpdates(pp_instance());
-}
-
-bool ChromotingInstance::IsNatTraversalAllowed(
-    const std::string& policy_json) {
-  int error_code = base::JSONReader::JSON_NO_ERROR;
-  std::string error_message;
-  scoped_ptr<base::Value> policy(base::JSONReader::ReadAndReturnError(
-      policy_json, true, &error_code, &error_message));
-
-  if (!policy.get()) {
-    LOG(ERROR) << "Error " << error_code << " parsing policy: "
-               << error_message << ".";
-    return false;
-  }
-
-  if (!policy->IsType(base::Value::TYPE_DICTIONARY)) {
-    LOG(ERROR) << "Policy must be a dictionary";
-    return false;
-  }
-
-  base::DictionaryValue* dictionary =
-      static_cast<base::DictionaryValue*>(policy.get());
-  bool traversal_policy = false;
-  if (!dictionary->GetBoolean(kClientFirewallTraversalPolicyName,
-                              &traversal_policy)) {
-    // Disable NAT traversal on any failure of reading the policy.
-    return false;
-  }
-
-  return traversal_policy;
-}
-
-void ChromotingInstance::HandlePolicyUpdate(const std::string policy_json) {
-  DCHECK(plugin_message_loop_->BelongsToCurrentThread());
-  bool traversal_policy = IsNatTraversalAllowed(policy_json);
-
-  // If the policy changes from traversal allowed, to traversal denied, we
-  // need to immediately drop all connections and redo the conneciton
-  // preparation.
-  if (traversal_policy == false &&
-      traversal_policy != enable_client_nat_traversal_) {
-    if (client_.get()) {
-      // This will delete the client and network related objects.
-      Disconnect();
-    }
-  }
-
-  initial_policy_received_ = true;
-  enable_client_nat_traversal_ = traversal_policy;
-
-  if (delayed_connect_.get())
-    plugin_message_loop_->PostTask(FROM_HERE, delayed_connect_.release());
 }
 
 }  // namespace remoting

@@ -39,12 +39,6 @@ namespace net {
 
 namespace {
 
-// Number of connection attempts for tests.
-const int kServerConnectionAttempts = 10;
-
-// Connection timeout in milliseconds for tests.
-const int kServerConnectionTimeoutMs = 1000;
-
 std::string GetHostname(TestServer::Type type,
                         const TestServer::HTTPSOptions& options) {
   if (type == TestServer::TYPE_HTTPS &&
@@ -62,13 +56,15 @@ std::string GetHostname(TestServer::Type type,
 TestServer::HTTPSOptions::HTTPSOptions()
     : server_certificate(CERT_OK),
       request_client_certificate(false),
-      bulk_ciphers(HTTPSOptions::BULK_CIPHER_ANY) {}
+      bulk_ciphers(HTTPSOptions::BULK_CIPHER_ANY),
+      record_resume(false) {}
 
 TestServer::HTTPSOptions::HTTPSOptions(
     TestServer::HTTPSOptions::ServerCertificate cert)
     : server_certificate(cert),
       request_client_certificate(false),
-      bulk_ciphers(HTTPSOptions::BULK_CIPHER_ANY) {}
+      bulk_ciphers(HTTPSOptions::BULK_CIPHER_ANY),
+      record_resume(false) {}
 
 TestServer::HTTPSOptions::~HTTPSOptions() {}
 
@@ -87,7 +83,8 @@ FilePath TestServer::HTTPSOptions::GetCertificateFile() const {
 
 TestServer::TestServer(Type type, const FilePath& document_root)
     : type_(type),
-      started_(false) {
+      started_(false),
+      log_to_console_(false) {
   Init(document_root);
 }
 
@@ -95,7 +92,8 @@ TestServer::TestServer(const HTTPSOptions& https_options,
                        const FilePath& document_root)
     : https_options_(https_options),
       type_(TYPE_HTTPS),
-      started_(false) {
+      started_(false),
+      log_to_console_(false) {
   Init(document_root);
 }
 
@@ -201,7 +199,7 @@ bool TestServer::GetAddressList(AddressList* address_list) const {
                                NULL));
   HostResolver::RequestInfo info(host_port_pair_);
   TestCompletionCallback callback;
-  int rv = resolver->Resolve(info, address_list, &callback, NULL,
+  int rv = resolver->Resolve(info, address_list, callback.callback(), NULL,
                              BoundNetLog());
   if (rv == ERR_IO_PENDING)
     rv = callback.WaitForResult();
@@ -284,6 +282,10 @@ void TestServer::Init(const FilePath& document_root) {
                        .Append(FILE_PATH_LITERAL("data"))
                        .Append(FILE_PATH_LITERAL("ssl"))
                        .Append(FILE_PATH_LITERAL("certificates"));
+
+  // TODO(battre) Remove this after figuring out why the TestServer is flaky.
+  // http://crbug.com/96594
+  log_to_console_ = true;
 }
 
 bool TestServer::SetPythonPath() {
@@ -360,7 +362,7 @@ bool TestServer::AddCommandLineArguments(CommandLine* command_line) const {
   command_line->AppendArgNative(FILE_PATH_LITERAL("--data-dir=") +
                                 document_root_.value());
 
-  if (VLOG_IS_ON(1)) {
+  if (VLOG_IS_ON(1) || log_to_console_) {
     command_line->AppendArg("--log-to-console");
   }
 
@@ -409,6 +411,9 @@ bool TestServer::AddCommandLineArguments(CommandLine* command_line) const {
       command_line->AppendArg(kBulkCipherSwitch + "=aes256");
     if (https_options_.bulk_ciphers & HTTPSOptions::BULK_CIPHER_3DES)
       command_line->AppendArg(kBulkCipherSwitch + "=3des");
+
+    if (https_options_.record_resume)
+      command_line->AppendArg("--https-record-resume");
   }
 
   return true;

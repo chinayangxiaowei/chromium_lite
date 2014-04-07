@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,28 @@
 
 #include <gtk/gtk.h>
 
+#include "base/string16.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/password_manager/password_manager.h"
-#include "chrome/browser/tab_contents/tab_contents_view_gtk.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/gtk/constrained_window_gtk.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/login/login_model.h"
-#include "content/browser/browser_thread.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/browser/tab_contents/navigation_controller.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "grit/generated_resources.h"
 #include "net/url_request/url_request.h"
+#include "ui/base/gtk/gtk_compat.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/l10n/l10n_util.h"
 
-using webkit_glue::PasswordForm;
+using content::BrowserThread;
+using content::WebContents;
+using webkit::forms::PasswordForm;
 
 // ----------------------------------------------------------------------------
 // LoginHandlerGtk
@@ -48,17 +51,17 @@ class LoginHandlerGtk : public LoginHandler,
   }
 
   // LoginModelObserver implementation.
-  virtual void OnAutofillDataAvailable(const std::wstring& username,
-                                       const std::wstring& password) {
+  virtual void OnAutofillDataAvailable(const string16& username,
+                                       const string16& password) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
     // NOTE: Would be nice to use gtk_entry_get_text_length, but it is fairly
     // new and not always in our GTK version.
     if (strlen(gtk_entry_get_text(GTK_ENTRY(username_entry_))) == 0) {
       gtk_entry_set_text(GTK_ENTRY(username_entry_),
-                         WideToUTF8(username).c_str());
+                         UTF16ToUTF8(username).c_str());
       gtk_entry_set_text(GTK_ENTRY(password_entry_),
-                         WideToUTF8(password).c_str());
+                         UTF16ToUTF8(password).c_str());
       gtk_editable_select_region(GTK_EDITABLE(username_entry_), 0, -1);
     }
   }
@@ -112,10 +115,12 @@ class LoginHandlerGtk : public LoginHandler,
     // control).  However, that's OK since any UI interaction in those functions
     // will occur via an InvokeLater on the UI thread, which is guaranteed
     // to happen after this is called (since this was InvokeLater'd first).
-    TabContents* requesting_contents = GetTabContentsForLogin();
+    WebContents* requesting_contents = GetWebContentsForLogin();
     DCHECK(requesting_contents);
 
-    SetDialog(new ConstrainedWindowGtk(requesting_contents, this));
+    TabContentsWrapper* wrapper =
+        TabContentsWrapper::GetCurrentWrapperForContents(requesting_contents);
+    SetDialog(new ConstrainedWindowGtk(wrapper, this));
     NotifyAuthNeeded();
   }
 
@@ -172,7 +177,7 @@ void LoginHandlerGtk::OnPromptHierarchyChanged(GtkWidget* sender,
                                                GtkWidget* previous_toplevel) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  if (!GTK_WIDGET_TOPLEVEL(gtk_widget_get_toplevel(ok_)))
+  if (!gtk_widget_is_toplevel(gtk_widget_get_toplevel(ok_)))
     return;
 
   // Now that we have attached ourself to the window, we can make our OK

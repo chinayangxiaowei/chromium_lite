@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,10 +16,10 @@
 #include "base/stringprintf.h"
 #include "base/string_util.h"
 #include "base/win/windows_version.h"
-#include "content/common/content_client.h"
-#include "content/common/content_switches.h"
-#include "content/common/child_process_info.h"
 #include "content/common/debug_flags.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/process_type.h"
 #include "sandbox/src/sandbox.h"
 #include "ui/gfx/gl/gl_switches.h"
 
@@ -57,6 +57,7 @@ const wchar_t* const kTroublesomeDlls[] = {
   L"npggNT.des",                  // GameGuard 2008.
   L"npggNT.dll",                  // GameGuard (older).
   L"oawatch.dll",                 // Online Armor.
+  L"owexplorer-10513.dll",        // Overwolf.
   L"pavhook.dll",                 // Panda Internet Security.
   L"pavshook.dll",                // Panda Antivirus.
   L"pavshookwow.dll",             // Panda Antivirus.
@@ -198,7 +199,7 @@ void BlacklistAddOneDll(const wchar_t* module_name,
     }
   }
   policy->AddDllToUnload(module_name);
-  VLOG(1) << "dll to unload found: " << module_name;
+  DVLOG(1) << "dll to unload found: " << module_name;
   return;
 }
 
@@ -220,7 +221,7 @@ void AddPluginDllEvictionPolicy(sandbox::TargetPolicy* policy) {
 // Returns the object path prepended with the current logon session.
 string16 PrependWindowsSessionPath(const char16* object) {
   // Cache this because it can't change after process creation.
-  uintptr_t s_session_id = 0;
+  static uintptr_t s_session_id = 0;
   if (s_session_id == 0) {
     HANDLE token;
     DWORD session_id_length;
@@ -230,7 +231,8 @@ string16 PrependWindowsSessionPath(const char16* object) {
     CHECK(::GetTokenInformation(token, TokenSessionId, &session_id,
         sizeof(session_id), &session_id_length));
     CloseHandle(token);
-    s_session_id = session_id;
+    if (session_id)
+      s_session_id = session_id;
   }
 
   return base::StringPrintf(L"\\Sessions\\%d%ls", s_session_id, object);
@@ -250,16 +252,27 @@ void AddBaseHandleClosePolicy(sandbox::TargetPolicy* policy) {
 bool AddGenericPolicy(sandbox::TargetPolicy* policy) {
   sandbox::ResultCode result;
 
-  // Add the policy for the pipes
+  // Add the policy for the client side of a pipe. It is just a file
+  // in the \pipe\ namespace. We restrict it to pipes that start with
+  // "chrome." so the sandboxed process cannot connect to system services.
   result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                            sandbox::TargetPolicy::FILES_ALLOW_ANY,
                            L"\\??\\pipe\\chrome.*");
   if (result != sandbox::SBOX_ALL_OK)
     return false;
-
+  // Allow the server side of a pipe restricted to the "chrome.nacl."
+  // namespace so that it cannot impersonate other system or other chrome
+  // service pipes.
   result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_NAMED_PIPES,
                            sandbox::TargetPolicy::NAMEDPIPES_ALLOW_ANY,
                            L"\\\\.\\pipe\\chrome.nacl.*");
+  if (result != sandbox::SBOX_ALL_OK)
+    return false;
+  // Allow the server side of sync sockets, which are pipes that have
+  // the "chrome.sync" namespace and a randomly generated suffix.
+  result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_NAMED_PIPES,
+                           sandbox::TargetPolicy::NAMEDPIPES_ALLOW_ANY,
+                           L"\\\\.\\pipe\\chrome.sync.*");
   if (result != sandbox::SBOX_ALL_OK)
     return false;
 
@@ -293,16 +306,26 @@ bool AddGenericPolicy(sandbox::TargetPolicy* policy) {
 // backend. Note that the GPU process is connected to the interactive
 // desktop.
 // TODO(cpu): Lock down the sandbox more if possible.
-// TODO(apatrick): Use D3D9Ex to render windowless.
 bool AddPolicyForGPU(CommandLine* cmd_line, sandbox::TargetPolicy* policy) {
+#if !defined(NACL_WIN64)  // We don't need this code on win nacl64.
   if (base::win::GetVersion() > base::win::VERSION_XP) {
-    policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                          sandbox::USER_LIMITED);
     if (cmd_line->GetSwitchValueASCII(switches::kUseGL) ==
         gfx::kGLImplementationDesktopName) {
+      policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                            sandbox::USER_LIMITED);
       policy->SetJobLevel(sandbox::JOB_UNPROTECTED, 0);
       policy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
     } else {
+      if (cmd_line->GetSwitchValueASCII(switches::kUseGL) ==
+          gfx::kGLImplementationSwiftShaderName ||
+          cmd_line->HasSwitch(switches::kReduceGpuSandbox)) {
+        policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                              sandbox::USER_LIMITED);
+      } else {
+        policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                              sandbox::USER_RESTRICTED);
+      }
+
       // UI restrictions break when we access Windows from outside our job.
       // However, we don't want a proxy window in this process because it can
       // introduce deadlocks where the renderer blocks on the gpu, which in
@@ -323,6 +346,7 @@ bool AddPolicyForGPU(CommandLine* cmd_line, sandbox::TargetPolicy* policy) {
   }
 
   AddGenericDllEvictionPolicy(policy);
+#endif
   return true;
 }
 
@@ -371,8 +395,8 @@ namespace sandbox {
 void InitBrokerServices(sandbox::BrokerServices* broker_services) {
   // TODO(abarth): DCHECK(CalledOnValidThread());
   //               See <http://b/1287166>.
-  CHECK(broker_services);
-  CHECK(!g_broker_services);
+  DCHECK(broker_services);
+  DCHECK(!g_broker_services);
   broker_services->Init();
   g_broker_services = broker_services;
 }
@@ -381,27 +405,26 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
                                            const FilePath& exposed_dir) {
   base::ProcessHandle process = 0;
   const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
-  ChildProcessInfo::ProcessType type;
+  content::ProcessType type;
   std::string type_str = cmd_line->GetSwitchValueASCII(switches::kProcessType);
   if (type_str == switches::kRendererProcess) {
-    type = ChildProcessInfo::RENDER_PROCESS;
-  } else if (type_str == switches::kExtensionProcess) {
-    // Extensions are just renderers with another name.
-    type = ChildProcessInfo::RENDER_PROCESS;
+    type = content::PROCESS_TYPE_RENDERER;
   } else if (type_str == switches::kPluginProcess) {
-    type = ChildProcessInfo::PLUGIN_PROCESS;
+    type = content::PROCESS_TYPE_PLUGIN;
   } else if (type_str == switches::kWorkerProcess) {
-    type = ChildProcessInfo::WORKER_PROCESS;
+    type = content::PROCESS_TYPE_WORKER;
   } else if (type_str == switches::kNaClLoaderProcess) {
-    type = ChildProcessInfo::NACL_LOADER_PROCESS;
+    type = content::PROCESS_TYPE_NACL_LOADER;
   } else if (type_str == switches::kUtilityProcess) {
-    type = ChildProcessInfo::UTILITY_PROCESS;
+    type = content::PROCESS_TYPE_UTILITY;
   } else if (type_str == switches::kNaClBrokerProcess) {
-    type = ChildProcessInfo::NACL_BROKER_PROCESS;
+    type = content::PROCESS_TYPE_NACL_BROKER;
   } else if (type_str == switches::kGpuProcess) {
-    type = ChildProcessInfo::GPU_PROCESS;
+    type = content::PROCESS_TYPE_GPU;
   } else if (type_str == switches::kPpapiPluginProcess) {
-    type = ChildProcessInfo::PPAPI_PLUGIN_PROCESS;
+    type = content::PROCESS_TYPE_PPAPI_PLUGIN;
+  } else if (type_str == switches::kPpapiBrokerProcess) {
+    type = content::PROCESS_TYPE_PPAPI_BROKER;
   } else {
     NOTREACHED();
     return 0;
@@ -413,18 +436,20 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   // First case: all process types except the nacl broker, and the plugin
   // process are sandboxed by default.
   bool in_sandbox =
-      (type != ChildProcessInfo::NACL_BROKER_PROCESS) &&
-      (type != ChildProcessInfo::PLUGIN_PROCESS);
+      (type != content::PROCESS_TYPE_NACL_BROKER) &&
+      (type != content::PROCESS_TYPE_PLUGIN) &&
+      (type != content::PROCESS_TYPE_PPAPI_BROKER);
 
   // If it is the GPU process then it can be disabled by a command line flag.
-  if ((type == ChildProcessInfo::GPU_PROCESS) &&
-      (browser_command_line.HasSwitch(switches::kDisableGpuSandbox))) {
+  if ((type == content::PROCESS_TYPE_GPU) &&
+      (cmd_line->HasSwitch(switches::kDisableGpuSandbox))) {
     in_sandbox = false;
-    VLOG(1) << "GPU sandbox is disabled";
+    DVLOG(1) << "GPU sandbox is disabled";
   }
 
-  if (browser_command_line.HasSwitch(switches::kNoSandbox)) {
-    // The user has explicity opted-out from all sandboxing.
+  if (browser_command_line.HasSwitch(switches::kNoSandbox) ||
+      cmd_line->HasSwitch(switches::kNoSandbox)) {
+    // The user or the caller has explicity opted-out from all sandboxing.
     in_sandbox = false;
   }
 
@@ -460,11 +485,13 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   PROCESS_INFORMATION target = {0};
   sandbox::TargetPolicy* policy = g_broker_services->CreatePolicy();
 
-  if (type == ChildProcessInfo::PLUGIN_PROCESS &&
+#if !defined(NACL_WIN64)  // We don't need this code on win nacl64.
+  if (type == content::PROCESS_TYPE_PLUGIN &&
       !browser_command_line.HasSwitch(switches::kNoSandbox) &&
       content::GetContentClient()->SandboxPlugin(cmd_line, policy)) {
     in_sandbox = true;
   }
+#endif
 
   if (!in_sandbox) {
     policy->Release();
@@ -472,21 +499,21 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
     return process;
   }
 
-  if (type == ChildProcessInfo::PLUGIN_PROCESS) {
+  if (type == content::PROCESS_TYPE_PLUGIN) {
     AddGenericDllEvictionPolicy(policy);
     AddPluginDllEvictionPolicy(policy);
-  } else if (type == ChildProcessInfo::GPU_PROCESS) {
+  } else if (type == content::PROCESS_TYPE_GPU) {
     if (!AddPolicyForGPU(cmd_line, policy))
       return 0;
-  } else if (type == ChildProcessInfo::PPAPI_PLUGIN_PROCESS) {
+  } else if (type == content::PROCESS_TYPE_PPAPI_PLUGIN) {
     if (!AddPolicyForPepperPlugin(policy))
       return 0;
   } else {
     AddPolicyForRenderer(policy);
     // TODO(jschuh): Need get these restrictions applied to NaCl and Pepper.
     // Just have to figure out what needs to be warmed up first.
-    if (type == ChildProcessInfo::RENDER_PROCESS ||
-        type == ChildProcessInfo::WORKER_PROCESS) {
+    if (type == content::PROCESS_TYPE_RENDERER ||
+        type == content::PROCESS_TYPE_WORKER) {
       AddBaseHandleClosePolicy(policy);
     }
 
@@ -528,8 +555,10 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
 
   TRACE_EVENT_END_ETW("StartProcessWithAccess::LAUNCHPROCESS", 0, 0);
 
-  if (sandbox::SBOX_ALL_OK != result)
+  if (sandbox::SBOX_ALL_OK != result) {
+    DLOG(ERROR) << "Failed to launch process. Error: " << result;
     return 0;
+  }
 
   // For Native Client sel_ldr processes on 32-bit Windows, reserve 1 GB of
   // address space to prevent later failure due to address space fragmentation
@@ -537,7 +566,7 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   // scanning the address space using VirtualQuery.
   // TODO(bbudge) Handle the --no-sandbox case.
   // http://code.google.com/p/nativeclient/issues/detail?id=2131
-  if (type == ChildProcessInfo::NACL_LOADER_PROCESS &&
+  if (type == content::PROCESS_TYPE_NACL_LOADER &&
       (base::win::OSInfo::GetInstance()->wow64_status() ==
           base::win::OSInfo::WOW64_DISABLED)) {
     const SIZE_T kOneGigabyte = 1 << 30;

@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/plugin/host_log_handler.h"
 
+#include "base/lazy_instance.h"
 #include "remoting/base/util.h"
 #include "remoting/host/plugin/host_script_object.h"
 
@@ -15,7 +16,8 @@ namespace remoting {
 static bool g_has_logging_scriptable_object = false;
 
 // The lock that protects the logging globals.
-static base::Lock g_logging_lock;
+static base::LazyInstance<base::Lock>::Leaky
+    g_logging_lock = LAZY_INSTANCE_INITIALIZER;
 
 // The scriptable object that will display the log information to the user.
 static HostNPScriptObject* g_logging_scriptable_object = NULL;
@@ -30,9 +32,9 @@ static bool g_has_registered_log_handler = false;
 
 // static
 void HostLogHandler::RegisterLogMessageHandler() {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
-  if (!g_has_registered_log_handler)
+  if (g_has_registered_log_handler)
     return;
 
   LOG(INFO) << "Registering global log handler";
@@ -45,14 +47,15 @@ void HostLogHandler::RegisterLogMessageHandler() {
   // Note that this will not log anything until a scriptable object instance
   // has been created to handle the log message display.
   logging::SetLogMessageHandler(&LogToUI);
+  g_has_registered_log_handler = true;
 }
 
 // static
 void HostLogHandler::RegisterLoggingScriptObject(
     HostNPScriptObject* script_object) {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
-  LOG(INFO) << "Registering log handler scriptable object";
+  VLOG(1) << "Registering log handler scriptable object";
 
   // Register this script object as the one that will handle all logging calls
   // and display them to the user.
@@ -65,7 +68,7 @@ void HostLogHandler::RegisterLoggingScriptObject(
 // static
 void HostLogHandler::UnregisterLoggingScriptObject(
     HostNPScriptObject* script_object) {
-  base::AutoLock lock(g_logging_lock);
+  base::AutoLock lock(g_logging_lock.Get());
 
   // Ignore unless we're the currently registered script object.
   if (script_object != g_logging_scriptable_object)
@@ -75,7 +78,7 @@ void HostLogHandler::UnregisterLoggingScriptObject(
   g_has_logging_scriptable_object = false;
   g_logging_scriptable_object = NULL;
 
-  LOG(INFO) << "Unregistering log handler scriptable object";
+  VLOG(1) << "Unregistering log handler scriptable object";
 }
 
 // static
@@ -100,7 +103,7 @@ bool HostLogHandler::LogToUI(int severity, const char* file, int line,
   // reasons: a mis-read either skips a log message or causes us to take a lock
   // unnecessarily.
   if (g_has_logging_scriptable_object) {
-    base::AutoLock lock(g_logging_lock);
+    base::AutoLock lock(g_logging_lock.Get());
 
     if (g_logging_scriptable_object) {
       std::string message = remoting::GetTimestampString();

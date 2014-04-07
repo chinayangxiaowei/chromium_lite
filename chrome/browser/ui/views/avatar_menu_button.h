@@ -10,13 +10,19 @@
 
 #include "base/compiler_specific.h"
 #include "ui/base/models/simple_menu_model.h"
-#include "views/controls/button/menu_button.h"
-#include "views/controls/menu/view_menu_delegate.h"
+#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/menu/view_menu_delegate.h"
 
 namespace gfx {
 class Canvas;
+class Image;
 }
 class Browser;
+
+// Draws a scaled version of the avatar in |image| on the taskbar button
+// associated with top level, visible |window|. Currently only implemented
+// for Windows 7 and above.
+void DrawTaskBarDecoration(gfx::NativeWindow window, const gfx::Image* image);
 
 // AvatarMenuButton
 //
@@ -36,8 +42,10 @@ class AvatarMenuButton : public views::MenuButton,
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
   virtual bool HitTest(const gfx::Point& point) const OVERRIDE;
 
-  // views::TextButton
-  virtual void SetIcon(const SkBitmap& icon) OVERRIDE;
+  virtual void SetAvatarIcon(const gfx::Image& icon,
+                       bool is_gaia_picture);
+
+  void ShowAvatarBubble();
 
  private:
   // views::ViewMenuDelegate
@@ -45,8 +53,13 @@ class AvatarMenuButton : public views::MenuButton,
 
   Browser* browser_;
   bool has_menu_;
-  bool set_taskbar_decoration_;
   scoped_ptr<ui::MenuModel> menu_model_;
+
+  // Use a scoped ptr because gfx::Image doesn't have a default constructor.
+  scoped_ptr<gfx::Image> icon_;
+  SkBitmap button_icon_;
+  bool is_gaia_picture_;
+  int old_height_;
 
   DISALLOW_COPY_AND_ASSIGN(AvatarMenuButton);
 };

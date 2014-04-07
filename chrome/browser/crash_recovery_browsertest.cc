@@ -8,19 +8,25 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/navigation_entry.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/page_transition_types.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/page_transition_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using content::NavigationController;
+using content::OpenURLParams;
+using content::Referrer;
 
 namespace {
 
 void SimulateRendererCrash(Browser* browser) {
   ui_test_utils::WindowedNotificationObserver observer(
-      content::NOTIFICATION_TAB_CONTENTS_DISCONNECTED,
-      NotificationService::AllSources());
-  browser->OpenURL(GURL(chrome::kChromeUICrashURL), GURL(), CURRENT_TAB,
-                   PageTransition::TYPED);
+      content::NOTIFICATION_WEB_CONTENTS_DISCONNECTED,
+      content::NotificationService::AllSources());
+  browser->OpenURL(OpenURLParams(
+      GURL(chrome::kChromeUICrashURL), Referrer(), CURRENT_TAB,
+      content::PAGE_TRANSITION_TYPED, false));
   observer.Wait();
 }
 
@@ -30,7 +36,7 @@ class CrashRecoveryBrowserTest : public InProcessBrowserTest {
 };
 
 // Test that reload works after a crash.
-// Disabled, http://crbug.com/29331, http://crbug.com/69637.
+// Disabled, http://crbug.com/29331 , http://crbug.com/69637 .
 IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
   // The title of the active tab should change each time this URL is loaded.
   GURL url(
@@ -45,8 +51,9 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
   SimulateRendererCrash(browser());
   ui_test_utils::WindowedNotificationObserver observer(
       content::NOTIFICATION_LOAD_STOP,
-      Source<NavigationController>(
-          &browser()->GetSelectedTabContentsWrapper()->controller()));
+      content::Source<NavigationController>(
+          &browser()->GetSelectedTabContentsWrapper()->web_contents()->
+              GetController()));
   browser()->Reload(CURRENT_TAB);
   observer.Wait();
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
@@ -74,8 +81,9 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, LoadInNewTab) {
   SimulateRendererCrash(browser());
   ui_test_utils::WindowedNotificationObserver observer(
       content::NOTIFICATION_LOAD_STOP,
-      Source<NavigationController>(
-          &browser()->GetSelectedTabContentsWrapper()->controller()));
+      content::Source<NavigationController>(
+          &browser()->GetSelectedTabContentsWrapper()->web_contents()->
+              GetController()));
   browser()->Reload(CURRENT_TAB);
   observer.Wait();
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),

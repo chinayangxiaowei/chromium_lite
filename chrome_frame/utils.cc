@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/string_number_conversions.h"
+#include "base/string_piece.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
@@ -29,6 +30,7 @@
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/installer/util/chrome_frame_distribution.h"
+#include "chrome_frame/chrome_tab.h"
 #include "chrome_frame/extra_system_apis.h"
 #include "chrome_frame/html_utils.h"
 #include "chrome_frame/navigation_constraints.h"
@@ -40,8 +42,6 @@
 #include "net/base/escape.h"
 #include "net/http/http_util.h"
 #include "ui/base/models/menu_model.h"
-
-#include "chrome_tab.h"  // NOLINT
 
 using base::win::RegKey;
 
@@ -83,6 +83,11 @@ const wchar_t kChromeFrameAccessibleMode[] = L"ChromeFrameAccessibleMode";
 // DLL pinning, such as the perf tests.
 const wchar_t kChromeFrameUnpinnedMode[] = L"kChromeFrameUnpinnedMode";
 
+// Controls whether we download subresources, etc on the chrome frame page in
+// the background worker thread. Defaults to true.
+const wchar_t kUseBackgroundThreadForSubResources[]
+    = L"BackgroundHTTPWorkerThread";
+
 // {1AF32B6C-A3BA-48B9-B24E-8AA9C41F6ECD}
 static const IID IID_IWebBrowserPriv2IE7 = { 0x1AF32B6C, 0xA3BA, 0x48B9,
     { 0xB2, 0x4E, 0x8A, 0xA9, 0xC4, 0x1F, 0x6E, 0xCD } };
@@ -106,7 +111,7 @@ namespace {
 // pointer so it should not be dereferenced and used for comparison against a
 // living instance only.
 base::LazyInstance<base::ThreadLocalPointer<IBrowserService> >
-    g_tls_browser_for_cf_navigation(base::LINKER_INITIALIZED);
+    g_tls_browser_for_cf_navigation = LAZY_INSTANCE_INITIALIZER;
 
 }  // end anonymous namespace
 
@@ -409,8 +414,11 @@ IEVersion GetIEVersion() {
       case 8:
         ie_version = IE_8;
         break;
+      case 9:
+        ie_version = IE_9;
+        break;
       default:
-        ie_version = major_version >= 9 ? IE_9 : IE_UNSUPPORTED;
+        ie_version = (major_version >= 10) ? IE_10 : IE_UNSUPPORTED;
         break;
     }
   }
@@ -513,8 +521,8 @@ bool GetModuleVersion(HMODULE module, uint32* high, uint32* low) {
       // Copy data as VerQueryValue tries to modify the data. This causes
       // exceptions and heap corruption errors if debugger is attached.
       scoped_array<char> data(new char[version_resource_size]);
-      memcpy(data.get(), readonly_resource_data, version_resource_size);
       if (data.get()) {
+        memcpy(data.get(), readonly_resource_data, version_resource_size);
         VS_FIXEDFILEINFO* ver_info = NULL;
         UINT info_size = 0;
         if (VerQueryValue(data.get(), L"\\",
@@ -1321,6 +1329,7 @@ std::string Bscf2Str(DWORD flags) {
 // Reads data from a stream into a string.
 HRESULT ReadStream(IStream* stream, size_t size, std::string* data) {
   DCHECK(stream);
+  DCHECK_GT(size, 0u);
   DCHECK(data);
 
   DWORD read = 0;
@@ -1416,8 +1425,8 @@ bool ChromeFrameUrl::ParseAttachExternalTabUrl() {
   if (tokenizer.GetNext()) {
     profile_name_ = tokenizer.token();
     // Escape out special characters like %20, etc.
-    profile_name_ = UnescapeURLComponent(profile_name_,
-        UnescapeRule::SPACES | UnescapeRule::URL_SPECIAL_CHARS);
+    profile_name_ = net::UnescapeURLComponent(profile_name_,
+        net::UnescapeRule::SPACES | net::UnescapeRule::URL_SPECIAL_CHARS);
   } else {
     return false;
   }
@@ -1466,18 +1475,20 @@ bool CanNavigate(const GURL& url,
 void PinModule() {
   static bool s_pinned = false;
   if (!s_pinned && !IsUnpinnedMode()) {
-    FilePath module_path;
-    if (PathService::Get(base::FILE_MODULE, &module_path)) {
+    wchar_t system_buffer[MAX_PATH];
+    HMODULE this_module = reinterpret_cast<HMODULE>(&__ImageBase);
+    system_buffer[0] = 0;
+    if (GetModuleFileName(this_module, system_buffer,
+                          arraysize(system_buffer)) != 0) {
       HMODULE unused;
-      if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_PIN,
-                             module_path.value().c_str(), &unused)) {
-        NOTREACHED() << "Failed to pin module " << module_path.value().c_str()
-                     << " , last error: " << GetLastError();
+      if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_PIN, system_buffer,
+                             &unused)) {
+        DPLOG(FATAL) << "Failed to pin module " << system_buffer;
       } else {
         s_pinned = true;
       }
     } else {
-      NOTREACHED() << "Could not get module path.";
+      DPLOG(FATAL) << "Could not get module path.";
     }
   }
 }
@@ -1546,7 +1557,9 @@ int GetXUaCompatibleDirective(const std::string& directive, char delimiter) {
     }
 
     int header_ie_version = 0;
-    if (!base::StringToInt(filter_begin + 2, filter_end, &header_ie_version) ||
+    if (!base::StringToInt(base::StringPiece(filter_begin + 2,
+                                             filter_end),
+                           &header_ie_version) ||
         header_ie_version == 0) {  // ensure it's not a sequence of 0's
       continue;
     }
@@ -1632,4 +1645,3 @@ bool IncreaseWinInetConnections(DWORD connections) {
   wininet_connection_count_updated = true;
   return true;
 }
-

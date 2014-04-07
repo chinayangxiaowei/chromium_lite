@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -73,7 +73,7 @@ void ScrollBy(PP_Resource scrollbar, PP_ScrollBy_Dev unit, int32_t multiplier) {
     enter.object()->ScrollBy(unit, multiplier);
 }
 
-const PPB_Scrollbar_0_5_Dev g_ppb_scrollbar_thunk = {
+const PPB_Scrollbar_Dev g_ppb_scrollbar_thunk = {
   &Create,
   &IsScrollbar,
   &GetThickness,
@@ -87,7 +87,7 @@ const PPB_Scrollbar_0_5_Dev g_ppb_scrollbar_thunk = {
 
 }  // namespace
 
-const PPB_Scrollbar_0_5_Dev* GetPPB_Scrollbar_Thunk() {
+const PPB_Scrollbar_Dev_0_5* GetPPB_Scrollbar_Dev_0_5_Thunk() {
   return &g_ppb_scrollbar_thunk;
 }
 

@@ -14,17 +14,15 @@
 #include "ppapi/c/pp_rect.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/proxy/ppapi_proxy_export.h"
-#include "ppapi/shared_impl/file_ref_impl.h"
+#include "ppapi/shared_impl/ppb_file_ref_shared.h"
 
 struct PP_FileInfo;
 struct PP_ObjectProperty;
-struct PP_Flash_Menu;
-struct PP_Flash_NetAddress;
+struct PP_NetAddress_Private;
 
 namespace ppapi {
 
 class HostResource;
-//struct PPB_FileRef_CreateInfo;
 
 namespace proxy {
 
@@ -57,8 +55,8 @@ struct ParamTraits<PP_FileInfo> {
 };
 
 template <>
-struct PPAPI_PROXY_EXPORT ParamTraits<PP_Flash_NetAddress> {
-  typedef PP_Flash_NetAddress param_type;
+struct PPAPI_PROXY_EXPORT ParamTraits<PP_NetAddress_Private> {
+  typedef PP_NetAddress_Private param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, void** iter, param_type* p);
   static void Log(const param_type& p, std::string* l);

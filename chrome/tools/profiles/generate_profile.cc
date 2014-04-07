@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,14 +23,16 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_service.h"
+#include "content/browser/browser_thread_impl.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 
 using base::Time;
+using content::BrowserThread;
 
 // Addition types data can be generated for. By default only urls/visits are
 // added.
@@ -137,17 +139,17 @@ void InsertURLBatch(Profile* profile,
 
   printf("Inserting %d URLs...\n", batch_size);
   GURL previous_url;
-  PageTransition::Type transition = PageTransition::TYPED;
+  content::PageTransition transition = content::PAGE_TRANSITION_TYPED;
   const int end_page_id = page_id + batch_size;
   history::TopSites* top_sites = profile->GetTopSites();
   for (; page_id < end_page_id; ++page_id) {
     // Randomly decide whether this new URL simulates following a link or
     // whether it's a jump to a new URL.
     if (!previous_url.is_empty() && RandomFloat() < kFollowLinkProbability) {
-      transition = PageTransition::LINK;
+      transition = content::PAGE_TRANSITION_LINK;
     } else {
       previous_url = GURL();
-      transition = PageTransition::TYPED;
+      transition = content::PAGE_TRANSITION_TYPED;
     }
 
     // Pick a URL, either newly at random or from our list of previously
@@ -232,11 +234,12 @@ int main(int argc, const char* argv[]) {
 
   chrome::RegisterPathProvider();
   ui::RegisterPathProvider();
-  ResourceBundle::InitSharedInstance("en-US");
-  NotificationService notification_service;
+  ResourceBundle::InitSharedInstanceWithLocale("en-US");
+  scoped_ptr<content::NotificationService> notification_service(
+      content::NotificationService::Create());
   MessageLoopForUI message_loop;
-  BrowserThread ui_thread(BrowserThread::UI, &message_loop);
-  BrowserThread db_thread(BrowserThread::DB, &message_loop);
+  content::BrowserThreadImpl ui_thread(BrowserThread::UI, &message_loop);
+  content::BrowserThreadImpl db_thread(BrowserThread::DB, &message_loop);
   TestingProfile profile;
   profile.CreateHistoryService(false, false);
   if (types & TOP_SITES) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,10 +23,15 @@
 #include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/ui/ui_test.h"
-#include "content/common/child_process_info.h"
 #include "content/common/debug_flags.h"
+#include "content/public/common/process_type.h"
 #include "ipc/ipc_channel.h"
+#include "ipc/ipc_descriptors.h"
 #include "sql/connection.h"
+
+#if defined(OS_POSIX)
+#include <signal.h>
+#endif
 
 namespace {
 
@@ -78,6 +83,8 @@ ProxyLauncher::ProxyLauncher()
                       switches::kNoSandbox)),
       full_memory_dump_(CommandLine::ForCurrentProcess()->HasSwitch(
                             switches::kFullMemoryCrashReport)),
+      show_error_dialogs_(CommandLine::ForCurrentProcess()->HasSwitch(
+                              switches::kEnableErrorDialogs)),
       dump_histograms_on_exit_(CommandLine::ForCurrentProcess()->HasSwitch(
                                    switches::kDumpHistogramsOnExit)),
       enable_dcheck_(CommandLine::ForCurrentProcess()->HasSwitch(
@@ -107,11 +114,11 @@ bool ProxyLauncher::WaitForBrowserLaunch(bool wait_for_initial_loads) {
       return false;
     }
   } else {
-    // TODO(phajdan.jr): We should get rid of this sleep, but some tests
-    // "rely" on it, e.g. AssertionTest.Assertion and CheckFalseTest.CheckFails.
-    // Those tests do not wait in any way until the crash gets noticed,
-    // so it's possible for the browser to exit before the tested crash happens.
-    base::PlatformThread::Sleep(TestTimeouts::action_timeout_ms());
+#if defined(OS_WIN)
+    // TODO(phajdan.jr): Get rid of this Sleep when logging_chrome_uitest
+    // stops "relying" on it.
+    base::PlatformThread::Sleep(TestTimeouts::action_timeout());
+#endif
   }
 
   if (!automation()->SetFilteredInet(ShouldFilterInet())) {
@@ -196,7 +203,7 @@ bool ProxyLauncher::LaunchBrowser(const LaunchState& state) {
   if (!state.setup_profile_callback.is_null())
     state.setup_profile_callback.Run();
 
-  if (!LaunchBrowserHelper(state, false, &process_)) {
+  if (!LaunchBrowserHelper(state, true, false, &process_)) {
     LOG(ERROR) << "LaunchBrowserHelper failed.";
     return false;
   }
@@ -208,14 +215,14 @@ bool ProxyLauncher::LaunchBrowser(const LaunchState& state) {
 #if !defined(OS_MACOSX)
 bool ProxyLauncher::LaunchAnotherBrowserBlockUntilClosed(
     const LaunchState& state) {
-  return LaunchBrowserHelper(state, true, NULL);
+  return LaunchBrowserHelper(state, false, true, NULL);
 }
 #endif
 
 void ProxyLauncher::QuitBrowser() {
   // If we have already finished waiting for the browser to exit
   // (or it hasn't launched at all), there's nothing to do here.
-  if (process_ == base::kNullProcessHandle)
+  if (process_ == base::kNullProcessHandle || !automation_proxy_.get())
     return;
 
   if (SESSION_ENDING == shutdown_type_) {
@@ -252,6 +259,7 @@ void ProxyLauncher::QuitBrowser() {
         automation()->GetBrowserWindow(0);
     EXPECT_TRUE(browser_proxy.get());
     if (browser_proxy.get()) {
+      EXPECT_TRUE(browser_proxy->is_valid());
       EXPECT_TRUE(browser_proxy->ApplyAccelerator(IDC_CLOSE_WINDOW));
       browser_proxy = NULL;
     }
@@ -284,13 +292,13 @@ void ProxyLauncher::QuitBrowser() {
 void ProxyLauncher::TerminateBrowser() {
   // If we have already finished waiting for the browser to exit
   // (or it hasn't launched at all), there's nothing to do here.
-  if (process_ == base::kNullProcessHandle)
+  if (process_ == base::kNullProcessHandle || !automation_proxy_.get())
     return;
 
   base::TimeTicks quit_start = base::TimeTicks::Now();
 
   EXPECT_TRUE(automation()->SetFilteredInet(false));
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser.get());
   ASSERT_TRUE(browser->TerminateSession());
@@ -332,7 +340,12 @@ bool ProxyLauncher::WaitForBrowserProcessToQuit(int timeout, int* exit_code) {
 #ifdef WAIT_FOR_DEBUGGER_ON_OPEN
   timeout = 500000;
 #endif
-  bool success = base::WaitForExitCodeWithTimeout(process_, exit_code, timeout);
+  bool success = false;
+
+  // Only wait for exit if the "browser, please terminate" message had a
+  // chance of making it through.
+  if (!automation_proxy_->channel_disconnected_on_failure())
+    success = base::WaitForExitCodeWithTimeout(process_, exit_code, timeout);
 
   if (!success)
     TerminateAllChromeProcesses(process_id_);
@@ -388,11 +401,8 @@ void ProxyLauncher::PrepareTestCommandline(CommandLine* command_line,
     command_line->AppendSwitchASCII(switches::kTestingChannelID,
                                     PrefixedChannelID());
 
-  if (!show_error_dialogs_ &&
-      !CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableErrorDialogs)) {
+  if (!show_error_dialogs_)
     command_line->AppendSwitch(switches::kNoErrorDialogs);
-  }
   if (no_sandbox_)
     command_line->AppendSwitch(switches::kNoSandbox);
   if (full_memory_dump_)
@@ -422,27 +432,23 @@ void ProxyLauncher::PrepareTestCommandline(CommandLine* command_line,
   command_line->AppendSwitch(switches::kDebugOnStart);
 #endif
 
-  // The tests assume that file:// URIs can freely access other file:// URIs.
-  command_line->AppendSwitch(switches::kAllowFileAccessFromFiles);
-
   // Disable TabCloseableStateWatcher for tests.
   command_line->AppendSwitch(switches::kDisableTabCloseableStateWatcher);
 
   // Allow file:// access on ChromeOS.
   command_line->AppendSwitch(switches::kAllowFileAccess);
-
-  // Allow testing File API over http.
-  command_line->AppendSwitch(switches::kUnlimitedQuotaForFiles);
 }
 
-bool ProxyLauncher::LaunchBrowserHelper(const LaunchState& state, bool wait,
+bool ProxyLauncher::LaunchBrowserHelper(const LaunchState& state,
+                                        bool main_launch,
+                                        bool wait,
                                         base::ProcessHandle* process) {
   CommandLine command_line(state.command);
 
   // Add command line arguments that should be applied to all UI tests.
   PrepareTestCommandline(&command_line, state.include_testing_id);
   DebugFlags::ProcessDebugFlags(
-      &command_line, ChildProcessInfo::UNKNOWN_PROCESS, false);
+      &command_line, content::PROCESS_TYPE_UNKNOWN, false);
 
   // Sometimes one needs to run the browser under a special environment
   // (e.g. valgrind) without also running the test harness (e.g. python)
@@ -459,8 +465,8 @@ bool ProxyLauncher::LaunchBrowserHelper(const LaunchState& state, bool wait,
             << browser_wrapper;
   }
 
-  // TODO(phajdan.jr): Only run it for "main" browser launch.
-  browser_launch_time_ = base::TimeTicks::Now();
+  if (main_launch)
+    browser_launch_time_ = base::TimeTicks::Now();
 
   base::LaunchOptions options;
   options.wait = wait;
@@ -468,10 +474,14 @@ bool ProxyLauncher::LaunchBrowserHelper(const LaunchState& state, bool wait,
 #if defined(OS_WIN)
   options.start_hidden = !state.show_window;
 #elif defined(OS_POSIX)
+  int ipcfd = -1;
+  file_util::ScopedFD ipcfd_closer(&ipcfd);
   base::file_handle_mapping_vector fds;
-  if (automation_proxy_.get())
-    fds = automation_proxy_->fds_to_map();
-  options.fds_to_remap = &fds;
+  if (main_launch && automation_proxy_.get()) {
+    ipcfd = automation_proxy_->channel()->TakeClientFileDescriptor();
+    fds.push_back(std::make_pair(ipcfd, kPrimaryIPCChannel + 3));
+    options.fds_to_remap = &fds;
+  }
 #endif
 
   return base::LaunchProcess(command_line, options, process);
@@ -547,7 +557,8 @@ bool NamedProxyLauncher::InitializeConnection(const LaunchState& state,
     channel_initialized = IPC::Channel::IsNamedServerInitialized(channel_id_);
     if (channel_initialized)
       break;
-    base::PlatformThread::Sleep(automation::kSleepTime);
+    base::PlatformThread::Sleep(
+        base::TimeDelta::FromMilliseconds(automation::kSleepTime));
   }
   if (!channel_initialized) {
     LOG(ERROR) << "Failed to wait for testing channel presence.";

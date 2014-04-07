@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include "build/build_config.h"
 #include "ui/base/ui_export.h"
 
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
-#include <gtk/gtkstyle.h>
+#if defined(TOOLKIT_USES_GTK)
+#include <gtk/gtk.h>
 #endif
 
 namespace gfx {
@@ -30,7 +30,7 @@ class UI_EXPORT Insets {
         left_(left),
         bottom_(bottom),
         right_(right) {}
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#if defined(TOOLKIT_USES_GTK)
   explicit Insets(const GtkBorder& border)
       : top_(border.top),
         left_(border.left),
@@ -78,6 +78,10 @@ class UI_EXPORT Insets {
     bottom_ += insets.bottom_;
     right_ += insets.right_;
     return *this;
+  }
+
+  Insets operator-() const {
+    return Insets(-top_, -left_, -bottom_, -right_);
   }
 
   // Returns a string representation of the insets.

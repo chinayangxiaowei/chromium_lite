@@ -28,6 +28,7 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/common/url_constants.h"
 #include "chrome_frame/chrome_frame_plugin.h"
+#include "chrome_frame/chrome_tab.h"
 #include "chrome_frame/com_message_event.h"
 #include "chrome_frame/com_type_info_holder.h"
 #include "chrome_frame/simple_resource_loader.h"
@@ -36,9 +37,6 @@
 #include "chrome_frame/utils.h"
 #include "grit/generated_resources.h"
 #include "net/base/cookie_monster.h"
-
-// Include without path to make GYP build see it.
-#include "chrome_tab.h"  // NOLINT
 
 // Connection point class to support firing IChromeFrameEvents (dispinterface).
 template<class T>
@@ -257,8 +255,8 @@ END_MSG_MAP()
       UMA_HISTOGRAM_CUSTOM_COUNTS("ChromeFrame.IEVersion",
                                   GetIEVersion(),
                                   IE_INVALID,
-                                  IE_9,
-                                  IE_9 + 1);
+                                  IE_10,
+                                  IE_10 + 1);
     }
 
     return S_OK;
@@ -385,6 +383,16 @@ END_MSG_MAP()
     return true;
   }
 
+  static void BringWebBrowserWindowToTop(IWebBrowser2* web_browser2) {
+    DCHECK(web_browser2);
+    if (web_browser2) {
+      web_browser2->put_Visible(VARIANT_TRUE);
+      HWND ie_window = NULL;
+      web_browser2->get_HWND(reinterpret_cast<long*>(&ie_window));
+      ::BringWindowToTop(ie_window);
+    }
+  }
+
  protected:
   virtual void GetProfilePath(const std::wstring& profile_name,
                               FilePath* profile_path) {
@@ -480,28 +488,10 @@ END_MSG_MAP()
   }
 
   virtual void OnAttachExternalTab(const AttachExternalTabParams& params) {
-    std::wstring wide_url = url_;
-    GURL parsed_url(WideToUTF8(wide_url));
-
-    // If Chrome-Frame is presently navigated to an extension page, navigating
-    // the host to a url with scheme chrome-extension will fail, so we
-    // point the host at http:local_host.  Note that this is NOT the URL
-    // to which the host is directed.  It is only used as a temporary message
-    // passing mechanism between this CF instance, and the BHO that will
-    // be constructed in the new IE tab.
-    if (parsed_url.SchemeIs("chrome-extension") &&
-        is_privileged()) {
-      const char kScheme[] = "http";
-      const char kHost[] = "local_host";
-
-      GURL::Replacements r;
-      r.SetScheme(kScheme, url_parse::Component(0, sizeof(kScheme) -1));
-      r.SetHost(kHost, url_parse::Component(0, sizeof(kHost) - 1));
-      parsed_url = parsed_url.ReplaceComponents(r);
-    }
-
-    std::string url = chrome_frame::ActiveXCreateUrl(parsed_url, params);
-    HostNavigate(GURL(url), GURL(), chrome_frame::GetDisposition(params));
+    GURL current_url(static_cast<BSTR>(url_));
+    std::string url = chrome_frame::ActiveXCreateUrl(current_url, params);
+    // Pass the current document url as the referrer for the new navigation.
+    HostNavigate(GURL(url), current_url, chrome_frame::GetDisposition(params));
   }
 
   virtual void OnHandleContextMenu(const ContextMenuModel& menu_model,
@@ -1165,6 +1155,21 @@ END_MSG_MAP()
       http_headers.Set(referrer_header.c_str());
     }
 
+    // IE6 does not support tabs. If Chrome sent us a window open request
+    // indicating that the navigation needs to occur in a foreground tab or
+    // a popup window, then we need to ensure that the new window in IE6 is
+    // brought to the foreground.
+    if (ie_version == IE_6) {
+      ChromeFrameUrl cf_url;
+      cf_url.Parse(static_cast<BSTR>(url_));
+
+      if (cf_url.attach_to_external_tab() &&
+          (cf_url.disposition() == NEW_FOREGROUND_TAB ||
+           cf_url.disposition() == NEW_POPUP)) {
+        BringWebBrowserWindowToTop(web_browser2);
+      }
+    }
+
     HRESULT hr = web_browser2->Navigate2(url.AsInput(), &flags, &empty, &empty,
                                          http_headers.AsInput());
     // If the current window is a popup window then attempting to open a new
@@ -1175,7 +1180,6 @@ END_MSG_MAP()
       V_I4(&flags) = navOpenInNewWindow;
       hr = web_browser2->Navigate2(url.AsInput(), &flags, &empty, &empty,
                                    http_headers.AsInput());
-
       DLOG_IF(ERROR, FAILED(hr))
           << "Navigate2 failed with error: "
           << base::StringPrintf("0x%08X", hr);

@@ -6,11 +6,12 @@
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/process_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/printing/printer_query.h"
 #include "chrome/browser/printing/print_job_manager.h"
-#include "chrome/browser/ui/webui/print_preview_ui.h"
+#include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "chrome/common/print_messages.h"
 
 #if defined(OS_CHROMEOS)
@@ -21,10 +22,9 @@
 #include "base/file_util.h"
 #include "base/lazy_instance.h"
 #include "chrome/browser/printing/print_dialog_cloud.h"
-#else
-#include "base/command_line.h"
-#include "chrome/common/chrome_switches.h"
 #endif
+
+using content::BrowserThread;
 
 namespace {
 
@@ -38,17 +38,22 @@ struct PrintingSequencePathMap {
 
 // No locking, only access on the FILE thread.
 static base::LazyInstance<PrintingSequencePathMap>
-    g_printing_file_descriptor_map(base::LINKER_INITIALIZED);
+    g_printing_file_descriptor_map = LAZY_INSTANCE_INITIALIZER;
 #endif
 
 void RenderParamsFromPrintSettings(const printing::PrintSettings& settings,
                                    PrintMsg_Print_Params* params) {
   params->page_size = settings.page_setup_device_units().physical_size();
-  params->printable_size.SetSize(
+  params->content_size.SetSize(
       settings.page_setup_device_units().content_area().width(),
       settings.page_setup_device_units().content_area().height());
-  params->margin_top = settings.page_setup_device_units().content_area().x();
-  params->margin_left = settings.page_setup_device_units().content_area().y();
+  params->printable_area.SetRect(
+      settings.page_setup_device_units().printable_area().x(),
+      settings.page_setup_device_units().printable_area().y(),
+      settings.page_setup_device_units().printable_area().width(),
+      settings.page_setup_device_units().printable_area().height());
+  params->margin_top = settings.page_setup_device_units().content_area().y();
+  params->margin_left = settings.page_setup_device_units().content_area().x();
   params->dpi = settings.dpi();
   // Currently hardcoded at 1.25. See PrintSettings' constructor.
   params->min_shrink = settings.min_shrink;
@@ -73,12 +78,6 @@ void RenderParamsFromPrintSettings(const printing::PrintSettings& settings,
 
 PrintingMessageFilter::PrintingMessageFilter()
     : print_job_manager_(g_browser_process->print_job_manager()) {
-#if defined(OS_CHROMEOS)
-  cloud_print_enabled_ = true;
-#else
-  cloud_print_enabled_ = CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableCloudPrint);
-#endif
 }
 
 PrintingMessageFilter::~PrintingMessageFilter() {
@@ -166,15 +165,13 @@ void PrintingMessageFilter::OnTempFileForPrintingWritten(int sequence_number) {
     return;
   }
 
-  if (cloud_print_enabled_)
-    print_dialog_cloud::CreatePrintDialogForFile(
-        it->second,
-        string16(),
-        string16(),
-        std::string("application/pdf"),
-        true);
-  else
-    NOTIMPLEMENTED();
+  print_dialog_cloud::CreatePrintDialogForFile(
+      it->second,
+      string16(),
+      string16(),
+      std::string("application/pdf"),
+      true,
+      false);
 
   // Erase the entry in the map.
   map->erase(it);
@@ -190,23 +187,16 @@ void PrintingMessageFilter::OnGetDefaultPrintSettings(IPC::Message* reply_msg) {
   }
 
   print_job_manager_->PopPrinterQuery(0, &printer_query);
-  if (!printer_query.get()) {
+  if (!printer_query.get())
     printer_query = new printing::PrinterQuery;
-  }
 
-  CancelableTask* task = NewRunnableMethod(
-      this,
-      &PrintingMessageFilter::OnGetDefaultPrintSettingsReply,
-      printer_query,
-      reply_msg);
   // Loads default settings. This is asynchronous, only the IPC message sender
   // will hang until the settings are retrieved.
-  printer_query->GetSettings(printing::PrinterQuery::DEFAULTS,
-                             NULL,
-                             0,
-                             false,
-                             true,
-                             task);
+  printer_query->GetSettings(
+      printing::PrinterQuery::DEFAULTS, NULL, 0, false,
+      printing::DEFAULT_MARGINS,
+      base::Bind(&PrintingMessageFilter::OnGetDefaultPrintSettingsReply, this,
+                 printer_query, reply_msg));
 }
 
 void PrintingMessageFilter::OnGetDefaultPrintSettingsReply(
@@ -245,24 +235,15 @@ void PrintingMessageFilter::OnScriptedPrint(
     printer_query = new printing::PrinterQuery;
   }
 
-  CancelableTask* task = NewRunnableMethod(
-      this,
-      &PrintingMessageFilter::OnScriptedPrintReply,
-      printer_query,
-      params.routing_id,
-      reply_msg);
-
-  printer_query->GetSettings(printing::PrinterQuery::ASK_USER,
-                             host_view,
-                             params.expected_pages_count,
-                             params.has_selection,
-                             params.use_overlays,
-                             task);
+  printer_query->GetSettings(
+      printing::PrinterQuery::ASK_USER, host_view, params.expected_pages_count,
+      params.has_selection, params.margin_type,
+      base::Bind(&PrintingMessageFilter::OnScriptedPrintReply, this,
+                 printer_query, reply_msg));
 }
 
 void PrintingMessageFilter::OnScriptedPrintReply(
     scoped_refptr<printing::PrinterQuery> printer_query,
-    int routing_id,
     IPC::Message* reply_msg) {
   PrintMsg_PrintPages_Params params;
   if (printer_query->last_status() != printing::PrintingContext::OK ||
@@ -287,22 +268,28 @@ void PrintingMessageFilter::OnUpdatePrintSettings(
     int document_cookie, const DictionaryValue& job_settings,
     IPC::Message* reply_msg) {
   scoped_refptr<printing::PrinterQuery> printer_query;
-  print_job_manager_->PopPrinterQuery(document_cookie, &printer_query);
-  if (printer_query.get()) {
-    CancelableTask* task = NewRunnableMethod(
-        this,
-        &PrintingMessageFilter::OnUpdatePrintSettingsReply,
-        printer_query,
-        reply_msg);
-    printer_query->SetSettings(job_settings, task);
+  if (!print_job_manager_->printing_enabled()) {
+    // Reply with NULL query.
+    OnUpdatePrintSettingsReply(printer_query, reply_msg);
+    return;
   }
+
+  print_job_manager_->PopPrinterQuery(document_cookie, &printer_query);
+  if (!printer_query.get())
+    printer_query = new printing::PrinterQuery;
+
+  printer_query->SetSettings(
+      job_settings,
+      base::Bind(&PrintingMessageFilter::OnUpdatePrintSettingsReply, this,
+                 printer_query, reply_msg));
 }
 
 void PrintingMessageFilter::OnUpdatePrintSettingsReply(
     scoped_refptr<printing::PrinterQuery> printer_query,
     IPC::Message* reply_msg) {
   PrintMsg_PrintPages_Params params;
-  if (printer_query->last_status() != printing::PrintingContext::OK) {
+  if (!printer_query.get() ||
+      printer_query->last_status() != printing::PrintingContext::OK) {
     params.Reset();
   } else {
     RenderParamsFromPrintSettings(printer_query->settings(), &params.params);
@@ -313,10 +300,12 @@ void PrintingMessageFilter::OnUpdatePrintSettingsReply(
   PrintHostMsg_UpdatePrintSettings::WriteReplyParams(reply_msg, params);
   Send(reply_msg);
   // If user hasn't cancelled.
-  if (printer_query->cookie() && printer_query->settings().dpi())
-    print_job_manager_->QueuePrinterQuery(printer_query.get());
-  else
-    printer_query->StopWorker();
+  if (printer_query.get()) {
+    if (printer_query->cookie() && printer_query->settings().dpi())
+      print_job_manager_->QueuePrinterQuery(printer_query.get());
+    else
+      printer_query->StopWorker();
+  }
 }
 
 void PrintingMessageFilter::OnCheckForCancel(const std::string& preview_ui_addr,

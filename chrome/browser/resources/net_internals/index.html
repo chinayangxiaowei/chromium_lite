@@ -6,34 +6,26 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
   <head i18n-values="dir:textdirection;">
-    <include src="../content_security_policy.html"/>
     <link rel="stylesheet" href="main.css">
+    <link rel="stylesheet" href="status_view.css">
     <link rel="stylesheet" href="events_view.css">
+    <link rel="stylesheet" href="timeline_view.css">
     <link rel="stylesheet" href="logs_view.css">
     <link rel="stylesheet" href="tab_switcher_view.css">
+    <link rel="stylesheet" href="chromeos_view.css">
     <script src="chrome://resources/js/util.js"></script>
     <script src="chrome://resources/js/cr.js"></script>
     <script src="chrome://net-internals/index.js"></script>
     <script src="chrome://net-internals/strings.js"></script>
   </head>
   <body id=import-view-drop-target>
-
-    <div id=status-view>
-      <!-- We use a different status bar when in capture mode vs file mode -->
-      <div id=status-view-for-capture>
-        Recording network events...
-      </div>
-
-      <div id=status-view-for-file style="display:none">
-        Displaying log file (<span id=status-view-dump-file-name></span>)
-      </div>
-    </div>
-
+    <include src="status_view.html"/>
     <include src="category_tabs.html"/>
     <include src="proxy_view.html"/>
     <include src="dns_view.html"/>
     <include src="sockets_view.html"/>
     <include src="spdy_view.html"/>
+    <include src="http_pipeline_view.html"/>
     <include src="http_cache_view.html"/>
     <include src="http_throttling_view.html"/>
     <include src="prerender_view.html"/>
@@ -44,7 +36,9 @@ found in the LICENSE file.
     <include src="test_view.html"/>
     <include src="hsts_view.html"/>
     <include src="events_view.html"/>
+    <include src="timeline_view.html"/>
     <include src="logs_view.html"/>
+    <include src="chromeos_view.html"/>
 
     <script src="chrome://resources/js/i18n_template.js"></script>
     <script src="chrome://resources/js/i18n_process.js"></script>

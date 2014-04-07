@@ -12,13 +12,14 @@
 #include "base/values.h"
 #include "chrome/browser/browser_about_handler.h"
 #include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_screen_actor.h"
+#include "chrome/browser/chromeos/login/screen_locker.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/about_ui.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/core_oobe_handler.h"
-#include "chrome/browser/ui/webui/chromeos/login/enterprise_enrollment_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/enterprise_oauth_enrollment_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/eula_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_dropdown_handler.h"
@@ -28,12 +29,14 @@
 #include "chrome/browser/ui/webui/chromeos/login/user_image_screen_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/user_image_source.h"
 #include "chrome/browser/ui/webui/theme_source.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/browser_resources.h"
 #include "ui/base/resource/resource_bundle.h"
+
+using content::WebContents;
 
 namespace {
 
@@ -79,7 +82,8 @@ OobeUIHTMLSource::OobeUIHTMLSource(DictionaryValue* localized_strings)
 void OobeUIHTMLSource::StartDataRequest(const std::string& path,
                                         bool is_incognito,
                                         int request_id) {
-  if (UserManager::Get()->user_is_logged_in()) {
+  if (UserManager::Get()->user_is_logged_in() &&
+      !ScreenLocker::default_screen_locker()) {
     scoped_refptr<RefCountedBytes> empty_bytes(new RefCountedBytes());
     SendResponse(request_id, empty_bytes);
     return;
@@ -105,8 +109,8 @@ std::string OobeUIHTMLSource::GetDataResource(int resource_id) const {
 
 // OobeUI ----------------------------------------------------------------------
 
-OobeUI::OobeUI(TabContents* contents)
-    : ChromeWebUI(contents),
+OobeUI::OobeUI(content::WebUI* web_ui)
+    : WebUIController(web_ui),
       update_screen_actor_(NULL),
       network_screen_actor_(NULL),
       eula_screen_actor_(NULL),
@@ -129,19 +133,12 @@ OobeUI::OobeUI(TabContents* contents)
   update_screen_actor_ = update_screen_handler;
   AddScreenHandler(update_screen_handler);
 
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kWebUILogin)) {
-    EnterpriseOAuthEnrollmentScreenHandler*
-        enterprise_oauth_enrollment_screen_handler =
-            new EnterpriseOAuthEnrollmentScreenHandler;
-    enterprise_enrollment_screen_actor_ =
-        enterprise_oauth_enrollment_screen_handler;
-    AddScreenHandler(enterprise_oauth_enrollment_screen_handler);
-  } else {
-    EnterpriseEnrollmentScreenHandler* enterprise_enrollment_screen_handler =
-        new EnterpriseEnrollmentScreenHandler;
-    enterprise_enrollment_screen_actor_ = enterprise_enrollment_screen_handler;
-    AddScreenHandler(enterprise_enrollment_screen_handler);
-  }
+  EnterpriseOAuthEnrollmentScreenHandler*
+      enterprise_oauth_enrollment_screen_handler =
+          new EnterpriseOAuthEnrollmentScreenHandler;
+  enterprise_enrollment_screen_actor_ =
+      enterprise_oauth_enrollment_screen_handler;
+  AddScreenHandler(enterprise_oauth_enrollment_screen_handler);
 
   UserImageScreenHandler* user_image_screen_handler =
       new UserImageScreenHandler();
@@ -154,13 +151,15 @@ OobeUI::OobeUI(TabContents* contents)
   DictionaryValue* localized_strings = new DictionaryValue();
   GetLocalizedStrings(localized_strings);
 
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   // Set up the chrome://theme/ source, for Chrome logo.
   ThemeSource* theme = new ThemeSource(profile);
   profile->GetChromeURLDataManager()->AddDataSource(theme);
 
   // Set up the chrome://terms/ data source, for EULA content.
-  InitializeAboutDataSource(chrome::kChromeUITermsHost, profile);
+  AboutUIHTMLSource* about_source =
+      new AboutUIHTMLSource(chrome::kChromeUITermsHost, profile);
+  profile->GetChromeURLDataManager()->AddDataSource(about_source);
 
   // Set up the chrome://oobe/ source.
   OobeUIHTMLSource* html_source = new OobeUIHTMLSource(localized_strings);
@@ -169,6 +168,9 @@ OobeUI::OobeUI(TabContents* contents)
   // Set up the chrome://userimage/ source.
   UserImageSource* user_image_source = new UserImageSource();
   profile->GetChromeURLDataManager()->AddDataSource(user_image_source);
+}
+
+OobeUI::~OobeUI() {
 }
 
 void OobeUI::ShowScreen(WizardScreen* screen) {
@@ -214,30 +216,36 @@ ViewScreenDelegate* OobeUI::GetHTMLPageScreenActor() {
 
 void OobeUI::GetLocalizedStrings(base::DictionaryValue* localized_strings) {
   // Note, handlers_[0] is a GenericHandler used by the WebUI.
-  for (size_t i = 1; i < handlers_.size(); ++i) {
-    static_cast<BaseScreenHandler*>(handlers_[i])->
-        GetLocalizedStrings(localized_strings);
-  }
+  for (size_t i = 0; i < handlers_.size(); ++i)
+    handlers_[i]->GetLocalizedStrings(localized_strings);
   ChromeURLDataManager::DataSource::SetFontAndTextDirection(localized_strings);
 }
 
 void OobeUI::AddScreenHandler(BaseScreenHandler* handler) {
-  AddMessageHandler(handler->Attach(this));
+  web_ui()->AddMessageHandler(handler);
+  handlers_.push_back(handler);
 }
 
 void OobeUI::InitializeHandlers() {
-  // Note, handlers_[0] is a GenericHandler used by the WebUI.
-  for (size_t i = 1; i < handlers_.size(); ++i) {
-    static_cast<BaseScreenHandler*>(handlers_[i])->InitializeBase();
-  }
+  for (size_t i = 0; i < handlers_.size(); ++i)
+    handlers_[i]->InitializeBase();
 }
 
 void OobeUI::ShowOobeUI(bool show) {
   core_handler_->ShowOobeUI(show);
 }
 
-void OobeUI::ShowSigninScreen() {
+void OobeUI::ShowSigninScreen(SigninScreenHandlerDelegate* delegate) {
+  signin_screen_handler_->SetDelegate(delegate);
   signin_screen_handler_->Show(core_handler_->show_oobe_ui());
+}
+
+void OobeUI::ResetSigninScreenHandlerDelegate() {
+  signin_screen_handler_->SetDelegate(NULL);
+}
+
+void OobeUI::OnLoginPromptVisible() {
+  user_image_screen_actor_->CheckCameraPresence();
 }
 
 }  // namespace chromeos

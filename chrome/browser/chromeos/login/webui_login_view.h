@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,34 +6,39 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_WEBUI_LOGIN_VIEW_H_
 #pragma once
 
+#include <map>
+#include <string>
+
 #include "chrome/browser/chromeos/login/login_html_dialog.h"
-#include "chrome/browser/chromeos/status/status_area_host.h"
-#include "chrome/browser/chromeos/tab_first_render_watcher.h"
+#include "chrome/browser/chromeos/status/status_area_button.h"
+#include "chrome/browser/chromeos/status/status_area_view_chromeos.h"
+#include "chrome/browser/tab_first_render_watcher.h"
 #include "chrome/browser/ui/views/unhandled_keyboard_event_handler.h"
-#include "content/browser/tab_contents/tab_contents_delegate.h"
-#include "views/view.h"
+#include "content/public/browser/web_contents_delegate.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
 
 class DOMView;
 class GURL;
-class Profile;
+class StatusAreaView;
+
+namespace content {
 class WebUI;
+}
 
 namespace views {
+class View;
 class Widget;
 }
 
 namespace chromeos {
 
-class StatusAreaView;
-class TabFirstRenderWatcher;
-
 // View used to render a WebUI supporting Widget. This widget is used for the
 // WebUI based start up and lock screens. It contains a StatusAreaView and
 // DOMView.
-class WebUILoginView : public views::View,
-                       public StatusAreaHost,
-                       public TabContentsDelegate,
-                       public chromeos::LoginHtmlDialog::Delegate,
+class WebUILoginView : public views::WidgetDelegateView,
+                       public StatusAreaButton::Delegate,
+                       public content::WebContentsDelegate,
                        public TabFirstRenderWatcher::Delegate {
  public:
   static const int kStatusAreaCornerPadding;
@@ -42,18 +47,18 @@ class WebUILoginView : public views::View,
   virtual ~WebUILoginView();
 
   // Initializes the webui login view.
-  virtual void Init();
+  virtual void Init(views::Widget* login_window);
 
   // Overridden from views::Views:
   virtual bool AcceleratorPressed(
-      const views::Accelerator& accelerator) OVERRIDE;
+      const ui::Accelerator& accelerator) OVERRIDE;
   virtual std::string GetClassName() const OVERRIDE;
-
-  // Overridden from StatusAreaHost:
-  virtual gfx::NativeWindow GetNativeWindow() const;
 
   // Called when WebUI window is created.
   virtual void OnWindowCreated();
+
+  // Gets the native window from the view widget.
+  gfx::NativeWindow GetNativeWindow() const;
 
   // Invokes SetWindowType for the window. This is invoked during startup and
   // after we've painted.
@@ -63,7 +68,10 @@ class WebUILoginView : public views::View,
   void LoadURL(const GURL& url);
 
   // Returns current WebUI.
-  WebUI* GetWebUI();
+  content::WebUI* GetWebUI();
+
+  // Opens proxy settings dialog.
+  void OpenProxySettings();
 
   // Toggles whether status area is enabled.
   void SetStatusAreaEnabled(bool enable);
@@ -74,21 +82,17 @@ class WebUILoginView : public views::View,
  protected:
   // Overridden from views::View:
   virtual void Layout() OVERRIDE;
+  virtual void OnLocaleChanged() OVERRIDE;
   virtual void ChildPreferredSizeChanged(View* child) OVERRIDE;
 
-  // Overridden from StatusAreaHost:
-  virtual Profile* GetProfile() const OVERRIDE;
-  virtual void ExecuteBrowserCommand(int id) const OVERRIDE;
-  virtual bool ShouldOpenButtonOptions(
-      const views::View* button_view) const OVERRIDE;
-  virtual void OpenButtonOptions(const views::View* button_view) OVERRIDE;
-  virtual ScreenMode GetScreenMode() const OVERRIDE;
-  virtual TextStyle GetTextStyle() const OVERRIDE;
+  // Overridden from StatusAreaButton::Delegate:
+  virtual bool ShouldExecuteStatusAreaCommand(
+      const views::View* button_view, int command_id) const OVERRIDE;
+  virtual void ExecuteStatusAreaCommand(
+      const views::View* button_view, int command_id) OVERRIDE;
+  virtual gfx::Font GetStatusAreaFont(const gfx::Font& font) const OVERRIDE;
+  virtual StatusAreaButton::TextStyle GetStatusAreaTextStyle() const OVERRIDE;
   virtual void ButtonVisibilityChanged(views::View* button_view) OVERRIDE;
-
-  // Overridden from LoginHtmlDialog::Delegate:
-  virtual void OnDialogClosed() OVERRIDE;
-  virtual void OnLocaleChanged() OVERRIDE;
 
   // TabFirstRenderWatcher::Delegate implementation.
   virtual void OnRenderHostCreated(RenderViewHost* host) OVERRIDE;
@@ -98,6 +102,12 @@ class WebUILoginView : public views::View,
   // Creates and adds the status area (separate window).
   virtual void InitStatusArea();
 
+  // Returns the screen mode to set on the status area view.
+  virtual StatusAreaViewChromeos::ScreenMode GetScreenMode();
+
+  // Returns the type to use for the status area widget.
+  virtual views::Widget::InitParams::Type GetStatusAreaWidgetType();
+
   StatusAreaView* status_area_;
 
   // DOMView for rendering a webpage as a webui login.
@@ -105,18 +115,22 @@ class WebUILoginView : public views::View,
 
  private:
   // Map type for the accelerator-to-identifier map.
-  typedef std::map<views::Accelerator, std::string> AccelMap;
+  typedef std::map<ui::Accelerator, std::string> AccelMap;
 
-  // Overridden from TabContentsDelegate.
+  // Overridden from content::WebContentsDelegate.
   virtual bool HandleContextMenu(const ContextMenuParams& params) OVERRIDE;
   virtual void HandleKeyboardEvent(
       const NativeWebKeyboardEvent& event) OVERRIDE;
-  virtual bool IsPopupOrPanel(const TabContents* source) const OVERRIDE;
+  virtual bool IsPopupOrPanel(
+      const content::WebContents* source) const OVERRIDE;
   virtual bool TakeFocus(bool reverse) OVERRIDE;
 
   // Called when focus is returned from status area.
   // |reverse| is true when focus is traversed backwards (using Shift-Tab).
   void ReturnFocus(bool reverse);
+
+  // Login window which shows the view.
+  views::Widget* login_window_;
 
   // Window that contains status area.
   // TODO(nkostylev): Temporary solution till we have

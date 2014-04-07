@@ -10,10 +10,8 @@
 namespace ppapi {
 namespace proxy {
 
-InterfaceProxy::InterfaceProxy(Dispatcher* dispatcher,
-                               const void* target_interface)
-    : dispatcher_(dispatcher),
-      target_interface_(target_interface) {
+InterfaceProxy::InterfaceProxy(Dispatcher* dispatcher)
+    : dispatcher_(dispatcher) {
 }
 
 InterfaceProxy::~InterfaceProxy() {
@@ -21,15 +19,6 @@ InterfaceProxy::~InterfaceProxy() {
 
 bool InterfaceProxy::Send(IPC::Message* msg) {
   return dispatcher_->Send(msg);
-}
-
-uint32 InterfaceProxy::SendCallback(PP_CompletionCallback callback) {
-  return dispatcher_->callback_tracker().SendCallback(callback);
-}
-
-PP_CompletionCallback InterfaceProxy::ReceiveCallback(
-    uint32 serialized_callback) {
-  return dispatcher_->callback_tracker().ReceiveCallback(serialized_callback);
 }
 
 }  // namespace proxy

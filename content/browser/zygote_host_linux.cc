@@ -13,21 +13,23 @@
 #include "base/command_line.h"
 #include "base/eintr_wrapper.h"
 #include "base/environment.h"
+#include "base/file_util.h"
 #include "base/linux_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/pickle.h"
 #include "base/process_util.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/content_browser_client.h"
 #include "content/browser/renderer_host/render_sandbox_host_linux.h"
-#include "content/common/content_switches.h"
-#include "content/common/process_watcher.h"
-#include "content/common/result_codes.h"
 #include "content/common/unix_domain_socket_posix.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/common/result_codes.h"
 #include "sandbox/linux/suid/suid_unsafe_environment_variables.h"
 
 #if defined(USE_TCMALLOC)
@@ -141,7 +143,7 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
       LOG(FATAL) << "The SUID sandbox helper binary was found, but is not "
                     "configured correctly. Rather than run without sandboxing "
                     "I'm aborting now. You need to make sure that "
-                 << sandbox_binary_ << " is mode 4755 and owned by root.";
+                 << sandbox_binary_ << " is owned by root and has mode 4755.";
     }
   } else {
     LOG(WARNING) << "Running without the SUID sandbox! See "
@@ -200,7 +202,7 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
 
     if (process != pid_) {
       // Reap the sandbox.
-      ProcessWatcher::EnsureProcessGetsReaped(process);
+      base::EnsureProcessGetsReaped(process);
     }
   } else {
     // Not using the SUID sandbox.
@@ -265,12 +267,45 @@ pid_t ZygoteHost::ForkRequest(
                                    fds))
       return base::kNullProcessHandle;
 
-    if (ReadReply(&pid, sizeof(pid)) != sizeof(pid))
+    // Read the reply, which pickles the PID and an optional UMA enumeration.
+    static const unsigned kMaxReplyLength = 2048;
+    char buf[kMaxReplyLength];
+    const ssize_t len = ReadReply(buf, sizeof(buf));
+
+    Pickle reply_pickle(buf, len);
+    void *iter = NULL;
+    if (len <= 0 || !reply_pickle.ReadInt(&iter, &pid))
       return base::kNullProcessHandle;
+
+    // If there is a nonempty UMA name string, then there is a UMA
+    // enumeration to record.
+    std::string uma_name;
+    int uma_sample;
+    int uma_boundary_value;
+    if (reply_pickle.ReadString(&iter, &uma_name) &&
+        !uma_name.empty() &&
+        reply_pickle.ReadInt(&iter, &uma_sample) &&
+        reply_pickle.ReadInt(&iter, &uma_boundary_value)) {
+      // We cannot use the UMA_HISTOGRAM_ENUMERATION macro here,
+      // because that's only for when the name is the same every time.
+      // Here we're using whatever name we got from the other side.
+      // But since it's likely that the same one will be used repeatedly
+      // (even though it's not guaranteed), we cache it here.
+      static base::Histogram* uma_histogram;
+      if (!uma_histogram || uma_histogram->histogram_name() != uma_name) {
+        uma_histogram = base::LinearHistogram::FactoryGet(
+            uma_name, 1,
+            uma_boundary_value,
+            uma_boundary_value + 1, base::Histogram::kUmaTargetedHistogramFlag);
+      }
+      uma_histogram->Add(uma_sample);
+    }
+
     if (pid <= 0)
       return base::kNullProcessHandle;
   }
 
+#if !defined(OS_OPENBSD)
   // This is just a starting score for a renderer or extension (the
   // only types of processes that will be started this way).  It will
   // get adjusted as time goes on.  (This is the same value as
@@ -278,10 +313,12 @@ pid_t ZygoteHost::ForkRequest(
   // that's not something we can include here.)
   const int kLowestRendererOomScore = 300;
   AdjustRendererOOMScore(pid, kLowestRendererOomScore);
+#endif
 
   return pid;
 }
 
+#if !defined(OS_OPENBSD)
 void ZygoteHost::AdjustRendererOOMScore(base::ProcessHandle pid, int score) {
   // 1) You can't change the oom_score_adj of a non-dumpable process
   //    (EPERM) unless you're root. Because of this, we can't set the
@@ -306,14 +343,17 @@ void ZygoteHost::AdjustRendererOOMScore(base::ProcessHandle pid, int score) {
   // don't want to add another library to the build as it's sure to cause
   // problems with other, non-SELinux distros.
   //
-  // So we just check for /selinux. This isn't foolproof, but it's not bad
-  // and it's easy.
+  // So we just check for files in /selinux. This isn't foolproof, but it's not
+  // bad and it's easy.
 
   static bool selinux;
   static bool selinux_valid = false;
 
   if (!selinux_valid) {
-    selinux = access("/selinux", X_OK) == 0;
+    const FilePath kSelinuxPath("/selinux");
+    selinux = access(kSelinuxPath.value().c_str(), X_OK) == 0 &&
+        file_util::CountFilesCreatedAfter(kSelinuxPath,
+                                          base::Time::UnixEpoch()) > 0;
     selinux_valid = true;
   }
 
@@ -338,13 +378,14 @@ void ZygoteHost::AdjustRendererOOMScore(base::ProcessHandle pid, int score) {
     base::ProcessHandle sandbox_helper_process;
     if (base::LaunchProcess(adj_oom_score_cmdline, base::LaunchOptions(),
                             &sandbox_helper_process)) {
-      ProcessWatcher::EnsureProcessGetsReaped(sandbox_helper_process);
+      base::EnsureProcessGetsReaped(sandbox_helper_process);
     }
   } else if (!using_suid_sandbox_) {
     if (!base::AdjustOOMScore(pid, score))
       PLOG(ERROR) << "Failed to adjust OOM score of renderer with pid " << pid;
   }
 }
+#endif
 
 void ZygoteHost::EnsureProcessTerminated(pid_t process) {
   DCHECK(init_);

@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -41,7 +41,7 @@ class TestTestExpectationsHistory(unittest.TestCase):
     testname = 'fast/css/getComputedStyle/computed-style-without-renderer.html'
     testname_list = [testname]
     result_list = TestExpectationsHistory.GetDiffBetweenTimes(
-        ctime, ptime, testname_list)
+        ptime, ctime, testname_list)
     self.assertTrue(self.AssertTestName(result_list, testname))
 
   def testGetDiffBetweenTimesOnly1Diff(self):
@@ -52,7 +52,18 @@ class TestTestExpectationsHistory(unittest.TestCase):
     testname = 'fast/css/getComputedStyle/computed-style-without-renderer.html'
     testname_list = [testname]
     result_list = TestExpectationsHistory.GetDiffBetweenTimes(
-        ctime, ptime, testname_list)
+        ptime, ctime, testname_list)
+    self.assertTrue(self.AssertTestName(result_list, testname))
+
+  def testGetDiffBetweenTimesOnly1DiffWithGobackSeveralDays(self):
+    ptime = datetime.strptime('2011-09-11-18', '%Y-%m-%d-%H')
+    ptime = time.mktime(ptime.timetuple())
+    ctime = datetime.strptime('2011-09-11-19', '%Y-%m-%d-%H')
+    ctime = time.mktime(ctime.timetuple())
+    testname = 'media/video-zoom-controls.html'
+    testname_list = [testname]
+    result_list = TestExpectationsHistory.GetDiffBetweenTimes(
+        ptime, ctime, testname_list)
     self.assertTrue(self.AssertTestName(result_list, testname))
 
 

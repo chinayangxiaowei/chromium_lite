@@ -8,29 +8,29 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "ppapi/c/ppb_image_data.h"
-#include "ppapi/shared_impl/image_data_impl.h"
+#include "ppapi/shared_impl/ppb_image_data_shared.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/thunk/ppb_image_data_api.h"
 #include "webkit/plugins/ppapi/plugin_delegate.h"
+#include "webkit/plugins/webkit_plugins_export.h"
 
 namespace skia {
 class PlatformCanvas;
 }
 
-struct PPB_ImageDataTrusted;
 class SkBitmap;
 
 namespace webkit {
 namespace ppapi {
 
 class PPB_ImageData_Impl : public ::ppapi::Resource,
-                           public ::ppapi::ImageDataImpl,
+                           public ::ppapi::PPB_ImageData_Shared,
                            public ::ppapi::thunk::PPB_ImageData_API {
  public:
   // If you call this constructor, you must also call Init before use. Normally
   // you should use the static Create function, but this constructor is needed
   // for some internal uses of ImageData (like Graphics2D).
-  explicit PPB_ImageData_Impl(PP_Instance instance);
+  WEBKIT_PLUGINS_EXPORT explicit PPB_ImageData_Impl(PP_Instance instance);
   virtual ~PPB_ImageData_Impl();
 
   static PP_Resource Create(PP_Instance pp_instance,
@@ -38,9 +38,9 @@ class PPB_ImageData_Impl : public ::ppapi::Resource,
                             const PP_Size& size,
                             PP_Bool init_to_zero);
 
-  bool Init(PP_ImageDataFormat format,
-            int width, int height,
-            bool init_to_zero);
+  WEBKIT_PLUGINS_EXPORT bool Init(PP_ImageDataFormat format,
+                                  int width, int height,
+                                  bool init_to_zero);
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -63,9 +63,8 @@ class PPB_ImageData_Impl : public ::ppapi::Resource,
   virtual void* Map() OVERRIDE;
   virtual void Unmap() OVERRIDE;
   virtual int32_t GetSharedMemory(int* handle, uint32_t* byte_count) OVERRIDE;
+  virtual skia::PlatformCanvas* GetPlatformCanvas() OVERRIDE;
 
-  // The mapped bitmap and canvas will be NULL if the image is not mapped.
-  skia::PlatformCanvas* mapped_canvas() const { return mapped_canvas_.get(); }
   const SkBitmap* GetMappedBitmap() const;
 
   // Swaps the guts of this image data with another.
@@ -98,7 +97,7 @@ class PPB_ImageData_Impl : public ::ppapi::Resource,
 //   image_data->mapped_canvas()->blah();  // Guaranteed valid.
 class ImageDataAutoMapper {
  public:
-  ImageDataAutoMapper(PPB_ImageData_Impl* image_data)
+  explicit ImageDataAutoMapper(PPB_ImageData_Impl* image_data)
         : image_data_(image_data) {
     if (image_data_->is_mapped()) {
       is_valid_ = true;

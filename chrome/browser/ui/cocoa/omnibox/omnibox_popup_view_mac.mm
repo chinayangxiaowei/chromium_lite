@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -164,7 +164,8 @@ NSMutableAttributedString* OmniboxPopupViewMac::ElideString(
   }
 
   // If ElideText() decides to do nothing, nothing to be done.
-  const string16 elided = ui::ElideText(originalString, font, width, false);
+  const string16 elided =
+      ui::ElideText(originalString, font, width, ui::ELIDE_AT_END);
   if (0 == elided.compare(originalString)) {
     return aString;
   }
@@ -217,7 +218,7 @@ NSAttributedString* OmniboxPopupViewMac::MatchText(
              font.GetNativeFont(), NSFontAttributeName,
              ContentTextColor(), NSForegroundColorAttributeName,
              nil];
-    NSString* rawEnDash = [NSString stringWithFormat:@" %C ", 0x2013];
+    NSString* rawEnDash = @" \u2013 ";
     NSAttributedString* enDash =
         [[[NSAttributedString alloc] initWithString:rawEnDash
                                          attributes:attributes] autorelease];
@@ -344,6 +345,10 @@ void OmniboxPopupViewMac::CreatePopupIfNeeded() {
 
     [contentView addSubview:matrix];
     [popup_ setContentView:contentView];
+
+    // TODO(dtseng): Ignore until we provide NSAccessibility support.
+    [popup_ accessibilitySetOverrideValue:NSAccessibilityUnknownRole
+        forAttribute:NSAccessibilityRoleAttribute];
   }
 }
 
@@ -382,7 +387,7 @@ void OmniboxPopupViewMac::PositionPopup(const CGFloat matrixHeight) {
   bool animate = (NSHeight(popupFrame) < NSHeight(currentPopupFrame) &&
                   NSWidth(popupFrame) == NSWidth(currentPopupFrame));
 
-  NSDictionary* savedAnimations = nil;
+  scoped_nsobject<NSDictionary> savedAnimations;
   if (!animate) {
     // In an ideal world, running a zero-length animation would cancel any
     // running animations and set the new frame value immediately.  In practice,
@@ -391,7 +396,7 @@ void OmniboxPopupViewMac::PositionPopup(const CGFloat matrixHeight) {
     // running the animation with a non-zero(!!) duration.  This somehow
     // convinces AppKit to do the right thing.  Save off the current animations
     // dictionary so it can be restored later.
-    savedAnimations = [[popup_ animations] copy];
+    savedAnimations.reset([[popup_ animations] copy]);
     [popup_ setAnimations:
               [NSDictionary dictionaryWithObjectsAndKeys:[NSNull null],
                                                          @"frame", nil]];
@@ -449,7 +454,7 @@ void OmniboxPopupViewMac::UpdatePopupAppearance() {
   // The popup's font is a slightly smaller version of the field's.
   NSFont* fieldFont = OmniboxViewMac::GetFieldFont();
   const CGFloat resultFontSize = [fieldFont pointSize] + kEditFontAdjust;
-  gfx::Font resultFont(base::SysNSStringToUTF16([fieldFont fontName]),
+  gfx::Font resultFont(base::SysNSStringToUTF8([fieldFont fontName]),
                        static_cast<int>(resultFontSize));
 
   AutocompleteMatrix* matrix = GetAutocompleteMatrix();

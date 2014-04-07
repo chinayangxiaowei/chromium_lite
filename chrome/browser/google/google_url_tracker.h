@@ -10,17 +10,20 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/common/url_fetcher_delegate.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/network_change_notifier.h"
 
-class NavigationController;
 class PrefService;
-class TabContents;
-class TemplateURL;
+
+namespace content {
+class NavigationController;
+class WebContents;
+}
 
 // This object is responsible for checking the Google URL once per network
 // change, and if necessary prompting the user to see if they want to change to
@@ -35,8 +38,8 @@ class TemplateURL;
 // To protect users' privacy and reduce server load, no updates will be
 // performed (ever) unless at least one consumer registers interest by calling
 // RequestServerCheck().
-class GoogleURLTracker : public URLFetcher::Delegate,
-                         public NotificationObserver,
+class GoogleURLTracker : public content::URLFetcherDelegate,
+                         public content::NotificationObserver,
                          public net::NetworkChangeNotifier::IPAddressObserver {
  public:
   // Only the main browser process loop should call this, when setting up
@@ -84,7 +87,7 @@ class GoogleURLTracker : public URLFetcher::Delegate,
  private:
   friend class GoogleURLTrackerTest;
 
-  typedef InfoBarDelegate* (*InfobarCreator)(TabContents*,
+  typedef InfoBarDelegate* (*InfobarCreator)(InfoBarTabHelper*,
                                              GoogleURLTracker*,
                                              const GURL&);
 
@@ -105,38 +108,33 @@ class GoogleURLTracker : public URLFetcher::Delegate,
   // it and can currently do so.
   void StartFetchIfDesirable();
 
-  // URLFetcher::Delegate
-  virtual void OnURLFetchComplete(const URLFetcher *source,
-                                  const GURL& url,
-                                  const net::URLRequestStatus& status,
-                                  int response_code,
-                                  const net::ResponseCookies& cookies,
-                                  const std::string& data);
+  // content::URLFetcherDelegate
+  virtual void OnURLFetchComplete(const content::URLFetcher* source) OVERRIDE;
 
-  // NotificationObserver
+  // content::NotificationObserver
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // NetworkChangeNotifier::IPAddressObserver
-  virtual void OnIPAddressChanged();
+  virtual void OnIPAddressChanged() OVERRIDE;
 
   void SearchCommitted();
-  void OnNavigationPending(const NotificationSource& source,
+  void OnNavigationPending(const content::NotificationSource& source,
                            const GURL& pending_url);
-  void OnNavigationCommittedOrTabClosed(TabContents* tab_contents,
+  void OnNavigationCommittedOrTabClosed(content::WebContents* web_contents,
                                         int type);
-  void ShowGoogleURLInfoBarIfNecessary(TabContents* tab_contents);
+  void ShowGoogleURLInfoBarIfNecessary(content::WebContents* web_contents);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
   InfobarCreator infobar_creator_;
   // TODO(ukai): GoogleURLTracker should track google domain (e.g. google.co.uk)
   // rather than URL (e.g. http://www.google.co.uk/), so that user could
   // configure to use https in search engine templates.
   GURL google_url_;
   GURL fetched_google_url_;
-  ScopedRunnableMethodFactory<GoogleURLTracker> runnable_method_factory_;
-  scoped_ptr<URLFetcher> fetcher_;
+  base::WeakPtrFactory<GoogleURLTracker> weak_ptr_factory_;
+  scoped_ptr<content::URLFetcher> fetcher_;
   int fetcher_id_;
   bool queue_wakeup_task_;
   bool in_startup_sleep_;  // True if we're in the five-second "no fetching"
@@ -151,7 +149,7 @@ class GoogleURLTracker : public URLFetcher::Delegate,
   bool need_to_prompt_;    // True if the last fetched Google URL is not
                            // matched with current user's default Google URL
                            // nor the last prompted Google URL.
-  NavigationController* controller_;
+  content::NavigationController* controller_;
   InfoBarDelegate* infobar_;
   GURL search_url_;
 
@@ -163,7 +161,7 @@ class GoogleURLTracker : public URLFetcher::Delegate,
 // code can subclass it.
 class GoogleURLTrackerInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  GoogleURLTrackerInfoBarDelegate(TabContents* tab_contents,
+  GoogleURLTrackerInfoBarDelegate(InfoBarTabHelper* infobar_helper,
                                   GoogleURLTracker* google_url_tracker,
                                   const GURL& new_google_url);
 
@@ -186,8 +184,6 @@ class GoogleURLTrackerInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   // Returns the portion of the appropriate hostname to display.
   string16 GetHost(bool new_host) const;
-
-  TabContents* tab_contents_;
 
   DISALLOW_COPY_AND_ASSIGN(GoogleURLTrackerInfoBarDelegate);
 };

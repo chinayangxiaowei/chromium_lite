@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,16 +46,15 @@ class MockQuotaManager : public QuotaManager {
       origin_(origin),
       type_(type),
       usage_(0),
-      quota_(QuotaFileUtil::kNoLimit),
+      quota_(kint64max),
       accessed_(0) {}
 
   virtual void GetUsageAndQuota(
       const GURL& origin, quota::StorageType type,
-      GetUsageAndQuotaCallback* callback) {
+      const GetUsageAndQuotaCallback& callback) OVERRIDE {
     EXPECT_EQ(origin_, origin);
     EXPECT_EQ(type_, type);
-    callback->Run(quota::kQuotaStatusOk, usage_, quota_);
-    delete callback;
+    callback.Run(quota::kQuotaStatusOk, usage_, quota_);
   }
 
  private:
@@ -97,7 +96,7 @@ class MockQuotaManagerProxy : public QuotaManagerProxy {
     EXPECT_FALSE(registered_client_);
   }
 
-  virtual void RegisterClient(QuotaClient* client) {
+  virtual void RegisterClient(QuotaClient* client) OVERRIDE {
     EXPECT_FALSE(registered_client_);
     registered_client_ = client;
   }
@@ -303,7 +302,6 @@ void FileSystemOperationTest::SetUp() {
       base_dir, test_helper_.origin(), test_helper_.storage_type());
   quota_manager_proxy_ = new MockQuotaManagerProxy(quota_manager_.get());
   test_helper_.SetUp(base_dir,
-                     false /* incognito */,
                      false /* unlimited quota */,
                      quota_manager_proxy_.get(),
                      local_file_util_.get());

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -22,30 +22,33 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/callback_old.h"
+#include "base/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/hash_tables.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/common/url_fetcher_delegate.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 
-class RenderProcessHost;
 class SafeBrowsingService;
 
 namespace base {
 class TimeDelta;
 }
 
+namespace content {
+class RenderProcessHost;
+}
+
 namespace net {
 class URLRequestContextGetter;
 class URLRequestStatus;
+typedef std::vector<std::string> ResponseCookies;
 }  // namespace net
 
 namespace safe_browsing {
@@ -53,43 +56,40 @@ class ClientPhishingRequest;
 class ClientPhishingResponse;
 class ClientSideModel;
 
-class ClientSideDetectionService : public URLFetcher::Delegate,
-                                   public NotificationObserver {
+class ClientSideDetectionService : public content::URLFetcherDelegate,
+                                   public content::NotificationObserver {
  public:
-  typedef Callback2<GURL /* phishing URL */, bool /* is phishing */>::Type
-      ClientReportPhishingRequestCallback;
+  // void(GURL phishing_url, bool is_phishing).
+  typedef base::Callback<void(GURL, bool)> ClientReportPhishingRequestCallback;
 
   virtual ~ClientSideDetectionService();
 
   // Creates a client-side detection service.  The service is initially
-  // disabled, use SetEnabled() to start it.  The caller takes ownership of the
-  // object.  This function may return NULL.
+  // disabled, use SetEnabledAndRefreshState() to start it.  The caller takes
+  // ownership of the object.  This function may return NULL.
   static ClientSideDetectionService* Create(
       net::URLRequestContextGetter* request_context_getter);
 
-  // Enables or disables the service.  This is usually called by the
-  // SafeBrowsingService, which tracks whether any profile uses these services
-  // at all.  Disabling cancels any pending requests; existing
-  // ClientSideDetectionHosts will have their callbacks called with "false"
-  // verdicts.  Enabling starts downloading the model after a delay.
-  void SetEnabled(bool enabled);
+  // Enables or disables the service, and refreshes the state of all renderers.
+  // This is usually called by the SafeBrowsingService, which tracks whether
+  // any profile uses these services at all.  Disabling cancels any pending
+  // requests; existing ClientSideDetectionHosts will have their callbacks
+  // called with "false" verdicts.  Enabling starts downloading the model after
+  // a delay.  In all cases, each render process is updated to match the state
+  // of the SafeBrowsing preference for that profile.
+  void SetEnabledAndRefreshState(bool enabled);
 
   bool enabled() const {
     return enabled_;
   }
 
-  // From the URLFetcher::Delegate interface.
-  virtual void OnURLFetchComplete(const URLFetcher* source,
-                                  const GURL& url,
-                                  const net::URLRequestStatus& status,
-                                  int response_code,
-                                  const net::ResponseCookies& cookies,
-                                  const std::string& data) OVERRIDE;
+  // From the content::URLFetcherDelegate interface.
+  virtual void OnURLFetchComplete(const content::URLFetcher* source) OVERRIDE;
 
-  // NotificationObserver overrides:
+  // content::NotificationObserver overrides:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Sends a request to the SafeBrowsing servers with the ClientPhishingRequest.
   // The URL scheme of the |url()| in the request should be HTTP.  This method
@@ -102,7 +102,7 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   // NULL if you don't care about the server verdict.
   virtual void SendClientReportPhishingRequest(
       ClientPhishingRequest* verdict,
-      ClientReportPhishingRequestCallback* callback);
+      const ClientReportPhishingRequestCallback& callback);
 
   // Returns true if the given IP address string falls within a private
   // (unroutable) network block.  Pages which are hosted on these IP addresses
@@ -165,14 +165,11 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   friend class ClientSideDetectionServiceTest;
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, FetchModelTest);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, SetBadSubnets);
-  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, SetEnabled);
+  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
+                           SetEnabledAndRefreshState);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest, IsBadIpAddress);
   FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
-                           IsFalsePositiveResponse);
-  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
                            ModelHasValidHashIds);
-  FRIEND_TEST_ALL_PREFIXES(ClientSideDetectionServiceTest,
-                           SanitizeRequestForPingback);
 
   // CacheState holds all information necessary to respond to a caller without
   // actually making a HTTP request.
@@ -199,27 +196,19 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   static const int kMaxReportsPerInterval;
   static const int kClientModelFetchIntervalMs;
   static const int kInitialClientModelFetchDelayMs;
-  static const base::TimeDelta kReportsInterval;
-  static const base::TimeDelta kNegativeCacheInterval;
-  static const base::TimeDelta kPositiveCacheInterval;
-
-  // Given a ClientSidePhishingRequest populated by the renderer and browser
-  // feature extractors, sanitizes it so that no data specifically identifying
-  // the URL or page content is included.  This is used when sending a pingback
-  // if the user is not opted in to UMA.
-  void SanitizeRequestForPingback(
-      const ClientPhishingRequest& original_request,
-      ClientPhishingRequest* sanitized_request);
+  static const int kReportsIntervalDays;
+  static const int kNegativeCacheIntervalDays;
+  static const int kPositiveCacheIntervalMinutes;
 
   // Starts sending the request to the client-side detection frontends.
   // This method takes ownership of both pointers.
   void StartClientReportPhishingRequest(
       ClientPhishingRequest* verdict,
-      ClientReportPhishingRequestCallback* callback);
+      const ClientReportPhishingRequestCallback& callback);
 
   // Called by OnURLFetchComplete to handle the response from fetching the
   // model.
-  void HandleModelResponse(const URLFetcher* source,
+  void HandleModelResponse(const content::URLFetcher* source,
                            const GURL& url,
                            const net::URLRequestStatus& status,
                            int response_code,
@@ -228,7 +217,7 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
 
   // Called by OnURLFetchComplete to handle the server response from
   // sending the client-side phishing request.
-  void HandlePhishingVerdict(const URLFetcher* source,
+  void HandlePhishingVerdict(const content::URLFetcher* source,
                              const GURL& url,
                              const net::URLRequestStatus& status,
                              int response_code,
@@ -245,12 +234,8 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   // that we consider non-public IP addresses.  Returns true on success.
   bool InitializePrivateNetworks();
 
-  // Initializes the |allowed_features_| hash_set with the features that
-  // can be sent in sanitized pingbacks.
-  void InitializeAllowedFeatures();
-
   // Send the model to the given renderer.
-  void SendModelToProcess(RenderProcessHost* process);
+  void SendModelToProcess(content::RenderProcessHost* process);
 
   // Same as above but sends the model to all rendereres.
   void SendModelToRenderers();
@@ -266,12 +251,6 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   // valid hashes in the model.
   static bool ModelHasValidHashIds(const ClientSideModel& model);
 
-  // Returns true iff the response is phishing (phishy() is true) and if the
-  // given URL matches one of the whitelisted expressions in the given
-  // ClientPhishingResponse.
-  static bool IsFalsePositiveResponse(const GURL& url,
-                                      const ClientPhishingResponse& response);
-
   // Whether the service is running or not.  When the service is not running,
   // it won't download the model nor report detected phishing URLs.
   bool enabled_;
@@ -279,15 +258,13 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   std::string model_str_;
   scoped_ptr<ClientSideModel> model_;
   scoped_ptr<base::TimeDelta> model_max_age_;
-  scoped_ptr<URLFetcher> model_fetcher_;
-
-  // This pointer may be NULL if SafeBrowsing is disabled.
-  scoped_refptr<SafeBrowsingService> sb_service_;
+  scoped_ptr<content::URLFetcher> model_fetcher_;
 
   // Map of client report phishing request to the corresponding callback that
   // has to be invoked when the request is done.
   struct ClientReportInfo;
-  std::map<const URLFetcher*, ClientReportInfo*> client_phishing_reports_;
+  std::map<const content::URLFetcher*, ClientReportInfo*>
+      client_phishing_reports_;
 
   // Cache of completed requests. Used to satisfy requests for the same urls
   // as long as the next request falls within our caching window (which is
@@ -304,7 +281,7 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
 
   // Used to asynchronously call the callbacks for
   // SendClientReportPhishingRequest.
-  ScopedRunnableMethodFactory<ClientSideDetectionService> method_factory_;
+  base::WeakPtrFactory<ClientSideDetectionService> weak_factory_;
 
   // The context we use to issue network requests.
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
@@ -312,14 +289,11 @@ class ClientSideDetectionService : public URLFetcher::Delegate,
   // The network blocks that we consider private IP address ranges.
   std::vector<AddressRange> private_networks_;
 
-  // Features which are allowed to be sent in sanitized pingbacks.
-  base::hash_set<std::string> allowed_features_;
-
   // Map of bad subnets which are copied from the client model and put into
   // this map to speed up lookups.
   BadSubnetMap bad_subnets_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(ClientSideDetectionService);
 };

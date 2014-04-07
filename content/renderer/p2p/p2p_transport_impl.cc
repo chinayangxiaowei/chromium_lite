@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include "content/renderer/p2p/ipc_network_manager.h"
 #include "content/renderer/p2p/ipc_socket_factory.h"
 #include "content/renderer/p2p/port_allocator.h"
-#include "content/renderer/render_view.h"
 #include "jingle/glue/channel_socket_adapter.h"
 #include "jingle/glue/pseudotcp_adapter.h"
 #include "jingle/glue/thread_wrapper.h"
@@ -25,9 +24,7 @@ P2PTransportImpl::P2PTransportImpl(
       event_handler_(NULL),
       state_(STATE_NONE),
       network_manager_(network_manager),
-      socket_factory_(socket_factory),
-      ALLOW_THIS_IN_INITIALIZER_LIST(connect_callback_(
-          this, &P2PTransportImpl::OnTcpConnected)) {
+      socket_factory_(socket_factory) {
 }
 
 P2PTransportImpl::P2PTransportImpl(P2PSocketDispatcher* socket_dispatcher)
@@ -35,16 +32,23 @@ P2PTransportImpl::P2PTransportImpl(P2PSocketDispatcher* socket_dispatcher)
       event_handler_(NULL),
       state_(STATE_NONE),
       network_manager_(new IpcNetworkManager(socket_dispatcher)),
-      socket_factory_(new IpcPacketSocketFactory(socket_dispatcher)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(connect_callback_(
-          this, &P2PTransportImpl::OnTcpConnected)) {
+      socket_factory_(new IpcPacketSocketFactory(socket_dispatcher)) {
   DCHECK(socket_dispatcher);
 }
 
 P2PTransportImpl::~P2PTransportImpl() {
+  MessageLoop* message_loop = MessageLoop::current();
+
+  // Because libjingle's sigslot doesn't handle deletion from a signal
+  // handler we have to postpone deletion of libjingle objects.
+  message_loop->DeleteSoon(FROM_HERE, channel_.release());
+  message_loop->DeleteSoon(FROM_HERE, allocator_.release());
+  message_loop->DeleteSoon(FROM_HERE, socket_factory_.release());
+  message_loop->DeleteSoon(FROM_HERE, network_manager_.release());
 }
 
-bool P2PTransportImpl::Init(const std::string& name,
+bool P2PTransportImpl::Init(WebKit::WebFrame* web_frame,
+                            const std::string& name,
                             Protocol protocol,
                             const Config& config,
                             EventHandler* event_handler) {
@@ -58,8 +62,9 @@ bool P2PTransportImpl::Init(const std::string& name,
   event_handler_ = event_handler;
 
   if (socket_dispatcher_) {
+    DCHECK(web_frame);
     allocator_.reset(new P2PPortAllocator(
-        socket_dispatcher_, network_manager_.get(),
+        web_frame, socket_dispatcher_, network_manager_.get(),
         socket_factory_.get(), config));
   } else {
     // Use BasicPortAllocator if we don't have P2PSocketDispatcher
@@ -77,7 +82,7 @@ bool P2PTransportImpl::Init(const std::string& name,
       this, &P2PTransportImpl::OnCandidateReady);
 
   if (protocol == PROTOCOL_UDP) {
-    channel_->SignalWritableState.connect(
+    channel_->SignalReadableState.connect(
         this, &P2PTransportImpl::OnReadableState);
     channel_->SignalWritableState.connect(
         this, &P2PTransportImpl::OnWriteableState);
@@ -100,7 +105,8 @@ bool P2PTransportImpl::Init(const std::string& name,
     if (config.tcp_ack_delay_ms > 0)
       pseudo_tcp_adapter_->SetAckDelay(config.tcp_ack_delay_ms);
 
-    int result = pseudo_tcp_adapter_->Connect(&connect_callback_);
+    int result = pseudo_tcp_adapter_->Connect(
+        base::Bind(&P2PTransportImpl::OnTcpConnected, base::Unretained(this)));
     if (result != net::ERR_IO_PENDING)
       OnTcpConnected(result);
   }

@@ -12,6 +12,8 @@
 #include "ppapi/proxy/plugin_var_tracker.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/serialized_var.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
+#include "ppapi/shared_impl/var_tracker.h"
 
 namespace ppapi {
 namespace proxy {
@@ -28,7 +30,7 @@ void HandleMessage(PP_Instance instance, PP_Var message_data) {
   }
 
   dispatcher->Send(new PpapiMsg_PPPMessaging_HandleMessage(
-      INTERFACE_ID_PPP_MESSAGING,
+      API_ID_PPP_MESSAGING,
       instance,
       SerializedVarSendInput(dispatcher, message_data)));
 }
@@ -37,16 +39,19 @@ static const PPP_Messaging messaging_interface = {
   &HandleMessage
 };
 
-InterfaceProxy* CreateMessagingProxy(Dispatcher* dispatcher,
-                                     const void* target_interface) {
-  return new PPP_Messaging_Proxy(dispatcher, target_interface);
+InterfaceProxy* CreateMessagingProxy(Dispatcher* dispatcher) {
+  return new PPP_Messaging_Proxy(dispatcher);
 }
 
 }  // namespace
 
-PPP_Messaging_Proxy::PPP_Messaging_Proxy(Dispatcher* dispatcher,
-                                         const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface) {
+PPP_Messaging_Proxy::PPP_Messaging_Proxy(Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher),
+      ppp_messaging_impl_(NULL) {
+  if (dispatcher->IsPlugin()) {
+    ppp_messaging_impl_ = static_cast<const PPP_Messaging*>(
+        dispatcher->local_get_interface()(PPP_MESSAGING_INTERFACE));
+  }
 }
 
 PPP_Messaging_Proxy::~PPP_Messaging_Proxy() {
@@ -57,7 +62,7 @@ const InterfaceProxy::Info* PPP_Messaging_Proxy::GetInfo() {
   static const Info info = {
     &messaging_interface,
     PPP_MESSAGING_INTERFACE,
-    INTERFACE_ID_PPP_MESSAGING,
+    API_ID_PPP_MESSAGING,
     false,
     &CreateMessagingProxy,
   };
@@ -79,8 +84,8 @@ void PPP_Messaging_Proxy::OnMsgHandleMessage(
   PP_Var received_var(message_data.Get(dispatcher()));
   // SerializedVarReceiveInput will decrement the reference count, but we want
   // to give the recipient a reference.
-  PluginResourceTracker::GetInstance()->var_tracker().AddRefVar(received_var);
-  ppp_messaging_target()->HandleMessage(instance, received_var);
+  PpapiGlobals::Get()->GetVarTracker()->AddRefVar(received_var);
+  ppp_messaging_impl_->HandleMessage(instance, received_var);
 }
 
 }  // namespace proxy

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
+#include "base/time.h"
 #include "chrome/browser/autocomplete/autocomplete_controller_delegate.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
-#include "chrome/browser/autocomplete/network_action_predictor.h"
 #include "chrome/common/instant_types.h"
-#include "content/common/page_transition_types.h"
+#include "content/public/common/page_transition_types.h"
 #include "googleurl/src/gurl.h"
 #include "ui/gfx/native_widget_types.h"
 #include "webkit/glue/window_open_disposition.h"
@@ -23,7 +23,6 @@ class AutocompleteEditModel;
 class AutocompletePopupModel;
 class AutocompleteResult;
 class InstantController;
-class NetworkActionPredictor;
 class OmniboxView;
 class Profile;
 class SkBitmap;
@@ -49,7 +48,7 @@ class AutocompleteEditController {
   // AutocompleteResult::GetAlternateNavURL().
   virtual void OnAutocompleteAccept(const GURL& url,
                                     WindowOpenDisposition disposition,
-                                    PageTransition::Type transition,
+                                    content::PageTransition transition,
                                     const GURL& alternate_nav_url) = 0;
 
   // Called when anything has changed that might affect the layout or contents
@@ -234,7 +233,7 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
   // Returns true if this is a paste-and-search rather than paste-and-go (or
   // nothing).
   bool is_paste_and_search() const {
-    return (paste_and_go_match_.transition != PageTransition::TYPED);
+    return (paste_and_go_match_.transition != content::PAGE_TRANSITION_TYPED);
   }
 
   // Asks the browser to load the popup's currently selected item, using the
@@ -292,6 +291,9 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
 
   // Called when the user pastes in text.
   void on_paste() { paste_state_ = PASTING; }
+
+  // Returns true if pasting is in progress.
+  bool is_pasting() const { return paste_state_ == PASTING; }
 
   // Called when the user presses up or down.  |count| is a repeat count,
   // negative for moving up, positive for moving down.
@@ -365,7 +367,7 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
   };
 
   // AutocompleteControllerDelegate:
-  virtual void OnResultChanged(bool default_match_changed);
+  virtual void OnResultChanged(bool default_match_changed) OVERRIDE;
 
   // Returns true if a query to an autocomplete provider is currently
   // in progress.  This logic should in the future live in
@@ -422,8 +424,8 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
                                     const string16& new_user_text,
                                     size_t caret_position);
 
-  // Tries to start an instant preview for |match|. Returns true if instant is
-  // supported. |suggested_text| must be non-NULL.
+  // Tries to start an instant preview for |match|. Returns true if instant
+  // processed the match.
   bool DoInstant(const AutocompleteMatch& match, string16* suggested_text);
 
   // Starts a prerender for the given |match|.
@@ -460,6 +462,10 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
   // The text that the user has entered.  This does not include inline
   // autocomplete text that has not yet been accepted.
   string16 user_text_;
+
+  // We keep track of when the user began modifying the omnibox text.
+  // This should be valid whenever user_input_in_progress_ is true.
+  base::TimeTicks time_user_first_modified_omnibox_;
 
   // When the user closes the popup, we need to remember the URL for their
   // desired choice, so that if they hit enter without reopening the popup we
@@ -554,9 +560,6 @@ class AutocompleteEditModel : public AutocompleteControllerDelegate {
 
   // Last value of InstantCompleteBehavior supplied to |SetSuggestedText|.
   InstantCompleteBehavior instant_complete_behavior_;
-
-  // Used to determine what network actions to take in different circumstances.
-  NetworkActionPredictor network_action_predictor_;
 
   DISALLOW_COPY_AND_ASSIGN(AutocompleteEditModel);
 };

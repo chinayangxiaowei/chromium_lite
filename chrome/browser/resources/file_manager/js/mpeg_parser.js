@@ -1,17 +1,17 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 function MpegParser(parent) {
-  MetadataParser.apply(this, [parent]);
-  this.verbose = true;
+  MetadataParser.call(this, parent, 'mpeg', /\.(mp4|m4v|m4a|mpe?g4?)$/i);
+  this.mimeType = 'video/mpeg';
 }
-
-MpegParser.parserType = 'mpeg';
 
 MpegParser.prototype = {__proto__: MetadataParser.prototype};
 
-MpegParser.prototype.urlFilter = /\.(mp4|m4v|m4a|mpe?g4?)$/i;
+MpegParser.prototype.acceptsMimeType = function(mimeType) {
+  return mimeType.match(/^video\/(mp4|mpeg)$/);
+};
 
 MpegParser.HEADER_SIZE = 8;
 
@@ -122,9 +122,7 @@ MpegParser.createRootParser = function(metadata) {
   };
 };
 
-MpegParser.prototype.parse = function (file, callback, onError) {
-  var metadata = {metadataType: 'mpeg'};
-
+MpegParser.prototype.parse = function (file, metadata, callback, onError) {
   this.rootParser_ = MpegParser.createRootParser(metadata);
 
   // Kick off the processing by reading the first atom's header.

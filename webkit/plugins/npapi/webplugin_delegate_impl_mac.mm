@@ -267,6 +267,7 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
       buffer_context_(NULL),
       layer_(nil),
       surface_(NULL),
+      composited_(false),
       renderer_(nil),
       containing_window_has_focus_(false),
       initial_window_focus_(false),
@@ -384,17 +385,34 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
           redraw_timer_.reset(new base::RepeatingTimer<WebPluginDelegateImpl>);
         }
         layer_ = layer;
-        surface_ = plugin_->GetAcceleratedSurface();
+
+        gfx::GpuPreference gpu_preference = gfx::PreferDiscreteGpu;
+        // On dual GPU systems, force the use of the discrete GPU for
+        // the CARenderer underlying our Core Animation backend for
+        // all plugins except Flash. For some reason Unity3D's output
+        // doesn't show up if the integrated GPU is used. Safari keeps
+        // even Flash 11 with Stage3D on the integrated GPU, so mirror
+        // that behavior here.
+        const WebPluginInfo& plugin_info =
+            instance_->plugin_lib()->plugin_info();
+        if (plugin_info.name.find(ASCIIToUTF16("Flash")) != string16::npos)
+          gpu_preference = gfx::PreferIntegratedGpu;
+        surface_ = plugin_->GetAcceleratedSurface(gpu_preference);
 
         // If surface initialization fails for some reason, just continue
         // without any drawing; returning false would be a more confusing user
         // experience (since it triggers a missing plugin placeholder).
         if (surface_ && surface_->context()) {
+          composited_ = surface_->IsComposited();
           renderer_ = [[CARenderer rendererWithCGLContext:surface_->context()
                                                   options:NULL] retain];
           [renderer_ setLayer:layer_];
         }
-        plugin_->BindFakePluginWindowHandle(false);
+        if (composited_) {
+          plugin_->AcceleratedPluginEnabledRendering();
+        } else {
+          plugin_->BindFakePluginWindowHandle(false);
+        }
       }
       break;
     }
@@ -403,9 +421,10 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
       break;
   }
 
-  // Let the WebPlugin know that we are windowless (unless this is a
-  // Core Animation plugin, in which case BindFakePluginWindowHandle will take
-  // care of setting up the appropriate window handle).
+  // Let the WebPlugin know that we are windowless, unless this is a Core
+  // Animation plugin, in which case AcceleratedPluginEnabledRendering
+  // calls SetWindow. Rendering breaks if SetWindow is called before
+  // accelerated rendering is enabled.
   if (!layer_)
     plugin_->SetWindow(NULL);
 
@@ -513,8 +532,8 @@ bool WebPluginDelegateImpl::PlatformHandleInputEvent(
     if (content_origin.x() != content_area_origin_.x() ||
         content_origin.y() != content_area_origin_.y()) {
       DLOG(WARNING) << "Stale plugin content area location: "
-                    << content_area_origin_ << " instead of "
-                    << content_origin;
+                    << content_area_origin_.ToString() << " instead of "
+                    << content_origin.ToString();
       SetContentAreaOrigin(content_origin);
     }
 
@@ -694,7 +713,7 @@ void WebPluginDelegateImpl::WindowlessPaint(gfx::NativeDrawingContext context,
     return;
   DCHECK(!use_buffer_context_ || buffer_context_ == context);
 
-  static base::StatsRate plugin_paint("Plugin.Paint");
+  base::StatsRate plugin_paint("Plugin.Paint");
   base::StatsScope<base::StatsRate> scope(plugin_paint);
 
   gfx::Rect paint_rect;
@@ -1023,7 +1042,8 @@ void WebPluginDelegateImpl::PluginVisibilityChanged() {
 #endif
   if (instance()->drawing_model() == NPDrawingModelCoreAnimation) {
     bool plugin_visible = container_is_visible_ && !clip_rect_.IsEmpty();
-    if (plugin_visible && !redraw_timer_->IsRunning() && windowed_handle()) {
+    if (plugin_visible && !redraw_timer_->IsRunning() &&
+        (composited_ || windowed_handle())) {
       redraw_timer_->Start(FROM_HERE,
           base::TimeDelta::FromMilliseconds(kCoreAnimationRedrawPeriodMs),
           this, &WebPluginDelegateImpl::DrawLayerInSurface);
@@ -1050,7 +1070,10 @@ void WebPluginDelegateImpl::StartIme() {
 
 void WebPluginDelegateImpl::DrawLayerInSurface() {
   // If we haven't plumbed up the surface yet, don't try to draw.
-  if (!windowed_handle() || !renderer_)
+  if (!renderer_)
+    return;
+
+  if (!composited_ && !windowed_handle())
     return;
 
   [renderer_ beginFrameAtTime:CACurrentMediaTime() timeStamp:NULL];
@@ -1072,8 +1095,10 @@ void WebPluginDelegateImpl::DrawLayerInSurface() {
 
 // Update the size of the surface to match the current size of the plug-in.
 void WebPluginDelegateImpl::UpdateAcceleratedSurface() {
-  // Will only have a window handle when using a Core Animation drawing model.
-  if (!windowed_handle() || !layer_)
+  if (!surface_ || !layer_)
+    return;
+
+  if (!composited_ && !windowed_handle())
     return;
 
   [CATransaction begin];
@@ -1085,10 +1110,15 @@ void WebPluginDelegateImpl::UpdateAcceleratedSurface() {
 
   [renderer_ setBounds:[layer_ bounds]];
   surface_->SetSize(window_rect_.size());
+  if (composited_) {
+    // Kick off the drawing timer, if necessary.
+    PluginVisibilityChanged();
+  }
 }
 
 void WebPluginDelegateImpl::set_windowed_handle(
     gfx::PluginWindowHandle handle) {
+  DCHECK(!composited_);
   windowed_handle_ = handle;
   surface_->SetWindowHandle(handle);
   UpdateAcceleratedSurface();

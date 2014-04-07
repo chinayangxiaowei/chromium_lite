@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -29,11 +29,9 @@ class EnterpriseTest(pyauto.PyUITest):
 
     This method will not run automatically.
     """
-    import pprint
-    pp = pprint.PrettyPrinter(indent=2)
     while True:
       raw_input('Interact with the browser and hit <enter> to dump prefs... ')
-      pp.pprint(self.GetPrefsInfo().Prefs())
+      self.pprint(self.GetPrefsInfo().Prefs())
 
   @staticmethod
   def _Cleanup():
@@ -366,16 +364,24 @@ class EnterpriseTest(pyauto.PyUITest):
       return
     self._CheckIfPrefCanBeModified(pyauto.kEditBookmarksEnabled, True, False)
 
-  def testDisable3DAPI(self):
-    """Verify when disable 3D API policy is set, webGL page does not work."""
-
+  def testDefaultSearchProviderEnabled(self):
+    """Verify a default search is performed when the user types text in the
+       omnibox that is not a URL
+    """
     if self.GetBrowserInfo()['properties']['branding'] != 'Google Chrome':
       return
 
-    self._CheckIfPrefCanBeModified(pyauto.kDisable3DAPIs, True, False)
-    self.assertEqual(self.GetDOMValue('document.createElement("canvas").' +
-                                      'getContext("experimental-webgl")' +
-                                      '== null ? "ok" : ""'), 'ok')
+    self._CheckIfPrefCanBeModified(pyauto.kDefaultSearchProviderEnabled, True,
+                                   False)
+    intranet_engine = [x for x in self.GetSearchEngineInfo()
+                       if x['keyword'] == 'mis']
+    self.assertTrue(intranet_engine)
+    self.assertTrue(intranet_engine[0]['is_default'])
+    self.SetOmniboxText('google chrome')
+    self.WaitUntilOmniboxQueryDone()
+    self.OmniboxAcceptInput()
+    self.assertTrue(re.search('search.my.company',
+                              self.GetActiveTabURL().spec()))
 
 class EnterpriseTestReverse(pyauto.PyUITest):
   """Test for the Enterprise features that uses the opposite values of the
@@ -395,11 +401,9 @@ class EnterpriseTestReverse(pyauto.PyUITest):
 
     This method will not run automatically.
     """
-    import pprint
-    pp = pprint.PrettyPrinter(indent=2)
     while True:
       raw_input('Interact with the browser and hit <enter> to dump prefs... ')
-      pp.pprint(self.GetPrefsInfo().Prefs())
+      self.pprint(self.GetPrefsInfo().Prefs())
 
   @staticmethod
   def _Cleanup():
@@ -673,15 +677,20 @@ class EnterpriseTestReverse(pyauto.PyUITest):
       return
     self._CheckIfPrefCanBeModified(pyauto.kEditBookmarksEnabled, False, True)
 
-  def testEnable3DAPI(self):
-    """Verify when disable 3D API policy set to 0, webGL page works."""
+  def testDefaultSearchProviderDisabled(self):
+    """Verify that inputting text in omnibox does not trigger search when
+    default search provider is disabled.
+    """
+
     if self.GetBrowserInfo()['properties']['branding'] != 'Google Chrome':
       return
 
-    self.assertFalse(self.GetPrefsInfo().Prefs(pyauto.kDisable3DAPIs))
-    self.assertEqual(self.GetDOMValue('document.createElement("canvas").' +
-                                      'getContext("experimental-webgl")' +
-                                      '!= null ? "ok" : ""'), 'ok')
+    self._CheckIfPrefCanBeModified(pyauto.kDefaultSearchProviderEnabled, False,
+                                   True)
+    self.SetOmniboxText('deli')
+    self.WaitUntilOmniboxQueryDone()
+    self.assertRaises(pyauto.JSONInterfaceError,
+                      lambda: self.OmniboxAcceptInput())
 
 
 if __name__ == '__main__':

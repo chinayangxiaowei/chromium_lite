@@ -18,7 +18,7 @@ class TestPostMessage : public TestCase {
  private:
   // TestCase implementation.
   virtual bool Init();
-  virtual void RunTest();
+  virtual void RunTests(const std::string& filter);
 
   // A handler for JS->Native calls to postMessage.  Simply pushes
   // the given value to the back of message_data_
@@ -51,6 +51,9 @@ class TestPostMessage : public TestCase {
   // Test some basic functionality;  make sure we can send data successfully
   // in both directions.
   std::string TestSendingData();
+
+  // Test sending ArrayBuffer vars in both directions.
+  std::string TestSendingArrayBuffer();
 
   // Test the MessageEvent object that JavaScript received to make sure it is
   // of the right type and has all the expected fields.

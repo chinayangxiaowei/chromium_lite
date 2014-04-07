@@ -74,7 +74,7 @@ class NetworkStats {
   bool Start(net::HostResolver* host_resolver,
              const net::HostPortPair& server,
              uint32 bytes_to_send,
-             net::CompletionCallback* callback);
+             const net::CompletionCallback& callback);
 
  protected:
   // Constructs an NetworkStats object that collects metrics for network
@@ -86,7 +86,7 @@ class NetworkStats {
   // server. |finished_callback| is called when we are done with the test.
   // |finished_callback| is mainly useful for unittests.
   void Initialize(uint32 bytes_to_send,
-                  net::CompletionCallback* finished_callback);
+                  const net::CompletionCallback& finished_callback);
 
   // Called after host is resolved. UDPStatsClient and TCPStatsClient implement
   // this method. They create the socket and connect to the server.
@@ -176,25 +176,16 @@ class NetworkStats {
   // HostResolver fills out the |addresses_| after host resolution is completed.
   net::AddressList addresses_;
 
-  // Callback to call when host resolution is completed.
-  net::CompletionCallbackImpl<NetworkStats> resolve_callback_;
-
-  // Callback to call when data is read from the server.
-  net::CompletionCallbackImpl<NetworkStats> read_callback_;
-
-  // Callback to call when data is sent to the server.
-  net::CompletionCallbackImpl<NetworkStats> write_callback_;
-
   // Callback to call when echo protocol is successefully finished or whenever
   // there is an error (this allows unittests to wait until echo protocol's
   // round trip is finished).
-  net::CompletionCallback* finished_callback_;
+  net::CompletionCallback finished_callback_;
 
   // The time when the session was started.
   base::TimeTicks start_time_;
 
   // We use this factory to create timeout tasks for socket's ReadData.
-  ScopedRunnableMethodFactory<NetworkStats> timers_factory_;
+  base::WeakPtrFactory<NetworkStats> weak_factory_;
 };
 
 class UDPStatsClient : public NetworkStats {
@@ -211,16 +202,16 @@ class UDPStatsClient : public NetworkStats {
   // Called after host is resolved. Creates UDClientSocket and connects to the
   // server. If successfully connected, then calls ConnectComplete() to start
   // the echo protocol. Returns |false| if there is any error.
-  virtual bool DoConnect(int result);
+  virtual bool DoConnect(int result) OVERRIDE;
 
   // This method calls NetworkStats::ReadComplete() to verify the data and calls
   // Finish() if there is an error or if read callback didn't return any data
   // (|result| is less than or equal to 0).
-  virtual bool ReadComplete(int result);
+  virtual bool ReadComplete(int result) OVERRIDE;
 
   // Collects stats for UDP connectivity. This is called when all the data from
   // server is read or when there is a failure during connect/read/write.
-  virtual void Finish(Status status, int result);
+  virtual void Finish(Status status, int result) OVERRIDE;
 };
 
 class TCPStatsClient : public NetworkStats {
@@ -236,23 +227,20 @@ class TCPStatsClient : public NetworkStats {
 
   // Called after host is resolved. Creates TCPClientSocket and connects to the
   // server.
-  virtual bool DoConnect(int result);
+  virtual bool DoConnect(int result) OVERRIDE;
 
   // This method calls NetworkStats::ReadComplete() to verify the data and calls
   // Finish() if there is an error (|result| is less than 0).
-  virtual bool ReadComplete(int result);
+  virtual bool ReadComplete(int result) OVERRIDE;
 
   // Collects stats for TCP connectivity. This is called when all the data from
   // server is read or when there is a failure during connect/read/write.
-  virtual void Finish(Status status, int result);
+  virtual void Finish(Status status, int result) OVERRIDE;
 
  private:
   // Callback that is called when connect is completed and calls
   // ConnectComplete() to start the echo protocol.
   void OnConnectComplete(int result);
-
-  // Callback to call when connect is completed.
-  net::CompletionCallbackImpl<TCPStatsClient> connect_callback_;
 };
 
 // This collects the network connectivity stats for UDP and TCP for small

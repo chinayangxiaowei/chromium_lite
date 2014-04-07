@@ -8,6 +8,8 @@
 
 #include <string>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
@@ -16,13 +18,14 @@
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -30,6 +33,10 @@
 #include "grit/theme_resources_standard.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+
+using content::UserMetricsAction;
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 namespace {
 
@@ -69,7 +76,7 @@ ChromeWebUIDataSource* CreateConflictsUIHTMLSource() {
 
 // The handler for JavaScript messages for the about:flags page.
 class ConflictsDOMHandler : public WebUIMessageHandler,
-                            public NotificationObserver {
+                            public content::NotificationObserver {
  public:
   ConflictsDOMHandler() {}
   virtual ~ConflictsDOMHandler() {}
@@ -84,23 +91,24 @@ class ConflictsDOMHandler : public WebUIMessageHandler,
   void SendModuleList();
 
   void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details);
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(ConflictsDOMHandler);
 };
 
 void ConflictsDOMHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("requestModuleList",
-      NewCallback(this, &ConflictsDOMHandler::HandleRequestModuleList));
+  web_ui()->RegisterMessageCallback("requestModuleList",
+      base::Bind(&ConflictsDOMHandler::HandleRequestModuleList,
+                 base::Unretained(this)));
 }
 
 void ConflictsDOMHandler::HandleRequestModuleList(const ListValue* args) {
   // This request is handled asynchronously. See Observe for when we reply back.
   registrar_.Add(this, chrome::NOTIFICATION_MODULE_LIST_ENUMERATED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
   EnumerateModulesModel::GetInstance()->ScanNow();
 }
 
@@ -127,12 +135,12 @@ void ConflictsDOMHandler::SendModuleList() {
   }
   results.SetString("modulesTableTitle", table_title);
 
-  web_ui_->CallJavascriptFunction("returnModuleList", results);
+  web_ui()->CallJavascriptFunction("returnModuleList", results);
 }
 
 void ConflictsDOMHandler::Observe(int type,
-                                  const NotificationSource& source,
-                                  const NotificationDetails& details) {
+                                  const content::NotificationSource& source,
+                                  const content::NotificationDetails& details) {
   switch (type) {
     case chrome::NOTIFICATION_MODULE_LIST_ENUMERATED:
       SendModuleList();
@@ -152,12 +160,12 @@ void ConflictsDOMHandler::Observe(int type,
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-ConflictsUI::ConflictsUI(TabContents* contents) : ChromeWebUI(contents) {
-  UserMetrics::RecordAction(UserMetricsAction("ViewAboutConflicts"));
-  AddMessageHandler((new ConflictsDOMHandler())->Attach(this));
+ConflictsUI::ConflictsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  content::RecordAction(UserMetricsAction("ViewAboutConflicts"));
+  web_ui->AddMessageHandler(new ConflictsDOMHandler());
 
   // Set up the about:conflicts source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(
       CreateConflictsUIHTMLSource());
 }

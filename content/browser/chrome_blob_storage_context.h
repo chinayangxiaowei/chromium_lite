@@ -8,9 +8,9 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "content/browser/browser_thread.h"
-
-class GURL;
+#include "base/message_loop_helpers.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/browser_thread.h"
 
 namespace webkit_blob {
 class BlobStorageController;
@@ -23,9 +23,9 @@ class BlobStorageController;
 //
 // All methods, except the ctor, are expected to be called on
 // the IO thread (unless specifically called out in doc comments).
-class ChromeBlobStorageContext
-    : public base::RefCountedThreadSafe<ChromeBlobStorageContext,
-                                        BrowserThread::DeleteOnIOThread> {
+class CONTENT_EXPORT ChromeBlobStorageContext
+    : public base::RefCountedThreadSafe<
+          ChromeBlobStorageContext, content::BrowserThread::DeleteOnIOThread> {
  public:
   ChromeBlobStorageContext();
 
@@ -36,8 +36,10 @@ class ChromeBlobStorageContext
   }
 
  private:
-  friend class BrowserThread;
-  friend class DeleteTask<ChromeBlobStorageContext>;
+  friend class base::RefCountedThreadSafe<
+      ChromeBlobStorageContext, content::BrowserThread::DeleteOnIOThread>;
+  friend class content::BrowserThread;
+  friend class base::DeleteHelper<ChromeBlobStorageContext>;
 
   virtual ~ChromeBlobStorageContext();
 

@@ -1,16 +1,17 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/redirect_to_file_resource_handler.h"
 
+#include "base/bind.h"
 #include "base/file_util.h"
 #include "base/file_util_proxy.h"
 #include "base/logging.h"
+#include "base/message_loop_proxy.h"
 #include "base/platform_file.h"
-#include "base/task.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/common/resource_response.h"
+#include "content/public/common/resource_response.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/mime_sniffer.h"
@@ -19,6 +20,8 @@
 
 using webkit_blob::DeletableFileReference;
 
+namespace content {
+
 // TODO(darin): Use the buffer sizing algorithm from AsyncResourceHandler.
 static const int kReadBufSize = 32768;
 
@@ -26,42 +29,25 @@ RedirectToFileResourceHandler::RedirectToFileResourceHandler(
     ResourceHandler* next_handler,
     int process_id,
     ResourceDispatcherHost* host)
-    : callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+    : LayeredResourceHandler(next_handler),
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
       host_(host),
-      next_handler_(next_handler),
       process_id_(process_id),
       request_id_(-1),
       buf_(new net::GrowableIOBuffer()),
       buf_write_pending_(false),
       write_cursor_(0),
-      write_callback_(ALLOW_THIS_IN_INITIALIZER_LIST(this),
-                      &RedirectToFileResourceHandler::DidWriteToFile),
       write_callback_pending_(false),
       request_was_closed_(false),
       completed_during_write_(false) {
 }
 
-bool RedirectToFileResourceHandler::OnUploadProgress(int request_id,
-                                                     uint64 position,
-                                                     uint64 size) {
-  return next_handler_->OnUploadProgress(request_id, position, size);
-}
-
-bool RedirectToFileResourceHandler::OnRequestRedirected(
-    int request_id,
-    const GURL& new_url,
-    ResourceResponse* response,
-    bool* defer) {
-  return next_handler_->OnRequestRedirected(request_id, new_url, response,
-                                            defer);
-}
-
 bool RedirectToFileResourceHandler::OnResponseStarted(
     int request_id,
-    ResourceResponse* response) {
-  if (response->response_head.status.is_success()) {
+    content::ResourceResponse* response) {
+  if (response->status.is_success()) {
     DCHECK(deletable_file_ && !deletable_file_->path().empty());
-    response->response_head.download_file_path = deletable_file_->path();
+    response->download_file_path = deletable_file_->path();
   }
   return next_handler_->OnResponseStarted(request_id, response);
 }
@@ -78,8 +64,8 @@ bool RedirectToFileResourceHandler::OnWillStart(int request_id,
     base::FileUtilProxy::CreateTemporary(
         BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE),
         base::PLATFORM_FILE_ASYNC,
-        callback_factory_.NewCallback(
-            &RedirectToFileResourceHandler::DidCreateTemporaryFile));
+        base::Bind(&RedirectToFileResourceHandler::DidCreateTemporaryFile,
+                   weak_factory_.GetWeakPtr()));
     return true;
   }
   return next_handler_->OnWillStart(request_id, url, defer);
@@ -167,7 +153,7 @@ RedirectToFileResourceHandler::~RedirectToFileResourceHandler() {
 void RedirectToFileResourceHandler::DidCreateTemporaryFile(
     base::PlatformFileError /*error_code*/,
     base::PassPlatformFile file_handle,
-    FilePath file_path) {
+    const FilePath& file_path) {
   if (request_was_closed_) {
     // If the request was already closed, then don't bother allocating the
     // file_stream_ (otherwise we will leak it).
@@ -222,9 +208,11 @@ bool RedirectToFileResourceHandler::WriteMore() {
     if (write_callback_pending_)
       return true;
     DCHECK(write_cursor_ < buf_->offset());
-    int rv = file_stream_->Write(buf_->StartOfBuffer() + write_cursor_,
-                                 buf_->offset() - write_cursor_,
-                                 &write_callback_);
+    int rv = file_stream_->Write(
+        buf_->StartOfBuffer() + write_cursor_,
+        buf_->offset() - write_cursor_,
+        base::Bind(&RedirectToFileResourceHandler::DidWriteToFile,
+                   base::Unretained(this)));
     if (rv == net::ERR_IO_PENDING) {
       write_callback_pending_ = true;
       return true;
@@ -243,3 +231,5 @@ bool RedirectToFileResourceHandler::BufIsFull() const {
   // TODO(darin): Fix this retardation!
   return buf_->RemainingCapacity() <= (2 * net::kMaxBytesToSniff);
 }
+
+}  // namespace content

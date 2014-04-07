@@ -26,14 +26,14 @@ class PRINTING_EXPORT PrintedPage
               Metafile* metafile,
               const gfx::Size& page_size,
               const gfx::Rect& page_content_rect,
-              bool has_visible_overlays);
+              double shrink_factor);
 
   // Getters
   int page_number() const { return page_number_; }
   const Metafile* metafile() const;
   const gfx::Size& page_size() const { return page_size_; }
   const gfx::Rect& page_content_rect() const { return page_content_rect_; }
-  bool has_visible_overlays() const { return has_visible_overlays_; }
+  double shrink_factor() const { return shrink_factor_; }
 
   // Get page content rect adjusted based on
   // http://dev.w3.org/csswg/css3-page/#positioning-page-box
@@ -58,8 +58,8 @@ class PRINTING_EXPORT PrintedPage
   // The printable area of the page.
   const gfx::Rect page_content_rect_;
 
-  // True if the overlays should be visible in this page.
-  bool has_visible_overlays_;
+  // Shrink done in comparison to desired_dpi.
+  double shrink_factor_;
 
   DISALLOW_COPY_AND_ASSIGN(PrintedPage);
 };

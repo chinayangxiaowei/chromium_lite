@@ -7,12 +7,12 @@
 #pragma once
 
 #include "base/compiler_specific.h"
-#include "content/browser/tab_contents/constrained_window.h"
+#include "chrome/browser/ui/constrained_window.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
-#include "views/widget/widget.h"
+#include "ui/views/widget/widget.h"
 
-class TabContents;
+class TabContentsWrapper;
 
 namespace views {
 namespace internal {
@@ -58,17 +58,18 @@ class ConstrainedWindowViews : public views::Widget,
                                public ConstrainedWindow,
                                public NativeConstrainedWindowDelegate {
  public:
-  ConstrainedWindowViews(TabContents* owner,
+  ConstrainedWindowViews(TabContentsWrapper* wrapper,
                          views::WidgetDelegate* widget_delegate);
   virtual ~ConstrainedWindowViews();
 
-  // Returns the TabContents that constrains this Constrained Window.
-  TabContents* owner() const { return owner_; }
+  // Returns the TabContentsWrapper that constrains this Constrained Window.
+  TabContentsWrapper* owner() const { return wrapper_; }
 
   // Overridden from ConstrainedWindow:
   virtual void ShowConstrainedWindow() OVERRIDE;
   virtual void CloseConstrainedWindow() OVERRIDE;
   virtual void FocusConstrainedWindow() OVERRIDE;
+  virtual gfx::NativeWindow GetNativeWindow() OVERRIDE;
 
  private:
   // Overridden from views::Widget:
@@ -80,8 +81,7 @@ class ConstrainedWindowViews : public views::Widget,
   virtual views::internal::NativeWidgetDelegate*
       AsNativeWidgetDelegate() OVERRIDE;
 
-  // The TabContents that owns and constrains this ConstrainedWindow.
-  TabContents* owner_;
+  TabContentsWrapper* wrapper_;
 
   NativeConstrainedWindow* native_constrained_window_;
 

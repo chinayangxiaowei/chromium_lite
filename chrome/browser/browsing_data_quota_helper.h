@@ -9,20 +9,16 @@
 #include <list>
 #include <string>
 
-#include "base/callback_old.h"
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
+#include "base/message_loop_helpers.h"
 #include "base/message_loop_proxy.h"
 #include "base/time.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "webkit/quota/quota_types.h"
 
-class Profile;
-
-namespace quota {
-class QuotaManager;
-}
-
 class BrowsingDataQuotaHelper;
+class Profile;
 
 struct BrowsingDataQuotaHelperDeleter {
   static void Destruct(const BrowsingDataQuotaHelper* helper);
@@ -52,37 +48,37 @@ class BrowsingDataQuotaHelper
               int64 persistent_usage);
     ~QuotaInfo();
 
+    // Certain versions of MSVC 2008 have bad implementations of ADL for nested
+    // classes so they require these operators to be declared here instead of in
+    // the global namespace.
+    bool operator <(const QuotaInfo& rhs) const;
+    bool operator ==(const QuotaInfo& rhs) const;
+
     std::string host;
     int64 temporary_usage;
     int64 persistent_usage;
   };
 
   typedef std::list<QuotaInfo> QuotaInfoArray;
-  typedef Callback1<const QuotaInfoArray&>::Type FetchResultCallback;
+  typedef base::Callback<void(const QuotaInfoArray&)> FetchResultCallback;
 
   static BrowsingDataQuotaHelper* Create(Profile* profile);
 
-  virtual void StartFetching(FetchResultCallback* callback) = 0;
+  virtual void StartFetching(const FetchResultCallback& callback) = 0;
   virtual void CancelNotification() = 0;
 
-  // We don't support deletion now.
-  virtual void DeleteQuotaHost(const std::string& host) {}
+  virtual void RevokeHostQuota(const std::string& host) = 0;
 
  protected:
   explicit BrowsingDataQuotaHelper(base::MessageLoopProxy* io_thread_);
   virtual ~BrowsingDataQuotaHelper();
 
  private:
-  friend class DeleteTask<const BrowsingDataQuotaHelper>;
+  friend class base::DeleteHelper<BrowsingDataQuotaHelper>;
   friend struct BrowsingDataQuotaHelperDeleter;
   scoped_refptr<base::MessageLoopProxy> io_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowsingDataQuotaHelper);
 };
-
-bool operator <(const BrowsingDataQuotaHelper::QuotaInfo& lhs,
-                const BrowsingDataQuotaHelper::QuotaInfo& rhs);
-bool operator ==(const BrowsingDataQuotaHelper::QuotaInfo& lhs,
-                 const BrowsingDataQuotaHelper::QuotaInfo& rhs);
 
 #endif  // CHROME_BROWSER_BROWSING_DATA_QUOTA_HELPER_H_

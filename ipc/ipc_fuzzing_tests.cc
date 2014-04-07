@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -267,7 +267,7 @@ TEST_F(IPCFuzzingTest, SanityTest) {
                     &listener);
   base::ProcessHandle server_process = SpawnChild(FUZZER_SERVER, &chan);
   ASSERT_TRUE(server_process);
-  base::PlatformThread::Sleep(1000);
+  base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
   ASSERT_TRUE(chan.Connect());
   listener.Init(&chan);
 
@@ -290,14 +290,14 @@ TEST_F(IPCFuzzingTest, SanityTest) {
 // In debug this triggers an assertion and in release it is ignored(!!). Right
 // after we generate another valid IPC to make sure framing is working
 // properly.
-#ifdef NDEBUG
+#if defined(NDEBUG) && !defined(DCHECK_ALWAYS_ON)
 TEST_F(IPCFuzzingTest, MsgBadPayloadShort) {
   FuzzerClientListener listener;
   IPC::Channel chan(kFuzzerChannel, IPC::Channel::MODE_SERVER,
                     &listener);
   base::ProcessHandle server_process = SpawnChild(FUZZER_SERVER, &chan);
   ASSERT_TRUE(server_process);
-  base::PlatformThread::Sleep(1000);
+  base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
   ASSERT_TRUE(chan.Connect());
   listener.Init(&chan);
 
@@ -314,7 +314,7 @@ TEST_F(IPCFuzzingTest, MsgBadPayloadShort) {
   EXPECT_TRUE(base::WaitForSingleProcess(server_process, 5000));
   base::CloseProcessHandle(server_process);
 }
-#endif  // NDEBUG
+#endif
 
 // This test uses a payload that has too many arguments, but so the payload
 // size is big enough so the unpacking routine does not generate an error as
@@ -327,7 +327,7 @@ TEST_F(IPCFuzzingTest, MsgBadPayloadArgs) {
                     &listener);
   base::ProcessHandle server_process = SpawnChild(FUZZER_SERVER, &chan);
   ASSERT_TRUE(server_process);
-  base::PlatformThread::Sleep(1000);
+  base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
   ASSERT_TRUE(chan.Connect());
   listener.Init(&chan);
 
@@ -355,8 +355,10 @@ class ServerMacroExTest {
  public:
   ServerMacroExTest() : unhandled_msgs_(0) {
   }
+
   virtual ~ServerMacroExTest() {
   }
+
   virtual bool OnMessageReceived(const IPC::Message& msg) {
     bool msg_is_ok = false;
     IPC_BEGIN_MESSAGE_MAP_EX(ServerMacroExTest, msg, msg_is_ok)
@@ -378,6 +380,8 @@ class ServerMacroExTest {
   }
 
   int unhandled_msgs_;
+
+  DISALLOW_COPY_AND_ASSIGN(ServerMacroExTest);
 };
 
 TEST_F(IPCFuzzingTest, MsgMapExMacro) {
@@ -392,7 +396,7 @@ TEST_F(IPCFuzzingTest, MsgMapExMacro) {
   EXPECT_TRUE(server.OnMessageReceived(*msg));
   delete msg;
 
-#ifdef NDEBUG
+#if defined(NDEBUG) && !defined(DCHECK_ALWAYS_ON)
   // Test a bad message.
   msg = new IPC::Message(MSG_ROUTING_CONTROL, MsgClassSI::ID,
                          IPC::Message::PRIORITY_NORMAL);

@@ -1,35 +1,32 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/tab_contents/render_view_context_menu_views.h"
 
 #include "base/logging.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "content/browser/renderer_host/render_widget_host_view.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/tab_contents/tab_contents_view.h"
-#include "grit/generated_resources.h"
-#include "ui/base/keycodes/keyboard_codes.h"
-#include "views/accelerator.h"
-#include "views/controls/menu/menu_item_view.h"
-#include "views/controls/menu/menu_model_adapter.h"
-#include "views/controls/menu/menu_runner.h"
-
-#if defined(TOUCH_UI)
-#include "chrome/browser/ui/views/tab_contents/tab_contents_view_touch.h"
-#include "views/widget/widget.h"
-#else
 #include "chrome/browser/ui/views/tab_contents/tab_contents_view_views.h"
-#endif
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
+#include "grit/generated_resources.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/keycodes/keyboard_codes.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
+#include "ui/views/controls/menu/menu_runner.h"
+
+using content::WebContents;
 
 ////////////////////////////////////////////////////////////////////////////////
 // RenderViewContextMenuViews, public:
 
 RenderViewContextMenuViews::RenderViewContextMenuViews(
-    TabContents* tab_contents,
+    WebContents* web_contents,
     const ContextMenuParams& params)
-    : RenderViewContextMenu(tab_contents, params),
+    : RenderViewContextMenu(web_contents, params),
       menu_(NULL) {
 }
 
@@ -37,17 +34,9 @@ RenderViewContextMenuViews::~RenderViewContextMenuViews() {
 }
 
 void RenderViewContextMenuViews::RunMenuAt(int x, int y) {
-#if defined(TOUCH_UI)
-  // TODO(oshima): Eliminate this once TabContentsViewTouch is replaced
-  // with TabContentsViewViews.
-  TabContentsViewTouch* touch =
-      static_cast<TabContentsViewTouch*>(source_tab_contents_->view());
-  views::Widget* parent = touch->GetWidget()->GetTopLevelWidget();
-#else
   TabContentsViewViews* tab =
-      static_cast<TabContentsViewViews*>(source_tab_contents_->view());
+      static_cast<TabContentsViewViews*>(source_web_contents_->GetView());
   views::Widget* parent = tab->GetTopLevelWidget();
-#endif
   if (menu_runner_->RunMenuAt(parent, NULL,
           gfx::Rect(gfx::Point(x, y), gfx::Size()),
           views::MenuItemView::TOPLEFT, views::MenuRunner::HAS_MNEMONICS) ==
@@ -82,28 +71,32 @@ bool RenderViewContextMenuViews::GetAcceleratorForCommandId(
   // that Ctrl+C, Ctrl+V, Ctrl+X, Ctrl-A, etc do what they normally do.
   switch (command_id) {
     case IDC_CONTENT_CONTEXT_UNDO:
-      *accel = views::Accelerator(ui::VKEY_Z, false, true, false);
+      *accel = ui::Accelerator(ui::VKEY_Z, false, true, false);
       return true;
 
     case IDC_CONTENT_CONTEXT_REDO:
       // TODO(jcampan): should it be Ctrl-Y?
-      *accel = views::Accelerator(ui::VKEY_Z, true, true, false);
+      *accel = ui::Accelerator(ui::VKEY_Z, true, true, false);
       return true;
 
     case IDC_CONTENT_CONTEXT_CUT:
-      *accel = views::Accelerator(ui::VKEY_X, false, true, false);
+      *accel = ui::Accelerator(ui::VKEY_X, false, true, false);
       return true;
 
     case IDC_CONTENT_CONTEXT_COPY:
-      *accel = views::Accelerator(ui::VKEY_C, false, true, false);
+      *accel = ui::Accelerator(ui::VKEY_C, false, true, false);
       return true;
 
     case IDC_CONTENT_CONTEXT_PASTE:
-      *accel = views::Accelerator(ui::VKEY_V, false, true, false);
+      *accel = ui::Accelerator(ui::VKEY_V, false, true, false);
+      return true;
+
+    case IDC_CONTENT_CONTEXT_PASTE_AND_MATCH_STYLE:
+      *accel = ui::Accelerator(ui::VKEY_V, true, true, false);
       return true;
 
     case IDC_CONTENT_CONTEXT_SELECTALL:
-      *accel = views::Accelerator(ui::VKEY_A, false, true, false);
+      *accel = ui::Accelerator(ui::VKEY_A, false, true, false);
       return true;
 
     default:
@@ -113,13 +106,15 @@ bool RenderViewContextMenuViews::GetAcceleratorForCommandId(
 
 void RenderViewContextMenuViews::UpdateMenuItem(int command_id,
                                                 bool enabled,
+                                                bool hidden,
                                                 const string16& title) {
   views::MenuItemView* item = menu_->GetMenuItemByID(command_id);
   if (!item)
     return;
 
   item->SetEnabled(enabled);
-  item->SetTitle(UTF16ToWide(title));
+  item->SetTitle(title);
+  item->SetVisible(!hidden);
 
   views::MenuItemView* parent = item->GetParentMenuItem();
   if (!parent)

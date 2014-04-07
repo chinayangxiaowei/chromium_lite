@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,9 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/lazy_instance.h"
+#include "base/message_loop.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
+#include "base/string16.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "crypto/nss_util.h"
@@ -31,110 +32,106 @@ namespace psm = mozilla_security_manager;
 
 namespace net {
 
-namespace {
-
-// Returns a FilePath object representing the src/net/data/ssl/certificates
-// directory in the source tree.
-FilePath GetTestCertsDirectory() {
-  FilePath certs_dir;
-  PathService::Get(base::DIR_SOURCE_ROOT, &certs_dir);
-  certs_dir = certs_dir.AppendASCII("net");
-  certs_dir = certs_dir.AppendASCII("data");
-  certs_dir = certs_dir.AppendASCII("ssl");
-  certs_dir = certs_dir.AppendASCII("certificates");
-  return certs_dir;
-}
-
-CertificateList ListCertsInSlot(PK11SlotInfo* slot) {
-  CertificateList result;
-  CERTCertList* cert_list = PK11_ListCertsInSlot(slot);
-  for (CERTCertListNode* node = CERT_LIST_HEAD(cert_list);
-       !CERT_LIST_END(node, cert_list);
-       node = CERT_LIST_NEXT(node)) {
-    result.push_back(X509Certificate::CreateFromHandle(
-        node->cert, X509Certificate::OSCertHandles()));
-  }
-  CERT_DestroyCertList(cert_list);
-
-  // Sort the result so that test comparisons can be deterministic.
-  std::sort(result.begin(), result.end(), X509Certificate::LessThan());
-  return result;
-}
-
-bool CleanupSlotContents(PK11SlotInfo* slot) {
-  CertDatabase cert_db;
-  bool ok = true;
-  CertificateList certs = ListCertsInSlot(slot);
-  for (size_t i = 0; i < certs.size(); ++i) {
-    if (!cert_db.DeleteCertAndKey(certs[i]))
-      ok = false;
-  }
-  return ok;
-}
-
-std::string ReadTestFile(const std::string& name) {
-  std::string result;
-  FilePath cert_path = GetTestCertsDirectory().AppendASCII(name);
-  EXPECT_TRUE(file_util::ReadFileToString(cert_path, &result));
-  return result;
-}
-
-bool ReadCertIntoList(const std::string& name, CertificateList* certs) {
-  std::string cert_data = ReadTestFile(name);
-  if (cert_data.empty())
-    return false;
-
-  X509Certificate* cert = X509Certificate::CreateFromBytes(
-      cert_data.data(), cert_data.size());
-  if (!cert)
-    return false;
-
-  certs->push_back(cert);
-  return true;
-}
-
-}  // namespace
-
 // TODO(mattm): when https://bugzilla.mozilla.org/show_bug.cgi?id=588269 is
 // fixed, switch back to using a separate userdb for each test.
 // (When doing so, remember to add some standalone tests of DeleteCert since it
 // won't be tested by TearDown anymore.)
 class CertDatabaseNSSTest : public testing::Test {
  public:
+  static void SetUpTestCase() {
+    ASSERT_TRUE(crypto::OpenTestNSSDB());
+    // There is no matching TearDownTestCase call to close the test NSS DB
+    // because that would leave NSS in a potentially broken state for further
+    // tests, due to https://bugzilla.mozilla.org/show_bug.cgi?id=588269
+  }
+
   virtual void SetUp() {
-    if (!temp_db_initialized_) {
-      ASSERT_TRUE(temp_db_dir_.Get().CreateUniqueTempDir());
-      ASSERT_TRUE(
-          crypto::OpenTestNSSDB(temp_db_dir_.Get().path(),
-                                "CertDatabaseNSSTest db"));
-      temp_db_initialized_ = true;
-    }
     slot_ = cert_db_.GetPublicModule();
 
     // Test db should be empty at start of test.
     EXPECT_EQ(0U, ListCertsInSlot(slot_->os_module_handle()).size());
   }
+
   virtual void TearDown() {
     // Don't try to cleanup if the setup failed.
     ASSERT_TRUE(slot_->os_module_handle());
 
     EXPECT_TRUE(CleanupSlotContents(slot_->os_module_handle()));
+
+    // Run the message loop to process any observer callbacks (e.g. for the
+    // ClientSocketFactory singleton) so that the scoped ref ptrs created in
+    // CertDatabase::NotifyObservers* get released.
+    MessageLoop::current()->RunAllPending();
+
     EXPECT_EQ(0U, ListCertsInSlot(slot_->os_module_handle()).size());
   }
 
  protected:
+  static std::string ReadTestFile(const std::string& name) {
+    std::string result;
+    FilePath cert_path = GetTestCertsDirectory().AppendASCII(name);
+    EXPECT_TRUE(file_util::ReadFileToString(cert_path, &result));
+    return result;
+  }
+
+  static bool ReadCertIntoList(const std::string& name,
+                               CertificateList* certs) {
+    std::string cert_data = ReadTestFile(name);
+    if (cert_data.empty())
+      return false;
+
+    X509Certificate* cert = X509Certificate::CreateFromBytes(
+        cert_data.data(), cert_data.size());
+    if (!cert)
+      return false;
+
+    certs->push_back(cert);
+    return true;
+  }
+
+  static CertificateList ListCertsInSlot(PK11SlotInfo* slot) {
+    CertificateList result;
+    CERTCertList* cert_list = PK11_ListCertsInSlot(slot);
+    for (CERTCertListNode* node = CERT_LIST_HEAD(cert_list);
+         !CERT_LIST_END(node, cert_list);
+         node = CERT_LIST_NEXT(node)) {
+      result.push_back(X509Certificate::CreateFromHandle(
+          node->cert, X509Certificate::OSCertHandles()));
+    }
+    CERT_DestroyCertList(cert_list);
+
+    // Sort the result so that test comparisons can be deterministic.
+    std::sort(result.begin(), result.end(), X509Certificate::LessThan());
+    return result;
+  }
+
   scoped_refptr<CryptoModule> slot_;
   CertDatabase cert_db_;
 
  private:
-  static base::LazyInstance<ScopedTempDir> temp_db_dir_;
-  static bool temp_db_initialized_;
-};
+  // Returns a FilePath object representing the src/net/data/ssl/certificates
+  // directory in the source tree.
+  static FilePath GetTestCertsDirectory() {
+    FilePath certs_dir;
+    PathService::Get(base::DIR_SOURCE_ROOT, &certs_dir);
+    certs_dir = certs_dir.AppendASCII("net");
+    certs_dir = certs_dir.AppendASCII("data");
+    certs_dir = certs_dir.AppendASCII("ssl");
+    certs_dir = certs_dir.AppendASCII("certificates");
+    return certs_dir;
+  }
 
-// static
-base::LazyInstance<ScopedTempDir> CertDatabaseNSSTest::temp_db_dir_(
-    base::LINKER_INITIALIZED);
-bool CertDatabaseNSSTest::temp_db_initialized_ = false;
+  static bool CleanupSlotContents(PK11SlotInfo* slot) {
+    CertDatabase cert_db;
+    bool ok = true;
+    CertificateList certs = ListCertsInSlot(slot);
+    for (size_t i = 0; i < certs.size(); ++i) {
+      if (!cert_db.DeleteCertAndKey(certs[i]))
+        ok = false;
+    }
+    return ok;
+  }
+};
 
 TEST_F(CertDatabaseNSSTest, ListCerts) {
   // This test isn't terribly useful, though it will at least let valgrind test
@@ -152,8 +149,9 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12WrongPassword) {
   EXPECT_EQ(ERR_PKCS12_IMPORT_BAD_PASSWORD,
             cert_db_.ImportFromPKCS12(slot_,
                                       pkcs12_data,
-                                      ASCIIToUTF16(""),
-                                      true));  // is_extractable
+                                      string16(),
+                                      true,  // is_extractable
+                                      NULL));
 
   // Test db should still be empty.
   EXPECT_EQ(0U, ListCertsInSlot(slot_->os_module_handle()).size());
@@ -165,7 +163,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12AsExtractableAndExportAgain) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          true));  // is_extractable
+                                          true,  // is_extractable
+                                          NULL));
 
   CertificateList cert_list = ListCertsInSlot(slot_->os_module_handle());
   ASSERT_EQ(1U, cert_list.size());
@@ -174,7 +173,7 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12AsExtractableAndExportAgain) {
   EXPECT_EQ("testusercert",
             cert->subject().common_name);
 
-  // TODO(mattm): move export test to seperate test case?
+  // TODO(mattm): move export test to separate test case?
   std::string exported_data;
   EXPECT_EQ(1, cert_db_.ExportToPKCS12(cert_list, ASCIIToUTF16("exportpw"),
                                        &exported_data));
@@ -188,7 +187,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12Twice) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          true));  // is_extractable
+                                          true,  // is_extractable
+                                          NULL));
   EXPECT_EQ(1U, ListCertsInSlot(slot_->os_module_handle()).size());
 
   // NSS has a SEC_ERROR_PKCS12_DUPLICATE_DATA error, but it doesn't look like
@@ -196,7 +196,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12Twice) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          true));  // is_extractable
+                                          true,  // is_extractable
+                                          NULL));
   EXPECT_EQ(1U, ListCertsInSlot(slot_->os_module_handle()).size());
 }
 
@@ -206,7 +207,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12AsUnextractableAndExportAgain) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          false));  // is_extractable
+                                          false,  // is_extractable
+                                          NULL));
 
   CertificateList cert_list = ListCertsInSlot(slot_->os_module_handle());
   ASSERT_EQ(1U, cert_list.size());
@@ -227,7 +229,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12OnlyMarkIncludedKey) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          true));  // is_extractable
+                                          true,  // is_extractable
+                                          NULL));
 
   CertificateList cert_list = ListCertsInSlot(slot_->os_module_handle());
   ASSERT_EQ(1U, cert_list.size());
@@ -237,7 +240,8 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12OnlyMarkIncludedKey) {
   EXPECT_EQ(OK, cert_db_.ImportFromPKCS12(slot_,
                                           pkcs12_data,
                                           ASCIIToUTF16("12345"),
-                                          false));  // is_extractable
+                                          false,  // is_extractable
+                                          NULL));
 
   cert_list = ListCertsInSlot(slot_->os_module_handle());
   ASSERT_EQ(1U, cert_list.size());
@@ -255,8 +259,9 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12InvalidFile) {
   EXPECT_EQ(ERR_PKCS12_IMPORT_INVALID_FILE,
             cert_db_.ImportFromPKCS12(slot_,
                                       pkcs12_data,
-                                      ASCIIToUTF16(""),
-                                      true));  // is_extractable
+                                      string16(),
+                                      true,  // is_extractable
+                                      NULL));
 
   // Test db should still be empty.
   EXPECT_EQ(0U, ListCertsInSlot(slot_->os_module_handle()).size());
@@ -465,7 +470,8 @@ TEST_F(CertDatabaseNSSTest, ImportCACertHierarchyUntrusted) {
 TEST_F(CertDatabaseNSSTest, ImportCACertHierarchyTree) {
   CertificateList certs;
   ASSERT_TRUE(ReadCertIntoList("dod_root_ca_2_cert.der", &certs));
-  ASSERT_TRUE(ReadCertIntoList("dod_ca_13_cert.der", &certs));
+  // This certificate is expired. http://crbug.com/111029
+  // ASSERT_TRUE(ReadCertIntoList("dod_ca_13_cert.der", &certs));
   ASSERT_TRUE(ReadCertIntoList("dod_ca_17_cert.der", &certs));
 
   // Import it.
@@ -477,10 +483,14 @@ TEST_F(CertDatabaseNSSTest, ImportCACertHierarchyTree) {
   EXPECT_EQ(0U, failed.size());
 
   CertificateList cert_list = ListCertsInSlot(slot_->os_module_handle());
-  ASSERT_EQ(3U, cert_list.size());
-  EXPECT_EQ("DOD CA-13", cert_list[0]->subject().common_name);
-  EXPECT_EQ("DoD Root CA 2", cert_list[1]->subject().common_name);
-  EXPECT_EQ("DOD CA-17", cert_list[2]->subject().common_name);
+  // One of the certificates is expired. http://crbug.com/111029
+  // ASSERT_EQ(3U, cert_list.size());
+  // EXPECT_EQ("DOD CA-13", cert_list[0]->subject().common_name);
+  // EXPECT_EQ("DoD Root CA 2", cert_list[1]->subject().common_name);
+  // EXPECT_EQ("DOD CA-17", cert_list[2]->subject().common_name);
+  ASSERT_EQ(2U, cert_list.size());
+  EXPECT_EQ("DoD Root CA 2", cert_list[0]->subject().common_name);
+  EXPECT_EQ("DOD CA-17", cert_list[1]->subject().common_name);
 }
 
 TEST_F(CertDatabaseNSSTest, ImportCACertNotHierarchy) {
@@ -511,7 +521,9 @@ TEST_F(CertDatabaseNSSTest, ImportCACertNotHierarchy) {
   EXPECT_EQ("Test CA", cert_list[0]->subject().common_name);
 }
 
-TEST_F(CertDatabaseNSSTest, ImportServerCert) {
+// http://crbug.com/108009 - Disabled, as google.chain.pem is an expired
+// certificate.
+TEST_F(CertDatabaseNSSTest, DISABLED_ImportServerCert) {
   // Need to import intermediate cert for the verify of google cert, otherwise
   // it will try to fetch it automatically with cert_pi_useAIACertFetch, which
   // will cause OCSPCreateSession on the main thread, which is not allowed.
@@ -540,9 +552,9 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert) {
 
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = goog_cert->Verify("www.google.com", flags, &verify_result);
+  int error = goog_cert->Verify("www.google.com", flags, NULL, &verify_result);
   EXPECT_EQ(OK, error);
-  EXPECT_EQ(0, verify_result.cert_status);
+  EXPECT_EQ(0U, verify_result.cert_status);
 }
 
 TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
@@ -565,7 +577,8 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
 
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = puny_cert->Verify("xn--wgv71a119e.com", flags, &verify_result);
+  int error = puny_cert->Verify("xn--wgv71a119e.com", flags, NULL,
+                                &verify_result);
   EXPECT_EQ(ERR_CERT_AUTHORITY_INVALID, error);
   EXPECT_EQ(CERT_STATUS_AUTHORITY_INVALID, verify_result.cert_status);
 
@@ -576,9 +589,9 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
       CertDatabase::TRUSTED_SSL | CertDatabase::TRUSTED_EMAIL));
 
   verify_result.Reset();
-  error = puny_cert->Verify("xn--wgv71a119e.com", flags, &verify_result);
+  error = puny_cert->Verify("xn--wgv71a119e.com", flags, NULL, &verify_result);
   EXPECT_EQ(OK, error);
-  EXPECT_EQ(0, verify_result.cert_status);
+  EXPECT_EQ(0U, verify_result.cert_status);
 }
 
 }  // namespace net

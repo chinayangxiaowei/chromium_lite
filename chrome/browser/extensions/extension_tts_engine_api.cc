@@ -28,8 +28,8 @@ void GetExtensionVoices(Profile* profile, ListValue* result_voices) {
   ExtensionEventRouter* event_router = profile->GetExtensionEventRouter();
   DCHECK(event_router);
 
-  const ExtensionList* extensions = service->extensions();
-  ExtensionList::const_iterator iter;
+  const ExtensionSet* extensions = service->extensions();
+  ExtensionSet::const_iterator iter;
   for (iter = extensions->begin(); iter != extensions->end(); ++iter) {
     const Extension* extension = *iter;
 
@@ -80,6 +80,11 @@ bool GetMatchingExtensionVoice(
     Utterance* utterance,
     const Extension** matching_extension,
     size_t* voice_index) {
+  // This will only happen during unit testing. Otherwise, an utterance
+  // will always have an associated profile.
+  if (!utterance->profile())
+    return false;
+
   ExtensionService* service = utterance->profile()->GetExtensionService();
   DCHECK(service);
   ExtensionEventRouter* event_router =
@@ -88,8 +93,8 @@ bool GetMatchingExtensionVoice(
 
   *matching_extension = NULL;
   *voice_index = -1;
-  const ExtensionList* extensions = service->extensions();
-  ExtensionList::const_iterator iter;
+  const ExtensionSet* extensions = service->extensions();
+  ExtensionSet::const_iterator iter;
   for (iter = extensions->begin(); iter != extensions->end(); ++iter) {
     const Extension* extension = *iter;
 

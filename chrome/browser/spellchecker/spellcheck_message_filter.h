@@ -5,33 +5,23 @@
 #ifndef CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_MESSAGE_FILTER_H_
 #define CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_MESSAGE_FILTER_H_
 
-#include "content/browser/browser_message_filter.h"
+#include "content/public/browser/browser_message_filter.h"
 
-// A message filter implementation that receives
-// the platform spell checker requests from SpellCheckProvider.
-class SpellCheckMessageFilter : public BrowserMessageFilter {
+// A message filter implementation that receives spell checker requests from
+// SpellCheckProvider.
+class SpellCheckMessageFilter : public content::BrowserMessageFilter {
  public:
   explicit SpellCheckMessageFilter(int render_process_id);
   virtual ~SpellCheckMessageFilter();
 
-  // BrowserMessageFilter implementation.
-  virtual void OverrideThreadForMessage(const IPC::Message& message,
-                                        BrowserThread::ID* thread);
+  // content::BrowserMessageFilter implementation.
+  virtual void OverrideThreadForMessage(
+      const IPC::Message& message,
+      content::BrowserThread::ID* thread) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message,
-                                 bool* message_was_ok);
+                                 bool* message_was_ok) OVERRIDE;
 
  private:
-  void OnPlatformCheckSpelling(const string16& word, int tag, bool* correct);
-  void OnPlatformFillSuggestionList(const string16& word,
-                                    std::vector<string16>* suggestions);
-  void OnGetDocumentTag(int* tag);
-  void OnDocumentWithTagClosed(int tag);
-  void OnShowSpellingPanel(bool show);
-  void OnUpdateSpellingPanelWithMisspelledWord(const string16& word);
-  void OnPlatformRequestTextCheck(int route_id,
-                                  int identifier,
-                                  int document_tag,
-                                  const string16& text);
   void OnSpellCheckerRequestDictionary();
   void OnNotifyChecked(const string16& word, bool misspelled);
 

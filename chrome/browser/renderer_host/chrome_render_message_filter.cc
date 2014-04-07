@@ -4,77 +4,46 @@
 
 #include "chrome/browser/renderer_host/chrome_render_message_filter.h"
 
+#include "base/bind.h"
+#include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/metrics/histogram.h"
 #include "chrome/browser/automation/automation_resource_message_filter.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/extensions/extension_event_router.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/extension_message_service.h"
+#include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/metrics/histogram_synchronizer.h"
 #include "chrome/browser/nacl_host/nacl_process_host.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
-#include "chrome/browser/net/predictor_api.h"
-#include "chrome/browser/prefs/pref_member.h"
+#include "chrome/browser/net/predictor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_message_bundle.h"
 #include "chrome/common/extensions/extension_messages.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
-#include "content/browser/renderer_host/render_process_host.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/url_constants.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/common/url_constants.h"
-#include "content/common/view_messages.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/common/process_type.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "webkit/plugins/npapi/plugin_list.h"
 
 #if defined(USE_TCMALLOC)
 #include "chrome/browser/browser_about_handler.h"
 #endif
 
-#if defined(OS_WIN)
-// These includes are only necessary for the PluginInfobarExperiment.
-#include "chrome/common/attrition_experiments.h"
-#include "chrome/installer/util/google_update_settings.h"
-#endif
-
+using content::BrowserThread;
 using WebKit::WebCache;
 using WebKit::WebSecurityOrigin;
-
-namespace {
-// Override the behavior of the security infobars for plugins. Only
-// operational on windows and only for a small slice of the of the
-// UMA opted-in population.
-void PluginInfobarExperiment(ContentSetting* outdated_policy,
-                             ContentSetting* authorize_policy) {
-#if !defined(OS_WIN)
-  return;
-#else
- std::wstring client_value;
- if (!GoogleUpdateSettings::GetClient(&client_value))
-   return;
- if (client_value == attrition_experiments::kPluginNoBlockNoOOD) {
-   *authorize_policy = CONTENT_SETTING_ALLOW;
-   *outdated_policy = CONTENT_SETTING_ALLOW;
- } else if (client_value == attrition_experiments::kPluginNoBlockDoOOD) {
-   *authorize_policy = CONTENT_SETTING_ALLOW;
-   *outdated_policy = CONTENT_SETTING_BLOCK;
- } else if (client_value == attrition_experiments::kPluginDoBlockNoOOD) {
-   *authorize_policy = CONTENT_SETTING_ASK;
-   *outdated_policy = CONTENT_SETTING_ALLOW;
- } else if (client_value == attrition_experiments::kPluginDoBlockDoOOD) {
-   *authorize_policy = CONTENT_SETTING_ASK;
-   *outdated_policy = CONTENT_SETTING_BLOCK;
- }
-#endif
-}
-}  // namespace
 
 ChromeRenderMessageFilter::ChromeRenderMessageFilter(
     int render_process_id,
@@ -84,14 +53,9 @@ ChromeRenderMessageFilter::ChromeRenderMessageFilter(
       profile_(profile),
       request_context_(request_context),
       extension_info_map_(profile->GetExtensionInfoMap()),
+      cookie_settings_(CookieSettings::GetForProfile(profile)),
+      resource_context_(profile->GetResourceContext()),
       weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
-  allow_outdated_plugins_.Init(prefs::kPluginsAllowOutdated,
-                               profile_->GetPrefs(), NULL);
-  allow_outdated_plugins_.MoveToThread(BrowserThread::IO);
-  always_authorize_plugins_.Init(prefs::kPluginsAlwaysAuthorize,
-                                 profile_->GetPrefs(), NULL);
-  always_authorize_plugins_.MoveToThread(BrowserThread::IO);
-  host_content_settings_map_ = profile->GetHostContentSettingsMap();
 }
 
 ChromeRenderMessageFilter::~ChromeRenderMessageFilter() {
@@ -101,7 +65,9 @@ bool ChromeRenderMessageFilter::OnMessageReceived(const IPC::Message& message,
                                                   bool* message_was_ok) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP_EX(ChromeRenderMessageFilter, message, *message_was_ok)
+#if !defined(DISABLE_NACL)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ChromeViewHostMsg_LaunchNaCl, OnLaunchNaCl)
+#endif
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_DnsPrefetch, OnDnsPrefetch)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_RendererHistograms,
                         OnRendererHistograms)
@@ -109,7 +75,7 @@ bool ChromeRenderMessageFilter::OnMessageReceived(const IPC::Message& message,
                         OnResourceTypeStats)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_UpdatedCacheStats,
                         OnUpdatedCacheStats)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_FPS, OnFPS)
+    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_FPS, OnFPS)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_V8HeapStats, OnV8HeapStats)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_OpenChannelToExtension,
                         OnOpenChannelToExtension)
@@ -119,6 +85,8 @@ bool ChromeRenderMessageFilter::OnMessageReceived(const IPC::Message& message,
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_AddListener, OnExtensionAddListener)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_RemoveListener,
                         OnExtensionRemoveListener)
+    IPC_MESSAGE_HANDLER(ExtensionHostMsg_ExtensionIdle, OnExtensionIdle)
+    IPC_MESSAGE_HANDLER(ExtensionHostMsg_ExtensionEventAck, OnExtensionEventAck)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_CloseChannel, OnExtensionCloseChannel)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_RequestForIOThread,
                         OnExtensionRequestForIOThread)
@@ -127,19 +95,14 @@ bool ChromeRenderMessageFilter::OnMessageReceived(const IPC::Message& message,
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_WriteTcmallocHeapProfile_ACK,
                         OnWriteTcmallocHeapProfile)
 #endif
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_GetPluginPolicies,
-                        OnGetPluginPolicies)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_AllowDatabase, OnAllowDatabase)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_AllowDOMStorage, OnAllowDOMStorage)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_AllowFileSystem, OnAllowFileSystem)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_AllowIndexedDB, OnAllowIndexedDB)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_GetPluginContentSetting,
-                        OnGetPluginContentSetting)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_CanTriggerClipboardRead,
                         OnCanTriggerClipboardRead)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_CanTriggerClipboardWrite,
                         OnCanTriggerClipboardWrite)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_ClearPredictorCache, OnClearPredictorCache)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
 
@@ -160,16 +123,6 @@ bool ChromeRenderMessageFilter::OnMessageReceived(const IPC::Message& message,
   return handled;
 }
 
-void ChromeRenderMessageFilter::OnDestruct() const {
-  const_cast<ChromeRenderMessageFilter*>(this)->
-      weak_ptr_factory_.DetachFromThread();
-  const_cast<ChromeRenderMessageFilter*>(this)->
-      weak_ptr_factory_.InvalidateWeakPtrs();
-
-  // Destroy on the UI thread because we contain a PrefMember.
-  BrowserThread::DeleteOnUIThread::Destruct(this);
-}
-
 void ChromeRenderMessageFilter::OverrideThreadForMessage(
     const IPC::Message& message, BrowserThread::ID* thread) {
   switch (message.type()) {
@@ -179,6 +132,8 @@ void ChromeRenderMessageFilter::OverrideThreadForMessage(
 #endif
     case ExtensionHostMsg_AddListener::ID:
     case ExtensionHostMsg_RemoveListener::ID:
+    case ExtensionHostMsg_ExtensionIdle::ID:
+    case ExtensionHostMsg_ExtensionEventAck::ID:
     case ExtensionHostMsg_CloseChannel::ID:
     case ChromeViewHostMsg_UpdatedCacheStats::ID:
       *thread = BrowserThread::UI;
@@ -188,15 +143,23 @@ void ChromeRenderMessageFilter::OverrideThreadForMessage(
   }
 }
 
+#if !defined(DISABLE_NACL)
 void ChromeRenderMessageFilter::OnLaunchNaCl(
-    const std::wstring& url, int channel_descriptor, IPC::Message* reply_msg) {
+    const std::wstring& url, int socket_count, IPC::Message* reply_msg) {
   NaClProcessHost* host = new NaClProcessHost(url);
-  host->Launch(this, channel_descriptor, reply_msg);
+  if (!host->Launch(this, socket_count, reply_msg)) {
+    // On failure, the NaClProcessHost didn't send the reply which the renderer
+    // is blocked on. Unblock the renderer by sending an error.
+    reply_msg->set_reply_error();
+    Send(reply_msg);
+  }
 }
+#endif
 
 void ChromeRenderMessageFilter::OnDnsPrefetch(
     const std::vector<std::string>& hostnames) {
-  chrome_browser_net::DnsPrefetchList(hostnames);
+  if (profile_->GetNetworkPredictor())
+    profile_->GetNetworkPredictor()->DnsPrefetchList(hostnames);
 }
 
 void ChromeRenderMessageFilter::OnRendererHistograms(
@@ -232,8 +195,8 @@ void ChromeRenderMessageFilter::OnFPS(int routing_id, float fps) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(
-            this, &ChromeRenderMessageFilter::OnFPS,
+        base::Bind(
+            &ChromeRenderMessageFilter::OnFPS, this,
             routing_id, fps));
     return;
   }
@@ -258,10 +221,9 @@ void ChromeRenderMessageFilter::OnOpenChannelToExtension(
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(
-          this, &ChromeRenderMessageFilter::OpenChannelToExtensionOnUIThread,
-          render_process_id_, routing_id, port2_id, source_extension_id,
-          target_extension_id, channel_name));
+      base::Bind(&ChromeRenderMessageFilter::OpenChannelToExtensionOnUIThread,
+                 this, render_process_id_, routing_id, port2_id,
+                 source_extension_id, target_extension_id, channel_name));
 }
 
 void ChromeRenderMessageFilter::OpenChannelToExtensionOnUIThread(
@@ -284,10 +246,9 @@ void ChromeRenderMessageFilter::OnOpenChannelToTab(
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(
-          this, &ChromeRenderMessageFilter::OpenChannelToTabOnUIThread,
-          render_process_id_, routing_id, port2_id, tab_id, extension_id,
-          channel_name));
+      base::Bind(&ChromeRenderMessageFilter::OpenChannelToTabOnUIThread, this,
+                 render_process_id_, routing_id, port2_id, tab_id, extension_id,
+                 channel_name));
 }
 
 void ChromeRenderMessageFilter::OpenChannelToTabOnUIThread(
@@ -315,10 +276,9 @@ void ChromeRenderMessageFilter::OnGetExtensionMessageBundle(
 
   BrowserThread::PostTask(
       BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(
-          this,
+      base::Bind(
           &ChromeRenderMessageFilter::OnGetExtensionMessageBundleOnFileThread,
-          extension_path, extension_id, default_locale, reply_msg));
+          this, extension_path, extension_id, default_locale, reply_msg));
 }
 
 void ChromeRenderMessageFilter::OnGetExtensionMessageBundleOnFileThread(
@@ -342,7 +302,8 @@ void ChromeRenderMessageFilter::OnGetExtensionMessageBundleOnFileThread(
 void ChromeRenderMessageFilter::OnExtensionAddListener(
     const std::string& extension_id,
     const std::string& event_name) {
-  RenderProcessHost* process = RenderProcessHost::FromID(render_process_id_);
+  content::RenderProcessHost* process =
+      content::RenderProcessHost::FromID(render_process_id_);
   if (!process || !profile_->GetExtensionEventRouter())
     return;
 
@@ -353,7 +314,8 @@ void ChromeRenderMessageFilter::OnExtensionAddListener(
 void ChromeRenderMessageFilter::OnExtensionRemoveListener(
     const std::string& extension_id,
     const std::string& event_name) {
-  RenderProcessHost* process = RenderProcessHost::FromID(render_process_id_);
+  content::RenderProcessHost* process =
+      content::RenderProcessHost::FromID(render_process_id_);
   if (!process || !profile_->GetExtensionEventRouter())
     return;
 
@@ -361,8 +323,20 @@ void ChromeRenderMessageFilter::OnExtensionRemoveListener(
       event_name, process, extension_id);
 }
 
+void ChromeRenderMessageFilter::OnExtensionIdle(
+    const std::string& extension_id) {
+  if (profile_->GetExtensionProcessManager())
+    profile_->GetExtensionProcessManager()->OnExtensionIdle(extension_id);
+}
+
+void ChromeRenderMessageFilter::OnExtensionEventAck(
+    const std::string& extension_id) {
+  if (profile_->GetExtensionEventRouter())
+    profile_->GetExtensionEventRouter()->OnExtensionEventAck(extension_id);
+}
+
 void ChromeRenderMessageFilter::OnExtensionCloseChannel(int port_id) {
-  if (!RenderProcessHost::FromID(render_process_id_))
+  if (!content::RenderProcessHost::FromID(render_process_id_))
     return;  // To guard against crash in browser_tests shutdown.
 
   if (profile_->GetExtensionMessageService())
@@ -393,39 +367,17 @@ void ChromeRenderMessageFilter::OnWriteTcmallocHeapProfile(
 }
 #endif
 
-void ChromeRenderMessageFilter::OnGetPluginPolicies(
-    ContentSetting* outdated_policy,
-    ContentSetting* authorize_policy) {
-  if (allow_outdated_plugins_.GetValue()) {
-    *outdated_policy = CONTENT_SETTING_ALLOW;
-  } else if (allow_outdated_plugins_.IsManaged()) {
-    *outdated_policy = CONTENT_SETTING_BLOCK;
-  } else {
-    *outdated_policy = CONTENT_SETTING_ASK;
-  }
-
-  *authorize_policy = always_authorize_plugins_.GetValue() ?
-      CONTENT_SETTING_ALLOW : CONTENT_SETTING_ASK;
-
-  PluginInfobarExperiment(outdated_policy, authorize_policy);
-}
-
 void ChromeRenderMessageFilter::OnAllowDatabase(int render_view_id,
                                                 const GURL& origin_url,
                                                 const GURL& top_origin_url,
                                                 const string16& name,
                                                 const string16& display_name,
                                                 bool* allowed) {
-  ContentSetting setting = host_content_settings_map_->GetCookieContentSetting(
-      origin_url, top_origin_url, true);
-  DCHECK((setting == CONTENT_SETTING_ALLOW) ||
-         (setting == CONTENT_SETTING_BLOCK) ||
-         (setting == CONTENT_SETTING_SESSION_ONLY));
-  *allowed = setting != CONTENT_SETTING_BLOCK;
-
+  *allowed = cookie_settings_->IsSettingCookieAllowed(origin_url,
+                                                      top_origin_url);
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableFunction(
+      base::Bind(
           &TabSpecificContentSettings::WebDatabaseAccessed,
           render_process_id_, render_view_id, origin_url, name, display_name,
           !*allowed));
@@ -434,33 +386,28 @@ void ChromeRenderMessageFilter::OnAllowDatabase(int render_view_id,
 void ChromeRenderMessageFilter::OnAllowDOMStorage(int render_view_id,
                                                   const GURL& origin_url,
                                                   const GURL& top_origin_url,
-                                                  DOMStorageType type,
+                                                  bool local,
                                                   bool* allowed) {
-  ContentSetting setting = host_content_settings_map_->GetCookieContentSetting(
-      origin_url, top_origin_url, true);
-  *allowed = setting != CONTENT_SETTING_BLOCK;
+  *allowed = cookie_settings_->IsSettingCookieAllowed(origin_url,
+                                                      top_origin_url);
   // Record access to DOM storage for potential display in UI.
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableFunction(
+      base::Bind(
           &TabSpecificContentSettings::DOMStorageAccessed,
-          render_process_id_, render_view_id, origin_url, type, !*allowed));
+          render_process_id_, render_view_id, origin_url, local, !*allowed));
 }
 
 void ChromeRenderMessageFilter::OnAllowFileSystem(int render_view_id,
                                                   const GURL& origin_url,
                                                   const GURL& top_origin_url,
                                                   bool* allowed) {
-  ContentSetting setting = host_content_settings_map_->GetCookieContentSetting(
-      origin_url, top_origin_url, true);
-  DCHECK((setting == CONTENT_SETTING_ALLOW) ||
-         (setting == CONTENT_SETTING_BLOCK) ||
-         (setting == CONTENT_SETTING_SESSION_ONLY));
-  *allowed = setting != CONTENT_SETTING_BLOCK;
+  *allowed = cookie_settings_->IsSettingCookieAllowed(origin_url,
+                                                      top_origin_url);
   // Record access to file system for potential display in UI.
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableFunction(
+      base::Bind(
           &TabSpecificContentSettings::FileSystemAccessed,
           render_process_id_, render_view_id, origin_url, !*allowed));
 }
@@ -470,52 +417,28 @@ void ChromeRenderMessageFilter::OnAllowIndexedDB(int render_view_id,
                                                  const GURL& top_origin_url,
                                                  const string16& name,
                                                  bool* allowed) {
-  ContentSetting setting = host_content_settings_map_->GetCookieContentSetting(
-      origin_url, top_origin_url, true);
-  *allowed = setting != CONTENT_SETTING_BLOCK;
-
+  *allowed = cookie_settings_->IsSettingCookieAllowed(origin_url,
+                                                      top_origin_url);
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      NewRunnableFunction(
+      base::Bind(
           &TabSpecificContentSettings::IndexedDBAccessed,
           render_process_id_, render_view_id, origin_url, name, !*allowed));
 }
 
-void ChromeRenderMessageFilter::OnGetPluginContentSetting(
-    const GURL& policy_url,
-    const std::string& resource,
-    ContentSetting* setting) {
-  *setting = host_content_settings_map_->GetContentSetting(
-      policy_url,
-      policy_url,
-      CONTENT_SETTINGS_TYPE_PLUGINS,
-      resource);
+void ChromeRenderMessageFilter::OnCanTriggerClipboardRead(
+    const GURL& origin, bool* allowed) {
+  *allowed = extension_info_map_->SecurityOriginHasAPIPermission(
+      origin, render_process_id_, ExtensionAPIPermission::kClipboardRead);
 }
 
-void ChromeRenderMessageFilter::OnCanTriggerClipboardRead(const GURL& url,
-                                                          bool* allowed) {
-  const Extension* extension =
-      extension_info_map_->extensions().GetByURL(url);
-  *allowed = extension &&
-      extension->HasAPIPermission(ExtensionAPIPermission::kClipboardRead);
-}
-
-void ChromeRenderMessageFilter::OnCanTriggerClipboardWrite(const GURL& url,
-                                                           bool* allowed) {
+void ChromeRenderMessageFilter::OnCanTriggerClipboardWrite(
+    const GURL& origin, bool* allowed) {
   // Since all extensions could historically write to the clipboard, preserve it
   // for compatibility.
-  const Extension* extension =
-      extension_info_map_->extensions().GetByURL(url);
-  *allowed = url.SchemeIs(chrome::kExtensionScheme) ||
-      (extension &&
-       extension->HasAPIPermission(ExtensionAPIPermission::kClipboardWrite));
-}
-
-void ChromeRenderMessageFilter::OnClearPredictorCache(int* result) {
-  // This function is disabled unless the user has enabled
-  // benchmarking extensions.
-  chrome_browser_net::ClearPredictorCache();
-  *result = 0;
+  *allowed = (origin.SchemeIs(chrome::kExtensionScheme) ||
+      extension_info_map_->SecurityOriginHasAPIPermission(
+          origin, render_process_id_, ExtensionAPIPermission::kClipboardWrite));
 }
 
 void ChromeRenderMessageFilter::OnGetCookies(

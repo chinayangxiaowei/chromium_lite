@@ -1,10 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/ui/cocoa/extensions/extension_installed_bubble_controller.h"
 
 #include "base/i18n/rtl.h"
+#include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
@@ -20,43 +21,48 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_source.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #import "skia/ext/skia_utils_mac.h"
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #include "ui/base/l10n/l10n_util.h"
 
+using content::BrowserThread;
 
 // C++ class that receives EXTENSION_LOADED notifications and proxies them back
 // to |controller|.
-class ExtensionLoadedNotificationObserver : public NotificationObserver {
+class ExtensionLoadedNotificationObserver
+    : public content::NotificationObserver {
  public:
   ExtensionLoadedNotificationObserver(
       ExtensionInstalledBubbleController* controller, Profile* profile)
           : controller_(controller) {
     registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
-        Source<Profile>(profile));
+        content::Source<Profile>(profile));
     registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
-        Source<Profile>(profile));
+        content::Source<Profile>(profile));
   }
 
  private:
   // NotificationObserver implementation. Tells the controller to start showing
   // its window on the main thread when the extension has finished loading.
   void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details) {
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) {
     if (type == chrome::NOTIFICATION_EXTENSION_LOADED) {
-      const Extension* extension = Details<const Extension>(details).ptr();
+      const Extension* extension =
+          content::Details<const Extension>(details).ptr();
       if (extension == [controller_ extension]) {
         [controller_ performSelectorOnMainThread:@selector(showWindow:)
                                       withObject:controller_
                                    waitUntilDone:NO];
       }
     } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
-      const Extension* extension = Details<const Extension>(details).ptr();
+      const Extension* extension =
+          content::Details<const Extension>(details).ptr();
       if (extension == [controller_ extension]) {
         [controller_ performSelectorOnMainThread:@selector(extensionUnloaded:)
                                       withObject:controller_
@@ -67,7 +73,7 @@ class ExtensionLoadedNotificationObserver : public NotificationObserver {
     }
   }
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
   ExtensionInstalledBubbleController* controller_;  // weak, owns us
 };
 
@@ -81,8 +87,8 @@ class ExtensionLoadedNotificationObserver : public NotificationObserver {
                    browser:(Browser*)browser
                       icon:(SkBitmap)icon {
   NSString* nibPath =
-      [base::mac::MainAppBundle() pathForResource:@"ExtensionInstalledBubble"
-                                          ofType:@"nib"];
+      [base::mac::FrameworkBundle() pathForResource:@"ExtensionInstalledBubble"
+                                             ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibPath owner:self])) {
     DCHECK(parentWindow);
     parentWindow_ = parentWindow;

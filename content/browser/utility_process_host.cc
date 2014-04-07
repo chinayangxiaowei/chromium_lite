@@ -1,17 +1,25 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/utility_process_host.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
-#include "content/browser/content_browser_client.h"
-#include "content/common/content_switches.h"
+#include "content/browser/browser_child_process_host_impl.h"
+#include "content/common/child_process_host_impl.h"
 #include "content/common/utility_messages.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_switches.h"
 #include "ipc/ipc_switches.h"
 #include "ui/base/ui_base_switches.h"
+#include "webkit/plugins/plugin_switches.h"
+
+using content::BrowserThread;
+using content::ChildProcessHost;
 
 UtilityProcessHost::Client::Client() {
 }
@@ -29,14 +37,23 @@ bool UtilityProcessHost::Client::OnMessageReceived(
 
 UtilityProcessHost::UtilityProcessHost(Client* client,
                                        BrowserThread::ID client_thread_id)
-    : BrowserChildProcessHost(UTILITY_PROCESS),
-      client_(client),
+    : client_(client),
       client_thread_id_(client_thread_id),
       is_batch_mode_(false),
+      no_sandbox_(false),
+#if defined(OS_LINUX)
+      child_flags_(ChildProcessHost::CHILD_ALLOW_SELF),
+#else
+      child_flags_(ChildProcessHost::CHILD_NORMAL),
+#endif
+      use_linux_zygote_(false),
       started_(false) {
+  process_.reset(
+      new BrowserChildProcessHostImpl(content::PROCESS_TYPE_UTILITY, this));
 }
 
 UtilityProcessHost::~UtilityProcessHost() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(!is_batch_mode_);
 }
 
@@ -44,7 +61,7 @@ bool UtilityProcessHost::Send(IPC::Message* message) {
   if (!StartProcess())
     return false;
 
-  return BrowserChildProcessHost::Send(message);
+  return process_->Send(message);
 }
 
 bool UtilityProcessHost::StartBatchMode()  {
@@ -61,12 +78,7 @@ void UtilityProcessHost::EndBatchMode()  {
 }
 
 FilePath UtilityProcessHost::GetUtilityProcessCmd() {
-#if defined(OS_LINUX)
-  int flags = CHILD_ALLOW_SELF;
-#else
-  int flags = CHILD_NORMAL;
-#endif
-  return GetChildPath(flags);
+  return ChildProcessHost::GetChildPath(child_flags_);
 }
 
 bool UtilityProcessHost::StartProcess() {
@@ -78,9 +90,10 @@ bool UtilityProcessHost::StartProcess() {
     return true;
   // Name must be set or metrics_service will crash in any test which
   // launches a UtilityProcessHost.
-  set_name(ASCIIToUTF16("utility process"));
+  process_->SetName(ASCIIToUTF16("utility process"));
 
-  if (!CreateChannel())
+  std::string channel_id = process_->GetHost()->CreateChannel();
+  if (channel_id.empty())
     return false;
 
   FilePath exe_path = GetUtilityProcessCmd();
@@ -92,7 +105,7 @@ bool UtilityProcessHost::StartProcess() {
   CommandLine* cmd_line = new CommandLine(exe_path);
   cmd_line->AppendSwitchASCII(switches::kProcessType,
                               switches::kUtilityProcess);
-  cmd_line->AppendSwitchASCII(switches::kProcessChannelID, channel_id());
+  cmd_line->AppendSwitchASCII(switches::kProcessChannelID, channel_id);
   std::string locale =
       content::GetContentClient()->browser()->GetApplicationLocale();
   cmd_line->AppendSwitchASCII(switches::kLang, locale);
@@ -100,8 +113,10 @@ bool UtilityProcessHost::StartProcess() {
   const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
   if (browser_command_line.HasSwitch(switches::kChromeFrame))
     cmd_line->AppendSwitch(switches::kChromeFrame);
-  if (browser_command_line.HasSwitch(switches::kNoSandbox))
+  if (no_sandbox_ || browser_command_line.HasSwitch(switches::kNoSandbox))
     cmd_line->AppendSwitch(switches::kNoSandbox);
+  if (browser_command_line.HasSwitch(switches::kDebugPluginLoading))
+    cmd_line->AppendSwitch(switches::kDebugPluginLoading);
 
 #if defined(OS_POSIX)
   // TODO(port): Sandbox this on Linux.  Also, zygote this to work with
@@ -118,12 +133,18 @@ bool UtilityProcessHost::StartProcess() {
   cmd_line->AppendSwitchPath(switches::kUtilityProcessAllowedDir, exposed_dir_);
 #endif
 
-  Launch(
+  bool use_zygote = false;
+
+#if defined(OS_LINUX)
+  use_zygote = !no_sandbox_ && use_linux_zygote_;
+#endif
+
+  process_->Launch(
 #if defined(OS_WIN)
       exposed_dir_,
 #elif defined(OS_POSIX)
-      false,
-      base::environment_vector(),
+      use_zygote,
+      env_,
 #endif
       cmd_line);
 
@@ -133,16 +154,13 @@ bool UtilityProcessHost::StartProcess() {
 bool UtilityProcessHost::OnMessageReceived(const IPC::Message& message) {
   BrowserThread::PostTask(
       client_thread_id_, FROM_HERE,
-      NewRunnableMethod(client_.get(), &Client::OnMessageReceived, message));
+      base::Bind(base::IgnoreResult(&Client::OnMessageReceived),
+                 client_.get(), message));
   return true;
 }
 
 void UtilityProcessHost::OnProcessCrashed(int exit_code) {
   BrowserThread::PostTask(
       client_thread_id_, FROM_HERE,
-      NewRunnableMethod(client_.get(), &Client::OnProcessCrashed, exit_code));
-}
-
-bool UtilityProcessHost::CanShutdown() {
-  return true;
+      base::Bind(&Client::OnProcessCrashed, client_.get(), exit_code));
 }

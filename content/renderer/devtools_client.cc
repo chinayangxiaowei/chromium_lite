@@ -7,19 +7,20 @@
 #include "base/command_line.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
-#include "content/common/content_switches.h"
 #include "content/common/devtools_messages.h"
-#include "content/renderer/render_thread.h"
-#include "content/renderer/render_view.h"
+#include "content/public/common/content_switches.h"
+#include "content/renderer/render_thread_impl.h"
+#include "content/renderer/render_view_impl.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDevToolsFrontend.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebFloatPoint.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
 #include "ui/base/ui_base_switches.h"
 
 using WebKit::WebDevToolsFrontend;
 using WebKit::WebString;
 
-DevToolsClient::DevToolsClient(RenderView* render_view)
-    : RenderViewObserver(render_view) {
+DevToolsClient::DevToolsClient(RenderViewImpl* render_view)
+    : content::RenderViewObserver(render_view) {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
   web_tools_frontend_.reset(
       WebDevToolsFrontend::create(
@@ -31,12 +32,8 @@ DevToolsClient::DevToolsClient(RenderView* render_view)
 DevToolsClient::~DevToolsClient() {
 }
 
-void DevToolsClient::SendToAgent(const IPC::Message& tools_agent_message) {
-  Send(new DevToolsHostMsg_ForwardToAgent(routing_id(), tools_agent_message));
-}
-
 bool DevToolsClient::OnMessageReceived(const IPC::Message& message) {
-  DCHECK(RenderThread::current()->message_loop() == MessageLoop::current());
+  DCHECK(RenderThreadImpl::current());
 
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(DevToolsClient, message)
@@ -48,18 +45,9 @@ bool DevToolsClient::OnMessageReceived(const IPC::Message& message) {
   return handled;
 }
 
-void DevToolsClient::sendFrontendLoaded() {
-  SendToAgent(DevToolsAgentMsg_FrontendLoaded(MSG_ROUTING_NONE));
-}
-
 void DevToolsClient::sendMessageToBackend(const WebString& message)  {
-  SendToAgent(DevToolsAgentMsg_DispatchOnInspectorBackend(MSG_ROUTING_NONE,
-                                                          message.utf8()));
-}
-
-void DevToolsClient::sendDebuggerCommandToAgent(const WebString& command) {
-  SendToAgent(DevToolsAgentMsg_DebuggerCommand(MSG_ROUTING_NONE,
-                                               command.utf8()));
+  Send(new DevToolsAgentMsg_DispatchOnInspectorBackend(routing_id(),
+                                                       message.utf8()));
 }
 
 void DevToolsClient::activateWindow() {
@@ -70,12 +58,25 @@ void DevToolsClient::closeWindow() {
   Send(new DevToolsHostMsg_CloseWindow(routing_id()));
 }
 
+void DevToolsClient::moveWindowBy(const WebKit::WebFloatPoint& offset) {
+  Send(new DevToolsHostMsg_MoveWindow(routing_id(), offset.x, offset.y));
+}
+
 void DevToolsClient::requestDockWindow() {
   Send(new DevToolsHostMsg_RequestDockWindow(routing_id()));
 }
 
 void DevToolsClient::requestUndockWindow() {
   Send(new DevToolsHostMsg_RequestUndockWindow(routing_id()));
+}
+
+void DevToolsClient::requestSetDockSide(const WebKit::WebString& side) {
+  Send(new DevToolsHostMsg_RequestSetDockSide(routing_id(), side.utf8()));
+}
+
+void DevToolsClient::openInNewTab(const WebKit::WebString& url) {
+  Send(new DevToolsHostMsg_OpenInNewTab(routing_id(),
+                                        url.utf8()));
 }
 
 void DevToolsClient::saveAs(const WebKit::WebString& file_name,
@@ -88,9 +89,4 @@ void DevToolsClient::saveAs(const WebKit::WebString& file_name,
 void DevToolsClient::OnDispatchOnInspectorFrontend(const std::string& message) {
   web_tools_frontend_->dispatchOnInspectorFrontend(
       WebString::fromUTF8(message));
-}
-
-bool DevToolsClient::shouldHideScriptsPanel() {
-  CommandLine* cmd = CommandLine::ForCurrentProcess();
-  return cmd->HasSwitch(switches::kRemoteShellPort);
 }

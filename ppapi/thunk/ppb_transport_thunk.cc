@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,11 +17,12 @@ namespace {
 
 typedef EnterResource<PPB_Transport_API> EnterTransport;
 
-PP_Resource Create(PP_Instance instance, const char* name, const char* proto) {
+PP_Resource Create(PP_Instance instance, const char* name,
+                   PP_TransportType type) {
   EnterFunction<ResourceCreationAPI> enter(instance, true);
   if (enter.failed())
     return 0;
-  return enter.functions()->CreateTransport(instance, name, proto);
+  return enter.functions()->CreateTransport(instance, name, type);
 }
 
 PP_Bool IsTransport(PP_Resource resource) {
@@ -108,7 +109,7 @@ const PPB_Transport_Dev g_ppb_transport_thunk = {
 
 }  // namespace
 
-const PPB_Transport_Dev* GetPPB_Transport_Thunk() {
+const PPB_Transport_Dev_0_7* GetPPB_Transport_Dev_0_7_Thunk() {
   return &g_ppb_transport_thunk;
 }
 

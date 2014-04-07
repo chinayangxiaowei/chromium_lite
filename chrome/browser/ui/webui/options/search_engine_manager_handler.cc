@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/webui/options/search_engine_manager_handler.h"
 
-#include "base/callback.h"
+#include "base/bind.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/search_engines/template_url_table_model.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -40,7 +41,7 @@ SearchEngineManagerHandler::~SearchEngineManagerHandler() {
 
 void SearchEngineManagerHandler::Initialize() {
   list_controller_.reset(
-      new KeywordEditorController(Profile::FromWebUI(web_ui_)));
+      new KeywordEditorController(Profile::FromWebUI(web_ui())));
   if (list_controller_.get()) {
     list_controller_->table_model()->SetObserver(this);
     OnModelChanged();
@@ -85,25 +86,30 @@ void SearchEngineManagerHandler::GetLocalizedValues(
 }
 
 void SearchEngineManagerHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback(
+  web_ui()->RegisterMessageCallback(
       "managerSetDefaultSearchEngine",
-      NewCallback(this, &SearchEngineManagerHandler::SetDefaultSearchEngine));
-  web_ui_->RegisterMessageCallback(
+      base::Bind(&SearchEngineManagerHandler::SetDefaultSearchEngine,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "removeSearchEngine",
-      NewCallback(this, &SearchEngineManagerHandler::RemoveSearchEngine));
-  web_ui_->RegisterMessageCallback(
+      base::Bind(&SearchEngineManagerHandler::RemoveSearchEngine,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "editSearchEngine",
-      NewCallback(this, &SearchEngineManagerHandler::EditSearchEngine));
-  web_ui_->RegisterMessageCallback(
+      base::Bind(&SearchEngineManagerHandler::EditSearchEngine,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "checkSearchEngineInfoValidity",
-      NewCallback(this,
-                  &SearchEngineManagerHandler::CheckSearchEngineInfoValidity));
-  web_ui_->RegisterMessageCallback(
+      base::Bind(&SearchEngineManagerHandler::CheckSearchEngineInfoValidity,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "searchEngineEditCancelled",
-      NewCallback(this, &SearchEngineManagerHandler::EditCancelled));
-  web_ui_->RegisterMessageCallback(
+      base::Bind(&SearchEngineManagerHandler::EditCancelled,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
       "searchEngineEditCompleted",
-      NewCallback(this, &SearchEngineManagerHandler::EditCompleted));
+      base::Bind(&SearchEngineManagerHandler::EditCompleted,
+                 base::Unretained(this)));
 }
 
 void SearchEngineManagerHandler::OnModelChanged() {
@@ -136,18 +142,18 @@ void SearchEngineManagerHandler::OnModelChanged() {
   // Build the extension keywords list.
   ListValue keyword_list;
   ExtensionService* extension_service =
-      Profile::FromWebUI(web_ui_)->GetExtensionService();
+      Profile::FromWebUI(web_ui())->GetExtensionService();
   if (extension_service) {
-    const ExtensionList* extensions = extension_service->extensions();
-    for (ExtensionList::const_iterator it = extensions->begin();
+    const ExtensionSet* extensions = extension_service->extensions();
+    for (ExtensionSet::const_iterator it = extensions->begin();
          it != extensions->end(); ++it) {
       if ((*it)->omnibox_keyword().size() > 0)
         keyword_list.Append(CreateDictionaryForExtension(*(*it)));
     }
   }
 
-  web_ui_->CallJavascriptFunction("SearchEngineManager.updateSearchEngineList",
-                                  defaults_list, others_list, keyword_list);
+  web_ui()->CallJavascriptFunction("SearchEngineManager.updateSearchEngineList",
+                                   defaults_list, others_list, keyword_list);
 }
 
 void SearchEngineManagerHandler::OnItemsChanged(int start, int length) {
@@ -243,7 +249,7 @@ void SearchEngineManagerHandler::EditSearchEngine(const ListValue* args) {
   if (index != -1)
     edit_url = list_controller_->GetTemplateURL(index);
   edit_controller_.reset(new EditSearchEngineController(
-      edit_url, this, Profile::FromWebUI(web_ui_)));
+      edit_url, this, Profile::FromWebUI(web_ui())));
 }
 
 void SearchEngineManagerHandler::OnEditedKeyword(
@@ -281,8 +287,8 @@ void SearchEngineManagerHandler::CheckSearchEngineInfoValidity(
   validity.SetBoolean("keyword", edit_controller_->IsKeywordValid(keyword));
   validity.SetBoolean("url", edit_controller_->IsURLValid(url));
   StringValue indexValue(modelIndex);
-  web_ui_->CallJavascriptFunction("SearchEngineManager.validityCheckCallback",
-                                  validity, indexValue);
+  web_ui()->CallJavascriptFunction("SearchEngineManager.validityCheckCallback",
+                                   validity, indexValue);
 }
 
 void SearchEngineManagerHandler::EditCancelled(const ListValue* args) {

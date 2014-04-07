@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 
 #include "base/basictypes.h"
 #include "build/build_config.h"
+#include "content/common/content_export.h"
 #include "webkit/glue/webaccessibility.h"
 
 class BrowserAccessibilityManager;
@@ -39,7 +40,7 @@ typedef std::map<WebAccessibility::StringAttribute, string16> StringAttrMap;
 // APIs.
 //
 ////////////////////////////////////////////////////////////////////////////////
-class BrowserAccessibility {
+class CONTENT_EXPORT BrowserAccessibility {
  public:
   // Creates a platform specific BrowserAccessibility. Ownership passes to the
   // caller.
@@ -54,21 +55,16 @@ class BrowserAccessibility {
   // Perform platform specific initialization. This can be called multiple times
   // during the lifetime of this instance after the members of this base object
   // have been reset with new values from the renderer process.
-  virtual void Initialize();
-
-  // Optionally send events triggered simply by the fact that this node
-  // has been created or modified (and has been attached to the tree).
-  // This can include "show" events, "text changed" events in live regions,
-  // or "alert" events.
-  virtual void SendNodeUpdateEvents() {}
+  // Child dependent initialization can be done here.
+  virtual void PostInitialize() {}
 
   // Initialize this object, reading attributes from |src|. Does not
   // recurse into children of |src| and build the whole subtree.
-  void Initialize(BrowserAccessibilityManager* manager,
-                  BrowserAccessibility* parent,
-                  int32 child_id,
-                  int32 index_in_parent,
-                  const WebAccessibility& src);
+  void PreInitialize(BrowserAccessibilityManager* manager,
+      BrowserAccessibility* parent,
+      int32 child_id,
+      int32 index_in_parent,
+      const WebAccessibility& src);
 
   // Add a child of this object.
   void AddChild(BrowserAccessibility* child);
@@ -96,10 +92,15 @@ class BrowserAccessibility {
   // of its parent.
   BrowserAccessibility* GetNextSibling();
 
-  // Returns the bounds of this object in screen coordinates.
-  gfx::Rect GetBoundsRect();
+  // Returns the bounds of this object in coordinates relative to the
+  // top-left corner of the overall web area.
+  gfx::Rect GetLocalBoundsRect();
 
-  // Returns the deepest descendant that contains the specified point.
+  // Returns the bounds of this object in screen coordinates.
+  gfx::Rect GetGlobalBoundsRect();
+
+  // Returns the deepest descendant that contains the specified point
+  // (in global screen coordinates).
   BrowserAccessibility* BrowserAccessibilityForPoint(const gfx::Point& point);
 
   //
@@ -192,6 +193,10 @@ class BrowserAccessibility {
   BrowserAccessibilityWin* toBrowserAccessibilityWin();
 #endif
 
+  // A string representation of this node.
+  // TODO(dtseng): Move to test only library.
+  std::string ToString();
+
   // Retrieve the value of a bool attribute from the bool attribute
   // map and returns true if found.
   bool GetBoolAttribute(WebAccessibility::BoolAttribute attr, bool* value)
@@ -216,10 +221,22 @@ class BrowserAccessibility {
   // returns true if found.
   bool GetHtmlAttribute(const char* attr, string16* value) const;
 
+  // Returns true if the bit corresponding to the given state enum is 1.
+  bool HasState(WebAccessibility::State state_enum) const;
+
   // Returns true if this node is an editable text field of any kind.
   bool IsEditableText() const;
 
+  // Append the text from this node and its children.
+  string16 GetTextRecursive() const;
+
  protected:
+  // Perform platform specific initialization. This can be called multiple times
+  // during the lifetime of this instance after the members of this base object
+  // have been reset with new values from the renderer process.
+  // Perform child independent initialization in this method.
+  virtual void PreInitialize();
+
   BrowserAccessibility();
 
   // The manager of this tree of accessibility objects; needed for

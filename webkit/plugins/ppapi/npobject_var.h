@@ -9,8 +9,8 @@
 
 #include "base/compiler_specific.h"
 #include "ppapi/c/pp_instance.h"
-#include "ppapi/c/pp_module.h"
 #include "ppapi/shared_impl/var.h"
+#include "webkit/plugins/webkit_plugins_export.h"
 
 typedef struct NPObject NPObject;
 typedef struct _NPVariant NPVariant;
@@ -32,13 +32,12 @@ class NPObjectVar : public Var {
   // You should always use FromNPObject to create an NPObjectVar. This function
   // guarantees that we maintain the 1:1 mapping between NPObject and
   // NPObjectVar.
-  NPObjectVar(PP_Module module, PP_Instance instance, NPObject* np_object);
+  NPObjectVar(PP_Instance instance, NPObject* np_object);
 
   virtual ~NPObjectVar();
 
   // Var overrides.
   virtual NPObjectVar* AsNPObjectVar() OVERRIDE;
-  virtual PP_Var GetPPVar() OVERRIDE;
   virtual PP_VarType GetType() const OVERRIDE;
 
   // Returns the underlying NPObject corresponding to this NPObjectVar.
@@ -54,7 +53,7 @@ class NPObjectVar : public Var {
 
   // Helper function that converts a PP_Var to an object. This will return NULL
   // if the PP_Var is not of object type or the object is invalid.
-  static scoped_refptr<NPObjectVar> FromPPVar(PP_Var var);
+  WEBKIT_PLUGINS_EXPORT static scoped_refptr<NPObjectVar> FromPPVar(PP_Var var);
 
  private:
   // Possibly 0 if the object has outlived its instance.

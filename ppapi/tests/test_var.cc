@@ -8,7 +8,6 @@
 
 #include <limits>
 
-#include "base/basictypes.h"
 #include "ppapi/c/dev/ppb_testing_dev.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/c/ppb_var.h"
@@ -26,19 +25,19 @@ uint32_t kInvalidLength = static_cast<uint32_t>(-1);
 REGISTER_TEST_CASE(Var);
 
 bool TestVar::Init() {
-  var_interface_ = reinterpret_cast<const PPB_Var*>(
+  var_interface_ = static_cast<const PPB_Var*>(
       pp::Module::Get()->GetBrowserInterface(PPB_VAR_INTERFACE));
-  return var_interface_ && InitTestingInterface();
+  return var_interface_ && CheckTestingInterface();
 }
 
-void TestVar::RunTest() {
-  RUN_TEST(BasicString);
-  RUN_TEST(InvalidAndEmpty);
-  RUN_TEST(InvalidUtf8);
-  RUN_TEST(NullInputInUtf8Conversion);
-  RUN_TEST(ValidUtf8);
-  RUN_TEST(Utf8WithEmbeddedNulls);
-  RUN_TEST(VarToUtf8ForWrongType);
+void TestVar::RunTests(const std::string& filter) {
+  RUN_TEST(BasicString, filter);
+  RUN_TEST(InvalidAndEmpty, filter);
+  RUN_TEST(InvalidUtf8, filter);
+  RUN_TEST(NullInputInUtf8Conversion, filter);
+  RUN_TEST(ValidUtf8, filter);
+  RUN_TEST(Utf8WithEmbeddedNulls, filter);
+  RUN_TEST(VarToUtf8ForWrongType, filter);
 }
 
 std::string TestVar::TestBasicString() {
@@ -46,9 +45,8 @@ std::string TestVar::TestBasicString() {
       instance_->pp_instance());
   {
     const char kStr[] = "Hello";
-    const uint32_t kStrLen(arraysize(kStr) - 1);
-    PP_Var str = var_interface_->VarFromUtf8(pp::Module::Get()->pp_module(),
-                                             kStr, kStrLen);
+    const uint32_t kStrLen(sizeof(kStr) - 1);
+    PP_Var str = var_interface_->VarFromUtf8(kStr, kStrLen);
     ASSERT_EQ(PP_VARTYPE_STRING, str.type);
 
     // Reading back the string should work.
@@ -123,8 +121,7 @@ std::string TestVar::TestNullInputInUtf8Conversion() {
 
   // 0-length string should not dereference input string, and should produce
   // an empty string.
-  converted_string = var_interface_->VarFromUtf8(
-      pp::Module::Get()->pp_module(), NULL, 0);
+  converted_string = var_interface_->VarFromUtf8(NULL, 0);
   if (converted_string.type != PP_VARTYPE_STRING) {
     return "Expected 0 length to return empty string.";
   }
@@ -139,6 +136,7 @@ std::string TestVar::TestNullInputInUtf8Conversion() {
   if (result == NULL) {
     return "Expected a non-null result for 0-lengthed string from VarToUtf8.";
   }
+  var_interface_->Release(converted_string);
 
   // Should not crash, and make an empty string.
   const char* null_string = NULL;

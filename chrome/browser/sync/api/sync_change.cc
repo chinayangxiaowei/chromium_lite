@@ -4,6 +4,8 @@
 
 #include "chrome/browser/sync/api/sync_change.h"
 
+#include <ostream>
+
 SyncChange::SyncChange() : change_type_(ACTION_INVALID) {
 }
 
@@ -19,18 +21,19 @@ bool SyncChange::IsValid() const {
   if (change_type_ == ACTION_INVALID || !sync_data_.IsValid())
     return false;
 
-  // Data from the syncer must always have specifics.
+  // Data from the syncer must always have valid specifics.
   if (!sync_data_.IsLocal())
-    return (sync_data_.GetDataType() != syncable::UNSPECIFIED);
+    return syncable::IsRealDataType(sync_data_.GetDataType());
 
-  // Local changes must always have a tag.
-  if (sync_data_.GetTag().empty())
+  // Local changes must always have a tag and specify a valid datatype.
+  if (sync_data_.GetTag().empty() ||
+      !syncable::IsRealDataType(sync_data_.GetDataType())) {
     return false;
+  }
 
-  // Adds and updates must have valid specifics (checked by GetDataType())
+  // Adds and updates must have a non-unique-title.
   if (change_type_ == ACTION_ADD || change_type_ == ACTION_UPDATE)
-    return (sync_data_.GetDataType() != syncable::UNSPECIFIED &&
-            !sync_data_.GetTitle().empty());
+    return (!sync_data_.GetTitle().empty());
 
   return true;
 }
@@ -58,4 +61,13 @@ std::string SyncChange::ChangeTypeToString(SyncChangeType change_type) {
       NOTREACHED();
   }
   return std::string();
+}
+
+std::string SyncChange::ToString() const {
+  return "{ changeType: " + ChangeTypeToString(change_type_) +
+      ", syncData: " + sync_data_.ToString() + "}";
+}
+
+void PrintTo(const SyncChange& sync_change, std::ostream* os) {
+  *os << sync_change.ToString();
 }

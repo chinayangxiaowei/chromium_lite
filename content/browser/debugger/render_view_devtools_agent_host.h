@@ -10,40 +10,42 @@
 
 #include "base/basictypes.h"
 #include "content/browser/debugger/devtools_agent_host.h"
-#include "content/browser/renderer_host/render_view_host_observer.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/render_view_host_observer.h"
 
 class RenderViewHost;
+class TabContents;
 
-class RenderViewDevToolsAgentHost : public DevToolsAgentHost,
-                                    private RenderViewHostObserver {
+namespace content {
+
+class CONTENT_EXPORT RenderViewDevToolsAgentHost
+    : public DevToolsAgentHost,
+      private content::RenderViewHostObserver {
  public:
-  static DevToolsAgentHost* FindFor(RenderViewHost*);
+  RenderViewDevToolsAgentHost(RenderViewHost*);
 
  private:
-  RenderViewDevToolsAgentHost(RenderViewHost*);
   virtual ~RenderViewDevToolsAgentHost();
 
   // DevToolsAgentHost implementation.
-  virtual void SendMessageToAgent(IPC::Message* msg);
-  virtual void NotifyClientClosing();
-  virtual int GetRenderProcessId();
+  virtual void SendMessageToAgent(IPC::Message* msg) OVERRIDE;
+  virtual void NotifyClientClosing() OVERRIDE;
+  virtual int GetRenderProcessId() OVERRIDE;
 
-  // RenderViewHostObserver overrides.
-  virtual void RenderViewHostDestroyed() OVERRIDE;
+  // content::RenderViewHostObserver overrides.
+  virtual void RenderViewHostDestroyed(RenderViewHost* rvh) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
 
-  void OnForwardToClient(const IPC::Message& message);
-  void OnRuntimePropertyChanged(const std::string& name,
-                                const std::string& value);
+  void OnDispatchOnInspectorFrontend(const std::string& message);
+  void OnSaveAgentRuntimeState(const std::string& state);
   void OnClearBrowserCache();
   void OnClearBrowserCookies();
 
   RenderViewHost* render_view_host_;
 
-  typedef std::map<RenderViewHost*, RenderViewDevToolsAgentHost*> Instances;
-  static Instances instances_;
-
   DISALLOW_COPY_AND_ASSIGN(RenderViewDevToolsAgentHost);
 };
+
+}  // namespace content
 
 #endif  // CONTENT_BROWSER_DEBUGGER_RENDER_VIEW_DEVTOOLS_AGENT_HOST_H_

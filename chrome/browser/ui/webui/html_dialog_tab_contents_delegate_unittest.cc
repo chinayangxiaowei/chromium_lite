@@ -21,6 +21,9 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/rect.h"
 
+using content::OpenURLParams;
+using content::Referrer;
+
 namespace {
 
 class TestTabContentsDelegate : public HtmlDialogTabContentsDelegate {
@@ -53,13 +56,13 @@ class HtmlDialogTabContentsDelegateTest : public BrowserWithTestWindowTest {
 
 TEST_F(HtmlDialogTabContentsDelegateTest, DoNothingMethodsTest) {
   // None of the following calls should do anything.
-  EXPECT_TRUE(test_tab_contents_delegate_->IsPopup(NULL));
+  EXPECT_TRUE(test_tab_contents_delegate_->IsPopupOrPanel(NULL));
   scoped_refptr<history::HistoryAddPageArgs> should_add_args(
       new history::HistoryAddPageArgs(
           GURL(), base::Time::Now(), 0, 0, GURL(), history::RedirectList(),
-          PageTransition::TYPED, history::SOURCE_SYNCED, false));
+          content::PAGE_TRANSITION_TYPED, history::SOURCE_SYNCED, false));
   EXPECT_FALSE(test_tab_contents_delegate_->ShouldAddNavigationToHistory(
-                   *should_add_args, NavigationType::NEW_PAGE));
+                   *should_add_args, content::NAVIGATION_TYPE_NEW_PAGE));
   test_tab_contents_delegate_->NavigationStateChanged(NULL, 0);
   test_tab_contents_delegate_->ActivateContents(NULL);
   test_tab_contents_delegate_->LoadingStateChanged(NULL);
@@ -72,8 +75,8 @@ TEST_F(HtmlDialogTabContentsDelegateTest, DoNothingMethodsTest) {
 
 TEST_F(HtmlDialogTabContentsDelegateTest, OpenURLFromTabTest) {
   test_tab_contents_delegate_->OpenURLFromTab(
-    NULL, GURL(chrome::kAboutBlankURL), GURL(),
-    NEW_FOREGROUND_TAB, PageTransition::LINK);
+    NULL, OpenURLParams(GURL(chrome::kAboutBlankURL), Referrer(),
+    NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK, false));
   // This should create a new foreground tab in the existing browser.
   EXPECT_EQ(1, browser()->tab_count());
   EXPECT_EQ(1U, BrowserList::size());
@@ -95,8 +98,8 @@ TEST_F(HtmlDialogTabContentsDelegateTest, DetachTest) {
   EXPECT_EQ(NULL, test_tab_contents_delegate_->profile());
   // Now, none of the following calls should do anything.
   test_tab_contents_delegate_->OpenURLFromTab(
-      NULL, GURL(chrome::kAboutBlankURL), GURL(),
-      NEW_FOREGROUND_TAB, PageTransition::LINK);
+      NULL, OpenURLParams(GURL(chrome::kAboutBlankURL), Referrer(),
+      NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK, false));
   test_tab_contents_delegate_->AddNewContents(NULL, NULL, NEW_FOREGROUND_TAB,
                                               gfx::Rect(), false);
   EXPECT_EQ(0, browser()->tab_count());

@@ -23,18 +23,21 @@ namespace {
 
 // Definitions for database schema.
 
-const int kCurrentVersion = 3;
+const int kCurrentVersion = 4;
 const int kCompatibleVersion = 2;
 
 const char kHostQuotaTable[] = "HostQuotaTable";
 const char kOriginInfoTable[] = "OriginInfoTable";
-const char kGlobalQuotaKeyPrefix[] = "GlobalQuota-";
 const char kIsOriginTableBootstrapped[] = "IsOriginTableBootstrapped";
 
 class HistogramUniquifier {
  public:
   static const char* name() { return "Sqlite.Quota.Error"; }
 };
+
+sql::ErrorDelegate* GetErrorHandlerForQuotaDb() {
+  return new sql::DiagnosticErrorDelegate<HistogramUniquifier>();
+}
 
 bool PrepareCachedStatement(
     sql::Connection* db, const sql::StatementID& id,
@@ -48,13 +51,10 @@ bool PrepareCachedStatement(
   return true;
 }
 
-std::string GetGlobalQuotaKey(quota::StorageType type) {
-  if (type == quota::kStorageTypeTemporary)
-    return std::string(kGlobalQuotaKeyPrefix) + "temporary";
-  else if (type == quota::kStorageTypePersistent)
-    return std::string(kGlobalQuotaKeyPrefix) + "persistent";
-  NOTREACHED() << "Unknown storage type " << type;
-  return std::string();
+bool VerifyValidQuotaConfig(const char* key) {
+  return (key != NULL &&
+          (!strcmp(key, QuotaDatabase::kDesiredAvailableSpaceKey) ||
+           !strcmp(key, QuotaDatabase::kTemporaryQuotaOverrideKey)));
 }
 
 const int kCommitIntervalMs = 30000;
@@ -62,6 +62,10 @@ const int kCommitIntervalMs = 30000;
 }  // anonymous namespace
 
 // static
+const char QuotaDatabase::kDesiredAvailableSpaceKey[] = "DesiredAvailableSpace";
+const char QuotaDatabase::kTemporaryQuotaOverrideKey[] =
+    "TemporaryQuotaOverride";
+
 const QuotaDatabase::TableSchema QuotaDatabase::kTables[] = {
   { kHostQuotaTable,
     "(host TEXT NOT NULL,"
@@ -106,7 +110,11 @@ struct QuotaDatabase::QuotaTableImporter {
 };
 
 // Clang requires explicit out-of-line constructors for them.
-QuotaDatabase::QuotaTableEntry::QuotaTableEntry() {}
+QuotaDatabase::QuotaTableEntry::QuotaTableEntry()
+    : type(kStorageTypeUnknown),
+      quota(0) {
+}
+
 QuotaDatabase::QuotaTableEntry::QuotaTableEntry(
     const std::string& host,
     StorageType type,
@@ -116,7 +124,11 @@ QuotaDatabase::QuotaTableEntry::QuotaTableEntry(
       quota(quota) {
 }
 
-QuotaDatabase::OriginInfoTableEntry::OriginInfoTableEntry() {}
+QuotaDatabase::OriginInfoTableEntry::OriginInfoTableEntry()
+    : type(kStorageTypeUnknown),
+      used_count(0) {
+}
+
 QuotaDatabase::OriginInfoTableEntry::OriginInfoTableEntry(
     const GURL& origin,
     StorageType type,
@@ -334,16 +346,18 @@ bool QuotaDatabase::DeleteOriginInfo(
   return true;
 }
 
-bool QuotaDatabase::GetGlobalQuota(StorageType type, int64* quota) {
+bool QuotaDatabase::GetQuotaConfigValue(const char* key, int64* value) {
   if (!LazyOpen(false))
     return false;
-  return meta_table_->GetValue(GetGlobalQuotaKey(type).c_str(), quota);
+  DCHECK(VerifyValidQuotaConfig(key));
+  return meta_table_->GetValue(key, value);
 }
 
-bool QuotaDatabase::SetGlobalQuota(StorageType type, int64 quota) {
+bool QuotaDatabase::SetQuotaConfigValue(const char* key, int64 value) {
   if (!LazyOpen(true))
     return false;
-  return meta_table_->SetValue(GetGlobalQuotaKey(type).c_str(), quota);
+  DCHECK(VerifyValidQuotaConfig(key));
+  return meta_table_->SetValue(key, value);
 }
 
 bool QuotaDatabase::GetLRUOrigin(
@@ -474,6 +488,8 @@ bool QuotaDatabase::LazyOpen(bool create_if_needed) {
 
   db_.reset(new sql::Connection);
   meta_table_.reset(new sql::MetaTable);
+
+  db_->set_error_delegate(GetErrorHandlerForQuotaDb());
 
   bool opened = false;
   if (in_memory_only) {

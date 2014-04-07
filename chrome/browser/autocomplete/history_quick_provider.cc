@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,15 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/in_memory_url_index.h"
+#include "chrome/browser/history/in_memory_url_index_types.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/notification_types.h"
 #include "googleurl/src/url_parse.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_source.h"
 #include "googleurl/src/url_util.h"
 #include "net/base/escape.h"
 #include "net/base/net_util.h"
@@ -58,11 +59,6 @@ void HistoryQuickProvider::Start(const AutocompleteInput& input,
 
   autocomplete_input_ = input;
 
-  // Do some fixup on the user input before matching against it, so we provide
-  // good results for local file paths, input with spaces, etc.
-  if (!FixupUserInput(&autocomplete_input_))
-    return;
-
   // TODO(pkasting): We should just block here until this loads.  Any time
   // someone unloads the history backend, we'll get inconsistent inline
   // autocomplete behavior here.
@@ -81,18 +77,13 @@ void HistoryQuickProvider::Start(const AutocompleteInput& input,
   }
 }
 
-// HistoryQuickProvider matches are currently not deletable.
-// TODO(mrossetti): Determine when a match should be deletable.
+// TODO(mrossetti): Implement this function. (Will happen in next CL.)
 void HistoryQuickProvider::DeleteMatch(const AutocompleteMatch& match) {}
 
 void HistoryQuickProvider::DoAutocomplete() {
   // Get the matching URLs from the DB.
   string16 term_string = autocomplete_input_.text();
-  term_string = UnescapeURLComponent(term_string,
-      UnescapeRule::SPACES | UnescapeRule::URL_SPECIAL_CHARS);
-  history::InMemoryURLIndex::String16Vector terms(
-      InMemoryURLIndex::WordVectorFromString16(term_string, false));
-  ScoredHistoryMatches matches = GetIndex()->HistoryItemsForTerms(terms);
+  ScoredHistoryMatches matches = GetIndex()->HistoryItemsForTerms(term_string);
   if (matches.empty())
     return;
 
@@ -107,7 +98,7 @@ void HistoryQuickProvider::DoAutocomplete() {
     const ScoredHistoryMatch& history_match(*match_iter);
     if (history_match.raw_score > 0) {
       AutocompleteMatch ac_match = QuickMatchToACMatch(
-          history_match, matches,
+          history_match,
           PreventInlineAutocomplete(autocomplete_input_),
           &max_match_score);
       matches_.push_back(ac_match);
@@ -117,7 +108,6 @@ void HistoryQuickProvider::DoAutocomplete() {
 
 AutocompleteMatch HistoryQuickProvider::QuickMatchToACMatch(
     const ScoredHistoryMatch& history_match,
-    const ScoredHistoryMatches& history_matches,
     bool prevent_inline_autocomplete,
     int* max_match_score) {
   DCHECK(max_match_score);
@@ -131,22 +121,26 @@ AutocompleteMatch HistoryQuickProvider::QuickMatchToACMatch(
 
   // Format the URL autocomplete presentation.
   std::vector<size_t> offsets =
-      InMemoryURLIndex::OffsetsFromTermMatches(history_match.url_matches);
-  match.contents =
-      net::FormatUrlWithOffsets(info.url(), languages_, net::kFormatUrlOmitAll,
-                                UnescapeRule::SPACES, NULL, NULL, &offsets);
+      OffsetsFromTermMatches(history_match.url_matches);
+  const net::FormatUrlTypes format_types = net::kFormatUrlOmitAll &
+      ~(!history_match.match_in_scheme ? 0 : net::kFormatUrlOmitHTTP);
+  match.fill_into_edit =
+      AutocompleteInput::FormattedStringWithEquivalentMeaning(info.url(),
+          net::FormatUrlWithOffsets(info.url(), languages_, format_types,
+              net::UnescapeRule::SPACES, NULL, NULL, &offsets));
+  match.contents = net::FormatUrl(info.url(), languages_, format_types,
+              net::UnescapeRule::SPACES, NULL, NULL, NULL);
   history::TermMatches new_matches =
-      InMemoryURLIndex::ReplaceOffsetsInTermMatches(history_match.url_matches,
-                                                    offsets);
+      ReplaceOffsetsInTermMatches(history_match.url_matches, offsets);
   match.contents_class =
       SpansFromTermMatch(new_matches, match.contents.length(), true);
-  match.fill_into_edit = match.contents;
 
   if (prevent_inline_autocomplete || !history_match.can_inline) {
     match.inline_autocomplete_offset = string16::npos;
   } else {
-    match.inline_autocomplete_offset =
-        history_match.input_location + match.fill_into_edit.length();
+    DCHECK(!new_matches.empty());
+    match.inline_autocomplete_offset = new_matches[0].offset +
+        new_matches[0].length;
     DCHECK_LE(match.inline_autocomplete_offset, match.fill_into_edit.length());
   }
 
@@ -168,12 +162,6 @@ history::InMemoryURLIndex* HistoryQuickProvider::GetIndex() {
     return NULL;
 
   return history_service->InMemoryIndex();
-}
-
-void HistoryQuickProvider::SetIndexForTesting(
-    history::InMemoryURLIndex* index) {
-  DCHECK(index);
-  index_for_testing_.reset(index);
 }
 
 // static

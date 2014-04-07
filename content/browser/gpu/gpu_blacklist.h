@@ -14,16 +14,20 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/values.h"
+#include "content/common/content_export.h"
 #include "content/common/gpu/gpu_feature_flags.h"
 
 class Version;
-struct GPUInfo;
 
 namespace base {
 class DictionaryValue;
 }
 
-class GpuBlacklist {
+namespace content {
+struct GPUInfo;
+}
+
+class CONTENT_EXPORT GpuBlacklist {
  public:
   enum OsType {
     kOsLinux,
@@ -41,7 +45,7 @@ class GpuBlacklist {
     kAllOs
   };
 
-  explicit GpuBlacklist(const std::string& browser_info_string);
+  explicit GpuBlacklist(const std::string& browser_version_string);
   ~GpuBlacklist();
 
   // Loads blacklist information from a json file.
@@ -56,37 +60,23 @@ class GpuBlacklist {
   // current OS version.
   GpuFeatureFlags DetermineGpuFeatureFlags(OsType os,
                                            Version* os_version,
-                                           const GPUInfo& gpu_info);
+                                           const content::GPUInfo& gpu_info);
 
-  // Collects the entries that set the "feature" flag from the last
+  // Collects the active entries that set the "feature" flag from the last
   // DetermineGpuFeatureFlags() call.  This tells which entries are responsible
   // for raising a certain flag, i.e, for blacklisting a certain feature.
   // Examples of "feature":
   //   kGpuFeatureAll - any of the supported features;
   //   kGpuFeatureWebgl - a single feature;
   //   kGpuFeatureWebgl | kGpuFeatureAcceleratedCompositing - two features.
+  // If disabled set to true, return entries that are disabled; otherwise,
+  // return enabled entries.
   void GetGpuFeatureFlagEntries(GpuFeatureFlags::GpuFeatureType feature,
-                                std::vector<uint32>& entry_ids) const;
+                                std::vector<uint32>& entry_ids,
+                                bool disabled) const;
 
-  // Returns status information on the blacklist. This is two parted:
-  // {
-  //    featureStatus: []
-  //    problems: []
-  // }
-  //
-  // Each entry in feature_status has:
-  // {
-  //    name:  "name of feature"
-  //    status: "enabled" | "unavailable_software" | "unavailable_off" |
-  //            "software" | "disabled_off" | "disabled_softare";
-  // }
-  //
-  // The features reported are not 1:1 with GpuFeatureType. Rather, they are:
-  //    '2d_canvas'
-  //    '3d_css'
-  //    'composting',
-  //    'webgl',
-  //    'multisampling'
+  // Returns the description and bugs from active entries from the last
+  // DetermineGpuFeatureFlags() call.
   //
   // Each problems has:
   // {
@@ -94,11 +84,7 @@ class GpuBlacklist {
   //    "crBugs": [1234],
   //    "webkitBugs": []
   // }
-  base::Value* GetFeatureStatus(bool gpu_access_allowed,
-                                bool disable_accelerated_compositing,
-                                bool disable_accelerated_2D_canvas,
-                                bool disable_experimental_webgl,
-                                bool disable_multisampling) const;
+  void GetBlacklistReasons(ListValue* problem_list) const;
 
   // Return the largest entry id.  This is used for histogramming.
   uint32 max_entry_id() const;
@@ -122,14 +108,6 @@ class GpuBlacklist {
     kSupported,
     kUnsupported,
     kMalformed
-  };
-
-  enum BrowserChannel {
-    kStable,
-    kBeta,
-    kDev,
-    kCanary,
-    kUnknown
   };
 
   class VersionInfo {
@@ -228,14 +206,16 @@ class GpuBlacklist {
     // Determines if a given os/gc/driver is included in the Entry set.
     bool Contains(OsType os_type,
                   const Version& os_version,
-                  BrowserChannel channel,
-                  const GPUInfo& gpu_info) const;
+                  const content::GPUInfo& gpu_info) const;
 
     // Returns the OsType.
     OsType GetOsType() const;
 
     // Returns the entry's unique id.  0 is reserved.
     uint32 id() const;
+
+    // Returns whether the entry is disabled.
+    bool disabled() const;
 
     // Returns the description of the entry
     const std::string& description() const { return description_; }
@@ -263,6 +243,8 @@ class GpuBlacklist {
     ~GpuBlacklistEntry() { }
 
     bool SetId(uint32 id);
+
+    void SetDisabled(bool disabled);
 
     bool SetOsInfo(const std::string& os,
                    const std::string& version_op,
@@ -295,9 +277,8 @@ class GpuBlacklist {
 
     void AddException(ScopedGpuBlacklistEntry exception);
 
-    void AddBrowserChannel(BrowserChannel channel);
-
     uint32 id_;
+    bool disabled_;
     std::string description_;
     std::vector<int> cr_bugs_;
     std::vector<int> webkit_bugs_;
@@ -311,7 +292,6 @@ class GpuBlacklist {
     scoped_ptr<StringInfo> gl_renderer_info_;
     scoped_ptr<GpuFeatureFlags> feature_flags_;
     std::vector<ScopedGpuBlacklistEntry> exceptions_;
-    std::vector<BrowserChannel> browser_channels_;
     bool contains_unknown_fields_;
     bool contains_unknown_features_;
   };
@@ -320,8 +300,6 @@ class GpuBlacklist {
   static OsType GetOsType();
 
   void Clear();
-
-  bool IsFeatureBlacklisted(GpuFeatureFlags::GpuFeatureType feature) const;
 
   // Check if the entry is supported by the current version of browser.
   // By default, if there is no browser version information in the entry,
@@ -335,17 +313,12 @@ class GpuBlacklist {
   // Check if any entries contain unknown fields.  This is only for tests.
   bool contains_unknown_fields() const { return contains_unknown_fields_; }
 
-  // The browser_info_string's format is "version channel".
-  // For example, "13.0.123.4 canary".
-  void SetBrowserInfo(const std::string& browser_info_string);
-
-  static BrowserChannel StringToBrowserChannel(const std::string& value);
+  void SetBrowserVersion(const std::string& version_string);
 
   scoped_ptr<Version> version_;
   std::vector<ScopedGpuBlacklistEntry> blacklist_;
 
   scoped_ptr<Version> browser_version_;
-  BrowserChannel browser_channel_;
 
   // This records all the blacklist entries that are appliable to the current
   // user machine.  It is updated everytime DetermineGpuFeatureFlags() is

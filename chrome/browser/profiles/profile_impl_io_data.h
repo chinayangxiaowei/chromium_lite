@@ -12,7 +12,13 @@
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/profiles/profile_io_data.h"
 
+namespace chrome_browser_net {
+class HttpServerPropertiesManager;
+class Predictor;
+}
+
 namespace net {
+class HttpServerProperties;
 class HttpTransactionFactory;
 }  // namespace net
 
@@ -36,11 +42,18 @@ class ProfileImplIOData : public ProfileIOData {
               const FilePath& media_cache_path,
               int media_cache_max_size,
               const FilePath& extensions_cookie_path,
-              const FilePath& app_path);
+              const FilePath& app_path,
+              chrome_browser_net::Predictor* predictor,
+              PrefService* local_state,
+              IOThread* io_thread,
+              bool restore_old_session_cookies);
 
     base::Callback<ChromeURLDataManagerBackend*(void)>
         GetChromeURLDataManagerBackendGetter() const;
     const content::ResourceContext& GetResourceContext() const;
+    // GetResourceContextNoInit() does not call LazyInitialize() so it can be
+    // safely be used during initialization.
+    const content::ResourceContext& GetResourceContextNoInit() const;
     scoped_refptr<ChromeURLRequestContextGetter>
         GetMainRequestContextGetter() const;
     scoped_refptr<ChromeURLRequestContextGetter>
@@ -50,6 +63,8 @@ class ProfileImplIOData : public ProfileIOData {
     scoped_refptr<ChromeURLRequestContextGetter>
         GetIsolatedAppRequestContextGetter(
             const std::string& app_id) const;
+
+    void ClearNetworkingHistorySince(base::Time time);
 
    private:
     typedef base::hash_map<std::string,
@@ -85,6 +100,8 @@ class ProfileImplIOData : public ProfileIOData {
     DISALLOW_COPY_AND_ASSIGN(Handle);
   };
 
+  net::HttpServerProperties* http_server_properties() const;
+
  private:
   friend class base::RefCountedThreadSafe<ProfileImplIOData>;
 
@@ -100,6 +117,7 @@ class ProfileImplIOData : public ProfileIOData {
     FilePath media_cache_path;
     int media_cache_max_size;
     FilePath extensions_cookie_path;
+    bool restore_old_session_cookies;
   };
 
   typedef base::hash_map<std::string, net::HttpTransactionFactory* >
@@ -108,24 +126,31 @@ class ProfileImplIOData : public ProfileIOData {
   ProfileImplIOData();
   virtual ~ProfileImplIOData();
 
-  virtual void LazyInitializeInternal(ProfileParams* profile_params) const;
+  virtual void LazyInitializeInternal(
+      ProfileParams* profile_params) const OVERRIDE;
   virtual scoped_refptr<ChromeURLRequestContext> InitializeAppRequestContext(
       scoped_refptr<ChromeURLRequestContext> main_context,
-      const std::string& app_id) const;
+      const std::string& app_id) const OVERRIDE;
   virtual scoped_refptr<ChromeURLRequestContext>
-      AcquireMediaRequestContext() const;
+      AcquireMediaRequestContext() const OVERRIDE;
   virtual scoped_refptr<ChromeURLRequestContext>
       AcquireIsolatedAppRequestContext(
           scoped_refptr<ChromeURLRequestContext> main_context,
-          const std::string& app_id) const;
+          const std::string& app_id) const OVERRIDE;
 
   // Lazy initialization params.
   mutable scoped_ptr<LazyParams> lazy_params_;
+
+  mutable scoped_ptr<chrome_browser_net::HttpServerPropertiesManager>
+      http_server_properties_manager_;
 
   mutable scoped_refptr<ChromeURLRequestContext> media_request_context_;
 
   mutable scoped_ptr<net::HttpTransactionFactory> main_http_factory_;
   mutable scoped_ptr<net::HttpTransactionFactory> media_http_factory_;
+  mutable scoped_ptr<net::FtpTransactionFactory> ftp_factory_;
+
+  mutable scoped_ptr<chrome_browser_net::Predictor> predictor_;
 
   // Parameters needed for isolated apps.
   FilePath app_path_;

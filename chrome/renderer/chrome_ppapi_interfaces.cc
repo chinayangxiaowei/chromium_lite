@@ -1,17 +1,19 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/renderer/chrome_ppapi_interfaces.h"
 
 #include "base/command_line.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/rand_util_c.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/chrome_ppb_pdf_impl.h"
-#include "content/common/content_switches.h"
-#include "content/renderer/render_thread.h"
+#include "content/public/common/content_switches.h"
+#include "content/public/renderer/render_thread.h"
+#include "ipc/ipc_sync_message_filter.h"
 #include "ppapi/c/private/ppb_nacl_private.h"
 #include "ppapi/c/private/ppb_pdf.h"
 #include "webkit/plugins/ppapi/ppapi_interface_factory.h"
@@ -21,22 +23,33 @@
 #include "ppapi/native_client/src/trusted/plugin/nacl_entry_points.h"
 #endif
 
+using content::RenderThread;
+
 namespace chrome {
+
+#if !defined(DISABLE_NACL)
+namespace {
+base::LazyInstance<scoped_refptr<IPC::SyncMessageFilter> >
+    g_background_thread_sender = LAZY_INSTANCE_INITIALIZER;
+}  // namespace
 
 // Launch NaCl's sel_ldr process.
 bool LaunchSelLdr(const char* alleged_url, int socket_count,
                   void* imc_handles, void* nacl_process_handle,
                   int* nacl_process_id) {
-#if !defined(DISABLE_NACL)
   std::vector<nacl::FileDescriptor> sockets;
   base::ProcessHandle nacl_process;
-  if (!RenderThread::current()->Send(
-    new ChromeViewHostMsg_LaunchNaCl(
-        ASCIIToWide(alleged_url),
-        socket_count,
-        &sockets,
-        &nacl_process,
-        reinterpret_cast<base::ProcessId*>(nacl_process_id)))) {
+  IPC::Message::Sender* sender = RenderThread::Get();
+  if (sender == NULL) {
+    sender = g_background_thread_sender.Pointer()->get();
+  }
+  if (!sender->Send(
+      new ChromeViewHostMsg_LaunchNaCl(
+          ASCIIToWide(alleged_url),
+          socket_count,
+          &sockets,
+          &nacl_process,
+          reinterpret_cast<base::ProcessId*>(nacl_process_id)))) {
     return false;
   }
   CHECK(static_cast<int>(sockets.size()) == socket_count);
@@ -46,9 +59,6 @@ bool LaunchSelLdr(const char* alleged_url, int socket_count,
   }
   *static_cast<nacl::Handle*>(nacl_process_handle) = nacl_process;
   return true;
-#else
-  return false;
-#endif
 }
 
 int UrandomFD(void) {
@@ -63,10 +73,16 @@ bool Are3DInterfacesDisabled() {
   return CommandLine::ForCurrentProcess()->HasSwitch(switches::kDisable3DAPIs);
 }
 
+void EnableBackgroundSelLdrLaunch() {
+  g_background_thread_sender.Get() =
+      RenderThread::Get()->GetSyncMessageFilter();
+}
+
 const PPB_NaCl_Private ppb_nacl = {
   &LaunchSelLdr,
   &UrandomFD,
   &Are3DInterfacesDisabled,
+  &EnableBackgroundSelLdrLaunch,
 };
 
 class PPB_NaCl_Impl {
@@ -77,25 +93,16 @@ class PPB_NaCl_Impl {
     return &ppb_nacl;
   }
 };
+#endif  // DISABLE_NACL
 
 const void* ChromePPAPIInterfaceFactory(const std::string& interface_name) {
+#if !defined(DISABLE_NACL)
   if (interface_name == PPB_NACL_PRIVATE_INTERFACE)
     return chrome::PPB_NaCl_Impl::GetInterface();
+#endif  // DISABLE_NACL
   if (interface_name == PPB_PDF_INTERFACE)
     return chrome::PPB_PDF_Impl::GetInterface();
   return NULL;
-}
-
-void InitializePPAPI() {
-  webkit::ppapi::PpapiInterfaceFactoryManager* factory_manager =
-      webkit::ppapi::PpapiInterfaceFactoryManager::GetInstance();
-  factory_manager->RegisterFactory(ChromePPAPIInterfaceFactory);
-}
-
-void UninitializePPAPI() {
-  webkit::ppapi::PpapiInterfaceFactoryManager* factory_manager =
-      webkit::ppapi::PpapiInterfaceFactoryManager::GetInstance();
-  factory_manager->UnregisterFactory(ChromePPAPIInterfaceFactory);
 }
 
 }  // namespace chrome

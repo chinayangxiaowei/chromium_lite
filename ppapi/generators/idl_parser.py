@@ -1,6 +1,5 @@
-#!/usr/bin/python
-#
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -44,7 +43,8 @@ Option('build_debug', 'Debug tree building.')
 Option('parse_debug', 'Debug parse reduction steps.')
 Option('token_debug', 'Debug token generation.')
 Option('dump_tree', 'Dump the tree.')
-Option('srcroot', 'Working directory.', default='../api')
+Option('srcroot', 'Working directory.', default=os.path.join('..', 'api'))
+Option('include_private', 'Include private IDL directory in default API paths.')
 
 #
 # ERROR_REMAP
@@ -413,19 +413,52 @@ class IDLParser(IDLLexer):
     p[0] = p[1]
     if self.parse_debug: DumpReduction('integer', p)
 
-# Numbers are integers or floats.
-  def p_number(self, p):
-    """number : FLOAT
-              | HEX
-              | INT
-              | OCT"""
-    p[0] = p[1]
-    if self.parse_debug: DumpReduction('number', p)
+#
+# Expression
+#
+# A simple arithmetic expression.
+#
+  precedence = (
+    ('left','|','&','^'),
+    ('left','LSHIFT','RSHIFT'),
+    ('left','+','-'),
+    ('left','*','/'),
+    ('right','UMINUS','~'),
+    )
 
-  def p_number_lshift(self, p):
-    """number : integer LSHIFT INT"""
-    p[0] = "%s << %s" % (p[1], p[3])
-    if self.parse_debug: DumpReduction('number_lshift', p)
+  def p_expression_binop(self, p):
+    """expression : expression LSHIFT expression
+                  | expression RSHIFT expression
+                  | expression '|' expression
+                  | expression '&' expression
+                  | expression '^' expression
+                  | expression '+' expression
+                  | expression '-' expression
+                  | expression '*' expression
+                  | expression '/' expression"""
+    p[0] = "%s %s %s" % (str(p[1]), str(p[2]), str(p[3]))
+    if self.parse_debug: DumpReduction('expression_binop', p)
+
+  def p_expression_unop(self, p):
+    """expression : '-' expression %prec UMINUS
+                  | '~' expression %prec '~'"""
+    p[0] = "%s%s" % (str(p[1]), str(p[2]))
+    if self.parse_debug: DumpReduction('expression_unop', p)
+
+  def p_expression_term(self, p):
+    "expression : '(' expression ')'"
+    p[0] = "%s%s%s" % (str(p[1]), str(p[2]), str(p[3]))
+    if self.parse_debug: DumpReduction('expression_term', p)
+
+  def p_expression_symbol(self, p):
+    "expression : SYMBOL"
+    p[0] = p[1]
+    if self.parse_debug: DumpReduction('expression_symbol', p)
+
+  def p_expression_integer(self, p):
+    "expression : integer"
+    p[0] = p[1]
+    if self.parse_debug: DumpReduction('expression_integer', p)
 
 #
 # Array List
@@ -523,7 +556,7 @@ class IDLParser(IDLLexer):
     if self.parse_debug: DumpReduction('enum_block', p)
 
   def p_enum_list(self, p):
-    """enum_list : modifiers SYMBOL '=' number enum_cont
+    """enum_list : modifiers SYMBOL '=' expression enum_cont
                  | modifiers SYMBOL enum_cont"""
     if len(p) > 4:
       val  = self.BuildAttribute('VALUE', p[4])
@@ -942,6 +975,7 @@ def TestErrorFiles(filter):
     InfoOut.Log("Passed parsing test.")
   return total_errs
 
+
 def TestNamespaceFiles(filter):
   idldir = os.path.split(sys.argv[0])[0]
   idldir = os.path.join(idldir, 'test_namespace', '*.idl')
@@ -968,19 +1002,24 @@ def TestNamespaceFiles(filter):
     InfoOut.Log("Passed namespace test.")
   return errs
 
-default_dirs = ['.', 'trusted', 'dev']
+default_dirs = ['.', 'trusted', 'dev', 'private']
 def ParseFiles(filenames):
   parser = IDLParser()
   filenodes = []
-  errors = 0
 
   if not filenames:
     filenames = []
     srcroot = GetOption('srcroot')
-    for dir in default_dirs:
-      srcdir = os.path.join(srcroot, dir, '*.idl')
+    dirs = default_dirs
+    if GetOption('include_private'):
+      dirs += ['private']
+    for dirname in dirs:
+      srcdir = os.path.join(srcroot, dirname, '*.idl')
       srcdir = os.path.normpath(srcdir)
       filenames += sorted(glob.glob(srcdir))
+
+  if not filenames:
+    ErrOut.Log('No sources provided.')
 
   for filename in filenames:
     filenode = parser.ParseFile(filename)
@@ -1013,6 +1052,6 @@ def Main(args):
   InfoOut.Log("%d files processed." % len(filenames))
   return errs
 
+
 if __name__ == '__main__':
   sys.exit(Main(sys.argv[1:]))
-

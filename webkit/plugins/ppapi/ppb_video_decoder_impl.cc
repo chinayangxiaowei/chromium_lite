@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,19 +15,17 @@
 #include "ppapi/c/dev/ppp_video_decoder_dev.h"
 #include "ppapi/c/pp_completion_callback.h"
 #include "ppapi/c/pp_errors.h"
-#include "webkit/plugins/ppapi/resource_helper.h"
+#include "ppapi/shared_impl/resource_tracker.h"
 #include "ppapi/thunk/enter.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/ppb_buffer_impl.h"
-#include "webkit/plugins/ppapi/ppb_context_3d_impl.h"
 #include "webkit/plugins/ppapi/ppb_graphics_3d_impl.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
+#include "webkit/plugins/ppapi/resource_helper.h"
 
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_Buffer_API;
-using ppapi::thunk::PPB_Context3D_API;
 using ppapi::thunk::PPB_Graphics3D_API;
 using ppapi::thunk::PPB_VideoDecoder_API;
 
@@ -35,7 +33,7 @@ namespace webkit {
 namespace ppapi {
 
 PPB_VideoDecoder_Impl::PPB_VideoDecoder_Impl(PP_Instance instance)
-    : Resource(instance),
+    : PPB_VideoDecoder_Shared(instance),
       ppp_videodecoder_(NULL) {
   PluginModule* plugin_module = ResourceHelper::GetPluginModule(this);
   if (plugin_module) {
@@ -45,10 +43,6 @@ PPB_VideoDecoder_Impl::PPB_VideoDecoder_Impl(PP_Instance instance)
 }
 
 PPB_VideoDecoder_Impl::~PPB_VideoDecoder_Impl() {
-}
-
-PPB_VideoDecoder_API* PPB_VideoDecoder_Impl::AsPPB_VideoDecoder_API() {
-  return this;
 }
 
 // Convert PP_VideoDecoder_Profile to media::VideoDecodeAccelerator::Profile.
@@ -64,28 +58,16 @@ PP_Resource PPB_VideoDecoder_Impl::Create(
     PP_Instance instance,
     PP_Resource graphics_context,
     PP_VideoDecoder_Profile profile) {
-  PluginDelegate::PlatformContext3D* platform_context = NULL;
-  gpu::gles2::GLES2Implementation* gles2_impl = NULL;
-  EnterResourceNoLock<PPB_Context3D_API> enter_context(graphics_context, false);
-  if (enter_context.succeeded()) {
-    PPB_Context3D_Impl* context3d_impl =
-        static_cast<PPB_Context3D_Impl*>(enter_context.object());
-    platform_context = context3d_impl->platform_context();
-    gles2_impl = context3d_impl->gles2_impl();
-  } else {
-    EnterResourceNoLock<PPB_Graphics3D_API> enter_context(graphics_context,
-                                                          true);
-    if (enter_context.failed())
-      return 0;
-    PPB_Graphics3D_Impl* graphics3d_impl =
-        static_cast<PPB_Graphics3D_Impl*>(enter_context.object());
-    platform_context = graphics3d_impl->platform_context();
-    gles2_impl = graphics3d_impl->gles2_impl();
-  }
+  EnterResourceNoLock<PPB_Graphics3D_API> enter_context(graphics_context, true);
+  if (enter_context.failed())
+    return 0;
+  PPB_Graphics3D_Impl* graphics3d_impl =
+      static_cast<PPB_Graphics3D_Impl*>(enter_context.object());
 
   scoped_refptr<PPB_VideoDecoder_Impl> decoder(
       new PPB_VideoDecoder_Impl(instance));
-  if (decoder->Init(graphics_context, platform_context, gles2_impl, profile))
+  if (decoder->Init(graphics_context, graphics3d_impl->platform_context(),
+                    graphics3d_impl->gles2_impl(), profile))
     return decoder->GetReference();
   return 0;
 }
@@ -117,6 +99,9 @@ bool PPB_VideoDecoder_Impl::Init(
 int32_t PPB_VideoDecoder_Impl::Decode(
     const PP_VideoBitstreamBuffer_Dev* bitstream_buffer,
     PP_CompletionCallback callback) {
+  if (!callback.func)
+    return PP_ERROR_BLOCKS_MAIN_THREAD;
+
   if (!platform_video_decoder_)
     return PP_ERROR_BADRESOURCE;
 
@@ -166,6 +151,9 @@ void PPB_VideoDecoder_Impl::ReusePictureBuffer(int32_t picture_buffer_id) {
 }
 
 int32_t PPB_VideoDecoder_Impl::Flush(PP_CompletionCallback callback) {
+  if (!callback.func)
+    return PP_ERROR_BLOCKS_MAIN_THREAD;
+
   if (!platform_video_decoder_)
     return PP_ERROR_BADRESOURCE;
 
@@ -178,6 +166,9 @@ int32_t PPB_VideoDecoder_Impl::Flush(PP_CompletionCallback callback) {
 }
 
 int32_t PPB_VideoDecoder_Impl::Reset(PP_CompletionCallback callback) {
+  if (!callback.func)
+    return PP_ERROR_BLOCKS_MAIN_THREAD;
+
   if (!platform_video_decoder_)
     return PP_ERROR_BADRESOURCE;
 
@@ -195,7 +186,7 @@ void PPB_VideoDecoder_Impl::Destroy() {
 
   FlushCommandBuffer();
   platform_video_decoder_->Destroy();
-  ::ppapi::VideoDecoderImpl::Destroy();
+  ::ppapi::PPB_VideoDecoder_Shared::Destroy();
   platform_video_decoder_ = NULL;
   ppp_videodecoder_ = NULL;
 }
@@ -207,7 +198,7 @@ void PPB_VideoDecoder_Impl::ProvidePictureBuffers(
 
   PP_Size out_dim = PP_MakeSize(dimensions.width(), dimensions.height());
   ppp_videodecoder_->ProvidePictureBuffers(pp_instance(), pp_resource(),
-                                           requested_num_of_buffers, out_dim);
+                                           requested_num_of_buffers, &out_dim);
 }
 
 void PPB_VideoDecoder_Impl::PictureReady(const media::Picture& picture) {
@@ -217,7 +208,7 @@ void PPB_VideoDecoder_Impl::PictureReady(const media::Picture& picture) {
   PP_Picture_Dev output;
   output.picture_buffer_id = picture.picture_buffer_id();
   output.bitstream_buffer_id = picture.bitstream_buffer_id();
-  ppp_videodecoder_->PictureReady(pp_instance(), pp_resource(), output);
+  ppp_videodecoder_->PictureReady(pp_instance(), pp_resource(), &output);
 }
 
 void PPB_VideoDecoder_Impl::DismissPictureBuffer(int32 picture_buffer_id) {
@@ -225,12 +216,6 @@ void PPB_VideoDecoder_Impl::DismissPictureBuffer(int32 picture_buffer_id) {
     return;
   ppp_videodecoder_->DismissPictureBuffer(pp_instance(), pp_resource(),
                                           picture_buffer_id);
-}
-
-void PPB_VideoDecoder_Impl::NotifyEndOfStream() {
-  if (!ppp_videodecoder_)
-    return;
-  ppp_videodecoder_->EndOfStream(pp_instance(), pp_resource());
 }
 
 void PPB_VideoDecoder_Impl::NotifyError(

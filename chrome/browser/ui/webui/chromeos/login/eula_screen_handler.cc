@@ -6,6 +6,8 @@
 
 #include <string>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/login/help_app_launcher.h"
 #include "chrome/browser/chromeos/login/webui_login_display.h"
@@ -14,7 +16,7 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "views/widget/widget.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 
@@ -84,13 +86,13 @@ void EulaScreenHandler::Initialize() {
     return;
 
   base::FundamentalValue checked(delegate_->IsUsageStatsEnabled());
-  web_ui_->CallJavascriptFunction("cr.ui.Oobe.setUsageStats", checked);
+  web_ui()->CallJavascriptFunction("cr.ui.Oobe.setUsageStats", checked);
 
   // This OEM EULA is a file:// URL which we're unable to load in iframe.
   // Instead if it's defined we use chrome://terms/oem that will load same file.
   if (!delegate_->GetOemEulaUrl().is_empty()) {
     StringValue oem_eula_url(chrome::kChromeUITermsOemURL);
-    web_ui_->CallJavascriptFunction("cr.ui.Oobe.setOemEulaUrl", oem_eula_url);
+    web_ui()->CallJavascriptFunction("cr.ui.Oobe.setOemEulaUrl", oem_eula_url);
   }
 
   if (show_on_init_) {
@@ -100,18 +102,19 @@ void EulaScreenHandler::Initialize() {
 }
 
 void EulaScreenHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("eulaOnExit",
-      NewCallback(this, &EulaScreenHandler::HandleOnExit));
-  web_ui_->RegisterMessageCallback("eulaOnLearnMore",
-      NewCallback(this, &EulaScreenHandler::HandleOnLearnMore));
-  web_ui_->RegisterMessageCallback("eulaOnTpmPopupOpened",
-      NewCallback(this, &EulaScreenHandler::HandleOnTpmPopupOpened));
+  web_ui()->RegisterMessageCallback("eulaOnExit",
+      base::Bind(&EulaScreenHandler::HandleOnExit,base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("eulaOnLearnMore",
+      base::Bind(&EulaScreenHandler::HandleOnLearnMore,base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("eulaOnTpmPopupOpened",
+      base::Bind(&EulaScreenHandler::HandleOnTpmPopupOpened,
+                 base::Unretained(this)));
 }
 
 void EulaScreenHandler::OnPasswordFetched(const std::string& tpm_password) {
   StringValue tpm_password_value(tpm_password);
-  web_ui_->CallJavascriptFunction("cr.ui.Oobe.setTpmPassword",
-                                  tpm_password_value);
+  web_ui()->CallJavascriptFunction("cr.ui.Oobe.setTpmPassword",
+                                   tpm_password_value);
 }
 
 void EulaScreenHandler::HandleOnExit(const base::ListValue* args) {
@@ -133,8 +136,7 @@ void EulaScreenHandler::HandleOnExit(const base::ListValue* args) {
 
 void EulaScreenHandler::HandleOnLearnMore(const base::ListValue* args) {
   if (!help_app_.get()) {
-    views::Widget* login_window = WebUILoginDisplay::GetLoginWindow();
-    help_app_ = new HelpAppLauncher(login_window->GetNativeWindow());
+    help_app_ = new HelpAppLauncher(GetNativeWindow());
   }
   help_app_->ShowHelpTopic(HelpAppLauncher::HELP_STATS_USAGE);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -37,17 +37,15 @@ class PppRpcClient {
  public:
   static NaClSrpcError PPP_InitializeModule(
       NaClSrpcChannel* channel,
-      int32_t pid,
       PP_Module module,
       NaClSrpcImcDescType upcall_channel_desc,
-      char* service_description,
-      int32_t* nacl_pid,
+      const char* service_description,
       int32_t* success);
   static NaClSrpcError PPP_ShutdownModule(
       NaClSrpcChannel* channel);
   static NaClSrpcError PPP_GetInterface(
       NaClSrpcChannel* channel,
-      char* interface_name,
+      const char* interface_name,
       int32_t* exports_interface_name);
 
  private:
@@ -124,8 +122,8 @@ class PppInstanceRpcClient {
   static NaClSrpcError PPP_Instance_DidChangeView(
       NaClSrpcChannel* channel,
       PP_Instance instance,
-      nacl_abi_size_t position_bytes, int32_t* position,
-      nacl_abi_size_t clip_bytes, int32_t* clip);
+      PP_Resource resource,
+      nacl_abi_size_t view_data_bytes, char* view_data);
   static NaClSrpcError PPP_Instance_DidChangeFocus(
       NaClSrpcChannel* channel,
       PP_Instance instance,
@@ -155,6 +153,18 @@ class PppMessagingRpcClient {
   void operator=(const PppMessagingRpcClient);
 };  // class PppMessagingRpcClient
 
+class PppMouseLockRpcClient {
+ public:
+  static NaClSrpcError PPP_MouseLock_MouseLockLost(
+      NaClSrpcChannel* channel,
+      PP_Instance instance);
+
+ private:
+  PppMouseLockRpcClient();
+  PppMouseLockRpcClient(const PppMouseLockRpcClient&);
+  void operator=(const PppMouseLockRpcClient);
+};  // class PppMouseLockRpcClient
+
 class PppPrintingRpcClient {
  public:
   static NaClSrpcError PPP_Printing_QuerySupportedFormats(
@@ -175,6 +185,10 @@ class PppPrintingRpcClient {
   static NaClSrpcError PPP_Printing_End(
       NaClSrpcChannel* channel,
       PP_Instance instance);
+  static NaClSrpcError PPP_Printing_IsScalingDisabled(
+      NaClSrpcChannel* channel,
+      PP_Instance instance,
+      int32_t* result);
 
  private:
   PppPrintingRpcClient();

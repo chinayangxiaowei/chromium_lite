@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/json/json_reader.h"
@@ -14,7 +15,9 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+
+using content::BrowserThread;
 
 namespace {
 
@@ -28,6 +31,7 @@ const char kCarriersAttr[] = "carriers";
 const char kCarrierIdsAttr[] = "ids";
 const char kCarrierIdAttr[] = "id";
 const char kTopUpURLAttr[] = "top_up_url";
+const char kShowPortalButtonAttr[] = "show_portal_button";
 const char kDealsAttr[] = "deals";
 
 // Carrier deal attributes.
@@ -52,8 +56,6 @@ const char kLocalCarrierConfigPath[] =
     "/opt/oem/etc/carrier_config.json";
 
 }  // anonymous namespace
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(chromeos::MobileConfig);
 
 namespace chromeos {
 
@@ -106,7 +108,8 @@ std::string MobileConfig::CarrierDeal::GetLocalizedString(
 // MobileConfig::Carrier implementation. ---------------------------------------
 
 MobileConfig::Carrier::Carrier(DictionaryValue* carrier_dict,
-                               const std::string& initial_locale) {
+                               const std::string& initial_locale)
+    : show_portal_button_(false) {
   InitFromDictionary(carrier_dict, initial_locale);
 }
 
@@ -143,6 +146,7 @@ const MobileConfig::CarrierDeal* MobileConfig::Carrier::GetDeal(
 void MobileConfig::Carrier::InitFromDictionary(
     base::DictionaryValue* carrier_dict, const std::string& initial_locale) {
   carrier_dict->GetString(kTopUpURLAttr, &top_up_url_);
+  carrier_dict->GetBoolean(kShowPortalButtonAttr, &show_portal_button_);
 
   bool exclude_deals = false;
   if (carrier_dict->GetBoolean(kExcludeDealsAttr, &exclude_deals) &&
@@ -284,10 +288,10 @@ MobileConfig::~MobileConfig() {
 
 void MobileConfig::LoadConfig() {
   BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this,
-          &MobileConfig::ReadConfigInBackground,
-          FilePath(kGlobalCarrierConfigPath),
-          FilePath(kLocalCarrierConfigPath)));
+      base::Bind(&MobileConfig::ReadConfigInBackground,
+                 base::Unretained(this),  // this class is a singleton.
+                 FilePath(kGlobalCarrierConfigPath),
+                 FilePath(kLocalCarrierConfigPath)));
 }
 
 void MobileConfig::ProcessConfig(const std::string& global_config,
@@ -330,11 +334,10 @@ void MobileConfig::ReadConfigInBackground(const FilePath& global_config_file,
             << local_config_file.value();
   }
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(
-          this,
-          &MobileConfig::ProcessConfig,
-          global_config,
-          local_config));
+                          base::Bind(&MobileConfig::ProcessConfig,
+                                     base::Unretained(this),  // singleton.
+                                     global_config,
+                                     local_config));
 }
 
 }  // namespace chromeos

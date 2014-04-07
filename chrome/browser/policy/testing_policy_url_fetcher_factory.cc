@@ -5,10 +5,12 @@
 #include "chrome/browser/policy/testing_policy_url_fetcher_factory.h"
 
 #include "base/bind.h"
-#include "base/callback.h"
 #include "chrome/browser/policy/logging_work_scheduler.h"
+#include "chrome/browser/policy/proto/device_management_backend.pb.h"
+#include "googleurl/src/gurl.h"
 #include "googleurl/src/url_parse.h"
 #include "net/http/http_request_headers.h"
+#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_status.h"
 
 namespace {
@@ -33,19 +35,27 @@ std::string GetRequestType(const GURL& url) {
 namespace policy {
 
 // An URLFetcher that calls back to its factory to figure out what to respond.
-class TestingPolicyURLFetcher : public URLFetcher {
+class TestingPolicyURLFetcher : public TestURLFetcher {
  public:
   TestingPolicyURLFetcher(
       const base::WeakPtr<TestingPolicyURLFetcherFactory>& parent,
       const GURL& url,
-      URLFetcher::RequestType request_type,
-      URLFetcher::Delegate* delegate);
+      content::URLFetcherDelegate* delegate);
 
-  virtual void Start();
+  virtual void Start() OVERRIDE;
   void Respond();
 
+  virtual int GetResponseCode() const OVERRIDE {
+    return response_.response_code;
+  }
+
+  virtual bool GetResponseAsString(
+      std::string* out_response_string) const OVERRIDE {
+    *out_response_string = response_.response_data;
+    return true;
+  }
+
  private:
-  GURL url_;
   TestURLResponse response_;
   base::WeakPtr<TestingPolicyURLFetcherFactory> parent_;
 
@@ -55,11 +65,11 @@ class TestingPolicyURLFetcher : public URLFetcher {
 TestingPolicyURLFetcher::TestingPolicyURLFetcher(
     const base::WeakPtr<TestingPolicyURLFetcherFactory>& parent,
     const GURL& url,
-    URLFetcher::RequestType request_type,
-    URLFetcher::Delegate* delegate)
-        : URLFetcher(url, request_type, delegate),
-          url_(url),
-          parent_(parent) {
+    content::URLFetcherDelegate* delegate)
+    : TestURLFetcher(0, url, delegate),
+      parent_(parent) {
+  set_url(url);
+  set_status(net::URLRequestStatus(net::URLRequestStatus::SUCCESS, 0));
 }
 
 void TestingPolicyURLFetcher::Start() {
@@ -67,11 +77,15 @@ void TestingPolicyURLFetcher::Start() {
 
   std::string auth_header;
   net::HttpRequestHeaders headers;
-  std::string request = GetRequestType(url_);
+  std::string request_type = GetRequestType(GetURL());
   GetExtraRequestHeaders(&headers);
   headers.GetHeader("Authorization", &auth_header);
+
+  enterprise_management::DeviceManagementRequest request;
+  request.ParseFromString(upload_data());
+
   // The following method is mocked by the currently running test.
-  parent_->GetResponse(auth_header, request, &response_);
+  parent_->GetResponse(auth_header, request_type, request, &response_);
 
   // We need to channel this through the central event logger, so that ordering
   // with other logged tasks that have a delay is preserved.
@@ -81,13 +95,7 @@ void TestingPolicyURLFetcher::Start() {
 }
 
 void TestingPolicyURLFetcher::Respond() {
-  delegate()->OnURLFetchComplete(
-      this,
-      url_,
-      net::URLRequestStatus(net::URLRequestStatus::SUCCESS, 0),
-      response_.response_code,
-      net::ResponseCookies(),
-      response_.response_data);
+  delegate()->OnURLFetchComplete(this);
 }
 
 TestingPolicyURLFetcherFactory::TestingPolicyURLFetcherFactory(
@@ -107,19 +115,20 @@ LoggingWorkScheduler* TestingPolicyURLFetcherFactory::scheduler() {
 
 void TestingPolicyURLFetcherFactory::GetResponse(
     const std::string& auth_header,
-    const std::string& request,
+    const std::string& request_type,
+    const enterprise_management::DeviceManagementRequest& request,
     TestURLResponse* response) {
   logger_->RegisterEvent();
-  Intercept(auth_header, request, response);
+  Intercept(auth_header, request_type, request, response);
 }
 
-URLFetcher* TestingPolicyURLFetcherFactory::CreateURLFetcher(
+content::URLFetcher* TestingPolicyURLFetcherFactory::CreateURLFetcher(
     int id,
     const GURL& url,
-    URLFetcher::RequestType request_type,
-    URLFetcher::Delegate* delegate) {
+    content::URLFetcher::RequestType request_type,
+    content::URLFetcherDelegate* delegate) {
   return new TestingPolicyURLFetcher(
-      weak_ptr_factory_.GetWeakPtr(), url, request_type, delegate);
+      weak_ptr_factory_.GetWeakPtr(), url, delegate);
 }
 
 }  // namespace policy

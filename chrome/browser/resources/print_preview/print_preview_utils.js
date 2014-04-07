@@ -1,11 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 /**
- * Returns true if |toTest| contains only digits. Leading and trailing
- * whitespace is allowed.
  * @param {string} toTest The string to be tested.
+ * @return {boolean} True if |toTest| contains only digits. Leading and trailing
+ *     whitespace is allowed.
  */
 function isInteger(toTest) {
   var numericExp = /^\s*[0-9]+\s*$/;
@@ -25,7 +25,7 @@ function isPositiveInteger(value) {
 /**
  * Returns true if the contents of the two arrays are equal.
  * @param {Array} array1 The first array.
- * @param {Array} array1 The second array.
+ * @param {Array} array2 The second array.
  *
  * @return {boolean} true if the arrays are equal.
  */
@@ -33,7 +33,7 @@ function areArraysEqual(array1, array2) {
   if (array1.length != array2.length)
     return false;
   for (var i = 0; i < array1.length; i++)
-    if(array1[i] != array2[i])
+    if (array1[i] !== array2[i])
       return false;
   return true;
 }
@@ -41,18 +41,18 @@ function areArraysEqual(array1, array2) {
 /**
  * Removes duplicate elements from |inArray| and returns a new array.
  * |inArray| is not affected. It assumes that |inArray| is already sorted.
- *
- * @param {Array} inArray The array to be processed.
+ * @param {Array.<number>} inArray The array to be processed.
+ * @return {Array.<number>} The array after processing.
  */
 function removeDuplicates(inArray) {
   var out = [];
 
-  if(inArray.length == 0)
+  if (inArray.length == 0)
     return out;
 
   out.push(inArray[0]);
   for (var i = 1; i < inArray.length; ++i)
-    if(inArray[i] != inArray[i - 1])
+    if (inArray[i] != inArray[i - 1])
       out.push(inArray[i]);
   return out;
 }
@@ -75,6 +75,8 @@ function removeDuplicates(inArray) {
  * Example: "34853253" is valid.
  * Example: "1-4, 9, 3-6, 10, 11" is valid.
  *
+ * @param {string} pageRangeText The text to be checked.
+ * @param {number} totalPageCount The total number of pages.
  * @return {boolean} true if the |pageRangeText| is valid.
  */
 function isPageRangeTextValid(pageRangeText, totalPageCount) {
@@ -112,8 +114,9 @@ function isPageRangeTextValid(pageRangeText, totalPageCount) {
  * eliminated. If |pageRangeText| is not valid according to
  * isPageRangeTextValid(), or |totalPageCount| is undefined an empty list is
  * returned.
- *
- * @return {Array}
+ * @param {string} pageRangeText The text to be checked.
+ * @param {number} totalPageCount The total number of pages.
+ * @return {Array.<number>} A list of all pages.
  */
 function pageRangeTextToPageList(pageRangeText, totalPageCount) {
   var pageList = [];
@@ -136,7 +139,7 @@ function pageRangeTextToPageList(pageRangeText, totalPageCount) {
         pageList.push(j);
     } else {
       var singlePageNumber = parseInt(parts[i], 10);
-      if (isPositiveInteger(singlePageNumber) &&
+      if (isPositiveInteger(singlePageNumber.toString()) &&
           singlePageNumber <= totalPageCount) {
         pageList.push(singlePageNumber);
       }
@@ -146,17 +149,18 @@ function pageRangeTextToPageList(pageRangeText, totalPageCount) {
 }
 
 /**
- * Returns the contents of |pageList| in ascending order and without any
- * duplicates. |pageList| is not affected.
- *
- * @return {Array}
+ * @param {Array.<number>} pageList The list to be processed.
+ * @return {Array.<number>} The contents of |pageList| in ascending order and
+ *     without any duplicates. |pageList| is not affected.
  */
 function pageListToPageSet(pageList) {
   var pageSet = [];
   if (pageList.length == 0)
     return pageSet;
   pageSet = pageList.slice(0);
-  pageSet.sort(function(a,b) { return a - b; });
+  pageSet.sort(function(a, b) {
+    return (/** @type {number} */ a) - (/** @type {number} */ b);
+  });
   pageSet = removeDuplicates(pageSet);
   return pageSet;
 }
@@ -165,16 +169,17 @@ function pageListToPageSet(pageList) {
  * Converts |pageSet| to page ranges. It squashes whenever possible.
  * Example: '1-2,3,5-7' becomes 1-3,5-7.
  *
- * @return {Array} an array of page range objects. A page range object has
- *     fields 'from' and 'to'.
+ * @param {Array.<number>} pageSet The set of pages to be processed. Callers
+ *     should ensure that no duplicates exist.
+ * @return {Array.<{from: number, to: number}>} An array of page range objects.
  */
 function pageSetToPageRanges(pageSet) {
   var pageRanges = [];
   for (var i = 0; i < pageSet.length; ++i) {
-    tempFrom = pageSet[i];
+    var tempFrom = pageSet[i];
     while (i + 1 < pageSet.length && pageSet[i + 1] == pageSet[i] + 1)
       ++i;
-    tempTo = pageSet[i];
+    var tempTo = pageSet[i];
     pageRanges.push({'from': tempFrom, 'to': tempTo});
   }
   return pageRanges;
@@ -190,7 +195,6 @@ function getPageSrcURL(id, pageNumber) {
   return 'chrome://print/' + id + '/' + pageNumber + '/print.pdf';
 }
 
-
 /**
  * Returns a random integer within the specified range, |endPointA| and
  * |endPointB| are included.
@@ -199,7 +203,64 @@ function getPageSrcURL(id, pageNumber) {
  * @return {number} The random integer.
  */
 function randomInteger(endPointA, endPointB) {
-  from = Math.min(endPointA, endPointB);
-  to = Math.max(endPointA, endPointB);
+  var from = Math.min(endPointA, endPointB);
+  var to = Math.max(endPointA, endPointB);
   return Math.floor(Math.random() * (to - from + 1) + from);
+}
+
+// Number of points per inch.
+var POINTS_PER_INCH = 72;
+// Number of points per millimeter.
+var POINTS_PER_MILLIMETER = 2.83464567;
+
+/**
+ * Converts |value| from inches to points.
+ * @param {number} value The number in inches.
+ * @return {number} |value| in points.
+ */
+function convertInchesToPoints(value) {
+  return value * POINTS_PER_INCH;
+}
+
+/**
+ * Converts |value| from points to inches.
+ * @param {number} value The number in points.
+ * @return {number} |value| in inches.
+ */
+function convertPointsToInches(value) {
+  return value / POINTS_PER_INCH;
+}
+
+/**
+ * Converts |value| from millimeters to points.
+ * @param {number} value The number in millimeters.
+ * @return {number} |value| in points.
+ */
+function convertMillimetersToPoints(value) {
+  return value * POINTS_PER_MILLIMETER;
+}
+
+/**
+ * Converts |value| from points to millimeters.
+ * @param {number} value The number in points.
+ * @return {number} |value| in millimeters.
+ */
+function convertPointsToMillimeters(value) {
+  return value / POINTS_PER_MILLIMETER;
+}
+
+/**
+ * Parses |numberFormat| and extracts the symbols used for the thousands point
+ * and decimal point.
+ * @param {string} numberFormat The formatted version of the number 12345678.
+ * @return {!Array.<string>} The extracted symbols in the order
+ *     [thousandsSymbol, decimalSymbol]]. For example
+ *     parseNumberFormat("123,456.78") returns [",", "."].
+ */
+function parseNumberFormat(numberFormat) {
+  if (!numberFormat)
+    numberFormat = '';
+  var regex = /^(\d+)(\W{0,1})(\d+)(\W{0,1})(\d+)$/;
+  var matches = numberFormat.match(regex) || ['', '', ',', '', '.'];
+  return [matches[2], matches[4]];
 }

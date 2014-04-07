@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/callback_old.h"
+#include "base/callback.h"
 #include "base/string16.h"
 #include "printing/print_settings.h"
 #include "ui/gfx/native_widget_types.h"
@@ -36,7 +36,7 @@ class PRINTING_EXPORT PrintingContext {
 
   // Callback of AskUserForSettings, used to notify the PrintJobWorker when
   // print settings are available.
-  typedef Callback1<Result>::Type PrintSettingsCallback;
+  typedef base::Callback<void(Result)> PrintSettingsCallback;
 
   // Asks the user what printer and format should be used to print. Updates the
   // context with the select device settings. The result of the call is returned
@@ -45,7 +45,7 @@ class PRINTING_EXPORT PrintingContext {
   virtual void AskUserForSettings(gfx::NativeView parent_view,
                                   int max_pages,
                                   bool has_selection,
-                                  PrintSettingsCallback* callback) = 0;
+                                  const PrintSettingsCallback& callback) = 0;
 
   // Selects the user's default printer and format. Updates the context with the
   // default device settings.
@@ -98,9 +98,7 @@ class PRINTING_EXPORT PrintingContext {
   // caller owns the returned object.
   static PrintingContext* Create(const std::string& app_locale);
 
-  void set_use_overlays(bool use_overlays) {
-    settings_.use_overlays = use_overlays;
-  }
+  void set_margin_type(MarginType type);
 
   const PrintSettings& settings() const {
     return settings_;

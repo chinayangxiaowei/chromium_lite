@@ -1,10 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
 #include "base/base_paths.h"
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
@@ -15,6 +16,8 @@
 #include "chrome/browser/browser_shutdown.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_info_cache.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/status_icons/status_icon.h"
 #include "chrome/browser/status_icons/status_tray.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -22,27 +25,25 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/user_metrics.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
+using content::UserMetricsAction;
+
 BackgroundModeManager::BackgroundModeData::BackgroundModeData(
     int command_id,
-    Profile* profile,
-    BackgroundModeManager* background_mode_manager)
+    Profile* profile)
     : applications_(new BackgroundApplicationListModel(profile)),
       command_id_(command_id),
-      profile_(profile),
-      background_mode_manager_(background_mode_manager) {
-  name_ = UTF8ToUTF16(profile_->GetProfileName());
-  if (name_.empty())
-    name_ = l10n_util::GetStringUTF16(IDS_PROFILES_DEFAULT_NAME);
+      profile_(profile) {
 }
 
 BackgroundModeManager::BackgroundModeData::~BackgroundModeData() {
@@ -73,9 +74,9 @@ void BackgroundModeManager::BackgroundModeData::ExecuteCommand(int item) {
       // Do nothing. This is just a label.
       break;
     default:
-      Browser* browser = GetBrowserWindow();
+      // Launch the app associated with this item.
       const Extension* extension = applications_->GetExtension(item);
-      browser->OpenApplicationTab(profile_, extension, NEW_FOREGROUND_TAB);
+      BackgroundModeManager::LaunchBackgroundApplication(profile_, extension);
       break;
   }
 }
@@ -118,6 +119,15 @@ void BackgroundModeManager::BackgroundModeData::BuildProfileMenu(
     containing_menu->AddSubMenu(command_id_, name_, menu);
 }
 
+void BackgroundModeManager::BackgroundModeData::SetName(
+    const string16& new_profile_name) {
+  name_ = new_profile_name;
+}
+
+string16 BackgroundModeManager::BackgroundModeData::name() {
+  return name_;
+}
+
 // static
 bool BackgroundModeManager::BackgroundModeData::BackgroundModeDataCompare(
     const BackgroundModeData* bmd1,
@@ -128,8 +138,11 @@ bool BackgroundModeManager::BackgroundModeData::BackgroundModeDataCompare(
 
 ///////////////////////////////////////////////////////////////////////////////
 //  BackgroundModeManager, public
-BackgroundModeManager::BackgroundModeManager(CommandLine* command_line)
-    : status_tray_(NULL),
+BackgroundModeManager::BackgroundModeManager(
+    CommandLine* command_line,
+    ProfileInfoCache* profile_cache)
+    : profile_cache_(profile_cache),
+      status_tray_(NULL),
       status_icon_(NULL),
       context_menu_(NULL),
       in_background_mode_(false),
@@ -144,6 +157,10 @@ BackgroundModeManager::BackgroundModeManager(CommandLine* command_line)
   // notifications.
   if (IsBackgroundModePermanentlyDisabled(command_line))
     return;
+
+  // Add self as an observer for the profile info cache so we know when profiles
+  // are deleted and their names change.
+  profile_cache_->AddObserver(this);
 
   // Listen for the background mode preference changing.
   if (g_browser_process->local_state()) {  // Skip for unit tests
@@ -171,13 +188,13 @@ BackgroundModeManager::BackgroundModeManager(CommandLine* command_line)
   // Listen for the application shutting down so we can decrement our KeepAlive
   // count.
   registrar_.Add(this, content::NOTIFICATION_APP_TERMINATING,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
 }
 
 BackgroundModeManager::~BackgroundModeManager() {
   // Remove ourselves from the application observer list (only needed by unit
   // tests since APP_TERMINATING is what does this in a real running system).
-  for (std::map<Profile*, BackgroundModeInfo>::iterator it =
+  for (BackgroundModeInfoMap::iterator it =
        background_mode_data_.begin();
        it != background_mode_data_.end();
        ++it) {
@@ -202,23 +219,30 @@ void BackgroundModeManager::RegisterProfile(Profile* profile) {
   // We don't want to register multiple times for one profile.
   DCHECK(background_mode_data_.find(profile) == background_mode_data_.end());
   BackgroundModeInfo bmd(new BackgroundModeData(current_command_id_++,
-                                                profile, this));
+                                                profile));
   background_mode_data_[profile] = bmd;
+
+  // Initially set the name for this background mode data.
+  size_t index = profile_cache_->GetIndexOfProfileWithPath(profile->GetPath());
+  string16 name = l10n_util::GetStringUTF16(IDS_PROFILES_DEFAULT_NAME);
+  if (index != std::string::npos)
+    name = profile_cache_->GetNameOfProfileAtIndex(index);
+  bmd->SetName(name);
 
   // Listen for when extensions are loaded or add the background permission so
   // we can display a "background app installed" notification and enter
   // "launch on login" mode on the Mac.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
-                 Source<Profile>(profile));
+                 content::Source<Profile>(profile));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_PERMISSIONS_UPDATED,
-                 Source<Profile>(profile));
+                 content::Source<Profile>(profile));
 
 
   // Check for the presence of background apps after all extensions have been
   // loaded, to handle the case where an extension has been manually removed
   // while Chrome was not running.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSIONS_READY,
-                 Source<Profile>(profile));
+                 content::Source<Profile>(profile));
 
   bmd->applications_->AddObserver(this);
 
@@ -228,14 +252,31 @@ void BackgroundModeManager::RegisterProfile(Profile* profile) {
     UpdateStatusTrayIconContextMenu();
 }
 
+// static
+void BackgroundModeManager::LaunchBackgroundApplication(
+    Profile* profile,
+    const Extension* extension) {
+  ExtensionService* service = profile->GetExtensionService();
+  extension_misc::LaunchContainer launch_container =
+      service->extension_prefs()->GetLaunchContainer(
+          extension, ExtensionPrefs::LAUNCH_REGULAR);
+  Browser::OpenApplication(profile, extension, launch_container, GURL(),
+                           NEW_FOREGROUND_TAB);
+}
+
+int BackgroundModeManager::NumberOfBackgroundModeData() {
+  return background_mode_data_.size();
+}
+
 ///////////////////////////////////////////////////////////////////////////////
-//  BackgroundModeManager, NotificationObserver overrides
-void BackgroundModeManager::Observe(int type,
-                                    const NotificationSource& source,
-                                    const NotificationDetails& details) {
+//  BackgroundModeManager, content::NotificationObserver overrides
+void BackgroundModeManager::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   switch (type) {
     case chrome::NOTIFICATION_PREF_CHANGED:
-      DCHECK(*Details<std::string>(details).ptr() ==
+      DCHECK(*content::Details<std::string>(details).ptr() ==
              prefs::kBackgroundModeEnabled);
       if (IsBackgroundModePrefEnabled())
         EnableBackgroundMode();
@@ -249,11 +290,11 @@ void BackgroundModeManager::Observe(int type,
       break;
 
     case chrome::NOTIFICATION_EXTENSION_LOADED: {
-        Extension* extension = Details<Extension>(details).ptr();
+        Extension* extension = content::Details<Extension>(details).ptr();
         if (BackgroundApplicationListModel::IsBackgroundApp(*extension)) {
           // Extensions loaded after the ExtensionsService is ready should be
           // treated as new installs.
-          Profile* profile = Source<Profile>(source).ptr();
+          Profile* profile = content::Source<Profile>(source).ptr();
           if (profile->GetExtensionService()->is_ready())
             OnBackgroundAppInstalled(extension);
         }
@@ -261,7 +302,7 @@ void BackgroundModeManager::Observe(int type,
       break;
     case chrome::NOTIFICATION_EXTENSION_PERMISSIONS_UPDATED: {
         UpdatedExtensionPermissionsInfo* info =
-            Details<UpdatedExtensionPermissionsInfo>(details).ptr();
+            content::Details<UpdatedExtensionPermissionsInfo>(details).ptr();
         if (info->permissions->HasAPIPermission(
                 ExtensionAPIPermission::kBackground) &&
             info->reason == UpdatedExtensionPermissionsInfo::ADDED) {
@@ -280,7 +321,7 @@ void BackgroundModeManager::Observe(int type,
       // Shutting down, so don't listen for any more notifications so we don't
       // try to re-enter/exit background mode again.
       registrar_.RemoveAll();
-      for (std::map<Profile*, BackgroundModeInfo>::iterator it =
+      for (BackgroundModeInfoMap::iterator it =
                background_mode_data_.begin();
            it != background_mode_data_.end();
            ++it) {
@@ -306,6 +347,15 @@ void BackgroundModeManager::OnApplicationListChanged(Profile* profile) {
 
   // Figure out what just happened based on the count of background apps.
   int count = GetBackgroundAppCount();
+
+  // Update the profile cache with the fact whether background apps are running
+  // for this profile.
+  size_t profile_index = profile_cache_->GetIndexOfProfileWithPath(
+      profile->GetPath());
+  if (profile_index != std::string::npos) {
+    profile_cache_->SetBackgroundStatusOfProfileAtIndex(
+        profile_index, GetBackgroundAppCountForProfile(profile) != 0);
+  }
 
   if (count == 0) {
     // We've uninstalled our last background app, make sure we exit background
@@ -335,6 +385,71 @@ void BackgroundModeManager::OnApplicationListChanged(Profile* profile) {
   }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+//  BackgroundModeManager, ProfileInfoCacheObserver overrides
+void BackgroundModeManager::OnProfileAdded(const FilePath& profile_path) {
+  ProfileInfoCache& cache =
+      g_browser_process->profile_manager()->GetProfileInfoCache();
+  string16 profile_name = cache.GetNameOfProfileAtIndex(
+      cache.GetIndexOfProfileWithPath(profile_path));
+  // At this point, the profile should be registered with the background mode
+  // manager, but when it's actually added to the cache is when its name is
+  // set so we need up to update that with the background_mode_data.
+  for (BackgroundModeInfoMap::const_iterator it =
+       background_mode_data_.begin();
+       it != background_mode_data_.end();
+       ++it) {
+    if (it->first->GetPath() == profile_path) {
+      it->second->SetName(profile_name);
+      UpdateStatusTrayIconContextMenu();
+      return;
+    }
+  }
+}
+
+void BackgroundModeManager::OnProfileWillBeRemoved(
+    const FilePath& profile_path) {
+  ProfileInfoCache& cache =
+      g_browser_process->profile_manager()->GetProfileInfoCache();
+  string16 profile_name = cache.GetNameOfProfileAtIndex(
+      cache.GetIndexOfProfileWithPath(profile_path));
+  // Remove the profile from our map of profiles.
+  BackgroundModeInfoMap::iterator it =
+      GetBackgroundModeIterator(profile_name);
+  // If a profile isn't running a background app, it may not be in the map.
+  if (it != background_mode_data_.end()) {
+    background_mode_data_.erase(it);
+    UpdateStatusTrayIconContextMenu();
+  }
+}
+
+void BackgroundModeManager::OnProfileWasRemoved(
+    const FilePath& profile_path,
+    const string16& profile_name) {
+}
+
+void BackgroundModeManager::OnProfileNameChanged(
+    const FilePath& profile_path,
+    const string16& old_profile_name) {
+  ProfileInfoCache& cache =
+      g_browser_process->profile_manager()->GetProfileInfoCache();
+  string16 new_profile_name = cache.GetNameOfProfileAtIndex(
+      cache.GetIndexOfProfileWithPath(profile_path));
+  BackgroundModeInfoMap::const_iterator it =
+      GetBackgroundModeIterator(old_profile_name);
+  // We check that the returned iterator is valid due to unittests, but really
+  // this should only be called on profiles already known by the background
+  // mode manager.
+  if (it != background_mode_data_.end()) {
+    it->second->SetName(new_profile_name);
+    UpdateStatusTrayIconContextMenu();
+  }
+}
+
+void BackgroundModeManager::OnProfileAvatarChanged(
+    const FilePath& profile_path) {
+
+}
 ///////////////////////////////////////////////////////////////////////////////
 //  BackgroundModeManager::BackgroundModeData, ui::SimpleMenuModel overrides
 bool BackgroundModeManager::IsCommandIdChecked(
@@ -367,7 +482,7 @@ void BackgroundModeManager::ExecuteCommand(int command_id) {
       bmd->GetBrowserWindow()->OpenTaskManager(true);
       break;
     case IDC_EXIT:
-      UserMetrics::RecordAction(UserMetricsAction("Exit"));
+      content::RecordAction(UserMetricsAction("Exit"));
       BrowserList::AttemptExit();
       break;
     case IDC_STATUS_TRAY_KEEP_CHROME_RUNNING_IN_BACKGROUND: {
@@ -399,14 +514,15 @@ void BackgroundModeManager::EndKeepAliveForStartup() {
     // keep-alive (which can shutdown Chrome) before the message loop has
     // started.
     MessageLoop::current()->PostTask(
-        FROM_HERE, NewRunnableFunction(BrowserList::EndKeepAlive));
+        FROM_HERE, base::Bind(&BrowserList::EndKeepAlive));
   }
 }
 
 void BackgroundModeManager::StartBackgroundMode() {
   // Don't bother putting ourselves in background mode if we're already there
   // or if background mode is disabled.
-  if (in_background_mode_ || !IsBackgroundModePrefEnabled())
+  if (in_background_mode_ ||
+      (!IsBackgroundModePrefEnabled() && !keep_alive_for_test_))
     return;
 
   // Mark ourselves as running in background mode.
@@ -460,7 +576,7 @@ void BackgroundModeManager::DisableBackgroundMode() {
 int BackgroundModeManager::GetBackgroundAppCount() const {
   int count = 0;
   // Walk the BackgroundModeData for all profiles and count the number of apps.
-  for (std::map<Profile*, BackgroundModeInfo>::const_iterator it =
+  for (BackgroundModeInfoMap::const_iterator it =
        background_mode_data_.begin();
        it != background_mode_data_.end();
        ++it) {
@@ -468,6 +584,12 @@ int BackgroundModeManager::GetBackgroundAppCount() const {
   }
   DCHECK(count >= 0);
   return count;
+}
+
+int BackgroundModeManager::GetBackgroundAppCountForProfile(
+    Profile* const profile) const {
+  BackgroundModeData* bmd = GetBackgroundModeData(profile);
+  return bmd->GetBackgroundAppCount();
 }
 
 void BackgroundModeManager::OnBackgroundAppInstalled(
@@ -546,14 +668,13 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
   // Create a context menu item for Chrome.
   ui::SimpleMenuModel* menu = new ui::SimpleMenuModel(this);
   // Add About item
-  menu->AddItem(IDC_ABOUT, l10n_util::GetStringFUTF16(IDS_ABOUT,
-      l10n_util::GetStringUTF16(IDS_PRODUCT_NAME)));
+  menu->AddItem(IDC_ABOUT, l10n_util::GetStringUTF16(IDS_ABOUT));
   menu->AddItemWithStringId(IDC_TASK_MANAGER, IDS_TASK_MANAGER);
   menu->AddSeparator();
 
-  if (background_mode_data_.size() > 1) {
+  if (profile_cache_->GetNumberOfProfiles() > 1) {
     std::vector<BackgroundModeData*> bmd_vector;
-    for (std::map<Profile*, BackgroundModeInfo>::iterator it =
+    for (BackgroundModeInfoMap::iterator it =
          background_mode_data_.begin();
          it != background_mode_data_.end();
          ++it) {
@@ -561,18 +682,29 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
     }
     std::sort(bmd_vector.begin(), bmd_vector.end(),
               &BackgroundModeData::BackgroundModeDataCompare);
+    int profiles_with_apps = 0;
     for (std::vector<BackgroundModeData*>::const_iterator bmd_it =
          bmd_vector.begin();
          bmd_it != bmd_vector.end();
          ++bmd_it) {
       BackgroundModeData* bmd = *bmd_it;
-      ui::SimpleMenuModel* submenu = new ui::SimpleMenuModel(bmd);
-      bmd->BuildProfileMenu(submenu, menu);
+      // We should only display the profile in the status icon if it has at
+      // least one background app.
+      if (bmd->GetBackgroundAppCount() > 0) {
+        ui::SimpleMenuModel* submenu = new ui::SimpleMenuModel(bmd);
+        bmd->BuildProfileMenu(submenu, menu);
+        profiles_with_apps++;
+      }
     }
+    // We should only be displaying the status tray icon if there is at least
+    // one profile with a background app.
+    DCHECK_GT(profiles_with_apps, 0);
   } else {
-    // We should only have one profile in the list if we are not
-    // using multi-profiles.
-    DCHECK_EQ(background_mode_data_.size(), size_t(1));
+    // We should only have one profile in the cache if we are not
+    // using multi-profiles. If keep_alive_for_test_ is set, then we may not
+    // have any profiles in the cache.
+    DCHECK(profile_cache_->GetNumberOfProfiles() == size_t(1) ||
+           keep_alive_for_test_);
     background_mode_data_.begin()->second->BuildProfileMenu(menu, NULL);
     menu->AddSeparator();
   }
@@ -592,9 +724,25 @@ void BackgroundModeManager::RemoveStatusTrayIcon() {
 }
 
 BackgroundModeManager::BackgroundModeData*
-BackgroundModeManager::GetBackgroundModeData(Profile* profile) {
+BackgroundModeManager::GetBackgroundModeData(Profile* const profile) const {
   DCHECK(background_mode_data_.find(profile) != background_mode_data_.end());
-  return background_mode_data_[profile].get();
+  return background_mode_data_.find(profile)->second.get();
+}
+
+BackgroundModeManager::BackgroundModeInfoMap::iterator
+BackgroundModeManager::GetBackgroundModeIterator(
+    const string16& profile_name) {
+  BackgroundModeInfoMap::iterator profile_it =
+      background_mode_data_.end();
+  for (BackgroundModeInfoMap::iterator it =
+       background_mode_data_.begin();
+       it != background_mode_data_.end();
+       ++it) {
+    if (it->second->name() == profile_name) {
+      profile_it = it;
+    }
+  }
+  return profile_it;
 }
 
 // static
@@ -606,6 +754,8 @@ bool BackgroundModeManager::IsBackgroundModePermanentlyDisabled(
   // always disabled on chromeos since chrome is always running on that
   // platform, making it superfluous.
 #if defined(OS_CHROMEOS)
+  if (command_line->HasSwitch(switches::kKeepAliveForTest))
+      return false;
   return true;
 #else
   bool background_mode_disabled =

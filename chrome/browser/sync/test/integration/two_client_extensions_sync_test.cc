@@ -267,7 +267,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionsSyncTest, DisableSync) {
   InstallExtension(GetProfile(0), 0);
   InstallExtension(verifier(), 0);
   ASSERT_TRUE(
-      GetClient(0)->AwaitSyncCycleCompletion("Installed an extension."));
+      GetClient(0)->AwaitFullSyncCompletion("Installed an extension."));
   ASSERT_TRUE(HasSameExtensionsAsVerifier(0));
   ASSERT_FALSE(HasSameExtensionsAsVerifier(1));
 
@@ -276,6 +276,30 @@ IN_PROC_BROWSER_TEST_F(TwoClientExtensionsSyncTest, DisableSync) {
   InstallExtensionsPendingForSync(GetProfile(0));
   InstallExtensionsPendingForSync(GetProfile(1));
   InstallExtensionsPendingForSync(verifier());
+  ASSERT_TRUE(AllProfilesHaveSameExtensionsAsVerifier());
+}
+
+// Regression test for bug 104399: ensure that an extension installed prior to
+// setting up sync, when uninstalled, is also uninstalled from sync.
+IN_PROC_BROWSER_TEST_F(TwoClientExtensionsSyncTest,
+                       UninstallPreinstalledExtensions) {
+  ASSERT_TRUE(SetupClients());
+  ASSERT_TRUE(AllProfilesHaveSameExtensionsAsVerifier());
+
+  InstallExtension(GetProfile(0), 0);
+  InstallExtension(verifier(), 0);
+
+  ASSERT_TRUE(SetupSync());
+
+  InstallExtensionsPendingForSync(GetProfile(0));
+  InstallExtensionsPendingForSync(GetProfile(1));
+  ASSERT_TRUE(AwaitQuiescence());
+  ASSERT_TRUE(AllProfilesHaveSameExtensionsAsVerifier());
+
+  UninstallExtension(GetProfile(0), 0);
+  UninstallExtension(verifier(), 0);
+
+  ASSERT_TRUE(AwaitQuiescence());
   ASSERT_TRUE(AllProfilesHaveSameExtensionsAsVerifier());
 }
 

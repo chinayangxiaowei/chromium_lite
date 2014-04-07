@@ -14,12 +14,12 @@
 REGISTER_TEST_CASE(FileSystem);
 
 bool TestFileSystem::Init() {
-  return InitTestingInterface() && EnsureRunningOverHTTP();
+  return CheckTestingInterface() && EnsureRunningOverHTTP();
 }
 
-void TestFileSystem::RunTest() {
-  RUN_TEST_FORCEASYNC_AND_NOT(Open);
-  RUN_TEST_FORCEASYNC_AND_NOT(MultipleOpens);
+void TestFileSystem::RunTests(const std::string& filter) {
+  RUN_TEST_FORCEASYNC_AND_NOT(Open, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(MultipleOpens, filter);
 }
 
 std::string TestFileSystem::TestOpen() {

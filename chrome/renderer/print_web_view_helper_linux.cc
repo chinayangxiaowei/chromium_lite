@@ -9,11 +9,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
 #include "chrome/common/print_messages.h"
-#include "content/common/view_messages.h"
+#include "content/public/renderer/render_thread.h"
 #include "printing/metafile.h"
 #include "printing/metafile_impl.h"
 #include "printing/metafile_skia_wrapper.h"
 #include "printing/page_size_margins.h"
+#include "skia/ext/platform_device.h"
 #include "skia/ext/vector_canvas.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
@@ -56,21 +57,17 @@ bool PrintWebViewHelper::RenderPreviewPage(int page_number) {
 
 bool PrintWebViewHelper::PrintPages(const PrintMsg_PrintPages_Params& params,
                                     WebFrame* frame,
-                                    WebNode* node,
-                                    PrepareFrameAndViewForPrint* prepare) {
+                                    const WebNode& node) {
   printing::NativeMetafile metafile;
   if (!metafile.Init())
     return false;
 
-  scoped_ptr<PrepareFrameAndViewForPrint> prep_frame_view;
-  if (!prepare) {
-    prep_frame_view.reset(new PrepareFrameAndViewForPrint(params.params, frame,
-                                                          node));
-    prepare = prep_frame_view.get();
-  }
+  PrepareFrameAndViewForPrint prep_frame_view(params.params, frame, node);
   int page_count = 0;
-  if (!RenderPages(params, frame, node, &page_count, prepare, &metafile))
+  if (!RenderPages(params, frame, node, &page_count, &prep_frame_view,
+                   &metafile)) {
     return false;
+  }
 
   // Get the size of the resulting metafile.
   uint32 buf_size = metafile.GetDataSize();
@@ -93,9 +90,8 @@ bool PrintWebViewHelper::PrintPages(const PrintMsg_PrintPages_Params& params,
   printed_page_params.data_size = 0;
   printed_page_params.document_cookie = params.params.document_cookie;
 
-  base::SharedMemoryHandle shared_mem_handle;
-  Send(new ViewHostMsg_AllocateSharedMemoryBuffer(buf_size,
-                                                  &shared_mem_handle));
+  base::SharedMemoryHandle shared_mem_handle =
+      content::RenderThread::Get()->HostAllocateSharedMemoryBuffer(buf_size);
   if (!base::SharedMemory::IsHandleValid(shared_mem_handle)) {
     NOTREACHED() << "AllocateSharedMemoryBuffer returned bad handle";
     return false;
@@ -142,12 +138,13 @@ bool PrintWebViewHelper::PrintPages(const PrintMsg_PrintPages_Params& params,
 
 bool PrintWebViewHelper::RenderPages(const PrintMsg_PrintPages_Params& params,
                                      WebKit::WebFrame* frame,
-                                     WebKit::WebNode* node,
+                                     const WebKit::WebNode& node,
                                      int* page_count,
                                      PrepareFrameAndViewForPrint* prepare,
                                      printing::Metafile* metafile) {
   PrintMsg_Print_Params print_params = params.params;
-  UpdatePrintableSizeInPrintParameters(frame, node, prepare, &print_params);
+  UpdateFrameAndViewFromCssPageLayout(frame, node, prepare, print_params,
+                                      ignore_css_margins_, fit_to_page_);
 
   *page_count = prepare->GetExpectedPageCount();
   if (!*page_count)
@@ -158,9 +155,6 @@ bool PrintWebViewHelper::RenderPages(const PrintMsg_PrintPages_Params& params,
                                                   print_params.document_cookie,
                                                   *page_count));
 #endif
-
-  base::TimeTicks begin_time = base::TimeTicks::Now();
-  base::TimeTicks page_begin_time = begin_time;
 
   PrintMsg_PrintPage_Params page_params;
   page_params.params = print_params;
@@ -177,8 +171,6 @@ bool PrintWebViewHelper::RenderPages(const PrintMsg_PrintPages_Params& params,
     }
   }
 
-  base::TimeDelta render_time = base::TimeTicks::Now() - begin_time;
-
   prepare->FinishPrinting();
   metafile->FinishDocument();
   return true;
@@ -190,23 +182,16 @@ void PrintWebViewHelper::PrintPageInternal(
     WebFrame* frame,
     printing::Metafile* metafile) {
   printing::PageSizeMargins page_layout_in_points;
-  GetPageSizeAndMarginsInPoints(frame, params.page_number, params.params,
-                                &page_layout_in_points);
-
-  gfx::Size page_size(
-      page_layout_in_points.content_width +
-          page_layout_in_points.margin_right +
-          page_layout_in_points.margin_left,
-      page_layout_in_points.content_height +
-          page_layout_in_points.margin_top +
-          page_layout_in_points.margin_bottom);
-  gfx::Rect content_area(page_layout_in_points.margin_left,
-                         page_layout_in_points.margin_top,
-                         page_layout_in_points.content_width,
-                         page_layout_in_points.content_height);
-
+  double scale_factor = 1.0f;
+  ComputePageLayoutInPointsForCss(frame, params.page_number, params.params,
+                                  ignore_css_margins_, fit_to_page_,
+                                  &scale_factor, &page_layout_in_points);
+  gfx::Size page_size;
+  gfx::Rect content_area;
+  GetPageSizeAndContentAreaFromPageLayout(page_layout_in_points, &page_size,
+                                          &content_area);
   SkDevice* device = metafile->StartPageForVectorCanvas(
-      page_size, content_area, 1.0f);
+      page_size, content_area, scale_factor);
   if (!device)
     return;
 
@@ -214,17 +199,17 @@ void PrintWebViewHelper::PrintPageInternal(
   // can't be a stack object.
   SkRefPtr<skia::VectorCanvas> canvas = new skia::VectorCanvas(device);
   canvas->unref();  // SkRefPtr and new both took a reference.
-  printing::MetafileSkiaWrapper::SetMetafileOnCanvas(canvas.get(), metafile);
-  printing::MetafileSkiaWrapper::SetDraftMode(canvas.get(),
-                                              is_print_ready_metafile_sent_);
+  printing::MetafileSkiaWrapper::SetMetafileOnCanvas(*canvas, metafile);
+  skia::SetIsDraftMode(*canvas, is_print_ready_metafile_sent_);
   frame->printPage(params.page_number, canvas.get());
 
   if (params.params.display_header_footer) {
     // |page_number| is 0-based, so 1 is added.
     // The scale factor on Linux is 1.
     PrintHeaderAndFooter(canvas.get(), params.page_number + 1,
-                         print_preview_context_.total_page_count(), 1,
-                         page_layout_in_points, *header_footer_info_);
+                         print_preview_context_.total_page_count(),
+                         scale_factor, page_layout_in_points,
+                         *header_footer_info_);
   }
 
   // Done printing. Close the device context to retrieve the compiled metafile.

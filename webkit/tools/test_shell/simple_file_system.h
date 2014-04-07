@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "base/id_map.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_temp_dir.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFileSystem.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebFileSystem.h"
 #include "webkit/fileapi/file_system_types.h"
 #include <vector>
 
@@ -21,7 +21,7 @@ class WebURL;
 
 namespace fileapi {
 class FileSystemContext;
-class FileSystemOperation;
+class FileSystemOperationInterface;
 }
 
 class SimpleFileSystem
@@ -81,8 +81,8 @@ class SimpleFileSystem
 
  private:
   // Helpers.
-  fileapi::FileSystemOperation* GetNewOperation(
-      WebKit::WebFileSystemCallbacks* callbacks);
+  fileapi::FileSystemOperationInterface* GetNewOperation(
+      const WebKit::WebURL& path, WebKit::WebFileSystemCallbacks* callbacks);
 
   // A temporary directory for FileSystem API.
   ScopedTempDir file_system_dir_;

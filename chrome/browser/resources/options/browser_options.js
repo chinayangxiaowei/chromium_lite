@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,19 +24,7 @@ cr.define('options', function() {
 
     startup_pages_pref_: {
       'name': 'session.urls_to_restore_on_startup',
-      'managed': false
-    },
-
-    homepage_pref_: {
-      'name': 'homepage',
-      'value': '',
-      'managed': false
-    },
-
-    homepage_is_newtabpage_pref_: {
-      'name': 'homepage_is_newtabpage',
-      'value': true,
-      'managed': false
+      'disabled': false
     },
 
     /**
@@ -59,9 +47,6 @@ cr.define('options', function() {
       // Wire up controls.
       $('startupUseCurrentButton').onclick = function(event) {
         chrome.send('setStartupPagesToCurrentPages');
-      };
-      $('toolbarShowBookmarksBar').onchange = function() {
-        chrome.send('toggleShowBookmarksBar');
       };
       $('defaultSearchManageEnginesButton').onclick = function(event) {
         OptionsPage.navigateToPage('searchEngines');
@@ -95,14 +80,10 @@ cr.define('options', function() {
       Preferences.getInstance().addEventListener('instant.enabled',
           this.onInstantEnabledChanged_.bind(this));
 
+      Preferences.getInstance().addEventListener(
+          $('homepageUseNTPButton').pref,
+          this.onHomepageUseNTPChanged_);
       var homepageField = $('homepageURL');
-      $('homepageUseNTPButton').onchange =
-          this.handleHomepageUseNTPButtonChange_.bind(this);
-      $('homepageUseURLButton').onchange =
-          this.handleHomepageUseURLButtonChange_.bind(this);
-      var homepageChangeHandler = this.handleHomepageURLChange_.bind(this);
-      homepageField.addEventListener('change', homepageChangeHandler);
-      homepageField.addEventListener('input', homepageChangeHandler);
       homepageField.addEventListener('focus', function(event) {
         self.autocompleteList_.attachToInput(homepageField);
       });
@@ -115,6 +96,7 @@ cr.define('options', function() {
         if (event.keyIdentifier == 'Enter')
           homepageField.blur();
       });
+
       // Text fields may change widths when the window changes size, so make
       // sure the suggestion list stays in sync.
       window.addEventListener('resize', function() {
@@ -131,6 +113,9 @@ cr.define('options', function() {
         $('defaultBrowserUseAsDefaultButton').onclick = function(event) {
           chrome.send('becomeDefaultBrowser');
         };
+
+        $('autoLaunch').addEventListener('click',
+                                         this.handleAutoLaunchChanged_);
       }
 
       var startupPagesList = $('startupPagesList');
@@ -138,7 +123,7 @@ cr.define('options', function() {
       startupPagesList.autoExpands = true;
 
       // Check if we are in the guest mode.
-      if (cr.commandLine.options['--bwsi']) {
+      if (cr.commandLine && cr.commandLine.options['--bwsi']) {
         // Hide the startup section.
         $('startupSection').hidden = true;
       } else {
@@ -148,17 +133,11 @@ cr.define('options', function() {
         Preferences.getInstance().addEventListener(
             this.startup_pages_pref_.name,
             this.handleStartupPageListChange_.bind(this));
-        Preferences.getInstance().addEventListener(
-            this.homepage_pref_.name,
-            this.handleHomepageChange_.bind(this));
-        Preferences.getInstance().addEventListener(
-            this.homepage_is_newtabpage_pref_.name,
-            this.handleHomepageIsNewTabPageChange_.bind(this));
 
         this.updateCustomStartupPageControlStates_();
       }
 
-      var suggestionList = new options.AutocompleteList();
+      var suggestionList = new cr.ui.AutocompleteList();
       suggestionList.autoExpands = true;
       suggestionList.suggestionUpdateRequestCallback =
           this.requestAutocompleteSuggestions_.bind(this);
@@ -195,6 +174,23 @@ cr.define('options', function() {
     setInstantFieldTrialStatus_: function(enabled) {
       $('instantEnabledCheckbox').hidden = enabled;
       $('instantFieldTrialCheckbox').hidden = !enabled;
+      $('instantLabel').htmlFor = enabled ? 'instantFieldTrialCheckbox'
+                                          : 'instantEnabledCheckbox';
+    },
+
+    /**
+     * Called when the value of the homepage-use-NTP pref changes.
+     * Updates the disabled state of the homepage text field.
+     * Notice that the text field can be disabled for other reasons too
+     * (it can be managed by policy, for instance).
+     * @param {Event} event Change event.
+     * @private
+     */
+    onHomepageUseNTPChanged_: function(event) {
+      var homepageField = $('homepageURL');
+      var homepageUseURLButton = $('homepageUseURLButton');
+      homepageField.setDisabled('radioNotSelected',
+                                !homepageUseURLButton.checked);
     },
 
     /**
@@ -254,7 +250,7 @@ cr.define('options', function() {
      */
     shouldEnableCustomStartupPageControls: function(pages) {
       return $('startupShowPagesButton').checked &&
-          !this.startup_pages_pref_.controlledBy;
+          !this.startup_pages_pref_.disabled;
     },
 
     /**
@@ -272,164 +268,6 @@ cr.define('options', function() {
     },
 
     /**
-     * Handles change events of the radio button 'homepageUseURLButton'.
-     * @param {event} change event.
-     * @private
-     */
-    handleHomepageUseURLButtonChange_: function(event) {
-      Preferences.setBooleanPref(this.homepage_is_newtabpage_pref_.name, false);
-    },
-
-    /**
-     * Handles change events of the radio button 'homepageUseNTPButton'.
-     * @param {event} change event.
-     * @private
-     */
-    handleHomepageUseNTPButtonChange_: function(event) {
-      Preferences.setBooleanPref(this.homepage_is_newtabpage_pref_.name, true);
-    },
-
-    /**
-     * Handles input and change events of the text field 'homepageURL'.
-     * @param {event} input/change event.
-     * @private
-     */
-    handleHomepageURLChange_: function(event) {
-      var homepageField = $('homepageURL');
-      var doFixup = event.type == 'change' ? '1' : '0';
-      chrome.send('setHomePage', [homepageField.value, doFixup]);
-    },
-
-    /**
-     * Handle change events of the preference 'homepage'.
-     * @param {event} preference changed event.
-     * @private
-     */
-    handleHomepageChange_: function(event) {
-      this.homepage_pref_.value = event.value['value'];
-      this.homepage_pref_.controlledBy = event.value['controlledBy'];
-      if (this.isHomepageURLNewTabPageURL_() &&
-          !this.homepage_pref_.controlledBy &&
-          !this.homepage_is_newtabpage_pref_.controlledBy) {
-        var useNewTabPage = this.isHomepageIsNewTabPageChoiceSelected_();
-        Preferences.setStringPref(this.homepage_pref_.name, '')
-        Preferences.setBooleanPref(this.homepage_is_newtabpage_pref_.name,
-                                   useNewTabPage)
-      }
-      this.updateHomepageControlStates_();
-    },
-
-    /**
-     * Handle change events of the preference homepage_is_newtabpage.
-     * @param {event} preference changed event.
-     * @private
-     */
-    handleHomepageIsNewTabPageChange_: function(event) {
-      this.homepage_is_newtabpage_pref_.value = event.value['value'];
-      this.homepage_is_newtabpage_pref_.controlledBy =
-          event.value['controlledBy'];
-      this.updateHomepageControlStates_();
-    },
-
-    /**
-     * Update homepage preference UI controls.  Here's a table describing the
-     * desired characteristics of the homepage choice radio value, its enabled
-     * state and the URL field enabled state. They depend on the values of the
-     * managed bits for homepage (m_hp) and homepageIsNewTabPage (m_ntp)
-     * preferences, as well as the value of the homepageIsNewTabPage preference
-     * (ntp) and whether the homepage preference is equal to the new tab page
-     * URL (hpisntp).
-     *
-     * m_hp m_ntp ntp hpisntp| choice value| choice enabled| URL field enabled
-     * ------------------------------------------------------------------------
-     * 0    0     0   0      | homepage    | 1             | 1
-     * 0    0     0   1      | new tab page| 1             | 0
-     * 0    0     1   0      | new tab page| 1             | 0
-     * 0    0     1   1      | new tab page| 1             | 0
-     * 0    1     0   0      | homepage    | 0             | 1
-     * 0    1     0   1      | homepage    | 0             | 1
-     * 0    1     1   0      | new tab page| 0             | 0
-     * 0    1     1   1      | new tab page| 0             | 0
-     * 1    0     0   0      | homepage    | 1             | 0
-     * 1    0     0   1      | new tab page| 0             | 0
-     * 1    0     1   0      | new tab page| 1             | 0
-     * 1    0     1   1      | new tab page| 0             | 0
-     * 1    1     0   0      | homepage    | 0             | 0
-     * 1    1     0   1      | new tab page| 0             | 0
-     * 1    1     1   0      | new tab page| 0             | 0
-     * 1    1     1   1      | new tab page| 0             | 0
-     *
-     * thus, we have:
-     *
-     *    choice value is new tab page === ntp || (hpisntp && (m_hp || !m_ntp))
-     *    choice enabled === !m_ntp && !(m_hp && hpisntp)
-     *    URL field enabled === !ntp && !mhp && !(hpisntp && !m_ntp)
-     *
-     * which also make sense if you think about them.
-     * @private
-     */
-    updateHomepageControlStates_: function() {
-      var homepageField = $('homepageURL');
-      homepageField.disabled = !this.isHomepageURLFieldEnabled_();
-      if (homepageField.value != this.homepage_pref_.value)
-        homepageField.value = this.homepage_pref_.value;
-      homepageField.style.backgroundImage = url('chrome://favicon/' +
-                                                this.homepage_pref_.value);
-      var disableChoice = !this.isHomepageChoiceEnabled_();
-      $('homepageUseURLButton').disabled = disableChoice;
-      $('homepageUseNTPButton').disabled = disableChoice;
-      var useNewTabPage = this.isHomepageIsNewTabPageChoiceSelected_();
-      $('homepageUseNTPButton').checked = useNewTabPage;
-      $('homepageUseURLButton').checked = !useNewTabPage;
-    },
-
-    /**
-     * Tests whether the value of the 'homepage' preference equls the new tab
-     * page url (chrome://newtab).
-     * @returns {boolean} True if the 'homepage' value equals the new tab page
-     *     url.
-     * @private
-     */
-    isHomepageURLNewTabPageURL_ : function() {
-      return (this.homepage_pref_.value.toLowerCase() == 'chrome://newtab');
-    },
-
-    /**
-     * Tests whether the Homepage choice "Use New Tab Page" is selected.
-     * @returns {boolean} True if "Use New Tab Page" is selected.
-     * @private
-     */
-    isHomepageIsNewTabPageChoiceSelected_: function() {
-      return (this.homepage_is_newtabpage_pref_.value ||
-              (this.isHomepageURLNewTabPageURL_() &&
-               (this.homepage_pref_.controlledBy ||
-                !this.homepage_is_newtabpage_pref_.controlledBy)));
-    },
-
-    /**
-     * Tests whether the home page choice controls are enabled.
-     * @returns {boolean} True if the home page choice controls are enabled.
-     * @private
-     */
-    isHomepageChoiceEnabled_: function() {
-      return (!this.homepage_is_newtabpage_pref_.controlledBy &&
-              !(this.homepage_pref_.controlledBy &&
-                this.isHomepageURLNewTabPageURL_()));
-    },
-
-    /**
-     * Checks whether the home page field should be enabled.
-     * @returns {boolean} True if the home page field should be enabled.
-     * @private
-     */
-    isHomepageURLFieldEnabled_: function() {
-      return (!this.homepage_is_newtabpage_pref_.value &&
-              !this.homepage_pref_.controlledBy &&
-              !(this.isHomepageURLNewTabPageURL_() &&
-                !this.homepage_is_newtabpage_pref_.controlledBy));
-    },
-
-    /**
      * Sets the enabled state of the custom startup page list controls
      * based on the current startup radio button selection.
      * @private
@@ -438,6 +276,7 @@ cr.define('options', function() {
       var disable = !this.shouldEnableCustomStartupPageControls();
       var startupPagesList = $('startupPagesList');
       startupPagesList.disabled = disable;
+      startupPagesList.setAttribute('tabindex', disable ? -1 : 0);
       // Explicitly set disabled state for input text elements.
       var inputs = startupPagesList.querySelectorAll("input[type='text']");
       for (var i = 0; i < inputs.length; i++)
@@ -446,18 +285,18 @@ cr.define('options', function() {
     },
 
     /**
-     * Handle change events of the preference
+     * Handles change events of the preference
      * 'session.urls_to_restore_on_startup'.
      * @param {event} preference changed event.
      * @private
      */
     handleStartupPageListChange_: function(event) {
-      this.startup_pages_pref_.controlledBy = event.value['controlledBy'];
+      this.startup_pages_pref_.disabled = event.value['disabled'];
       this.updateCustomStartupPageControlStates_();
     },
 
     /**
-     * Set the default search engine based on the popup selection.
+     * Sets the default search engine based on the popup selection.
      */
     setDefaultSearchEngine_: function() {
       var engineSelect = $('defaultSearchEngine');
@@ -466,6 +305,13 @@ cr.define('options', function() {
         var selection = engineSelect.options[selectedIndex];
         chrome.send('setDefaultSearchEngine', [String(selection.value)]);
       }
+    },
+
+    /**
+     * Sets or clear whether Chrome should Auto-launch on computer startup.
+     */
+    handleAutoLaunchChanged_: function() {
+      chrome.send('toggleAutoLaunch', [Boolean($('autoLaunch').checked)]);
     },
 
     /**
@@ -493,6 +339,14 @@ cr.define('options', function() {
         return;
       list.suggestions = suggestions;
     },
+
+    /**
+      * Shows the autoLaunch preference and initializes its checkbox value.
+      */
+    updateAutoLaunchState_: function(enabled) {
+      $('autoLaunchOption').hidden = false;
+      $('autoLaunch').checked = enabled;
+    },
   };
 
   BrowserOptions.updateDefaultBrowserState = function(statusString, isDefault,
@@ -516,6 +370,10 @@ cr.define('options', function() {
 
   BrowserOptions.updateAutocompleteSuggestions = function(suggestions) {
     BrowserOptions.getInstance().updateAutocompleteSuggestions_(suggestions);
+  };
+
+  BrowserOptions.updateAutoLaunchState = function(enabled) {
+    BrowserOptions.getInstance().updateAutoLaunchState_(enabled);
   };
 
   BrowserOptions.setInstantFieldTrialStatus = function(enabled) {

@@ -12,6 +12,9 @@
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
+#include "chrome/browser/net/connect_interceptor.h"
+#include "chrome/browser/net/http_server_properties_manager.h"
+#include "chrome/browser/net/predictor.h"
 #include "chrome/browser/net/sqlite_origin_bound_cert_store.h"
 #include "chrome/browser/net/sqlite_persistent_cookie_store.h"
 #include "chrome/browser/prefs/pref_member.h"
@@ -20,11 +23,25 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/resource_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/origin_bound_cert_service.h"
 #include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_cache.h"
+#include "net/url_request/url_request_job_factory.h"
+
+using content::BrowserThread;
+
+namespace {
+
+void ClearNetworkingHistorySinceOnIOThread(
+    ProfileImplIOData* io_data, base::Time time) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  io_data->transport_security_state()->DeleteSince(time);
+  io_data->http_server_properties()->Clear();
+}
+
+}  // namespace
 
 ProfileImplIOData::Handle::Handle(Profile* profile)
     : io_data_(new ProfileImplIOData),
@@ -43,6 +60,13 @@ ProfileImplIOData::Handle::~Handle() {
   if (extensions_request_context_getter_)
     extensions_request_context_getter_->CleanupOnUIThread();
 
+  if (io_data_->predictor_.get() != NULL) {
+    // io_data_->predictor_ might be NULL if Init() was never called
+    // (i.e. we shut down before ProfileImpl::DoFinalInit() got called).
+    PrefService* user_prefs = profile_->GetPrefs();
+    io_data_->predictor_->ShutdownOnUIThread(user_prefs);
+  }
+
   // Clean up all isolated app request contexts.
   for (ChromeURLRequestContextGetterMap::iterator iter =
            app_request_context_getter_map_.begin();
@@ -51,19 +75,28 @@ ProfileImplIOData::Handle::~Handle() {
     iter->second->CleanupOnUIThread();
   }
 
+  if (io_data_->http_server_properties_manager_.get())
+    io_data_->http_server_properties_manager_->ShutdownOnUIThread();
   io_data_->ShutdownOnUIThread();
 }
 
-void ProfileImplIOData::Handle::Init(const FilePath& cookie_path,
-                                     const FilePath& origin_bound_cert_path,
-                                     const FilePath& cache_path,
-                                     int cache_max_size,
-                                     const FilePath& media_cache_path,
-                                     int media_cache_max_size,
-                                     const FilePath& extensions_cookie_path,
-                                     const FilePath& app_path) {
+void ProfileImplIOData::Handle::Init(
+      const FilePath& cookie_path,
+      const FilePath& origin_bound_cert_path,
+      const FilePath& cache_path,
+      int cache_max_size,
+      const FilePath& media_cache_path,
+      int media_cache_max_size,
+      const FilePath& extensions_cookie_path,
+      const FilePath& app_path,
+      chrome_browser_net::Predictor* predictor,
+      PrefService* local_state,
+      IOThread* io_thread,
+      bool restore_old_session_cookies) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!io_data_->lazy_params_.get());
+  DCHECK(predictor);
+
   LazyParams* lazy_params = new LazyParams;
 
   lazy_params->cookie_path = cookie_path;
@@ -73,11 +106,24 @@ void ProfileImplIOData::Handle::Init(const FilePath& cookie_path,
   lazy_params->media_cache_path = media_cache_path;
   lazy_params->media_cache_max_size = media_cache_max_size;
   lazy_params->extensions_cookie_path = extensions_cookie_path;
+  lazy_params->restore_old_session_cookies = restore_old_session_cookies;
 
   io_data_->lazy_params_.reset(lazy_params);
 
   // Keep track of isolated app path separately so we can use it on demand.
   io_data_->app_path_ = app_path;
+
+  io_data_->predictor_.reset(predictor);
+
+  if (!main_request_context_getter_) {
+    main_request_context_getter_ =
+        ChromeURLRequestContextGetter::CreateOriginal(
+            profile_, io_data_);
+  }
+  io_data_->predictor_->InitNetworkPredictor(profile_->GetPrefs(),
+                                             local_state,
+                                             io_thread,
+                                             main_request_context_getter_);
 }
 
 base::Callback<ChromeURLDataManagerBackend*(void)>
@@ -90,6 +136,13 @@ ProfileImplIOData::Handle::GetChromeURLDataManagerBackendGetter() const {
 
 const content::ResourceContext&
 ProfileImplIOData::Handle::GetResourceContext() const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  LazyInitialize();
+  return GetResourceContextNoInit();
+}
+
+const content::ResourceContext&
+ProfileImplIOData::Handle::GetResourceContextNoInit() const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // Don't call LazyInitialize here, since the resource context is created at
   // the beginning of initalization and is used by some members while they're
@@ -155,17 +208,33 @@ ProfileImplIOData::Handle::GetIsolatedAppRequestContextGetter(
   return context;
 }
 
+void ProfileImplIOData::Handle::ClearNetworkingHistorySince(
+    base::Time time) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  LazyInitialize();
+
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(
+          &ClearNetworkingHistorySinceOnIOThread,
+          io_data_,
+          time));
+}
+
 void ProfileImplIOData::Handle::LazyInitialize() const {
   if (!initialized_) {
     io_data_->InitializeOnUIThread(profile_);
+    PrefService* pref_service = profile_->GetPrefs();
+    io_data_->http_server_properties_manager_.reset(
+        new chrome_browser_net::HttpServerPropertiesManager(pref_service));
     ChromeNetworkDelegate::InitializeReferrersEnabled(
-        io_data_->enable_referrers(), profile_->GetPrefs());
+        io_data_->enable_referrers(), pref_service);
     io_data_->clear_local_state_on_exit()->Init(
-        prefs::kClearSiteDataOnExit, profile_->GetPrefs(), NULL);
+        prefs::kClearSiteDataOnExit, pref_service, NULL);
     io_data_->clear_local_state_on_exit()->MoveToThread(BrowserThread::IO);
 #if defined(ENABLE_SAFE_BROWSING)
     io_data_->safe_browsing_enabled()->Init(prefs::kSafeBrowsingEnabled,
-        profile_->GetPrefs(), NULL);
+        pref_service, NULL);
     io_data_->safe_browsing_enabled()->MoveToThread(BrowserThread::IO);
 #endif
     initialized_ = true;
@@ -204,12 +273,23 @@ void ProfileImplIOData::LazyInitializeInternal(
   ApplyProfileParamsToContext(media_request_context_);
   ApplyProfileParamsToContext(extensions_context);
 
+  if (http_server_properties_manager_.get())
+    http_server_properties_manager_->InitializeOnIOThread();
+
+  main_context->set_transport_security_state(transport_security_state());
+  media_request_context_->set_transport_security_state(
+      transport_security_state());
+  extensions_context->set_transport_security_state(transport_security_state());
+
   main_context->set_net_log(io_thread->net_log());
   media_request_context_->set_net_log(io_thread->net_log());
   extensions_context->set_net_log(io_thread->net_log());
 
   main_context->set_network_delegate(network_delegate());
   media_request_context_->set_network_delegate(network_delegate());
+
+  main_context->set_http_server_properties(http_server_properties());
+  media_request_context_->set_http_server_properties(http_server_properties());
 
   main_context->set_host_resolver(
       io_thread_globals->host_resolver.get());
@@ -219,17 +299,15 @@ void ProfileImplIOData::LazyInitializeInternal(
       io_thread_globals->cert_verifier.get());
   media_request_context_->set_cert_verifier(
       io_thread_globals->cert_verifier.get());
-  main_context->set_dnsrr_resolver(
-      io_thread_globals->dnsrr_resolver.get());
-  media_request_context_->set_dnsrr_resolver(
-      io_thread_globals->dnsrr_resolver.get());
   main_context->set_http_auth_handler_factory(
       io_thread_globals->http_auth_handler_factory.get());
   media_request_context_->set_http_auth_handler_factory(
       io_thread_globals->http_auth_handler_factory.get());
 
-  main_context->set_dns_cert_checker(dns_cert_checker());
-  media_request_context_->set_dns_cert_checker(dns_cert_checker());
+  main_context->set_fraudulent_certificate_reporter(
+      fraudulent_certificate_reporter());
+  media_request_context_->set_fraudulent_certificate_reporter(
+      fraudulent_certificate_reporter());
 
   main_context->set_proxy_service(proxy_service());
   media_request_context_->set_proxy_service(proxy_service());
@@ -250,18 +328,23 @@ void ProfileImplIOData::LazyInitializeInternal(
     DCHECK(!lazy_params_->cookie_path.empty());
 
     scoped_refptr<SQLitePersistentCookieStore> cookie_db =
-        new SQLitePersistentCookieStore(lazy_params_->cookie_path);
+        new SQLitePersistentCookieStore(
+            lazy_params_->cookie_path,
+            lazy_params_->restore_old_session_cookies);
     cookie_db->SetClearLocalStateOnExit(
         profile_params->clear_local_state_on_exit);
     cookie_store =
         new net::CookieMonster(cookie_db.get(),
                                profile_params->cookie_monster_delegate);
+    if (command_line.HasSwitch(switches::kEnableRestoreSessionState))
+      cookie_store->GetCookieMonster()->SetPersistSessionCookies(true);
   }
 
   net::CookieMonster* extensions_cookie_store =
       new net::CookieMonster(
           new SQLitePersistentCookieStore(
-              lazy_params_->extensions_cookie_path), NULL);
+              lazy_params_->extensions_cookie_path,
+              lazy_params_->restore_old_session_cookies), NULL);
   // Enable cookies for devtools and extension URLs.
   const char* schemes[] = {chrome::kChromeDevToolsScheme,
                            chrome::kExtensionScheme};
@@ -298,12 +381,14 @@ void ProfileImplIOData::LazyInitializeInternal(
       main_context->host_resolver(),
       main_context->cert_verifier(),
       main_context->origin_bound_cert_service(),
-      main_context->dnsrr_resolver(),
-      main_context->dns_cert_checker(),
+      main_context->transport_security_state(),
       main_context->proxy_service(),
+      "", // pass empty ssl_session_cache_shard to share the SSL session cache
+          // with everything that doesn't explicitly want a different one.
       main_context->ssl_config_service(),
       main_context->http_auth_handler_factory(),
       main_context->network_delegate(),
+      main_context->http_server_properties(),
       main_context->net_log(),
       main_backend);
 
@@ -326,8 +411,9 @@ void ProfileImplIOData::LazyInitializeInternal(
   main_context->set_http_transaction_factory(main_cache);
   media_request_context_->set_http_transaction_factory(media_cache);
 
-  main_context->set_ftp_transaction_factory(
+  ftp_factory_.reset(
       new net::FtpNetworkLayer(io_thread_globals->host_resolver.get()));
+  main_context->set_ftp_transaction_factory(ftp_factory_.get());
 
   main_context->set_chrome_url_data_manager_backend(
       chrome_url_data_manager_backend());
@@ -336,7 +422,14 @@ void ProfileImplIOData::LazyInitializeInternal(
   media_request_context_->set_job_factory(job_factory());
   extensions_context->set_job_factory(job_factory());
 
+  job_factory()->AddInterceptor(
+      new chrome_browser_net::ConnectInterceptor(predictor_.get()));
+
   lazy_params_.reset();
+}
+
+net::HttpServerProperties* ProfileImplIOData::http_server_properties() const {
+  return http_server_properties_manager_.get();
 }
 
 scoped_refptr<ChromeURLRequestContext>
@@ -387,7 +480,7 @@ ProfileImplIOData::InitializeAppRequestContext(
     DCHECK(!cookie_path.empty());
 
     scoped_refptr<SQLitePersistentCookieStore> cookie_db =
-        new SQLitePersistentCookieStore(cookie_path);
+        new SQLitePersistentCookieStore(cookie_path, false);
     cookie_db->SetClearLocalStateOnExit(clear_local_state_on_exit_);
     // TODO(creis): We should have a cookie delegate for notifying the cookie
     // extensions API, but we need to update it to understand isolated apps

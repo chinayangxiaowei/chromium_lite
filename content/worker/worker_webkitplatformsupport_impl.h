@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #pragma once
 
 #include "base/memory/scoped_ptr.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebMimeRegistry.h"
-#include "webkit/glue/webkitplatformsupport_impl.h"
+#include "content/common/webkitplatformsupport_impl.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebMimeRegistry.h"
 
 class WebFileSystemImpl;
 
@@ -17,7 +17,7 @@ class WebFileUtilities;
 }
 
 class WorkerWebKitPlatformSupportImpl
-    : public webkit_glue::WebKitPlatformSupportImpl,
+    : public content::WebKitPlatformSupportImpl,
       public WebKit::WebMimeRegistry {
  public:
   WorkerWebKitPlatformSupportImpl();

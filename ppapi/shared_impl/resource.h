@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,27 @@
 
 #include <stddef.h>  // For NULL.
 
+#include <string>
+
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
 #include "ppapi/c/pp_instance.h"
 #include "ppapi/c/pp_resource.h"
+#include "ppapi/c/dev/ppb_console_dev.h"
 #include "ppapi/shared_impl/host_resource.h"
 
 // All resource types should be added here. This implements our hand-rolled
 // RTTI system since we don't compile with "real" RTTI.
 #define FOR_ALL_PPAPI_RESOURCE_APIS(F) \
-  F(PPB_AudioConfig_API) \
-  F(PPB_AudioTrusted_API) \
   F(PPB_Audio_API) \
+  F(PPB_AudioConfig_API) \
+  F(PPB_AudioInput_API) \
+  F(PPB_AudioInputTrusted_API) \
+  F(PPB_AudioTrusted_API) \
   F(PPB_Broker_API) \
   F(PPB_Buffer_API) \
   F(PPB_BufferTrusted_API) \
-  F(PPB_Context3D_API) \
+  F(PPB_DeviceRef_API) \
   F(PPB_DirectoryReader_API) \
   F(PPB_FileChooser_API) \
   F(PPB_FileIO_API) \
@@ -31,23 +36,27 @@
   F(PPB_Find_API) \
   F(PPB_Flash_Menu_API) \
   F(PPB_Flash_NetConnector_API) \
-  F(PPB_Flash_TCPSocket_API) \
   F(PPB_Font_API) \
   F(PPB_Graphics2D_API) \
   F(PPB_Graphics3D_API) \
   F(PPB_ImageData_API) \
   F(PPB_InputEvent_API) \
   F(PPB_LayerCompositor_API) \
+  F(PPB_MessageLoop_API) \
   F(PPB_PDFFont_API) \
+  F(PPB_ResourceArray_API) \
   F(PPB_Scrollbar_API) \
-  F(PPB_Surface3D_API) \
+  F(PPB_TCPSocket_Private_API) \
   F(PPB_Transport_API) \
+  F(PPB_UDPSocket_Private_API) \
   F(PPB_URLLoader_API) \
   F(PPB_URLRequestInfo_API) \
   F(PPB_URLResponseInfo_API) \
   F(PPB_VideoCapture_API) \
   F(PPB_VideoDecoder_API) \
   F(PPB_VideoLayer_API) \
+  F(PPB_View_API) \
+  F(PPB_WebSocket_API) \
   F(PPB_Widget_API)
 
 namespace ppapi {
@@ -118,6 +127,10 @@ class PPAPI_SHARED_EXPORT Resource : public base::RefCounted<Resource> {
 
   // Template-based dynamic casting. See specializations below.
   template <typename T> T* GetAs() { return NULL; }
+
+ protected:
+  // Logs a message to the console from this resource.
+  void Log(PP_LogLevel_Dev level, const std::string& message);
 
  private:
   // See the getters above.

@@ -4,8 +4,11 @@
 
 #include "content/browser/in_process_webkit/webkit_context.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+
+using content::BrowserThread;
 
 WebKitContext::WebKitContext(
     bool is_incognito, const FilePath& data_path,
@@ -33,7 +36,7 @@ WebKitContext::~WebKitContext() {
       clear_local_state_on_exit_);
   DOMStorageContext* dom_storage_context = dom_storage_context_.release();
   if (!BrowserThread::DeleteSoon(
-          BrowserThread::WEBKIT, FROM_HERE, dom_storage_context)) {
+          BrowserThread::WEBKIT_DEPRECATED, FROM_HERE, dom_storage_context)) {
     // The WebKit thread wasn't created, and the task got deleted without
     // freeing the DOMStorageContext, so delete it manually.
     delete dom_storage_context;
@@ -44,10 +47,10 @@ WebKitContext::~WebKitContext() {
 }
 
 void WebKitContext::PurgeMemory() {
-  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED)) {
     BrowserThread::PostTask(
-        BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableMethod(this, &WebKitContext::PurgeMemory));
+        BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+        base::Bind(&WebKitContext::PurgeMemory, this));
     return;
   }
 
@@ -55,38 +58,37 @@ void WebKitContext::PurgeMemory() {
 }
 
 void WebKitContext::DeleteDataModifiedSince(const base::Time& cutoff) {
-  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED)) {
     BrowserThread::PostTask(
-        BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableMethod(this, &WebKitContext::DeleteDataModifiedSince,
-                          cutoff));
+        BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+        base::Bind(&WebKitContext::DeleteDataModifiedSince, this, cutoff));
     return;
   }
 
   dom_storage_context_->DeleteDataModifiedSince(cutoff);
 }
 
-void WebKitContext::DeleteSessionOnlyData() {
-  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
-    BrowserThread::PostTask(
-        BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableMethod(this, &WebKitContext::DeleteSessionOnlyData));
-    return;
-  }
-
-  dom_storage_context_->DeleteSessionOnlyData();
-}
-
 void WebKitContext::DeleteSessionStorageNamespace(
     int64 session_storage_namespace_id) {
-  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED)) {
     BrowserThread::PostTask(
-        BrowserThread::WEBKIT, FROM_HERE,
-        NewRunnableMethod(this, &WebKitContext::DeleteSessionStorageNamespace,
-                          session_storage_namespace_id));
+        BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+        base::Bind(&WebKitContext::DeleteSessionStorageNamespace, this,
+                   session_storage_namespace_id));
     return;
   }
 
   dom_storage_context_->DeleteSessionStorageNamespace(
       session_storage_namespace_id);
+}
+
+void WebKitContext::SaveSessionState() {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT_DEPRECATED)) {
+    BrowserThread::PostTask(
+        BrowserThread::WEBKIT_DEPRECATED, FROM_HERE,
+        base::Bind(&WebKitContext::SaveSessionState, this));
+    return;
+  }
+  dom_storage_context_->SaveSessionState();
+  indexed_db_context_->SaveSessionState();
 }

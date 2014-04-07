@@ -5,6 +5,7 @@
 #import "chrome/browser/ui/cocoa/browser/avatar_menu_bubble_controller.h"
 
 #include "base/memory/scoped_nsobject.h"
+#include "base/message_pump_mac.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/profiles/avatar_menu_model.h"
 #include "chrome/browser/profiles/avatar_menu_model_observer.h"
@@ -14,6 +15,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "testing/gtest_mac.h"
+#include "ui/base/test/cocoa_test_event_utils.h"
 
 class FakeBridge : public AvatarMenuModelObserver {
  public:
@@ -50,6 +52,14 @@ class AvatarMenuBubbleControllerTest : public CocoaTest {
   AvatarMenuModel* model() { return model_; }
   FakeBridge* bridge() { return bridge_; }
 
+  AvatarMenuItemController* GetHighlightedItem() {
+    for (AvatarMenuItemController* item in [controller() items]) {
+      if ([item isHighlighted])
+        return item;
+    }
+    return nil;
+  }
+
  private:
   TestingProfileManager manager_;
 
@@ -64,9 +74,9 @@ class AvatarMenuBubbleControllerTest : public CocoaTest {
 TEST_F(AvatarMenuBubbleControllerTest, InitialLayout) {
   [controller() showWindow:nil];
 
-  // Two profiles means two item views and the new button.
+  // Two profiles means two item views and the new button with separator.
   NSView* contents = [[controller() window] contentView];
-  EXPECT_EQ(3U, [[contents subviews] count]);
+  EXPECT_EQ(4U, [[contents subviews] count]);
 
   // Loop over the itmes and match the viewController views to subviews.
   NSMutableArray* subviews =
@@ -81,14 +91,27 @@ TEST_F(AvatarMenuBubbleControllerTest, InitialLayout) {
   }
 
   // The one remaining subview should be the new user button.
-  EXPECT_EQ(1U, [subviews count]);
+  EXPECT_EQ(2U, [subviews count]);
 
-  NSButton* newUser = [subviews lastObject];
-  ASSERT_TRUE([newUser isKindOfClass:[NSButton class]]);
+  BOOL hasButton = NO;
+  BOOL hasSeparator = NO;
+  for (NSView* subview in subviews) {
+    if ([subview isKindOfClass:[NSButton class]]) {
+      EXPECT_FALSE(hasButton);
+      hasButton = YES;
 
-  EXPECT_EQ(@selector(newProfile:), [newUser action]);
-  EXPECT_EQ(controller(), [newUser target]);
-  EXPECT_TRUE([[newUser cell] isKindOfClass:[HyperlinkButtonCell class]]);
+      NSButton* button = static_cast<NSButton*>(subview);
+      EXPECT_EQ(@selector(newProfile:), [button action]);
+      EXPECT_EQ(controller(), [button target]);
+      EXPECT_TRUE([[button cell] isKindOfClass:[HyperlinkButtonCell class]]);
+    } else if ([subview isKindOfClass:[NSBox class]]) {
+      EXPECT_FALSE(hasSeparator);
+      hasSeparator = YES;
+    } else {
+      EXPECT_FALSE(subview) << "Unexpected subview: "
+                            << [[subview description] UTF8String];
+    }
+  }
 
   [controller() close];
 }
@@ -97,7 +120,7 @@ TEST_F(AvatarMenuBubbleControllerTest, PerformLayout) {
   [controller() showWindow:nil];
 
   NSView* contents = [[controller() window] contentView];
-  EXPECT_EQ(3U, [[contents subviews] count]);
+  EXPECT_EQ(4U, [[contents subviews] count]);
 
   scoped_nsobject<NSMutableArray> oldItems([[controller() items] copy]);
 
@@ -107,7 +130,7 @@ TEST_F(AvatarMenuBubbleControllerTest, PerformLayout) {
   // Testing the bridge is not worth the effort...
   [controller() performLayout];
 
-  EXPECT_EQ(4U, [[contents subviews] count]);
+  EXPECT_EQ(5U, [[contents subviews] count]);
 
   // Make sure that none of the old items exit.
   NSArray* newItems = [controller() items];
@@ -119,64 +142,126 @@ TEST_F(AvatarMenuBubbleControllerTest, PerformLayout) {
   [controller() close];
 }
 
+// This subclass is used to inject a delegate into the hide/show edit link
+// animation.
+@interface TestingAvatarMenuItemController : AvatarMenuItemController
+                                                 <NSAnimationDelegate> {
+ @private
+  scoped_refptr<base::MessagePumpNSRunLoop> pump_;
+}
+// After calling |-highlightForEventType:| an animation will possibly be
+// started. Since the animation is non-blocking, the run loop will need to be
+// spun (via the MessagePump) until the animation has finished.
+- (void)runMessagePump;
+@end
+
+@implementation TestingAvatarMenuItemController
+- (void)runMessagePump {
+  if (!pump_.get())
+    pump_ = new base::MessagePumpNSRunLoop;
+  pump_->Run(NULL);
+}
+
+- (void)willStartAnimation:(NSAnimation*)anim {
+  [anim setDelegate:self];
+}
+
+- (void)animationDidEnd:(NSAnimation*)anim {
+  [super animationDidEnd:anim];
+  pump_->Quit();
+}
+
+- (void)animationDidStop:(NSAnimation*)anim {
+  [super animationDidStop:anim];
+  FAIL() << "Animation stopped before it completed its run";
+  pump_->Quit();
+}
+
+- (void)sendHighlightMessageForMouseExited {
+  [self highlightForEventType:NSMouseExited];
+  // Quit the pump because the animation was cancelled before it even ran.
+  pump_->Quit();
+}
+@end
+
 TEST_F(AvatarMenuBubbleControllerTest, HighlightForEventType) {
-  scoped_nsobject<AvatarMenuItemController> item(
-      [[AvatarMenuItemController alloc] initWithModelIndex:0
-                                            menuController:nil]);
-  NSTextField* field = [item nameField];
+  scoped_nsobject<TestingAvatarMenuItemController> item(
+      [[TestingAvatarMenuItemController alloc] initWithModelIndex:0
+                                                   menuController:nil]);
   // Test non-active states first.
   [[item activeView] setHidden:YES];
 
-  NSColor* startColor = [NSColor controlTextColor];
-  NSColor* upColor = nil;
-  NSColor* downColor = nil;
-  NSColor* enterColor = nil;
-  NSColor* exitColor = nil;
+  NSView* editButton = [item editButton];
+  NSView* emailField = [item emailField];
 
-  EXPECT_NSEQ(startColor, field.textColor);
+  // The edit link remains hidden.
+  [item setIsHighlighted:YES];
+  EXPECT_TRUE(editButton.isHidden);
+  EXPECT_FALSE(emailField.isHidden);
 
-  // The controller does this in |-performLayout|.
-  [item highlightForEventType:NSLeftMouseUp];
-  EXPECT_NSNE(startColor, field.textColor);
-  startColor = field.textColor;
-
-  [item highlightForEventType:NSLeftMouseDown];
-  downColor = field.textColor;
-
-  [item highlightForEventType:NSMouseEntered];
-  enterColor = field.textColor;
-
-  [item highlightForEventType:NSMouseExited];
-  exitColor = field.textColor;
-
-  [item highlightForEventType:NSLeftMouseUp];
-  upColor = field.textColor;
-
-  // Use transitivity to determine that all colors for each state are correct.
-  EXPECT_NSEQ(startColor, upColor);
-  EXPECT_NSEQ(upColor, exitColor);
-  EXPECT_NSEQ(downColor, enterColor);
-  EXPECT_NSNE(enterColor, exitColor);
+  [item setIsHighlighted:NO];
+  EXPECT_TRUE(editButton.isHidden);
+  EXPECT_FALSE(emailField.isHidden);
 
   // Make the item "active" and re-test.
   [[item activeView] setHidden:NO];
-  [item highlightForEventType:NSLeftMouseUp];
-  EXPECT_NSNE(startColor, field.textColor);
-  upColor = field.textColor;
 
-  [item highlightForEventType:NSLeftMouseDown];
-  EXPECT_NSNE(downColor, field.textColor);
-  downColor = field.textColor;
+  [item setIsHighlighted:YES];
+  [item runMessagePump];
 
+  EXPECT_FALSE(editButton.isHidden);
+  EXPECT_TRUE(emailField.isHidden);
+
+  [item setIsHighlighted:NO];
+  [item runMessagePump];
+
+  EXPECT_TRUE(editButton.isHidden);
+  EXPECT_FALSE(emailField.isHidden);
+
+  // Now mouse over and out quickly, as if scrubbing through the menu, to test
+  // the hover dwell delay.
   [item highlightForEventType:NSMouseEntered];
-  EXPECT_NSNE(enterColor, field.textColor);
-  enterColor = field.textColor;
+  [item performSelector:@selector(sendHighlightMessageForMouseExited)
+             withObject:nil
+             afterDelay:0];
+  [item runMessagePump];
 
-  [item highlightForEventType:NSMouseExited];
-  EXPECT_NSNE(exitColor, field.textColor);
-  exitColor = field.textColor;
+  EXPECT_TRUE(editButton.isHidden);
+  EXPECT_FALSE(emailField.isHidden);
+}
 
-  EXPECT_NSEQ(upColor, exitColor);
-  EXPECT_NSEQ(downColor, enterColor);
-  EXPECT_NSNE(upColor, downColor);
+TEST_F(AvatarMenuBubbleControllerTest, DownArrow) {
+  EXPECT_NSEQ(nil, GetHighlightedItem());
+
+  NSEvent* event =
+      cocoa_test_event_utils::KeyEventWithCharacter(NSDownArrowFunctionKey);
+  // Going down with no item selected should start the selection at the first
+  // item.
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:1], GetHighlightedItem());
+
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:0], GetHighlightedItem());
+
+  // There are no more items now so going down should stay at the last item.
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:0], GetHighlightedItem());
+}
+
+TEST_F(AvatarMenuBubbleControllerTest, UpArrow) {
+  EXPECT_NSEQ(nil, GetHighlightedItem());
+
+  NSEvent* event =
+      cocoa_test_event_utils::KeyEventWithCharacter(NSUpArrowFunctionKey);
+  // Going up with no item selected should start the selection at the last
+  // item.
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:0], GetHighlightedItem());
+
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:1], GetHighlightedItem());
+
+  // There are no more items now so going up should stay at the first item.
+  [controller() keyDown:event];
+  EXPECT_EQ([[controller() items] objectAtIndex:1], GetHighlightedItem());
 }

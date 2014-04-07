@@ -23,9 +23,10 @@ class TestURLRequestContextGetter : public net::URLRequestContextGetter {
   TestURLRequestContextGetter();
   virtual ~TestURLRequestContextGetter();
 
-  // net::URLRequestContextGetter:
-  virtual net::URLRequestContext* GetURLRequestContext();
-  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() const;
+  // net::URLRequestContextGetter implementation.
+  virtual net::URLRequestContext* GetURLRequestContext() OVERRIDE;
+  virtual scoped_refptr<base::MessageLoopProxy>
+      GetIOMessageLoopProxy() const OVERRIDE;
 
  private:
   scoped_refptr<net::URLRequestContext> context_;

@@ -11,27 +11,21 @@
 #include <map>
 #include <queue>
 
-#include "base/callback_old.h"
+#include "base/callback.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task.h"
 #include "content/renderer/gpu/gpu_video_decode_accelerator_host.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_message.h"
 
+class GpuChannelHost;
+struct GPUCommandBufferConsoleMessage;
+
 namespace base {
 class SharedMemory;
 }
-
-namespace gfx {
-class Size;
-}
-
-class GpuChannelHost;
-class PluginChannelHost;
-class Task;
 
 // Client side proxy that forwards messages synchronously to a
 // CommandBufferStub.
@@ -43,33 +37,36 @@ class CommandBufferProxy : public gpu::CommandBuffer,
   virtual ~CommandBufferProxy();
 
   // IPC::Channel::Listener implementation:
-  virtual bool OnMessageReceived(const IPC::Message& message);
-  virtual void OnChannelError();
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  virtual void OnChannelError() OVERRIDE;
 
   int route_id() const { return route_id_; }
 
   // CommandBuffer implementation:
-  virtual bool Initialize(int32 size);
-  virtual bool Initialize(base::SharedMemory* buffer, int32 size);
-  virtual gpu::Buffer GetRingBuffer();
-  virtual State GetState();
-  virtual State GetLastState();
-  virtual void Flush(int32 put_offset);
-  virtual State FlushSync(int32 put_offset, int32 last_known_get);
-  virtual void SetGetOffset(int32 get_offset);
-  virtual int32 CreateTransferBuffer(size_t size, int32 id_request);
+  virtual bool Initialize() OVERRIDE;
+  virtual State GetState() OVERRIDE;
+  virtual State GetLastState() OVERRIDE;
+  virtual void Flush(int32 put_offset) OVERRIDE;
+  virtual State FlushSync(int32 put_offset, int32 last_known_get) OVERRIDE;
+  virtual void SetGetBuffer(int32 shm_id) OVERRIDE;
+  virtual void SetGetOffset(int32 get_offset) OVERRIDE;
+  virtual int32 CreateTransferBuffer(size_t size, int32 id_request) OVERRIDE;
   virtual int32 RegisterTransferBuffer(base::SharedMemory* shared_memory,
                                        size_t size,
-                                       int32 id_request);
-  virtual void DestroyTransferBuffer(int32 id);
-  virtual gpu::Buffer GetTransferBuffer(int32 handle);
-  virtual void SetToken(int32 token);
-  virtual void SetParseError(gpu::error::Error error);
-  virtual void SetContextLostReason(gpu::error::ContextLostReason reason);
+                                       int32 id_request) OVERRIDE;
+  virtual void DestroyTransferBuffer(int32 id) OVERRIDE;
+  virtual gpu::Buffer GetTransferBuffer(int32 handle) OVERRIDE;
+  virtual void SetToken(int32 token) OVERRIDE;
+  virtual void SetParseError(gpu::error::Error error) OVERRIDE;
+  virtual void SetContextLostReason(
+      gpu::error::ContextLostReason reason) OVERRIDE;
 
   // Invoke the task when the channel has been flushed. Takes care of deleting
   // the task whether the echo succeeds or not.
-  bool Echo(Task* task);
+  bool Echo(const base::Closure& callback);
+
+  // Sends an IPC message with the new state of surface visibility
+  bool SetSurfaceVisible(bool visible);
 
   // Reparent a command buffer. TODO(apatrick): going forward, the notion of
   // the parent / child relationship between command buffers is going away in
@@ -78,11 +75,11 @@ class CommandBufferProxy : public gpu::CommandBuffer,
   virtual bool SetParent(CommandBufferProxy* parent_command_buffer,
                          uint32 parent_texture_id);
 
-  void SetChannelErrorCallback(Callback0::Type* callback);
+  void SetChannelErrorCallback(const base::Closure& callback);
 
   // Set a task that will be invoked the next time the window becomes invalid
   // and needs to be repainted. Takes ownership of task.
-  void SetNotifyRepaintTask(Task* task);
+  void SetNotifyRepaintTask(const base::Closure& callback);
 
   // Sends an IPC message to create a GpuVideoDecodeAccelerator. Creates and
   // returns a pointer to a GpuVideoDecodeAcceleratorHost.
@@ -95,7 +92,6 @@ class CommandBufferProxy : public gpu::CommandBuffer,
       media::VideoDecodeAccelerator::Client* client);
 
  private:
-
   // Send an IPC message over the GPU channel. This is private to fully
   // encapsulate the channel; all callers of this function must explicitly
   // verify that the context has not been lost.
@@ -106,10 +102,7 @@ class CommandBufferProxy : public gpu::CommandBuffer,
   void OnNotifyRepaint();
   void OnDestroyed(gpu::error::ContextLostReason reason);
   void OnEchoAck();
-
-  // As with the service, the client takes ownership of the ring buffer.
-  int32 num_entries_;
-  scoped_ptr<base::SharedMemory> ring_buffer_;
+  void OnConsoleMessage(const GPUCommandBufferConsoleMessage& message);
 
   // Local cache of id to transfer buffer mapping.
   typedef std::map<int32, gpu::Buffer> TransferBufferMap;
@@ -130,11 +123,11 @@ class CommandBufferProxy : public gpu::CommandBuffer,
   unsigned int flush_count_;
 
   // Tasks to be invoked in echo responses.
-  std::queue<linked_ptr<Task> > echo_tasks_;
+  std::queue<base::Closure> echo_tasks_;
 
-  scoped_ptr<Task> notify_repaint_task_;
+  base::Closure notify_repaint_task_;
 
-  scoped_ptr<Callback0::Type> channel_error_callback_;
+  base::Closure channel_error_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(CommandBufferProxy);
 };

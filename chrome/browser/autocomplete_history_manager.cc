@@ -9,17 +9,20 @@
 #include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/autofill/autofill_external_delegate.h"
 #include "chrome/browser/autofill/credit_card.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/autofill_messages.h"
 #include "chrome/common/pref_names.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "webkit/glue/form_data.h"
+#include "content/public/browser/web_contents.h"
+#include "webkit/forms/form_data.h"
 
-using webkit_glue::FormData;
-using webkit_glue::FormField;
+using base::StringPiece16;
+using content::WebContents;
+using webkit::forms::FormData;
+using webkit::forms::FormField;
 
 namespace {
 
@@ -28,11 +31,11 @@ namespace {
 const int kMaxAutocompleteMenuItems = 6;
 
 // The separator characters for SSNs.
-const string16 kSSNSeparators = ASCIIToUTF16(" -");
+const char16 kSSNSeparators[] = {' ', '-', 0};
 
 bool IsSSN(const string16& text) {
   string16 number_string;
-  RemoveChars(text, kSSNSeparators.c_str(), &number_string);
+  RemoveChars(text, kSSNSeparators, &number_string);
 
   // A SSN is of the form AAA-GG-SSSS (A = area number, G = group number, S =
   // serial number). The validation we do here is simply checking if the area,
@@ -62,26 +65,32 @@ bool IsSSN(const string16& text) {
     return false;
 
   int area;
-  if (!base::StringToInt(number_string.begin(),
-                         number_string.begin() + 3,
-                         &area))
+  if (!base::StringToInt(StringPiece16(number_string.begin(),
+                                       number_string.begin() + 3),
+                         &area)) {
     return false;
+  }
   if (area < 1 ||
       area == 666 ||
-      area >= 900)
+      area >= 900) {
     return false;
+  }
 
   int group;
-  if (!base::StringToInt(number_string.begin() + 3,
-                         number_string.begin() + 5,
-                         &group) || group == 0)
+  if (!base::StringToInt(StringPiece16(number_string.begin() + 3,
+                                       number_string.begin() + 5),
+                         &group)
+      || group == 0) {
     return false;
+  }
 
   int serial;
-  if (!base::StringToInt(number_string.begin() + 5,
-                         number_string.begin() + 9,
-                         &serial) || serial == 0)
+  if (!base::StringToInt(StringPiece16(number_string.begin() + 5,
+                                       number_string.begin() + 9),
+                         &serial)
+      || serial == 0) {
     return false;
+  }
 
   return true;
 }
@@ -99,11 +108,12 @@ bool IsTextField(const FormField& field) {
 }  // namespace
 
 AutocompleteHistoryManager::AutocompleteHistoryManager(
-    TabContents* tab_contents)
-    : TabContentsObserver(tab_contents),
+    WebContents* web_contents)
+    : content::WebContentsObserver(web_contents),
       pending_query_handle_(0),
-      query_id_(0) {
-  profile_ = Profile::FromBrowserContext(tab_contents->browser_context());
+      query_id_(0),
+      external_delegate_(NULL) {
+  profile_ = Profile::FromBrowserContext(web_contents->GetBrowserContext());
   // May be NULL in unit tests.
   web_data_service_ = profile_->GetWebDataService(Profile::EXPLICIT_ACCESS);
   autofill_enabled_.Init(prefs::kAutofillEnabled, profile_->GetPrefs(), NULL);
@@ -217,15 +227,21 @@ void AutocompleteHistoryManager::OnWebDataServiceRequestDone(
   SendSuggestions(&suggestions);
 }
 
+void AutocompleteHistoryManager::SetExternalDelegate(
+    AutofillExternalDelegate* delegate) {
+  external_delegate_ = delegate;
+}
+
 AutocompleteHistoryManager::AutocompleteHistoryManager(
-    TabContents* tab_contents,
+    WebContents* web_contents,
     Profile* profile,
     WebDataService* wds)
-    : TabContentsObserver(tab_contents),
+    : content::WebContentsObserver(web_contents),
       profile_(profile),
       web_data_service_(wds),
       pending_query_handle_(0),
-      query_id_(0) {
+      query_id_(0),
+      external_delegate_(NULL) {
   autofill_enabled_.Init(
       prefs::kAutofillEnabled, profile_->GetPrefs(), NULL);
 }
@@ -262,12 +278,21 @@ void AutocompleteHistoryManager::SendSuggestions(
     }
   }
 
-  Send(new AutofillMsg_SuggestionsReturned(routing_id(),
-                                           query_id_,
-                                           autofill_values_,
-                                           autofill_labels_,
-                                           autofill_icons_,
-                                           autofill_unique_ids_));
+  if (external_delegate_) {
+    external_delegate_->OnSuggestionsReturned(
+        query_id_,
+        autofill_values_,
+        autofill_labels_,
+        autofill_icons_,
+        autofill_unique_ids_);
+  } else {
+    Send(new AutofillMsg_SuggestionsReturned(routing_id(),
+                                             query_id_,
+                                             autofill_values_,
+                                             autofill_labels_,
+                                             autofill_icons_,
+                                             autofill_unique_ids_));
+  }
 
   query_id_ = 0;
   autofill_values_.clear();

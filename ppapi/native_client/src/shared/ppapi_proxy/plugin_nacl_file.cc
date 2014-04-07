@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2011 The Native Client Authors. All rights reserved.
+  Copyright (c) 2012 The Chromium Authors. All rights reserved.
   Use of this source code is governed by a BSD-style license that can be
   found in the LICENSE file.
 */
@@ -18,16 +18,16 @@ namespace ppapi_proxy {
 int32_t StreamAsFile(PP_Instance instance,
                      const char* url,
                      struct PP_CompletionCallback callback) {
-  DebugPrintf("NaClFile::StreamAsFile: instance=%"NACL_PRIu32" url=%s\n",
+  DebugPrintf("NaClFile::StreamAsFile: instance=%"NACL_PRId32" url=%s\n",
               instance, url);
 
   int32_t callback_id =
       CompletionCallbackTable::Get()->AddCallback(callback);
   if (callback_id == 0)
-    return PP_ERROR_BADARGUMENT;
+    return PP_ERROR_BLOCKS_MAIN_THREAD;
 
   NaClSrpcError srpc_result = NaClFileRpcClient::StreamAsFile(
-          GetMainSrpcChannel(), instance, const_cast<char*>(url), callback_id);
+      GetMainSrpcChannel(), instance, const_cast<char*>(url), callback_id);
   DebugPrintf("NaClFile::StreamAsFile: %s\n", NaClSrpcErrorString(srpc_result));
 
   if (srpc_result == NACL_SRPC_RESULT_OK)
@@ -37,7 +37,7 @@ int32_t StreamAsFile(PP_Instance instance,
 
 
 int GetFileDesc(PP_Instance instance, const char* url) {
-  DebugPrintf("NaClFile::GetFileDesc: instance=%"NACL_PRIu32" url=%s\n",
+  DebugPrintf("NaClFile::GetFileDesc: instance=%"NACL_PRId32" url=%s\n",
               instance, url);
 
   int file_desc;

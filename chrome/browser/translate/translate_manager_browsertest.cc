@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,47 +7,54 @@
 #include <set>
 #include <vector>
 
-#include "base/utf_string_conversions.h"
+#include "base/json/json_writer.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/stringprintf.h"
+#include "base/utf_string_conversions.h"
+#include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/infobars/infobar.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/pref_service.h"
-#include "chrome/browser/tab_contents/infobar.h"
 #include "chrome/browser/tab_contents/render_view_context_menu.h"
 #include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/browser/translate/translate_manager.h"
 #include "chrome/browser/translate/translate_prefs.h"
-#include "chrome/browser/ui/tab_contents/test_tab_contents_wrapper.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/test_tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/renderer_host/mock_render_process_host.h"
-#include "content/browser/renderer_host/test_render_view_host.h"
-#include "content/browser/tab_contents/navigation_details.h"
 #include "content/browser/tab_contents/test_tab_contents.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_observer_mock.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/view_messages.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/test/notification_observer_mock.h"
+#include "content/test/render_view_test.h"
+#include "content/test/test_browser_thread.h"
 #include "content/test/test_url_fetcher_factory.h"
 #include "grit/generated_resources.h"
 #include "ipc/ipc_test_sink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebContextMenuData.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 #include "third_party/cld/languages/public/languages.h"
 
+using content::BrowserThread;
+using content::NavigationController;
+using content::WebContents;
 using testing::_;
 using testing::Pointee;
 using testing::Property;
 using WebKit::WebContextMenuData;
 
 class TranslateManagerTest : public TabContentsWrapperTestHarness,
-                             public NotificationObserver {
+                             public content::NotificationObserver {
  public:
   TranslateManagerTest()
       : ui_thread_(BrowserThread::UI, &message_loop_) {
@@ -145,22 +152,24 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     DCHECK_EQ(chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED, type);
-    removed_infobars_.insert(Details<InfoBarRemovedDetails>(details)->first);
+    removed_infobars_.insert(
+        content::Details<InfoBarRemovedDetails>(details)->first);
   }
 
  protected:
   virtual void SetUp() {
+    WebKit::initialize(&webkit_platform_support_);
     // Access the TranslateManager singleton so it is created before we call
-    // RenderViewHostTestHarness::SetUp() to match what's done in Chrome, where
-    // the TranslateManager is created before the TabContents.  This matters as
-    // they both register for similar events and we want the notifications to
-    // happen in the same sequence (TranslateManager first, TabContents second).
-    // Also clears the translate script so it is fetched everytime and sets the
-    // expiration delay to a large value by default (in case it was zeroed in
-    // a previous test).
+    // TabContentsWrapperTestHarness::SetUp() to match what's done in Chrome,
+    // where the TranslateManager is created before the TabContents.  This
+    // matters as they both register for similar events and we want the
+    // notifications to happen in the same sequence (TranslateManager first,
+    // TabContents second).  Also clears the translate script so it is fetched
+    // everytime and sets the expiration delay to a large value by default (in
+    // case it was zeroed in a previous test).
     TranslateManager::GetInstance()->ClearTranslateScript();
     TranslateManager::GetInstance()->
         set_translate_script_expiration_delay(60 * 60 * 1000);
@@ -169,7 +178,8 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
 
     notification_registrar_.Add(this,
         chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED,
-        Source<TabContentsWrapper>(contents_wrapper()));
+        content::Source<InfoBarTabHelper>(
+            contents_wrapper()->infobar_tab_helper()));
   }
 
   virtual void TearDown() {
@@ -177,9 +187,11 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
 
     notification_registrar_.Remove(this,
         chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED,
-        Source<TabContentsWrapper>(contents_wrapper()));
+        content::Source<InfoBarTabHelper>(
+            contents_wrapper()->infobar_tab_helper()));
 
     TabContentsWrapperTestHarness::TearDown();
+    WebKit::shutdown();
   }
 
   void SimulateTranslateScriptURLFetch(bool success) {
@@ -188,10 +200,10 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
     net::URLRequestStatus status;
     status.set_status(success ? net::URLRequestStatus::SUCCESS :
                                 net::URLRequestStatus::FAILED);
-    fetcher->delegate()->OnURLFetchComplete(fetcher, fetcher->original_url(),
-                                            status, success ? 200 : 500,
-                                            net::ResponseCookies(),
-                                            std::string());
+    fetcher->set_url(fetcher->GetOriginalURL());
+    fetcher->set_status(status);
+    fetcher->set_response_code(success ? 200 : 500);
+    fetcher->delegate()->OnURLFetchComplete(fetcher);
   }
 
   void SimulateSupportedLanguagesURLFetch(
@@ -216,10 +228,11 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
       }
       data += "}})";
     }
-    fetcher->delegate()->OnURLFetchComplete(fetcher, fetcher->original_url(),
-                                            status, success ? 200 : 500,
-                                            net::ResponseCookies(),
-                                            data);
+    fetcher->set_url(fetcher->GetOriginalURL());
+    fetcher->set_status(status);
+    fetcher->set_response_code(success ? 200 : 500);
+    fetcher->SetResponseString(data);
+    fetcher->delegate()->OnURLFetchComplete(fetcher);
   }
 
   void SetPrefObserverExpectation(const char* path) {
@@ -227,15 +240,17 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
         pref_observer_,
         Observe(int(chrome::NOTIFICATION_PREF_CHANGED),
                 _,
-                Property(&Details<std::string>::ptr, Pointee(path))));
+                Property(&content::Details<std::string>::ptr, Pointee(path))));
   }
 
-  NotificationObserverMock pref_observer_;
+  content::NotificationObserverMock pref_observer_;
 
  private:
-  NotificationRegistrar notification_registrar_;
+  content::NotificationRegistrar notification_registrar_;
   TestURLFetcherFactory url_fetcher_factory_;
-  BrowserThread ui_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox
+      webkit_platform_support_;
 
   // The infobars that have been removed.
   // WARNING: the pointers point to deleted objects, use only for comparison.
@@ -245,19 +260,20 @@ class TranslateManagerTest : public TabContentsWrapperTestHarness,
 };
 
 // An observer that keeps track of whether a navigation entry was committed.
-class NavEntryCommittedObserver : public NotificationObserver {
+class NavEntryCommittedObserver : public content::NotificationObserver {
  public:
   explicit NavEntryCommittedObserver(TabContents* tab_contents) {
     registrar_.Add(this, content::NOTIFICATION_NAV_ENTRY_COMMITTED,
-                   Source<NavigationController>(&tab_contents->controller()));
+                   content::Source<NavigationController>(
+                      &tab_contents->GetController()));
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     DCHECK(type == content::NOTIFICATION_NAV_ENTRY_COMMITTED);
     details_ =
-        *(Details<content::LoadCommittedDetails>(details).ptr());
+        *(content::Details<content::LoadCommittedDetails>(details).ptr());
   }
 
   const content::LoadCommittedDetails&
@@ -267,7 +283,7 @@ class NavEntryCommittedObserver : public NotificationObserver {
 
  private:
   content::LoadCommittedDetails details_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(NavEntryCommittedObserver);
 };
@@ -277,7 +293,7 @@ namespace {
 class TestRenderViewContextMenu : public RenderViewContextMenu {
  public:
   static TestRenderViewContextMenu* CreateContextMenu(
-      TabContents* tab_contents) {
+      WebContents* web_contents) {
     ContextMenuParams params;
     params.media_type = WebKit::WebContextMenuData::MediaTypeNone;
     params.x = 0;
@@ -286,14 +302,14 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
     params.media_flags = 0;
     params.spellcheck_enabled = false;
     params.is_editable = false;
-    params.page_url = tab_contents->controller().GetActiveEntry()->url();
+    params.page_url = web_contents->GetController().GetActiveEntry()->GetURL();
 #if defined(OS_MACOSX)
     params.writing_direction_default = 0;
     params.writing_direction_left_to_right = 0;
     params.writing_direction_right_to_left = 0;
 #endif  // OS_MACOSX
     params.edit_flags = WebContextMenuData::CanTranslate;
-    return new TestRenderViewContextMenu(tab_contents, params);
+    return new TestRenderViewContextMenu(web_contents, params);
   }
 
   bool IsItemPresent(int id) {
@@ -306,9 +322,9 @@ class TestRenderViewContextMenu : public RenderViewContextMenu {
       ui::Accelerator* accelerator) { return false; }
 
  private:
-  TestRenderViewContextMenu(TabContents* tab_contents,
+  TestRenderViewContextMenu(WebContents* web_contents,
                             const ContextMenuParams& params)
-      : RenderViewContextMenu(tab_contents, params) {
+      : RenderViewContextMenu(web_contents, params) {
   }
 
   DISALLOW_COPY_AND_ASSIGN(TestRenderViewContextMenu);
@@ -561,7 +577,8 @@ TEST_F(TranslateManagerTest, FetchLanguagesFromTranslateServer) {
   // To make sure we got the defaults and don't confuse them with the mocks.
   ASSERT_NE(default_supported_languages.size(), server_languages.size());
 
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   TranslateManager::GetInstance()->FetchLanguageListFromTranslateServer(prefs);
 
@@ -593,6 +610,63 @@ TEST_F(TranslateManagerTest, FetchLanguagesFromTranslateServer) {
   // Reset to original state.
   TranslateManager::GetInstance()->FetchLanguageListFromTranslateServer(prefs);
   SimulateSupportedLanguagesURLFetch(true, default_supported_languages);
+}
+
+std::string GetLanguageListString(
+    const std::vector<std::string>& language_list) {
+  // The translate manager is expecting a JSON string like:
+  // sl({'sl': {'XX': 'LanguageName', ...}, 'tl': {'XX': 'LanguageName', ...}})
+  // We only need to set the tl (target languages) dictionary.
+  scoped_ptr<DictionaryValue> target_languages_dict(new DictionaryValue);
+  for (size_t i = 0; i < language_list.size(); ++i) {
+    // The value is ignored, we only use the key.
+    target_languages_dict->Set(language_list[i], Value::CreateNullValue());
+  }
+
+  DictionaryValue language_list_dict;
+  language_list_dict.Set("tl", target_languages_dict.release());
+  std::string language_list_json_str;
+  base::JSONWriter::Write(&language_list_dict, false, &language_list_json_str);
+  std::string language_list_str("sl(");
+  language_list_str += language_list_json_str;
+  language_list_str += ")";
+  return language_list_str;
+}
+
+// Test Language Code synonyms.
+TEST_F(TranslateManagerTest, LanguageCodeSynonyms) {
+  // The current set of synonyms are {"nb", "no"}, {"he", "iw"}, {"jw", "jv"}.
+
+  std::vector<std::string> language_list;
+  // Add some values around ht potential synonyms.
+  language_list.push_back("fr");
+  language_list.push_back("nb");
+  language_list.push_back("en");
+  TranslateManager::SetSupportedLanguages(GetLanguageListString(language_list));
+
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("no"));
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("nb"));
+
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("he"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("iw"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("jw"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("jv"));
+
+  language_list.push_back("iw");
+  TranslateManager::SetSupportedLanguages(GetLanguageListString(language_list));
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("he"));
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("iw"));
+
+  language_list.clear();
+  language_list.push_back("jw");
+  TranslateManager::SetSupportedLanguages(GetLanguageListString(language_list));
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("jw"));
+  EXPECT_TRUE(TranslateManager::IsSupportedLanguage("jv"));
+
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("no"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("nb"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("he"));
+  EXPECT_FALSE(TranslateManager::IsSupportedLanguage("iw"));
 }
 
 // Tests auto-translate on page.
@@ -667,7 +741,7 @@ TEST_F(TranslateManagerTest, Reload) {
   const content::LoadCommittedDetails& nav_details =
       nav_observer.get_load_commited_details();
   EXPECT_TRUE(nav_details.entry != NULL);  // There was a navigation.
-  EXPECT_EQ(NavigationType::EXISTING_PAGE, nav_details.type);
+  EXPECT_EQ(content::NAVIGATION_TYPE_EXISTING_PAGE, nav_details.type);
 
   // The TranslateManager class processes the navigation entry committed
   // notification in a posted task; process that task.
@@ -689,7 +763,9 @@ TEST_F(TranslateManagerTest, ReloadFromLocationBar) {
   // Create a pending navigation and simulate a page load.  That should be the
   // equivalent of typing the URL again in the location bar.
   NavEntryCommittedObserver nav_observer(contents());
-  contents()->controller().LoadURL(url, GURL(), PageTransition::TYPED);
+  contents()->GetController().LoadURL(url, content::Referrer(),
+                                      content::PAGE_TRANSITION_TYPED,
+                                      std::string());
   rvh()->SendNavigate(0, url);
 
   // Test that we are really getting a same page navigation, the test would be
@@ -697,7 +773,7 @@ TEST_F(TranslateManagerTest, ReloadFromLocationBar) {
   const content::LoadCommittedDetails& nav_details =
       nav_observer.get_load_commited_details();
   EXPECT_TRUE(nav_details.entry != NULL);  // There was a navigation.
-  EXPECT_EQ(NavigationType::SAME_PAGE, nav_details.type);
+  EXPECT_EQ(content::NAVIGATION_TYPE_SAME_PAGE, nav_details.type);
 
   // The TranslateManager class processes the navigation entry committed
   // notification in a posted task; process that task.
@@ -735,12 +811,12 @@ TEST_F(TranslateManagerTest, CloseInfoBarInSubframeNavigation) {
 
   // Simulate a sub-frame auto-navigating.
   rvh()->SendNavigateWithTransition(1, GURL("http://pub.com"),
-                                    PageTransition::AUTO_SUBFRAME);
+                                    content::PAGE_TRANSITION_AUTO_SUBFRAME);
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 
   // Simulate the user navigating in a sub-frame.
   rvh()->SendNavigateWithTransition(2, GURL("http://pub.com"),
-                                    PageTransition::MANUAL_SUBFRAME);
+                                    content::PAGE_TRANSITION_MANUAL_SUBFRAME);
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 
   // Navigate out of page, a new infobar should show.
@@ -871,14 +947,15 @@ TEST_F(TranslateManagerTest, ServerReportsUnsupportedLanguage) {
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 }
 
-// Tests that no translate infobar is shown when Chrome is in a language that
-// the translate server does not support.
+// Tests that no translate infobar is shown and context menu is disabled, when
+// Chrome is in a language that the translate server does not support.
 TEST_F(TranslateManagerTest, UnsupportedUILanguage) {
   std::string original_lang = g_browser_process->GetApplicationLocale();
   g_browser_process->SetApplicationLocale("qbz");
 
   // Make sure that the accept language list only contains unsupported languages
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   prefs->SetString(prefs::kAcceptLanguages, "qbz");
 
@@ -888,6 +965,13 @@ TEST_F(TranslateManagerTest, UnsupportedUILanguage) {
 
   // No info-bar should be shown.
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
+
+  // And the context menu option should be disabled too.
+  scoped_ptr<TestRenderViewContextMenu> menu(
+      TestRenderViewContextMenu::CreateContextMenu(contents()));
+  menu->Init();
+  EXPECT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_TRANSLATE));
+  EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_TRANSLATE));
 
   g_browser_process->SetApplicationLocale(original_lang);
 }
@@ -899,7 +983,8 @@ TEST_F(TranslateManagerTest, TranslateAcceptLanguage) {
   g_browser_process->SetApplicationLocale("qbz");
 
   // Set Qbz and French as the only accepted languages
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   prefs->SetString(prefs::kAcceptLanguages, "qbz,fr");
 
@@ -924,7 +1009,8 @@ TEST_F(TranslateManagerTest, TranslateAcceptLanguage) {
 // Tests that the translate enabled preference is honored.
 TEST_F(TranslateManagerTest, TranslateEnabledPref) {
   // Make sure the pref allows translate.
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   prefs->SetBoolean(prefs::kEnableTranslate, true);
 
@@ -961,7 +1047,8 @@ TEST_F(TranslateManagerTest, NeverTranslateLanguagePref) {
   EXPECT_TRUE(GetTranslateInfoBar() != NULL);
 
   // Select never translate this language.
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   PrefChangeRegistrar registrar;
   registrar.Init(prefs);
@@ -1008,7 +1095,8 @@ TEST_F(TranslateManagerTest, NeverTranslateSitePref) {
   EXPECT_TRUE(GetTranslateInfoBar() != NULL);
 
   // Select never translate this site.
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   PrefChangeRegistrar registrar;
   registrar.Init(prefs);
@@ -1047,7 +1135,8 @@ TEST_F(TranslateManagerTest, NeverTranslateSitePref) {
 // Tests the "Always translate this language" pref.
 TEST_F(TranslateManagerTest, AlwaysTranslateLanguagePref) {
   // Select always translate French to English.
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   PrefService* prefs = profile->GetPrefs();
   PrefChangeRegistrar registrar;
   registrar.Init(prefs);
@@ -1084,7 +1173,7 @@ TEST_F(TranslateManagerTest, AlwaysTranslateLanguagePref) {
   // Let's switch to incognito mode, it should not be autotranslated in that
   // case either.
   TestingProfile* test_profile =
-      static_cast<TestingProfile*>(contents()->browser_context());
+      static_cast<TestingProfile*>(contents()->GetBrowserContext());
   test_profile->set_incognito(true);
   SimulateNavigation(GURL("http://www.youtube.fr"), "fr", true);
   EXPECT_FALSE(GetTranslateMessage(&page_id, &original_lang, &target_lang));
@@ -1107,7 +1196,8 @@ TEST_F(TranslateManagerTest, AlwaysTranslateLanguagePref) {
 TEST_F(TranslateManagerTest, ContextMenu) {
   // Blacklist www.google.fr and French for translation.
   GURL url("http://www.google.fr");
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   TranslatePrefs translate_prefs(profile->GetPrefs());
   translate_prefs.BlacklistLanguage("fr");
   translate_prefs.BlacklistSite(url.host());
@@ -1215,7 +1305,8 @@ TEST_F(TranslateManagerTest, ContextMenu) {
 // translate" infobar when the translation is accepted/declined 3 times,
 // only when not in incognito mode.
 TEST_F(TranslateManagerTest, BeforeTranslateExtraButtons) {
-  Profile* profile = Profile::FromBrowserContext(contents()->browser_context());
+  Profile* profile =  
+      Profile::FromBrowserContext(contents()->GetBrowserContext());
   TranslatePrefs translate_prefs(profile->GetPrefs());
   translate_prefs.ResetTranslationAcceptedCount("fr");
   translate_prefs.ResetTranslationDeniedCount("fr");
@@ -1226,7 +1317,8 @@ TEST_F(TranslateManagerTest, BeforeTranslateExtraButtons) {
   // shown in that case, then 4 times in normal mode.
   TranslateInfoBarDelegate* infobar;
   TestingProfile* test_profile =
-      static_cast<TestingProfile*>(contents()->browser_context());
+      static_cast<TestingProfile*>(contents()->GetBrowserContext());
+  test_profile->CreateExtensionProcessManager();
   test_profile->set_incognito(true);
   for (int i = 0; i < 8; ++i) {
     SCOPED_TRACE(::testing::Message() << "Iteration " << i <<

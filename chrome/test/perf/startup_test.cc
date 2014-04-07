@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "base/string_util.h"
 #include "base/sys_info.h"
 #include "base/test/test_file_util.h"
+#include "base/test/test_timeouts.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_constants.h"
@@ -20,6 +21,7 @@
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/ui_perf_test.h"
 #include "net/base/net_util.h"
 
@@ -142,7 +144,13 @@ class StartupTest : public UIPerfTest {
           profile_type));
     }
 
+#if defined(NDEBUG)
     const int kNumCyclesMax = 20;
+#else
+    // Debug builds are too slow and we can't run that many cycles in a
+    // reasonable amount of time.
+    const int kNumCyclesMax = 10;
+#endif
     int numCycles = kNumCyclesMax;
     scoped_ptr<base::Environment> env(base::Environment::Create());
     std::string numCyclesEnv;
@@ -184,17 +192,6 @@ class StartupTest : public UIPerfTest {
       UITest::SetUp();
       TimeTicks end_time = TimeTicks::Now();
 
-      // HACK: Chrome < 5.0.368.0 did not yet implement SendJSONRequest.
-      {
-        std::string server_version = automation()->server_version();
-        std::vector<std::string> version_numbers;
-        base::SplitString(server_version, '.', &version_numbers);
-        int chrome_buildnum = 0;
-        ASSERT_TRUE(base::StringToInt(version_numbers[2], &chrome_buildnum));
-        if (chrome_buildnum < 368) {
-          num_tabs = 0;
-        }
-      }
       if (num_tabs > 0) {
         float min_start;
         float max_stop;
@@ -203,7 +200,11 @@ class StartupTest : public UIPerfTest {
             automation()->GetBrowserWindow(0));
         ASSERT_TRUE(browser_proxy.get());
 
-        if (browser_proxy->GetInitialLoadTimes(&min_start, &max_stop, &times) &&
+        if (browser_proxy->GetInitialLoadTimes(
+              TestTimeouts::action_max_timeout_ms(),
+              &min_start,
+              &max_stop,
+              &times) &&
             !times.empty()) {
           ASSERT_LT(nth_timed_tab, num_tabs);
           ASSERT_EQ(times.size(), static_cast<size_t>(num_tabs));
@@ -236,7 +237,7 @@ class StartupTest : public UIPerfTest {
                           "%.2f,",
                           timings[i].end_to_end.InMillisecondsF());
     }
-    PrintResultList(graph, "", trace, times, "ms", important);
+    perf_test::PrintResultList(graph, "", trace, times, "ms", important);
 
     if (num_tabs > 0) {
       std::string name_base = trace;
@@ -246,13 +247,15 @@ class StartupTest : public UIPerfTest {
       name = name_base + "-start";
       for (int i = 0; i < numCycles; ++i)
         base::StringAppendF(&times, "%.2f,", timings[i].first_start_ms);
-      PrintResultList(graph, "", name.c_str(), times, "ms", important);
+      perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
+                                 important);
 
       times.clear();
       name = name_base + "-first";
       for (int i = 0; i < numCycles; ++i)
         base::StringAppendF(&times, "%.2f,", timings[i].first_stop_ms);
-      PrintResultList(graph, "", name.c_str(), times, "ms", important);
+      perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
+                                 important);
 
       if (nth_timed_tab > 0) {
         // Display only the time necessary to load the first n tabs.
@@ -260,7 +263,8 @@ class StartupTest : public UIPerfTest {
         name = name_base + "-" + base::IntToString(nth_timed_tab);
         for (int i = 0; i < numCycles; ++i)
           base::StringAppendF(&times, "%.2f,", timings[i].nth_tab_stop_ms);
-        PrintResultList(graph, "", name.c_str(), times, "ms", important);
+        perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
+                                   important);
       }
 
       if (num_tabs > 1) {
@@ -269,7 +273,8 @@ class StartupTest : public UIPerfTest {
         name = name_base + "-all";
         for (int i = 0; i < numCycles; ++i)
           base::StringAppendF(&times, "%.2f,", timings[i].last_stop_ms);
-        PrintResultList(graph, "", name.c_str(), times, "ms", important);
+        perf_test::PrintResultList(graph, "", name.c_str(), times, "ms",
+                                   important);
       }
     }
   }
@@ -288,7 +293,14 @@ TEST_F(StartupTest, PerfReferenceWarm) {
 
 // TODO(mpcomplete): Should we have reference timings for all these?
 
-TEST_F(StartupTest, PerfCold) {
+// dominich: Disabling as per http://crbug.com/100900.
+#if defined(OS_WIN)
+#define MAYBE_PerfCold DISABLED_PerfCold
+#else
+#define MAYBE_PerfCold PerfCold
+#endif
+
+TEST_F(StartupTest, MAYBE_PerfCold) {
   RunStartupTest("cold", "t", COLD, NOT_IMPORTANT,
                  UITestBase::DEFAULT_THEME, 0, 0);
 }
@@ -329,7 +341,14 @@ void StartupTest::RunPerfTestWithManyTabs(const char* graph, const char* trace,
                  UITestBase::DEFAULT_THEME, tab_count, nth_timed_tab);
 }
 
-TEST_F(StartupTest, PerfFewTabs) {
+// http://crbug.com/101591
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_PerfFewTabs FLAKY_PerfFewTabs
+#else
+#define MAYBE_PerfFewTabs PerfFewTabs
+#endif
+
+TEST_F(StartupTest, MAYBE_PerfFewTabs) {
   RunPerfTestWithManyTabs("few_tabs", "cmdline", 5, 2, false);
 }
 
@@ -356,7 +375,12 @@ TEST_F(StartupTest, PerfRestoreFewTabsReference) {
 #define MAYBE_PerfExtensionContentScript50 FLAKY_PerfExtensionContentScript50
 #elif defined(OS_WIN)
 // http://crbug.com/46609
+#if !defined(NDEBUG)
+// http://crbug.com/102584
+#define MAYBE_PerfSeveralTabs DISABLED_PerfSeveralTabs
+#else
 #define MAYBE_PerfSeveralTabs FLAKY_PerfSeveralTabs
+#endif
 #define MAYBE_PerfSeveralTabsReference PerfSeveralTabsReference
 #define MAYBE_PerfRestoreSeveralTabs PerfRestoreSeveralTabs
 #define MAYBE_PerfExtensionContentScript50 PerfExtensionContentScript50
@@ -365,6 +389,13 @@ TEST_F(StartupTest, PerfRestoreFewTabsReference) {
 #define MAYBE_PerfSeveralTabs PerfSeveralTabs
 #define MAYBE_PerfRestoreSeveralTabs PerfRestoreSeveralTabs
 #define MAYBE_PerfExtensionContentScript50 PerfExtensionContentScript50
+#endif
+
+// http://crbug.com/99604
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_PerfComplexTheme FLAKY_PerfComplexTheme
+#else
+#define MAYBE_PerfComplexTheme PerfComplexTheme
 #endif
 
 TEST_F(StartupTest, MAYBE_PerfSeveralTabs) {
@@ -406,7 +437,7 @@ TEST_F(StartupTest, MAYBE_PerfExtensionContentScript50) {
                  UITestBase::DEFAULT_THEME, 1, 0);
 }
 
-TEST_F(StartupTest, PerfComplexTheme) {
+TEST_F(StartupTest, MAYBE_PerfComplexTheme) {
   RunStartupTest("warm", "t-theme", WARM, NOT_IMPORTANT,
                  UITestBase::COMPLEX_THEME, 0, 0);
 }

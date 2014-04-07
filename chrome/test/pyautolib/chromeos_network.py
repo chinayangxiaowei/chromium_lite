@@ -1,5 +1,3 @@
-#!/usr/bin/python
-
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -140,6 +138,7 @@ class PyNetworkUITest(pyauto.PyUITest):
     # effectively hiding any ssh connections that the
     # test harness might be using and putting wifi ahead.
     self._PushServiceOrder('vpn,bluetooth,wifi,wimax,cellular,ethernet')
+    self._ParseDefaultRoutingTable()
     pyauto.PyUITest.setUp(self)
     self.ForgetAllRememberedNetworks()
     self._wifi_power_strip = None
@@ -150,6 +149,20 @@ class PyNetworkUITest(pyauto.PyUITest):
     self._PopServiceOrder()
     if self._wifi_power_strip:
       self._wifi_power_strip.TurnOffUsedRouters()
+    # Remove the route entry for the power strip.
+    if hasattr(self, 'ps_route_entry'):
+      os.system('route del -net %(ipaddress)s gateway %(gateway)s netmask '
+                '%(netmask)s dev %(iface)s' % self.ps_route_entry)
+
+  def _ParseDefaultRoutingTable(self):
+    """Creates and stores a dictionary of the default routing paths."""
+    route_table_headers = ['destination', 'gateway', 'genmask', 'flags',
+                           'metric', 'ref', 'use', 'iface']
+    routes = os.popen('route -n | egrep "^0.0.0.0"').read()
+    routes = [interface.split() for interface in routes.split('\n')][:-1]
+    self.default_routes = {}
+    for iface in routes:
+      self.default_routes[iface[-1]] = dict(zip(route_table_headers, iface))
 
   def ForgetAllRememberedNetworks(self):
     """Forgets all networks that the device has marked as remembered."""
@@ -200,6 +213,31 @@ class PyNetworkUITest(pyauto.PyUITest):
         'Flimflam service order not set properly. %s != %s' % \
         (old_service_order, set_service_order)
 
+  def _SetupRouteForPowerStrip(self, ipaddress, iface='eth'):
+    """Create a route table entry for the power strip."""
+
+    # Assume device has only one interface that is prepended with
+    # $iface and use that one.
+    try:
+      iface = [ key for key in self.default_routes.keys() if iface in key ][0]
+    except:
+      assert 'Unable to find interface of type %s.' % iface
+
+    self.ps_route_entry = {
+      'iface' : iface,
+      'gateway' : self.default_routes[iface]['gateway'],
+      'netmask' : '255.255.255.255',
+      'ipaddress' : ipaddress
+    }
+
+    os.system('route add -net %(ipaddress)s gateway %(gateway)s netmask '
+              '%(netmask)s dev %(iface)s' % self.ps_route_entry)
+
+    # Verify the route was added.
+    assert os.system('route -n | egrep "^%(ipaddress)s[[:space:]]+%(gateway)s'
+                     '[[:space:]]+%(netmask)s"' % self.ps_route_entry) == 0, \
+                     'Failed to create default route for powerstrip.'
+
   def InitWifiPowerStrip(self):
     """Initializes the router controller using the specified config file."""
 
@@ -209,6 +247,7 @@ class PyNetworkUITest(pyauto.PyUITest):
     config = pyauto.PyUITest.EvalDataFrom(self._ROUTER_CONFIG_FILE)
     strip_ip, routers = config['strip_ip'], config['routers']
 
+    self._SetupRouteForPowerStrip(strip_ip)
     self._wifi_power_strip = WifiPowerStrip(strip_ip, routers)
 
     self.RouterPower = self._wifi_power_strip.RouterPower
@@ -280,7 +319,7 @@ class PyNetworkUITest(pyauto.PyUITest):
         return service_path
     return None
 
-  def ConnectToWifiRouter(self, router_name):
+  def ConnectToWifiRouter(self, router_name, shared=True):
     """Connects to a router by name.
 
     Args:
@@ -305,5 +344,7 @@ class PyNetworkUITest(pyauto.PyUITest):
              router['ssid']
 
       logging.debug('Connecting to router %s.' % router_name)
-      error_string = self.ConnectToWifiNetwork(service_path, passphrase)
+      error_string = self.ConnectToWifiNetwork(service_path,
+                                               password=passphrase,
+                                               shared=shared)
     return error_string

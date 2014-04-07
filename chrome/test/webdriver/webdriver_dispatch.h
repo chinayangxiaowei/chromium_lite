@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/logging.h"
 #include "chrome/test/webdriver/commands/response.h"
 #include "third_party/mongoose/mongoose.h"
 
@@ -22,6 +21,31 @@ namespace webdriver {
 
 class Command;
 class HttpResponse;
+
+namespace mongoose {
+
+typedef void (HttpCallback)(struct mg_connection* connection,
+                            const struct mg_request_info* request_info,
+                            void* user_data);
+
+struct CallbackDetails {
+  CallbackDetails() {
+  }
+
+  CallbackDetails(const std::string &uri_regex,
+                  HttpCallback* func,
+                  void* user_data)
+    : uri_regex_(uri_regex),
+      func_(func),
+      user_data_(user_data) {
+  }
+
+  std::string uri_regex_;
+  HttpCallback* func_;
+  void* user_data_;
+};
+
+}  // namespace mongoose
 
 namespace internal {
 
@@ -40,6 +64,7 @@ void SendResponse(struct mg_connection* const connection,
 // Parses the request info and returns whether parsing was successful. If not,
 // |response| has been modified with the error.
 bool ParseRequestInfo(const struct mg_request_info* const request_info,
+                      struct mg_connection* const connection,
                       std::string* method,
                       std::vector<std::string>* path_segments,
                       base::DictionaryValue** parameters,
@@ -64,14 +89,11 @@ void Dispatch(struct mg_connection* connection,
   base::DictionaryValue* parameters = NULL;
   Response response;
   if (internal::ParseRequestInfo(request_info,
+                                 connection,
                                  &method,
                                  &path_segments,
                                  &parameters,
                                  &response)) {
-    std::string post_data(request_info->post_data, request_info->post_data_len);
-    LOG(INFO) << "Received command, url: " << request_info->uri
-              << ", method: " << request_info->request_method
-              << ", postd data: " << post_data;
     internal::DispatchHelper(
         new CommandType(path_segments, parameters),
         method,
@@ -80,7 +102,6 @@ void Dispatch(struct mg_connection* connection,
   internal::SendResponse(connection,
                          request_info->request_method,
                          response);
-  LOG(INFO) << "Sent command response, url: " << request_info->uri;
 }
 
 class Dispatcher {
@@ -88,8 +109,11 @@ class Dispatcher {
   // Creates a new dispatcher that will register all URL callbacks with the
   // given |context|. Each callback's pattern will be prefixed with the provided
   // |root|.
-  Dispatcher(struct mg_context* context, const std::string& root);
+  explicit Dispatcher(const std::string& root);
   ~Dispatcher();
+
+  bool ProcessHttpRequest(struct mg_connection* conn,
+                          const struct mg_request_info* request_info);
 
   // Registers a callback for a WebDriver command using the given URL |pattern|.
   // The |CommandType| must be a subtype of |webdriver::Command|.
@@ -101,10 +125,10 @@ class Dispatcher {
   void AddShutdown(const std::string& pattern,
                    base::WaitableEvent* shutdown_event);
 
-  // Registers a callback for the given pattern that will return a simple
-  // "HTTP/1.1 200 OK" message with "ok" in the body. Used for checking the
-  // status of the server.
-  void AddHealthz(const std::string& pattern);
+  // Registers a callback that responds to with this server's status
+  // information, as defined by the WebDriver wire protocol:
+  // http://code.google.com/p/selenium/wiki/JsonWireProtocol#GET_/status.
+  void AddStatus(const std::string& pattern);
 
   // Registers a callback for the given pattern that will return the current
   // WebDriver log contents.
@@ -120,8 +144,12 @@ class Dispatcher {
   void ForbidAllOtherRequests();
 
  private:
-  struct mg_context* context_;
-  const std::string root_;
+  void AddCallback(const std::string& uri_pattern,
+                   webdriver::mongoose::HttpCallback callback,
+                   void* user_data);
+
+  std::vector<webdriver::mongoose::CallbackDetails> callbacks_;
+  const std::string url_base_;
 
   DISALLOW_COPY_AND_ASSIGN(Dispatcher);
 };
@@ -129,8 +157,7 @@ class Dispatcher {
 
 template <typename CommandType>
 void Dispatcher::Add(const std::string& pattern) {
-  mg_set_uri_callback(context_, (root_ + pattern).c_str(),
-                      &Dispatch<CommandType>, NULL);
+  AddCallback(url_base_ + pattern, &Dispatch<CommandType>, NULL);
 }
 
 }  // namespace webdriver

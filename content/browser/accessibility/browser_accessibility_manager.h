@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "base/hash_tables.h"
 #include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
+#include "content/common/content_export.h"
 #include "ui/gfx/native_widget_types.h"
 #include "webkit/glue/webaccessibility.h"
 
@@ -24,16 +25,22 @@ using webkit_glue::WebAccessibility;
 struct ViewHostMsg_AccessibilityNotification_Params;
 
 // Class that can perform actions on behalf of the BrowserAccessibilityManager.
-class BrowserAccessibilityDelegate {
+class CONTENT_EXPORT BrowserAccessibilityDelegate {
  public:
   virtual ~BrowserAccessibilityDelegate() {}
   virtual void SetAccessibilityFocus(int acc_obj_id) = 0;
   virtual void AccessibilityDoDefaultAction(int acc_obj_id) = 0;
-  virtual bool HasFocus() = 0;
+  virtual void AccessibilityScrollToMakeVisible(
+      int acc_obj_id, gfx::Rect subfocus) = 0;
+  virtual void AccessibilityScrollToPoint(
+      int acc_obj_id, gfx::Point point) = 0;
+  virtual void AccessibilitySetTextSelection(
+      int acc_obj_id, int start_offset, int end_offset) = 0;
+  virtual bool HasFocus() const = 0;
   virtual gfx::Rect GetViewBounds() const = 0;
 };
 
-class BrowserAccessibilityFactory {
+class CONTENT_EXPORT BrowserAccessibilityFactory {
  public:
   virtual ~BrowserAccessibilityFactory() {}
 
@@ -43,7 +50,7 @@ class BrowserAccessibilityFactory {
 };
 
 // Manages a tree of BrowserAccessibility objects.
-class BrowserAccessibilityManager {
+class CONTENT_EXPORT BrowserAccessibilityManager {
  public:
   // Creates the platform specific BrowserAccessibilityManager. Ownership passes
   // to the caller.
@@ -99,6 +106,22 @@ class BrowserAccessibilityManager {
   // Tell the renderer to do the default action for this node.
   void DoDefaultAction(const BrowserAccessibility& node);
 
+  // Tell the renderer to scroll to make |node| visible.
+  // In addition, if it's not possible to make the entire object visible,
+  // scroll so that the |subfocus| rect is visible at least. The subfocus
+  // rect is in local coordinates of the object itself.
+  void ScrollToMakeVisible(
+      const BrowserAccessibility& node, gfx::Rect subfocus);
+
+  // Tell the renderer to scroll such that |node| is at |point|,
+  // where |point| is in global coordinates of the tab contents.
+  void ScrollToPoint(
+      const BrowserAccessibility& node, gfx::Point point);
+
+  // Tell the renderer to set the text selection on a node.
+  void SetTextSelection(
+      const BrowserAccessibility& node, int start_offset, int end_offset);
+
   // Retrieve the bounds of the parent View in screen coordinates.
   gfx::Rect GetViewBounds();
 
@@ -125,27 +148,11 @@ class BrowserAccessibilityManager {
       BrowserAccessibilityFactory* factory);
 
  private:
-  // Type is a ViewHostMsg_AccessibilityNotification_Type::int.
-  // We pass it as int so that we don't include the render message declaration
-  // header here.
-  void OnSimpleAccessibilityNotification(
-      const WebAccessibility& acc_obj,
-      int type,
-      bool include_children);
-
-  void OnAccessibilityObjectFocusChange(
-      const WebAccessibility& acc_obj);
-  void OnAccessibilityObjectLoadComplete(
-      const WebAccessibility& acc_obj);
-
   // Update an accessibility node with an updated WebAccessibility node
   // received from the renderer process. When |include_children| is true
   // the node's children will also be updated, otherwise only the node
-  // itself is updated. Returns the updated node or NULL if no node was
-  // updated.
-  BrowserAccessibility* UpdateNode(
-      const WebAccessibility& src,
-      bool include_children);
+  // itself is updated.
+  void UpdateNode(const WebAccessibility& src, bool include_children);
 
   // Recursively build a tree of BrowserAccessibility objects from
   // the WebAccessibility tree received from the renderer process.

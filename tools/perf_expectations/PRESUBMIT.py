@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -8,10 +7,6 @@
 See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts for
 details on the presubmit API built into gcl.
 """
-
-UNIT_TESTS = [
-  'tests.perf_expectations_unittest',
-]
 
 PERF_EXPECTATIONS = 'tools/perf_expectations/perf_expectations.json'
 CONFIG_FILE = 'tools/perf_expectations/chromium_perf_expectations.cfg'
@@ -24,9 +19,9 @@ def CheckChangeOnUpload(input_api, output_api):
 
   output = []
   if run_tests:
-    output.extend(input_api.canned_checks.RunPythonUnitTests(input_api,
-                                                             output_api,
-                                                             UNIT_TESTS))
+    whitelist = [r'.+_unittest\.py$']
+    output.extend(input_api.canned_checks.RunUnitTestsInDirectory(
+        input_api, output_api, 'tests', whitelist))
   return output
 
 
@@ -38,9 +33,10 @@ def CheckChangeOnCommit(input_api, output_api):
 
   output = []
   if run_tests:
-    output.extend(input_api.canned_checks.RunPythonUnitTests(input_api,
-                                                             output_api,
-                                                             UNIT_TESTS))
-    output.extend(input_api.canned_checks.CheckDoNotSubmit(input_api,
-                                                           output_api))
+    whitelist = [r'.+_unittest\.py$']
+    output.extend(input_api.canned_checks.RunUnitTestsInDirectory(
+        input_api, output_api, 'tests', whitelist))
+
+  output.extend(input_api.canned_checks.CheckDoNotSubmit(input_api,
+                                                         output_api))
   return output

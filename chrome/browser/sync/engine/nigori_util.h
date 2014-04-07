@@ -8,6 +8,7 @@
 #define CHROME_BROWSER_SYNC_ENGINE_NIGORI_UTIL_H_
 #pragma once
 
+#include "base/compiler_specific.h"
 #include "chrome/browser/sync/protocol/nigori_specifics.pb.h"
 #include "chrome/browser/sync/syncable/model_type.h"
 
@@ -25,7 +26,6 @@ const char kEncryptedString[] = "encrypted";
 
 class BaseTransaction;
 class Entry;
-class ReadTransaction;
 class WriteTransaction;
 
 // Check if our unsyced changes are encrypted if they need to be based on
@@ -36,7 +36,7 @@ class WriteTransaction;
 // modify the data and does not care if data is unnecessarily encrypted.
 bool VerifyUnsyncedChangesAreEncrypted(
     BaseTransaction* const trans,
-    const ModelTypeSet& encrypted_types);
+    ModelTypeSet encrypted_types);
 
 // Processes all unsynced changes and ensures they are appropriately encrypted
 // or unencrypted, based on |encrypted_types|.
@@ -47,18 +47,19 @@ bool ProcessUnsyncedChangesForEncryption(
 // Returns true if the entry requires encryption but is not encrypted, false
 // otherwise. Note: this does not check that already encrypted entries are
 // encrypted with the proper key.
-bool EntryNeedsEncryption(const ModelTypeSet& encrypted_types,
+bool EntryNeedsEncryption(ModelTypeSet encrypted_types,
                           const Entry& entry);
 
 // Same as EntryNeedsEncryption, but looks at specifics.
-bool SpecificsNeedsEncryption(const ModelTypeSet& encrypted_types,
+bool SpecificsNeedsEncryption(ModelTypeSet encrypted_types,
                               const sync_pb::EntitySpecifics& specifics);
 
 // Verifies all data of type |type| is encrypted appropriately.
-bool VerifyDataTypeEncryption(BaseTransaction* const trans,
-                              browser_sync::Cryptographer* cryptographer,
-                              ModelType type,
-                              bool is_encrypted);
+bool VerifyDataTypeEncryptionForTest(
+    BaseTransaction* const trans,
+    browser_sync::Cryptographer* cryptographer,
+    ModelType type,
+    bool is_encrypted) WARN_UNUSED_RESULT;
 
 }  // namespace syncable
 

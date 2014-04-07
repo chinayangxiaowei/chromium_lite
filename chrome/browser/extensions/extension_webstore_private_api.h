@@ -11,9 +11,11 @@
 #include "chrome/browser/extensions/extension_function.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/webstore_install_helper.h"
+#include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/browser/gpu/gpu_data_manager.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 class ProfileSyncService;
 
@@ -22,18 +24,14 @@ class WebstorePrivateApi {
   // Allows you to set the ProfileSyncService the function will use for
   // testing purposes.
   static void SetTestingProfileSyncService(ProfileSyncService* service);
-};
 
-// TODO(asargent): this is being deprecated in favor of
-// BeginInstallWithManifestFunction. See crbug.com/75821 for details.
-class BeginInstallFunction : public SyncExtensionFunction {
- public:
-  // For use only in tests - sets a flag that can cause this function to ignore
-  // the normal requirement that it is called during a user gesture.
-  static void SetIgnoreUserGestureForTests(bool ignore);
- protected:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.beginInstall");
+  // Allows you to override the WebstoreInstaller delegate for testing.
+  static void SetWebstoreInstallerDelegateForTesting(
+      WebstoreInstaller::Delegate* delegate);
+
+  // If |allow| is true, then the extension IDs used by the SilentlyInstall
+  // apitest will be trusted.
+  static void SetTrustTestIDsForTesting(bool allow);
 };
 
 class BeginInstallWithManifestFunction
@@ -44,8 +42,8 @@ class BeginInstallWithManifestFunction
   BeginInstallWithManifestFunction();
 
   // Result codes for the return value. If you change this, make sure to
-  // update the description for the beginInstallWithManifest callback in
-  // extension_api.json.
+  // update the description for the beginInstallWithManifest3 callback in
+  // the extension API JSON.
   enum ResultCode {
     ERROR_NONE = 0,
 
@@ -67,22 +65,17 @@ class BeginInstallWithManifestFunction
     // The page does not have permission to call this function.
     PERMISSION_DENIED,
 
-    // The function was not called during a user gesture.
-    NO_GESTURE,
-
     // Invalid icon url.
     INVALID_ICON_URL
   };
 
-  // For use only in tests - sets a flag that can cause this function to ignore
-  // the normal requirement that it is called during a user gesture.
-  static void SetIgnoreUserGestureForTests(bool ignore);
-
   // Implementing WebstoreInstallHelper::Delegate interface.
   virtual void OnWebstoreParseSuccess(
+      const std::string& id,
       const SkBitmap& icon,
       base::DictionaryValue* parsed_manifest) OVERRIDE;
   virtual void OnWebstoreParseFailure(
+      const std::string& id,
       InstallHelperResultCode result_code,
       const std::string& error_message) OVERRIDE;
 
@@ -92,7 +85,7 @@ class BeginInstallWithManifestFunction
 
  protected:
   virtual ~BeginInstallWithManifestFunction();
-  virtual bool RunImpl();
+  virtual bool RunImpl() OVERRIDE;
 
   // Sets the result_ as a string based on |code|.
   void SetResult(ResultCode code);
@@ -113,27 +106,80 @@ class BeginInstallWithManifestFunction
   // ExtensionInstallUI to prompt for confirmation of the install.
   scoped_refptr<Extension> dummy_extension_;
 
-  DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.beginInstallWithManifest2");
+  DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.beginInstallWithManifest3");
 };
 
 class CompleteInstallFunction : public SyncExtensionFunction {
-  virtual bool RunImpl();
+  virtual bool RunImpl() OVERRIDE;
   DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.completeInstall");
 };
 
+class SilentlyInstallFunction : public AsyncExtensionFunction,
+                                public WebstoreInstallHelper::Delegate,
+                                public WebstoreInstaller::Delegate {
+ public:
+  SilentlyInstallFunction();
+
+  // WebstoreInstallHelper::Delegate implementation.
+  virtual void OnWebstoreParseSuccess(
+      const std::string& id,
+      const SkBitmap& icon,
+      base::DictionaryValue* parsed_manifest) OVERRIDE;
+  virtual void OnWebstoreParseFailure(
+      const std::string& id,
+      InstallHelperResultCode result_code,
+      const std::string& error_message) OVERRIDE;
+
+  // WebstoreInstaller::Delegate implementation.
+  virtual void OnExtensionInstallSuccess(const std::string& id) OVERRIDE;
+  virtual void OnExtensionInstallFailure(const std::string& id,
+                                         const std::string& error) OVERRIDE;
+
+ protected:
+  virtual ~SilentlyInstallFunction();
+  virtual bool RunImpl() OVERRIDE;
+
+ private:
+  std::string id_;
+  std::string manifest_;
+  DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.silentlyInstall");
+};
+
 class GetBrowserLoginFunction : public SyncExtensionFunction {
-  virtual bool RunImpl();
+  virtual bool RunImpl() OVERRIDE;
   DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.getBrowserLogin");
 };
 
 class GetStoreLoginFunction : public SyncExtensionFunction {
-  virtual bool RunImpl();
+  virtual bool RunImpl() OVERRIDE;
   DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.getStoreLogin");
 };
 
 class SetStoreLoginFunction : public SyncExtensionFunction {
-  virtual bool RunImpl();
+  virtual bool RunImpl() OVERRIDE;
   DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.setStoreLogin");
+};
+
+class GetWebGLStatusFunction : public AsyncExtensionFunction,
+                               public GpuDataManager::Observer {
+ public:
+  GetWebGLStatusFunction();
+
+  // Implementing GpuDataManager::Observer interface.
+  virtual void OnGpuInfoUpdate() OVERRIDE;
+
+ protected:
+  virtual ~GetWebGLStatusFunction();
+  virtual bool RunImpl() OVERRIDE;
+
+ private:
+  void CreateResult(bool webgl_allowed);
+
+  // A false return value is always valid, but a true one is only valid if full
+  // GPU info has been collected in a GPU process.
+  static bool IsWebGLAllowed(GpuDataManager* manager);
+
+  DECLARE_EXTENSION_FUNCTION_NAME("webstorePrivate.getWebGLStatus");
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_WEBSTORE_PRIVATE_API_H_

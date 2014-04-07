@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,24 +10,29 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/common/url_constants.h"
+#include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "views/controls/label.h"
-#include "views/controls/link.h"
-#include "views/layout/grid_layout.h"
-#include "views/layout/layout_constants.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/link.h"
+#include "ui/views/layout/grid_layout.h"
+#include "ui/views/layout/layout_constants.h"
+#include "ui/views/widget/widget.h"
+
+using content::OpenURLParams;
+using content::Referrer;
 
 InstantConfirmView::InstantConfirmView(Profile* profile) : profile_(profile) {
   views::Label* description_label = new views::Label(
-      UTF16ToWide(l10n_util::GetStringUTF16(IDS_INSTANT_OPT_IN_MESSAGE)));
+      l10n_util::GetStringUTF16(IDS_INSTANT_OPT_IN_MESSAGE));
   description_label->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   description_label->SetMultiLine(true);
 
   views::Link* learn_more_link = new views::Link(
-      UTF16ToWide(l10n_util::GetStringUTF16(IDS_LEARN_MORE)));
+      l10n_util::GetStringUTF16(IDS_LEARN_MORE));
   learn_more_link->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   learn_more_link->set_listener(this);
 
@@ -61,8 +66,8 @@ views::View* InstantConfirmView::GetContentsView() {
   return this;
 }
 
-std::wstring InstantConfirmView::GetWindowTitle() const {
-  return UTF16ToWide(l10n_util::GetStringUTF16(IDS_INSTANT_OPT_IN_TITLE));
+string16 InstantConfirmView::GetWindowTitle() const {
+  return l10n_util::GetStringUTF16(IDS_INSTANT_OPT_IN_TITLE);
 }
 
 gfx::Size InstantConfirmView::GetPreferredSize() {
@@ -74,14 +79,16 @@ gfx::Size InstantConfirmView::GetPreferredSize() {
   return gfx::Size(pref_width, pref_height);
 }
 
-bool InstantConfirmView::IsModal() const {
-  return true;
+ui::ModalType InstantConfirmView::GetModalType() const {
+  return ui::MODAL_TYPE_WINDOW;
 }
 
 void InstantConfirmView::LinkClicked(views::Link* source, int event_flags) {
-  Browser* browser = BrowserList::GetLastActive();
-  browser->OpenURL(browser::InstantLearnMoreURL(), GURL(),
-                   NEW_FOREGROUND_TAB, PageTransition::TYPED);
+  Browser* browser = BrowserList::GetLastActiveWithProfile(profile_);
+  OpenURLParams params(
+      GURL(chrome::kInstantLearnMoreURL), Referrer(), NEW_FOREGROUND_TAB,
+      content::PAGE_TRANSITION_TYPED, false);
+  browser->OpenURL(params);
 }
 
 namespace browser {

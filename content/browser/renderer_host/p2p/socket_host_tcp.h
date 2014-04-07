@@ -24,7 +24,7 @@ class StreamSocket;
 
 namespace content {
 
-class P2PSocketHostTcp : public P2PSocketHost {
+class CONTENT_EXPORT P2PSocketHostTcp : public P2PSocketHost {
  public:
   P2PSocketHostTcp(IPC::Message::Sender* message_sender,
                    int routing_id, int id);
@@ -65,10 +65,6 @@ class P2PSocketHostTcp : public P2PSocketHost {
   scoped_refptr<net::DrainableIOBuffer> write_buffer_;
 
   bool connected_;
-
-  net::CompletionCallbackImpl<P2PSocketHostTcp> connect_callback_;
-  net::CompletionCallbackImpl<P2PSocketHostTcp> read_callback_;
-  net::CompletionCallbackImpl<P2PSocketHostTcp> write_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(P2PSocketHostTcp);
 };

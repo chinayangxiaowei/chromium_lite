@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 The Chromium Authors. All rights reserved.
+ * Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -27,10 +27,10 @@ div#header {
 }
 
 #header h1 {
-  background: url('../../app/theme/extensions_section.png') 0px 20px no-repeat;
+  background: url('../../app/theme/extensions_section.png') 0 20px no-repeat;
   display: inline;
   margin: 0;
-  padding-bottom: 43px;
+  padding-bottom: 20px;
   padding-left: 75px;
   padding-top: 40px;
 }
@@ -112,7 +112,7 @@ body.hideTmiModeInitial .showInTmiMode {
 body.hideTmiMode .showInTmiMode {
   height: 0 !important;
   opacity: 0;
-  -webkit-transition: all .1s ease-out;
+  -webkit-transition: all 100ms ease-out;
 }
 
 body.showTmiModeInitial .showInTmiMode {
@@ -121,7 +121,7 @@ body.showTmiModeInitial .showInTmiMode {
 
 body.showTmiMode .showInTmiMode {
   opacity: 1;
-  -webkit-transition: all .1s ease-in;
+  -webkit-transition: all 100ms ease-in;
 }
 
 .wbox-tmi-mode {
@@ -247,6 +247,10 @@ body.showTmiMode .showInTmiMode {
   -webkit-padding-start: 5px;
   margin-top: 0.2em;
   margin-bottom: 0.2em;
+}
+
+.always-allow {
+  -webkit-margin-start: 30px;
 }
 
 button {

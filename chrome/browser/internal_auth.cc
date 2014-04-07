@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,14 @@
 #include "base/base64.h"
 #include "base/lazy_instance.h"
 #include "base/rand_util.h"
-#include "base/synchronization/lock.h"
 #include "base/string_number_conversions.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "base/time.h"
 #include "base/values.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
 #include "crypto/hmac.h"
 
 namespace {
@@ -325,9 +325,9 @@ class InternalAuthVerificationService {
 namespace {
 
 static base::LazyInstance<browser::InternalAuthVerificationService>
-    g_verification_service(base::LINKER_INITIALIZED);
-static base::LazyInstance<base::Lock> g_verification_service_lock(
-    base::LINKER_INITIALIZED);
+    g_verification_service = LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<base::Lock>::Leaky
+    g_verification_service_lock = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -432,7 +432,7 @@ class InternalAuthGenerationService : public base::ThreadChecker {
 namespace {
 
 static base::LazyInstance<browser::InternalAuthGenerationService>
-    g_generation_service(base::LINKER_INITIALIZED);
+    g_generation_service = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -477,4 +477,3 @@ void InternalAuthGeneration::GenerateNewKey() {
 }
 
 }  // namespace browser
-

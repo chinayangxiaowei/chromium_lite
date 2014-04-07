@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,12 @@
 #include <iostream>
 
 #include "base/debug/stack_trace.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/mac/crash_logging.h"
 #include "base/mac/mac_util.h"
 #include "base/metrics/histogram.h"
 #include "base/synchronization/lock.h"
-#import "chrome/app/breakpad_mac.h"
 #import "chrome/common/mac/objc_method_swizzle.h"
 
 // Deallocated objects are re-classed as |CrZombie|.  No superclass
@@ -75,7 +76,7 @@ size_t g_fatZombieSize = 0;
 BOOL g_zombieAllObjects = NO;
 
 // Protects |g_zombieCount|, |g_zombieIndex|, and |g_zombies|.
-base::Lock lock_;
+base::LazyInstance<base::Lock>::Leaky g_lock = LAZY_INSTANCE_INITIALIZER;
 
 // How many zombies to keep before freeing, and the current head of
 // the circular buffer.
@@ -198,12 +199,15 @@ void ZombieDealloc(id self, SEL _cmd) {
   // |_internal_object_dispose()| (in objc-class.m) does this, so it
   // should be safe (messaging free'd objects shouldn't be expected to
   // be thread-safe in the first place).
+#pragma clang diagnostic push  // clang warns about direct access to isa.
+#pragma clang diagnostic ignored "-Wdeprecated-objc-isa-usage"
   if (size >= g_fatZombieSize) {
     self->isa = g_fatZombieClass;
     static_cast<CrFatZombie*>(self)->wasa = wasa;
   } else {
     self->isa = g_zombieClass;
   }
+#pragma clang diagnostic pop
 
   // The new record to swap into |g_zombies|.  If |g_zombieCount| is
   // zero, then |self| will be freed immediately.
@@ -213,7 +217,7 @@ void ZombieDealloc(id self, SEL _cmd) {
 
   // Don't involve the lock when creating zombies without a treadmill.
   if (g_zombieCount > 0) {
-    base::AutoLock pin(lock_);
+    base::AutoLock pin(g_lock.Get());
 
     // Check the count again in a thread-safe manner.
     if (g_zombieCount > 0) {
@@ -236,7 +240,7 @@ void ZombieDealloc(id self, SEL _cmd) {
 BOOL GetZombieRecord(id object, ZombieRecord* record) {
   // Holding the lock is reasonable because this should be fast, and
   // the process is going to crash presently anyhow.
-  base::AutoLock pin(lock_);
+  base::AutoLock pin(g_lock.Get());
   for (size_t i = 0; i < g_zombieCount; ++i) {
     if (g_zombies[i].object == object) {
       *record = g_zombies[i];
@@ -284,7 +288,7 @@ void ZombieObjectCrash(id object, SEL aSelector, SEL viaSelector) {
   }
 
   // Set a value for breakpad to report.
-  SetCrashKeyValue(@"zombie", aString);
+  base::mac::SetCrashKeyValue(@"zombie", aString);
 
   // Hex-encode the backtrace and tuck it into a breakpad key.
   NSString* deallocTrace = @"<unknown>";
@@ -300,7 +304,7 @@ void ZombieObjectCrash(id object, SEL aSelector, SEL viaSelector) {
     // Warn someone if this exceeds the breakpad limits.
     DCHECK_LE(strlen([deallocTrace UTF8String]), 255U);
   }
-  SetCrashKeyValue(@"zombie_dealloc_bt", deallocTrace);
+  base::mac::SetCrashKeyValue(@"zombie_dealloc_bt", deallocTrace);
 
   // Log -dealloc backtrace in debug builds then crash with a useful
   // stack trace.
@@ -450,7 +454,7 @@ bool ZombieEnable(bool zombieAllObjects,
                   size_t zombieCount) {
   // Only allow enable/disable on the main thread, just to keep things
   // simple.
-  CHECK([NSThread isMainThread]);
+  DCHECK([NSThread isMainThread]);
 
   if (!ZombieInit())
     return false;
@@ -472,7 +476,7 @@ bool ZombieEnable(bool zombieAllObjects,
   ZombieRecord* oldZombies = g_zombies;
 
   {
-    base::AutoLock pin(lock_);
+    base::AutoLock pin(g_lock.Get());
 
     // Save the old index in case zombies need to be transferred.
     size_t oldIndex = g_zombieIndex;
@@ -527,7 +531,7 @@ bool ZombieEnable(bool zombieAllObjects,
 void ZombieDisable() {
   // Only allow enable/disable on the main thread, just to keep things
   // simple.
-  CHECK([NSThread isMainThread]);
+  DCHECK([NSThread isMainThread]);
 
   // |ZombieInit()| was never called.
   if (!g_originalDeallocIMP)
@@ -535,7 +539,7 @@ void ZombieDisable() {
 
   // Put back the original implementation of -[NSObject dealloc].
   Method m = class_getInstanceMethod([NSObject class], @selector(dealloc));
-  CHECK(m);
+  DCHECK(m);
   method_setImplementation(m, g_originalDeallocIMP);
 
   // Can safely grab this because it only happens on the main thread.
@@ -543,7 +547,7 @@ void ZombieDisable() {
   ZombieRecord* oldZombies = g_zombies;
 
   {
-    base::AutoLock pin(lock_);  // In case any |-dealloc| are in-progress.
+    base::AutoLock pin(g_lock.Get());  // In case any -dealloc are in progress.
     g_zombieCount = 0;
     g_zombies = NULL;
   }

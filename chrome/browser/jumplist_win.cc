@@ -12,7 +12,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
@@ -34,8 +35,8 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_source.h"
 #include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -44,6 +45,7 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/icon_util.h"
 
+using content::BrowserThread;
 
 namespace {
 
@@ -523,19 +525,19 @@ bool JumpList::AddObserver(Profile* profile) {
     // Register for notification when TopSites changes so that we can update
     // ourself.
     registrar_.Add(this, chrome::NOTIFICATION_TOP_SITES_CHANGED,
-                   Source<history::TopSites>(top_sites));
+                   content::Source<history::TopSites>(top_sites));
     // Register for notification when profile is destroyed to ensure that all
     // observers are detatched at that time.
     registrar_.Add(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
-                   Source<Profile>(profile_));
+                   content::Source<Profile>(profile_));
   }
   tab_restore_service->AddObserver(this);
   return true;
 }
 
 void JumpList::Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
   switch (type) {
     case chrome::NOTIFICATION_TOP_SITES_CHANGED: {
       // Most visited urls changed, query again.
@@ -543,7 +545,8 @@ void JumpList::Observe(int type,
       if (top_sites) {
         top_sites->GetMostVisitedURLs(
             &topsites_consumer_,
-            NewCallback(this, &JumpList::OnMostVisitedURLsAvailable));
+            base::Bind(&JumpList::OnMostVisitedURLsAvailable,
+                       base::Unretained(this)));
       }
       break;
     }
@@ -563,10 +566,12 @@ void JumpList::RemoveObserver() {
         TabRestoreServiceFactory::GetForProfile(profile_);
     if (tab_restore_service)
       tab_restore_service->RemoveObserver(this);
-    registrar_.Remove(this, chrome::NOTIFICATION_TOP_SITES_CHANGED,
-                     Source<history::TopSites>(profile_->GetTopSites()));
-    registrar_.Remove(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
-                     Source<Profile>(profile_));
+    registrar_.Remove(
+        this, chrome::NOTIFICATION_TOP_SITES_CHANGED,
+        content::Source<history::TopSites>(profile_->GetTopSites()));
+    registrar_.Remove(
+        this, chrome::NOTIFICATION_PROFILE_DESTROYED,
+        content::Source<Profile>(profile_));
   }
   profile_ = NULL;
 }
@@ -660,16 +665,12 @@ bool JumpList::AddTab(const TabRestoreService::Tab* tab,
                       size_t max_items) {
   // This code adds the URL and the title strings of the given tab to the
   // specified list.
-  // This code is copied from RecentlyClosedTabsHandler::TabToValue().
-  if (tab->navigations.empty() || list->size() >= max_items)
-    return false;
-
-  const TabNavigation& current_navigation =
-      tab->navigations.at(tab->current_navigation_index);
-  if (current_navigation.virtual_url() == GURL(chrome::kChromeUINewTabURL))
+  if (list->size() >= max_items)
     return false;
 
   scoped_refptr<ShellLinkItem> link(new ShellLinkItem);
+  const TabNavigation& current_navigation =
+      tab->navigations.at(tab->current_navigation_index);
   std::string url = current_navigation.virtual_url().spec();
   link->SetArguments(UTF8ToWide(url));
   link->SetTitle(current_navigation.title());
@@ -678,22 +679,17 @@ bool JumpList::AddTab(const TabRestoreService::Tab* tab,
   return true;
 }
 
-bool JumpList::AddWindow(const TabRestoreService::Window* window,
+void JumpList::AddWindow(const TabRestoreService::Window* window,
                          ShellLinkItemList* list,
                          size_t max_items) {
   // This code enumerates al the tabs in the given window object and add their
   // URLs and titles to the list.
-  // This code is copied from RecentlyClosedTabsHandler::WindowToValue().
-  if (window->tabs.empty()) {
-    NOTREACHED();
-    return false;
-  }
+  DCHECK(!window->tabs.empty());
+
   for (size_t i = 0; i < window->tabs.size(); ++i) {
     if (!AddTab(&window->tabs[i], list, max_items))
-      return false;
+      return;
   }
-
-  return true;
 }
 
 bool JumpList::StartLoadingFavicon() {
@@ -710,7 +706,7 @@ bool JumpList::StartLoadingFavicon() {
       profile_->GetFaviconService(Profile::EXPLICIT_ACCESS);
   handle_ = favicon_service->GetFaviconForURL(
       url, history::FAVICON, &favicon_consumer_,
-      NewCallback(this, &JumpList::OnFaviconDataAvailable));
+      base::Bind(&JumpList::OnFaviconDataAvailable, base::Unretained(this)));
   return true;
 }
 
@@ -742,7 +738,7 @@ void JumpList::OnFaviconDataAvailable(
   // the file thread.
   BrowserThread::PostTask(
       BrowserThread::FILE, FROM_HERE,
-      NewRunnableMethod(this, &JumpList::RunUpdate));
+      base::Bind(&JumpList::RunUpdate, this));
 }
 
 void JumpList::RunUpdate() {

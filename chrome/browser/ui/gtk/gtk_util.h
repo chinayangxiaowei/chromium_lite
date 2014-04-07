@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/string16.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragOperation.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/rect.h"
@@ -25,7 +24,10 @@ class BrowserWindow;
 class GtkThemeService;
 class GURL;
 class Profile;
-struct RendererPreferences;  // from common/renderer_preferences.h
+
+namespace content {
+struct RendererPreferences;
+}
 
 namespace event_utils {
 
@@ -90,12 +92,6 @@ void GetWidgetSizeFromResources(GtkWidget* widget,
 void SetWindowSizeFromResources(GtkWindow* window,
                                 int width_id, int height_id, bool resizable);
 
-// Places |window| approximately over center of |parent|, it also moves window
-// to parent's desktop. Use this only for non-modal dialogs, such as the
-// options window and content settings window; otherwise you should be using
-// transient_for.
-void CenterOverWindow(GtkWindow* window, GtkWindow* parent);
-
 // Puts all browser windows in one window group; this will make any dialog
 // spawned app modal.
 void MakeAppModalWindowGroup();
@@ -134,9 +130,6 @@ void ConvertWidgetPointToScreen(GtkWidget* widget, gfx::Point* p);
 GtkWidget* CenterWidgetInHBox(GtkWidget* hbox, GtkWidget* widget,
                               bool pack_at_end, int padding);
 
-// Returns true if the screen is composited, false otherwise.
-bool IsScreenComposited();
-
 // Enumerates the top-level gdk windows of the current display.
 void EnumerateTopLevelWindows(ui::EnumerateWindowsDelegate* delegate);
 
@@ -156,6 +149,10 @@ void SetButtonTriggersNavigation(GtkWidget* button);
 // Returns the mirrored x value for |bounds| if the layout is RTL; otherwise,
 // the original value is returned unchanged.
 int MirroredLeftPointForRect(GtkWidget* widget, const gfx::Rect& bounds);
+
+// Returns the mirrored right value for |bounds| if the layout is RTL;
+// otherwise, the original value is returned unchanged.
+int MirroredRightPointForRect(GtkWidget* widget, const gfx::Rect& bounds);
 
 // Returns the mirrored x value for the point |x| if the layout is RTL;
 // otherwise, the original value is returned unchanged.
@@ -191,13 +188,7 @@ GtkWidget* IndentWidget(GtkWidget* content);
 
 // Sets (or resets) the font settings in |prefs| (used when creating new
 // renderers) based on GtkSettings (which itself comes from XSETTINGS).
-void UpdateGtkFontSettings(RendererPreferences* prefs);
-
-// Get the current location of the mouse cursor relative to the screen.
-gfx::Point ScreenPoint(GtkWidget* widget);
-
-// Get the current location of the mouse cursor relative to the widget.
-gfx::Point ClientPoint(GtkWidget* widget);
+void UpdateGtkFontSettings(content::RendererPreferences* prefs);
 
 // Reverses a point in RTL mode. Used in making vectors of GdkPoints for window
 // shapes.
@@ -214,6 +205,9 @@ void DrawTextEntryBackground(GtkWidget* offscreen_entry,
                              GtkWidget* widget_to_draw_on,
                              GdkRectangle* dirty_rec,
                              GdkRectangle* rec);
+
+// Set up the text to be displayed by |layout|.
+void SetLayoutText(PangoLayout* layout, const string16& text);
 
 // Draws the background of the toolbar area subject to the expose rectangle
 // |event| and starting image tiling from |tabstrip_origin|.
@@ -254,7 +248,7 @@ WindowOpenDisposition DispositionForCurrentButtonPressEvent();
 bool GrabAllInput(GtkWidget* widget);
 
 // Returns a rectangle that represents the widget's bounds. The rectangle it
-// returns is the same as widget->allocation, but anchored at (0, 0).
+// returns is the same as gtk_widget_get_allocation, but anchored at (0, 0).
 gfx::Rect WidgetBounds(GtkWidget* widget);
 
 // Update the timestamp for the given window. This is usually the time of the
@@ -324,11 +318,6 @@ void SetLabelWidth(GtkWidget* label, int pixel_width);
 // It must be done when the label is mapped (become visible on the screen),
 // to make sure the pango can get correct font information for the calculation.
 void InitLabelSizeRequestAndEllipsizeMode(GtkWidget* label);
-
-// Convenience methods for converting between web drag operations and the GDK
-// equivalent.
-GdkDragAction WebDragOpToGdkDragAction(WebKit::WebDragOperationsMask op);
-WebKit::WebDragOperationsMask GdkDragActionToWebDragOp(GdkDragAction action);
 
 // A helper function for gtk_message_dialog_new() to work around a few KDE 3
 // window manager bugs. You should always call it after creating a dialog with

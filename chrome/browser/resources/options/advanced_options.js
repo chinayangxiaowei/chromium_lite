@@ -63,6 +63,11 @@ var OptionsPage = options.OptionsPage;
         chrome.send('defaultFontSizeAction',
             [String(event.target.options[event.target.selectedIndex].value)]);
       };
+      $('defaultZoomFactor').onchange = function(event) {
+        chrome.send('defaultZoomFactorAction',
+            [String(event.target.options[event.target.selectedIndex].value)]);
+      };
+
       $('language-button').onclick = function(event) {
         OptionsPage.navigateToPage('languages');
         chrome.send('coreOptionsUserMetricsAction',
@@ -88,10 +93,10 @@ var OptionsPage = options.OptionsPage;
         $('downloadLocationChangeButton').onclick = function(event) {
           chrome.send('selectDownloadLocation');
         };
-        $('promptForDownload').onclick = function(event) {
-          chrome.send('promptForDownloadAction',
-              [String($('promptForDownload').checked)]);
-        };
+        // This text field is always disabled. Setting ".disabled = true" isn't
+        // enough, since a policy can disable it but shouldn't re-enable when
+        // it is removed.
+        $('downloadLocationPath').setDisabled('readonly', true);
       }
 
       $('sslCheckRevocation').onclick = function(event) {
@@ -109,19 +114,19 @@ var OptionsPage = options.OptionsPage;
       // 'cloudPrintProxyEnabled' is true for Chrome branded builds on
       // certain platforms, or could be enabled by a lab.
       if (!cr.isChromeOS) {
-        $('cloudPrintProxySetupButton').onclick = function(event) {
-          if ($('cloudPrintProxyManageButton').style.display == 'none') {
+        $('cloudPrintConnectorSetupButton').onclick = function(event) {
+          if ($('cloudPrintManageButton').style.display == 'none') {
             // Disable the button, set it's text to the intermediate state.
-            $('cloudPrintProxySetupButton').textContent =
-              localStrings.getString('cloudPrintProxyEnablingButton');
-            $('cloudPrintProxySetupButton').disabled = true;
+            $('cloudPrintConnectorSetupButton').textContent =
+              localStrings.getString('cloudPrintConnectorEnablingButton');
+            $('cloudPrintConnectorSetupButton').disabled = true;
             chrome.send('showCloudPrintSetupDialog');
           } else {
-            chrome.send('disableCloudPrintProxy');
+            chrome.send('disableCloudPrintConnector');
           }
         };
       }
-      $('cloudPrintProxyManageButton').onclick = function(event) {
+      $('cloudPrintManageButton').onclick = function(event) {
         chrome.send('showCloudPrintManagePage');
       };
 
@@ -171,23 +176,27 @@ var OptionsPage = options.OptionsPage;
     $('Custom').selected = true;
   };
 
-  // Set the download path.
-  AdvancedOptions.SetDownloadLocationPath = function(path, disabled) {
-    if (!cr.isChromeOS) {
-      $('downloadLocationPath').value = path;
-      $('downloadLocationChangeButton').disabled = disabled;
-    }
-  };
+  /**
+    * Populate the page zoom selector with values received from the caller.
+    * @param {Array} items An array of items to populate the selector.
+    *     each object is an array with three elements as follows:
+    *       0: The title of the item (string).
+    *       1: The value of the item (number).
+    *       2: Whether the item should be selected (boolean).
+    */
+  AdvancedOptions.SetupPageZoomSelector = function(items) {
+    var element = $('defaultZoomFactor');
 
-  // Set the prompt for download checkbox.
-  AdvancedOptions.SetPromptForDownload = function(checked, disabled) {
-    if (!cr.isChromeOS) {
-      $('promptForDownload').checked = checked;
-      $('promptForDownload').disabled = disabled;
-      if (disabled)
-        $('promptForDownloadLabel').className = 'informational-text';
-      else
-        $('promptForDownloadLabel').className = '';
+    // Remove any existing content.
+    element.textContent = '';
+
+    // Insert new child nodes into select element.
+    var value, title, selected;
+    for (var i = 0; i < items.length; i++) {
+      title = items[i][0];
+      value = items[i][1];
+      selected = items[i][2];
+      element.appendChild(new Option(title, value, false, selected));
     }
   };
 
@@ -224,28 +233,28 @@ var OptionsPage = options.OptionsPage;
   };
 
   // Set the Cloud Print proxy UI to enabled, disabled, or processing.
-  AdvancedOptions.SetupCloudPrintProxySection = function(
+  AdvancedOptions.SetupCloudPrintConnectorSection = function(
         disabled, label, allowed) {
     if (!cr.isChromeOS) {
-      $('cloudPrintProxyLabel').textContent = label;
+      $('cloudPrintConnectorLabel').textContent = label;
       if (disabled || !allowed) {
-        $('cloudPrintProxySetupButton').textContent =
-          localStrings.getString('cloudPrintProxyDisabledButton');
-        $('cloudPrintProxyManageButton').style.display = 'none';
+        $('cloudPrintConnectorSetupButton').textContent =
+          localStrings.getString('cloudPrintConnectorDisabledButton');
+        $('cloudPrintManageButton').style.display = 'none';
       } else {
-        $('cloudPrintProxySetupButton').textContent =
-          localStrings.getString('cloudPrintProxyEnabledButton');
-        $('cloudPrintProxyManageButton').style.display = 'inline';
+        $('cloudPrintConnectorSetupButton').textContent =
+          localStrings.getString('cloudPrintConnectorEnabledButton');
+        $('cloudPrintManageButton').style.display = 'inline';
       }
-      $('cloudPrintProxySetupButton').disabled = !allowed;
+      $('cloudPrintConnectorSetupButton').disabled = !allowed;
     }
   };
 
-  AdvancedOptions.RemoveCloudPrintProxySection = function() {
+  AdvancedOptions.RemoveCloudPrintConnectorSection = function() {
     if (!cr.isChromeOS) {
-      var proxySectionElm = $('cloud-print-proxy-section');
-      if (proxySectionElm)
-        proxySectionElm.parentNode.removeChild(proxySectionElm);
+      var connectorSectionElm = $('cloud-print-connector-section');
+      if (connectorSectionElm)
+        connectorSectionElm.parentNode.removeChild(connectorSectionElm);
     }
   };
 

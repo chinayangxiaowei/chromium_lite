@@ -1,11 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/renderer/chrome_render_process_observer.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/message_loop.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
 #include "base/native_library.h"
@@ -20,23 +23,21 @@
 #include "chrome/renderer/chrome_content_renderer_client.h"
 #include "chrome/renderer/content_settings_observer.h"
 #include "chrome/renderer/security_filter_peer.h"
-#include "content/common/resource_dispatcher.h"
-#include "content/common/resource_dispatcher_delegate.h"
-#include "content/common/view_messages.h"
-#include "content/renderer/render_thread.h"
-#include "content/renderer/render_view.h"
-#include "content/renderer/render_view_visitor.h"
+#include "content/public/common/resource_dispatcher_delegate.h"
+#include "content/public/renderer/render_thread.h"
+#include "content/public/renderer/render_view_visitor.h"
+#include "content/public/renderer/render_view.h"
 #include "crypto/nss_util.h"
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_module.h"
 #include "third_party/sqlite/sqlite3.h"
-#include "third_party/tcmalloc/chromium/src/google/malloc_extension.h"
 #include "third_party/tcmalloc/chromium/src/google/heap-profiler.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
+#include "third_party/tcmalloc/chromium/src/google/malloc_extension.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCache.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCrossOriginPreflightResultCache.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFontCache.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebRuntimeFeatures.h"
@@ -51,15 +52,16 @@ using WebKit::WebCache;
 using WebKit::WebCrossOriginPreflightResultCache;
 using WebKit::WebFontCache;
 using WebKit::WebRuntimeFeatures;
+using content::RenderThread;
 
 namespace {
 
-static const unsigned int kCacheStatsDelayMS = 2000 /* milliseconds */;
+static const int kCacheStatsDelayMS = 2000;
 
-class RendererResourceDelegate : public ResourceDispatcherDelegate {
+class RendererResourceDelegate : public content::ResourceDispatcherDelegate {
  public:
   RendererResourceDelegate()
-      : ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   }
 
   virtual webkit_glue::ResourceLoaderBridge::Peer* OnRequestComplete(
@@ -68,22 +70,22 @@ class RendererResourceDelegate : public ResourceDispatcherDelegate {
       const net::URLRequestStatus& status) {
     // Update the browser about our cache.
     // Rate limit informing the host of our cache stats.
-    if (method_factory_.empty()) {
+    if (!weak_factory_.HasWeakPtrs()) {
       MessageLoop::current()->PostDelayedTask(
          FROM_HERE,
-         method_factory_.NewRunnableMethod(
-             &RendererResourceDelegate::InformHostOfCacheStats),
-         kCacheStatsDelayMS);
+         base::Bind(&RendererResourceDelegate::InformHostOfCacheStats,
+                    weak_factory_.GetWeakPtr()),
+         base::TimeDelta::FromMilliseconds(kCacheStatsDelayMS));
     }
 
     if (status.status() != net::URLRequestStatus::CANCELED ||
-        status.os_error() == net::ERR_ABORTED) {
+        status.error() == net::ERR_ABORTED) {
       return NULL;
     }
 
     // Resource canceled with a specific error are filtered.
     return SecurityFilterPeer::CreateSecurityFilterPeerForDeniedRequest(
-        resource_type, current_peer, status.os_error());
+        resource_type, current_peer, status.error());
   }
 
   virtual webkit_glue::ResourceLoaderBridge::Peer* OnReceivedResponse(
@@ -91,43 +93,19 @@ class RendererResourceDelegate : public ResourceDispatcherDelegate {
       const std::string& mime_type,
       const GURL& url) {
     return ExtensionLocalizationPeer::CreateExtensionLocalizationPeer(
-        current_peer, RenderThread::current(), mime_type, url);
+        current_peer, RenderThread::Get(), mime_type, url);
   }
 
  private:
   void InformHostOfCacheStats() {
     WebCache::UsageStats stats;
     WebCache::getUsageStats(&stats);
-    RenderThread::current()->Send(new ChromeViewHostMsg_UpdatedCacheStats(
-        stats));
+    RenderThread::Get()->Send(new ChromeViewHostMsg_UpdatedCacheStats(stats));
   }
 
-  ScopedRunnableMethodFactory<RendererResourceDelegate> method_factory_;
+  base::WeakPtrFactory<RendererResourceDelegate> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(RendererResourceDelegate);
-};
-
-class RenderViewContentSettingsSetter : public RenderViewVisitor {
- public:
-  RenderViewContentSettingsSetter(const GURL& url,
-                                  const ContentSettings& content_settings)
-      : url_(url),
-        content_settings_(content_settings) {
-  }
-
-  virtual bool Visit(RenderView* render_view) {
-    if (GURL(render_view->webview()->mainFrame()->document().url()) == url_) {
-      ContentSettingsObserver::Get(render_view)->SetContentSettings(
-          content_settings_);
-    }
-    return true;
-  }
-
- private:
-  GURL url_;
-  ContentSettings content_settings_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderViewContentSettingsSetter);
 };
 
 #if defined(OS_WIN)
@@ -158,8 +136,9 @@ DWORD WINAPI GetFontDataPatch(HDC hdc,
     LOGFONT logfont;
     if (GetObject(font, sizeof(LOGFONT), &logfont)) {
       std::vector<char> font_data;
-      if (RenderThread::current()->Send(new ViewHostMsg_PreCacheFont(logfont)))
-        rv = GetFontData(hdc, table, offset, buffer, length);
+      RenderThread::Get()->PreCacheFont(logfont);
+      rv = GetFontData(hdc, table, offset, buffer, length);
+      RenderThread::Get()->ReleaseCachedFonts();
     }
   }
   return rv;
@@ -195,7 +174,8 @@ bool ChromeRenderProcessObserver::is_incognito_process_ = false;
 
 ChromeRenderProcessObserver::ChromeRenderProcessObserver(
     chrome::ChromeContentRendererClient* client)
-    : client_(client) {
+    : client_(client),
+      clear_cache_pending_(false) {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
   if (command_line.HasSwitch(switches::kEnableWatchdog)) {
     // TODO(JAR): Need to implement renderer IO msgloop watchdog.
@@ -205,9 +185,9 @@ ChromeRenderProcessObserver::ChromeRenderProcessObserver(
     base::StatisticsRecorder::set_dump_on_exit(true);
   }
 
-  RenderThread* thread = RenderThread::current();
+  RenderThread* thread = RenderThread::Get();
   resource_delegate_.reset(new RendererResourceDelegate());
-  thread->resource_dispatcher()->set_delegate(resource_delegate_.get());
+  thread->SetResourceDispatcherDelegate(resource_delegate_.get());
 
 #if defined(OS_POSIX)
   thread->AddFilter(new SuicideOnChannelErrorFilter());
@@ -261,10 +241,6 @@ bool ChromeRenderProcessObserver::OnControlMessageReceived(
   IPC_BEGIN_MESSAGE_MAP(ChromeRenderProcessObserver, message)
     IPC_MESSAGE_HANDLER(ChromeViewMsg_SetIsIncognitoProcess,
                         OnSetIsIncognitoProcess)
-    IPC_MESSAGE_HANDLER(ChromeViewMsg_SetDefaultContentSettings,
-                        OnSetDefaultContentSettings)
-    IPC_MESSAGE_HANDLER(ChromeViewMsg_SetContentSettingsForCurrentURL,
-                        OnSetContentSettingsForCurrentURL)
     IPC_MESSAGE_HANDLER(ChromeViewMsg_SetCacheCapacities, OnSetCacheCapacities)
     IPC_MESSAGE_HANDLER(ChromeViewMsg_ClearCache, OnClearCache)
     IPC_MESSAGE_HANDLER(ChromeViewMsg_SetFieldTrialGroup, OnSetFieldTrialGroup)
@@ -280,6 +256,8 @@ bool ChromeRenderProcessObserver::OnControlMessageReceived(
     IPC_MESSAGE_HANDLER(ChromeViewMsg_GetCacheResourceStats,
                         OnGetCacheResourceStats)
     IPC_MESSAGE_HANDLER(ChromeViewMsg_PurgeMemory, OnPurgeMemory)
+    IPC_MESSAGE_HANDLER(ChromeViewMsg_SetContentSettingRules,
+                        OnSetContentSettingRules)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -294,16 +272,9 @@ void ChromeRenderProcessObserver::OnSetIsIncognitoProcess(
   is_incognito_process_ = is_incognito_process;
 }
 
-void ChromeRenderProcessObserver::OnSetContentSettingsForCurrentURL(
-    const GURL& url,
-    const ContentSettings& content_settings) {
-  RenderViewContentSettingsSetter setter(url, content_settings);
-  RenderView::ForEach(&setter);
-}
-
-void ChromeRenderProcessObserver::OnSetDefaultContentSettings(
-    const ContentSettings& content_settings) {
-  ContentSettingsObserver::SetDefaultContentSettings(content_settings);
+void ChromeRenderProcessObserver::OnSetContentSettingRules(
+    const RendererContentSettingRules& rules) {
+  content_setting_rules_ = rules;
 }
 
 void ChromeRenderProcessObserver::OnSetCacheCapacities(size_t min_dead_capacity,
@@ -313,14 +284,18 @@ void ChromeRenderProcessObserver::OnSetCacheCapacities(size_t min_dead_capacity,
       min_dead_capacity, max_dead_capacity, capacity);
 }
 
-void ChromeRenderProcessObserver::OnClearCache() {
-  WebCache::clear();
+void ChromeRenderProcessObserver::OnClearCache(bool on_navigation) {
+  if (on_navigation) {
+    clear_cache_pending_ = true;
+  } else {
+    WebCache::clear();
+  }
 }
 
 void ChromeRenderProcessObserver::OnGetCacheResourceStats() {
   WebCache::ResourceTypeStats stats;
   WebCache::getResourceTypeStats(&stats);
-  Send(new ChromeViewHostMsg_ResourceTypeStats(stats));
+  RenderThread::Get()->Send(new ChromeViewHostMsg_ResourceTypeStats(stats));
 }
 
 #if defined(USE_TCMALLOC)
@@ -329,7 +304,7 @@ void ChromeRenderProcessObserver::OnGetRendererTcmalloc() {
   char buffer[1024 * 32];
   MallocExtension::instance()->GetStats(buffer, sizeof(buffer));
   result.append(buffer);
-  Send(new ChromeViewHostMsg_RendererTcmalloc(result));
+  RenderThread::Get()->Send(new ChromeViewHostMsg_RendererTcmalloc(result));
 }
 
 void ChromeRenderProcessObserver::OnSetTcmallocHeapProfiling(
@@ -358,7 +333,8 @@ void ChromeRenderProcessObserver::OnWriteTcmallocHeapProfile(
   // a string and pass it to the handler (which runs on the browser host).
   std::string result(profile);
   delete profile;
-  Send(new ChromeViewHostMsg_WriteTcmallocHeapProfile_ACK(filename, result));
+  RenderThread::Get()->Send(
+      new ChromeViewHostMsg_WriteTcmallocHeapProfile_ACK(filename, result));
 #endif
 }
 
@@ -373,11 +349,13 @@ void ChromeRenderProcessObserver::OnSetFieldTrialGroup(
 void ChromeRenderProcessObserver::OnGetV8HeapStats() {
   v8::HeapStatistics heap_stats;
   v8::V8::GetHeapStatistics(&heap_stats);
-  Send(new ChromeViewHostMsg_V8HeapStats(heap_stats.total_heap_size(),
-                                         heap_stats.used_heap_size()));
+  RenderThread::Get()->Send(new ChromeViewHostMsg_V8HeapStats(
+      heap_stats.total_heap_size(), heap_stats.used_heap_size()));
 }
 
 void ChromeRenderProcessObserver::OnPurgeMemory() {
+  RenderThread::Get()->EnsureWebKitInitialized();
+
   // Clear the object cache (as much as possible; some live objects cannot be
   // freed).
   WebCache::clear();
@@ -393,12 +371,7 @@ void ChromeRenderProcessObserver::OnPurgeMemory() {
   while (sqlite3_release_memory(std::numeric_limits<int>::max()) > 0) {
   }
 
-  // Repeatedly call the V8 idle notification until it returns true ("nothing
-  // more to free").  Note that it makes more sense to do this than to implement
-  // a new "delete everything" pass because object references make it difficult
-  // to free everything possible in just one pass.
-  while (!v8::V8::IdleNotification()) {
-  }
+  v8::V8::LowMemoryNotification();
 
 #if !defined(OS_MACOSX) && defined(USE_TCMALLOC)
   // Tell tcmalloc to release any free pages it's still holding.
@@ -407,4 +380,16 @@ void ChromeRenderProcessObserver::OnPurgeMemory() {
 
   if (client_)
     client_->OnPurgeMemory();
+}
+
+void ChromeRenderProcessObserver::ExecutePendingClearCache() {
+  if (clear_cache_pending_) {
+    clear_cache_pending_ = false;
+    WebCache::clear();
+  }
+}
+
+const RendererContentSettingRules*
+ChromeRenderProcessObserver::content_setting_rules() const {
+  return &content_setting_rules_;
 }

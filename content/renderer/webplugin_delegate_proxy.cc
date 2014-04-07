@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #if defined(TOOLKIT_USES_GTK)
 #include <gtk/gtk.h>
+#elif defined(USE_X11)
+#include <cairo/cairo.h>
 #endif
 
 #include <algorithm>
@@ -21,25 +23,25 @@
 #include "base/utf_string_conversions.h"
 #include "base/version.h"
 #include "content/common/child_process.h"
+#include "content/common/npobject_proxy.h"
+#include "content/common/npobject_stub.h"
+#include "content/common/npobject_util.h"
 #include "content/common/plugin_messages.h"
 #include "content/common/view_messages.h"
-#include "content/plugin/npobject_proxy.h"
-#include "content/plugin/npobject_stub.h"
-#include "content/plugin/npobject_util.h"
+#include "content/public/renderer/content_renderer_client.h"
 #include "content/renderer/gpu/command_buffer_proxy.h"
-#include "content/renderer/content_renderer_client.h"
 #include "content/renderer/plugin_channel_host.h"
-#include "content/renderer/render_thread.h"
-#include "content/renderer/render_view.h"
+#include "content/renderer/render_thread_impl.h"
+#include "content/renderer/render_view_impl.h"
 #include "ipc/ipc_channel_handle.h"
 #include "net/base/mime_util.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragData.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebDragData.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "ui/gfx/blit.h"
 #include "ui/gfx/canvas_skia.h"
@@ -163,10 +165,13 @@ class ResourceClientProxy : public webkit::npapi::WebPluginResourceClient {
 
 WebPluginDelegateProxy::WebPluginDelegateProxy(
     const std::string& mime_type,
-    const base::WeakPtr<RenderView>& render_view)
+    const base::WeakPtr<RenderViewImpl>& render_view)
     : render_view_(render_view),
       plugin_(NULL),
       uses_shared_bitmaps_(false),
+#if defined(OS_MACOSX)
+      uses_compositor_(false),
+#endif
       window_(gfx::kNullPluginWindow),
       mime_type_(mime_type),
       instance_id_(MSG_ROUTING_NONE),
@@ -188,7 +193,7 @@ WebPluginDelegateProxy::SharedBitmap::SharedBitmap() {}
 WebPluginDelegateProxy::SharedBitmap::~SharedBitmap() {}
 
 void WebPluginDelegateProxy::PluginDestroyed() {
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_WIN)
   // Ensure that the renderer doesn't think the plugin still has focus.
   if (render_view_)
     render_view_->PluginFocusChanged(false, instance_id_);
@@ -260,22 +265,6 @@ static bool SilverlightColorIsTransparent(const std::string& color) {
   return false;
 }
 
-#if defined(OS_MACOSX)
-// Returns true if the given Flash version assumes QuickDraw support is present
-// instead of checking using the negotiation system.
-static bool FlashVersionAssumesQuickDrawSupport(const string16& version) {
-  scoped_ptr<Version> plugin_version(
-      webkit::npapi::PluginGroup::CreateVersionFromString(version));
-  if (plugin_version.get() && plugin_version->components().size() >= 2) {
-    uint16 major = plugin_version->components()[0];
-    uint16 minor = plugin_version->components()[1];
-    return major < 10 || (major == 10 && minor < 3);
-  }
-  // If parsing fails for some reason, assume the best.
-  return false;
-}
-#endif
-
 bool WebPluginDelegateProxy::Initialize(
     const GURL& url,
     const std::vector<std::string>& arg_names,
@@ -283,7 +272,7 @@ bool WebPluginDelegateProxy::Initialize(
     webkit::npapi::WebPlugin* plugin,
     bool load_manually) {
   IPC::ChannelHandle channel_handle;
-  if (!RenderThread::current()->Send(new ViewHostMsg_OpenChannelToPlugin(
+  if (!RenderThreadImpl::current()->Send(new ViewHostMsg_OpenChannelToPlugin(
           render_view_->routing_id(), url, page_url_, mime_type_,
           &channel_handle, &info_))) {
     return false;
@@ -341,18 +330,6 @@ bool WebPluginDelegateProxy::Initialize(
       transparent_ = true;
     }
   }
-#if defined(OS_MACOSX)
-  // Older versions of Flash just assume QuickDraw support during negotiation,
-  // so force everything but transparent mode to use opaque mode on 10.5
-  // (where Flash doesn't use CA) to prevent QuickDraw from being used.
-  // TODO(stuartmorgan): Remove this code once the two latest major Flash
-  // releases negotiate correctly.
-  if (flash && !transparent_ && base::mac::IsOSLeopardOrEarlier() &&
-      FlashVersionAssumesQuickDrawSupport(info_.version)) {
-    params.arg_names.push_back("wmode");
-    params.arg_values.push_back("opaque");
-  }
-#endif
   params.load_manually = load_manually;
 
   plugin_ = plugin;
@@ -423,6 +400,8 @@ bool WebPluginDelegateProxy::OnMessageReceived(const IPC::Message& msg) {
 #if defined(OS_WIN)
     IPC_MESSAGE_HANDLER(PluginHostMsg_SetWindowlessPumpEvent,
                         OnSetWindowlessPumpEvent)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_NotifyIMEStatus,
+                        OnNotifyIMEStatus)
 #endif
     IPC_MESSAGE_HANDLER(PluginHostMsg_CancelResource, OnCancelResource)
     IPC_MESSAGE_HANDLER(PluginHostMsg_InvalidateRect, OnInvalidateRect)
@@ -459,6 +438,13 @@ bool WebPluginDelegateProxy::OnMessageReceived(const IPC::Message& msg) {
                         OnAcceleratedSurfaceFreeTransportDIB)
     IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedSurfaceBuffersSwapped,
                         OnAcceleratedSurfaceBuffersSwapped)
+    // Used only on 10.6 and later.
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedPluginEnabledRendering,
+                        OnAcceleratedPluginEnabledRendering)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedPluginAllocatedIOSurface,
+                        OnAcceleratedPluginAllocatedIOSurface)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedPluginSwappedIOSurface,
+                        OnAcceleratedPluginSwappedIOSurface)
 #endif
     IPC_MESSAGE_HANDLER(PluginHostMsg_URLRedirectResponse,
                         OnURLRedirectResponse)
@@ -480,7 +466,7 @@ void WebPluginDelegateProxy::OnChannelError() {
   if (!channel_host_->expecting_shutdown())
     render_view_->PluginCrashed(info_.path);
 
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_WIN)
   // Ensure that the renderer doesn't think the plugin still has focus.
   if (render_view_)
     render_view_->PluginFocusChanged(false, instance_id_);
@@ -648,7 +634,7 @@ bool WebPluginDelegateProxy::CreateSharedBitmap(
 #if defined(OS_MACOSX)
   TransportDIB::Handle handle;
   IPC::Message* msg = new ViewHostMsg_AllocTransportDIB(size, false, &handle);
-  if (!RenderThread::current()->Send(msg))
+  if (!RenderThreadImpl::current()->Send(msg))
     return false;
   if (handle.fd < 0)
     return false;
@@ -765,6 +751,9 @@ void WebPluginDelegateProxy::Paint(WebKit::WebCanvas* canvas,
 bool WebPluginDelegateProxy::BackgroundChanged(
     gfx::NativeDrawingContext context,
     const gfx::Rect& rect) {
+#if defined(OS_ANDROID)
+  NOTIMPLEMENTED();
+#else
 #if defined(OS_WIN)
   HBITMAP hbitmap = static_cast<HBITMAP>(GetCurrentObject(context, OBJ_BITMAP));
   if (hbitmap == NULL) {
@@ -904,6 +893,7 @@ bool WebPluginDelegateProxy::BackgroundChanged(
       return true;
   }
 #endif
+#endif  // OS_ANDROID
 
   return false;
 }
@@ -937,6 +927,10 @@ void WebPluginDelegateProxy::DidFinishLoadWithReason(
 
 void WebPluginDelegateProxy::SetFocus(bool focused) {
   Send(new PluginMsg_SetFocus(instance_id_, focused));
+#if defined(OS_WIN)
+  if (render_view_)
+    render_view_->PluginFocusChanged(focused, instance_id_);
+#endif
 }
 
 bool WebPluginDelegateProxy::HandleInputEvent(
@@ -968,6 +962,35 @@ void WebPluginDelegateProxy::SetContentAreaFocus(bool has_focus) {
   msg->set_unblock(true);
   Send(msg);
 }
+
+#if defined(OS_WIN)
+void WebPluginDelegateProxy::ImeCompositionUpdated(
+    const string16& text,
+    const std::vector<int>& clauses,
+    const std::vector<int>& target,
+    int cursor_position,
+    int plugin_id) {
+  // Dispatch the raw IME data if this plug-in is the focused one.
+  if (instance_id_ != plugin_id)
+    return;
+
+  IPC::Message* msg = new PluginMsg_ImeCompositionUpdated(instance_id_,
+      text, clauses, target, cursor_position);
+  msg->set_unblock(true);
+  Send(msg);
+}
+
+void WebPluginDelegateProxy::ImeCompositionCompleted(const string16& text,
+                                                     int plugin_id) {
+  // Dispatch the IME text if this plug-in is the focused one.
+  if (instance_id_ != plugin_id)
+    return;
+
+  IPC::Message* msg = new PluginMsg_ImeCompositionCompleted(instance_id_, text);
+  msg->set_unblock(true);
+  Send(msg);
+}
+#endif
 
 #if defined(OS_MACOSX)
 void WebPluginDelegateProxy::SetWindowFocus(bool window_has_focus) {
@@ -1021,7 +1044,11 @@ void WebPluginDelegateProxy::ImeCompositionCompleted(const string16& text,
 #endif  // OS_MACOSX
 
 void WebPluginDelegateProxy::OnSetWindow(gfx::PluginWindowHandle window) {
+#if defined(OS_MACOSX)
+  uses_shared_bitmaps_ = !window && !uses_compositor_;
+#else
   uses_shared_bitmaps_ = !window;
+#endif
   window_ = window;
   if (plugin_)
     plugin_->SetWindow(window);
@@ -1053,6 +1080,20 @@ void WebPluginDelegateProxy::OnSetWindowlessPumpEvent(
 
   modal_loop_pump_messages_event_.reset(
       new base::WaitableEvent(modal_loop_pump_messages_event));
+}
+
+void WebPluginDelegateProxy::OnNotifyIMEStatus(int input_type,
+                                               const gfx::Rect& caret_rect) {
+  if (!render_view_)
+    return;
+
+  render_view_->Send(new ViewHostMsg_TextInputStateChanged(
+      render_view_->routing_id(),
+      static_cast<ui::TextInputType>(input_type),
+      true));
+
+  render_view_->Send(new ViewHostMsg_SelectionBoundsChanged(
+      render_view_->routing_id(), caret_rect, caret_rect));
 }
 #endif
 
@@ -1099,7 +1140,7 @@ void WebPluginDelegateProxy::OnResolveProxy(const GURL& url,
                                             bool* result,
                                             std::string* proxy_list) {
   *result = false;
-  RenderThread::current()->Send(
+  RenderThreadImpl::current()->Send(
       new ViewHostMsg_ResolveProxy(url, result, proxy_list));
 }
 
@@ -1359,9 +1400,27 @@ void WebPluginDelegateProxy::OnAcceleratedSurfaceFreeTransportDIB(
 }
 
 void WebPluginDelegateProxy::OnAcceleratedSurfaceBuffersSwapped(
-    gfx::PluginWindowHandle window, uint64 surface_id) {
+    gfx::PluginWindowHandle window, uint64 surface_handle) {
   if (render_view_)
-    render_view_->AcceleratedSurfaceBuffersSwapped(window, surface_id);
+    render_view_->AcceleratedSurfaceBuffersSwapped(window, surface_handle);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedPluginEnabledRendering() {
+  uses_compositor_ = true;
+  OnSetWindow(NULL);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedPluginAllocatedIOSurface(
+    int32 width,
+    int32 height,
+    uint32 surface_id) {
+  if (plugin_)
+    plugin_->AcceleratedPluginAllocatedIOSurface(width, height, surface_id);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedPluginSwappedIOSurface() {
+  if (plugin_)
+    plugin_->AcceleratedPluginSwappedIOSurface();
 }
 #endif
 

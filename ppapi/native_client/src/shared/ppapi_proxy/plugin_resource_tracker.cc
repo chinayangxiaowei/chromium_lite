@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 
+#include "base/basictypes.h"
 #include "native_client/src/include/nacl_macros.h"
 #include "native_client/src/include/portability.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_globals.h"
@@ -15,6 +16,12 @@
 #include "ppapi/c/pp_resource.h"
 
 namespace ppapi_proxy {
+
+// static
+PluginResourceTracker* PluginResourceTracker::Get() {
+  CR_DEFINE_STATIC_LOCAL(PluginResourceTracker, tracker, ());
+  return &tracker;
+}
 
 PluginResourceTracker::ResourceAndRefCounts::ResourceAndRefCounts(
     PluginResource* r, size_t browser_count)
@@ -33,7 +40,7 @@ scoped_refptr<PluginResource> PluginResourceTracker::GetExistingResource(
     return result->second.resource;
 }
 
-PluginResourceTracker::PluginResourceTracker() {
+PluginResourceTracker::PluginResourceTracker() : last_id_(0) {
 }
 
 void PluginResourceTracker::AddResource(PluginResource* resource,

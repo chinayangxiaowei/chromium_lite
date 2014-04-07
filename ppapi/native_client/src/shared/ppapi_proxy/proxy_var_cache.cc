@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Native Client Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,17 @@ namespace ppapi_proxy {
 namespace {
 
 pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+
+// Convert the given SharedProxyVar to a PP_Var, incrementing the reference
+// count by 1.
+PP_Var GetPPVar(const SharedProxyVar& proxy_var) {
+  PP_Var var;
+  var.type = proxy_var->pp_var_type();
+  var.padding = 0;
+  var.value.as_id = proxy_var->id();
+  proxy_var->AddRef();
+  return var;
+}
 
 }  // namespace
 
@@ -84,6 +95,17 @@ SharedProxyVar ProxyVarCache::SharedProxyVarForVar(PP_Var pp_var) const {
   }
   pthread_mutex_unlock(&mu);
   return proxy_var;
+}
+
+std::vector<PP_Var> ProxyVarCache::GetLiveVars() {
+  std::vector<PP_Var> live_vars;
+  pthread_mutex_lock(&mu);
+  for (ProxyVarDictionary::const_iterator iter(proxy_var_cache_.begin());
+       iter != proxy_var_cache_.end();
+       ++iter)
+    live_vars.push_back(GetPPVar(iter->second));
+  pthread_mutex_unlock(&mu);
+  return live_vars;
 }
 
 }  // namespace ppapi_proxy

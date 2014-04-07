@@ -6,16 +6,14 @@
 #define CHROME_BROWSER_UI_GTK_INFOBARS_EXTENSION_INFOBAR_GTK_H_
 #pragma once
 
+#include "base/compiler_specific.h"
 #include "chrome/browser/extensions/extension_infobar_delegate.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
 #include "chrome/browser/ui/gtk/extensions/extension_view_gtk.h"
 #include "chrome/browser/ui/gtk/infobars/infobar_gtk.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
-#include "ui/base/gtk/gtk_signal_registrar.h"
 #include "ui/gfx/gtk_util.h"
 
-class ExtensionContextMenuModel;
-class ExtensionInfobarDelegate;
 class ExtensionResource;
 class ExtensionViewGtk;
 class MenuGtk;
@@ -24,25 +22,25 @@ class ExtensionInfoBarGtk : public InfoBarGtk,
                             public ImageLoadingTracker::Observer,
                             public MenuGtk::Delegate {
  public:
-  ExtensionInfoBarGtk(TabContentsWrapper* owner,
+  ExtensionInfoBarGtk(InfoBarTabHelper* owner,
                       ExtensionInfoBarDelegate* delegate);
   virtual ~ExtensionInfoBarGtk();
 
   // Overridden from InfoBar (through InfoBarGtk):
-  virtual void PlatformSpecificHide(bool animate);
+  virtual void PlatformSpecificHide(bool animate) OVERRIDE;
 
   // Overridden from InfoBarGtk:
   virtual void GetTopColor(InfoBarDelegate::Type type,
-                           double* r, double* g, double* b);
+                           double* r, double* g, double* b) OVERRIDE;
   virtual void GetBottomColor(InfoBarDelegate::Type type,
-                              double* r, double* g, double* b);
+                              double* r, double* g, double* b) OVERRIDE;
 
   // Overridden from ImageLoadingTracker::Observer:
   virtual void OnImageLoaded(
-      SkBitmap* image, const ExtensionResource& resource, int index);
+      SkBitmap* image, const ExtensionResource& resource, int index) OVERRIDE;
 
   // Overridden from MenuGtk::Delegate:
-  virtual void StoppedShowing();
+  virtual void StoppedShowing() OVERRIDE;
 
  private:
   // Build the widgets of the Infobar.
@@ -52,9 +50,9 @@ class ExtensionInfoBarGtk : public InfoBarGtk,
   // NULL if we aren't attached.
   Browser* GetBrowser();
 
-  // Returns the context menu for this extension. Can be NULL if extension
-  // context menus are disabled.
-  MenuGtk* BuildMenu();
+  // Returns the context menu model for this extension. Can be NULL if
+  // extension context menus are disabled.
+  ui::MenuModel* BuildMenuModel();
 
   CHROMEGTK_CALLBACK_1(ExtensionInfoBarGtk, void, OnSizeAllocate,
                        GtkAllocation*);
@@ -82,14 +80,6 @@ class ExtensionInfoBarGtk : public InfoBarGtk,
   // to reattach the view since the alignment_ will have the |hbox_| packing
   // child properties. Reparenting becomes easier too.
   GtkWidget* alignment_;
-
-  // We connect to signals on a gtk object that we only hold a weak reference
-  // to which outlives us.
-  ui::GtkSignalRegistrar signals_;
-
-  // The menu view and model for this extension action.
-  scoped_ptr<MenuGtk> menu_;
-  scoped_refptr<ExtensionContextMenuModel> menu_model_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionInfoBarGtk);
 };

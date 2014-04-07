@@ -11,7 +11,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_source.h"
 
 namespace {
 
@@ -55,10 +55,17 @@ class ResourceChangeObserver : public TaskManagerModelObserver {
 void TaskManagerBrowserTestUtil::WaitForResourceChange(int target_count) {
   TaskManagerModel* model = TaskManager::GetInstance()->model();
 
-  if (model->ResourceCount() == target_count)
-    return;
   ResourceChangeObserver observer(model, target_count);
   model->AddObserver(&observer);
+
+  // Checks that the condition has not been satisfied yet.
+  // This check has to be placed after the installation of the observer,
+  // because resources may change before that.
+  if (model->ResourceCount() == target_count) {
+    model->RemoveObserver(&observer);
+    return;
+  }
+
   ui_test_utils::RunMessageLoop();
   model->RemoveObserver(&observer);
 }
@@ -69,7 +76,7 @@ void TaskManagerBrowserTestUtil::ShowTaskManagerAndWaitForReady(
 #if defined(WEBUI_TASK_MANAGER)
   ui_test_utils::WindowedNotificationObserver observer(
       chrome::NOTIFICATION_TASK_MANAGER_WINDOW_READY,
-      Source<TaskManagerModel>(TaskManager::GetInstance()->model()));
+      content::Source<TaskManagerModel>(TaskManager::GetInstance()->model()));
   browser->window()->ShowTaskManager();
   observer.Wait();
 #else

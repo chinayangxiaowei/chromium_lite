@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include <cstddef>
 
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/tracked.h"
+#include "base/string_number_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/sync/internal_api/change_record.h"
 #include "chrome/browser/sync/js/js_arg_list.h"
 #include "chrome/browser/sync/js/js_event_details.h"
 #include "chrome/browser/sync/js/js_event_handler.h"
@@ -26,34 +28,6 @@ JsSyncManagerObserver::~JsSyncManagerObserver() {}
 void JsSyncManagerObserver::SetJsEventHandler(
     const WeakHandle<JsEventHandler>& event_handler) {
   event_handler_ = event_handler;
-}
-
-void JsSyncManagerObserver::OnChangesApplied(
-    syncable::ModelType model_type,
-    const sync_api::BaseTransaction* trans,
-    const sync_api::SyncManager::ChangeRecord* changes,
-    int change_count) {
-  if (!event_handler_.IsInitialized()) {
-    return;
-  }
-  DictionaryValue details;
-  details.SetString("modelType", syncable::ModelTypeToString(model_type));
-  ListValue* change_values = new ListValue();
-  details.Set("changes", change_values);
-  for (int i = 0; i < change_count; ++i) {
-    change_values->Append(changes[i].ToValue(trans));
-  }
-  HandleJsEvent(FROM_HERE, "onChangesApplied", JsEventDetails(&details));
-}
-
-void JsSyncManagerObserver::OnChangesComplete(
-    syncable::ModelType model_type) {
-  if (!event_handler_.IsInitialized()) {
-    return;
-  }
-  DictionaryValue details;
-  details.SetString("modelType", syncable::ModelTypeToString(model_type));
-  HandleJsEvent(FROM_HERE, "onChangesComplete", JsEventDetails(&details));
 }
 
 void JsSyncManagerObserver::OnSyncCycleCompleted(
@@ -86,7 +60,8 @@ void JsSyncManagerObserver::OnUpdatedToken(const std::string& token) {
 }
 
 void JsSyncManagerObserver::OnPassphraseRequired(
-    sync_api::PassphraseRequiredReason reason) {
+    sync_api::PassphraseRequiredReason reason,
+    const sync_pb::EncryptedData& pending_keys) {
   if (!event_handler_.IsInitialized()) {
     return;
   }
@@ -96,36 +71,44 @@ void JsSyncManagerObserver::OnPassphraseRequired(
   HandleJsEvent(FROM_HERE, "onPassphraseRequired", JsEventDetails(&details));
 }
 
-void JsSyncManagerObserver::OnPassphraseAccepted(
-    const std::string& bootstrap_token) {
+void JsSyncManagerObserver::OnPassphraseAccepted() {
+  if (!event_handler_.IsInitialized()) {
+    return;
+  }
+  DictionaryValue details;
+  HandleJsEvent(FROM_HERE, "onPassphraseAccepted", JsEventDetails(&details));
+}
+
+void JsSyncManagerObserver::OnBootstrapTokenUpdated(
+    const std::string& boostrap_token) {
   if (!event_handler_.IsInitialized()) {
     return;
   }
   DictionaryValue details;
   details.SetString("bootstrapToken", "<redacted>");
-  HandleJsEvent(FROM_HERE, "onPassphraseAccepted", JsEventDetails(&details));
+  HandleJsEvent(FROM_HERE, "OnBootstrapTokenUpdated", JsEventDetails(&details));
 }
 
-void JsSyncManagerObserver::OnEncryptionComplete(
-    const syncable::ModelTypeSet& encrypted_types) {
+void JsSyncManagerObserver::OnEncryptedTypesChanged(
+    syncable::ModelTypeSet encrypted_types,
+    bool encrypt_everything) {
   if (!event_handler_.IsInitialized()) {
     return;
   }
   DictionaryValue details;
   details.Set("encryptedTypes",
                syncable::ModelTypeSetToValue(encrypted_types));
-  HandleJsEvent(FROM_HERE, "onEncryptionComplete", JsEventDetails(&details));
+  details.SetBoolean("encryptEverything", encrypt_everything);
+  HandleJsEvent(FROM_HERE,
+                "onEncryptedTypesChanged", JsEventDetails(&details));
 }
 
-void JsSyncManagerObserver::OnMigrationNeededForTypes(
-    const syncable::ModelTypeSet& types) {
+void JsSyncManagerObserver::OnEncryptionComplete() {
   if (!event_handler_.IsInitialized()) {
     return;
   }
   DictionaryValue details;
-  details.Set("types", syncable::ModelTypeSetToValue(types));
-  HandleJsEvent(FROM_HERE, "onMigrationNeededForTypes",
-                JsEventDetails(&details));
+  HandleJsEvent(FROM_HERE, "onEncryptionComplete", JsEventDetails());
 }
 
 void JsSyncManagerObserver::OnActionableError(

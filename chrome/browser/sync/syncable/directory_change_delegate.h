@@ -24,17 +24,18 @@ namespace syncable {
 class DirectoryChangeDelegate {
  public:
   virtual void HandleCalculateChangesChangeEventFromSyncApi(
-      const EntryKernelMutationSet& mutations,
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) = 0;
   virtual void HandleCalculateChangesChangeEventFromSyncer(
-      const EntryKernelMutationSet& mutations,
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) = 0;
   // Must return the set of all ModelTypes that were modified in the
   // transaction.
-  virtual ModelTypeBitSet HandleTransactionEndingChangeEvent(
+  virtual ModelTypeSet HandleTransactionEndingChangeEvent(
+      const ImmutableWriteTransactionInfo& write_transaction_info,
       BaseTransaction* trans) = 0;
   virtual void HandleTransactionCompleteChangeEvent(
-      const ModelTypeBitSet& models_with_changes) = 0;
+      ModelTypeSet models_with_changes) = 0;
  protected:
   virtual ~DirectoryChangeDelegate() {}
 };

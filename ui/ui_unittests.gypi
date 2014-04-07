@@ -1,12 +1,38 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 {
   'targets': [
     {
+      'target_name': 'ui_test_support',
+      'dependencies': [
+        '../base/base.gyp:base',
+        '../testing/gtest.gyp:gtest',
+      ],
+      'sources': [
+        'base/test/cocoa_test_event_utils.h',
+        'base/test/cocoa_test_event_utils.mm',
+        'base/test/ui_cocoa_test_helper.h',
+        'base/test/ui_cocoa_test_helper.mm',
+      ],
+      'include_dirs': [
+        '../',
+      ],
+      'conditions': [
+        ['OS=="mac"', {
+          'type': 'static_library',
+        }, { # OS != "mac"
+          'type': 'none',
+        }],
+      ],
+    },
+    {
       'target_name': 'ui_unittests',
       'type': 'executable',
+      'includes': [
+        'base/ime/ime_unittests.gypi',
+      ],
       'dependencies': [
         '../base/base.gyp:base',
         '../base/base.gyp:test_support_base',
@@ -16,8 +42,9 @@
         '../testing/gtest.gyp:gtest',
         '../third_party/icu/icu.gyp:icui18n',
         '../third_party/icu/icu.gyp:icuuc',
-        'ui',
         'gfx_resources',
+        'ui',
+        'ui_test_support',
       ],
       'sources': [
         'base/animation/animation_container_unittest.cc',
@@ -25,10 +52,14 @@
         'base/animation/multi_animation_unittest.cc',
         'base/animation/slide_animation_unittest.cc',
         'base/clipboard/clipboard_unittest.cc',
+        'base/clipboard/custom_data_helper_unittest.cc',
+        'base/cocoa/base_view_unittest.mm',
+        'base/cocoa/events_mac_unittest.mm',
         'base/gtk/gtk_expanded_container_unittest.cc',
         'base/gtk/gtk_im_context_util_unittest.cc',
         'base/l10n/l10n_util_mac_unittest.mm',
         'base/l10n/l10n_util_unittest.cc',
+        'base/models/list_model_unittest.cc',
         'base/models/tree_node_iterator_unittest.cc',
         'base/models/tree_node_model_unittest.cc',
         'base/range/range_unittest.cc',
@@ -46,6 +77,7 @@
         'gfx/color_analysis_unittest.cc',
         'gfx/color_utils_unittest.cc',
         'gfx/font_unittest.cc',
+        'gfx/font_list_unittest.cc',
         'gfx/image/image_mac_unittest.mm',
         'gfx/image/image_unittest.cc',
         'gfx/image/image_unittest_util.h',
@@ -53,34 +85,22 @@
         'gfx/insets_unittest.cc',
         'gfx/rect_unittest.cc',
         'gfx/run_all_unittests.cc',
+        'gfx/screen_unittest.cc',
         'gfx/skbitmap_operations_unittest.cc',
         'gfx/skia_util_unittest.cc',
         'gfx/test_suite.cc',
         'gfx/test_suite.h',
-        'views/rendering/border_unittest.cc',
-        'views/view_unittest.cc',
-        'views/widget/native_widget_win_unittest.cc',
-        'views/widget/root_view_unittest.cc',
-        'views/widget/widget_test_util.cc',
-        'views/widget/widget_test_util.h',
-        'views/widget/widget_unittest.cc',
         '<(SHARED_INTERMEDIATE_DIR)/ui/gfx/gfx_resources.rc',
       ],
       'include_dirs': [
         '../',
       ],
       'conditions': [
-        ['toolkit_views2==1', {
-          'dependencies': [
-            'v2',
-          ],
-        }],
         ['OS == "win"', {
           'sources': [
             'base/dragdrop/os_exchange_data_win_unittest.cc',
             'base/view_prop_unittest.cc',
             # TODO(brettw) re-enable this when the dependencies on WindowImpl are fixed!
-            'gfx/canvas_direct2d_unittest.cc',
             'gfx/icon_util_unittest.cc',
             'gfx/native_theme_win_unittest.cc',
           ],
@@ -107,18 +127,25 @@
             ],
           },
         }],
+        ['OS == "linux"', {
+          'sources': [
+            'gfx/platform_font_pango_unittest.cc',
+          ],
+        }],
+        ['OS == "linux" and toolkit_views==1', {
+          'sources': [
+            'base/x/events_x_unittest.cc',
+          ],
+        }],
         ['OS != "mac"', {
           'sources': [
             'gfx/transform_unittest.cc',
             'gfx/interpolated_transform_unittest.cc',
           ],
         }],
-        ['toolkit_uses_gtk == 1', {
-          'sources': [
-            'base/dragdrop/gtk_dnd_util_unittest.cc',
-          ],
+        ['use_glib == 1', {
           'dependencies': [
-            '../build/linux/system.gyp:gtk',
+            '../build/linux/system.gyp:pangocairo',
             '../tools/xdisplaycheck/xdisplaycheck.gyp:xdisplaycheck',
             'base/strings/ui_strings.gyp:ui_unittest_strings',
           ],
@@ -135,9 +162,23 @@
             }],
           ],
         }],
-        ['toolkit_views==1', {
+        ['toolkit_uses_gtk == 1', {
+          'sources': [
+            'base/dragdrop/gtk_dnd_util_unittest.cc',
+          ],
+          'dependencies': [
+            '../build/linux/system.gyp:gtk',
+          ],
+        }],
+        ['toolkit_views==1 and OS!="mac"', {
           'sources': [
             'gfx/render_text_unittest.cc',
+          ],
+        }],
+        ['use_aura==1', {
+          'sources!': [
+            'base/view_prop_unittest.cc',
+            'gfx/screen_unittest.cc',
           ],
         }],
       ],

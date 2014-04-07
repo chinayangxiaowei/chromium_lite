@@ -9,13 +9,14 @@
       'browser_interface.cc',
       'desc_based_handle.cc',
       'file_downloader.cc',
-      'manifest.cc',
+      'json_manifest.cc',
       'method_map.cc',
       'module_ppapi.cc',
       'nacl_subprocess.cc',
       'nexe_arch.cc',
       'plugin.cc',
       'pnacl_coordinator.cc',
+      'pnacl_resources.cc',
       'pnacl_srpc_lib.cc',
       'scriptable_handle.cc',
       'service_runtime.cc',
@@ -56,9 +57,13 @@
         'cflags': [
           '-Wno-long-long',
         ],
-        'ldflags': [
-          # Catch unresolved symbols.
-          '-Wl,-z,defs',
+        'conditions': [
+          ['asan!=1', {
+            'ldflags': [
+              # Catch unresolved symbols.
+              '-Wl,-z,defs',
+            ],
+          }],
         ],
         'libraries': [
           '-ldl',

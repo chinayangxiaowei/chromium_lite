@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8468,6 +8468,61 @@ COMPILE_ASSERT(offsetof(RenderbufferStorageMultisampleEXT, width) == 16,
 COMPILE_ASSERT(offsetof(RenderbufferStorageMultisampleEXT, height) == 20,
                OffsetOf_RenderbufferStorageMultisampleEXT_height_not_20);
 
+struct TexStorage2DEXT {
+  typedef TexStorage2DEXT ValueType;
+  static const CommandId kCmdId = kTexStorage2DEXT;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+
+  static uint32 ComputeSize() {
+    return static_cast<uint32>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() {
+    header.SetCmd<ValueType>();
+  }
+
+  void Init(
+      GLenum _target, GLsizei _levels, GLenum _internalFormat, GLsizei _width,
+      GLsizei _height) {
+    SetHeader();
+    target = _target;
+    levels = _levels;
+    internalFormat = _internalFormat;
+    width = _width;
+    height = _height;
+  }
+
+  void* Set(
+      void* cmd, GLenum _target, GLsizei _levels, GLenum _internalFormat,
+      GLsizei _width, GLsizei _height) {
+    static_cast<ValueType*>(
+        cmd)->Init(_target, _levels, _internalFormat, _width, _height);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32 target;
+  int32 levels;
+  uint32 internalFormat;
+  int32 width;
+  int32 height;
+};
+
+COMPILE_ASSERT(sizeof(TexStorage2DEXT) == 24,
+               Sizeof_TexStorage2DEXT_is_not_24);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, header) == 0,
+               OffsetOf_TexStorage2DEXT_header_not_0);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, target) == 4,
+               OffsetOf_TexStorage2DEXT_target_not_4);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, levels) == 8,
+               OffsetOf_TexStorage2DEXT_levels_not_8);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, internalFormat) == 12,
+               OffsetOf_TexStorage2DEXT_internalFormat_not_12);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, width) == 16,
+               OffsetOf_TexStorage2DEXT_width_not_16);
+COMPILE_ASSERT(offsetof(TexStorage2DEXT, height) == 20,
+               OffsetOf_TexStorage2DEXT_height_not_20);
+
 struct SwapBuffers {
   typedef SwapBuffers ValueType;
   static const CommandId kCmdId = kSwapBuffers;
@@ -8985,9 +9040,57 @@ COMPILE_ASSERT(offsetof(GetProgramInfoCHROMIUM::Result, num_attribs) == 4,
 COMPILE_ASSERT(offsetof(GetProgramInfoCHROMIUM::Result, num_uniforms) == 8,
                OffsetOf_GetProgramInfoCHROMIUM_Result_num_uniforms_not_8);
 
-struct Placeholder447CHROMIUM {
-  typedef Placeholder447CHROMIUM ValueType;
-  static const CommandId kCmdId = kPlaceholder447CHROMIUM;
+struct CreateStreamTextureCHROMIUM {
+  typedef CreateStreamTextureCHROMIUM ValueType;
+  static const CommandId kCmdId = kCreateStreamTextureCHROMIUM;
+  static const cmd::ArgFlags kArgFlags = cmd::kFixed;
+
+  typedef GLuint Result;
+
+  static uint32 ComputeSize() {
+    return static_cast<uint32>(sizeof(ValueType));  // NOLINT
+  }
+
+  void SetHeader() {
+    header.SetCmd<ValueType>();
+  }
+
+  void Init(
+      GLuint _client_id, uint32 _result_shm_id, uint32 _result_shm_offset) {
+    SetHeader();
+    client_id = _client_id;
+    result_shm_id = _result_shm_id;
+    result_shm_offset = _result_shm_offset;
+  }
+
+  void* Set(
+      void* cmd, GLuint _client_id, uint32 _result_shm_id,
+      uint32 _result_shm_offset) {
+    static_cast<ValueType*>(
+        cmd)->Init(_client_id, _result_shm_id, _result_shm_offset);
+    return NextCmdAddress<ValueType>(cmd);
+  }
+
+  gpu::CommandHeader header;
+  uint32 client_id;
+  uint32 result_shm_id;
+  uint32 result_shm_offset;
+};
+
+COMPILE_ASSERT(sizeof(CreateStreamTextureCHROMIUM) == 16,
+               Sizeof_CreateStreamTextureCHROMIUM_is_not_16);
+COMPILE_ASSERT(offsetof(CreateStreamTextureCHROMIUM, header) == 0,
+               OffsetOf_CreateStreamTextureCHROMIUM_header_not_0);
+COMPILE_ASSERT(offsetof(CreateStreamTextureCHROMIUM, client_id) == 4,
+               OffsetOf_CreateStreamTextureCHROMIUM_client_id_not_4);
+COMPILE_ASSERT(offsetof(CreateStreamTextureCHROMIUM, result_shm_id) == 8,
+               OffsetOf_CreateStreamTextureCHROMIUM_result_shm_id_not_8);
+COMPILE_ASSERT(offsetof(CreateStreamTextureCHROMIUM, result_shm_offset) == 12,
+               OffsetOf_CreateStreamTextureCHROMIUM_result_shm_offset_not_12);
+
+struct DestroyStreamTextureCHROMIUM {
+  typedef DestroyStreamTextureCHROMIUM ValueType;
+  static const CommandId kCmdId = kDestroyStreamTextureCHROMIUM;
   static const cmd::ArgFlags kArgFlags = cmd::kFixed;
 
   static uint32 ComputeSize() {
@@ -8998,26 +9101,30 @@ struct Placeholder447CHROMIUM {
     header.SetCmd<ValueType>();
   }
 
-  void Init() {
+  void Init(GLuint _texture) {
     SetHeader();
+    texture = _texture;
   }
 
-  void* Set(void* cmd) {
-    static_cast<ValueType*>(cmd)->Init();
+  void* Set(void* cmd, GLuint _texture) {
+    static_cast<ValueType*>(cmd)->Init(_texture);
     return NextCmdAddress<ValueType>(cmd);
   }
 
   gpu::CommandHeader header;
+  uint32 texture;
 };
 
-COMPILE_ASSERT(sizeof(Placeholder447CHROMIUM) == 4,
-               Sizeof_Placeholder447CHROMIUM_is_not_4);
-COMPILE_ASSERT(offsetof(Placeholder447CHROMIUM, header) == 0,
-               OffsetOf_Placeholder447CHROMIUM_header_not_0);
+COMPILE_ASSERT(sizeof(DestroyStreamTextureCHROMIUM) == 8,
+               Sizeof_DestroyStreamTextureCHROMIUM_is_not_8);
+COMPILE_ASSERT(offsetof(DestroyStreamTextureCHROMIUM, header) == 0,
+               OffsetOf_DestroyStreamTextureCHROMIUM_header_not_0);
+COMPILE_ASSERT(offsetof(DestroyStreamTextureCHROMIUM, texture) == 4,
+               OffsetOf_DestroyStreamTextureCHROMIUM_texture_not_4);
 
-struct Placeholder451CHROMIUM {
-  typedef Placeholder451CHROMIUM ValueType;
-  static const CommandId kCmdId = kPlaceholder451CHROMIUM;
+struct GetTranslatedShaderSourceANGLE {
+  typedef GetTranslatedShaderSourceANGLE ValueType;
+  static const CommandId kCmdId = kGetTranslatedShaderSourceANGLE;
   static const cmd::ArgFlags kArgFlags = cmd::kFixed;
 
   static uint32 ComputeSize() {
@@ -9028,26 +9135,34 @@ struct Placeholder451CHROMIUM {
     header.SetCmd<ValueType>();
   }
 
-  void Init() {
+  void Init(GLuint _shader, uint32 _bucket_id) {
     SetHeader();
+    shader = _shader;
+    bucket_id = _bucket_id;
   }
 
-  void* Set(void* cmd) {
-    static_cast<ValueType*>(cmd)->Init();
+  void* Set(void* cmd, GLuint _shader, uint32 _bucket_id) {
+    static_cast<ValueType*>(cmd)->Init(_shader, _bucket_id);
     return NextCmdAddress<ValueType>(cmd);
   }
 
   gpu::CommandHeader header;
+  uint32 shader;
+  uint32 bucket_id;
 };
 
-COMPILE_ASSERT(sizeof(Placeholder451CHROMIUM) == 4,
-               Sizeof_Placeholder451CHROMIUM_is_not_4);
-COMPILE_ASSERT(offsetof(Placeholder451CHROMIUM, header) == 0,
-               OffsetOf_Placeholder451CHROMIUM_header_not_0);
+COMPILE_ASSERT(sizeof(GetTranslatedShaderSourceANGLE) == 12,
+               Sizeof_GetTranslatedShaderSourceANGLE_is_not_12);
+COMPILE_ASSERT(offsetof(GetTranslatedShaderSourceANGLE, header) == 0,
+               OffsetOf_GetTranslatedShaderSourceANGLE_header_not_0);
+COMPILE_ASSERT(offsetof(GetTranslatedShaderSourceANGLE, shader) == 4,
+               OffsetOf_GetTranslatedShaderSourceANGLE_shader_not_4);
+COMPILE_ASSERT(offsetof(GetTranslatedShaderSourceANGLE, bucket_id) == 8,
+               OffsetOf_GetTranslatedShaderSourceANGLE_bucket_id_not_8);
 
-struct Placeholder452CHROMIUM {
-  typedef Placeholder452CHROMIUM ValueType;
-  static const CommandId kCmdId = kPlaceholder452CHROMIUM;
+struct PostSubBufferCHROMIUM {
+  typedef PostSubBufferCHROMIUM ValueType;
+  static const CommandId kCmdId = kPostSubBufferCHROMIUM;
   static const cmd::ArgFlags kArgFlags = cmd::kFixed;
 
   static uint32 ComputeSize() {
@@ -9058,26 +9173,42 @@ struct Placeholder452CHROMIUM {
     header.SetCmd<ValueType>();
   }
 
-  void Init() {
+  void Init(GLint _x, GLint _y, GLint _width, GLint _height) {
     SetHeader();
+    x = _x;
+    y = _y;
+    width = _width;
+    height = _height;
   }
 
-  void* Set(void* cmd) {
-    static_cast<ValueType*>(cmd)->Init();
+  void* Set(void* cmd, GLint _x, GLint _y, GLint _width, GLint _height) {
+    static_cast<ValueType*>(cmd)->Init(_x, _y, _width, _height);
     return NextCmdAddress<ValueType>(cmd);
   }
 
   gpu::CommandHeader header;
+  int32 x;
+  int32 y;
+  int32 width;
+  int32 height;
 };
 
-COMPILE_ASSERT(sizeof(Placeholder452CHROMIUM) == 4,
-               Sizeof_Placeholder452CHROMIUM_is_not_4);
-COMPILE_ASSERT(offsetof(Placeholder452CHROMIUM, header) == 0,
-               OffsetOf_Placeholder452CHROMIUM_header_not_0);
+COMPILE_ASSERT(sizeof(PostSubBufferCHROMIUM) == 20,
+               Sizeof_PostSubBufferCHROMIUM_is_not_20);
+COMPILE_ASSERT(offsetof(PostSubBufferCHROMIUM, header) == 0,
+               OffsetOf_PostSubBufferCHROMIUM_header_not_0);
+COMPILE_ASSERT(offsetof(PostSubBufferCHROMIUM, x) == 4,
+               OffsetOf_PostSubBufferCHROMIUM_x_not_4);
+COMPILE_ASSERT(offsetof(PostSubBufferCHROMIUM, y) == 8,
+               OffsetOf_PostSubBufferCHROMIUM_y_not_8);
+COMPILE_ASSERT(offsetof(PostSubBufferCHROMIUM, width) == 12,
+               OffsetOf_PostSubBufferCHROMIUM_width_not_12);
+COMPILE_ASSERT(offsetof(PostSubBufferCHROMIUM, height) == 16,
+               OffsetOf_PostSubBufferCHROMIUM_height_not_16);
 
-struct Placeholder453CHROMIUM {
-  typedef Placeholder453CHROMIUM ValueType;
-  static const CommandId kCmdId = kPlaceholder453CHROMIUM;
+struct TexImageIOSurface2DCHROMIUM {
+  typedef TexImageIOSurface2DCHROMIUM ValueType;
+  static const CommandId kCmdId = kTexImageIOSurface2DCHROMIUM;
   static const cmd::ArgFlags kArgFlags = cmd::kFixed;
 
   static uint32 ComputeSize() {
@@ -9088,22 +9219,47 @@ struct Placeholder453CHROMIUM {
     header.SetCmd<ValueType>();
   }
 
-  void Init() {
+  void Init(
+      GLenum _target, GLsizei _width, GLsizei _height, GLuint _ioSurfaceId,
+      GLuint _plane) {
     SetHeader();
+    target = _target;
+    width = _width;
+    height = _height;
+    ioSurfaceId = _ioSurfaceId;
+    plane = _plane;
   }
 
-  void* Set(void* cmd) {
-    static_cast<ValueType*>(cmd)->Init();
+  void* Set(
+      void* cmd, GLenum _target, GLsizei _width, GLsizei _height,
+      GLuint _ioSurfaceId, GLuint _plane) {
+    static_cast<ValueType*>(
+        cmd)->Init(_target, _width, _height, _ioSurfaceId, _plane);
     return NextCmdAddress<ValueType>(cmd);
   }
 
   gpu::CommandHeader header;
+  uint32 target;
+  int32 width;
+  int32 height;
+  uint32 ioSurfaceId;
+  uint32 plane;
 };
 
-COMPILE_ASSERT(sizeof(Placeholder453CHROMIUM) == 4,
-               Sizeof_Placeholder453CHROMIUM_is_not_4);
-COMPILE_ASSERT(offsetof(Placeholder453CHROMIUM, header) == 0,
-               OffsetOf_Placeholder453CHROMIUM_header_not_0);
+COMPILE_ASSERT(sizeof(TexImageIOSurface2DCHROMIUM) == 24,
+               Sizeof_TexImageIOSurface2DCHROMIUM_is_not_24);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, header) == 0,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_header_not_0);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, target) == 4,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_target_not_4);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, width) == 8,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_width_not_8);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, height) == 12,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_height_not_12);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, ioSurfaceId) == 16,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_ioSurfaceId_not_16);
+COMPILE_ASSERT(offsetof(TexImageIOSurface2DCHROMIUM, plane) == 20,
+               OffsetOf_TexImageIOSurface2DCHROMIUM_plane_not_20);
 
 
 #endif  // GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_FORMAT_AUTOGEN_H_

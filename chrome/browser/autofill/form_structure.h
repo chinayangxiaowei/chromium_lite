@@ -38,16 +38,18 @@ namespace buzz {
 class XmlElement;
 }
 
-namespace webkit_glue {
+namespace webkit {
+namespace forms {
 struct FormData;
 struct FormDataPredictions;
+}
 }
 
 // FormStructure stores a single HTML form together with the values entered
 // in the fields along with additional information needed by Autofill.
 class FormStructure {
  public:
-  explicit FormStructure(const webkit_glue::FormData& form);
+  explicit FormStructure(const webkit::forms::FormData& form);
   virtual ~FormStructure();
 
   // Runs several heuristics against the form fields to determine their possible
@@ -64,7 +66,7 @@ class FormStructure {
   // with 2, 4, and 3 fields. The returned XML would have type info for 9
   // fields, first two of which would be for the first form, next 4 for the
   // second, and the rest is for the third.
-  static bool EncodeQueryRequest(const ScopedVector<FormStructure>& forms,
+  static bool EncodeQueryRequest(const std::vector<FormStructure*>& forms,
                                  std::vector<std::string>* encoded_signatures,
                                  std::string* encoded_xml);
 
@@ -78,7 +80,7 @@ class FormStructure {
   // fields' predicted types.
   static void GetFieldTypePredictions(
       const std::vector<FormStructure*>& form_structures,
-      std::vector<webkit_glue::FormDataPredictions>* forms);
+      std::vector<webkit::forms::FormDataPredictions>* forms);
 
   // The unique signature for this form, composed of the target url domain,
   // the form name, and the form field names in a 64-bit hash.
@@ -139,12 +141,8 @@ class FormStructure {
 
   virtual std::string server_experiment_id() const;
 
-  bool operator==(const webkit_glue::FormData& form) const;
-  bool operator!=(const webkit_glue::FormData& form) const;
-
- protected:
-  // For tests.
-  ScopedVector<AutofillField>* fields() { return &fields_; }
+  bool operator==(const webkit::forms::FormData& form) const;
+  bool operator!=(const webkit::forms::FormData& form) const;
 
  private:
   friend class FormStructureTest;
@@ -173,8 +171,11 @@ class FormStructure {
   // Classifies each field in |fields_| into a logical section.
   // Sections are identified by the heuristic that a logical section should not
   // include multiple fields of the same autofill type (with some exceptions, as
-  // described in the implementation).
-  void IdentifySections();
+  // described in the implementation).  Sections are furthermore distinguished
+  // as either credit card or non-credit card sections.
+  // If |has_author_specified_sections| is true, only the second pass --
+  // distinguishing credit card sections from non-credit card ones -- is made.
+  void IdentifySections(bool has_author_specified_sections);
 
   // The name of the form.
   string16 form_name_;

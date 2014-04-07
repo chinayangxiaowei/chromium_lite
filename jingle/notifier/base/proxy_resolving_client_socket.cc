@@ -5,6 +5,8 @@
 #include "jingle/notifier/base/proxy_resolving_client_socket.h"
 
 #include "base/basictypes.h"
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "googleurl/src/gurl.h"
@@ -19,13 +21,16 @@
 namespace notifier {
 
 ProxyResolvingClientSocket::ProxyResolvingClientSocket(
+    net::ClientSocketFactory* socket_factory,
     const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
     const net::SSLConfig& ssl_config,
     const net::HostPortPair& dest_host_port_pair)
-        : proxy_resolve_callback_(ALLOW_THIS_IN_INITIALIZER_LIST(this),
-                        &ProxyResolvingClientSocket::ProcessProxyResolveDone),
-          connect_callback_(ALLOW_THIS_IN_INITIALIZER_LIST(this),
-                            &ProxyResolvingClientSocket::ProcessConnectDone),
+        : ALLOW_THIS_IN_INITIALIZER_LIST(proxy_resolve_callback_(
+              base::Bind(&ProxyResolvingClientSocket::ProcessProxyResolveDone,
+                         base::Unretained(this)))),
+          ALLOW_THIS_IN_INITIALIZER_LIST(connect_callback_(
+              base::Bind(&ProxyResolvingClientSocket::ProcessConnectDone,
+                         base::Unretained(this)))),
           ssl_config_(ssl_config),
           pac_request_(NULL),
           dest_host_port_pair_(dest_host_port_pair),
@@ -34,27 +39,27 @@ ProxyResolvingClientSocket::ProxyResolvingClientSocket(
               net::BoundNetLog::Make(
                   request_context_getter->GetURLRequestContext()->net_log(),
                   net::NetLog::SOURCE_SOCKET)),
-          scoped_runnable_method_factory_(
-              ALLOW_THIS_IN_INITIALIZER_LIST(this)),
-          user_connect_callback_(NULL) {
+          ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   DCHECK(request_context_getter);
   net::URLRequestContext* request_context =
       request_context_getter->GetURLRequestContext();
   DCHECK(request_context);
   net::HttpNetworkSession::Params session_params;
-  session_params.client_socket_factory = NULL;
+  session_params.client_socket_factory = socket_factory;
   session_params.host_resolver = request_context->host_resolver();
   session_params.cert_verifier = request_context->cert_verifier();
   // TODO(rkn): This is NULL because OriginBoundCertService is not thread safe.
   session_params.origin_bound_cert_service = NULL;
-  session_params.dnsrr_resolver = request_context->dnsrr_resolver();
-  session_params.dns_cert_checker = request_context->dns_cert_checker();
+  // transport_security_state is NULL because it's not thread safe.
+  session_params.transport_security_state = NULL;
   session_params.proxy_service = request_context->proxy_service();
   session_params.ssl_host_info_factory = NULL;
   session_params.ssl_config_service = request_context->ssl_config_service();
   session_params.http_auth_handler_factory =
       request_context->http_auth_handler_factory();
   session_params.network_delegate = request_context->network_delegate();
+  session_params.http_server_properties =
+      request_context->http_server_properties();
   session_params.net_log = request_context->net_log();
   network_session_ = new net::HttpNetworkSession(session_params);
 }
@@ -64,15 +69,17 @@ ProxyResolvingClientSocket::~ProxyResolvingClientSocket() {
 }
 
 int ProxyResolvingClientSocket::Read(net::IOBuffer* buf, int buf_len,
-                                     net::CompletionCallback* callback) {
+                                     const net::CompletionCallback& callback) {
   if (transport_.get() && transport_->socket())
     return transport_->socket()->Read(buf, buf_len, callback);
   NOTREACHED();
   return net::ERR_SOCKET_NOT_CONNECTED;
 }
 
-int ProxyResolvingClientSocket::Write(net::IOBuffer* buf, int buf_len,
-                                      net::CompletionCallback* callback) {
+int ProxyResolvingClientSocket::Write(
+    net::IOBuffer* buf,
+    int buf_len,
+    const net::CompletionCallback& callback) {
   if (transport_.get() && transport_->socket())
     return transport_->socket()->Write(buf, buf_len, callback);
   NOTREACHED();
@@ -93,8 +100,9 @@ bool ProxyResolvingClientSocket::SetSendBufferSize(int32 size) {
   return false;
 }
 
-int ProxyResolvingClientSocket::Connect(net::CompletionCallback* callback) {
-  DCHECK(!user_connect_callback_);
+int ProxyResolvingClientSocket::Connect(
+    const net::CompletionCallback& callback) {
+  DCHECK(user_connect_callback_.is_null());
 
   tried_direct_connect_fallback_ = false;
 
@@ -103,7 +111,7 @@ int ProxyResolvingClientSocket::Connect(net::CompletionCallback* callback) {
   int status = network_session_->proxy_service()->ResolveProxy(
       url,
       &proxy_info_,
-      &proxy_resolve_callback_,
+      proxy_resolve_callback_,
       &pac_request_,
       bound_net_log_);
   if (status != net::ERR_IO_PENDING) {
@@ -114,8 +122,8 @@ int ProxyResolvingClientSocket::Connect(net::CompletionCallback* callback) {
     CHECK(message_loop);
     message_loop->PostTask(
         FROM_HERE,
-        scoped_runnable_method_factory_.NewRunnableMethod(
-            &ProxyResolvingClientSocket::ProcessProxyResolveDone, status));
+        base::Bind(&ProxyResolvingClientSocket::ProcessProxyResolveDone,
+                   weak_factory_.GetWeakPtr(), status));
   }
   user_connect_callback_ = callback;
   return net::ERR_IO_PENDING;
@@ -123,9 +131,9 @@ int ProxyResolvingClientSocket::Connect(net::CompletionCallback* callback) {
 
 void ProxyResolvingClientSocket::RunUserConnectCallback(int status) {
   DCHECK_LE(status, net::OK);
-  net::CompletionCallback* user_connect_callback = user_connect_callback_;
-  user_connect_callback_ = NULL;
-  user_connect_callback->Run(status);
+  net::CompletionCallback user_connect_callback = user_connect_callback_;
+  user_connect_callback_.Reset();
+  user_connect_callback.Run(status);
 }
 
 // Always runs asynchronously.
@@ -162,15 +170,9 @@ void ProxyResolvingClientSocket::ProcessProxyResolveDone(int status) {
 
   transport_.reset(new net::ClientSocketHandle);
   // Now that we have resolved the proxy, we need to connect.
-  status = net::ClientSocketPoolManager::InitSocketHandleForRawConnect(
-      dest_host_port_pair_,
-      network_session_.get(),
-      proxy_info_,
-      ssl_config_,
-      ssl_config_,
-      bound_net_log_,
-      transport_.get(),
-      &connect_callback_);
+  status = net::InitSocketHandleForRawConnect(
+      dest_host_port_pair_, network_session_.get(), proxy_info_, ssl_config_,
+      ssl_config_, bound_net_log_, transport_.get(), connect_callback_);
   if (status != net::ERR_IO_PENDING) {
     // Since this method is always called asynchronously. it is OK to call
     // ProcessConnectDone synchronously.
@@ -248,7 +250,7 @@ int ProxyResolvingClientSocket::ReconsiderProxyAfterError(int error) {
 
   GURL url("http://" + dest_host_port_pair_.ToString());
   int rv = network_session_->proxy_service()->ReconsiderProxyAfterError(
-      url, &proxy_info_, &proxy_resolve_callback_, &pac_request_,
+      url, &proxy_info_, proxy_resolve_callback_, &pac_request_,
       bound_net_log_);
   if (rv == net::OK || rv == net::ERR_IO_PENDING) {
     CloseTransportSocket();
@@ -267,8 +269,8 @@ int ProxyResolvingClientSocket::ReconsiderProxyAfterError(int error) {
     CHECK(message_loop);
     message_loop->PostTask(
         FROM_HERE,
-        scoped_runnable_method_factory_.NewRunnableMethod(
-            &ProxyResolvingClientSocket::ProcessProxyResolveDone, rv));
+        base::Bind(&ProxyResolvingClientSocket::ProcessProxyResolveDone,
+                   weak_factory_.GetWeakPtr(), rv));
     // Since we potentially have another try to go (trying the direct connect)
     // set the return code code to ERR_IO_PENDING.
     rv = net::ERR_IO_PENDING;
@@ -284,7 +286,7 @@ void ProxyResolvingClientSocket::Disconnect() {
   CloseTransportSocket();
   if (pac_request_)
     network_session_->proxy_service()->CancelPacRequest(pac_request_);
-  user_connect_callback_ = NULL;
+  user_connect_callback_.Reset();
 }
 
 bool ProxyResolvingClientSocket::IsConnected() const {

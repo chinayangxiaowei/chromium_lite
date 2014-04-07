@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 #include <string>
 
 #include "base/memory/ref_counted.h"
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/browsing_data_remover.h"
 #include "chrome/browser/chromeos/login/help_app_launcher.h"
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/system_key_event_listener.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_screen_handler.h"
-#include "content/browser/webui/web_ui.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/web_ui.h"
 
 class BrowsingDataRemover;
 
@@ -25,6 +28,7 @@ class ListValue;
 namespace chromeos {
 
 class NetworkStateInformer;
+class User;
 
 // An interface for WebUILoginDisplay to call SigninScreenHandler.
 class LoginDisplayWebUIHandler {
@@ -32,10 +36,13 @@ class LoginDisplayWebUIHandler {
   virtual void ClearAndEnablePassword() = 0;
   virtual void OnLoginSuccess(const std::string& username) = 0;
   virtual void OnUserRemoved(const std::string& username) = 0;
+  virtual void OnUserImageChanged(const User& user) = 0;
+  virtual void OnPreferencesChanged() = 0;
   virtual void ShowError(int login_attempts,
                          const std::string& error_text,
                          const std::string& help_link_text,
                          HelpAppLauncher::HelpTopic help_topic_id) = 0;
+  virtual void ShowGaiaPasswordChanged(const std::string& username) = 0;
   // Show siginin screen for the given credentials.
   virtual void ShowSigninScreenForCreds(const std::string& username,
                                         const std::string& password) = 0;
@@ -74,6 +81,22 @@ class SigninScreenHandlerDelegate {
   // Let the delegate know about the handler it is supposed to be using.
   virtual void SetWebUIHandler(LoginDisplayWebUIHandler* webui_handler) = 0;
 
+  // Returns users list to be shown.
+  virtual const UserList& GetUsers() const = 0;
+
+  // Whether login as guest is available.
+  virtual bool IsShowGuest() const = 0;
+
+  // Whether login as guest is available.
+  virtual bool IsShowUsers() const = 0;
+
+  // Whether new user pod is available.
+  virtual bool IsShowNewUser() const = 0;
+
+  // Sets the displayed email for the next login attempt. If it succeeds,
+  // user's displayed email value will be updated to |email|.
+  virtual void SetDisplayEmail(const std::string& email) = 0;
+
  protected:
   virtual ~SigninScreenHandlerDelegate() {}
 };
@@ -82,7 +105,9 @@ class SigninScreenHandlerDelegate {
 // and LoginDisplay.
 class SigninScreenHandler : public BaseScreenHandler,
                             public LoginDisplayWebUIHandler,
-                            public BrowsingDataRemover::Observer {
+                            public BrowsingDataRemover::Observer,
+                            public SystemKeyEventListener::CapsLockObserver,
+                            public content::NotificationObserver {
  public:
   SigninScreenHandler();
   virtual ~SigninScreenHandler();
@@ -90,6 +115,10 @@ class SigninScreenHandler : public BaseScreenHandler,
   // Shows the sign in screen. |oobe_ui| indicates whether the signin
   // screen is for OOBE or usual sign-in flow.
   void Show(bool oobe_ui);
+
+  // Sets delegate to be used by the handler. It is guaranteed that valid
+  // delegate is set before Show() method will be called.
+  void SetDelegate(SigninScreenHandlerDelegate* delegate);
 
  private:
   friend class ReportDnsCacheClearedOnUIThread;
@@ -106,18 +135,40 @@ class SigninScreenHandler : public BaseScreenHandler,
   virtual void ClearAndEnablePassword() OVERRIDE;
   virtual void OnLoginSuccess(const std::string& username) OVERRIDE;
   virtual void OnUserRemoved(const std::string& username) OVERRIDE;
+  virtual void OnUserImageChanged(const User& user) OVERRIDE;
+  virtual void OnPreferencesChanged() OVERRIDE;
   virtual void ShowError(int login_attempts,
                          const std::string& error_text,
                          const std::string& help_link_text,
                          HelpAppLauncher::HelpTopic help_topic_id) OVERRIDE;
   virtual void ShowSigninScreenForCreds(const std::string& username,
                                         const std::string& password) OVERRIDE;
+  virtual void ShowGaiaPasswordChanged(const std::string& username) OVERRIDE;
 
   // BrowsingDataRemover::Observer overrides.
   virtual void OnBrowsingDataRemoverDone() OVERRIDE;
 
+  // SystemKeyEventListener::CapsLockObserver overrides.
+  virtual void OnCapsLockChange(bool enabled) OVERRIDE;
+
+  // content::NotificationObserver implementation.
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+
   // Shows signin screen after dns cache and cookie cleanup operations finish.
   void ShowSigninScreenIfReady();
+
+  // Tells webui to load authentication extension. |force| is used to force the
+  // extension reloading, if it has already been loaded. |silent_load| is true
+  // for cases when extension should be loaded in the background and it
+  // shouldn't grab the focus. |offline| is true when offline version of the
+  // extension should be used.
+  void LoadAuthExtension(bool force, bool silent_load, bool offline);
+
+  // Updates authentication extension. Called when device settings that affect
+  // sign-in (allow BWSI and allow whitelist) are changed.
+  void UpdateAuthExtension();
 
   // Handles confirmation message of user authentication that was performed by
   // the authentication extension.
@@ -135,6 +186,9 @@ class SigninScreenHandler : public BaseScreenHandler,
   // Handles fix captive portal request (starts guest session with specific
   // start URL).
   void HandleFixCaptivePortal(const base::ListValue* args);
+
+  // Handles offline login request.
+  void HandleOfflineLogin(const base::ListValue* args);
 
   // Handles system shutdown request.
   void HandleShutdownSystem(const base::ListValue* args);
@@ -154,6 +208,9 @@ class SigninScreenHandler : public BaseScreenHandler,
   // Handle 'createAccount' request.
   void HandleCreateAccount(const base::ListValue* args);
 
+  // Handle 'accountPickerReady' request.
+  void HandleAccountPickerReady(const base::ListValue* args);
+
   // Handle 'loginWebuiReady' request.
   void HandleLoginWebuiReady(const base::ListValue* args);
 
@@ -165,6 +222,9 @@ class SigninScreenHandler : public BaseScreenHandler,
 
   // Handle 'loginRemoveNetworkStateObserver' request.
   void HandleLoginRemoveNetworkStateObserver(const base::ListValue* args);
+
+  // Handle 'signOutUser' request.
+  void HandleSignOutUser(const base::ListValue* args);
 
   // Sends user list to account picker.
   void SendUserList(bool animated);
@@ -185,6 +245,12 @@ class SigninScreenHandler : public BaseScreenHandler,
   // Keeps whether screen should be shown for OOBE.
   bool oobe_ui_;
 
+  // Whether webui has been loaded for the first time.
+  bool is_first_webui_ready_;
+
+  // Whether it is the first attempt to load the gaia extension.
+  bool is_first_attempt_;
+
   // True if dns cache cleanup is done.
   bool dns_cleared_;
 
@@ -194,17 +260,16 @@ class SigninScreenHandler : public BaseScreenHandler,
   // True if cookie jar cleanup is done.
   bool cookies_cleared_;
 
-  // True if new user sign in flow is driven by the extension.
-  bool extension_driven_;
-
   // Help application used for help dialogs.
   scoped_refptr<HelpAppLauncher> help_app_;
 
-  // Network state infromer used to keep offline message screen up.
+  // Network state informer used to keep offline message screen up.
   scoped_ptr<NetworkStateInformer> network_state_informer_;
 
   // Email to pre-populate with.
   std::string email_;
+  // Emails of the users, whose passwords have recently been changed.
+  std::set<std::string> password_changed_for_;
 
   // Test credentials.
   std::string test_user_;
@@ -212,7 +277,10 @@ class SigninScreenHandler : public BaseScreenHandler,
 
   BrowsingDataRemover* cookie_remover_;
 
-  ScopedRunnableMethodFactory<SigninScreenHandler> method_factory_;
+  base::WeakPtrFactory<SigninScreenHandler> weak_factory_;
+
+  // CapsLock state change notifier instance;
+  SystemKeyEventListener* key_event_listener_;
 
   DISALLOW_COPY_AND_ASSIGN(SigninScreenHandler);
 };

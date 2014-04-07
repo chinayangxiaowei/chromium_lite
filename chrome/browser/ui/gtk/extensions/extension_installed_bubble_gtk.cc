@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <string>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
@@ -20,8 +22,9 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -90,26 +93,29 @@ ExtensionInstalledBubbleGtk::ExtensionInstalledBubbleGtk(
   // be sure that a browser action or page action has had views created which we
   // can inspect for the purpose of pointing to them.
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
-      Source<Profile>(browser->profile()));
+      content::Source<Profile>(browser->profile()));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
-      Source<Profile>(browser->profile()));
+      content::Source<Profile>(browser->profile()));
 }
 
 ExtensionInstalledBubbleGtk::~ExtensionInstalledBubbleGtk() {}
 
-void ExtensionInstalledBubbleGtk::Observe(int type,
-                                          const NotificationSource& source,
-                                          const NotificationDetails& details) {
+void ExtensionInstalledBubbleGtk::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_EXTENSION_LOADED) {
-    const Extension* extension = Details<const Extension>(details).ptr();
+    const Extension* extension =
+        content::Details<const Extension>(details).ptr();
     if (extension == extension_) {
       // PostTask to ourself to allow all EXTENSION_LOADED Observers to run.
-      MessageLoopForUI::current()->PostTask(FROM_HERE, NewRunnableMethod(this,
-          &ExtensionInstalledBubbleGtk::ShowInternal));
+      MessageLoopForUI::current()->PostTask(
+          FROM_HERE,
+          base::Bind(&ExtensionInstalledBubbleGtk::ShowInternal, this));
     }
   } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
     const Extension* extension =
-        Details<UnloadedExtensionInfo>(details)->extension;
+        content::Details<UnloadedExtensionInfo>(details)->extension;
     if (extension == extension_)
       extension_ = NULL;
   } else {
@@ -131,8 +137,8 @@ void ExtensionInstalledBubbleGtk::ShowInternal() {
     if (toolbar->animating() && animation_wait_retries_-- > 0) {
       MessageLoopForUI::current()->PostDelayedTask(
           FROM_HERE,
-          NewRunnableMethod(this, &ExtensionInstalledBubbleGtk::ShowInternal),
-          kAnimationWaitMS);
+          base::Bind(&ExtensionInstalledBubbleGtk::ShowInternal, this),
+          base::TimeDelta::FromMilliseconds(kAnimationWaitMS));
       return;
     }
 
@@ -312,8 +318,9 @@ void ExtensionInstalledBubbleGtk::BubbleClosing(BubbleGtk* bubble,
   // We need to allow the bubble to close and remove the widgets from
   // the window before we call Release() because close_button_ depends
   // on all references being cleared before it is destroyed.
-  MessageLoopForUI::current()->PostTask(FROM_HERE, NewRunnableMethod(this,
-      &ExtensionInstalledBubbleGtk::Close));
+  MessageLoopForUI::current()->PostTask(
+      FROM_HERE,
+      base::Bind(&ExtensionInstalledBubbleGtk::Close, this));
 }
 
 void ExtensionInstalledBubbleGtk::Close() {

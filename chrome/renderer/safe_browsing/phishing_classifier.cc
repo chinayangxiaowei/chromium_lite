@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/bind.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
@@ -20,14 +21,14 @@
 #include "chrome/renderer/safe_browsing/phishing_term_feature_extractor.h"
 #include "chrome/renderer/safe_browsing/phishing_url_feature_extractor.h"
 #include "chrome/renderer/safe_browsing/scorer.h"
-#include "content/renderer/render_view.h"
+#include "content/public/renderer/render_view.h"
 #include "crypto/sha2.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDataSource.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURL.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURLRequest.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURL.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 
 namespace safe_browsing {
@@ -35,12 +36,12 @@ namespace safe_browsing {
 const float PhishingClassifier::kInvalidScore = -1.0;
 const float PhishingClassifier::kPhishyThreshold = 0.5;
 
-PhishingClassifier::PhishingClassifier(RenderView* render_view,
+PhishingClassifier::PhishingClassifier(content::RenderView* render_view,
                                        FeatureExtractorClock* clock)
     : render_view_(render_view),
       scorer_(NULL),
       clock_(clock),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   Clear();
 }
 
@@ -53,23 +54,32 @@ PhishingClassifier::~PhishingClassifier() {
 void PhishingClassifier::set_phishing_scorer(const Scorer* scorer) {
   CheckNoPendingClassification();
   scorer_ = scorer;
-  url_extractor_.reset(new PhishingUrlFeatureExtractor);
-  dom_extractor_.reset(
-      new PhishingDOMFeatureExtractor(render_view_, clock_.get()));
-  term_extractor_.reset(new PhishingTermFeatureExtractor(
-      &scorer_->page_terms(),
-      &scorer_->page_words(),
-      scorer_->max_words_per_term(),
-      scorer_->murmurhash3_seed(),
-      clock_.get()));
+  if (scorer_) {
+    url_extractor_.reset(new PhishingUrlFeatureExtractor);
+    dom_extractor_.reset(
+        new PhishingDOMFeatureExtractor(render_view_, clock_.get()));
+    term_extractor_.reset(new PhishingTermFeatureExtractor(
+        &scorer_->page_terms(),
+        &scorer_->page_words(),
+        scorer_->max_words_per_term(),
+        scorer_->murmurhash3_seed(),
+        clock_.get()));
+  } else {
+    // We're disabling client-side phishing detection, so tear down all
+    // of the relevant objects.
+    url_extractor_.reset();
+    dom_extractor_.reset();
+    term_extractor_.reset();
+  }
 }
 
 bool PhishingClassifier::is_ready() const {
   return scorer_ != NULL;
 }
 
-void PhishingClassifier::BeginClassification(const string16* page_text,
-                                             DoneCallback* done_callback) {
+void PhishingClassifier::BeginClassification(
+    const string16* page_text,
+    const DoneCallback& done_callback) {
   DCHECK(is_ready());
 
   // The RenderView should have called CancelPendingClassification() before
@@ -80,7 +90,7 @@ void PhishingClassifier::BeginClassification(const string16* page_text,
   CancelPendingClassification();
 
   page_text_ = page_text;
-  done_callback_.reset(done_callback);
+  done_callback_ = done_callback;
 
   // For consistency, we always want to invoke the DoneCallback
   // asynchronously, rather than directly from this method.  To ensure that
@@ -88,12 +98,12 @@ void PhishingClassifier::BeginClassification(const string16* page_text,
   // iteration of the message loop.
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      method_factory_.NewRunnableMethod(
-          &PhishingClassifier::BeginFeatureExtraction));
+      base::Bind(&PhishingClassifier::BeginFeatureExtraction,
+                 weak_factory_.GetWeakPtr()));
 }
 
 void PhishingClassifier::BeginFeatureExtraction() {
-  WebKit::WebView* web_view = render_view_->webview();
+  WebKit::WebView* web_view = render_view_->GetWebView();
   if (!web_view) {
     RunFailureCallback();
     return;
@@ -129,7 +139,8 @@ void PhishingClassifier::BeginFeatureExtraction() {
   // in several chunks of work and invokes the callback when finished.
   dom_extractor_->ExtractFeatures(
       features_.get(),
-      NewCallback(this, &PhishingClassifier::DOMExtractionFinished));
+      base::Bind(&PhishingClassifier::DOMExtractionFinished,
+                 base::Unretained(this)));
 }
 
 void PhishingClassifier::CancelPendingClassification() {
@@ -138,7 +149,7 @@ void PhishingClassifier::CancelPendingClassification() {
   DCHECK(is_ready());
   dom_extractor_->CancelPendingExtraction();
   term_extractor_->CancelPendingExtraction();
-  method_factory_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
   Clear();
 }
 
@@ -149,7 +160,8 @@ void PhishingClassifier::DOMExtractionFinished(bool success) {
     term_extractor_->ExtractFeatures(
         page_text_,
         features_.get(),
-        NewCallback(this, &PhishingClassifier::TermExtractionFinished));
+        base::Bind(&PhishingClassifier::TermExtractionFinished,
+                   base::Unretained(this)));
   } else {
     RunFailureCallback();
   }
@@ -157,7 +169,7 @@ void PhishingClassifier::DOMExtractionFinished(bool success) {
 
 void PhishingClassifier::TermExtractionFinished(bool success) {
   if (success) {
-    WebKit::WebView* web_view = render_view_->webview();
+    WebKit::WebView* web_view = render_view_->GetWebView();
     if (!web_view) {
       RunFailureCallback();
       return;
@@ -195,9 +207,9 @@ void PhishingClassifier::TermExtractionFinished(bool success) {
 }
 
 void PhishingClassifier::CheckNoPendingClassification() {
-  DCHECK(!done_callback_.get());
+  DCHECK(done_callback_.is_null());
   DCHECK(!page_text_);
-  if (done_callback_.get() || page_text_) {
+  if (!done_callback_.is_null() || page_text_) {
     LOG(ERROR) << "Classification in progress, missing call to "
                << "CancelPendingClassification";
     UMA_HISTOGRAM_COUNTS("SBClientPhishing.CheckNoPendingClassificationFailed",
@@ -206,7 +218,7 @@ void PhishingClassifier::CheckNoPendingClassification() {
 }
 
 void PhishingClassifier::RunCallback(const ClientPhishingRequest& verdict) {
-  done_callback_->Run(verdict);
+  done_callback_.Run(verdict);
   Clear();
 }
 
@@ -222,7 +234,7 @@ void PhishingClassifier::RunFailureCallback() {
 
 void PhishingClassifier::Clear() {
   page_text_ = NULL;
-  done_callback_.reset(NULL);
+  done_callback_.Reset();
   features_.reset(NULL);
 }
 

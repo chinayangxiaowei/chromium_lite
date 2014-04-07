@@ -5,7 +5,6 @@
 #include "remoting/protocol/protobuf_video_reader.h"
 
 #include "base/bind.h"
-#include "base/task.h"
 #include "net/socket/stream_socket.h"
 #include "remoting/base/constants.h"
 #include "remoting/proto/video.pb.h"
@@ -15,21 +14,30 @@ namespace remoting {
 namespace protocol {
 
 ProtobufVideoReader::ProtobufVideoReader(VideoPacketFormat::Encoding encoding)
-    : encoding_(encoding),
+    : session_(NULL),
+      encoding_(encoding),
       video_stub_(NULL) {
 }
 
-ProtobufVideoReader::~ProtobufVideoReader() { }
+ProtobufVideoReader::~ProtobufVideoReader() {
+  if (session_)
+    session_->CancelChannelCreation(kVideoChannelName);
+}
 
 void ProtobufVideoReader::Init(protocol::Session* session,
                                VideoStub* video_stub,
                                const InitializedCallback& callback) {
+  session_ = session;
   initialized_callback_ = callback;
   video_stub_ = video_stub;
 
-  session->CreateStreamChannel(
+  session_->CreateStreamChannel(
       kVideoChannelName,
       base::Bind(&ProtobufVideoReader::OnChannelReady, base::Unretained(this)));
+}
+
+bool ProtobufVideoReader::is_connected() {
+  return channel_.get() != NULL;
 }
 
 void ProtobufVideoReader::OnChannelReady(net::StreamSocket* socket) {
@@ -40,11 +48,13 @@ void ProtobufVideoReader::OnChannelReady(net::StreamSocket* socket) {
 
   DCHECK(!channel_.get());
   channel_.reset(socket);
-  reader_.Init(socket, NewCallback(this, &ProtobufVideoReader::OnNewData));
+  reader_.Init(socket, base::Bind(&ProtobufVideoReader::OnNewData,
+                                  base::Unretained(this)));
   initialized_callback_.Run(true);
 }
 
-void ProtobufVideoReader::OnNewData(VideoPacket* packet, Task* done_task) {
+void ProtobufVideoReader::OnNewData(VideoPacket* packet,
+                                    const base::Closure& done_task) {
   video_stub_->ProcessVideoPacket(packet, done_task);
 }
 

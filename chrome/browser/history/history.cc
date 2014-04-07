@@ -29,7 +29,7 @@
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
-#include "base/task.h"
+#include "base/threading/thread.h"
 #include "chrome/browser/autocomplete/history_url_provider.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_backend.h"
@@ -47,9 +47,9 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/download/download_persistent_store_info.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -69,52 +69,64 @@ static const char* kHistoryThreadName = "Chrome_HistoryThread";
 // Release when the Backend has a reference to us).
 class HistoryService::BackendDelegate : public HistoryBackend::Delegate {
  public:
-  explicit BackendDelegate(HistoryService* history_service)
+  BackendDelegate(HistoryService* history_service, Profile* profile)
       : history_service_(history_service),
-        message_loop_(MessageLoop::current()) {
+        message_loop_(MessageLoop::current()),
+        profile_(profile) {
   }
 
-  virtual void NotifyProfileError(sql::InitStatus init_status) OVERRIDE {
+  virtual void NotifyProfileError(int backend_id,
+                                  sql::InitStatus init_status) OVERRIDE {
     // Send to the history service on the main thread.
-    message_loop_->PostTask(FROM_HERE, NewRunnableMethod(history_service_.get(),
-        &HistoryService::NotifyProfileError, init_status));
+    message_loop_->PostTask(
+        FROM_HERE,
+        base::Bind(&HistoryService::NotifyProfileError, history_service_.get(),
+                   backend_id, init_status));
   }
 
-  virtual void SetInMemoryBackend(
+  virtual void SetInMemoryBackend(int backend_id,
       history::InMemoryHistoryBackend* backend) OVERRIDE {
     // Send the backend to the history service on the main thread.
-    message_loop_->PostTask(FROM_HERE, NewRunnableMethod(history_service_.get(),
-        &HistoryService::SetInMemoryBackend, backend));
+    message_loop_->PostTask(
+        FROM_HERE,
+        base::Bind(&HistoryService::SetInMemoryBackend, history_service_.get(),
+                   backend_id, backend));
   }
 
   virtual void BroadcastNotifications(
       int type,
       history::HistoryDetails* details) OVERRIDE {
     // Send the notification on the history thread.
-    if (NotificationService::current()) {
-      Details<history::HistoryDetails> det(details);
-      NotificationService::current()->Notify(type,
-                                             NotificationService::AllSources(),
-                                             det);
+    if (content::NotificationService::current()) {
+      content::Details<history::HistoryDetails> det(details);
+      content::NotificationService::current()->Notify(
+          type, content::Source<Profile>(profile_), det);
     }
     // Send the notification to the history service on the main thread.
-    message_loop_->PostTask(FROM_HERE, NewRunnableMethod(history_service_.get(),
-        &HistoryService::BroadcastNotifications, type, details));
+    message_loop_->PostTask(
+        FROM_HERE,
+        base::Bind(&HistoryService::BroadcastNotificationsHelper,
+                   history_service_.get(), type, base::Owned(details)));
   }
 
-  virtual void DBLoaded() OVERRIDE {
-    message_loop_->PostTask(FROM_HERE, NewRunnableMethod(history_service_.get(),
-        &HistoryService::OnDBLoaded));
+  virtual void DBLoaded(int backend_id) OVERRIDE {
+    message_loop_->PostTask(
+        FROM_HERE,
+        base::Bind(&HistoryService::OnDBLoaded, history_service_.get(),
+                   backend_id));
   }
 
-  virtual void StartTopSitesMigration() OVERRIDE {
-    message_loop_->PostTask(FROM_HERE, NewRunnableMethod(history_service_.get(),
-        &HistoryService::StartTopSitesMigration));
+  virtual void StartTopSitesMigration(int backend_id) OVERRIDE {
+    message_loop_->PostTask(
+        FROM_HERE,
+        base::Bind(&HistoryService::StartTopSitesMigration,
+                   history_service_.get(), backend_id));
   }
 
  private:
   scoped_refptr<HistoryService> history_service_;
   MessageLoop* message_loop_;
+  Profile* profile_;
 };
 
 // The history thread is intentionally not a BrowserThread because the
@@ -124,6 +136,7 @@ HistoryService::HistoryService()
     : thread_(new base::Thread(kHistoryThreadName)),
       profile_(NULL),
       backend_loaded_(false),
+      current_backend_id_(-1),
       bookmark_service_(NULL),
       no_db_(false),
       needs_top_sites_migration_(false) {
@@ -133,14 +146,15 @@ HistoryService::HistoryService(Profile* profile)
     : thread_(new base::Thread(kHistoryThreadName)),
       profile_(profile),
       backend_loaded_(false),
+      current_backend_id_(-1),
       bookmark_service_(NULL),
       no_db_(false),
       needs_top_sites_migration_(false) {
   DCHECK(profile_);
   registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
-                 Source<Profile>(profile_));
+                 content::Source<Profile>(profile_));
   registrar_.Add(this, chrome::NOTIFICATION_TEMPLATE_URL_REMOVED,
-                 Source<Profile>(profile_));
+                 content::Source<Profile>(profile_));
 }
 
 HistoryService::~HistoryService() {
@@ -180,14 +194,21 @@ void HistoryService::UnloadBackend() {
   // run before we release our backend refptr, the last reference will be held
   // by this thread and the destructor will be called from here.
   //
-  // Therefore, we create a task to run the Closing operation first. This holds
-  // a reference to the backend. Then we release our reference, then we schedule
-  // the task to run. After the task runs, it will delete its reference from
-  // the history thread, ensuring everything works properly.
-  Task* closing_task =
-      NewRunnableMethod(history_backend_.get(), &HistoryBackend::Closing);
-  history_backend_ = NULL;
+  // Therefore, we create a closure to run the Closing operation first. This
+  // holds a reference to the backend. Then we release our reference, then we
+  // schedule the task to run. After the task runs, it will delete its reference
+  // from the history thread, ensuring everything works properly.
+  //
+  // TODO(ajwong): Cleanup HistoryBackend lifetime issues.
+  //     See http://crbug.com/99767.
+  history_backend_->AddRef();
+  base::Closure closing_task =
+      base::Bind(&HistoryBackend::Closing, history_backend_.get());
   ScheduleTask(PRIORITY_NORMAL, closing_task);
+  closing_task.Reset();
+  HistoryBackend* raw_ptr = history_backend_.get();
+  history_backend_ = NULL;
+  thread_->message_loop()->ReleaseSoon(FROM_HERE, raw_ptr);
 }
 
 void HistoryService::Cleanup() {
@@ -258,7 +279,7 @@ HistoryService::Handle HistoryService::GetMostRecentKeywordSearchTerms(
     const string16& prefix,
     int max_count,
     CancelableRequestConsumerBase* consumer,
-    GetMostRecentKeywordSearchTermsCallback* callback) {
+    const GetMostRecentKeywordSearchTermsCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::GetMostRecentKeywordSearchTerms,
                   consumer,
                   new history::GetMostRecentKeywordSearchTermsRequest(callback),
@@ -270,27 +291,25 @@ void HistoryService::URLsNoLongerBookmarked(const std::set<GURL>& urls) {
                     urls);
 }
 
-HistoryService::Handle HistoryService::ScheduleDBTask(
-    HistoryDBTask* task,
-    CancelableRequestConsumerBase* consumer) {
+void HistoryService::ScheduleDBTask(HistoryDBTask* task,
+                                    CancelableRequestConsumerBase* consumer) {
   history::HistoryDBTaskRequest* request = new history::HistoryDBTaskRequest(
-      NewCallback(task, &HistoryDBTask::DoneRunOnMainThread));
+      base::Bind(&HistoryDBTask::DoneRunOnMainThread, task));
   request->value = task;  // The value is the task to execute.
-  return Schedule(PRIORITY_UI, &HistoryBackend::ProcessDBTask, consumer,
-                  request);
+  Schedule(PRIORITY_UI, &HistoryBackend::ProcessDBTask, consumer, request);
 }
 
 HistoryService::Handle HistoryService::QuerySegmentUsageSince(
     CancelableRequestConsumerBase* consumer,
     const Time from_time,
     int max_result_count,
-    SegmentQueryCallback* callback) {
+    const SegmentQueryCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::QuerySegmentUsage,
                   consumer, new history::QuerySegmentUsageRequest(callback),
                   from_time, max_result_count);
 }
 
-void HistoryService::SetOnBackendDestroyTask(Task* task) {
+void HistoryService::SetOnBackendDestroyTask(const base::Closure& task) {
   ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::SetOnBackendDestroyTask,
                     MessageLoop::current(), task);
 }
@@ -299,7 +318,7 @@ void HistoryService::AddPage(const GURL& url,
                              const void* id_scope,
                              int32 page_id,
                              const GURL& referrer,
-                             PageTransition::Type transition,
+                             content::PageTransition transition,
                              const history::RedirectList& redirects,
                              history::VisitSource visit_source,
                              bool did_replace_entry) {
@@ -312,7 +331,7 @@ void HistoryService::AddPage(const GURL& url,
                              const void* id_scope,
                              int32 page_id,
                              const GURL& referrer,
-                             PageTransition::Type transition,
+                             content::PageTransition transition,
                              const history::RedirectList& redirects,
                              history::VisitSource visit_source,
                              bool did_replace_entry) {
@@ -431,7 +450,7 @@ void HistoryService::SetPageContents(const GURL& url,
 HistoryService::Handle HistoryService::GetPageThumbnail(
     const GURL& page_url,
     CancelableRequestConsumerBase* consumer,
-    ThumbnailDataCallback* callback) {
+    const ThumbnailDataCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::GetPageThumbnail, consumer,
                   new history::GetPageThumbnailRequest(callback), page_url);
 }
@@ -478,6 +497,12 @@ void HistoryService::SetFaviconOutOfDateForPage(const GURL& page_url) {
                     &HistoryBackend::SetFaviconOutOfDateForPage, page_url);
 }
 
+void HistoryService::CloneFavicon(const GURL& old_page_url,
+                                  const GURL& new_page_url) {
+  ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::CloneFavicon,
+                    old_page_url, new_page_url);
+}
+
 void HistoryService::SetImportedFavicons(
     const std::vector<history::ImportedFaviconUsage>& favicon_usage) {
   ScheduleAndForget(PRIORITY_NORMAL,
@@ -492,7 +517,7 @@ HistoryService::Handle HistoryService::QueryURL(
     const GURL& url,
     bool want_visits,
     CancelableRequestConsumerBase* consumer,
-    QueryURLCallback* callback) {
+    const QueryURLCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::QueryURL, consumer,
                   new history::QueryURLRequest(callback), url, want_visits);
 }
@@ -505,17 +530,24 @@ HistoryService::Handle HistoryService::CreateDownload(
     int32 id,
     const DownloadPersistentStoreInfo& create_info,
     CancelableRequestConsumerBase* consumer,
-    HistoryService::DownloadCreateCallback* callback) {
+    const HistoryService::DownloadCreateCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::CreateDownload, consumer,
                   new history::DownloadCreateRequest(callback), id,
                   create_info);
+}
+
+HistoryService::Handle HistoryService::GetNextDownloadId(
+    CancelableRequestConsumerBase* consumer,
+    const DownloadNextIdCallback& callback) {
+  return Schedule(PRIORITY_NORMAL, &HistoryBackend::GetNextDownloadId, consumer,
+                  new history::DownloadNextIdRequest(callback));
 }
 
 // Handle queries for a list of all downloads in the history database's
 // 'downloads' table.
 HistoryService::Handle HistoryService::QueryDownloads(
     CancelableRequestConsumerBase* consumer,
-    DownloadQueryCallback* callback) {
+    const DownloadQueryCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::QueryDownloads, consumer,
                   new history::DownloadQueryRequest(callback));
 }
@@ -529,11 +561,8 @@ void HistoryService::CleanUpInProgressEntries() {
 
 // Handle updates for a particular download. This is a 'fire and forget'
 // operation, so we don't need to be called back.
-void HistoryService::UpdateDownload(int64 received_bytes,
-                                    int32 state,
-                                    int64 db_handle) {
-  ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::UpdateDownload,
-                    received_bytes, state, db_handle);
+void HistoryService::UpdateDownload(const DownloadPersistentStoreInfo& data) {
+  ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::UpdateDownload, data);
 }
 
 void HistoryService::UpdateDownloadPath(const FilePath& path,
@@ -559,7 +588,7 @@ HistoryService::Handle HistoryService::QueryHistory(
     const string16& text_query,
     const history::QueryOptions& options,
     CancelableRequestConsumerBase* consumer,
-    QueryHistoryCallback* callback) {
+    const QueryHistoryCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::QueryHistory, consumer,
                   new history::QueryHistoryRequest(callback),
                   text_query, options);
@@ -568,7 +597,7 @@ HistoryService::Handle HistoryService::QueryHistory(
 HistoryService::Handle HistoryService::QueryRedirectsFrom(
     const GURL& from_url,
     CancelableRequestConsumerBase* consumer,
-    QueryRedirectsCallback* callback) {
+    const QueryRedirectsCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::QueryRedirectsFrom, consumer,
       new history::QueryRedirectsRequest(callback), from_url);
 }
@@ -576,7 +605,7 @@ HistoryService::Handle HistoryService::QueryRedirectsFrom(
 HistoryService::Handle HistoryService::QueryRedirectsTo(
     const GURL& to_url,
     CancelableRequestConsumerBase* consumer,
-    QueryRedirectsCallback* callback) {
+    const QueryRedirectsCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::QueryRedirectsTo, consumer,
       new history::QueryRedirectsRequest(callback), to_url);
 }
@@ -584,7 +613,7 @@ HistoryService::Handle HistoryService::QueryRedirectsTo(
 HistoryService::Handle HistoryService::GetVisibleVisitCountToHost(
     const GURL& url,
     CancelableRequestConsumerBase* consumer,
-    GetVisibleVisitCountToHostCallback* callback) {
+    const GetVisibleVisitCountToHostCallback& callback) {
   return Schedule(PRIORITY_UI, &HistoryBackend::GetVisibleVisitCountToHost,
       consumer, new history::GetVisibleVisitCountToHostRequest(callback), url);
 }
@@ -592,7 +621,7 @@ HistoryService::Handle HistoryService::GetVisibleVisitCountToHost(
 HistoryService::Handle HistoryService::QueryTopURLsAndRedirects(
     int result_count,
     CancelableRequestConsumerBase* consumer,
-    QueryTopURLsAndRedirectsCallback* callback) {
+    const QueryTopURLsAndRedirectsCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::QueryTopURLsAndRedirects,
       consumer, new history::QueryTopURLsAndRedirectsRequest(callback),
       result_count);
@@ -602,7 +631,7 @@ HistoryService::Handle HistoryService::QueryMostVisitedURLs(
     int result_count,
     int days_back,
     CancelableRequestConsumerBase* consumer,
-    QueryMostVisitedURLsCallback* callback) {
+    const QueryMostVisitedURLsCallback& callback) {
   return Schedule(PRIORITY_NORMAL, &HistoryBackend::QueryMostVisitedURLs,
                   consumer,
                   new history::QueryMostVisitedURLsRequest(callback),
@@ -610,8 +639,8 @@ HistoryService::Handle HistoryService::QueryMostVisitedURLs(
 }
 
 void HistoryService::Observe(int type,
-                             const NotificationSource& source,
-                             const NotificationDetails& details) {
+                             const content::NotificationSource& source,
+                             const content::NotificationDetails& details) {
   if (!thread_)
     return;
 
@@ -628,7 +657,7 @@ void HistoryService::Observe(int type,
       // isn't. Therefore, we update the delete URLs after the fact.
       if (!profile_)
         return;  // No profile, probably unit testing.
-      Details<history::URLsDeletedDetails> deleted_details(details);
+      content::Details<history::URLsDeletedDetails> deleted_details(details);
       VisitedLinkMaster* visited_links = profile_->GetVisitedLinkMaster();
       if (!visited_links)
         return;  // Nobody to update.
@@ -640,7 +669,8 @@ void HistoryService::Observe(int type,
     }
 
     case chrome::NOTIFICATION_TEMPLATE_URL_REMOVED:
-      DeleteAllSearchTermsForKeyword(*(Details<TemplateURLID>(details).ptr()));
+      DeleteAllSearchTermsForKeyword(
+          *(content::Details<TemplateURLID>(details).ptr()));
       break;
 
     default:
@@ -672,8 +702,8 @@ void HistoryService::ScheduleAutocomplete(HistoryURLProvider* provider,
 }
 
 void HistoryService::ScheduleTask(SchedulePriority priority,
-                                  Task* task) {
-  // TODO(brettw): do prioritization.
+                                  const base::Closure& task) {
+  // TODO(brettw): Do prioritization.
   thread_->message_loop()->PostTask(FROM_HERE, task);
 }
 
@@ -700,8 +730,14 @@ bool HistoryService::CanAddURL(const GURL& url) {
   return true;
 }
 
-void HistoryService::SetInMemoryBackend(
+void HistoryService::SetInMemoryBackend(int backend_id,
     history::InMemoryHistoryBackend* mem_backend) {
+  if (!history_backend_ || current_backend_id_ != backend_id) {
+    VLOG(1) << "Message from obsolete backend";
+    // Cleaning up the memory backend.
+    delete mem_backend;
+    return;
+  }
   DCHECK(!in_memory_backend_.get()) << "Setting mem DB twice";
   in_memory_backend_.reset(mem_backend);
 
@@ -709,7 +745,12 @@ void HistoryService::SetInMemoryBackend(
   in_memory_backend_->AttachToHistoryService(profile_);
 }
 
-void HistoryService::NotifyProfileError(sql::InitStatus init_status) {
+void HistoryService::NotifyProfileError(int backend_id,
+                                        sql::InitStatus init_status) {
+  if (!history_backend_ || current_backend_id_ != backend_id) {
+    VLOG(1) << "Message from obsolete backend";
+    return;
+  }
   ShowProfileErrorDialog(
       (init_status == sql::INIT_FAILURE) ?
       IDS_COULDNT_OPEN_PROFILE_ERROR : IDS_PROFILE_TOO_NEW_ERROR);
@@ -720,24 +761,27 @@ void HistoryService::DeleteURL(const GURL& url) {
   ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::DeleteURL, url);
 }
 
+void HistoryService::DeleteURLsForTest(const std::vector<GURL>& urls) {
+  // We will update the visited links when we observe the delete
+  // notifications.
+  ScheduleAndForget(PRIORITY_NORMAL, &HistoryBackend::DeleteURLs, urls);
+}
+
 void HistoryService::ExpireHistoryBetween(
     const std::set<GURL>& restrict_urls,
     Time begin_time, Time end_time,
     CancelableRequestConsumerBase* consumer,
-    ExpireHistoryCallback* callback) {
+    const base::Closure& callback) {
 
   // We will update the visited links when we observe the delete notifications.
   Schedule(PRIORITY_UI, &HistoryBackend::ExpireHistoryBetween, consumer,
-           new history::ExpireHistoryRequest(callback),
+           new CancelableRequest<base::Closure>(callback),
            restrict_urls, begin_time, end_time);
 }
 
-void HistoryService::BroadcastNotifications(
+void HistoryService::BroadcastNotificationsHelper(
     int type,
-    history::HistoryDetails* details_deleted) {
-  // We take ownership of the passed-in pointer and delete it. It was made for
-  // us on another thread, so the caller doesn't know when we will handle it.
-  scoped_ptr<history::HistoryDetails> details(details_deleted);
+    history::HistoryDetails* details) {
   // TODO(evanm): this is currently necessitated by generate_profile, which
   // runs without a browser process. generate_profile should really create
   // a browser process, at which point this check can then be nuked.
@@ -749,23 +793,25 @@ void HistoryService::BroadcastNotifications(
 
   // The source of all of our notifications is the profile. Note that this
   // pointer is NULL in unit tests.
-  Source<Profile> source(profile_);
+  content::Source<Profile> source(profile_);
 
   // The details object just contains the pointer to the object that the
   // backend has allocated for us. The receiver of the notification will cast
   // this to the proper type.
-  Details<history::HistoryDetails> det(details_deleted);
+  content::Details<history::HistoryDetails> det(details);
 
-  NotificationService::current()->Notify(type, source, det);
+  content::NotificationService::current()->Notify(type, source, det);
 }
 
 void HistoryService::LoadBackendIfNecessary() {
   if (!thread_ || history_backend_)
     return;  // Failed to init, or already started loading.
 
+  ++current_backend_id_;
   scoped_refptr<HistoryBackend> backend(
       new HistoryBackend(history_dir_,
-                         new BackendDelegate(this),
+                         current_backend_id_,
+                         new BackendDelegate(this, profile_),
                          bookmark_service_));
   history_backend_.swap(backend);
 
@@ -778,11 +824,16 @@ void HistoryService::LoadBackendIfNecessary() {
   ScheduleAndForget(PRIORITY_UI, &HistoryBackend::Init, languages, no_db_);
 }
 
-void HistoryService::OnDBLoaded() {
+void HistoryService::OnDBLoaded(int backend_id) {
+  if (!history_backend_ || current_backend_id_ != backend_id) {
+    VLOG(1) << "Message from obsolete backend";
+    return;
+  }
   backend_loaded_ = true;
-  NotificationService::current()->Notify(chrome::NOTIFICATION_HISTORY_LOADED,
-                                         Source<Profile>(profile_),
-                                         Details<HistoryService>(this));
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_HISTORY_LOADED,
+      content::Source<Profile>(profile_),
+      content::Details<HistoryService>(this));
   if (thread_ && profile_) {
     // We don't want to force creation of TopSites.
     history::TopSites* ts = profile_->GetTopSitesWithoutCreating();
@@ -791,7 +842,11 @@ void HistoryService::OnDBLoaded() {
   }
 }
 
-void HistoryService::StartTopSitesMigration() {
+void HistoryService::StartTopSitesMigration(int backend_id) {
+  if (!history_backend_ || current_backend_id_ != backend_id) {
+    VLOG(1) << "Message from obsolete backend";
+    return;
+  }
   needs_top_sites_migration_ = true;
   if (thread_ && profile_) {
     // We don't want to force creation of TopSites.

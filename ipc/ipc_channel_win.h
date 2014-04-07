@@ -12,6 +12,7 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop.h"
 
 namespace base {
@@ -32,7 +33,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
   bool Send(Message* message);
   static bool IsNamedServerInitialized(const std::string& channel_id);
  private:
-  static const std::wstring PipeName(const std::string& channel_id);
+  static const string16 PipeName(const std::string& channel_id,
+                                 int32* secret);
   bool CreatePipe(const IPC::ChannelHandle &channel_handle, Mode mode);
 
   bool ProcessConnection();
@@ -79,7 +81,17 @@ class Channel::ChannelImpl : public MessageLoopForIO::IOHandler {
   // problems.  TODO(darin): make this unnecessary
   bool processing_incoming_;
 
-  ScopedRunnableMethodFactory<ChannelImpl> factory_;
+  // Determines if we should validate a client's secret on connection.
+  bool validate_client_;
+
+  // This is a unique per-channel value used to authenticate the client end of
+  // a connection. If the value is non-zero, the client passes it in the hello
+  // and the host validates. (We don't send the zero value fto preserve IPC
+  // compatability with existing clients that don't validate the channel.)
+  int32 client_secret_;
+
+
+  base::WeakPtrFactory<ChannelImpl> weak_factory_;
 
   scoped_ptr<base::NonThreadSafe> thread_check_;
 

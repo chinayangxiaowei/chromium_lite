@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -35,9 +35,25 @@ def Main(args):
     # See http://code.google.com/p/nativeclient/issues/detail?id=2124
     # TODO(mseaborn): Reenable when this issue is resolved.
     tests_to_disable.append('run_ppapi_ppb_var_browser_test')
-    # Te behavior of the URLRequest changed slightly and this test needs to be
+    # The behavior of the URLRequest changed slightly and this test needs to be
     # updated. http://code.google.com/p/chromium/issues/detail?id=94352
     tests_to_disable.append('run_ppapi_ppb_url_request_info_browser_test')
+    # This test failed and caused the build's gatekeep to close the tree.
+    # http://code.google.com/p/chromium/issues/detail?id=96434
+    tests_to_disable.append('run_ppapi_example_post_message_test')
+    # These tests are flakey on the chrome waterfall and need to be looked at.
+    # TODO(bsy): http://code.google.com/p/nativeclient/issues/detail?id=2509
+    tests_to_disable.append('run_pm_redir_stderr_fg_0_chrome_browser_test')
+    tests_to_disable.append('run_pm_redir_stderr_bg_0_chrome_browser_test')
+    tests_to_disable.append('run_pm_redir_stderr_bg_1000_chrome_browser_test')
+    tests_to_disable.append('run_pm_redir_stderr_bg_1000000_chrome_browser_test')
+    # http://code.google.com/p/nativeclient/issues/detail?id=2511
+    tests_to_disable.append('run_ppapi_ppb_image_data_browser_test')
+    # TODO(cdn): Reenable once we can pass
+    # --disable-extensions-resource-whitelist to chrome for this test.
+    # http://code.google.com/p/nativeclient/issues/detail?id=108131
+    tests_to_disable.append('run_ppapi_extension_mime_handler_browser_test')
+
 
     # TODO(ncbray) why did these tests flake?
     # http://code.google.com/p/nativeclient/issues/detail?id=2230
@@ -49,18 +65,19 @@ def Main(args):
         'run_srpc_manifest_file_chrome_browser_test',
         'run_srpc_nameservice_chrome_browser_test',
         'run_srpc_nrd_xfer_chrome_browser_test',
+        'run_no_fault_pm_nameservice_chrome_browser_test',
+        'run_fault_pm_nameservice_chrome_browser_test',
+        'run_fault_pq_os_pm_nameservice_chrome_browser_test',
+        'run_fault_pq_dep_pm_nameservice_chrome_browser_test',
         ])
 
-  if sys.platform == 'darwin':
-    # The following test is failing on Mac OS X 10.5.  This may be
-    # because of a kernel bug that we might need to work around.
-    # See http://code.google.com/p/nativeclient/issues/detail?id=1835
-    # TODO(mseaborn): Remove this when the issue is resolved.
-    tests_to_disable.append('run_async_messaging_test')
-    # The following test fails on debug builds of Chromium.
-    # See http://code.google.com/p/nativeclient/issues/detail?id=2077
-    # TODO(mseaborn): Remove this when the issue is resolved.
-    tests_to_disable.append('run_ppapi_example_font_test')
+    if sys.platform == 'darwin':
+      # TODO(mseaborn) fix
+      # http://code.google.com/p/nativeclient/issues/detail?id=1835
+      tests_to_disable.append('run_ppapi_crash_browser_test')
+
+  if sys.platform in ('win32', 'cygwin'):
+    tests_to_disable.append('run_ppapi_ppp_input_event_browser_test')
 
   script_dir = os.path.dirname(os.path.abspath(__file__))
   test_dir = os.path.dirname(script_dir)
@@ -69,6 +86,11 @@ def Main(args):
   nacl_integration_script = os.path.join(
       src_dir, 'native_client/build/buildbot_chrome_nacl_stage.py')
   cmd = [sys.executable,
+         '/b/build/scripts/slave/runtest.py',
+         '--run-python-script',
+         '--target=',
+         '--build-dir=',
+         '--',
          nacl_integration_script,
          '--disable_tests=%s' % ','.join(tests_to_disable)] + args
   sys.stdout.write('Running %s\n' % ' '.join(cmd))

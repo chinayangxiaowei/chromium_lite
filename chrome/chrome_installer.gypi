@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,6 +14,8 @@
           'target_name': 'gcapi_dll',
           'type': 'loadable_module',
           'dependencies': [
+            'installer_util',
+            '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/google_update/google_update.gyp:google_update',
           ],
           'include_dirs': [
@@ -21,6 +23,7 @@
           ],
           'sources': [
             'installer/gcapi/gcapi.cc',
+            'installer/gcapi/gcapi.def',
             'installer/gcapi/gcapi.h',
           ],
         },
@@ -28,6 +31,8 @@
           'target_name': 'gcapi_lib',
           'type': 'static_library',
           'dependencies': [
+            'installer_util',
+            '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/google_update/google_update.gyp:google_update',
           ],
           'include_dirs': [
@@ -41,14 +46,20 @@
         {
           'target_name': 'gcapi_test',
           'type': 'executable',
-          'dependencies': [
+          'dependencies': [   
+            'common',
             'gcapi_dll',
             'gcapi_lib',
+            'installer_util',
+            '<(DEPTH)/base/base.gyp:base',
+            '<(DEPTH)/base/base.gyp:test_support_base',
+            '<(DEPTH)/testing/gtest.gyp:gtest',
           ],
           'include_dirs': [
             '<(DEPTH)',
           ],
           'sources': [
+            'installer/gcapi/gcapi_last_run_test.cc',
             'installer/gcapi/gcapi_test.cc',
             'installer/gcapi/gcapi_test.rc',
             'installer/gcapi/resource.h',
@@ -60,11 +71,11 @@
           'dependencies': [
             'installer_util',
             'installer_util_strings',
-            '../content/content.gyp:content_common',
             '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/base/base.gyp:base_i18n',
             '<(DEPTH)/base/base.gyp:test_support_base',
             '<(DEPTH)/build/temp_gyp/googleurl.gyp:googleurl',
+            '<(DEPTH)/content/content.gyp:content_common',
             '<(DEPTH)/testing/gmock.gyp:gmock',
             '<(DEPTH)/testing/gtest.gyp:gtest',
           ],
@@ -97,6 +108,7 @@
             'installer/util/installer_util_unittests.rc',
             'installer/util/installer_util_unittests_resource.h',
             'installer/util/language_selector_unittest.cc',
+            'installer/util/logging_installer_unittest.cc',
             'installer/util/lzma_util_unittest.cc',
             'installer/util/master_preferences_unittest.cc',
             'installer/util/move_tree_work_item_unittest.cc',
@@ -175,13 +187,15 @@
             '<(SHARED_INTERMEDIATE_DIR)/installer_util_strings/installer_util_strings.rc',
             'installer/util/installation_validation_helper.cc',
             'installer/util/installation_validation_helper.h',
-            'test/mini_installer_test/run_all_unittests.cc',
-            'test/mini_installer_test/chrome_mini_installer.cc',
-            'test/mini_installer_test/chrome_mini_installer.h',
+            'test/mini_installer_test/installer_path_provider.cc',
+            'test/mini_installer_test/installer_path_provider.h',
+            'test/mini_installer_test/installer_test_util.cc',
+            'test/mini_installer_test/installer_test_util.h',
             'test/mini_installer_test/mini_installer_test_constants.cc',
             'test/mini_installer_test/mini_installer_test_constants.h',
-            'test/mini_installer_test/mini_installer_test_util.cc',
-            'test/mini_installer_test/mini_installer_test_util.h',
+            'test/mini_installer_test/run_all_unittests.cc',
+            'test/mini_installer_test/switch_builder.cc',
+            'test/mini_installer_test/switch_builder.h',
             'test/mini_installer_test/test.cc',
           ],
           'msvs_settings': {
@@ -198,9 +212,8 @@
             'installer_util_strings',
             '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/build/temp_gyp/googleurl.gyp:googleurl',
-            '<(DEPTH)/build/util/build_util.gyp:lastchange',
+            '<(DEPTH)/build/util/build_util.gyp:lastchange#target',
             '<(DEPTH)/build/util/support/support.gyp:*',
-            '<(DEPTH)/build/win/system.gyp:cygwin',
             '<(DEPTH)/chrome_frame/chrome_frame.gyp:chrome_tab_idl',
             '<(DEPTH)/chrome_frame/chrome_frame.gyp:npchrome_frame',
             '<(DEPTH)/breakpad/breakpad.gyp:breakpad_handler',
@@ -416,6 +429,7 @@
           '<(PRODUCT_DIR)/locales/en-US.pak',
           '<(PRODUCT_DIR)/nacl_helper',
           '<(PRODUCT_DIR)/nacl_helper_bootstrap',
+          '<@(default_apps_list_linux_dest)',
         ],
         'flock_bash': ['flock', '--', '/tmp/linux_package_lock', 'bash'],
         'deb_build': '<(PRODUCT_DIR)/installer/debian/build.sh',

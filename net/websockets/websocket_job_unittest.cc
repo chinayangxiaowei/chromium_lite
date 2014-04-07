@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
@@ -41,16 +44,18 @@ class MockSocketStream : public net::SocketStream {
       : SocketStream(url, delegate) {}
   virtual ~MockSocketStream() {}
 
-  virtual void Connect() {}
-  virtual bool SendData(const char* data, int len) {
+  virtual void Connect() OVERRIDE {}
+  virtual bool SendData(const char* data, int len) OVERRIDE {
     sent_data_ += std::string(data, len);
     return true;
   }
 
-  virtual void Close() {}
+  virtual void Close() OVERRIDE {}
   virtual void RestartWithAuth(
-      const string16& username, const string16& password) {}
-  virtual void DetachDelegate() {
+      const net::AuthCredentials& credentials) OVERRIDE {
+  }
+
+  virtual void DetachDelegate() OVERRIDE {
     delegate_ = NULL;
   }
 
@@ -71,47 +76,47 @@ class MockSocketStreamDelegate : public net::SocketStream::Delegate {
   }
   virtual ~MockSocketStreamDelegate() {}
 
-  void SetOnStartOpenConnection(Callback0::Type* callback) {
-    on_start_open_connection_.reset(callback);
+  void SetOnStartOpenConnection(const base::Closure& callback) {
+    on_start_open_connection_ = callback;
   }
-  void SetOnConnected(Callback0::Type* callback) {
-    on_connected_.reset(callback);
+  void SetOnConnected(const base::Closure& callback) {
+    on_connected_ = callback;
   }
-  void SetOnSentData(Callback0::Type* callback) {
-    on_sent_data_.reset(callback);
+  void SetOnSentData(const base::Closure& callback) {
+    on_sent_data_ = callback;
   }
-  void SetOnReceivedData(Callback0::Type* callback) {
-    on_received_data_.reset(callback);
+  void SetOnReceivedData(const base::Closure& callback) {
+    on_received_data_ = callback;
   }
-  void SetOnClose(Callback0::Type* callback) {
-    on_close_.reset(callback);
+  void SetOnClose(const base::Closure& callback) {
+    on_close_ = callback;
   }
 
   virtual int OnStartOpenConnection(net::SocketStream* socket,
-                                    net::CompletionCallback* callback) {
-    if (on_start_open_connection_.get())
-      on_start_open_connection_->Run();
+                                    const net::CompletionCallback& callback) {
+    if (!on_start_open_connection_.is_null())
+      on_start_open_connection_.Run();
     return net::OK;
   }
   virtual void OnConnected(net::SocketStream* socket,
                            int max_pending_send_allowed) {
-    if (on_connected_.get())
-      on_connected_->Run();
+    if (!on_connected_.is_null())
+      on_connected_.Run();
   }
   virtual void OnSentData(net::SocketStream* socket, int amount_sent) {
     amount_sent_ += amount_sent;
-    if (on_sent_data_.get())
-      on_sent_data_->Run();
+    if (!on_sent_data_.is_null())
+      on_sent_data_.Run();
   }
   virtual void OnReceivedData(net::SocketStream* socket,
                               const char* data, int len) {
     received_data_ += std::string(data, len);
-    if (on_received_data_.get())
-      on_received_data_->Run();
+    if (!on_received_data_.is_null())
+      on_received_data_.Run();
   }
   virtual void OnClose(net::SocketStream* socket) {
-    if (on_close_.get())
-      on_close_->Run();
+    if (!on_close_.is_null())
+      on_close_.Run();
   }
   virtual bool CanGetCookies(net::SocketStream* socket, const GURL& url) {
     return allow_all_cookies_;
@@ -130,11 +135,11 @@ class MockSocketStreamDelegate : public net::SocketStream::Delegate {
   int amount_sent_;
   bool allow_all_cookies_;
   std::string received_data_;
-  scoped_ptr<Callback0::Type> on_start_open_connection_;
-  scoped_ptr<Callback0::Type> on_connected_;
-  scoped_ptr<Callback0::Type> on_sent_data_;
-  scoped_ptr<Callback0::Type> on_received_data_;
-  scoped_ptr<Callback0::Type> on_close_;
+  base::Closure on_start_open_connection_;
+  base::Closure on_connected_;
+  base::Closure on_sent_data_;
+  base::Closure on_received_data_;
+  base::Closure on_close_;
 };
 
 class MockCookieStore : public net::CookieStore {
@@ -209,6 +214,11 @@ class MockCookieStore : public net::CookieStore {
                                  const base::Closure& callback) {
     ADD_FAILURE();
   }
+  virtual void DeleteAllCreatedBetweenAsync(const base::Time& delete_begin,
+                                            const base::Time& delete_end,
+                                            const DeleteCallback& callback) {
+    ADD_FAILURE();
+  }
 
   virtual net::CookieMonster* GetCookieMonster() { return NULL; }
 
@@ -228,30 +238,30 @@ class MockSSLConfigService : public net::SSLConfigService {
 
 class MockURLRequestContext : public net::URLRequestContext {
  public:
-  explicit MockURLRequestContext(net::CookieStore* cookie_store) {
+  explicit MockURLRequestContext(net::CookieStore* cookie_store)
+      : transport_security_state_(std::string()) {
     set_cookie_store(cookie_store);
-    transport_security_state_ = new net::TransportSecurityState(std::string());
-    set_transport_security_state(transport_security_state_.get());
+    set_transport_security_state(&transport_security_state_);
     net::TransportSecurityState::DomainState state;
     state.expiry = base::Time::Now() + base::TimeDelta::FromSeconds(1000);
-    transport_security_state_->EnableHost("upgrademe.com", state);
+    transport_security_state_.EnableHost("upgrademe.com", state);
   }
 
  private:
   friend class base::RefCountedThreadSafe<MockURLRequestContext>;
   virtual ~MockURLRequestContext() {}
 
-  scoped_refptr<net::TransportSecurityState> transport_security_state_;
+  net::TransportSecurityState transport_security_state_;
 };
 
 class MockHttpTransactionFactory : public net::HttpTransactionFactory {
  public:
-  MockHttpTransactionFactory(scoped_refptr<net::OrderedSocketData>& data) {
+  MockHttpTransactionFactory(net::OrderedSocketData* data) {
     data_ = data;
     net::MockConnect connect_data(false, net::OK);
     data_->set_connect_data(connect_data);
     session_deps_.reset(new net::SpdySessionDependencies);
-    session_deps_->socket_factory->AddSocketDataProvider(data_.get());
+    session_deps_->socket_factory->AddSocketDataProvider(data_);
     http_session_ =
         net::SpdySessionDependencies::SpdyCreateSession(session_deps_.get());
     host_port_pair_.set_host("example.com");
@@ -268,16 +278,14 @@ class MockHttpTransactionFactory : public net::HttpTransactionFactory {
 
     transport_params_ = new net::TransportSocketParams(host_port_pair_,
                                                        net::MEDIUM,
-                                                       GURL(),
                                                        false,
                                                        false);
     net::ClientSocketHandle* connection = new net::ClientSocketHandle;
-    EXPECT_EQ(net::OK, connection->Init(host_port_pair_.ToString(),
-                                        transport_params_,
-                                        net::MEDIUM,
-                                        NULL,
-                                        http_session_->transport_socket_pool(),
-                                        net::BoundNetLog()));
+    EXPECT_EQ(net::OK,
+              connection->Init(host_port_pair_.ToString(), transport_params_,
+                               net::MEDIUM, net::CompletionCallback(),
+                               http_session_->GetTransportSocketPool(),
+                               net::BoundNetLog()));
     EXPECT_EQ(net::OK,
               session_->InitializeWithSocket(connection, false, net::OK));
   }
@@ -293,7 +301,7 @@ class MockHttpTransactionFactory : public net::HttpTransactionFactory {
     return http_session_.get();
   }
  private:
-  scoped_refptr<net::OrderedSocketData> data_;
+  net::OrderedSocketData* data_;
   scoped_ptr<net::SpdySessionDependencies> session_deps_;
   scoped_refptr<net::HttpNetworkSession> http_session_;
   scoped_refptr<net::TransportSocketParams> transport_params_;
@@ -328,10 +336,10 @@ class WebSocketJobTest : public PlatformTest {
       websocket_->SendData(kDataHello, kDataHelloLength);
   }
   void DoSync() {
-    sync_callback_.Run(OK);
+    sync_test_callback_.callback().Run(OK);
   }
   int WaitForResult() {
-    return sync_callback_.WaitForResult();
+    return sync_test_callback_.WaitForResult();
   }
  protected:
   enum StreamType {
@@ -360,7 +368,7 @@ class WebSocketJobTest : public PlatformTest {
 
     if (stream_type == STREAM_SOCKET || stream_type == STREAM_SPDY_WEBSOCKET) {
       if (stream_type == STREAM_SPDY_WEBSOCKET) {
-        http_factory_.reset(new MockHttpTransactionFactory(data_));
+        http_factory_.reset(new MockHttpTransactionFactory(data_.get()));
         context_->set_http_transaction_factory(http_factory_.get());
       }
 
@@ -440,8 +448,8 @@ class WebSocketJobTest : public PlatformTest {
   scoped_refptr<WebSocketJob> websocket_;
   scoped_refptr<SocketStream> socket_;
   scoped_ptr<MockClientSocketFactory> socket_factory_;
-  scoped_refptr<OrderedSocketData> data_;
-  TestCompletionCallback sync_callback_;
+  scoped_ptr<OrderedSocketData> data_;
+  TestCompletionCallback sync_test_callback_;
   scoped_refptr<MockSSLConfigService> ssl_config_service_;
   scoped_ptr<net::ProxyService> proxy_service_;
   scoped_ptr<net::MockHostResolver> host_resolver_;
@@ -819,21 +827,21 @@ void WebSocketJobTest::TestConnectByWebSocket(ThrottlingOption throttling) {
              4),
     MockRead(false, 0, 5)  // EOF
   };
-  data_ = new OrderedSocketData(
-      reads, arraysize(reads), writes, arraysize(writes));
+  data_.reset(new OrderedSocketData(
+      reads, arraysize(reads), writes, arraysize(writes)));
 
   GURL url("ws://example.com/demo");
   MockSocketStreamDelegate delegate;
   WebSocketJobTest* test = this;
   if (throttling == THROTTLING_ON)
     delegate.SetOnStartOpenConnection(
-        NewCallback(test, &WebSocketJobTest::DoSync));
+        base::Bind(&WebSocketJobTest::DoSync, base::Unretained(test)));
   delegate.SetOnConnected(
-      NewCallback(test, &WebSocketJobTest::DoSendRequest));
+      base::Bind(&WebSocketJobTest::DoSendRequest, base::Unretained(test)));
   delegate.SetOnReceivedData(
-      NewCallback(test, &WebSocketJobTest::DoSendData));
+      base::Bind(&WebSocketJobTest::DoSendData, base::Unretained(test)));
   delegate.SetOnClose(
-      NewCallback(test, &WebSocketJobTest::DoSync));
+      base::Bind(&WebSocketJobTest::DoSync, base::Unretained(test)));
   InitWebSocketJob(url, &delegate, STREAM_SOCKET);
 
   scoped_refptr<WebSocketJob> block_websocket;
@@ -929,26 +937,26 @@ void WebSocketJobTest::TestConnectBySpdy(
   };
 
   if (spdy == SPDY_ON)
-    data_ = new OrderedSocketData(
+    data_.reset(new OrderedSocketData(
         reads_spdy, arraysize(reads_spdy),
-        writes_spdy, arraysize(writes_spdy));
+        writes_spdy, arraysize(writes_spdy)));
   else
-    data_ = new OrderedSocketData(
+    data_.reset(new OrderedSocketData(
         reads_websocket, arraysize(reads_websocket),
-        writes_websocket, arraysize(writes_websocket));
+        writes_websocket, arraysize(writes_websocket)));
 
   GURL url("ws://example.com/demo");
   MockSocketStreamDelegate delegate;
   WebSocketJobTest* test = this;
   if (throttling == THROTTLING_ON)
     delegate.SetOnStartOpenConnection(
-        NewCallback(test, &WebSocketJobTest::DoSync));
+        base::Bind(&WebSocketJobTest::DoSync, base::Unretained(test)));
   delegate.SetOnConnected(
-      NewCallback(test, &WebSocketJobTest::DoSendRequest));
+      base::Bind(&WebSocketJobTest::DoSendRequest, base::Unretained(test)));
   delegate.SetOnReceivedData(
-      NewCallback(test, &WebSocketJobTest::DoSendData));
+      base::Bind(&WebSocketJobTest::DoSendData, base::Unretained(test)));
   delegate.SetOnClose(
-      NewCallback(test, &WebSocketJobTest::DoSync));
+      base::Bind(&WebSocketJobTest::DoSync, base::Unretained(test)));
   InitWebSocketJob(url, &delegate, STREAM_SPDY_WEBSOCKET);
 
   scoped_refptr<WebSocketJob> block_websocket;

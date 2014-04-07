@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -41,6 +41,7 @@
         'gpu_demo_framework',
         '../gpu.gyp:command_buffer_client',
         '../gpu.gyp:command_buffer_service',
+        '../gpu.gyp:gles2_implementation',
         '../../base/base.gyp:base',
         '../../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
         '../../ui/ui.gyp:ui',
@@ -203,6 +204,17 @@
       'sources': [
         'gles2_book/example.h',
         'gles2_book/demo_texture_wrap.cc',
+      ],
+    },
+    {
+      'target_name': 'compressed_textures_exe',
+      'type': 'executable',
+      'dependencies': [
+        'gpu_demo_framework_exe',
+        '../../third_party/gles2_book/gles2_book.gyp:es_util',
+      ],
+      'sources': [
+        'compressed_textures/compressed_textures.cc',
       ],
     },
   ],

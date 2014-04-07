@@ -10,6 +10,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/message_loop_proxy.h"
+#include "content/common/content_export.h"
 #include "webkit/quota/quota_client.h"
 #include "webkit/quota/quota_task.h"
 #include "webkit/quota/quota_types.h"
@@ -22,25 +23,25 @@ class IndexedDBContext;
 class IndexedDBQuotaClient : public quota::QuotaClient,
                              public quota::QuotaTaskObserver {
  public:
-  IndexedDBQuotaClient(
+  CONTENT_EXPORT IndexedDBQuotaClient(
       base::MessageLoopProxy* tracker_thread,
       IndexedDBContext* indexed_db_context);
-  virtual ~IndexedDBQuotaClient();
+  CONTENT_EXPORT virtual ~IndexedDBQuotaClient();
 
   // QuotaClient method overrides
   virtual ID id() const OVERRIDE;
   virtual void OnQuotaManagerDestroyed() OVERRIDE;
   virtual void GetOriginUsage(const GURL& origin_url,
                               quota::StorageType type,
-                              GetUsageCallback* callback) OVERRIDE;
+                              const GetUsageCallback& callback) OVERRIDE;
   virtual void GetOriginsForType(quota::StorageType type,
-                                 GetOriginsCallback* callback) OVERRIDE;
+                                 const GetOriginsCallback& callback) OVERRIDE;
   virtual void GetOriginsForHost(quota::StorageType type,
                                  const std::string& host,
-                                 GetOriginsCallback* callback) OVERRIDE;
+                                 const GetOriginsCallback& callback) OVERRIDE;
   virtual void DeleteOriginData(const GURL& origin,
                                 quota::StorageType type,
-                                DeletionCallback* callback) OVERRIDE;
+                                const DeletionCallback& callback) OVERRIDE;
  private:
   class HelperTask;
   class GetOriginUsageTask;
@@ -50,17 +51,17 @@ class IndexedDBQuotaClient : public quota::QuotaClient,
   class DeleteOriginTask;
 
   typedef quota::CallbackQueueMap1
-      <GetUsageCallback*,
+      <GetUsageCallback,
        GURL,  // origin
        int64
       > UsageForOriginCallbackMap;
   typedef quota::CallbackQueue2
-      <GetOriginsCallback*,
+      <GetOriginsCallback,
        const std::set<GURL>&,
        quota::StorageType
       > OriginsForTypeCallbackQueue;
   typedef quota::CallbackQueueMap2
-      <GetOriginsCallback*,
+      <GetOriginsCallback,
        std::string,  // host
        const std::set<GURL>&,
        quota::StorageType

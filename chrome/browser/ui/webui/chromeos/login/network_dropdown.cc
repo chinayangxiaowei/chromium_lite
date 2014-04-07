@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 
 #include <string>
 
-#include "content/browser/webui/web_ui.h"
-#include "chrome/browser/chromeos/login/proxy_settings_dialog.h"
+#include "base/values.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
+#include "chrome/browser/chromeos/login/base_login_display_host.h"
+#include "chrome/browser/chromeos/login/login_display_host.h"
 #include "chrome/browser/ui/webui/web_ui_util.h"
+#include "content/public/browser/web_ui.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/gfx/font.h"
 
@@ -18,7 +20,7 @@ namespace chromeos {
 // WebUI specific implementation of the NetworkMenu class.
 class NetworkMenuWebUI : public NetworkMenu {
  public:
-  NetworkMenuWebUI(NetworkMenu::Delegate* delegate, WebUI* web_ui);
+  NetworkMenuWebUI(NetworkMenu::Delegate* delegate, content::WebUI* web_ui);
 
   // NetworkMenu override:
   virtual void UpdateMenu() OVERRIDE;
@@ -31,7 +33,7 @@ class NetworkMenuWebUI : public NetworkMenu {
   base::ListValue* ConvertMenuModel(ui::MenuModel* model);
 
   // WebUI where network menu is located.
-  WebUI* web_ui_;
+  content::WebUI* web_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkMenuWebUI);
 };
@@ -39,8 +41,8 @@ class NetworkMenuWebUI : public NetworkMenu {
 // NetworkMenuWebUI ------------------------------------------------------------
 
 NetworkMenuWebUI::NetworkMenuWebUI(NetworkMenu::Delegate* delegate,
-                                   WebUI* web_ui)
-    : NetworkMenu(delegate, false),
+                                   content::WebUI* web_ui)
+    : NetworkMenu(delegate),
       web_ui_(web_ui) {
 }
 
@@ -91,9 +93,10 @@ base::ListValue* NetworkMenuWebUI::ConvertMenuModel(ui::MenuModel* model) {
 
 // NetworkDropdown -------------------------------------------------------------
 
-NetworkDropdown::NetworkDropdown(WebUI *web_ui, gfx::NativeWindow parent_window)
-    : parent_window_(parent_window),
-      web_ui_(web_ui) {
+NetworkDropdown::NetworkDropdown(content::WebUI* web_ui,
+                                 bool oobe)
+    : web_ui_(web_ui),
+      oobe_(oobe) {
   network_menu_.reset(new NetworkMenuWebUI(this, web_ui));
   network_icon_.reset(
       new NetworkMenuIcon(this, NetworkMenuIcon::DROPDOWN_MODE));
@@ -103,6 +106,10 @@ NetworkDropdown::NetworkDropdown(WebUI *web_ui, gfx::NativeWindow parent_window)
 
 NetworkDropdown::~NetworkDropdown() {
   CrosLibrary::Get()->GetNetworkLibrary()->RemoveNetworkManagerObserver(this);
+}
+
+void NetworkDropdown::SetLastNetworkType(ConnectionType last_network_type) {
+  network_icon_->set_last_network_type(last_network_type);
 }
 
 void NetworkDropdown::OnItemChosen(int id) {
@@ -115,19 +122,15 @@ views::MenuButton* NetworkDropdown::GetMenuButton() {
 }
 
 gfx::NativeWindow NetworkDropdown::GetNativeWindow() const {
-  return parent_window_;
+  return BaseLoginDisplayHost::default_host()->GetNativeWindow();
 }
 
 void NetworkDropdown::OpenButtonOptions() {
-  if (proxy_settings_dialog_.get() == NULL) {
-    proxy_settings_dialog_.reset(
-        new ProxySettingsDialog(this, GetNativeWindow()));
-  }
-  proxy_settings_dialog_->Show();
+  BaseLoginDisplayHost::default_host()->OpenProxySettings();
 }
 
 bool NetworkDropdown::ShouldOpenButtonOptions() const {
-  return true;
+  return !oobe_;
 }
 
 void NetworkDropdown::OnNetworkManagerChanged(NetworkLibrary* cros) {
@@ -139,18 +142,16 @@ void NetworkDropdown::Refresh() {
   network_menu_->UpdateMenu();
 }
 
-void NetworkDropdown::OnDialogClosed() {
-}
-
 void NetworkDropdown::NetworkMenuIconChanged() {
   SetNetworkIconAndText();
 }
 
 void NetworkDropdown::SetNetworkIconAndText() {
   string16 text;
-  const SkBitmap* icon_bitmap = network_icon_->GetIconAndText(&text);
+  const SkBitmap icon_bitmap = network_icon_->GetIconAndText(&text);
   std::string icon_str =
-      icon_bitmap ? web_ui_util::GetImageDataUrl(*icon_bitmap) : std::string();
+      icon_bitmap.empty() ?
+          std::string() : web_ui_util::GetImageDataUrl(icon_bitmap);
   base::StringValue title(text);
   base::StringValue icon(icon_str);
   web_ui_->CallJavascriptFunction("cr.ui.DropDown.updateNetworkTitle",

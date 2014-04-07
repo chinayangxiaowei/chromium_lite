@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
@@ -17,6 +19,7 @@
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/synchronization/lock.h"
 #include "base/version.h"
 #include "base/win/iat_patch_function.h"
 #include "base/win/registry.h"
@@ -24,7 +27,6 @@
 #include "skia/ext/platform_canvas.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/plugins/npapi/default_plugin_shared.h"
 #include "webkit/plugins/npapi/plugin_constants_win.h"
 #include "webkit/plugins/npapi/plugin_group.h"
 #include "webkit/plugins/npapi/plugin_instance.h"
@@ -32,6 +34,7 @@
 #include "webkit/plugins/npapi/plugin_list.h"
 #include "webkit/plugins/npapi/plugin_stream_url.h"
 #include "webkit/plugins/npapi/webplugin.h"
+#include "webkit/plugins/npapi/webplugin_ime_win.h"
 
 using WebKit::WebCursorInfo;
 using WebKit::WebKeyboardEvent;
@@ -69,26 +72,30 @@ const int kWindowedPluginPopupTimerMs = 50;
 WebPluginDelegateImpl* g_current_plugin_instance = NULL;
 
 typedef std::deque<MSG> ThrottleQueue;
-base::LazyInstance<ThrottleQueue> g_throttle_queue(base::LINKER_INITIALIZED);
-base::LazyInstance<std::map<HWND, WNDPROC> > g_window_handle_proc_map(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<ThrottleQueue> g_throttle_queue = LAZY_INSTANCE_INITIALIZER;
 
+base::LazyInstance<std::map<HWND, WNDPROC> > g_window_handle_proc_map =
+    LAZY_INSTANCE_INITIALIZER;
 
 // Helper object for patching the TrackPopupMenu API.
-base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_track_popup_menu(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_track_popup_menu =
+    LAZY_INSTANCE_INITIALIZER;
 
 // Helper object for patching the SetCursor API.
-base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_set_cursor(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_set_cursor =
+    LAZY_INSTANCE_INITIALIZER;
 
 // Helper object for patching the RegEnumKeyExW API.
-base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_reg_enum_key_ex_w(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_reg_enum_key_ex_w =
+    LAZY_INSTANCE_INITIALIZER;
+
+// Helper object for patching the GetProcAddress API.
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_get_proc_address =
+    LAZY_INSTANCE_INITIALIZER;
 
 // Helper object for patching the GetKeyState API.
-base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_get_key_state(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_get_key_state =
+    LAZY_INSTANCE_INITIALIZER;
 
 // Saved key state globals and helper access functions.
 SHORT (WINAPI *g_iat_orig_get_key_state)(int vkey);
@@ -120,6 +127,34 @@ void ClearSavedKeyState() {
   memset(g_saved_key_state, 0, sizeof(g_saved_key_state));
 }
 
+// Helper objects for patching VirtualQuery, VirtualProtect.
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_virtual_protect =
+    LAZY_INSTANCE_INITIALIZER;
+BOOL (WINAPI *g_iat_orig_virtual_protect)(LPVOID address,
+                                          SIZE_T size,
+                                          DWORD new_protect,
+                                          PDWORD old_protect);
+
+base::LazyInstance<base::win::IATPatchFunction> g_iat_patch_virtual_free =
+    LAZY_INSTANCE_INITIALIZER;
+BOOL (WINAPI *g_iat_orig_virtual_free)(LPVOID address,
+                                       SIZE_T size,
+                                       DWORD free_type);
+
+const DWORD kExecPageMask = PAGE_EXECUTE_READ;
+static volatile intptr_t g_max_exec_mem_size;
+static scoped_ptr<base::Lock> g_exec_mem_lock;
+
+void UpdateExecMemSize(intptr_t size) {
+  base::AutoLock locked(*g_exec_mem_lock);
+
+  static intptr_t s_exec_mem_size = 0;
+
+  // Floor to zero since shutdown may unmap pages created before our hooks.
+  s_exec_mem_size = std::max(0, s_exec_mem_size + size);
+  if (s_exec_mem_size > g_max_exec_mem_size)
+    g_max_exec_mem_size = s_exec_mem_size;
+}
 
 // http://crbug.com/16114
 // Enforces providing a valid device context in NPWindow, so that NPP_SetWindow
@@ -301,6 +336,50 @@ SHORT WINAPI WebPluginDelegateImpl::GetKeyStatePatch(int vkey) {
   return g_iat_orig_get_key_state(vkey);
 }
 
+// We need to track RX memory usage in plugins to prevent JIT spraying attacks.
+// This is done by hooking VirtualProtect and VirtualFree.
+BOOL WINAPI WebPluginDelegateImpl::VirtualProtectPatch(LPVOID address,
+                                                       SIZE_T size,
+                                                       DWORD new_protect,
+                                                       PDWORD old_protect) {
+  if (g_iat_orig_virtual_protect(address, size, new_protect, old_protect)) {
+    bool is_exec = new_protect == kExecPageMask;
+    bool was_exec = *old_protect == kExecPageMask;
+    if (is_exec && !was_exec) {
+      UpdateExecMemSize(static_cast<intptr_t>(size));
+    } else if (!is_exec && was_exec) {
+      UpdateExecMemSize(-(static_cast<intptr_t>(size)));
+    }
+
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+BOOL WINAPI WebPluginDelegateImpl::VirtualFreePatch(LPVOID address,
+                                                    SIZE_T size,
+                                                    DWORD free_type) {
+  MEMORY_BASIC_INFORMATION mem_info;
+  if (::VirtualQuery(address, &mem_info, sizeof(mem_info))) {
+    size_t exec_size = 0;
+    void* base_address = mem_info.AllocationBase;
+    do {
+      if (mem_info.Protect == kExecPageMask)
+        exec_size += mem_info.RegionSize;
+      BYTE* next = reinterpret_cast<BYTE*>(mem_info.BaseAddress) +
+          mem_info.RegionSize;
+      if (!::VirtualQuery(next, &mem_info, sizeof(mem_info)))
+        break;
+    } while (base_address == mem_info.AllocationBase);
+
+    if (exec_size)
+      UpdateExecMemSize(-(static_cast<intptr_t>(exec_size)));
+  }
+
+  return g_iat_orig_virtual_free(address, size, free_type);
+}
+
 WebPluginDelegateImpl::WebPluginDelegateImpl(
     gfx::PluginWindowHandle containing_view,
     PluginInstance *instance)
@@ -319,8 +398,7 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
       handle_event_message_filter_hook_(NULL),
       handle_event_pump_messages_event_(NULL),
       user_gesture_message_posted_(false),
-#pragma warning(suppress: 4355)  // can use this
-      user_gesture_msg_factory_(this),
+      ALLOW_THIS_IN_INITIALIZER_LIST(user_gesture_msg_factory_(this)),
       handle_event_depth_(0),
       mouse_hook_(NULL),
       first_set_window_call_(true),
@@ -346,8 +424,10 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
     if (filename == kBuiltinFlashPlugin &&
         base::win::GetVersion() >= base::win::VERSION_VISTA) {
       quirks_ |= PLUGIN_QUIRK_REPARENT_IN_BROWSER |
-                 PLUGIN_QUIRK_PATCH_GETKEYSTATE;
+                 PLUGIN_QUIRK_PATCH_GETKEYSTATE |
+                 PLUGIN_QUIRK_PATCH_VM_API;
     }
+    quirks_ |= PLUGIN_QUIRK_EMULATE_IME;
   } else if (filename == kAcrobatReaderPlugin) {
     // Check for the version number above or equal 9.
     int major_version = GetPluginMajorVersion(plugin_info);
@@ -488,6 +568,17 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
         WebPluginDelegateImpl::RegEnumKeyExWPatch);
   }
 
+  // Flash retrieves the pointers to IMM32 functions with GetProcAddress() calls
+  // and use them to retrieve IME data. We add a patch to this function so we
+  // can dispatch these IMM32 calls to the WebPluginIMEWin class, which emulates
+  // IMM32 functions for Flash.
+  if (!g_iat_patch_get_proc_address.Pointer()->is_patched() &&
+      (quirks_ & PLUGIN_QUIRK_EMULATE_IME)) {
+    g_iat_patch_get_proc_address.Pointer()->Patch(
+        GetPluginPath().value().c_str(), "kernel32.dll", "GetProcAddress",
+        GetProcAddressPatch);
+  }
+
   // Under UIPI the key state does not get forwarded properly to the child
   // plugin window. So, instead we track the key state manually and intercept
   // GetKeyState.
@@ -497,6 +588,26 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
     g_iat_patch_get_key_state.Pointer()->Patch(
         L"gcswf32.dll", "user32.dll", "GetKeyState",
         WebPluginDelegateImpl::GetKeyStatePatch);
+  }
+
+  // Hook the VM calls so we can track the amount of executable memory being
+  // allocated by Flash (and potentially other plugins).
+  if (quirks_ & PLUGIN_QUIRK_PATCH_VM_API) {
+    if (!g_exec_mem_lock.get())
+      g_exec_mem_lock.reset(new base::Lock());
+
+    if (!g_iat_patch_virtual_protect.Pointer()->is_patched()) {
+      g_iat_orig_virtual_protect = ::VirtualProtect;
+      g_iat_patch_virtual_protect.Pointer()->Patch(
+          L"gcswf32.dll", "kernel32.dll", "VirtualProtect",
+          WebPluginDelegateImpl::VirtualProtectPatch);
+    }
+    if (!g_iat_patch_virtual_free.Pointer()->is_patched()) {
+      g_iat_orig_virtual_free = ::VirtualFree;
+      g_iat_patch_virtual_free.Pointer()->Patch(
+          L"gcswf32.dll", "kernel32.dll", "VirtualFree",
+          WebPluginDelegateImpl::VirtualFreePatch);
+    }
   }
 
   return true;
@@ -509,6 +620,12 @@ void WebPluginDelegateImpl::PlatformDestroyInstance() {
   // Unpatch if this is the last plugin instance.
   if (instance_->plugin_lib()->instance_count() != 1)
     return;
+
+  // Pass back the stats for max executable memory.
+  if (quirks_ & PLUGIN_QUIRK_PATCH_VM_API) {
+    plugin_->ReportExecutableMemory(g_max_exec_mem_size);
+    g_max_exec_mem_size = 0;
+  }
 
   if (g_iat_patch_set_cursor.Pointer()->is_patched())
     g_iat_patch_set_cursor.Pointer()->Unpatch();
@@ -681,8 +798,8 @@ void WebPluginDelegateImpl::OnThrottleMessage() {
   }
 
   if (!throttle_queue_was_empty) {
-    MessageLoop::current()->PostDelayedTask(FROM_HERE,
-        NewRunnableFunction(&WebPluginDelegateImpl::OnThrottleMessage),
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE, base::Bind(&WebPluginDelegateImpl::OnThrottleMessage),
         kFlashWMUSERMessageThrottleDelayMs);
   }
 }
@@ -704,8 +821,8 @@ void WebPluginDelegateImpl::ThrottleMessage(WNDPROC proc, HWND hwnd,
   throttle_queue->push_back(msg);
 
   if (throttle_queue->size() == 1) {
-    MessageLoop::current()->PostDelayedTask(FROM_HERE,
-        NewRunnableFunction(&WebPluginDelegateImpl::OnThrottleMessage),
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE, base::Bind(&WebPluginDelegateImpl::OnThrottleMessage),
         kFlashWMUSERMessageThrottleDelayMs);
   }
 }
@@ -1063,9 +1180,10 @@ LRESULT CALLBACK WebPluginDelegateImpl::NativeWndProc(
 
       delegate->instance()->PushPopupsEnabledState(true);
 
-      MessageLoop::current()->PostDelayedTask(FROM_HERE,
-          delegate->user_gesture_msg_factory_.NewRunnableMethod(
-              &WebPluginDelegateImpl::OnUserGestureEnd),
+      MessageLoop::current()->PostDelayedTask(
+          FROM_HERE,
+          base::Bind(&WebPluginDelegateImpl::OnUserGestureEnd,
+                     delegate->user_gesture_msg_factory_.GetWeakPtr()),
           kWindowedPluginPopupTimerMs);
     }
 
@@ -1311,6 +1429,14 @@ bool WebPluginDelegateImpl::PlatformHandleInputEvent(
       UnsetSavedKeyState(np_event.wParam);
   }
 
+  // Allow this plug-in to access this IME emulator through IMM32 API while the
+  // plug-in is processing this event.
+  if (GetQuirks() & PLUGIN_QUIRK_EMULATE_IME) {
+    if (!plugin_ime_.get())
+      plugin_ime_.reset(new WebPluginIMEWin);
+  }
+  WebPluginIMEWin::ScopedLock lock(plugin_ime_.get());
+
   HWND last_focus_window = NULL;
 
   if (ShouldTrackEventForModalLoops(&np_event)) {
@@ -1485,6 +1611,41 @@ LONG WINAPI WebPluginDelegateImpl::RegEnumKeyExWPatch(
   }
 
   return rv;
+}
+
+void WebPluginDelegateImpl::ImeCompositionUpdated(
+    const string16& text,
+    const std::vector<int>& clauses,
+    const std::vector<int>& target,
+    int cursor_position) {
+  if (!plugin_ime_.get())
+    plugin_ime_.reset(new WebPluginIMEWin);
+
+  plugin_ime_->CompositionUpdated(text, clauses, target, cursor_position);
+  plugin_ime_->SendEvents(instance());
+}
+
+void WebPluginDelegateImpl::ImeCompositionCompleted(const string16& text) {
+  if (!plugin_ime_.get())
+    plugin_ime_.reset(new WebPluginIMEWin);
+  plugin_ime_->CompositionCompleted(text);
+  plugin_ime_->SendEvents(instance());
+}
+
+bool WebPluginDelegateImpl::GetIMEStatus(int* input_type,
+                                         gfx::Rect* caret_rect) {
+  if (!plugin_ime_.get())
+    return false;
+  return plugin_ime_->GetStatus(input_type, caret_rect);
+}
+
+// static
+FARPROC WINAPI WebPluginDelegateImpl::GetProcAddressPatch(HMODULE module,
+                                                          LPCSTR name) {
+  FARPROC imm_function = WebPluginIMEWin::GetProcAddress(name);
+  if (imm_function)
+    return imm_function;
+  return ::GetProcAddress(module, name);
 }
 
 void WebPluginDelegateImpl::HandleCaptureForMessage(HWND window,

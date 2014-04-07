@@ -1,31 +1,41 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/external_extension_provider_impl.h"
 
+#include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
+#include "base/metrics/field_trial.h"
 #include "base/path_service.h"
+#include "base/string_util.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/external_extension_provider_interface.h"
 #include "chrome/browser/extensions/external_policy_extension_loader.h"
 #include "chrome/browser/extensions/external_pref_extension_loader.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
-#include "content/browser/browser_thread.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
+#include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
+
+#if !defined(OS_CHROMEOS)
+#include "chrome/browser/extensions/default_apps.h"
+#endif
 
 #if defined(OS_WIN)
 #include "chrome/browser/extensions/external_registry_extension_loader_win.h"
 #endif
 
+using content::BrowserThread;
+
 // Constants for keeping track of extension preferences in a dictionary.
-const char ExternalExtensionProviderImpl::kLocation[] = "location";
-const char ExternalExtensionProviderImpl::kState[] = "state";
 const char ExternalExtensionProviderImpl::kExternalCrx[] = "external_crx";
 const char ExternalExtensionProviderImpl::kExternalVersion[] =
     "external_version";
@@ -38,13 +48,16 @@ ExternalExtensionProviderImpl::ExternalExtensionProviderImpl(
     VisitorInterface* service,
     ExternalExtensionLoader* loader,
     Extension::Location crx_location,
-    Extension::Location download_location)
+    Extension::Location download_location,
+    int creation_flags)
   : crx_location_(crx_location),
     download_location_(download_location),
     service_(service),
     prefs_(NULL),
     ready_(false),
-    loader_(loader) {
+    loader_(loader),
+    creation_flags_(creation_flags),
+    auto_acknowledge_(false) {
   loader_->Init(this);
 }
 
@@ -53,7 +66,7 @@ ExternalExtensionProviderImpl::~ExternalExtensionProviderImpl() {
   loader_->OwnerShutdown();
 }
 
-void ExternalExtensionProviderImpl::VisitRegisteredExtension() const {
+void ExternalExtensionProviderImpl::VisitRegisteredExtension() {
   // The loader will call back to SetPrefs.
   loader_->StartLoading();
 }
@@ -61,7 +74,7 @@ void ExternalExtensionProviderImpl::VisitRegisteredExtension() const {
 void ExternalExtensionProviderImpl::SetPrefs(DictionaryValue* prefs) {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  // Check if the service is still alive. It is possible that it had went
+  // Check if the service is still alive. It is possible that it went
   // away while |loader_| was working on the FILE thread.
   if (!service_) return;
 
@@ -184,7 +197,8 @@ void ExternalExtensionProviderImpl::SetPrefs(DictionaryValue* prefs) {
         continue;
       }
       service_->OnExternalExtensionFileFound(extension_id, version.get(), path,
-                                             crx_location_);
+                                             crx_location_, creation_flags_,
+                                             auto_acknowledge_);
     } else { // if (has_external_update_url)
       CHECK(has_external_update_url);  // Checking of keys above ensures this.
       if (download_location_ == Extension::INVALID) {
@@ -212,15 +226,19 @@ void ExternalExtensionProviderImpl::SetPrefs(DictionaryValue* prefs) {
     prefs_->Remove(*it, NULL);
   }
 
-  service_->OnExternalProviderReady();
+  service_->OnExternalProviderReady(this);
 }
 
 void ExternalExtensionProviderImpl::ServiceShutdown() {
   service_ = NULL;
 }
 
-bool ExternalExtensionProviderImpl::IsReady() {
+bool ExternalExtensionProviderImpl::IsReady() const {
   return ready_;
+}
+
+int ExternalExtensionProviderImpl::GetCreationFlags() const {
+  return creation_flags_;
 }
 
 bool ExternalExtensionProviderImpl::HasExtension(
@@ -271,25 +289,56 @@ void ExternalExtensionProviderImpl::CreateExternalProviders(
     VisitorInterface* service,
     Profile* profile,
     ProviderCollection* provider_list) {
-  provider_list->push_back(
-      linked_ptr<ExternalExtensionProviderInterface>(
-          new ExternalExtensionProviderImpl(
-              service,
-              new ExternalPrefExtensionLoader(
-                  chrome::DIR_EXTERNAL_EXTENSIONS),
-              Extension::EXTERNAL_PREF,
-              Extension::EXTERNAL_PREF_DOWNLOAD)));
 
-#if defined(OS_CHROMEOS)
-  // Chrome OS specific source for OEM customization.
+  // On Mac OS, items in /Library/... should be written by the superuser.
+  // Check that all components of the path are writable by root only.
+  ExternalPrefExtensionLoader::Options check_admin_permissions_on_mac;
+#if defined(OS_MACOSX)
+  check_admin_permissions_on_mac =
+    ExternalPrefExtensionLoader::ENSURE_PATH_CONTROLLED_BY_ADMIN;
+#else
+  check_admin_permissions_on_mac = ExternalPrefExtensionLoader::NONE;
+#endif
+
   provider_list->push_back(
       linked_ptr<ExternalExtensionProviderInterface>(
           new ExternalExtensionProviderImpl(
               service,
               new ExternalPrefExtensionLoader(
-                  chrome::DIR_USER_EXTERNAL_EXTENSIONS),
+                  chrome::DIR_EXTERNAL_EXTENSIONS,
+                  check_admin_permissions_on_mac),
               Extension::EXTERNAL_PREF,
-              Extension::EXTERNAL_PREF_DOWNLOAD)));
+              Extension::EXTERNAL_PREF_DOWNLOAD,
+              Extension::NO_FLAGS)));
+
+#if defined(OS_MACOSX)
+  // Support old path to external extensions file as we migrate to the
+  // new one.  See crbug/67203.
+  provider_list->push_back(
+      linked_ptr<ExternalExtensionProviderInterface>(
+          new ExternalExtensionProviderImpl(
+              service,
+              new ExternalPrefExtensionLoader(
+                  chrome::DIR_DEPRECATED_EXTERNAL_EXTENSIONS,
+                  ExternalPrefExtensionLoader::NONE),
+              Extension::EXTERNAL_PREF,
+              Extension::EXTERNAL_PREF_DOWNLOAD,
+              Extension::NO_FLAGS)));
+#endif
+
+#if defined(OS_CHROMEOS) || defined (OS_MACOSX)
+  // Define a per-user source of external extensions.
+  // On Chrome OS, this serves as a source for OEM customization.
+  provider_list->push_back(
+      linked_ptr<ExternalExtensionProviderInterface>(
+          new ExternalExtensionProviderImpl(
+              service,
+              new ExternalPrefExtensionLoader(
+                  chrome::DIR_USER_EXTERNAL_EXTENSIONS,
+                  ExternalPrefExtensionLoader::NONE),
+              Extension::EXTERNAL_PREF,
+              Extension::EXTERNAL_PREF_DOWNLOAD,
+              Extension::NO_FLAGS)));
 #endif
 #if defined(OS_WIN)
   provider_list->push_back(
@@ -298,7 +347,8 @@ void ExternalExtensionProviderImpl::CreateExternalProviders(
               service,
               new ExternalRegistryExtensionLoader,
               Extension::EXTERNAL_REGISTRY,
-              Extension::INVALID)));
+              Extension::INVALID,
+              Extension::NO_FLAGS)));
 #endif
   provider_list->push_back(
       linked_ptr<ExternalExtensionProviderInterface>(
@@ -306,5 +356,20 @@ void ExternalExtensionProviderImpl::CreateExternalProviders(
               service,
               new ExternalPolicyExtensionLoader(profile),
               Extension::INVALID,
-              Extension::EXTERNAL_POLICY_DOWNLOAD)));
+              Extension::EXTERNAL_POLICY_DOWNLOAD,
+              Extension::NO_FLAGS)));
+
+#if !defined(OS_CHROMEOS)
+  provider_list->push_back(
+      linked_ptr<ExternalExtensionProviderInterface>(
+          new default_apps::Provider(
+              profile,
+              service,
+              new ExternalPrefExtensionLoader(
+                  chrome::DIR_DEFAULT_APPS,
+                  ExternalPrefExtensionLoader::NONE),
+              Extension::EXTERNAL_PREF,
+              Extension::INVALID,
+              Extension::FROM_BOOKMARK)));
+#endif
 }

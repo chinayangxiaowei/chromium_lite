@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,7 +32,8 @@ BrowserAccessibilityManagerWin::BrowserAccessibilityManagerWin(
     const WebAccessibility& src,
     BrowserAccessibilityDelegate* delegate,
     BrowserAccessibilityFactory* factory)
-    : BrowserAccessibilityManager(parent_view, src, delegate, factory) {
+    : BrowserAccessibilityManager(parent_view, src, delegate, factory),
+      tracked_scroll_object_(NULL) {
   // Allow NULL parent_view for unit testing.
   if (parent_view == NULL) {
     window_iaccessible_ = NULL;
@@ -46,6 +47,10 @@ BrowserAccessibilityManagerWin::BrowserAccessibilityManagerWin(
 }
 
 BrowserAccessibilityManagerWin::~BrowserAccessibilityManagerWin() {
+  if (tracked_scroll_object_) {
+    tracked_scroll_object_->Release();
+    tracked_scroll_object_ = NULL;
+  }
 }
 
 IAccessible* BrowserAccessibilityManagerWin::GetParentWindowIAccessible() {
@@ -96,11 +101,40 @@ void BrowserAccessibilityManagerWin::NotifyAccessibilityEvent(
     case ViewHostMsg_AccEvent::ALERT:
       event_id = EVENT_SYSTEM_ALERT;
       break;
+    case ViewHostMsg_AccEvent::MENU_LIST_VALUE_CHANGED:
+      event_id = EVENT_OBJECT_VALUECHANGE;
+      break;
+    case ViewHostMsg_AccEvent::SELECTED_CHILDREN_CHANGED:
+      event_id = EVENT_OBJECT_SELECTIONWITHIN;
+      break;
     default:
       // Not all WebKit accessibility events result in a Windows
       // accessibility notification.
-      return;
+      break;
   }
 
-  NotifyWinEvent(event_id, GetParentView(), OBJID_CLIENT, node->child_id());
+  if (event_id != EVENT_MIN)
+    NotifyWinEvent(event_id, GetParentView(), OBJID_CLIENT, node->child_id());
+
+  // If this is a layout complete notification (sent when a container scrolls)
+  // and there is a descendant tracked object, send a notification on it.
+  // TODO(dmazzoni): remove once http://crbug.com/113483 is fixed.
+  if (type == ViewHostMsg_AccEvent::LAYOUT_COMPLETE &&
+      tracked_scroll_object_ &&
+      tracked_scroll_object_->IsDescendantOf(node)) {
+    NotifyWinEvent(IA2_EVENT_VISIBLE_DATA_CHANGED,
+                   GetParentView(),
+                   OBJID_CLIENT,
+                   tracked_scroll_object_->child_id());
+    tracked_scroll_object_->Release();
+    tracked_scroll_object_ = NULL;
+  }
+}
+
+void BrowserAccessibilityManagerWin::TrackScrollingObject(
+    BrowserAccessibilityWin* node) {
+  if (tracked_scroll_object_)
+    tracked_scroll_object_->Release();
+  tracked_scroll_object_ = node;
+  tracked_scroll_object_->AddRef();
 }

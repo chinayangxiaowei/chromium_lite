@@ -4,7 +4,14 @@
 
 #include "chrome/browser/ui/views/tabs/fake_base_tab_strip_controller.h"
 
+FakeBaseTabStripController::FakeBaseTabStripController() {
+}
+
 FakeBaseTabStripController::~FakeBaseTabStripController() {
+}
+
+const TabStripSelectionModel& FakeBaseTabStripController::GetSelectionModel() {
+  return selection_model_;
 }
 
 int FakeBaseTabStripController::GetCount() const {
@@ -70,7 +77,7 @@ void FakeBaseTabStripController::PerformDrop(bool drop_before,
                                              const GURL& url) {
 }
 
-bool FakeBaseTabStripController::IsCompatibleWith(BaseTabStrip* other) const {
+bool FakeBaseTabStripController::IsCompatibleWith(TabStrip* other) const {
   return false;
 }
 
@@ -78,4 +85,8 @@ void FakeBaseTabStripController::CreateNewTab() {
 }
 
 void FakeBaseTabStripController::ClickActiveTab(int index) {
+}
+
+bool FakeBaseTabStripController::IsIncognito() {
+  return false;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,22 +10,22 @@
 #define CONTENT_RENDERER_GPU_RENDERER_GL_CONTEXT_H_
 #pragma once
 
-#include "base/callback_old.h"
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/non_thread_safe.h"
 #include "build/build_config.h"
+#include "ui/gfx/gl/gpu_preference.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
 
 class GpuChannelHost;
 class CommandBufferProxy;
 class GURL;
-class Task;
-class TransportTextureHost;
 
 namespace gpu {
+class TransferBuffer;
 namespace gles2 {
 class GLES2CmdHelper;
 class GLES2Implementation;
@@ -104,11 +104,12 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext>,
   // more cross-platform.
   static RendererGLContext* CreateViewContext(
       GpuChannelHost* channel,
-      int render_view_id,
+      int32 surface_id,
       RendererGLContext* share_group,
       const char* allowed_extensions,
       const int32* attrib_list,
-      const GURL& active_arl);
+      const GURL& active_url,
+      gfx::GpuPreference gpu_preference);
 
   // Create a RendererGLContext that renders to an offscreen frame buffer. If
   // parent is not NULL, that RendererGLContext can access a copy of the created
@@ -124,7 +125,8 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext>,
       RendererGLContext* share_group,
       const char* allowed_extensions,
       const int32* attrib_list,
-      const GURL& active_url);
+      const GURL& active_url,
+      gfx::GpuPreference gpu_preference);
 
   // Sets the parent context. If any parent textures have been created for
   // another parent, it is important to delete them before changing the parent.
@@ -142,7 +144,8 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext>,
   // Deletes a texture in the parent's RendererGLContext.
   void DeleteParentTexture(uint32 texture);
 
-  void SetContextLostCallback(Callback1<ContextLostReason>::Type* callback);
+  void SetContextLostCallback(
+      const base::Callback<void(ContextLostReason)>& callback);
 
   // Set the current RendererGLContext for the calling thread.
   static bool MakeCurrent(RendererGLContext* context);
@@ -155,10 +158,10 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext>,
 
   // Run the task once the channel has been flushed. Takes care of deleting the
   // task whether the echo succeeds or not.
-  bool Echo(Task* task);
+  bool Echo(const base::Closure& task);
 
-  // Create a TransportTextureHost object associated with the context.
-  scoped_refptr<TransportTextureHost> CreateTransportTextureHost();
+  // Sends an IPC message with the new state of surface visibility
+  bool SetSurfaceVisible(bool visibility);
 
   // TODO(gman): Remove this
   void DisableShaderTranslation();
@@ -180,23 +183,24 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext>,
   explicit RendererGLContext(GpuChannelHost* channel);
 
   bool Initialize(bool onscreen,
-                  int render_view_id,
+                  int32 surface_id,
                   const gfx::Size& size,
                   RendererGLContext* share_group,
                   const char* allowed_extensions,
                   const int32* attrib_list,
-                  const GURL& active_url);
+                  const GURL& active_url,
+                  gfx::GpuPreference gpu_preference);
   void Destroy();
 
   void OnContextLost();
 
   scoped_refptr<GpuChannelHost> channel_;
   base::WeakPtr<RendererGLContext> parent_;
-  scoped_ptr<Callback1<ContextLostReason>::Type> context_lost_callback_;
+  base::Callback<void(ContextLostReason)> context_lost_callback_;
   uint32 parent_texture_id_;
   CommandBufferProxy* command_buffer_;
   gpu::gles2::GLES2CmdHelper* gles2_helper_;
-  int32 transfer_buffer_id_;
+  gpu::TransferBuffer* transfer_buffer_;
   gpu::gles2::GLES2Implementation* gles2_implementation_;
   Error last_error_;
   int frame_number_;

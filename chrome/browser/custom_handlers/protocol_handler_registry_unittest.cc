@@ -8,19 +8,23 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/custom_handlers/protocol_handler.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_pref_service.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/renderer_host/test_render_view_host.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_source.h"
+#include "content/test/test_browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "net/url_request/url_request.h"
+
+using content::BrowserThread;
+
+namespace {
 
 class FakeDelegate : public ProtocolHandlerRegistry::Delegate {
  public:
@@ -138,30 +142,31 @@ ShellIntegration::DefaultProtocolClientWorker* FakeDelegate::CreateShellWorker(
   return new FakeProtocolClientWorker(observer, protocol, force_os_failure_);
 }
 
-class NotificationCounter : public NotificationObserver {
+class NotificationCounter : public content::NotificationObserver {
  public:
   explicit NotificationCounter(Profile* profile)
       : events_(0),
         notification_registrar_() {
     notification_registrar_.Add(this,
         chrome::NOTIFICATION_PROTOCOL_HANDLER_REGISTRY_CHANGED,
-        Source<Profile>(profile));
+        content::Source<Profile>(profile));
   }
 
   int events() { return events_; }
   bool notified() { return events_ > 0; }
   void Clear() { events_ = 0; }
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     ++events_;
   }
 
   int events_;
-  NotificationRegistrar notification_registrar_;
+  content::NotificationRegistrar notification_registrar_;
 };
 
-class QueryProtocolHandlerOnChange : public NotificationObserver {
+class QueryProtocolHandlerOnChange
+    : public content::NotificationObserver {
  public:
   QueryProtocolHandlerOnChange(Profile* profile,
                                ProtocolHandlerRegistry* registry)
@@ -170,12 +175,12 @@ class QueryProtocolHandlerOnChange : public NotificationObserver {
       notification_registrar_() {
     notification_registrar_.Add(this,
         chrome::NOTIFICATION_PROTOCOL_HANDLER_REGISTRY_CHANGED,
-        Source<Profile>(profile));
+        content::Source<Profile>(profile));
   }
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) {
     std::vector<std::string> output;
     registry_->GetRegisteredProtocols(&output);
     called_ = true;
@@ -183,8 +188,10 @@ class QueryProtocolHandlerOnChange : public NotificationObserver {
 
   ProtocolHandlerRegistry* registry_;
   bool called_;
-  NotificationRegistrar notification_registrar_;
+  content::NotificationRegistrar notification_registrar_;
 };
+
+}  // namespace
 
 class ProtocolHandlerRegistryTest : public testing::Test {
  protected:
@@ -202,8 +209,8 @@ class ProtocolHandlerRegistryTest : public testing::Test {
   ProtocolHandler CreateProtocolHandler(const std::string& protocol,
                                         const GURL& url,
                                         const std::string& title) {
-  return ProtocolHandler::CreateProtocolHandler(protocol, url,
-      UTF8ToUTF16(title));
+    return ProtocolHandler::CreateProtocolHandler(protocol, url,
+        UTF8ToUTF16(title));
   }
 
   ProtocolHandler CreateProtocolHandler(const std::string& protocol,
@@ -222,16 +229,13 @@ class ProtocolHandlerRegistryTest : public testing::Test {
 
   virtual void SetUp() {
     ui_message_loop_.reset(new MessageLoopForUI());
-    ui_thread_.reset(new BrowserThread(BrowserThread::UI,
-                                       MessageLoop::current()));
-    io_thread_.reset(new BrowserThread(BrowserThread::IO));
-    base::Thread::Options options;
-    options.message_loop_type = MessageLoop::TYPE_IO;
-    io_thread_->StartWithOptions(options);
+    ui_thread_.reset(new content::TestBrowserThread(BrowserThread::UI,
+                                                    MessageLoop::current()));
+    io_thread_.reset(new content::TestBrowserThread(BrowserThread::IO));
+    io_thread_->StartIOThread();
 
-    file_thread_.reset(new BrowserThread(BrowserThread::FILE));
-    options.message_loop_type = MessageLoop::TYPE_DEFAULT;
-    file_thread_->StartWithOptions(options);
+    file_thread_.reset(new content::TestBrowserThread(BrowserThread::FILE));
+    file_thread_->Start();
 
     profile_.reset(new TestingProfile());
     profile_->SetPrefService(new TestingPrefService());
@@ -260,9 +264,9 @@ class ProtocolHandlerRegistryTest : public testing::Test {
   }
 
   scoped_ptr<MessageLoopForUI> ui_message_loop_;
-  scoped_ptr<BrowserThread> ui_thread_;
-  scoped_ptr<BrowserThread> io_thread_;
-  scoped_ptr<BrowserThread> file_thread_;
+  scoped_ptr<content::TestBrowserThread> ui_thread_;
+  scoped_ptr<content::TestBrowserThread> io_thread_;
+  scoped_ptr<content::TestBrowserThread> file_thread_;
 
   FakeDelegate* delegate_;
   scoped_ptr<TestingProfile> profile_;
@@ -304,8 +308,24 @@ TEST_F(ProtocolHandlerRegistryTest, DisableDeregistersProtocolHandlers) {
 TEST_F(ProtocolHandlerRegistryTest, IgnoreProtocolHandler) {
   registry()->OnIgnoreRegisterProtocolHandler(test_protocol_handler());
   ASSERT_TRUE(registry()->IsIgnored(test_protocol_handler()));
+
   registry()->RemoveIgnoredHandler(test_protocol_handler());
   ASSERT_FALSE(registry()->IsIgnored(test_protocol_handler()));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, IgnoreEquivalentProtocolHandler) {
+  ProtocolHandler ph1 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test2");
+
+  registry()->OnIgnoreRegisterProtocolHandler(ph1);
+  ASSERT_TRUE(registry()->IsIgnored(ph1));
+  ASSERT_TRUE(registry()->HasIgnoredEquivalent(ph2));
+
+  registry()->RemoveIgnoredHandler(ph1);
+  ASSERT_FALSE(registry()->IsIgnored(ph1));
+  ASSERT_FALSE(registry()->HasIgnoredEquivalent(ph2));
 }
 
 TEST_F(ProtocolHandlerRegistryTest, SaveAndLoad) {
@@ -431,6 +451,49 @@ TEST_F(ProtocolHandlerRegistryTest, TestIsRegistered) {
   registry()->OnAcceptRegisterProtocolHandler(ph2);
 
   ASSERT_TRUE(registry()->IsRegistered(ph1));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestIsEquivalentRegistered) {
+  ProtocolHandler ph1 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test2");
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+
+  ASSERT_TRUE(registry()->IsRegistered(ph1));
+  ASSERT_TRUE(registry()->HasRegisteredEquivalent(ph2));
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestSilentlyRegisterHandler) {
+  ProtocolHandler ph1 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("test", GURL("http://test/%s"),
+                                              "test2");
+  ProtocolHandler ph3 = CreateProtocolHandler("ignore", GURL("http://test/%s"),
+                                              "ignore1");
+  ProtocolHandler ph4 = CreateProtocolHandler("ignore", GURL("http://test/%s"),
+                                              "ignore2");
+
+  ASSERT_FALSE(registry()->SilentlyHandleRegisterHandlerRequest(ph1));
+  ASSERT_FALSE(registry()->IsRegistered(ph1));
+
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+  ASSERT_TRUE(registry()->IsRegistered(ph1));
+
+  ASSERT_TRUE(registry()->SilentlyHandleRegisterHandlerRequest(ph2));
+  ASSERT_FALSE(registry()->IsRegistered(ph1));
+  ASSERT_TRUE(registry()->IsRegistered(ph2));
+
+  ASSERT_FALSE(registry()->SilentlyHandleRegisterHandlerRequest(ph3));
+  ASSERT_FALSE(registry()->IsRegistered(ph3));
+
+  registry()->OnIgnoreRegisterProtocolHandler(ph3);
+  ASSERT_FALSE(registry()->IsRegistered(ph3));
+  ASSERT_TRUE(registry()->IsIgnored(ph3));
+
+  ASSERT_TRUE(registry()->SilentlyHandleRegisterHandlerRequest(ph4));
+  ASSERT_FALSE(registry()->IsRegistered(ph4));
+  ASSERT_TRUE(registry()->HasIgnoredEquivalent(ph4));
 }
 
 TEST_F(ProtocolHandlerRegistryTest, TestRemoveHandlerRemovesDefault) {
@@ -576,7 +639,7 @@ TEST_F(ProtocolHandlerRegistryTest, MAYBE_TestOSRegistrationFailure) {
 static void MakeRequest(const GURL& url, ProtocolHandlerRegistry* registry) {
   net::URLRequest request(url, NULL);
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                          new MessageLoop::QuitTask());
+                          MessageLoop::QuitClosure());
   scoped_refptr<net::URLRequestJob> job(registry->MaybeCreateJob(&request));
   ASSERT_TRUE(job.get() != NULL);
 }
@@ -587,14 +650,14 @@ TEST_F(ProtocolHandlerRegistryTest, TestMaybeCreateTaskWorksFromIOThread) {
   GURL url("mailto:someone@something.com");
   scoped_refptr<ProtocolHandlerRegistry> r(registry());
   BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                          NewRunnableFunction(MakeRequest, url, r));
+                          base::Bind(MakeRequest, url, r));
   MessageLoop::current()->Run();
 }
 
 static void CheckIsHandled(const std::string& scheme, bool expected,
     ProtocolHandlerRegistry* registry) {
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                          new MessageLoop::QuitTask());
+                          MessageLoop::QuitClosure());
   ASSERT_EQ(expected, registry->IsHandledProtocolIO(scheme));
 }
 
@@ -606,7 +669,7 @@ TEST_F(ProtocolHandlerRegistryTest, TestIsHandledProtocolWorksOnIOThread) {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableFunction(CheckIsHandled, scheme, true, r));
+      base::Bind(CheckIsHandled, scheme, true, r));
 }
 
 TEST_F(ProtocolHandlerRegistryTest, TestRemovingDefaultFallsBackToOldDefault) {
@@ -655,19 +718,79 @@ TEST_F(ProtocolHandlerRegistryTest, TestClearDefaultGetsPropagatedToIO) {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableFunction(CheckIsHandled, scheme, false, r));
+      base::Bind(CheckIsHandled, scheme, false, r));
 }
 
 static void QuitUILoop() {
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-                          new MessageLoop::QuitTask());
+                          MessageLoop::QuitClosure());
 }
 
 TEST_F(ProtocolHandlerRegistryTest, TestLoadEnabledGetsPropogatedToIO) {
   registry()->Disable();
   ReloadProtocolHandlerRegistry();
   BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-                          NewRunnableFunction(QuitUILoop));
+                          base::Bind(QuitUILoop));
   MessageLoop::current()->Run();
   ASSERT_FALSE(enabled_io());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestReplaceHandler) {
+  ProtocolHandler ph1 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/%s"), "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/updated-url/%s"), "test2");
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+  ASSERT_TRUE(registry()->AttemptReplace(ph2));
+  const ProtocolHandler& handler(registry()->GetHandlerFor("mailto"));
+  ASSERT_EQ(handler.url(), ph2.url());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestReplaceNonDefaultHandler) {
+  ProtocolHandler ph1 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/%s"), "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/updated-url/%s"), "test2");
+  ProtocolHandler ph3 = CreateProtocolHandler("mailto",
+      GURL("http://else.com/%s"), "test3");
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+  registry()->OnAcceptRegisterProtocolHandler(ph3);
+  ASSERT_TRUE(registry()->AttemptReplace(ph2));
+  const ProtocolHandler& handler(registry()->GetHandlerFor("mailto"));
+  ASSERT_EQ(handler.url(), ph3.url());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestReplaceRemovesStaleHandlers) {
+  ProtocolHandler ph1 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/%s"), "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/updated-url/%s"), "test2");
+  ProtocolHandler ph3 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/third/%s"), "test");
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+  registry()->OnAcceptRegisterProtocolHandler(ph2);
+
+  // This should replace the previous two handlers.
+  ASSERT_TRUE(registry()->AttemptReplace(ph3));
+  const ProtocolHandler& handler(registry()->GetHandlerFor("mailto"));
+  ASSERT_EQ(handler.url(), ph3.url());
+  registry()->RemoveHandler(ph3);
+  ASSERT_TRUE(registry()->GetHandlerFor("mailto").IsEmpty());
+}
+
+TEST_F(ProtocolHandlerRegistryTest, TestIsSameOrigin) {
+  ProtocolHandler ph1 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/%s"), "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("mailto",
+      GURL("http://test.com/updated-url/%s"), "test2");
+  ProtocolHandler ph3 = CreateProtocolHandler("mailto",
+      GURL("http://other.com/%s"), "test");
+  ASSERT_EQ(ph1.url().GetOrigin() == ph2.url().GetOrigin(),
+      ph1.IsSameOrigin(ph2));
+  ASSERT_EQ(ph1.url().GetOrigin() == ph2.url().GetOrigin(),
+      ph2.IsSameOrigin(ph1));
+  ASSERT_EQ(ph2.url().GetOrigin() == ph3.url().GetOrigin(),
+      ph2.IsSameOrigin(ph3));
+  ASSERT_EQ(ph3.url().GetOrigin() == ph2.url().GetOrigin(),
+      ph3.IsSameOrigin(ph2));
 }

@@ -7,9 +7,11 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "base/mac/cocoa_protocols.h"
 #include "base/memory/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
 #import "chrome/browser/ui/cocoa/base_bubble_controller.h"
+#import "chrome/browser/ui/cocoa/tracking_area.h"
 
 class AvatarMenuModel;
 class AvatarMenuModelObserver;
@@ -49,7 +51,7 @@ class Browser;
 ////////////////////////////////////////////////////////////////////////////////
 
 // This view controller manages the menu item XIB.
-@interface AvatarMenuItemController : NSViewController {
+@interface AvatarMenuItemController : NSViewController<NSAnimationDelegate> {
  @private
   // The parent menu controller; owns this.
   __weak AvatarMenuBubbleController* controller_;
@@ -57,17 +59,30 @@ class Browser;
   // The AvatarMenuModel::item.model_index field.
   size_t modelIndex_;
 
+  // Tracks whether this item is currently highlighted.
+  BOOL isHighlighted_;
+
+  // The animation showing the edit link, which is run after the user has
+  // dwelled over the item for a short delay.
+  scoped_nsobject<NSAnimation> linkAnimation_;
+
   // Instance variables that back the outlets.
   __weak NSImageView* iconView_;
   __weak NSImageView* activeView_;
   __weak NSTextField* nameField_;
-  __weak HoverImageButton* editButton_;
+  // These two views sit on top of each other, and only one is visible at a
+  // time. The editButton_ is visible when the mouse is over the item and the
+  // emailField_ is visible otherwise.
+  __weak NSTextField* emailField_;
+  __weak NSButton* editButton_;
 }
 @property(readonly, nonatomic) size_t modelIndex;
+@property(assign, nonatomic) BOOL isHighlighted;
 @property(assign, nonatomic) IBOutlet NSImageView* iconView;
 @property(assign, nonatomic) IBOutlet NSImageView* activeView;
 @property(assign, nonatomic) IBOutlet NSTextField* nameField;
-@property(assign, nonatomic) IBOutlet HoverImageButton* editButton;
+@property(assign, nonatomic) IBOutlet NSTextField* emailField;
+@property(assign, nonatomic) IBOutlet NSButton* editButton;
 
 // Designated initializer.
 - (id)initWithModelIndex:(size_t)modelIndex
@@ -89,12 +104,23 @@ class Browser;
 // view controller for changing highlight style of the item subviews. This is
 // an invisible button that underlays most of the menu item and is responsible
 // for performing the switch profile action.
-@interface SwitchProfileButtonCell : NSButtonCell {
+@interface AvatarMenuItemView : NSView {
  @private
   // The controller that manages this.
   __weak AvatarMenuItemController* viewController_;
+
+  // Used to highlight the background on hover.
+  ScopedCrTrackingArea trackingArea_;
 }
 @property(assign, nonatomic) IBOutlet AvatarMenuItemController* viewController;
+@end
+
+////////////////////////////////////////////////////////////////////////////////
+
+@interface AccessibilityIgnoredImageCell : NSImageCell
+@end
+
+@interface AccessibilityIgnoredTextFieldCell : NSTextFieldCell
 @end
 
 // Testing API /////////////////////////////////////////////////////////////////
@@ -108,5 +134,8 @@ class Browser;
 - (NSMutableArray*)items;
 @end
 
+@interface AvatarMenuItemController (ExposedForTesting)
+- (void)willStartAnimation:(NSAnimation*)animation;
+@end
 
 #endif  // CHROME_BROWSER_UI_COCOA_BROWSER_AVATAR_MENU_BUBBLE_CONTROLLER_H_

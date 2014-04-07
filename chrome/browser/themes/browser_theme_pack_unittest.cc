@@ -6,18 +6,20 @@
 
 #include "base/file_util.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_value_serializer.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/scoped_temp_dir.h"
 #include "base/values.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/common/chrome_paths.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/json_value_serializer.h"
+#include "content/test/test_browser_thread.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/color_utils.h"
+
+using content::BrowserThread;
 
 class BrowserThemePackTest : public ::testing::Test {
  public:
@@ -192,8 +194,8 @@ class BrowserThemePackTest : public ::testing::Test {
   }
 
   MessageLoop message_loop;
-  BrowserThread fake_ui_thread;
-  BrowserThread fake_file_thread;
+  content::TestBrowserThread fake_ui_thread;
+  content::TestBrowserThread fake_file_thread;
 
   scoped_refptr<BrowserThemePack> theme_pack_;
 };

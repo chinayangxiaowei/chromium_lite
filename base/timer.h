@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,8 @@
 //   class MyClass {
 //    public:
 //     void StartDoingStuff() {
-//       timer_.Start(TimeDelta::FromSeconds(1), this, &MyClass::DoStuff);
+//       timer_.Start(FROM_HERE, TimeDelta::FromSeconds(1),
+//                    this, &MyClass::DoStuff);
 //     }
 //     void StopDoingStuff() {
 //       timer_.Stop();
@@ -48,8 +49,8 @@
 // should be able to tell the difference.
 
 #include "base/base_export.h"
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/task.h"
 #include "base/time.h"
 
 class MessageLoop;
@@ -85,7 +86,7 @@ class BASE_EXPORT BaseTimer_Helper {
   BaseTimer_Helper() : delayed_task_(NULL) {}
 
   // We have access to the timer_ member so we can orphan this task.
-  class TimerTask : public Task {
+  class TimerTask {
    public:
     TimerTask(const tracked_objects::Location& posted_from,
               TimeDelta delay)
@@ -94,6 +95,7 @@ class BASE_EXPORT BaseTimer_Helper {
           delay_(delay) {
     }
     virtual ~TimerTask() {}
+    virtual void Run() = 0;
     tracked_objects::Location posted_from_;
     BaseTimer_Helper* timer_;
     TimeDelta delay_;
@@ -169,7 +171,7 @@ class BaseTimer : public BaseTimer_Helper {
         ResetBaseTimer();
       else
         ClearBaseTimer();
-      DispatchToMethod(receiver_, method_, Tuple0());
+      (receiver_->*method_)();
     }
 
     TimerTask* Clone() const {

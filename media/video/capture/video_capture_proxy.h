@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
-#include "base/task.h"
 #include "media/video/capture/video_capture.h"
 
 namespace base {
@@ -51,6 +50,7 @@ class MEDIA_EXPORT VideoCaptureHandlerProxy
   virtual void OnStopped(VideoCapture* capture) OVERRIDE;
   virtual void OnPaused(VideoCapture* capture) OVERRIDE;
   virtual void OnError(VideoCapture* capture, int error_code) OVERRIDE;
+  virtual void OnRemoved(VideoCapture* capture) OVERRIDE;
   virtual void OnBufferReady(
       VideoCapture* capture,
       scoped_refptr<VideoCapture::VideoFrameBuffer> buffer) OVERRIDE;
@@ -73,6 +73,9 @@ class MEDIA_EXPORT VideoCaptureHandlerProxy
       VideoCapture* capture,
       const VideoCaptureState& state,
       int error_code);
+  void OnRemovedOnMainThread(
+      VideoCapture* capture,
+      const VideoCaptureState& state);
   void OnBufferReadyOnMainThread(
       VideoCapture* capture,
       const VideoCaptureState& state,
@@ -90,6 +93,5 @@ class MEDIA_EXPORT VideoCaptureHandlerProxy
 };
 
 }  // namespace media
-DISABLE_RUNNABLE_METHOD_REFCOUNT(media::VideoCaptureHandlerProxy);
 
 #endif  // MEDIA_VIDEO_CAPTURE_VIDEO_CAPTURE_PROXY_H_

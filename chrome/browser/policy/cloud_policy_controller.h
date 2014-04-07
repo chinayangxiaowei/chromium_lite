@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,28 @@
 #define CHROME_BROWSER_POLICY_CLOUD_POLICY_CONTROLLER_H_
 #pragma once
 
-#include <string>
-
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
+#include "chrome/browser/policy/cloud_policy_constants.h"
 #include "chrome/browser/policy/cloud_policy_data_store.h"
-#include "chrome/browser/policy/configuration_policy_provider.h"
-#include "chrome/browser/policy/delayed_work_scheduler.h"
-#include "chrome/browser/policy/device_token_fetcher.h"
+
+namespace enterprise_management {
+class DeviceManagementResponse;
+}
 
 namespace policy {
 
 class CloudPolicyCacheBase;
-class DeviceManagementBackend;
+class DelayedWorkScheduler;
+class DeviceManagementRequestJob;
+class DeviceManagementService;
+class DeviceTokenFetcher;
+class PolicyNotifier;
 
 // Coordinates the actions of DeviceTokenFetcher, CloudPolicyDataStore,
-// DeviceManagementBackend, and CloudPolicyCache: calls their methods and
-// listens to their callbacks/notifications.
-class CloudPolicyController
-    : public DeviceManagementBackend::DevicePolicyResponseDelegate,
-      public CloudPolicyDataStore::Observer {
+// and CloudPolicyCache: calls their methods and listens to their
+// callbacks/notifications.
+class CloudPolicyController : public CloudPolicyDataStore::Observer {
  public:
   // All parameters are weak pointers.
   CloudPolicyController(DeviceManagementService* service,
@@ -38,16 +40,20 @@ class CloudPolicyController
   // Sets the refresh rate at which to re-fetch policy information.
   void SetRefreshRate(int64 refresh_rate_milliseconds);
 
-  // Triggers an immediate retry of of the current operation.
+  // Triggers an immediate retry of the current operation.
   void Retry();
 
   // Stops any pending activity and resets the controller to unenrolled state.
   void Reset();
 
-  // DevicePolicyResponseDelegate implementation:
-  virtual void HandlePolicyResponse(
-      const em::DevicePolicyResponse& response) OVERRIDE;
-  virtual void OnError(DeviceManagementBackend::ErrorCode code) OVERRIDE;
+  // Attempts to fetch policies again, if possible. The cache is notified that
+  // a fetch was attempted.
+  void RefreshPolicies();
+
+  // Policy request response handler.
+  void OnPolicyFetchCompleted(
+      DeviceManagementStatus status,
+      const enterprise_management::DeviceManagementResponse& response);
 
   // CloudPolicyDataStore::Observer implementation:
   virtual void OnDeviceTokenChanged() OVERRIDE;
@@ -92,6 +98,9 @@ class CloudPolicyController
                   PolicyNotifier* notifier,
                   DelayedWorkScheduler* scheduler);
 
+  // Checks if the controller is ready to fetch the DMToken.
+  bool ReadyToFetchToken();
+
   // Asks the token fetcher to fetch a new token.
   void FetchToken();
 
@@ -114,7 +123,7 @@ class CloudPolicyController
   CloudPolicyCacheBase* cache_;
   CloudPolicyDataStore* data_store_;
   DeviceTokenFetcher* token_fetcher_;
-  scoped_ptr<DeviceManagementBackend> backend_;
+  scoped_ptr<DeviceManagementRequestJob> request_job_;
   ControllerState state_;
   PolicyNotifier* notifier_;
 

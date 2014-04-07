@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
+#include "base/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/io_thread.h"
@@ -17,13 +18,16 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/resource_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/default_origin_bound_cert_store.h"
 #include "net/base/origin_bound_cert_service.h"
 #include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_cache.h"
+#include "net/http/http_server_properties_impl.h"
 #include "webkit/database/database_tracker.h"
+
+using content::BrowserThread;
 
 OffTheRecordProfileIOData::Handle::Handle(Profile* profile)
     : io_data_(new OffTheRecordProfileIOData),
@@ -62,6 +66,13 @@ GetChromeURLDataManagerBackendGetter() const {
 
 const content::ResourceContext&
 OffTheRecordProfileIOData::Handle::GetResourceContext() const {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  LazyInitialize();
+  return GetResourceContextNoInit();
+}
+
+const content::ResourceContext&
+OffTheRecordProfileIOData::Handle::GetResourceContextNoInit() const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // Don't call LazyInitialize here, since the resource context is created at
   // the beginning of initalization and is used by some members while they're
@@ -135,6 +146,18 @@ OffTheRecordProfileIOData::OffTheRecordProfileIOData()
     : ProfileIOData(true) {}
 OffTheRecordProfileIOData::~OffTheRecordProfileIOData() {}
 
+unsigned OffTheRecordProfileIOData::ssl_session_cache_instance_ = 0;
+
+// static
+std::string OffTheRecordProfileIOData::GetSSLSessionCacheShard() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  // The SSL session cache is partitioned by setting a string. This returns a
+  // unique string to partition the SSL session cache. Each time we create a
+  // new Incognito profile, we'll get a fresh SSL session cache which is also
+  // separate from the non-incognito ones.
+  return StringPrintf("incognito/%u", ssl_session_cache_instance_++);
+}
+
 void OffTheRecordProfileIOData::LazyInitializeInternal(
     ProfileParams* profile_params) const {
   ChromeURLRequestContext* main_context = main_request_context();
@@ -146,6 +169,9 @@ void OffTheRecordProfileIOData::LazyInitializeInternal(
   ApplyProfileParamsToContext(main_context);
   ApplyProfileParamsToContext(extensions_context);
 
+  main_context->set_transport_security_state(transport_security_state());
+  extensions_context->set_transport_security_state(transport_security_state());
+
   main_context->set_net_log(io_thread->net_log());
   extensions_context->set_net_log(io_thread->net_log());
 
@@ -155,12 +181,15 @@ void OffTheRecordProfileIOData::LazyInitializeInternal(
       io_thread_globals->host_resolver.get());
   main_context->set_cert_verifier(
       io_thread_globals->cert_verifier.get());
-  main_context->set_dnsrr_resolver(
-      io_thread_globals->dnsrr_resolver.get());
   main_context->set_http_auth_handler_factory(
       io_thread_globals->http_auth_handler_factory.get());
-  main_context->set_dns_cert_checker(dns_cert_checker());
+  main_context->set_fraudulent_certificate_reporter(
+      fraudulent_certificate_reporter());
   main_context->set_proxy_service(proxy_service());
+
+  // For incognito, we use the default non-persistent HttpServerPropertiesImpl.
+  http_server_properties_.reset(new net::HttpServerPropertiesImpl);
+  main_context->set_http_server_properties(http_server_properties_.get());
 
   // For incognito, we use a non-persistent origin bound cert store.
   net::OriginBoundCertService* origin_bound_cert_service =
@@ -188,19 +217,21 @@ void OffTheRecordProfileIOData::LazyInitializeInternal(
       new net::HttpCache(main_context->host_resolver(),
                          main_context->cert_verifier(),
                          main_context->origin_bound_cert_service(),
-                         main_context->dnsrr_resolver(),
-                         main_context->dns_cert_checker(),
+                         main_context->transport_security_state(),
                          main_context->proxy_service(),
+                         GetSSLSessionCacheShard(),
                          main_context->ssl_config_service(),
                          main_context->http_auth_handler_factory(),
                          main_context->network_delegate(),
+                         main_context->http_server_properties(),
                          main_context->net_log(),
                          main_backend);
 
   main_http_factory_.reset(cache);
   main_context->set_http_transaction_factory(cache);
-  main_context->set_ftp_transaction_factory(
+  ftp_factory_.reset(
       new net::FtpNetworkLayer(main_context->host_resolver()));
+  main_context->set_ftp_transaction_factory(ftp_factory_.get());
 
   main_context->set_chrome_url_data_manager_backend(
       chrome_url_data_manager_backend());

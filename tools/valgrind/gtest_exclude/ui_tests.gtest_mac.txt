@@ -80,6 +80,7 @@ ChromeMainTest.AppLaunch
 
 # See http://crbug.com/46783
 SessionHistoryTest.LocationReplace
+SessionHistoryTest.FragmentBackForward
 
 # UNIMPLEMENTED reached, see http://crbug.com/51387
 AutomatedUITestBase.CloseTab
@@ -121,38 +122,10 @@ HistoryTester.VerifyHistoryLength3
 HostRulesTest.TestMap
 IFrameTest.Crash
 IFrameTest.InEmptyFrame
-LocaleTestsDa.TestStart
-LocaleTestsZhTw.TestStart
 LoginPromptTest.SupplyRedundantAuths
 LoginPromptTest.TestCancelAuth
 MetricsServiceTest.CrashRenderers
-OutOfProcessPPAPITest.Broker
-OutOfProcessPPAPITest.Buffer
-OutOfProcessPPAPITest.CharSet
-OutOfProcessPPAPITest.Core
-OutOfProcessPPAPITest.ImageData
-OutOfProcessPPAPITest.Memory
-OutOfProcessPPAPITest.PaintAggregator
-OutOfProcessPPAPITest.URLUtil
-OutOfProcessPPAPITest.VideoDecoder
-PPAPITest.Buffer
-PPAPITest.CharSet
-PPAPITest.FileIO
-PPAPITest.FileRef
-PPAPITest.FileSystem
-PPAPITest.Graphics2D
-PPAPITest.Graphics2SD
-PPAPITest.ImageData
-PPAPITest.Instance
-PPAPITest.PaintAggregator
-PPAPITest.QueryPolicy
-PPAPITest.Scrollbar
-PPAPITest.UMA
-PPAPITest.URLUtil
-PPAPITest.VarDeprecated
-PPAPITest.VideoDecoder
 PreferenceServiceTest.PreservedWindowPlacementIsLoaded
-PrintPreviewUITest.LoadPrintPreviewByURL
 RedirectTest.Server
 RedirectTest.ServerReference
 RepostFormWarningTest.TestDoubleReload
@@ -173,7 +146,6 @@ WorkerFileSystemTest.FileFromFileEntrySync
 WorkerFileSystemTest.FileWriterSyncTruncateExtend
 WorkerFileSystemTest.FileWriterTruncateExtend
 WorkerFileSystemTest.Temporary
-PrintPreviewUITest.AdvancedPrintCommandEnabled
 
 # Valgrind dies on bszB assertion, see http://crbug.com/58145
 AutomatedUITestBase.Home
@@ -202,10 +174,6 @@ DomStorageEmptyDatabaseTest.EmptyDirAfterGet
 # Hangs; See http://crbug.com/58569
 SearchProviderTest.TestIsSearchProviderInstalled
 
-# Following tests crash with LOG(FATAL) on valgrind mac; See http://crbug.com/60036
-OptionsUITest.TwoCommandsOneTab
-OptionsUITest.CommandAgainGoesBackToOptionsTab
-
 # Times out, see http://crbug.com/50297
 DOMStorageTest.RootLayoutTests
 
@@ -230,10 +198,7 @@ HistoryTester.VerifyHistoryLength1
 HistoryTester.VerifyHistoryLength2
 RedirectTest.ClientServerServer
 DomCheckerTest.File
-PPAPITest.Broker
-PPAPITest.Core
-PPAPITest.Memory
-PPAPITest.PostMessage
+OptionsUITest.LoadOptionsByURL
 PreferenceServiceTest.PreservedWindowPlacementIsMigrated
 RedirectTest.Client
 RedirectTest.ClientFragments
@@ -245,15 +210,8 @@ ResourceDispatcherTest.SniffHTMLWithNoContentType
 WorkerFileSystemTest.Persistent
 WorkerFileSystemTest.SyncTemporary
 
-# Fails, see http://crbug.com/75250
-NewTabUITest.AboutHangInNTP
-NewTabUIProcessPerTabTest.NavBeforeNTPCommits
-
 # Fails with valgrind assertion, see http://crbug.com/75396
 ViewSourceTest.ViewSourceInMenuEnabledOnANormalPage
-
-# Fails, see http://crbug.com/79784
-PPAPITest.Transport
 
 # Fails, see http://crbug.com/79803
 RepostFormWarningTest.TestLoginAfterRepost
@@ -279,15 +237,6 @@ NPAPIAutomationEnabledTest.LoadAllBlockedPlugins
 AutomatedUITestBase.RestoreTab
 AutomationProxyTest4.BooleanValueIsEchoedByDomAutomationController
 
-# http://crbug.com/87625
-PPAPITest.Var
-
-# http://crbug.com/87766
-PPAPITest.URLLoader
-
-# http://crbug.com/87992
-PrintPreviewUITest.PrintCommandDisabled
-
 # http://crbug.com/88068
 LocaleTestsHe.TestStart
 
@@ -295,11 +244,7 @@ LocaleTestsHe.TestStart
 NewTabUITest.ChromeHangInNTP
 
 # http://crbug.com/88244
-NoStartupWindowTest.NoStartupWindowBasicTest
 RunInBackgroundTest.RunInBackgroundBasicTest
-
-# http://crbug.com/88254
-PPAPITest.CursorControl
 
 # Flakiness leading to leak reports. http://crbug.com/31739
 SessionHistoryTest.BasicBackForward
@@ -310,3 +255,22 @@ AutomatedUITestBase.OpenCloseBrowserWindowWithAccelerator
 # http://crbug.com/92177
 CustomHandlerMailStartupTest.CustomHandlerMailStartup
 CustomHandlerWebcalStartupTest.CustomHandlerWebcalStartup
+
+# Crash when loading plugin. http://crbug.com/99828
+OutOfProcessPPAPITest.Crypto
+PPAPITest.Crypto
+
+# Fails intermittently. http://crbug.com/104534.
+PrintPreviewUITest.PrintCommands
+
+# PPAPI and OutOfProcessPPAPPI tests fail on Mac WebKit.
+# Doing a blanket exclusion for all of them.
+PPAPITest.*
+OutOfProcessPPAPITest.*
+
+# Crashes intermittently.
+LoadtimesExtensionBindingsUITest.LoadTimesSameAfterClientInDocNavigation
+LoadtimesExtensionBindingsUITest.LoadTimesSameAfterUserInDocNavigation
+
+# crbug.com/110612
+IndexedDBUILayoutTest.LayoutTests

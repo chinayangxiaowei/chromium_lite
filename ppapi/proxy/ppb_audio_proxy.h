@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,15 +12,12 @@
 #include "base/sync_socket.h"
 #include "ipc/ipc_platform_file.h"
 #include "ppapi/c/pp_instance.h"
-#include "ppapi/c/pp_module.h"
 #include "ppapi/c/pp_resource.h"
 #include "ppapi/c/ppb_audio.h"
 #include "ppapi/c/ppb_audio_config.h"
-#include "ppapi/cpp/completion_callback.h"
 #include "ppapi/proxy/interface_proxy.h"
 #include "ppapi/proxy/proxy_non_thread_safe_ref_count.h"
-
-struct PPB_Audio;
+#include "ppapi/utility/completion_callback_factory.h"
 
 namespace ppapi {
 
@@ -30,10 +27,8 @@ namespace proxy {
 
 class PPB_Audio_Proxy : public InterfaceProxy {
  public:
-  PPB_Audio_Proxy(Dispatcher* dispatcher, const void* target_interface);
+  PPB_Audio_Proxy(Dispatcher* dispatcher);
   virtual ~PPB_Audio_Proxy();
-
-  static const Info* GetInfo();
 
   // Creates an Audio object in the plugin process.
   static PP_Resource CreateProxyResource(PP_Instance instance_id,
@@ -42,12 +37,10 @@ class PPB_Audio_Proxy : public InterfaceProxy {
                                          void* user_data);
 
 
-  const PPB_Audio* ppb_audio_target() const {
-    return static_cast<const PPB_Audio*>(target_interface());
-  }
-
   // InterfaceProxy implementation.
   virtual bool OnMessageReceived(const IPC::Message& msg);
+
+  static const ApiID kApiID = API_ID_PPB_AUDIO;
 
  private:
   // Plugin->renderer message handlers.

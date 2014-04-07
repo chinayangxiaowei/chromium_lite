@@ -1,19 +1,25 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/utility/chrome_content_utility_client.h"
 
+#include "base/bind.h"
 #include "base/base64.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
+#include "base/threading/thread.h"
+#include "chrome/browser/importer/external_process_importer_bridge.h"
+#include "chrome/browser/importer/importer.h"
+#include "chrome/browser/importer/profile_import_process_messages.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_utility_messages.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/extensions/extension_unpacker.h"
 #include "chrome/common/extensions/update_manifest.h"
 #include "chrome/common/web_resource/web_resource_unpacker.h"
-#include "content/utility/utility_thread.h"
+#include "content/public/utility/utility_thread.h"
 #include "printing/backend/print_backend.h"
 #include "printing/page_range.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -27,14 +33,14 @@
 #include "base/path_service.h"
 #include "base/win/iat_patch_function.h"
 #include "base/win/scoped_handle.h"
-#include "content/common/content_switches.h"
-#include "content/common/sandbox_init_wrapper.h"
+#include "content/public/common/content_switches.h"
 #include "printing/emf_win.h"
+#include "ui/gfx/gdi_util.h"
 #endif  // defined(OS_WIN)
 
 namespace chrome {
 
-ChromeContentUtilityClient::ChromeContentUtilityClient() {
+ChromeContentUtilityClient::ChromeContentUtilityClient() : items_to_import_(0) {
 }
 
 ChromeContentUtilityClient::~ChromeContentUtilityClient() {
@@ -74,18 +80,33 @@ bool ChromeContentUtilityClient::OnMessageReceived(
     IPC_MESSAGE_HANDLER(ChromeUtilityMsg_ParseJSON, OnParseJSON)
     IPC_MESSAGE_HANDLER(ChromeUtilityMsg_GetPrinterCapsAndDefaults,
                         OnGetPrinterCapsAndDefaults)
+    IPC_MESSAGE_HANDLER(ProfileImportProcessMsg_StartImport,
+                        OnImportStart)
+    IPC_MESSAGE_HANDLER(ProfileImportProcessMsg_CancelImport,
+                        OnImportCancel)
+    IPC_MESSAGE_HANDLER(ProfileImportProcessMsg_ReportImportItemFinished,
+                        OnImportItemFinished)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
 }
 
 bool ChromeContentUtilityClient::Send(IPC::Message* message) {
-  return UtilityThread::current()->Send(message);
+  return content::UtilityThread::Get()->Send(message);
 }
 
 void ChromeContentUtilityClient::OnUnpackExtension(
-    const FilePath& extension_path) {
-  ExtensionUnpacker unpacker(extension_path);
+    const FilePath& extension_path,
+    const std::string& extension_id,
+    int location,
+    int creation_flags) {
+  CHECK(location > Extension::INVALID);
+  CHECK(location < Extension::NUM_LOCATIONS);
+  ExtensionUnpacker unpacker(
+      extension_path,
+      extension_id,
+      static_cast<Extension::Location>(location),
+      creation_flags);
   if (unpacker.Run() && unpacker.DumpImagesToFile() &&
       unpacker.DumpMessageCatalogsToFile()) {
     Send(new ChromeUtilityHostMsg_UnpackExtension_Succeeded(
@@ -95,7 +116,7 @@ void ChromeContentUtilityClient::OnUnpackExtension(
         unpacker.error_message()));
   }
 
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 void ChromeContentUtilityClient::OnUnpackWebResource(
@@ -112,7 +133,7 @@ void ChromeContentUtilityClient::OnUnpackWebResource(
         unpacker.error_message()));
   }
 
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 void ChromeContentUtilityClient::OnParseUpdateManifest(const std::string& xml) {
@@ -124,7 +145,7 @@ void ChromeContentUtilityClient::OnParseUpdateManifest(const std::string& xml) {
     Send(new ChromeUtilityHostMsg_ParseUpdateManifest_Succeeded(
         manifest.results()));
   }
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 void ChromeContentUtilityClient::OnDecodeImage(
@@ -137,7 +158,7 @@ void ChromeContentUtilityClient::OnDecodeImage(
   } else {
     Send(new ChromeUtilityHostMsg_DecodeImage_Succeeded(decoded_image));
   }
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 void ChromeContentUtilityClient::OnDecodeImageBase64(
@@ -160,27 +181,29 @@ void ChromeContentUtilityClient::OnDecodeImageBase64(
 void ChromeContentUtilityClient::OnRenderPDFPagesToMetafile(
     base::PlatformFile pdf_file,
     const FilePath& metafile_path,
-    const gfx::Rect& render_area,
-    int render_dpi,
+    const printing::PdfRenderSettings& pdf_render_settings,
     const std::vector<printing::PageRange>& page_ranges) {
   bool succeeded = false;
 #if defined(OS_WIN)
   int highest_rendered_page_number = 0;
+  double scale_factor = 1.0;
   succeeded = RenderPDFToWinMetafile(pdf_file,
                                      metafile_path,
-                                     render_area,
-                                     render_dpi,
+                                     pdf_render_settings.area(),
+                                     pdf_render_settings.dpi(),
+                                     pdf_render_settings.autorotate(),
                                      page_ranges,
-                                     &highest_rendered_page_number);
+                                     &highest_rendered_page_number,
+                                     &scale_factor);
   if (succeeded) {
     Send(new ChromeUtilityHostMsg_RenderPDFPagesToMetafile_Succeeded(
-        highest_rendered_page_number));
+        highest_rendered_page_number, scale_factor));
   }
 #endif  // defined(OS_WIN)
   if (!succeeded) {
     Send(new ChromeUtilityHostMsg_RenderPDFPagesToMetafile_Failed());
   }
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 #if defined(OS_WIN)
@@ -189,7 +212,8 @@ typedef bool (*RenderPDFPageToDCProc)(
     const unsigned char* pdf_buffer, int buffer_size, int page_number, HDC dc,
     int dpi_x, int dpi_y, int bounds_origin_x, int bounds_origin_y,
     int bounds_width, int bounds_height, bool fit_to_bounds,
-    bool stretch_to_bounds, bool keep_aspect_ratio, bool center_in_bounds);
+    bool stretch_to_bounds, bool keep_aspect_ratio, bool center_in_bounds,
+    bool autorotate);
 
 typedef bool (*GetPDFDocInfoProc)(const unsigned char* pdf_buffer,
                                   int buffer_size, int* page_count,
@@ -222,9 +246,9 @@ DWORD WINAPI UtilityProcess_GetFontDataPatch(
     LOGFONT logfont;
     if (GetObject(font, sizeof(LOGFONT), &logfont)) {
       std::vector<char> font_data;
-      if (UtilityThread::current()->Send(
-              new ChromeUtilityHostMsg_PreCacheFont(logfont)))
-        rv = GetFontData(hdc, table, offset, buffer, length);
+      content::UtilityThread::Get()->PreCacheFont(logfont);
+      rv = GetFontData(hdc, table, offset, buffer, length);
+      content::UtilityThread::Get()->ReleaseCachedFonts();
     }
   }
   return rv;
@@ -235,9 +259,12 @@ bool ChromeContentUtilityClient::RenderPDFToWinMetafile(
     const FilePath& metafile_path,
     const gfx::Rect& render_area,
     int render_dpi,
+    bool autorotate,
     const std::vector<printing::PageRange>& page_ranges,
-    int* highest_rendered_page_number) {
+    int* highest_rendered_page_number,
+    double* scale_factor) {
   *highest_rendered_page_number = -1;
+  *scale_factor = 1.0;
   base::win::ScopedHandle file(pdf_file);
   FilePath pdf_module_path;
   PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf_module_path);
@@ -287,15 +314,17 @@ bool ChromeContentUtilityClient::RenderPDFToWinMetafile(
 
   printing::Emf metafile;
   metafile.InitToFile(metafile_path);
-  // Since we created the metafile using the screen DPI (but we actually want
-  // the PDF DLL to print using the passed in render_dpi, we apply the following
-  // transformation.
-  SetGraphicsMode(metafile.context(), GM_ADVANCED);
-  XFORM xform = {0};
-  int screen_dpi = GetDeviceCaps(GetDC(NULL), LOGPIXELSX);
-  xform.eM11 = xform.eM22 =
-      static_cast<float>(screen_dpi) / static_cast<float>(render_dpi);
-  ModifyWorldTransform(metafile.context(), &xform, MWT_LEFTMULTIPLY);
+  // We need to scale down DC to fit an entire page into DC available area.
+  // Current metafile is based on screen DC and have current screen size.
+  // Writing outside of those boundaries will result in the cut-off output.
+  // On metafiles (this is the case here), scaling down will still record
+  // original coordinates and we'll be able to print in full resolution.
+  // Before playback we'll need to counter the scaling up that will happen
+  // in the service (print_system_win.cc).
+  *scale_factor = gfx::CalculatePageScale(metafile.context(),
+                                          render_area.right(),
+                                          render_area.bottom());
+  gfx::ScaleDC(metafile.context(), *scale_factor);
 
   bool ret = false;
   std::vector<printing::PageRange>::const_iterator iter;
@@ -309,7 +338,8 @@ bool ChromeContentUtilityClient::RenderPDFToWinMetafile(
       if (render_proc(&buffer.front(), buffer.size(), page_number,
                       metafile.context(), render_dpi, render_dpi,
                       render_area.x(), render_area.y(), render_area.width(),
-                      render_area.height(), true, false, true, true))
+                      render_area.height(), true, false, true, true,
+                      autorotate))
         if (*highest_rendered_page_number < page_number)
           *highest_rendered_page_number = page_number;
         ret = true;
@@ -334,7 +364,7 @@ void ChromeContentUtilityClient::OnParseJSON(const std::string& json) {
   } else {
     Send(new ChromeUtilityHostMsg_ParseJSON_Failed(error));
   }
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 void ChromeContentUtilityClient::OnGetPrinterCapsAndDefaults(
@@ -349,7 +379,56 @@ void ChromeContentUtilityClient::OnGetPrinterCapsAndDefaults(
     Send(new ChromeUtilityHostMsg_GetPrinterCapsAndDefaults_Failed(
         printer_name));
   }
-  UtilityThread::current()->ReleaseProcessIfNeeded();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
+}
+
+void ChromeContentUtilityClient::OnImportStart(
+    const importer::SourceProfile& source_profile,
+    uint16 items,
+    const DictionaryValue& localized_strings) {
+  bridge_ = new ExternalProcessImporterBridge(
+      localized_strings, content::UtilityThread::Get());
+  importer_ = importer::CreateImporterByType(source_profile.importer_type);
+  if (!importer_) {
+    Send(new ProfileImportProcessHostMsg_Import_Finished(false,
+        "Importer could not be created."));
+    return;
+  }
+
+  items_to_import_ = items;
+
+  // Create worker thread in which importer runs.
+  import_thread_.reset(new base::Thread("import_thread"));
+  base::Thread::Options options;
+  options.message_loop_type = MessageLoop::TYPE_IO;
+  if (!import_thread_->StartWithOptions(options)) {
+    NOTREACHED();
+    ImporterCleanup();
+  }
+  import_thread_->message_loop()->PostTask(
+      FROM_HERE, base::Bind(&Importer::StartImport, importer_.get(),
+                            source_profile, items, bridge_));
+}
+
+void ChromeContentUtilityClient::OnImportCancel() {
+  ImporterCleanup();
+}
+
+void ChromeContentUtilityClient::OnImportItemFinished(uint16 item) {
+  items_to_import_ ^= item;  // Remove finished item from mask.
+  // If we've finished with all items, notify the browser process.
+  if (items_to_import_ == 0) {
+    Send(new ProfileImportProcessHostMsg_Import_Finished(true, ""));
+    ImporterCleanup();
+  }
+}
+
+void ChromeContentUtilityClient::ImporterCleanup() {
+  importer_->Cancel();
+  importer_ = NULL;
+  bridge_ = NULL;
+  import_thread_.reset();
+  content::UtilityThread::Get()->ReleaseProcessIfNeeded();
 }
 
 }  // namespace chrome

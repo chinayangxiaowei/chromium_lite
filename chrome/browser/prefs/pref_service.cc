@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
@@ -23,17 +24,20 @@
 #include "chrome/browser/policy/configuration_policy_pref_store.h"
 #include "chrome/browser/prefs/command_line_pref_store.h"
 #include "chrome/browser/prefs/default_pref_store.h"
-#include "chrome/browser/prefs/incognito_user_pref_store.h"
+#include "chrome/browser/prefs/overlay_user_pref_store.h"
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/prefs/pref_notifier_impl.h"
 #include "chrome/browser/prefs/pref_value_store.h"
+#include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/browser/ui/profile_error_dialog.h"
 #include "chrome/common/json_pref_store.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_service.h"
+#include "chrome/common/pref_names.h"
+#include "content/public/browser/browser_thread.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+
+using content::BrowserThread;
 
 namespace {
 
@@ -100,9 +104,10 @@ class ReadErrorHandler : public PersistentPrefStore::ReadErrorDelegate {
 
       if (message_id) {
         BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-            NewRunnableFunction(&NotifyReadError, message_id));
+            base::Bind(&NotifyReadError, message_id));
       }
-      UMA_HISTOGRAM_ENUMERATION("PrefService.ReadError", error, 20);
+      UMA_HISTOGRAM_ENUMERATION("PrefService.ReadError", error,
+                                PersistentPrefStore::PREF_READ_ERROR_MAX_ENUM);
     }
   }
 };
@@ -151,62 +156,96 @@ PrefService* PrefService::CreatePrefService(const FilePath& pref_filename,
       BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE));
   DefaultPrefStore* default_pref_store = new DefaultPrefStore();
 
+  PrefNotifierImpl* pref_notifier = new PrefNotifierImpl();
+  PrefModelAssociator* pref_sync_associator = new PrefModelAssociator();
+
   return new PrefService(
-      managed_platform, managed_cloud, extension_prefs,
-      command_line, user, recommended_platform,
-      recommended_cloud, default_pref_store, async);
+      pref_notifier,
+      new PrefValueStore(
+          managed_platform,
+          managed_cloud,
+          extension_prefs,
+          command_line,
+          user,
+          recommended_platform,
+          recommended_cloud,
+          default_pref_store,
+          pref_sync_associator,
+          pref_notifier),
+      user,
+      default_pref_store,
+      pref_sync_associator,
+      async);
 }
 
 PrefService* PrefService::CreateIncognitoPrefService(
     PrefStore* incognito_extension_prefs) {
-  return new PrefService(*this, incognito_extension_prefs);
-}
-
-PrefService::PrefService(PrefStore* managed_platform_prefs,
-                         PrefStore* managed_cloud_prefs,
-                         PrefStore* extension_prefs,
-                         PrefStore* command_line_prefs,
-                         PersistentPrefStore* user_prefs,
-                         PrefStore* recommended_platform_prefs,
-                         PrefStore* recommended_cloud_prefs,
-                         DefaultPrefStore* default_store,
-                         bool async)
-    : user_pref_store_(user_prefs),
-      default_store_(default_store) {
-  pref_sync_associator_.reset(new PrefModelAssociator(this));
-  pref_notifier_.reset(new PrefNotifierImpl(this));
-  pref_value_store_.reset(
-      new PrefValueStore(managed_platform_prefs,
-                         managed_cloud_prefs,
-                         extension_prefs,
-                         command_line_prefs,
-                         user_pref_store_,
-                         recommended_platform_prefs,
-                         recommended_cloud_prefs,
-                         default_store,
-                         pref_sync_associator_.get(),
-                         pref_notifier_.get()));
-  InitFromStorage(async);
-}
-
-PrefService::PrefService(const PrefService& original,
-                         PrefStore* incognito_extension_prefs)
-      : user_pref_store_(
-            new IncognitoUserPrefStore(original.user_pref_store_.get())),
-        default_store_(original.default_store_.get()) {
-  // Incognito mode doesn't sync, so no need to create PrefModelAssociator.
-  pref_notifier_.reset(new PrefNotifierImpl(this));
-  pref_value_store_.reset(original.pref_value_store_->CloneAndSpecialize(
-      NULL, // managed_platform_prefs
-      NULL, // managed_cloud_prefs
-      incognito_extension_prefs,
-      NULL, // command_line_prefs
-      user_pref_store_.get(),
-      NULL, // recommended_platform_prefs
-      NULL, // recommended_cloud_prefs
+  pref_service_forked_ = true;
+  PrefNotifierImpl* pref_notifier = new PrefNotifierImpl();
+  OverlayUserPrefStore* incognito_pref_store =
+      new OverlayUserPrefStore(user_pref_store_.get());
+  PrefsTabHelper::InitIncognitoUserPrefStore(incognito_pref_store);
+  return new PrefService(
+      pref_notifier,
+      pref_value_store_->CloneAndSpecialize(
+          NULL,  // managed_platform_prefs
+          NULL,  // managed_cloud_prefs
+          incognito_extension_prefs,
+          NULL,  // command_line_prefs
+          incognito_pref_store,
+          NULL,  // recommended_platform_prefs
+          NULL,  // recommended_cloud_prefs
+          default_store_.get(),
+          NULL,  // pref_sync_associator
+          pref_notifier),
+      incognito_pref_store,
       default_store_.get(),
-      NULL, // pref_sync_associator_
-      pref_notifier_.get()));
+      NULL,
+      false);
+}
+
+PrefService* PrefService::CreatePrefServiceWithPerTabPrefStore() {
+  pref_service_forked_ = true;
+  PrefNotifierImpl* pref_notifier = new PrefNotifierImpl();
+  OverlayUserPrefStore* per_tab_pref_store =
+      new OverlayUserPrefStore(user_pref_store_.get());
+  PrefsTabHelper::InitPerTabUserPrefStore(per_tab_pref_store);
+  DefaultPrefStore* default_store = new DefaultPrefStore();
+  return new PrefService(
+      pref_notifier,
+      pref_value_store_->CloneAndSpecialize(
+          NULL,  // managed_platform_prefs
+          NULL,  // managed_cloud_prefs
+          NULL,  // extension_prefs
+          NULL,  // command_line_prefs
+          per_tab_pref_store,
+          NULL,  // recommended_platform_prefs
+          NULL,  // recommended_cloud_prefs
+          default_store,
+          NULL,
+          pref_notifier),
+      per_tab_pref_store,
+      default_store,
+      NULL,
+      false);
+}
+
+PrefService::PrefService(PrefNotifierImpl* pref_notifier,
+                         PrefValueStore* pref_value_store,
+                         PersistentPrefStore* user_prefs,
+                         DefaultPrefStore* default_store,
+                         PrefModelAssociator* pref_sync_associator,
+                         bool async)
+    : pref_notifier_(pref_notifier),
+      pref_value_store_(pref_value_store),
+      user_pref_store_(user_prefs),
+      default_store_(default_store),
+      pref_sync_associator_(pref_sync_associator),
+      pref_service_forked_(false) {
+  pref_notifier_->SetPrefService(this);
+  if (pref_sync_associator_.get())
+    pref_sync_associator_->SetPrefService(this);
+  InitFromStorage(async);
 }
 
 PrefService::~PrefService() {
@@ -229,25 +268,15 @@ void PrefService::InitFromStorage(bool async) {
     // Guarantee that initialization happens after this function returned.
     MessageLoop::current()->PostTask(
         FROM_HERE,
-        NewRunnableMethod(user_pref_store_.get(),
-                          &PersistentPrefStore::ReadPrefsAsync,
-                          new ReadErrorHandler()));
+        base::Bind(&PersistentPrefStore::ReadPrefsAsync,
+                   user_pref_store_.get(),
+                   new ReadErrorHandler()));
   }
 }
 
 bool PrefService::ReloadPersistentPrefs() {
   return user_pref_store_->ReadPrefs() ==
              PersistentPrefStore::PREF_READ_ERROR_NONE;
-}
-
-bool PrefService::SavePersistentPrefs() {
-  DCHECK(CalledOnValidThread());
-  return user_pref_store_->WritePrefs();
-}
-
-void PrefService::ScheduleSavePersistentPrefs() {
-  DCHECK(CalledOnValidThread());
-  user_pref_store_->ScheduleWritePrefs();
 }
 
 void PrefService::CommitPendingWrite() {
@@ -258,14 +287,14 @@ void PrefService::CommitPendingWrite() {
 namespace {
 
 // If there's no g_browser_process or no local state, return true (for testing).
-bool IsLocalStatePrefService(PrefService* prefs){
+bool IsLocalStatePrefService(PrefService* prefs) {
   return (!g_browser_process ||
           !g_browser_process->local_state() ||
           g_browser_process->local_state() == prefs);
 }
 
 // If there's no g_browser_process, return true (for testing).
-bool IsProfilePrefService(PrefService* prefs){
+bool IsProfilePrefService(PrefService* prefs) {
   // TODO(zea): uncomment this once all preferences are only ever registered
   // with either the local_state's pref service or the profile's pref service.
   // return (!g_browser_process || g_browser_process->local_state() != prefs);
@@ -493,7 +522,7 @@ void PrefService::RegisterLocalizedBooleanPref(const char* path,
   DCHECK(IsProfilePrefService(this));
   RegisterPreference(
       path,
-      CreateLocaleDefaultValue(Value::TYPE_BOOLEAN,locale_default_message_id),
+      CreateLocaleDefaultValue(Value::TYPE_BOOLEAN, locale_default_message_id),
       sync_status);
 }
 
@@ -688,12 +717,12 @@ const ListValue* PrefService::GetList(const char* path) const {
 }
 
 void PrefService::AddPrefObserver(const char* path,
-                                  NotificationObserver* obs) {
+                                  content::NotificationObserver* obs) {
   pref_notifier_->AddPrefObserver(path, obs);
 }
 
 void PrefService::RemovePrefObserver(const char* path,
-                                     NotificationObserver* obs) {
+                                     content::NotificationObserver* obs) {
   pref_notifier_->RemovePrefObserver(path, obs);
 }
 
@@ -720,6 +749,25 @@ void PrefService::RegisterPreference(const char* path,
   // Register with sync if necessary.
   if (sync_status == SYNCABLE_PREF && pref_sync_associator_.get())
     pref_sync_associator_->RegisterPref(path);
+}
+
+void PrefService::UnregisterPreference(const char* path) {
+  DCHECK(CalledOnValidThread());
+
+  Preference p(this, path, Value::TYPE_NULL);
+  PreferenceSet::iterator it = prefs_.find(&p);
+  if (it == prefs_.end()) {
+    NOTREACHED() << "Trying to unregister an unregistered pref: " << path;
+    return;
+  }
+
+  delete *it;
+  prefs_.erase(it);
+  default_store_->RemoveDefaultValue(path);
+  if (pref_sync_associator_.get() &&
+      pref_sync_associator_->IsPrefRegistered(path)) {
+    pref_sync_associator_->UnregisterPref(path);
+  }
 }
 
 void PrefService::ClearPref(const char* path) {
@@ -838,6 +886,14 @@ SyncableService* PrefService::GetSyncableService() {
   return pref_sync_associator_.get();
 }
 
+void PrefService::UpdateCommandLinePrefStore(CommandLine* command_line) {
+  // If |pref_service_forked_| is true, then this PrefService and the forked
+  // copies will be out of sync.
+  DCHECK(!pref_service_forked_);
+  pref_value_store_->UpdateCommandLinePrefStore(
+      new CommandLinePrefStore(command_line));
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // PrefService::Preference
 
@@ -872,6 +928,10 @@ const Value* PrefService::Preference::GetValue() const {
 
 bool PrefService::Preference::IsManaged() const {
   return pref_value_store()->PrefValueInManagedStore(name_.c_str());
+}
+
+bool PrefService::Preference::IsRecommended() const {
+  return pref_value_store()->PrefValueFromRecommendedStore(name_.c_str());
 }
 
 bool PrefService::Preference::HasExtensionSetting() const {

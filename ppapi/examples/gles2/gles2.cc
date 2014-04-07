@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,7 @@
 
 #include "ppapi/c/dev/ppb_console_dev.h"
 #include "ppapi/c/pp_errors.h"
-#include "ppapi/c/ppb_opengles.h"
-#include "ppapi/cpp/dev/context_3d_dev.h"
-#include "ppapi/cpp/dev/surface_3d_dev.h"
+#include "ppapi/c/ppb_opengles2.h"
 #include "ppapi/cpp/dev/video_decoder_client_dev.h"
 #include "ppapi/cpp/dev/video_decoder_dev.h"
 #include "ppapi/cpp/graphics_3d.h"
@@ -26,6 +24,7 @@
 #include "ppapi/cpp/var.h"
 #include "ppapi/examples/gles2/testdata.h"
 #include "ppapi/lib/gl/include/GLES2/gl2.h"
+#include "ppapi/utility/completion_callback_factory.h"
 
 // Use assert as a poor-man's CHECK, even in non-debug mode.
 // Since <assert.h> redefines assert on every inclusion (it doesn't use
@@ -54,7 +53,7 @@ class GLES2DemoInstance : public pp::Instance,
   // pp::Graphics3DClient implementation.
   virtual void Graphics3DContextLost() {
     // TODO(vrk/fischman): Properly reset after a lost graphics context.  In
-    // particular need to delete context_ & surface_ and re-create textures.
+    // particular need to delete context_ and re-create textures.
     // Probably have to recreate the decoder from scratch, because old textures
     // can still be outstanding in the decoder!
     assert(!"Unexpectedly lost graphics context");
@@ -63,11 +62,10 @@ class GLES2DemoInstance : public pp::Instance,
   // pp::VideoDecoderClient_Dev implementation.
   virtual void ProvidePictureBuffers(PP_Resource decoder,
                                      uint32_t req_num_of_bufs,
-                                     PP_Size dimensions);
+                                     const PP_Size& dimensions);
   virtual void DismissPictureBuffer(PP_Resource decoder,
                                     int32_t picture_buffer_id);
   virtual void PictureReady(PP_Resource decoder, const PP_Picture_Dev& picture);
-  virtual void EndOfStream(PP_Resource decoder);
   virtual void NotifyError(PP_Resource decoder, PP_VideoDecodeError_Dev error);
 
  private:
@@ -157,13 +155,12 @@ class GLES2DemoInstance : public pp::Instance,
   pp::CompletionCallbackFactory<GLES2DemoInstance> callback_factory_;
 
   // Unowned pointers.
-  const struct PPB_Console_Dev* console_if_;
-  const struct PPB_Core* core_if_;
-  const struct PPB_OpenGLES2* gles2_if_;
+  const PPB_Console_Dev* console_if_;
+  const PPB_Core* core_if_;
+  const PPB_OpenGLES2* gles2_if_;
 
   // Owned data.
-  pp::Context3D_Dev* context_;
-  pp::Surface3D_Dev* surface_;
+  pp::Graphics3D* context_;
   typedef std::map<int, DecoderClient*> Decoders;
   Decoders video_decoders_;
 };
@@ -199,13 +196,12 @@ GLES2DemoInstance::GLES2DemoInstance(PP_Instance instance, pp::Module* module)
       first_frame_delivered_ticks_(-1),
       swap_ticks_(0),
       callback_factory_(this),
-      context_(NULL),
-      surface_(NULL) {
-  assert((console_if_ = static_cast<const struct PPB_Console_Dev*>(
+      context_(NULL) {
+  assert((console_if_ = static_cast<const PPB_Console_Dev*>(
       module->GetBrowserInterface(PPB_CONSOLE_DEV_INTERFACE))));
-  assert((core_if_ = static_cast<const struct PPB_Core*>(
+  assert((core_if_ = static_cast<const PPB_Core*>(
       module->GetBrowserInterface(PPB_CORE_INTERFACE))));
-  assert((gles2_if_ = static_cast<const struct PPB_OpenGLES2*>(
+  assert((gles2_if_ = static_cast<const PPB_OpenGLES2*>(
       module->GetBrowserInterface(PPB_OPENGLES2_INTERFACE))));
 }
 
@@ -215,7 +211,6 @@ GLES2DemoInstance::~GLES2DemoInstance() {
     delete it->second;
   }
   video_decoders_.clear();
-  delete surface_;
   delete context_;
 }
 
@@ -324,7 +319,7 @@ void GLES2DemoInstance::DecoderClient::DecodeNextNALU() {
 }
 
 void GLES2DemoInstance::ProvidePictureBuffers(
-    PP_Resource decoder, uint32_t req_num_of_bufs, PP_Size dimensions) {
+    PP_Resource decoder, uint32_t req_num_of_bufs, const PP_Size& dimensions) {
   DecoderClient* client = video_decoders_[decoder];
   assert(client);
   client->ProvidePictureBuffers(req_num_of_bufs, dimensions);
@@ -387,6 +382,7 @@ void GLES2DemoInstance::PictureReady(PP_Resource decoder,
     x = plugin_size_.width() / kNumDecoders;
     y = plugin_size_.height() / kNumDecoders;
   }
+
   gles2_if_->Viewport(context_->pp_resource(), x, y,
                       plugin_size_.width() / kNumDecoders,
                       plugin_size_.height() / kNumDecoders);
@@ -398,10 +394,7 @@ void GLES2DemoInstance::PictureReady(PP_Resource decoder,
       callback_factory_.NewCallback(
           &GLES2DemoInstance::PaintFinished, decoder, buffer.id);
   last_swap_request_ticks_ = core_if_->GetTimeTicks();
-  assert(surface_->SwapBuffers(cb) == PP_OK_COMPLETIONPENDING);
-}
-
-void GLES2DemoInstance::EndOfStream(PP_Resource decoder) {
+  assert(context_->SwapBuffers(cb) == PP_OK_COMPLETIONPENDING);
 }
 
 void GLES2DemoInstance::NotifyError(PP_Resource decoder,
@@ -426,24 +419,28 @@ void GLES2DemoInstance::InitGL() {
   assert(plugin_size_.width() && plugin_size_.height());
   is_painting_ = false;
 
-  assert(!context_ && !surface_);
-  context_ = new pp::Context3D_Dev(*this, 0, pp::Context3D_Dev(), NULL);
-  assert(!context_->is_null());
-
-  int32_t surface_attributes[] = {
+  assert(!context_);
+  int32_t context_attributes[] = {
+    PP_GRAPHICS3DATTRIB_ALPHA_SIZE, 8,
+    PP_GRAPHICS3DATTRIB_BLUE_SIZE, 8,
+    PP_GRAPHICS3DATTRIB_GREEN_SIZE, 8,
+    PP_GRAPHICS3DATTRIB_RED_SIZE, 8,
+    PP_GRAPHICS3DATTRIB_DEPTH_SIZE, 0,
+    PP_GRAPHICS3DATTRIB_STENCIL_SIZE, 0,
+    PP_GRAPHICS3DATTRIB_SAMPLES, 0,
+    PP_GRAPHICS3DATTRIB_SAMPLE_BUFFERS, 0,
     PP_GRAPHICS3DATTRIB_WIDTH, plugin_size_.width(),
     PP_GRAPHICS3DATTRIB_HEIGHT, plugin_size_.height(),
-    PP_GRAPHICS3DATTRIB_NONE
+    PP_GRAPHICS3DATTRIB_NONE,
   };
-  surface_ = new pp::Surface3D_Dev(*this, 0, surface_attributes);
-  assert(!surface_->is_null());
-
-  assert(!context_->BindSurfaces(*surface_, *surface_));
+  context_ = new pp::Graphics3D(this, context_attributes);
+  assert(!context_->is_null());
+  assert(BindGraphics(*context_));
 
   // Clear color bit.
+  gles2_if_->ClearColor(context_->pp_resource(), 1, 0, 0, 1);
   gles2_if_->Clear(context_->pp_resource(), GL_COLOR_BUFFER_BIT);
 
-  assert(BindGraphics(*surface_));
   assertNoGLError();
 
   CreateGLObjects();
@@ -451,6 +448,7 @@ void GLES2DemoInstance::InitGL() {
 
 void GLES2DemoInstance::PaintFinished(int32_t result, PP_Resource decoder,
                                       int picture_buffer_id) {
+  assert(result == PP_OK);
   swap_ticks_ += core_if_->GetTimeTicks() - last_swap_request_ticks_;
   is_painting_ = false;
   ++num_frames_rendered_;
@@ -479,8 +477,7 @@ GLuint GLES2DemoInstance::CreateTexture(int32_t width, int32_t height) {
   assertNoGLError();
   // Assign parameters.
   gles2_if_->ActiveTexture(context_->pp_resource(), GL_TEXTURE0);
-  gles2_if_->BindTexture(
-      context_->pp_resource(), GL_TEXTURE_2D, texture_id);
+  gles2_if_->BindTexture(context_->pp_resource(), GL_TEXTURE_2D, texture_id);
   gles2_if_->TexParameteri(
       context_->pp_resource(), GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
       GL_NEAREST);
@@ -494,7 +491,6 @@ GLuint GLES2DemoInstance::CreateTexture(int32_t width, int32_t height) {
       context_->pp_resource(), GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
       GL_CLAMP_TO_EDGE);
 
-  // Allocate texture.
   gles2_if_->TexImage2D(
       context_->pp_resource(), GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
       GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -537,7 +533,7 @@ void GLES2DemoInstance::CreateGLObjects() {
   gles2_if_->DeleteProgram(context_->pp_resource(), program);
   gles2_if_->Uniform1i(
       context_->pp_resource(),
-      gles2_if_->GetAttribLocation(
+      gles2_if_->GetUniformLocation(
           context_->pp_resource(), program, "s_texture"), 0);
   assertNoGLError();
 

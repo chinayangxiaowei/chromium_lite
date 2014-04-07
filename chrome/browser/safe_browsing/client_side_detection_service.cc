@@ -1,37 +1,39 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/client_side_detection_service.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/time.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "base/string_util.h"
 #include "base/stl_util.h"
-#include "base/task.h"
+#include "base/string_util.h"
 #include "base/time.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/safe_browsing/browser_features.h"
-#include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/net/http_return.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/safe_browsing/client_model.pb.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
 #include "chrome/common/safe_browsing/safebrowsing_messages.h"
-#include "chrome/renderer/safe_browsing/features.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/renderer_host/render_process_host.h"
-#include "content/common/notification_service.h"
-#include "content/common/url_fetcher.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/common/url_fetcher.h"
 #include "crypto/sha2.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_status.h"
+
+using content::BrowserThread;
 
 namespace safe_browsing {
 
@@ -42,12 +44,9 @@ const int ClientSideDetectionService::kMaxReportsPerInterval = 3;
 const int ClientSideDetectionService::kClientModelFetchIntervalMs = 3600 * 1000;
 const int ClientSideDetectionService::kInitialClientModelFetchDelayMs = 10000;
 
-const base::TimeDelta ClientSideDetectionService::kReportsInterval =
-    base::TimeDelta::FromDays(1);
-const base::TimeDelta ClientSideDetectionService::kNegativeCacheInterval =
-    base::TimeDelta::FromDays(1);
-const base::TimeDelta ClientSideDetectionService::kPositiveCacheInterval =
-    base::TimeDelta::FromMinutes(30);
+const int ClientSideDetectionService::kReportsIntervalDays = 1;
+const int ClientSideDetectionService::kNegativeCacheIntervalDays = 1;
+const int ClientSideDetectionService::kPositiveCacheIntervalMinutes = 30;
 
 const char ClientSideDetectionService::kClientReportPhishingUrl[] =
     "https://sb-ssl.google.com/safebrowsing/clientreport/phishing";
@@ -55,7 +54,7 @@ const char ClientSideDetectionService::kClientModelUrl[] =
     "https://ssl.gstatic.com/safebrowsing/csd/client_model_v4.pb";
 
 struct ClientSideDetectionService::ClientReportInfo {
-  scoped_ptr<ClientReportPhishingRequestCallback> callback;
+  ClientReportPhishingRequestCallback callback;
   GURL phishing_url;
 };
 
@@ -66,16 +65,14 @@ ClientSideDetectionService::CacheState::CacheState(bool phish, base::Time time)
 ClientSideDetectionService::ClientSideDetectionService(
     net::URLRequestContextGetter* request_context_getter)
     : enabled_(false),
-      sb_service_(g_browser_process->safe_browsing_service()),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)),
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
       request_context_getter_(request_context_getter) {
-  InitializeAllowedFeatures();
   registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_CREATED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllBrowserContextsAndSources());
 }
 
 ClientSideDetectionService::~ClientSideDetectionService() {
-  method_factory_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
   STLDeleteContainerPairPointers(client_phishing_reports_.begin(),
                                  client_phishing_reports_.end());
   client_phishing_reports_.clear();
@@ -94,8 +91,9 @@ ClientSideDetectionService* ClientSideDetectionService::Create(
   return service.release();
 }
 
-void ClientSideDetectionService::SetEnabled(bool enabled) {
+void ClientSideDetectionService::SetEnabledAndRefreshState(bool enabled) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  SendModelToRenderers();  // always refresh the renderer state
   if (enabled == enabled_)
     return;
   enabled_ = enabled;
@@ -110,12 +108,12 @@ void ClientSideDetectionService::SetEnabled(bool enabled) {
     // Cancel pending requests.
     model_fetcher_.reset();
     // Invoke pending callbacks with a false verdict.
-    for (std::map<const URLFetcher*, ClientReportInfo*>::iterator it =
+    for (std::map<const content::URLFetcher*, ClientReportInfo*>::iterator it =
              client_phishing_reports_.begin();
          it != client_phishing_reports_.end(); ++it) {
       ClientReportInfo* info = it->second;
-      if (info->callback.get())
-        info->callback->Run(info->phishing_url, false);
+      if (!info->callback.is_null())
+        info->callback.Run(info->phishing_url, false);
     }
     STLDeleteContainerPairPointers(client_phishing_reports_.begin(),
                                    client_phishing_reports_.end());
@@ -126,13 +124,12 @@ void ClientSideDetectionService::SetEnabled(bool enabled) {
 
 void ClientSideDetectionService::SendClientReportPhishingRequest(
     ClientPhishingRequest* verdict,
-    ClientReportPhishingRequestCallback* callback) {
+    const ClientReportPhishingRequestCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      method_factory_.NewRunnableMethod(
-          &ClientSideDetectionService::StartClientReportPhishingRequest,
-          verdict, callback));
+      base::Bind(&ClientSideDetectionService::StartClientReportPhishingRequest,
+                 weak_factory_.GetWeakPtr(), verdict, callback));
 }
 
 bool ClientSideDetectionService::IsPrivateIPAddress(
@@ -184,42 +181,57 @@ bool ClientSideDetectionService::IsBadIpAddress(
 }
 
 void ClientSideDetectionService::OnURLFetchComplete(
-    const URLFetcher* source,
-    const GURL& url,
-    const net::URLRequestStatus& status,
-    int response_code,
-    const net::ResponseCookies& cookies,
-    const std::string& data) {
+    const content::URLFetcher* source) {
+  std::string data;
+  source->GetResponseAsString(&data);
   if (source == model_fetcher_.get()) {
-    HandleModelResponse(source, url, status, response_code, cookies, data);
+    HandleModelResponse(
+        source, source->GetURL(), source->GetStatus(),
+        source->GetResponseCode(), source->GetCookies(), data);
   } else if (client_phishing_reports_.find(source) !=
              client_phishing_reports_.end()) {
-    HandlePhishingVerdict(source, url, status, response_code, cookies, data);
+    HandlePhishingVerdict(
+        source, source->GetURL(), source->GetStatus(),
+        source->GetResponseCode(), source->GetCookies(), data);
   } else {
     NOTREACHED();
   }
 }
 
-void ClientSideDetectionService::Observe(int type,
-                                         const NotificationSource& source,
-                                         const NotificationDetails& details) {
+void ClientSideDetectionService::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(type == content::NOTIFICATION_RENDERER_PROCESS_CREATED);
   if (!model_.get()) {
     // Model might not be ready or maybe there was an error.
     return;
   }
-  SendModelToProcess(Source<RenderProcessHost>(source).ptr());
+  SendModelToProcess(
+      content::Source<content::RenderProcessHost>(source).ptr());
 }
 
 void ClientSideDetectionService::SendModelToProcess(
-    RenderProcessHost* process) {
-  VLOG(2) << "Sending phishing model to renderer";
-  process->Send(new SafeBrowsingMsg_SetPhishingModel(model_str_));
+    content::RenderProcessHost* process) {
+  // The ClientSideDetectionService is enabled if _any_ active profile has
+  // SafeBrowsing turned on.  Here we check the profile for each renderer
+  // process and only send the model to those that have SafeBrowsing enabled.
+  Profile* profile = Profile::FromBrowserContext(process->GetBrowserContext());
+  std::string model;
+  if (profile->GetPrefs()->GetBoolean(prefs::kSafeBrowsingEnabled)) {
+    VLOG(2) << "Sending phishing model to RenderProcessHost @" << process;
+    model = model_str_;
+  } else {
+    VLOG(2) << "Disabling client-side phishing detection for "
+            << "RenderProcessHost @" << process;
+  }
+  process->Send(new SafeBrowsingMsg_SetPhishingModel(model));
 }
 
 void ClientSideDetectionService::SendModelToRenderers() {
-  for (RenderProcessHost::iterator i(RenderProcessHost::AllHostsIterator());
+  for (content::RenderProcessHost::iterator i(
+          content::RenderProcessHost::AllHostsIterator());
        !i.IsAtEnd(); i.Advance()) {
     SendModelToProcess(i.GetCurrentValue());
   }
@@ -228,20 +240,19 @@ void ClientSideDetectionService::SendModelToRenderers() {
 void ClientSideDetectionService::ScheduleFetchModel(int64 delay_ms) {
   MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
-      method_factory_.NewRunnableMethod(
-          &ClientSideDetectionService::StartFetchModel),
-      delay_ms);
+      base::Bind(&ClientSideDetectionService::StartFetchModel,
+                 weak_factory_.GetWeakPtr()),
+      base::TimeDelta::FromMilliseconds(delay_ms));
 }
 
 void ClientSideDetectionService::StartFetchModel() {
   if (enabled_) {
     // Start fetching the model either from the cache or possibly from the
     // network if the model isn't in the cache.
-    model_fetcher_.reset(URLFetcher::Create(0 /* ID is not used */,
-                                            GURL(kClientModelUrl),
-                                            URLFetcher::GET,
-                                            this));
-    model_fetcher_->set_request_context(request_context_getter_.get());
+    model_fetcher_.reset(content::URLFetcher::Create(
+        0 /* ID used for testing */, GURL(kClientModelUrl),
+        content::URLFetcher::GET, this));
+    model_fetcher_->SetRequestContext(request_context_getter_.get());
     model_fetcher_->Start();
   }
 }
@@ -270,84 +281,40 @@ void ClientSideDetectionService::EndFetchModel(ClientModelStatus status) {
   ScheduleFetchModel(delay_ms);
 }
 
-void ClientSideDetectionService::SanitizeRequestForPingback(
-    const ClientPhishingRequest& full_request,
-    ClientPhishingRequest* sanitized_request) {
-  DCHECK(full_request.IsInitialized());
-  sanitized_request->Clear();
-  if (full_request.has_hash_prefix()) {
-    sanitized_request->set_hash_prefix(full_request.hash_prefix());
-  }
-  sanitized_request->set_client_score(full_request.client_score());
-  if (full_request.has_is_phishing()) {
-    sanitized_request->set_is_phishing(full_request.is_phishing());
-  }
-
-  for (int i = 0; i < full_request.feature_map_size(); ++i) {
-    const ClientPhishingRequest_Feature& feature = full_request.feature_map(i);
-    if (allowed_features_.find(feature.name()) != allowed_features_.end()) {
-      sanitized_request->add_feature_map()->CopyFrom(feature);
-    }
-  }
-
-  if (full_request.has_model_version()) {
-    sanitized_request->set_model_version(full_request.model_version());
-  }
-
-  for (int i = 0; i < full_request.non_model_feature_map_size(); ++i) {
-    const ClientPhishingRequest_Feature& feature =
-        full_request.non_model_feature_map(i);
-    if (allowed_features_.find(feature.name()) != allowed_features_.end()) {
-      sanitized_request->add_non_model_feature_map()->CopyFrom(feature);
-    }
-  }
-}
-
 void ClientSideDetectionService::StartClientReportPhishingRequest(
     ClientPhishingRequest* verdict,
-    ClientReportPhishingRequestCallback* callback) {
+    const ClientReportPhishingRequestCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   scoped_ptr<ClientPhishingRequest> request(verdict);
-  scoped_ptr<ClientReportPhishingRequestCallback> cb(callback);
 
   if (!enabled_) {
-    if (cb.get())
-      cb->Run(GURL(request->url()), false);
+    if (!callback.is_null())
+      callback.Run(GURL(request->url()), false);
     return;
-  }
-
-  // Create the version of the request proto that we'll send over the network.
-  ClientPhishingRequest request_to_send;
-  if (sb_service_ && sb_service_->CanReportStats()) {
-    request_to_send.CopyFrom(*request);
-  } else {
-    SanitizeRequestForPingback(*request, &request_to_send);
   }
 
   std::string request_data;
-  if (!request_to_send.SerializeToString(&request_data)) {
+  if (!request->SerializeToString(&request_data)) {
     UMA_HISTOGRAM_COUNTS("SBClientPhishing.RequestNotSerialized", 1);
     VLOG(1) << "Unable to serialize the CSD request. Proto file changed?";
-    if (cb.get()) {
-      cb->Run(GURL(request->url()), false);
-    }
+    if (!callback.is_null())
+      callback.Run(GURL(request->url()), false);
     return;
   }
 
-  URLFetcher* fetcher = URLFetcher::Create(0 /* ID is not used */,
-                                           GURL(kClientReportPhishingUrl),
-                                           URLFetcher::POST,
-                                           this);
+  content::URLFetcher* fetcher = content::URLFetcher::Create(
+      0 /* ID used for testing */, GURL(kClientReportPhishingUrl),
+      content::URLFetcher::POST, this);
 
   // Remember which callback and URL correspond to the current fetcher object.
   ClientReportInfo* info = new ClientReportInfo;
-  info->callback.swap(cb);  // takes ownership of the callback.
+  info->callback = callback;
   info->phishing_url = GURL(request->url());
   client_phishing_reports_[fetcher] = info;
 
-  fetcher->set_load_flags(net::LOAD_DISABLE_CACHE);
-  fetcher->set_request_context(request_context_getter_.get());
-  fetcher->set_upload_data("application/octet-stream", request_data);
+  fetcher->SetLoadFlags(net::LOAD_DISABLE_CACHE);
+  fetcher->SetRequestContext(request_context_getter_.get());
+  fetcher->SetUploadData("application/octet-stream", request_data);
   fetcher->Start();
 
   // Record that we made a request
@@ -355,7 +322,7 @@ void ClientSideDetectionService::StartClientReportPhishingRequest(
 }
 
 void ClientSideDetectionService::HandleModelResponse(
-    const URLFetcher* source,
+    const content::URLFetcher* source,
     const GURL& url,
     const net::URLRequestStatus& status,
     int response_code,
@@ -363,8 +330,8 @@ void ClientSideDetectionService::HandleModelResponse(
     const std::string& data) {
   base::TimeDelta max_age;
   if (status.is_success() && RC_REQUEST_OK == response_code &&
-      source->response_headers() &&
-      source->response_headers()->GetMaxAgeValue(&max_age)) {
+      source->GetResponseHeaders() &&
+      source->GetResponseHeaders()->GetMaxAgeValue(&max_age)) {
     model_max_age_.reset(new base::TimeDelta(max_age));
   }
   scoped_ptr<ClientSideModel> model(new ClientSideModel());
@@ -396,7 +363,7 @@ void ClientSideDetectionService::HandleModelResponse(
 }
 
 void ClientSideDetectionService::HandlePhishingVerdict(
-    const URLFetcher* source,
+    const content::URLFetcher* source,
     const GURL& url,
     const net::URLRequestStatus& status,
     int response_code,
@@ -410,16 +377,14 @@ void ClientSideDetectionService::HandlePhishingVerdict(
     // Cache response, possibly flushing an old one.
     cache_[info->phishing_url] =
         make_linked_ptr(new CacheState(response.phishy(), base::Time::Now()));
-    is_phishing = (response.phishy() &&
-                   !IsFalsePositiveResponse(info->phishing_url, response));
+    is_phishing = response.phishy();
   } else {
     DLOG(ERROR) << "Unable to get the server verdict for URL: "
                 << info->phishing_url << " status: " << status.status() << " "
                 << "response_code:" << response_code;
   }
-  if (info->callback.get()) {
-    info->callback->Run(info->phishing_url, is_phishing);
-  }
+  if (!info->callback.is_null())
+    info->callback.Run(info->phishing_url, is_phishing);
   client_phishing_reports_.erase(source);
   delete source;
 }
@@ -442,8 +407,10 @@ bool ClientSideDetectionService::GetValidCachedResult(const GURL& url,
   // We still need to check if the result is valid.
   const CacheState& cache_state = *it->second;
   if (cache_state.is_phishing ?
-      cache_state.timestamp > base::Time::Now() - kPositiveCacheInterval :
-      cache_state.timestamp > base::Time::Now() - kNegativeCacheInterval) {
+      cache_state.timestamp > base::Time::Now() -
+          base::TimeDelta::FromMinutes(kPositiveCacheIntervalMinutes) :
+      cache_state.timestamp > base::Time::Now() -
+          base::TimeDelta::FromDays(kNegativeCacheIntervalDays)) {
     *is_phishing = cache_state.is_phishing;
     return true;
   }
@@ -456,9 +423,11 @@ void ClientSideDetectionService::UpdateCache() {
   // could be used for this purpose even if we will not use the entry to
   // satisfy the request from the cache.
   base::TimeDelta positive_cache_interval =
-      std::max(kPositiveCacheInterval, kReportsInterval);
+      std::max(base::TimeDelta::FromMinutes(kPositiveCacheIntervalMinutes),
+               base::TimeDelta::FromDays(kReportsIntervalDays));
   base::TimeDelta negative_cache_interval =
-      std::max(kNegativeCacheInterval, kReportsInterval);
+      std::max(base::TimeDelta::FromDays(kNegativeCacheIntervalDays),
+               base::TimeDelta::FromDays(kReportsIntervalDays));
 
   // Remove elements from the cache that will no longer be used.
   for (PhishingCache::iterator it = cache_.begin(); it != cache_.end();) {
@@ -478,7 +447,8 @@ bool ClientSideDetectionService::OverReportLimit() {
 }
 
 int ClientSideDetectionService::GetNumReports() {
-  base::Time cutoff = base::Time::Now() - kReportsInterval;
+  base::Time cutoff =
+      base::Time::Now() - base::TimeDelta::FromDays(kReportsIntervalDays);
 
   // Erase items older than cutoff because we will never care about them again.
   while (!phishing_report_times_.empty() &&
@@ -516,44 +486,6 @@ bool ClientSideDetectionService::InitializePrivateNetworks() {
   return true;
 }
 
-void ClientSideDetectionService::InitializeAllowedFeatures() {
-  static const char* const kAllowedFeatures[] = {
-    // Renderer (model) features.
-    features::kUrlHostIsIpAddress,
-    features::kUrlNumOtherHostTokensGTOne,
-    features::kUrlNumOtherHostTokensGTThree,
-    features::kPageHasForms,
-    features::kPageActionOtherDomainFreq,
-    features::kPageHasTextInputs,
-    features::kPageHasPswdInputs,
-    features::kPageHasRadioInputs,
-    features::kPageHasCheckInputs,
-    features::kPageExternalLinksFreq,
-    features::kPageSecureLinksFreq,
-    features::kPageNumScriptTagsGTOne,
-    features::kPageNumScriptTagsGTSix,
-    features::kPageImgOtherDomainFreq,
-    // Browser (non-model) features.
-    features::kUrlHistoryVisitCount,
-    features::kUrlHistoryTypedCount,
-    features::kUrlHistoryLinkCount,
-    features::kUrlHistoryVisitCountMoreThan24hAgo,
-    features::kHttpHostVisitCount,
-    features::kHttpsHostVisitCount,
-    features::kFirstHttpHostVisitMoreThan24hAgo,
-    features::kFirstHttpsHostVisitMoreThan24hAgo,
-    features::kHasSSLReferrer,
-    features::kPageTransitionType,
-    features::kIsFirstNavigation,
-    features::kSafeBrowsingIsSubresource,
-    features::kSafeBrowsingThreatType,
-  };
-
-  for (size_t i = 0; i < arraysize(kAllowedFeatures); ++i) {
-    allowed_features_.insert(kAllowedFeatures[i]);
-  }
-}
-
 // static
 void ClientSideDetectionService::SetBadSubnets(const ClientSideModel& model,
                                                BadSubnetMap* bad_subnets) {
@@ -564,7 +496,7 @@ void ClientSideDetectionService::SetBadSubnets(const ClientSideModel& model,
       DLOG(ERROR) << "Invalid bad subnet size: " << size;
       continue;
     }
-    if (model.bad_subnet(i).prefix().size() != crypto::SHA256_LENGTH) {
+    if (model.bad_subnet(i).prefix().size() != crypto::kSHA256Length) {
       DLOG(ERROR) << "Invalid bad subnet prefix length: "
                   << model.bad_subnet(i).prefix().size();
       continue;
@@ -599,51 +531,5 @@ bool ClientSideDetectionService::ModelHasValidHashIds(
     }
   }
   return true;
-}
-
-// static
-bool ClientSideDetectionService::IsFalsePositiveResponse(
-    const GURL& url,
-    const ClientPhishingResponse& response) {
-  if (!response.phishy() || response.whitelist_expression_size() == 0) {
-    return false;
-  }
-  // This whitelist is special.  A particular URL gets whitelisted if it
-  // matches any of the expressions on the whitelist or if any of the whitelist
-  // entries matches the URL.
-
-  std::string host, path, query;
-  safe_browsing_util::CanonicalizeUrl(url, &host, &path, &query);
-  std::string canonical_url_as_pattern = host + path + query;
-
-  std::vector<std::string> url_patterns;
-  safe_browsing_util::GeneratePatternsToCheck(url, &url_patterns);
-
-  for (int i = 0; i < response.whitelist_expression_size(); ++i) {
-    GURL whitelisted_url(std::string("http://") +
-                         response.whitelist_expression(i));
-    if (!whitelisted_url.is_valid()) {
-      UMA_HISTOGRAM_COUNTS("SBClientPhishing.InvalidWhitelistExpression", 1);
-      continue;  // Skip invalid whitelist expressions.
-    }
-    // First, we check whether the canonical URL matches any of the whitelisted
-    // expressions.
-    for (size_t j = 0; j < url_patterns.size(); ++j) {
-      if (url_patterns[j] == response.whitelist_expression(i)) {
-        return true;
-      }
-    }
-    // Second, we consider the canonical URL as an expression and we check
-    // whether any of the whitelist entries matches that expression.
-    std::vector<std::string> whitelist_patterns;
-    safe_browsing_util::GeneratePatternsToCheck(whitelisted_url,
-                                                &whitelist_patterns);
-    for (size_t j = 0; j < whitelist_patterns.size(); ++j) {
-      if (whitelist_patterns[j] == canonical_url_as_pattern) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 }  // namespace safe_browsing

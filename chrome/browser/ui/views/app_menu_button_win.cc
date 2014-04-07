@@ -5,10 +5,10 @@
 #include "chrome/browser/ui/views/app_menu_button_win.h"
 
 #include "ui/base/win/hwnd_util.h"
-#include "views/widget/widget.h"
+#include "ui/views/widget/widget.h"
 
 AppMenuButtonWin::AppMenuButtonWin(views::ViewMenuDelegate* menu_delegate)
-    : views::MenuButton(NULL, std::wstring(), menu_delegate, false) {
+    : views::MenuButton(NULL, string16(), menu_delegate, false) {
 }
 
 bool AppMenuButtonWin::OnKeyPressed(const views::KeyEvent& event) {

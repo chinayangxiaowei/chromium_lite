@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_CONTENTS_VIEW_H_
 #pragma once
 
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_view.h"
@@ -13,7 +14,7 @@
 #include "ui/base/animation/animation_delegate.h"
 #include "ui/base/animation/slide_animation.h"
 #include "ui/gfx/font.h"
-#include "views/view.h"
+#include "ui/views/view.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class AutocompleteEditModel;
@@ -23,7 +24,6 @@ class Profile;
 
 namespace gfx {
 class CanvasSkia;
-class Insets;
 }
 
 namespace views {

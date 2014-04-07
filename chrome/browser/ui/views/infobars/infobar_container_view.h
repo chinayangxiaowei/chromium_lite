@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_CONTAINER_VIEW_H_
 #pragma once
 
-#include "chrome/browser/tab_contents/infobar_container.h"
-#include "chrome/browser/ui/views/accessible_pane_view.h"
+#include "chrome/browser/infobars/infobar_container.h"
+#include "ui/views/accessible_pane_view.h"
 
 // The views-specific implementation of InfoBarContainer.
-class InfoBarContainerView : public AccessiblePaneView,
+class InfoBarContainerView : public views::AccessiblePaneView,
                              public InfoBarContainer {
  public:
   explicit InfoBarContainerView(Delegate* delegate);

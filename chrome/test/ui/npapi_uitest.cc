@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/ui/npapi_test_helper.h"
 #include "content/browser/net/url_request_mock_http_job.h"
-#include "content/common/content_switches.h"
+#include "content/public/common/content_switches.h"
 
 using npapi_test::kTestCompleteCookie;
 using npapi_test::kTestCompleteSuccess;
@@ -161,9 +161,11 @@ TEST_F(NPAPIVisiblePluginTester, SelfDeletePluginInNewStream) {
 }
 
 // http://crbug.com/95558
-// This test fails frequently on Mac, so it is disabled for now.
+// This test fails frequently on Mac and windows, so it is disabled for now.
 #if defined(OS_MACOSX)
 #define MAYBE_DeletePluginInDeallocate DISABLED_DeletePluginInDeallocate
+#elif defined(OS_WIN)
+#define MAYBE_DeletePluginInDeallocate FLAKY_DeletePluginInDeallocate
 #else
 #define MAYBE_DeletePluginInDeallocate DeletePluginInDeallocate
 #endif
@@ -208,23 +210,21 @@ TEST_F(NPAPIVisiblePluginTester, AlertInWindowMessage) {
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
 
   bool modal_dialog_showing = false;
-  ui::MessageBoxFlags::DialogButton available_buttons;
+  ui::DialogButton available_buttons;
   ASSERT_TRUE(automation()->WaitForAppModalDialog());
   ASSERT_TRUE(automation()->GetShowingAppModalDialog(&modal_dialog_showing,
       &available_buttons));
   ASSERT_TRUE(modal_dialog_showing);
-  ASSERT_NE((ui::MessageBoxFlags::DIALOGBUTTON_OK & available_buttons), 0);
-  ASSERT_TRUE(automation()->ClickAppModalDialogButton(
-      ui::MessageBoxFlags::DIALOGBUTTON_OK));
+  ASSERT_NE((ui::DIALOG_BUTTON_OK & available_buttons), 0);
+  ASSERT_TRUE(automation()->ClickAppModalDialogButton(ui::DIALOG_BUTTON_OK));
 
   modal_dialog_showing = false;
   ASSERT_TRUE(automation()->WaitForAppModalDialog());
   ASSERT_TRUE(automation()->GetShowingAppModalDialog(&modal_dialog_showing,
       &available_buttons));
   ASSERT_TRUE(modal_dialog_showing);
-  ASSERT_NE((ui::MessageBoxFlags::DIALOGBUTTON_OK & available_buttons), 0);
-  ASSERT_TRUE(automation()->ClickAppModalDialogButton(
-      ui::MessageBoxFlags::DIALOGBUTTON_OK));
+  ASSERT_NE((ui::DIALOG_BUTTON_OK & available_buttons), 0);
+  ASSERT_TRUE(automation()->ClickAppModalDialogButton(ui::DIALOG_BUTTON_OK));
 }
 
 TEST_F(NPAPIVisiblePluginTester, VerifyNPObjectLifetimeTest) {
@@ -313,6 +313,10 @@ TEST_F(NPAPITesterBase, PluginThreadAsyncCall) {
 }
 
 // Test checking the privacy mode is on.
+#if defined(OS_LINUX)
+// http://crbug.com/104380
+#define PrivateEnabled FLAKY_PrivateEnabled
+#endif
 TEST_F(NPAPIIncognitoTester, PrivateEnabled) {
   const FilePath test_case(FILE_PATH_LITERAL("private.html"));
   GURL url = ui_test_utils::GetFileUrlWithQuery(
@@ -378,6 +382,10 @@ TEST_F(NPAPITesterBase, NoHangIfInitCrashes) {
 
 #endif
 
+#if defined(OS_MACOSX)
+// http://crbug.com/111508
+#define PluginReferrerTest FLAKY_PluginReferrerTest
+#endif
 TEST_F(NPAPIVisiblePluginTester, PluginReferrerTest) {
   GURL url(URLRequestMockHTTPJob::GetMockUrl(
                FilePath(FILE_PATH_LITERAL(

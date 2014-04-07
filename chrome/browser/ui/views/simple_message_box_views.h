@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
 #include "ui/gfx/native_widget_types.h"
-#include "views/window/dialog_delegate.h"
+#include "ui/views/window/dialog_delegate.h"
 
 namespace views {
 class MessageBoxView;
@@ -50,21 +50,25 @@ class SimpleMessageBoxViews : public views::DialogDelegate,
  protected:
   // Overridden from views::DialogDelegate:
   virtual int GetDialogButtons() const OVERRIDE;
-  virtual std::wstring GetDialogButtonLabel(
-      MessageBoxFlags::DialogButton button) const OVERRIDE;
+  virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
 
-  // Overridden from views::WindowDelegate:
+  // Overridden from views::WidgetDelegate:
   virtual bool ShouldShowWindowTitle() const OVERRIDE;
-  virtual std::wstring GetWindowTitle() const OVERRIDE;
+  virtual string16 GetWindowTitle() const OVERRIDE;
   virtual void DeleteDelegate() OVERRIDE;
-  virtual bool IsModal() const OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
   virtual views::View* GetContentsView() OVERRIDE;
   virtual views::Widget* GetWidget() OVERRIDE;
   virtual const views::Widget* GetWidget() const OVERRIDE;
 
  private:
+  enum DialogType {
+    DIALOG_ERROR,
+    DIALOG_YES_NO,
+  };
+
   SimpleMessageBoxViews(gfx::NativeWindow parent_window,
-                        int dialog_flags,
+                        DialogType type,
                         const string16& title,
                         const string16& message);
   virtual ~SimpleMessageBoxViews();
@@ -74,15 +78,15 @@ class SimpleMessageBoxViews : public views::DialogDelegate,
   // Dispatcher method. This returns true if the menu was canceled, or
   // if the message is such that the menu should be closed.
   virtual bool Dispatch(const MSG& msg) OVERRIDE;
-#elif defined(TOUCH_UI)
+#elif defined(USE_AURA)
   virtual base::MessagePumpDispatcher::DispatchStatus Dispatch(
       XEvent* xevent) OVERRIDE;
 #else
   virtual bool Dispatch(GdkEvent* event) OVERRIDE;
 #endif
 
-  int dialog_flags_;
-  std::wstring message_box_title_;
+  const DialogType type_;
+  string16 message_box_title_;
   views::MessageBoxView* message_box_view_;
   DispositionType disposition_;
 

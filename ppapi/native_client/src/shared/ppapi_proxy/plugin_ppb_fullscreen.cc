@@ -1,12 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "native_client/src/shared/ppapi_proxy/plugin_instance_data.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_ppb_fullscreen.h"
 #include "native_client/src/shared/ppapi_proxy/plugin_globals.h"
 #include "native_client/src/shared/ppapi_proxy/utility.h"
-#include "ppapi/c/dev/ppb_fullscreen_dev.h"
 #include "ppapi/c/pp_size.h"
+#include "ppapi/c/ppb_fullscreen.h"
 #include "srpcgen/ppb_rpc.h"
 
 namespace ppapi_proxy {
@@ -14,25 +15,15 @@ namespace ppapi_proxy {
 namespace {
 
 PP_Bool IsFullscreen(PP_Instance instance) {
-  DebugPrintf("PPB_Fullscreen::IsFullscreen: instance=%"NACL_PRIu32"\n",
+  DebugPrintf("PPB_Fullscreen::IsFullscreen: instance=%"NACL_PRId32"\n",
               instance);
-
-  int32_t success;
-  NaClSrpcError srpc_result =
-      PpbFullscreenRpcClient::PPB_Fullscreen_IsFullscreen(
-          GetMainSrpcChannel(), instance, &success);
-  DebugPrintf("PPB_Fullscreen::IsFullscreen: %s\n",
-              NaClSrpcErrorString(srpc_result));
-
-  if (srpc_result == NACL_SRPC_RESULT_OK && success)
-    return PP_TRUE;
-  return PP_FALSE;
+  return PP_FromBool(PluginInstanceData::IsFullscreen(instance));
 }
 
 
 PP_Bool SetFullscreen(PP_Instance instance, PP_Bool fullscreen) {
   DebugPrintf("PPB_Fullscreen::SetFullscreen: "
-              "instance=%"NACL_PRIu32" fullscreen=%d\n", instance, fullscreen);
+              "instance=%"NACL_PRId32" fullscreen=%d\n", instance, fullscreen);
 
   int32_t success;
   NaClSrpcError srpc_result =
@@ -51,7 +42,7 @@ PP_Bool SetFullscreen(PP_Instance instance, PP_Bool fullscreen) {
 
 
 PP_Bool GetScreenSize(PP_Instance instance, struct PP_Size* size) {
-  DebugPrintf("PPB_Fullscreen::GetScreenSize: instance=%"NACL_PRIu32"\n",
+  DebugPrintf("PPB_Fullscreen::GetScreenSize: instance=%"NACL_PRId32"\n",
               instance);
   if (size == NULL)
     return PP_FALSE;
@@ -76,8 +67,8 @@ PP_Bool GetScreenSize(PP_Instance instance, struct PP_Size* size) {
 
 }  // namespace
 
-const PPB_Fullscreen_Dev* PluginFullscreen::GetInterface() {
-  static const PPB_Fullscreen_Dev fullscreen_interface = {
+const PPB_Fullscreen* PluginFullscreen::GetInterface() {
+  static const PPB_Fullscreen fullscreen_interface = {
     IsFullscreen,
     SetFullscreen,
     GetScreenSize

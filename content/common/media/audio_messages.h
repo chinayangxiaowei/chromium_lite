@@ -5,6 +5,7 @@
 // IPC messages for the audio.
 // Multiply-included message file, hence no include guard.
 
+#include "base/basictypes.h"
 #include "base/shared_memory.h"
 #include "base/sync_socket.h"
 #include "content/common/media/audio_stream_state.h"
@@ -88,6 +89,11 @@ IPC_MESSAGE_CONTROL2(AudioMsg_NotifyStreamStateChanged,
                      int /* stream id */,
                      AudioStreamState /* new state */)
 
+// Notification message sent from browser to renderer for state update.
+IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamStateChanged,
+                     int /* stream id */,
+                     AudioStreamState /* new state */)
+
 IPC_MESSAGE_CONTROL2(AudioMsg_NotifyStreamVolume,
                      int /* stream id */,
                      double /* volume */)
@@ -95,6 +101,10 @@ IPC_MESSAGE_CONTROL2(AudioMsg_NotifyStreamVolume,
 IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyStreamVolume,
                      int /* stream id */,
                      double /* volume */)
+
+IPC_MESSAGE_CONTROL2(AudioInputMsg_NotifyDeviceStarted,
+                     int /* stream id */,
+                     std::string /* device_id */)
 
 // Messages sent from the renderer to the browser.
 
@@ -105,10 +115,11 @@ IPC_MESSAGE_CONTROL3(AudioHostMsg_CreateStream,
                      bool /* low-latency */)
 
 // Request that got sent to browser for creating an audio input stream
-IPC_MESSAGE_CONTROL3(AudioInputHostMsg_CreateStream,
+IPC_MESSAGE_CONTROL4(AudioInputHostMsg_CreateStream,
                      int /* stream_id */,
                      AudioParameters /* params */,
-                     bool /* low-latency */)
+                     bool /* low-latency */,
+                     std::string /* device_id */)
 
 // Tell the browser the audio buffer prepared for stream (stream_id) is
 // filled and is ready to be consumed.
@@ -159,3 +170,9 @@ IPC_MESSAGE_CONTROL2(AudioHostMsg_SetVolume,
 IPC_MESSAGE_CONTROL2(AudioInputHostMsg_SetVolume,
                      int /* stream_id */,
                      double /* volume */)
+
+// Start the device referenced by the session_id for the input stream specified
+// by stream_id.
+IPC_MESSAGE_CONTROL2(AudioInputHostMsg_StartDevice,
+                     int /* stream_id */,
+                     int /* session_id */)

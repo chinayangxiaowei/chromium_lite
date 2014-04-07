@@ -14,8 +14,6 @@ using WebKit::WebConsoleMessage;
 
 namespace appcache {
 
-const char kManifestMimeType[] = "text/cache-manifest";
-
 const char kHttpScheme[] = "http";
 const char kHttpsScheme[] = "https";
 const char kHttpGETMethod[] = "GET";
@@ -25,6 +23,7 @@ const FilePath::CharType kAppCacheDatabaseName[] = FILE_PATH_LITERAL("Index");
 
 AppCacheInfo::AppCacheInfo()
     : cache_id(kNoCacheId),
+      group_id(0),
       status(UNCACHED),
       size(0),
       is_complete(false) {
@@ -36,16 +35,29 @@ AppCacheInfo::~AppCacheInfo() {
 AppCacheResourceInfo::AppCacheResourceInfo()
     : url(),
       size(0),
-      is_master(0),
-      is_manifest(0),
-      is_fallback(0),
-      is_foreign(0),
-      is_explicit(0),
+      is_master(false),
+      is_manifest(false),
+      is_intercept(false),
+      is_fallback(false),
+      is_foreign(false),
+      is_explicit(false),
       response_id(kNoResponseId) {
 }
 
 AppCacheResourceInfo::~AppCacheResourceInfo() {
 }
+
+Namespace::Namespace()
+    : type(FALLBACK_NAMESPACE) {
+}
+
+Namespace::Namespace(NamespaceType type, const GURL& url, const GURL& target)
+    : type(type), namespace_url(url), target_url(target) {
+}
+
+Namespace::~Namespace() {
+}
+
 
 bool IsSchemeSupported(const GURL& url) {
   bool supported = url.SchemeIs(kHttpScheme) || url.SchemeIs(kHttpsScheme);

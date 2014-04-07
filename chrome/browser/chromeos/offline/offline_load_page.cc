@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,16 +21,17 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/tab_contents/navigation_controller.h"
-#include "content/browser/tab_contents/navigation_entry.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
+#include "net/base/escape.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+
+using content::BrowserThread;
+using content::WebContents;
 
 namespace {
 
@@ -46,42 +47,23 @@ void SetString(DictionaryValue* strings, const char* name, int resource_id) {
 
 namespace chromeos {
 
-// static
-void OfflineLoadPage::Show(int process_host_id, int render_view_id,
-                           const GURL& url, Delegate* delegate) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (!net::NetworkChangeNotifier::IsOffline()) {
-    // Check again in UI thread and proceed if it's connected.
-    delegate->OnBlockingPageComplete(true);
-  } else {
-    TabContents* tab_contents =
-        tab_util::GetTabContentsByID(process_host_id, render_view_id);
-    // There is a chance that the tab is closed after we decided to show
-    // offline and before we actually show the offline page.
-    if (!tab_contents)
-      return;
-    (new OfflineLoadPage(tab_contents, url, delegate))->Show();
-  }
-}
-
-OfflineLoadPage::OfflineLoadPage(TabContents* tab_contents,
+OfflineLoadPage::OfflineLoadPage(WebContents* web_contents,
                                  const GURL& url,
-                                 Delegate* delegate)
-    : ChromeInterstitialPage(tab_contents, true, url),
-      delegate_(delegate),
-      proceeded_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)),
-      in_test_(false) {
+                                 const CompletionCallback& callback)
+    : ChromeInterstitialPage(web_contents, true, url),
+      callback_(callback),
+      proceeded_(false) {
   net::NetworkChangeNotifier::AddOnlineStateObserver(this);
 }
 
 OfflineLoadPage::~OfflineLoadPage() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   net::NetworkChangeNotifier::RemoveOnlineStateObserver(this);
 }
 
 std::string OfflineLoadPage::GetHTMLContents() {
   DictionaryValue strings;
-  int64 time_to_wait = 0;  // kMaxBlankPeriod
+  int64 time_to_wait = kMaxBlankPeriod;
   // Set the timeout to show the page.
   strings.SetInteger("time_to_wait", static_cast<int>(time_to_wait));
   // Button labels
@@ -101,13 +83,14 @@ std::string OfflineLoadPage::GetHTMLContents() {
   strings.SetString("url", failed_url);
 
   // The offline page for app has icons and slightly different message.
-  Profile* profile = Profile::FromBrowserContext(tab()->browser_context());
+  Profile* profile = Profile::FromBrowserContext(tab()->GetBrowserContext());
   DCHECK(profile);
   const Extension* extension = NULL;
   ExtensionService* extensions_service = profile->GetExtensionService();
   // Extension service does not exist in test.
   if (extensions_service)
-    extension = extensions_service->GetExtensionByWebExtent(url());
+    extension = extensions_service->extensions()->GetHostedAppByURL(
+        ExtensionURLInfo(url()));
 
   if (extension)
     GetAppOfflineStrings(extension, failed_url, &strings);
@@ -141,7 +124,7 @@ void OfflineLoadPage::GetAppOfflineStrings(
   strings->SetString(
       "msg",
       l10n_util::GetStringFUTF16(IDS_APP_OFFLINE_LOAD_DESCRIPTION,
-                                 failed_url));
+                                 net::EscapeForHTML(failed_url)));
 }
 
 void OfflineLoadPage::GetNormalOfflineStrings(
@@ -155,7 +138,7 @@ void OfflineLoadPage::GetNormalOfflineStrings(
   strings->SetString(
       "msg",
       l10n_util::GetStringFUTF16(IDS_SITE_OFFLINE_LOAD_DESCRIPTION,
-                                 failed_url));
+                                 net::EscapeForHTML(failed_url)));
 }
 
 void OfflineLoadPage::CommandReceived(const std::string& cmd) {
@@ -182,18 +165,24 @@ void OfflineLoadPage::CommandReceived(const std::string& cmd) {
   }
 }
 
+void OfflineLoadPage::NotifyBlockingPageComplete(bool proceed) {
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE, base::Bind(callback_, proceed));
+}
+
 void OfflineLoadPage::Proceed() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   proceeded_ = true;
-  delegate_->OnBlockingPageComplete(true);
+  NotifyBlockingPageComplete(true);
   InterstitialPage::Proceed();
 }
 
 void OfflineLoadPage::DontProceed() {
-  // Inogre if it's already proceeded.
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  // Ignore if it's already proceeded.
   if (proceeded_)
     return;
-  delegate_->OnBlockingPageComplete(false);
+  NotifyBlockingPageComplete(false);
   InterstitialPage::DontProceed();
 }
 

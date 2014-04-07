@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -55,16 +55,6 @@ TEST_F(StatusControllerTest, GetsDirty) {
   status.set_invalid_store(false);
   EXPECT_TRUE(status.TestAndClearIsDirty());
 
-  status.set_syncer_stuck(true);
-  EXPECT_TRUE(status.TestAndClearIsDirty());
-  status.set_syncer_stuck(false);
-  EXPECT_TRUE(status.TestAndClearIsDirty());
-
-  status.SetSyncInProgressAndUpdateStartTime(true);
-  EXPECT_TRUE(status.TestAndClearIsDirty());
-  status.SetSyncInProgressAndUpdateStartTime(false);
-  EXPECT_TRUE(status.TestAndClearIsDirty());
-
   status.increment_num_successful_commits();
   EXPECT_TRUE(status.TestAndClearIsDirty());
   status.increment_num_successful_commits();
@@ -88,8 +78,6 @@ TEST_F(StatusControllerTest, GetsDirty) {
 
 TEST_F(StatusControllerTest, StaysClean) {
   StatusController status(routes_);
-  status.update_conflict_sets_built(true);
-  EXPECT_FALSE(status.TestAndClearIsDirty());
   status.update_conflicts_resolved(true);
   EXPECT_FALSE(status.TestAndClearIsDirty());
 
@@ -131,13 +119,19 @@ TEST_F(StatusControllerTest, ReadYourWrites) {
   status.set_invalid_store(true);
   EXPECT_TRUE(status.syncer_status().invalid_store);
 
-  EXPECT_FALSE(status.syncer_status().syncer_stuck);
-  status.set_syncer_stuck(true);
-  EXPECT_TRUE(status.syncer_status().syncer_stuck);
+  EXPECT_FALSE(status.conflicts_resolved());
+  status.update_conflicts_resolved(true);
+  EXPECT_TRUE(status.conflicts_resolved());
 
-  EXPECT_FALSE(status.syncer_status().sync_in_progress);
-  status.SetSyncInProgressAndUpdateStartTime(true);
-  EXPECT_TRUE(status.syncer_status().sync_in_progress);
+  status.set_last_download_updates_result(SYNCER_OK);
+  EXPECT_EQ(SYNCER_OK, status.error().last_download_updates_result);
+
+  status.set_last_post_commit_result(SYNC_AUTH_ERROR);
+  EXPECT_EQ(SYNC_AUTH_ERROR, status.error().last_post_commit_result);
+
+  status.set_last_process_commit_response_result(SYNC_SERVER_ERROR);
+  EXPECT_EQ(SYNC_SERVER_ERROR,
+            status.error().last_process_commit_response_result);
 
   for (int i = 0; i < 14; i++)
     status.increment_num_successful_commits();
@@ -154,19 +148,19 @@ TEST_F(StatusControllerTest, HasConflictingUpdates) {
   EXPECT_FALSE(status.HasConflictingUpdates());
   {
     ScopedModelSafeGroupRestriction r(&status, GROUP_UI);
-    EXPECT_FALSE(status.update_progress().HasConflictingUpdates());
+    EXPECT_FALSE(status.update_progress());
     status.mutable_update_progress()->AddAppliedUpdate(SUCCESS,
         syncable::Id());
     status.mutable_update_progress()->AddAppliedUpdate(CONFLICT,
         syncable::Id());
-    EXPECT_TRUE(status.update_progress().HasConflictingUpdates());
+    EXPECT_TRUE(status.update_progress()->HasConflictingUpdates());
   }
 
   EXPECT_TRUE(status.HasConflictingUpdates());
 
   {
     ScopedModelSafeGroupRestriction r(&status, GROUP_PASSIVE);
-    EXPECT_FALSE(status.update_progress().HasConflictingUpdates());
+    EXPECT_FALSE(status.update_progress());
   }
 }
 
@@ -186,17 +180,18 @@ TEST_F(StatusControllerTest, TotalNumConflictingItems) {
   TestIdFactory f;
   {
     ScopedModelSafeGroupRestriction r(&status, GROUP_UI);
+    EXPECT_FALSE(status.conflict_progress());
     status.mutable_conflict_progress()->AddConflictingItemById(f.NewLocalId());
     status.mutable_conflict_progress()->AddConflictingItemById(f.NewLocalId());
-    EXPECT_EQ(2, status.conflict_progress().ConflictingItemsSize());
+    EXPECT_EQ(2, status.conflict_progress()->ConflictingItemsSize());
   }
   EXPECT_EQ(2, status.TotalNumConflictingItems());
   {
     ScopedModelSafeGroupRestriction r(&status, GROUP_DB);
-    EXPECT_EQ(0, status.conflict_progress().ConflictingItemsSize());
+    EXPECT_FALSE(status.conflict_progress());
     status.mutable_conflict_progress()->AddConflictingItemById(f.NewLocalId());
     status.mutable_conflict_progress()->AddConflictingItemById(f.NewLocalId());
-    EXPECT_EQ(2, status.conflict_progress().ConflictingItemsSize());
+    EXPECT_EQ(2, status.conflict_progress()->ConflictingItemsSize());
   }
   EXPECT_EQ(4, status.TotalNumConflictingItems());
 }
@@ -204,8 +199,9 @@ TEST_F(StatusControllerTest, TotalNumConflictingItems) {
 // Basic test that non group-restricted state accessors don't cause violations.
 TEST_F(StatusControllerTest, Unrestricted) {
   StatusController status(routes_);
-  status.GetUnrestrictedUpdateProgress(
-      GROUP_UI)->SuccessfullyAppliedUpdateCount();
+  const UpdateProgress* progress =
+      status.GetUnrestrictedUpdateProgress(GROUP_UI);
+  EXPECT_FALSE(progress);
   status.mutable_commit_message();
   status.commit_response();
   status.mutable_commit_response();

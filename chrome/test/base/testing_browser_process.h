@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,9 +16,9 @@
 #include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "content/common/notification_service.h"
 
 class BackgroundModeManager;
+class CRLSetFetcher;
 class IOThread;
 class GoogleURLTracker;
 class MHTMLGenerationManager;
@@ -26,8 +26,8 @@ class NotificationUIManager;
 class PrefService;
 class WatchDogThread;
 
-namespace base {
-class WaitableEvent;
+namespace content {
+class NotificationService;
 }
 
 namespace policy {
@@ -47,78 +47,64 @@ class TestingBrowserProcess : public BrowserProcess {
   TestingBrowserProcess();
   virtual ~TestingBrowserProcess();
 
-  virtual void EndSession();
-  virtual ResourceDispatcherHost* resource_dispatcher_host();
-  virtual MetricsService* metrics_service();
-  virtual IOThread* io_thread();
-
-  virtual base::Thread* file_thread();
-  virtual base::Thread* db_thread();
-  virtual base::Thread* cache_thread();
-  virtual WatchDogThread* watchdog_thread();
-
-#if defined(OS_CHROMEOS)
-  virtual base::Thread* web_socket_proxy_thread();
-#endif
-
-  virtual ProfileManager* profile_manager();
-  virtual PrefService* local_state();
-  virtual policy::BrowserPolicyConnector* browser_policy_connector();
-  virtual IconManager* icon_manager();
-  virtual ThumbnailGenerator* GetThumbnailGenerator();
-  virtual DevToolsManager* devtools_manager();
-  virtual SidebarManager* sidebar_manager();
-  virtual TabCloseableStateWatcher* tab_closeable_state_watcher();
-  virtual BackgroundModeManager* background_mode_manager();
-  virtual StatusTray* status_tray();
-  virtual SafeBrowsingService* safe_browsing_service();
+  virtual void ResourceDispatcherHostCreated() OVERRIDE;
+  virtual void EndSession() OVERRIDE;
+  virtual MetricsService* metrics_service() OVERRIDE;
+  virtual IOThread* io_thread() OVERRIDE;
+  virtual WatchDogThread* watchdog_thread() OVERRIDE;
+  virtual ProfileManager* profile_manager() OVERRIDE;
+  virtual PrefService* local_state() OVERRIDE;
+  virtual policy::BrowserPolicyConnector* browser_policy_connector() OVERRIDE;
+  virtual IconManager* icon_manager() OVERRIDE;
+  virtual ThumbnailGenerator* GetThumbnailGenerator() OVERRIDE;
+  virtual TabCloseableStateWatcher* tab_closeable_state_watcher() OVERRIDE;
+  virtual BackgroundModeManager* background_mode_manager() OVERRIDE;
+  virtual StatusTray* status_tray() OVERRIDE;
+  virtual SafeBrowsingService* safe_browsing_service() OVERRIDE;
   virtual safe_browsing::ClientSideDetectionService*
-      safe_browsing_detection_service();
-  virtual net::URLRequestContextGetter* system_request_context();
+      safe_browsing_detection_service() OVERRIDE;
+  virtual net::URLRequestContextGetter* system_request_context() OVERRIDE;
 
 #if defined(OS_CHROMEOS)
-  virtual chromeos::ProxyConfigServiceImpl*
-      chromeos_proxy_config_service_impl();
+  virtual browser::OomPriorityManager* oom_priority_manager() OVERRIDE;
 #endif  // defined(OS_CHROMEOS)
 
-  virtual ui::Clipboard* clipboard();
-  virtual ExtensionEventRouterForwarder* extension_event_router_forwarder();
-  virtual NotificationUIManager* notification_ui_manager();
-  virtual GoogleURLTracker* google_url_tracker();
-  virtual IntranetRedirectDetector* intranet_redirect_detector();
-  virtual AutomationProviderList* InitAutomationProviderList();
+  virtual ui::Clipboard* clipboard() OVERRIDE;
+  virtual ExtensionEventRouterForwarder*
+      extension_event_router_forwarder() OVERRIDE;
+  virtual NotificationUIManager* notification_ui_manager() OVERRIDE;
+  virtual GoogleURLTracker* google_url_tracker() OVERRIDE;
+  virtual IntranetRedirectDetector* intranet_redirect_detector() OVERRIDE;
+  virtual AutomationProviderList* GetAutomationProviderList() OVERRIDE;
   virtual void InitDevToolsHttpProtocolHandler(
       Profile* profile,
       const std::string& ip,
       int port,
-      const std::string& frontend_url);
-  virtual void InitDevToolsLegacyProtocolHandler(int port);
-  virtual unsigned int AddRefModule();
-  virtual unsigned int ReleaseModule();
-  virtual bool IsShuttingDown();
-  virtual printing::PrintJobManager* print_job_manager();
-  virtual printing::PrintPreviewTabController* print_preview_tab_controller();
-  virtual printing::BackgroundPrintingManager* background_printing_manager();
-  virtual const std::string& GetApplicationLocale();
-  virtual void SetApplicationLocale(const std::string& app_locale);
-  virtual DownloadStatusUpdater* download_status_updater();
-  virtual DownloadRequestLimiter* download_request_limiter();
-  virtual bool plugin_finder_disabled() const;
-  virtual void CheckForInspectorFiles() {}
+      const std::string& frontend_url) OVERRIDE;
+  virtual unsigned int AddRefModule() OVERRIDE;
+  virtual unsigned int ReleaseModule() OVERRIDE;
+  virtual bool IsShuttingDown() OVERRIDE;
+  virtual printing::PrintJobManager* print_job_manager() OVERRIDE;
+  virtual printing::PrintPreviewTabController*
+      print_preview_tab_controller() OVERRIDE;
+  virtual printing::BackgroundPrintingManager*
+      background_printing_manager() OVERRIDE;
+  virtual const std::string& GetApplicationLocale() OVERRIDE;
+  virtual void SetApplicationLocale(const std::string& app_locale) OVERRIDE;
+  virtual DownloadStatusUpdater* download_status_updater() OVERRIDE;
+  virtual DownloadRequestLimiter* download_request_limiter() OVERRIDE;
+  virtual bool plugin_finder_disabled() const OVERRIDE;
 
 #if (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
-  virtual void StartAutoupdateTimer() {}
+  virtual void StartAutoupdateTimer() OVERRIDE {}
 #endif
 
-  virtual ChromeNetLog* net_log();
-  virtual prerender::PrerenderTracker* prerender_tracker();
-
-#if defined(IPC_MESSAGE_LOG_ENABLED)
-  virtual void SetIPCLoggingEnabled(bool enable) {}
-#endif
-  virtual MHTMLGenerationManager* mhtml_generation_manager();
-  virtual GpuBlacklistUpdater* gpu_blacklist_updater();
-  virtual ComponentUpdateService* component_updater();
+  virtual ChromeNetLog* net_log() OVERRIDE;
+  virtual prerender::PrerenderTracker* prerender_tracker() OVERRIDE;
+  virtual MHTMLGenerationManager* mhtml_generation_manager() OVERRIDE;
+  virtual ComponentUpdateService* component_updater() OVERRIDE;
+  virtual CRLSetFetcher* crl_set_fetcher() OVERRIDE;
+  virtual AudioManager* audio_manager() OVERRIDE;
 
   // Set the local state for tests. Consumer is responsible for cleaning it up
   // afterwards (using ScopedTestingLocalState, for example).
@@ -126,10 +112,10 @@ class TestingBrowserProcess : public BrowserProcess {
   void SetGoogleURLTracker(GoogleURLTracker* google_url_tracker);
   void SetProfileManager(ProfileManager* profile_manager);
   void SetIOThread(IOThread* io_thread);
-  void SetDevToolsManager(DevToolsManager*);
+  void SetBrowserPolicyConnector(policy::BrowserPolicyConnector* connector);
 
  private:
-  NotificationService notification_service_;
+  scoped_ptr<content::NotificationService> notification_service_;
   unsigned int module_ref_count_;
   scoped_ptr<ui::Clipboard> clipboard_;
   std::string app_locale_;
@@ -141,9 +127,10 @@ class TestingBrowserProcess : public BrowserProcess {
   scoped_ptr<ProfileManager> profile_manager_;
   scoped_ptr<NotificationUIManager> notification_ui_manager_;
   scoped_ptr<printing::BackgroundPrintingManager> background_printing_manager_;
+  scoped_refptr<printing::PrintPreviewTabController>
+      print_preview_tab_controller_;
   scoped_ptr<prerender::PrerenderTracker> prerender_tracker_;
   IOThread* io_thread_;
-  scoped_ptr<DevToolsManager> devtools_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(TestingBrowserProcess);
 };

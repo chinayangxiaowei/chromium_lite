@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,21 +15,21 @@
 
 #include "base/file_path.h"
 #include "base/memory/linked_ptr.h"
+#include "base/message_loop_helpers.h"
 #include "base/shared_memory.h"
 #include "base/string16.h"
-#include "base/task.h"
 #include "build/build_config.h"
-#include "content/browser/browser_message_filter.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/public/browser/browser_message_filter.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupType.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/surface/transport_dib.h"
 
 struct FontDescriptor;
+class PluginServiceImpl;
 class RenderWidgetHelper;
 struct ViewHostMsg_CreateWindow_Params;
-struct ViewHostMsg_CreateWorker_Params;
 
 namespace WebKit {
 struct WebScreenInfo;
@@ -41,6 +41,7 @@ class ResourceContext;
 }
 
 namespace base {
+class ProcessMetrics;
 class SharedMemory;
 }
 
@@ -61,34 +62,29 @@ namespace webkit {
 struct WebPluginInfo;
 }
 
-namespace webkit_glue {
-struct WebCookie;
-}
-
 // This class filters out incoming IPC messages for the renderer process on the
 // IPC thread.
-class RenderMessageFilter : public BrowserMessageFilter {
+class RenderMessageFilter : public content::BrowserMessageFilter {
  public:
   // Create the filter.
   RenderMessageFilter(int render_process_id,
-                      PluginService* plugin_service,
+                      PluginServiceImpl * plugin_service,
                       content::BrowserContext* browser_context,
                       net::URLRequestContextGetter* request_context,
                       RenderWidgetHelper* render_widget_helper);
 
-  // BrowserMessageFilter methods:
-  virtual void OverrideThreadForMessage(const IPC::Message& message,
-                                        BrowserThread::ID* thread);
+  // IPC::ChannelProxy::MessageFilter methods:
+  virtual void OnChannelClosing() OVERRIDE;
+  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
+
+  // content::BrowserMessageFilter methods:
   virtual bool OnMessageReceived(const IPC::Message& message,
-                                 bool* message_was_ok);
-  virtual void OnDestruct() const;
+                                 bool* message_was_ok) OVERRIDE;
+  virtual void OnDestruct() const OVERRIDE;
 
   bool OffTheRecord() const;
 
   int render_process_id() const { return render_process_id_; }
-  ResourceDispatcherHost* resource_dispatcher_host() {
-    return resource_dispatcher_host_;
-  }
 
   // Returns the correct net::URLRequestContext depending on what type of url is
   // given.
@@ -96,18 +92,24 @@ class RenderMessageFilter : public BrowserMessageFilter {
   net::URLRequestContext* GetRequestContextForURL(const GURL& url);
 
  private:
-  friend class BrowserThread;
-  friend class DeleteTask<RenderMessageFilter>;
+  friend class content::BrowserThread;
+  friend class base::DeleteHelper<RenderMessageFilter>;
+
+  class OpenChannelToNpapiPluginCallback;
 
   virtual ~RenderMessageFilter();
 
   void OnMsgCreateWindow(const ViewHostMsg_CreateWindow_Params& params,
                          int* route_id,
+                         int* surface_id,
                          int64* cloned_session_storage_namespace_id);
   void OnMsgCreateWidget(int opener_id,
                          WebKit::WebPopupType popup_type,
-                         int* route_id);
-  void OnMsgCreateFullscreenWidget(int opener_id, int* route_id);
+                         int* route_id,
+                         int* surface_id);
+  void OnMsgCreateFullscreenWidget(int opener_id,
+                                   int* route_id,
+                                   int* surface_id);
   void OnSetCookie(const IPC::Message& message,
                    const GURL& url,
                    const GURL& first_party_for_cookies,
@@ -131,22 +133,18 @@ class RenderMessageFilter : public BrowserMessageFilter {
                   uint32* font_id);
 #endif
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   // On Windows, we handle these on the IO thread to avoid a deadlock with
   // plugins.  On non-Windows systems, we need to handle them on the UI thread.
   void OnGetScreenInfo(gfx::NativeViewId window,
                        WebKit::WebScreenInfo* results);
   void OnGetWindowRect(gfx::NativeViewId window, gfx::Rect* rect);
   void OnGetRootWindowRect(gfx::NativeViewId window, gfx::Rect* rect);
-
-  // This hack is Windows-specific.
-  // Cache fonts for the renderer. See RenderMessageFilter::OnPreCacheFont
-  // implementation for more details.
-  void OnPreCacheFont(const LOGFONT& font);
 #endif
 
-  void OnGetPlugins(bool refresh,
-                    std::vector<webkit::WebPluginInfo>* plugins);
+  void OnGetPlugins(bool refresh, IPC::Message* reply_msg);
+  void GetPluginsCallback(IPC::Message* reply_msg,
+                          const std::vector<webkit::WebPluginInfo>& plugins);
   void OnGetPluginInfo(int routing_id,
                        const GURL& url,
                        const GURL& policy_url,
@@ -169,16 +167,21 @@ class RenderMessageFilter : public BrowserMessageFilter {
                      const GURL& url,
                      const GURL& referrer,
                      const string16& suggested_name);
-  void OnCheckNotificationPermission(const GURL& source_url,
+  void OnCheckNotificationPermission(const GURL& source_origin,
                                      int* permission_level);
 
+  void OnGetCPUUsage(int* cpu_usage);
+
+  void OnGetHardwareBufferSize(uint32* buffer_size);
+  void OnGetHardwareInputSampleRate(double* sample_rate);
   void OnGetHardwareSampleRate(double* sample_rate);
+  void OnGetHardwareInputChannelCount(uint32* channels);
 
   // Used to ask the browser to allocate a block of shared memory for the
   // renderer to send back data in, since shared memory can't be created
   // in the renderer on POSIX due to the sandbox.
-  void OnAllocateSharedMemoryBuffer(uint32 buffer_size,
-                                    base::SharedMemoryHandle* handle);
+  void OnAllocateSharedMemory(uint32 buffer_size,
+                              base::SharedMemoryHandle* handle);
   void OnResolveProxy(const GURL& url, IPC::Message* reply_msg);
 
   // Browser side transport DIB allocation
@@ -186,14 +189,9 @@ class RenderMessageFilter : public BrowserMessageFilter {
                            bool cache_in_browser,
                            TransportDIB::Handle* result);
   void OnFreeTransportDIB(TransportDIB::Id dib_id);
-  void OnCloseCurrentConnections();
-  void OnSetCacheMode(bool enabled);
-  void OnClearCache(bool preserve_ssl_host_info, IPC::Message* reply_msg);
-  void OnClearHostResolverCache(int* result);
   void OnCacheableMetadataAvailable(const GURL& url,
                                     double expected_response_time,
                                     const std::vector<char>& data);
-  void OnEnableSpdy(bool enable);
   void OnKeygen(uint32 key_size_index, const std::string& challenge_string,
                 const GURL& url, IPC::Message* reply_msg);
   void OnKeygenOnWorkerThread(
@@ -226,12 +224,16 @@ class RenderMessageFilter : public BrowserMessageFilter {
 
   bool CheckBenchmarkingEnabled() const;
   bool CheckPreparsedJsCachingEnabled() const;
+  void OnCompletedOpenChannelToNpapiPlugin(
+      OpenChannelToNpapiPluginCallback* client);
+
+  void OnUpdateIsDelayed(const IPC::Message& msg);
 
   // Cached resource request dispatcher host and plugin service, guaranteed to
   // be non-null if Init succeeds. We do not own the objects, they are managed
   // by the BrowserProcess, which has a wider scope than we do.
   ResourceDispatcherHost* resource_dispatcher_host_;
-  PluginService* plugin_service_;
+  PluginServiceImpl* plugin_service_;
 
   // The browser context associated with our renderer process.  This should only
   // be accessed on the UI thread!
@@ -254,6 +256,15 @@ class RenderMessageFilter : public BrowserMessageFilter {
   scoped_refptr<WebKitContext> webkit_context_;
 
   int render_process_id_;
+
+  std::set<OpenChannelToNpapiPluginCallback*> plugin_host_clients_;
+
+  // Records the last time we sampled CPU usage of the renderer process.
+  base::TimeTicks cpu_usage_sample_time_;
+  // Records the last sampled CPU usage in percents.
+  int cpu_usage_;
+  // Used for sampling CPU usage of the renderer process.
+  scoped_ptr<base::ProcessMetrics> process_metrics_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderMessageFilter);
 };

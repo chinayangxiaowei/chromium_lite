@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,6 @@
 #include "ppapi/proxy/interface_proxy.h"
 #include "ppapi/shared_impl/host_resource.h"
 
-struct PPB_URLResponseInfo;
-
 namespace ppapi {
 
 struct PPB_FileRef_CreateInfo;
@@ -24,11 +22,8 @@ class SerializedVarReturnValue;
 
 class PPB_URLResponseInfo_Proxy : public InterfaceProxy {
  public:
-  PPB_URLResponseInfo_Proxy(Dispatcher* dispatcher,
-                            const void* target_interface);
+  PPB_URLResponseInfo_Proxy(Dispatcher* dispatcher);
   virtual ~PPB_URLResponseInfo_Proxy();
-
-  static const Info* GetInfo();
 
   // URLResponseInfo objects are actually created and returned by the
   // URLLoader. This function allows the URLLoader to convert a new
@@ -40,6 +35,8 @@ class PPB_URLResponseInfo_Proxy : public InterfaceProxy {
 
   // InterfaceProxy implementation.
   virtual bool OnMessageReceived(const IPC::Message& msg);
+
+  static const ApiID kApiID = API_ID_PPB_URL_RESPONSE_INFO;
 
  private:
   // Message handlers.

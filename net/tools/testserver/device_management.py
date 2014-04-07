@@ -1,4 +1,3 @@
-#!/usr/bin/python2.5
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -45,6 +44,7 @@ Example:
 """
 
 import cgi
+import hashlib
 import logging
 import os
 import random
@@ -71,6 +71,13 @@ import chrome_device_policy_pb2 as dp
 
 # ASN.1 object identifier for PKCS#1/RSA.
 PKCS1_RSA_OID = '\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01'
+
+# SHA256 sum of "0".
+SHA256_0 = hashlib.sha256('0').digest()
+
+# List of bad machine identifiers that trigger the |valid_serial_number_missing|
+# flag to be set set in the policy fetch response.
+BAD_MACHINE_IDS = [ '123490EN400015' ];
 
 class RequestHandler(object):
   """Decodes and handles device management requests from clients.
@@ -145,6 +152,8 @@ class RequestHandler(object):
       return self.ProcessUnregister(rmsg.unregister_request)
     elif request_type == 'policy' or request_type == 'ping':
       return self.ProcessPolicy(rmsg.policy_request, request_type)
+    elif request_type == 'enterprise_check':
+      return self.ProcessAutoEnrollment(rmsg.auto_enrollment_request)
     else:
       return (400, 'Invalid request parameter')
 
@@ -223,7 +232,7 @@ class RequestHandler(object):
       return response
 
     # Unregister the device.
-    self._server.UnregisterDevice(token);
+    self._server.UnregisterDevice(token['device_token']);
 
     # Prepare and send the response.
     response = dm.DeviceManagementResponse()
@@ -255,12 +264,45 @@ class RequestHandler(object):
       else:
         return (400, 'Invalid policy_type')
 
+  def ProcessAutoEnrollment(self, msg):
+    """Handles an auto-enrollment check request.
+
+    The reply depends on the value of the modulus:
+      1: replies with no new modulus and the sha256 hash of "0"
+      2: replies with a new modulus, 4.
+      4: replies with a new modulus, 2.
+      8: fails with error 400.
+      anything else: replies with no new modulus and an empty list of hashes
+
+    These allow the client to pick the testing scenario its wants to simulate.
+
+    Args:
+      msg: The DeviceAutoEnrollmentRequest message received from the client.
+
+    Returns:
+      A tuple of HTTP status code and response data to send to the client.
+    """
+    auto_enrollment_response = dm.DeviceAutoEnrollmentResponse()
+
+    if msg.modulus == 1:
+      auto_enrollment_response.hash.append(SHA256_0)
+    elif msg.modulus == 2:
+      auto_enrollment_response.expected_modulus = 4
+    elif msg.modulus == 4:
+      auto_enrollment_response.expected_modulus = 2
+    elif msg.modulus == 8:
+      return (400, 'Server error')
+
+    response = dm.DeviceManagementResponse()
+    response.auto_enrollment_response.CopyFrom(auto_enrollment_response)
+    return (200, response.SerializeToString())
+
   def SetProtobufMessageField(self, group_message, field, field_value):
     '''Sets a field in a protobuf message.
 
     Args:
       group_message: The protobuf message.
-      field: The field of the message to set, it shuold be a member of
+      field: The field of the message to set, it should be a member of
           group_message.DESCRIPTOR.fields.
       field_value: The value to set.
     '''
@@ -360,6 +402,9 @@ class RequestHandler(object):
     if not token_info:
       return error
 
+    if msg.machine_id:
+      self._server.UpdateMachineId(token_info['device_token'], msg.machine_id)
+
     # Response is only given if the scope is specified in the config file.
     # Normally 'google/chromeos/device' and 'google/chromeos/user' should be
     # accepted.
@@ -395,9 +440,12 @@ class RequestHandler(object):
     policy_data = dm.PolicyData()
     policy_data.policy_type = msg.policy_type
     policy_data.timestamp = int(time.time() * 1000)
-    policy_data.request_token = token_info['device_token'];
+    policy_data.request_token = token_info['device_token']
     policy_data.policy_value = policy_value
     policy_data.machine_name = token_info['machine_name']
+    policy_data.valid_serial_number_missing = (
+        token_info['machine_id'] in BAD_MACHINE_IDS)
+
     if signing_key:
       policy_data.public_key_version = key_version
     policy_data.username = self._server.username
@@ -557,8 +605,19 @@ class TestServer(object):
       'device_token': dmtoken,
       'allowed_policy_types': allowed_policy_types[type],
       'machine_name': 'chromeos-' + machine_id,
+      'machine_id': machine_id,
     }
     return self._registered_tokens[dmtoken]
+
+  def UpdateMachineId(self, dmtoken, machine_id):
+    """Updates the machine identifier for a registered device.
+
+    Args:
+      dmtoken: The device management token provided by the client.
+      machine_id: Updated hardware identifier value.
+    """
+    if dmtoken in self._registered_tokens:
+      self._registered_tokens[dmtoken]['machine_id'] = machine_id
 
   def LookupToken(self, dmtoken):
     """Looks up a device or a user by DM token.

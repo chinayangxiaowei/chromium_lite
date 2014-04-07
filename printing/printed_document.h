@@ -11,16 +11,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/synchronization/lock.h"
-#include "googleurl/src/gurl.h"
 #include "printing/print_settings.h"
 #include "ui/gfx/native_widget_types.h"
 
 class FilePath;
 class MessageLoop;
-
-namespace gfx {
-class Font;
-}
 
 namespace printing {
 
@@ -47,8 +42,7 @@ class PRINTING_EXPORT PrintedDocument
   // Sets a page's data. 0-based. Takes metafile ownership.
   // Note: locks for a short amount of time.
   void SetPage(int page_number, Metafile* metafile, double shrink,
-               const gfx::Size& paper_size, const gfx::Rect& page_rect,
-               bool has_visible_overlays);
+               const gfx::Size& paper_size, const gfx::Rect& page_rect);
 
   // Retrieves a page. If the page is not available right now, it
   // requests to have this page be rendered and returns false.
@@ -57,7 +51,7 @@ class PRINTING_EXPORT PrintedDocument
 
   // Draws the page in the context.
   // Note: locks for a short amount of time in debug only.
-#if defined(OS_WIN) || defined(OS_MACOSX)
+#if defined(OS_WIN) || defined(OS_MACOSX) && !defined(USE_AURA)
   void RenderPrintedPage(const PrintedPage& page,
                          gfx::NativeDrawingContext context) const;
 #elif defined(OS_POSIX)
@@ -95,10 +89,7 @@ class PRINTING_EXPORT PrintedDocument
 
   // Getters. All these items are immutable hence thread-safe.
   const PrintSettings& settings() const { return immutable_.settings_; }
-  const string16& name() const {
-    return immutable_.name_;
-  }
-  const GURL& url() const { return immutable_.url_; }
+  const string16& name() const { return immutable_.name_; }
   int cookie() const { return immutable_.cookie_; }
 
   // Sets a path where to dump printing output files for debugging. If never set
@@ -136,9 +127,6 @@ class PRINTING_EXPORT PrintedDocument
     // The total number of pages in the document.
     int page_count_;
 
-    // Shrink done in comparison to desired_dpi.
-    double shrink_factor;
-
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
     // Page number of the first page.
     int first_page;
@@ -161,9 +149,6 @@ class PRINTING_EXPORT PrintedDocument
 
     // Document name. Immutable.
     string16 name_;
-
-    // URL that generated this document. Immutable.
-    GURL url_;
 
     // Cookie to uniquely identify this document. It is used to make sure that a
     // PrintedPage is correctly belonging to the PrintedDocument. Since

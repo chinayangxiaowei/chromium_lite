@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,11 +21,11 @@
 #include "chrome/common/guid.h"
 #include "sql/statement.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/glue/form_field.h"
+#include "webkit/forms/form_field.h"
 
 using base::Time;
 using base::TimeDelta;
-using webkit_glue::FormField;
+using webkit::forms::FormField;
 
 // So we can compare AutofillKeys with EXPECT_EQ().
 std::ostream& operator<<(std::ostream& os, const AutofillKey& key) {
@@ -559,7 +559,6 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   home_profile.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("90025"));
   home_profile.SetInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("US"));
   home_profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("18181234567"));
-  home_profile.SetInfo(PHONE_FAX_WHOLE_NUMBER, ASCIIToUTF16("1915243678"));
 
   Time pre_creation_time = Time::Now();
   EXPECT_TRUE(db.GetAutofillTable()->AddAutofillProfile(home_profile));
@@ -574,7 +573,7 @@ TEST_F(AutofillTableTest, AutofillProfile) {
       "SELECT date_modified "
       "FROM autofill_profiles WHERE guid=?"));
   s_home.BindString(0, home_profile.guid());
-  ASSERT_TRUE(s_home);
+  ASSERT_TRUE(s_home.is_valid());
   ASSERT_TRUE(s_home.Step());
   EXPECT_GE(s_home.ColumnInt64(0), pre_creation_time.ToTimeT());
   EXPECT_LE(s_home.ColumnInt64(0), post_creation_time.ToTimeT());
@@ -599,7 +598,7 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   sql::Statement s_billing(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles WHERE guid=?"));
   s_billing.BindString(0, billing_profile.guid());
-  ASSERT_TRUE(s_billing);
+  ASSERT_TRUE(s_billing.is_valid());
   ASSERT_TRUE(s_billing.Step());
   EXPECT_GE(s_billing.ColumnInt64(0), pre_creation_time.ToTimeT());
   EXPECT_LE(s_billing.ColumnInt64(0), post_creation_time.ToTimeT());
@@ -618,7 +617,7 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   sql::Statement s_billing_updated(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles WHERE guid=?"));
   s_billing_updated.BindString(0, billing_profile.guid());
-  ASSERT_TRUE(s_billing_updated);
+  ASSERT_TRUE(s_billing_updated.is_valid());
   ASSERT_TRUE(s_billing_updated.Step());
   EXPECT_GE(s_billing_updated.ColumnInt64(0),
             pre_modification_time.ToTimeT());
@@ -640,7 +639,6 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   billing_profile.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("10011"));
   billing_profile.SetInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("United States"));
   billing_profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("18181230000"));
-  billing_profile.SetInfo(PHONE_FAX_WHOLE_NUMBER, ASCIIToUTF16("1915240000"));
   Time pre_modification_time_2 = Time::Now();
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(
       billing_profile));
@@ -651,7 +649,7 @@ TEST_F(AutofillTableTest, AutofillProfile) {
   sql::Statement s_billing_updated_2(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles WHERE guid=?"));
   s_billing_updated_2.BindString(0, billing_profile.guid());
-  ASSERT_TRUE(s_billing_updated_2);
+  ASSERT_TRUE(s_billing_updated_2.is_valid());
   ASSERT_TRUE(s_billing_updated_2.Step());
   EXPECT_GE(s_billing_updated_2.ColumnInt64(0),
             pre_modification_time_2.ToTimeT());
@@ -684,7 +682,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueNames) {
   AutofillProfile* db_profile;
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Update the values.
@@ -694,7 +692,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueNames) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Delete values.
@@ -703,7 +701,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueNames) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   EXPECT_EQ(string16(), db_profile->GetInfo(NAME_FULL));
   delete db_profile;
 }
@@ -725,20 +723,18 @@ TEST_F(AutofillTableTest, AutofillProfileSingleValue) {
   AutofillProfile* db_profile;
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
-  // Update the values.  This update is the "single value" update, it should
-  // not perturb the multi-values following the zeroth entry.  This simulates
-  // the Sync use-case until Sync can be changed to be multi-value aware.
   const string16 kNoOne(ASCIIToUTF16("No One"));
   set_values.resize(1);
   set_values[0] = kNoOne;
   p.SetMultiInfo(NAME_FULL, set_values);
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfile(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
-  EXPECT_EQ(p, *db_profile);
-  EXPECT_NE(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(p.PrimaryValue(), db_profile->PrimaryValue());
+  EXPECT_EQ(p.guid(), db_profile->guid());
+  EXPECT_NE(0, p.Compare(*db_profile));
   db_profile->GetMultiInfo(NAME_FULL, &set_values);
   ASSERT_EQ(2UL, set_values.size());
   EXPECT_EQ(kNoOne, set_values[0]);
@@ -763,7 +759,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueEmails) {
   AutofillProfile* db_profile;
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Update the values.
@@ -773,7 +769,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueEmails) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Delete values.
@@ -782,7 +778,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValueEmails) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   EXPECT_EQ(string16(), db_profile->GetInfo(EMAIL_ADDRESS));
   delete db_profile;
 }
@@ -804,7 +800,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValuePhone) {
   AutofillProfile* db_profile;
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Update the values.
@@ -814,7 +810,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValuePhone) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   delete db_profile;
 
   // Delete values.
@@ -823,48 +819,7 @@ TEST_F(AutofillTableTest, AutofillProfileMultiValuePhone) {
   EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
   ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
   EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
-  EXPECT_EQ(string16(), db_profile->GetInfo(EMAIL_ADDRESS));
-  delete db_profile;
-}
-
-TEST_F(AutofillTableTest, AutofillProfileMultiValueFax) {
-  WebDatabase db;
-  ASSERT_EQ(sql::INIT_OK, db.Init(file_));
-
-  AutofillProfile p;
-  const string16 kJohnDoe(ASCIIToUTF16("4151112222"));
-  const string16 kJohnPDoe(ASCIIToUTF16("4151113333"));
-  std::vector<string16> set_values;
-  set_values.push_back(kJohnDoe);
-  set_values.push_back(kJohnPDoe);
-  p.SetMultiInfo(PHONE_FAX_WHOLE_NUMBER, set_values);
-
-  EXPECT_TRUE(db.GetAutofillTable()->AddAutofillProfile(p));
-
-  AutofillProfile* db_profile;
-  ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
-  EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
-  delete db_profile;
-
-  // Update the values.
-  const string16 kNoOne(ASCIIToUTF16("4151110000"));
-  set_values[1] = kNoOne;
-  p.SetMultiInfo(PHONE_FAX_WHOLE_NUMBER, set_values);
-  EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
-  ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
-  EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
-  delete db_profile;
-
-  // Delete values.
-  set_values.clear();
-  p.SetMultiInfo(PHONE_FAX_WHOLE_NUMBER, set_values);
-  EXPECT_TRUE(db.GetAutofillTable()->UpdateAutofillProfileMulti(p));
-  ASSERT_TRUE(db.GetAutofillTable()->GetAutofillProfile(p.guid(), &db_profile));
-  EXPECT_EQ(p, *db_profile);
-  EXPECT_EQ(0, p.CompareMulti(*db_profile));
+  EXPECT_EQ(0, p.Compare(*db_profile));
   EXPECT_EQ(string16(), db_profile->GetInfo(EMAIL_ADDRESS));
   delete db_profile;
 }
@@ -993,7 +948,7 @@ TEST_F(AutofillTableTest, CreditCard) {
       "card_number_encrypted, date_modified "
       "FROM credit_cards WHERE guid=?"));
   s_work.BindString(0, work_creditcard.guid());
-  ASSERT_TRUE(s_work);
+  ASSERT_TRUE(s_work.is_valid());
   ASSERT_TRUE(s_work.Step());
   EXPECT_GE(s_work.ColumnInt64(5), pre_creation_time.ToTimeT());
   EXPECT_LE(s_work.ColumnInt64(5), post_creation_time.ToTimeT());
@@ -1019,7 +974,7 @@ TEST_F(AutofillTableTest, CreditCard) {
       "card_number_encrypted, date_modified "
       "FROM credit_cards WHERE guid=?"));
   s_target.BindString(0, target_creditcard.guid());
-  ASSERT_TRUE(s_target);
+  ASSERT_TRUE(s_target.is_valid());
   ASSERT_TRUE(s_target.Step());
   EXPECT_GE(s_target.ColumnInt64(5), pre_creation_time.ToTimeT());
   EXPECT_LE(s_target.ColumnInt64(5), post_creation_time.ToTimeT());
@@ -1039,7 +994,7 @@ TEST_F(AutofillTableTest, CreditCard) {
       "card_number_encrypted, date_modified "
       "FROM credit_cards WHERE guid=?"));
   s_target_updated.BindString(0, target_creditcard.guid());
-  ASSERT_TRUE(s_target_updated);
+  ASSERT_TRUE(s_target_updated.is_valid());
   ASSERT_TRUE(s_target_updated.Step());
   EXPECT_GE(s_target_updated.ColumnInt64(5), pre_modification_time.ToTimeT());
   EXPECT_LE(s_target_updated.ColumnInt64(5), post_modification_time.ToTimeT());
@@ -1071,14 +1026,13 @@ TEST_F(AutofillTableTest, UpdateAutofillProfile) {
   profile.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("90025"));
   profile.SetInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("US"));
   profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("18181234567"));
-  profile.SetInfo(PHONE_FAX_WHOLE_NUMBER, ASCIIToUTF16("1915243678"));
   db.GetAutofillTable()->AddAutofillProfile(profile);
 
   // Set a mocked value for the profile's creation time.
   const time_t mock_creation_date = Time::Now().ToTimeT() - 13;
   sql::Statement s_mock_creation_date(db.GetSQLConnection()->GetUniqueStatement(
       "UPDATE autofill_profiles SET date_modified = ?"));
-  ASSERT_TRUE(s_mock_creation_date);
+  ASSERT_TRUE(s_mock_creation_date.is_valid());
   s_mock_creation_date.BindInt64(0, mock_creation_date);
   ASSERT_TRUE(s_mock_creation_date.Run());
 
@@ -1090,7 +1044,7 @@ TEST_F(AutofillTableTest, UpdateAutofillProfile) {
   EXPECT_EQ(profile, *db_profile);
   sql::Statement s_original(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_original);
+  ASSERT_TRUE(s_original.is_valid());
   ASSERT_TRUE(s_original.Step());
   EXPECT_EQ(mock_creation_date, s_original.ColumnInt64(0));
   EXPECT_FALSE(s_original.Step());
@@ -1107,7 +1061,7 @@ TEST_F(AutofillTableTest, UpdateAutofillProfile) {
   EXPECT_EQ(profile, *db_profile);
   sql::Statement s_updated(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_updated);
+  ASSERT_TRUE(s_updated.is_valid());
   ASSERT_TRUE(s_updated.Step());
   EXPECT_LT(mock_creation_date, s_updated.ColumnInt64(0));
   EXPECT_FALSE(s_updated.Step());
@@ -1117,7 +1071,7 @@ TEST_F(AutofillTableTest, UpdateAutofillProfile) {
   sql::Statement s_mock_modification_date(
       db.GetSQLConnection()->GetUniqueStatement(
           "UPDATE autofill_profiles SET date_modified = ?"));
-  ASSERT_TRUE(s_mock_modification_date);
+  ASSERT_TRUE(s_mock_modification_date.is_valid());
   s_mock_modification_date.BindInt64(0, mock_modification_date);
   ASSERT_TRUE(s_mock_modification_date.Run());
 
@@ -1132,7 +1086,7 @@ TEST_F(AutofillTableTest, UpdateAutofillProfile) {
   EXPECT_EQ(profile, *db_profile);
   sql::Statement s_unchanged(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_unchanged);
+  ASSERT_TRUE(s_unchanged.is_valid());
   ASSERT_TRUE(s_unchanged.Step());
   EXPECT_EQ(mock_modification_date, s_unchanged.ColumnInt64(0));
   EXPECT_FALSE(s_unchanged.Step());
@@ -1154,7 +1108,7 @@ TEST_F(AutofillTableTest, UpdateCreditCard) {
   const time_t mock_creation_date = Time::Now().ToTimeT() - 13;
   sql::Statement s_mock_creation_date(db.GetSQLConnection()->GetUniqueStatement(
       "UPDATE credit_cards SET date_modified = ?"));
-  ASSERT_TRUE(s_mock_creation_date);
+  ASSERT_TRUE(s_mock_creation_date.is_valid());
   s_mock_creation_date.BindInt64(0, mock_creation_date);
   ASSERT_TRUE(s_mock_creation_date.Run());
 
@@ -1166,7 +1120,7 @@ TEST_F(AutofillTableTest, UpdateCreditCard) {
   EXPECT_EQ(credit_card, *db_credit_card);
   sql::Statement s_original(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_original);
+  ASSERT_TRUE(s_original.is_valid());
   ASSERT_TRUE(s_original.Step());
   EXPECT_EQ(mock_creation_date, s_original.ColumnInt64(0));
   EXPECT_FALSE(s_original.Step());
@@ -1183,7 +1137,7 @@ TEST_F(AutofillTableTest, UpdateCreditCard) {
   EXPECT_EQ(credit_card, *db_credit_card);
   sql::Statement s_updated(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_updated);
+  ASSERT_TRUE(s_updated.is_valid());
   ASSERT_TRUE(s_updated.Step());
   EXPECT_LT(mock_creation_date, s_updated.ColumnInt64(0));
   EXPECT_FALSE(s_updated.Step());
@@ -1193,7 +1147,7 @@ TEST_F(AutofillTableTest, UpdateCreditCard) {
   sql::Statement s_mock_modification_date(
       db.GetSQLConnection()->GetUniqueStatement(
           "UPDATE credit_cards SET date_modified = ?"));
-  ASSERT_TRUE(s_mock_modification_date);
+  ASSERT_TRUE(s_mock_modification_date.is_valid());
   s_mock_modification_date.BindInt64(0, mock_modification_date);
   ASSERT_TRUE(s_mock_modification_date.Run());
 
@@ -1208,7 +1162,7 @@ TEST_F(AutofillTableTest, UpdateCreditCard) {
   EXPECT_EQ(credit_card, *db_credit_card);
   sql::Statement s_unchanged(db.GetSQLConnection()->GetUniqueStatement(
       "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_unchanged);
+  ASSERT_TRUE(s_unchanged.is_valid());
   ASSERT_TRUE(s_unchanged.Step());
   EXPECT_EQ(mock_modification_date, s_unchanged.ColumnInt64(0));
   EXPECT_FALSE(s_unchanged.Step());
@@ -1257,7 +1211,7 @@ TEST_F(AutofillTableTest, RemoveAutofillProfilesAndCreditCardsModifiedBetween) {
   sql::Statement s_autofill_profiles_bounded(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_autofill_profiles_bounded);
+  ASSERT_TRUE(s_autofill_profiles_bounded.is_valid());
   ASSERT_TRUE(s_autofill_profiles_bounded.Step());
   EXPECT_EQ(11, s_autofill_profiles_bounded.ColumnInt64(0));
   ASSERT_TRUE(s_autofill_profiles_bounded.Step());
@@ -1274,7 +1228,7 @@ TEST_F(AutofillTableTest, RemoveAutofillProfilesAndCreditCardsModifiedBetween) {
   sql::Statement s_credit_cards_bounded(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_credit_cards_bounded);
+  ASSERT_TRUE(s_credit_cards_bounded.is_valid());
   ASSERT_TRUE(s_credit_cards_bounded.Step());
   EXPECT_EQ(47, s_credit_cards_bounded.ColumnInt64(0));
   ASSERT_TRUE(s_credit_cards_bounded.Step());
@@ -1293,7 +1247,7 @@ TEST_F(AutofillTableTest, RemoveAutofillProfilesAndCreditCardsModifiedBetween) {
   sql::Statement s_autofill_profiles_unbounded(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_autofill_profiles_unbounded);
+  ASSERT_TRUE(s_autofill_profiles_unbounded.is_valid());
   ASSERT_TRUE(s_autofill_profiles_unbounded.Step());
   EXPECT_EQ(11, s_autofill_profiles_unbounded.ColumnInt64(0));
   ASSERT_TRUE(s_autofill_profiles_unbounded.Step());
@@ -1305,7 +1259,7 @@ TEST_F(AutofillTableTest, RemoveAutofillProfilesAndCreditCardsModifiedBetween) {
   sql::Statement s_credit_cards_unbounded(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_credit_cards_unbounded);
+  ASSERT_TRUE(s_credit_cards_unbounded.is_valid());
   ASSERT_TRUE(s_credit_cards_unbounded.Step());
   EXPECT_EQ(47, s_credit_cards_unbounded.ColumnInt64(0));
   EXPECT_FALSE(s_credit_cards_unbounded.Step());
@@ -1320,14 +1274,14 @@ TEST_F(AutofillTableTest, RemoveAutofillProfilesAndCreditCardsModifiedBetween) {
   sql::Statement s_autofill_profiles_empty(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM autofill_profiles"));
-  ASSERT_TRUE(s_autofill_profiles_empty);
+  ASSERT_TRUE(s_autofill_profiles_empty.is_valid());
   EXPECT_FALSE(s_autofill_profiles_empty.Step());
   ASSERT_EQ(1UL, credit_card_guids.size());
   EXPECT_EQ("00000000-0000-0000-0000-000000000009", credit_card_guids[0]);
   sql::Statement s_credit_cards_empty(
       db.GetSQLConnection()->GetUniqueStatement(
           "SELECT date_modified FROM credit_cards"));
-  ASSERT_TRUE(s_credit_cards_empty);
+  ASSERT_TRUE(s_credit_cards_empty.is_valid());
   EXPECT_FALSE(s_credit_cards_empty.Step());
 }
 

@@ -13,22 +13,23 @@
 #include "base/file_path.h"
 #include "base/time.h"
 #include "content/browser/download/download_file.h"
-#include "content/browser/download/download_request_handle.h"
-#include "content/common/page_transition_types.h"
+#include "content/browser/download/download_types.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/download_id.h"
+#include "content/public/common/page_transition_types.h"
 #include "googleurl/src/gurl.h"
 
 // Used for informing the download manager of a new download, since we don't
 // want to pass |DownloadItem|s between threads.
-struct DownloadCreateInfo {
+struct CONTENT_EXPORT DownloadCreateInfo {
   DownloadCreateInfo(const FilePath& path,
                      const GURL& url,
                      const base::Time& start_time,
                      int64 received_bytes,
                      int64 total_bytes,
                      int32 state,
-                     int32 download_id,
                      bool has_user_gesture,
-                     PageTransition::Type transition_type);
+                     content::PageTransition transition_type);
   DownloadCreateInfo();
   ~DownloadCreateInfo();
 
@@ -48,10 +49,6 @@ struct DownloadCreateInfo {
   // The URL that referred us.
   GURL referrer_url;
 
-  // A number that should be added to the suggested path to make it unique.
-  // 0 means no number should be appended.  Not actually stored in the db.
-  int path_uniquifier;
-
   // The time when the download started.
   base::Time start_time;
 
@@ -65,16 +62,12 @@ struct DownloadCreateInfo {
   int32 state;
 
   // The (per-session) ID of the download.
-  int32 download_id;
+  content::DownloadId download_id;
 
   // True if the download was initiated by user action.
   bool has_user_gesture;
 
-  PageTransition::Type transition_type;
-
-  // The handle to the download request information.  Used for operations
-  // outside the download system.
-  DownloadRequestHandle request_handle;
+  content::PageTransition transition_type;
 
   // The handle of the download in the history database.
   int64 db_handle;
@@ -90,9 +83,17 @@ struct DownloadCreateInfo {
   // which may look at the file extension and first few bytes of the file.
   std::string original_mime_type;
 
+  // For continuing a download, the modification time of the file.
+  // Storing as a string for exact match to server format on
+  // "If-Unmodified-Since" comparison.
+  std::string last_modified;
+
+  // For continuing a download, the ETAG of the file.
+  std::string etag;
+
   // True if we should display the 'save as...' UI and prompt the user
   // for the download location.
-  // False if the UI should be supressed and the download performed to the
+  // False if the UI should be suppressed and the download performed to the
   // default location.
   bool prompt_user_for_save_location;
 
@@ -105,6 +106,10 @@ struct DownloadCreateInfo {
 
   // The download file save info.
   DownloadSaveInfo save_info;
+
+  // The remote IP address where the download was fetched from.  Copied from
+  // UrlRequest::GetSocketAddress().
+  std::string remote_address;
 };
 
 #endif  // CONTENT_BROWSER_DOWNLOAD_DOWNLOAD_CREATE_INFO_H_

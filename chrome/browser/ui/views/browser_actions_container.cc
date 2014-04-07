@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/browser_actions_container.h"
 
+#include "base/bind.h"
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
@@ -27,8 +28,7 @@
 #include "chrome/common/pref_names.h"
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
@@ -42,13 +42,14 @@
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/canvas_skia.h"
-#include "views/controls/button/menu_button.h"
-#include "views/controls/button/text_button.h"
-#include "views/controls/menu/menu_item_view.h"
-#include "views/controls/menu/menu_model_adapter.h"
-#include "views/controls/menu/menu_runner.h"
-#include "views/drag_utils.h"
-#include "views/metrics.h"
+#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/button/text_button.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/controls/resize_area.h"
+#include "ui/views/drag_utils.h"
+#include "ui/views/metrics.h"
 
 // Horizontal spacing between most items in the container, as well as after the
 // last item or chevron (if visible).
@@ -65,7 +66,7 @@ bool BrowserActionsContainer::disable_animations_during_testing_ = false;
 BrowserActionButton::BrowserActionButton(const Extension* extension,
                                          BrowserActionsContainer* panel)
     : ALLOW_THIS_IN_INITIALIZER_LIST(
-          MenuButton(this, std::wstring(), NULL, false)),
+          MenuButton(this, string16(), NULL, false)),
       browser_action_(extension->browser_action()),
       extension_(extension),
       ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)),
@@ -78,7 +79,7 @@ BrowserActionButton::BrowserActionButton(const Extension* extension,
   // should call UpdateState() after creation.
 
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_BROWSER_ACTION_UPDATED,
-                 Source<ExtensionAction>(browser_action_));
+                 content::Source<ExtensionAction>(browser_action_));
 }
 
 void BrowserActionButton::Destroy() {
@@ -172,7 +173,7 @@ void BrowserActionButton::UpdateState() {
   string16 name = UTF8ToUTF16(browser_action()->GetTitle(tab_id));
   if (name.empty())
     name = UTF8ToUTF16(extension()->name());
-  SetTooltipText(UTF16ToWideHack(name));
+  SetTooltipText(name);
   SetAccessibleName(name);
   parent()->SchedulePaint();
 }
@@ -188,8 +189,8 @@ GURL BrowserActionButton::GetPopupUrl() {
 }
 
 void BrowserActionButton::Observe(int type,
-                                  const NotificationSource& source,
-                                  const NotificationDetails& details) {
+                                  const content::NotificationSource& source,
+                                  const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_EXTENSION_BROWSER_ACTION_UPDATED);
   UpdateState();
   // The browser action may have become visible/hidden so we need to make
@@ -215,8 +216,8 @@ bool BrowserActionButton::Activate() {
 
 bool BrowserActionButton::OnMousePressed(const views::MouseEvent& event) {
   if (!event.IsRightMouseButton()) {
-    return IsPopup() ?
-        MenuButton::OnMousePressed(event) : TextButton::OnMousePressed(event);
+    return IsPopup() ? MenuButton::OnMousePressed(event)
+                     : TextButton::OnMousePressed(event);
   }
 
   ShowContextMenu(gfx::Point(), true);
@@ -241,8 +242,8 @@ void BrowserActionButton::OnMouseExited(const views::MouseEvent& event) {
 }
 
 bool BrowserActionButton::OnKeyReleased(const views::KeyEvent& event) {
-  return IsPopup() ?
-      MenuButton::OnKeyReleased(event) : TextButton::OnKeyReleased(event);
+  return IsPopup() ? MenuButton::OnKeyReleased(event)
+                   : TextButton::OnKeyReleased(event);
 }
 
 void BrowserActionButton::ShowContextMenu(const gfx::Point& p,
@@ -308,8 +309,7 @@ gfx::Canvas* BrowserActionView::GetIconWithBadge() {
   if (icon.isNull())
     icon = button_->default_icon();
 
-  gfx::Canvas* canvas = new gfx::CanvasSkia(icon.width(), icon.height(), false);
-  canvas->DrawBitmapInt(icon, 0, 0);
+  gfx::Canvas* canvas = new gfx::CanvasSkia(icon, false);
 
   if (tab_id >= 0) {
     gfx::Rect bounds(icon.width(), icon.height() + ToolbarView::kVertSpacing);
@@ -376,7 +376,7 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
   resize_area_ = new views::ResizeArea(this);
   AddChildView(resize_area_);
 
-  chevron_ = new views::MenuButton(NULL, std::wstring(), this, false);
+  chevron_ = new views::MenuButton(NULL, string16(), this, false);
   chevron_->set_border(NULL);
   chevron_->EnableCanvasFlippingForRTLUI(true);
   chevron_->SetAccessibleName(
@@ -389,6 +389,8 @@ BrowserActionsContainer::~BrowserActionsContainer() {
   if (model_)
     model_->RemoveObserver(this);
   StopShowFolderDropMenuTimer();
+  if (popup_)
+    popup_->GetWidget()->RemoveObserver(this);
   HidePopup();
   DeleteBrowserActionViews();
 }
@@ -455,13 +457,8 @@ void BrowserActionsContainer::CreateBrowserActionViews() {
 }
 
 void BrowserActionsContainer::DeleteBrowserActionViews() {
-  if (!browser_action_views_.empty()) {
-    for (size_t i = 0; i < browser_action_views_.size(); ++i)
-      RemoveChildView(browser_action_views_[i]);
-    STLDeleteContainerPointers(browser_action_views_.begin(),
-                               browser_action_views_.end());
-    browser_action_views_.clear();
-  }
+  HidePopup();
+  STLDeleteElements(&browser_action_views_);
 }
 
 void BrowserActionsContainer::OnBrowserActionVisibilityChanged() {
@@ -473,7 +470,7 @@ void BrowserActionsContainer::OnBrowserActionVisibilityChanged() {
 size_t BrowserActionsContainer::VisibleBrowserActions() const {
   size_t visible_actions = 0;
   for (size_t i = 0; i < browser_action_views_.size(); ++i) {
-    if (browser_action_views_[i]->IsVisible())
+    if (browser_action_views_[i]->visible())
       ++visible_actions;
   }
   return visible_actions;
@@ -506,18 +503,12 @@ void BrowserActionsContainer::OnBrowserActionExecuted(
   // We can get the execute event for browser actions that are not visible,
   // since buttons can be activated from the overflow menu (chevron). In that
   // case we show the popup as originating from the chevron.
-  View* reference_view = button->parent()->IsVisible() ? button : chevron_;
-  gfx::Point origin;
-  View::ConvertPointToScreen(reference_view, &origin);
-  gfx::Rect rect = reference_view->bounds();
-  rect.set_origin(origin);
-
+  View* reference_view = button->parent()->visible() ? button : chevron_;
   views::BubbleBorder::ArrowLocation arrow_location = base::i18n::IsRTL() ?
       views::BubbleBorder::TOP_LEFT : views::BubbleBorder::TOP_RIGHT;
-
-  popup_ = ExtensionPopup::Show(button->GetPopupUrl(), browser_, rect,
-                                arrow_location, inspect_with_devtools,
-                                this);
+  popup_ = ExtensionPopup::ShowPopup(button->GetPopupUrl(), browser_,
+               reference_view, arrow_location, inspect_with_devtools);
+  popup_->GetWidget()->AddObserver(this);
   popup_button_ = button;
   popup_button_->SetButtonPushed();
 }
@@ -601,7 +592,7 @@ int BrowserActionsContainer::OnDragUpdated(
     const views::DropTargetEvent& event) {
   // First check if we are above the chevron (overflow) menu.
   if (GetEventHandlerForPoint(event.location()) == chevron_) {
-    if (show_menu_task_factory_.empty() && !overflow_menu_)
+    if (!show_menu_task_factory_.HasWeakPtrs() && !overflow_menu_)
       StartShowFolderDropMenuTimer();
     return ui::DragDropTypes::DRAG_MOVE;
   }
@@ -676,7 +667,7 @@ int BrowserActionsContainer::OnPerformDrop(
   size_t i = 0;
   for (; i < browser_action_views_.size(); ++i) {
     int view_x = browser_action_views_[i]->GetMirroredBounds().x();
-    if (!browser_action_views_[i]->IsVisible() ||
+    if (!browser_action_views_[i]->visible() ||
         (base::i18n::IsRTL() ? (view_x < drop_indicator_position_) :
             (view_x >= drop_indicator_position_))) {
       // We have reached the end of the visible icons or found one that has a
@@ -795,12 +786,15 @@ void BrowserActionsContainer::InspectPopup(ExtensionAction* action) {
   OnBrowserActionExecuted(GetBrowserActionView(action)->button(), true);
 }
 
-void BrowserActionsContainer::ExtensionPopupIsClosing(ExtensionPopup* popup) {
-  // ExtensionPopup is ref-counted, so we don't need to delete it.
-  DCHECK_EQ(popup_, popup);
+void BrowserActionsContainer::OnWidgetClosing(views::Widget* widget) {
+  DCHECK_EQ(popup_->GetWidget(), widget);
+  popup_->GetWidget()->RemoveObserver(this);
   popup_ = NULL;
-  popup_button_->SetButtonNotPushed();
-  popup_button_ = NULL;
+  // |popup_button_| is NULL if the extension has been removed.
+  if (popup_button_) {
+    popup_button_->SetButtonNotPushed();
+    popup_button_ = NULL;
+  }
 }
 
 void BrowserActionsContainer::MoveBrowserAction(const std::string& extension_id,
@@ -814,8 +808,11 @@ void BrowserActionsContainer::MoveBrowserAction(const std::string& extension_id,
 }
 
 void BrowserActionsContainer::HidePopup() {
-  if (popup_)
-    popup_->Close();
+  if (popup_) {
+    popup_->GetWidget()->Close();
+    // NULL out popup_button_ in case it's being deleted.
+    popup_button_ = NULL;
+  }
 }
 
 void BrowserActionsContainer::TestExecuteBrowserAction(int index) {
@@ -826,7 +823,7 @@ void BrowserActionsContainer::TestExecuteBrowserAction(int index) {
 void BrowserActionsContainer::TestSetIconVisibilityCount(size_t icons) {
   model_->SetVisibleIconCount(icons);
   chevron_->SetVisible(icons < browser_action_views_.size());
-  container_width_ = IconCountToWidth(icons, chevron_->IsVisible());
+  container_width_ = IconCountToWidth(icons, chevron_->visible());
   Layout();
   SchedulePaint();
 }
@@ -843,9 +840,7 @@ void BrowserActionsContainer::OnPaint(gfx::Canvas* canvas) {
 
     // Color of the drop indicator.
     static const SkColor kDropIndicatorColor = SK_ColorBLACK;
-    canvas->FillRectInt(kDropIndicatorColor, indicator_bounds.x(),
-                        indicator_bounds.y(), indicator_bounds.width(),
-                        indicator_bounds.height());
+    canvas->FillRect(kDropIndicatorColor, indicator_bounds);
   }
 }
 
@@ -942,7 +937,6 @@ void BrowserActionsContainer::BrowserActionRemoved(const Extension* extension) {
   for (BrowserActionViews::iterator iter = browser_action_views_.begin();
        iter != browser_action_views_.end(); ++iter) {
     if ((*iter)->button()->extension() == extension) {
-      RemoveChildView(*iter);
       delete *iter;
       browser_action_views_.erase(iter);
 
@@ -1001,7 +995,7 @@ void BrowserActionsContainer::SetContainerWidth() {
   if (visible_actions < 0)  // All icons should be visible.
     visible_actions = model_->size();
   chevron_->SetVisible(static_cast<size_t>(visible_actions) < model_->size());
-  container_width_ = IconCountToWidth(visible_actions, chevron_->IsVisible());
+  container_width_ = IconCountToWidth(visible_actions, chevron_->visible());
 }
 
 void BrowserActionsContainer::CloseOverflowMenu() {
@@ -1010,14 +1004,15 @@ void BrowserActionsContainer::CloseOverflowMenu() {
 }
 
 void BrowserActionsContainer::StopShowFolderDropMenuTimer() {
-  show_menu_task_factory_.RevokeAll();
+  show_menu_task_factory_.InvalidateWeakPtrs();
 }
 
 void BrowserActionsContainer::StartShowFolderDropMenuTimer() {
   int delay = views::GetMenuShowDelay();
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
-      show_menu_task_factory_.NewRunnableMethod(
-          &BrowserActionsContainer::ShowDropFolder),
+  MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
+      base::Bind(&BrowserActionsContainer::ShowDropFolder,
+                 show_menu_task_factory_.GetWeakPtr()),
       delay);
 }
 

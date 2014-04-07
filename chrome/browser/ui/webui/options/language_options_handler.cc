@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/i18n/rtl.h"
 #include "base/utf_string_conversions.h"
@@ -19,10 +20,13 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/user_metrics.h"
+#include "content/public/browser/user_metrics.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+
+using content::UserMetricsAction;
 
 LanguageOptionsHandler::LanguageOptionsHandler() {
 }
@@ -45,8 +49,9 @@ void LanguageOptionsHandler::GetLocalizedValues(
 void LanguageOptionsHandler::RegisterMessages() {
   LanguageOptionsHandlerCommon::RegisterMessages();
 
-  web_ui_->RegisterMessageCallback("uiLanguageRestart",
-      NewCallback(this, &LanguageOptionsHandler::RestartCallback));
+  web_ui()->RegisterMessageCallback("uiLanguageRestart",
+      base::Bind(&LanguageOptionsHandler::RestartCallback,
+                 base::Unretained(this)));
 }
 
 ListValue* LanguageOptionsHandler::GetLanguageList() {
@@ -109,6 +114,6 @@ void LanguageOptionsHandler::SetApplicationLocale(
 }
 
 void LanguageOptionsHandler::RestartCallback(const ListValue* args) {
-  UserMetrics::RecordAction(UserMetricsAction("LanguageOptions_Restart"));
+  content::RecordAction(UserMetricsAction("LanguageOptions_Restart"));
   BrowserList::AttemptRestart();
 }

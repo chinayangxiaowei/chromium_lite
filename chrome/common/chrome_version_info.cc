@@ -8,6 +8,7 @@
 #include "base/file_version_info.h"
 #include "base/string_util.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -35,19 +36,19 @@ bool VersionInfo::is_valid() const {
 std::string VersionInfo::Name() const {
   if (!is_valid())
     return std::string();
-  return UTF16ToASCII(version_info_->product_name());
+  return UTF16ToUTF8(version_info_->product_name());
 }
 
 std::string VersionInfo::Version() const {
   if (!is_valid())
     return std::string();
-  return UTF16ToASCII(version_info_->product_version());
+  return UTF16ToUTF8(version_info_->product_version());
 }
 
 std::string VersionInfo::LastChange() const {
   if (!is_valid())
     return std::string();
-  return UTF16ToASCII(version_info_->last_change());
+  return UTF16ToUTF8(version_info_->last_change());
 }
 
 bool VersionInfo::IsOfficialBuild() const {
@@ -92,7 +93,6 @@ bool VersionInfo::IsOfficialBuild() const {
 
 std::string VersionInfo::CreateVersionString() const {
   std::string current_version;
-#if !defined(NACL_WIN64)
   if (is_valid()) {
     current_version += Version();
 #if !defined(GOOGLE_CHROME_BUILD)
@@ -108,7 +108,6 @@ std::string VersionInfo::CreateVersionString() const {
     if (!modifier.empty())
       current_version += " " + modifier;
   }
-#endif  // !defined(NACL_WIN64)
   return current_version;
 }
 

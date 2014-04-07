@@ -9,6 +9,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 
 namespace {
@@ -30,6 +31,11 @@ Browser* FindOtherBrowser(Browser* browser) {
 
 class ExtensionManagementApiTest : public ExtensionApiTest {
  public:
+  virtual void SetUpCommandLine(CommandLine* command_line) {
+    ExtensionApiTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kEnablePanels);
+  }
+
   virtual void InstallExtensions() {
     FilePath basedir = test_data_dir_.AppendASCII("management");
 
@@ -89,17 +95,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, LaunchPanelApp) {
   // Find the app's browser.  Check that it is a panel.
   ASSERT_EQ(2u, BrowserList::GetBrowserCount(browser()->profile()));
   Browser* app_browser = FindOtherBrowser(browser());
-#if defined(OS_CHROMEOS)
   ASSERT_TRUE(app_browser->is_type_panel());
-#else
-  ASSERT_TRUE(app_browser->is_type_popup());
-#endif
   ASSERT_TRUE(app_browser->is_app());
 
   // Close the app panel.
   ui_test_utils::WindowedNotificationObserver signal(
       chrome::NOTIFICATION_BROWSER_CLOSED,
-      Source<Browser>(app_browser));
+      content::Source<Browser>(app_browser));
 
   app_browser->CloseWindow();
   signal.Wait();
@@ -126,11 +128,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiTest, LaunchPanelApp) {
   // prefs, so we should still see the launch in a panel.
   ASSERT_EQ(2u, BrowserList::GetBrowserCount(browser()->profile()));
   app_browser = FindOtherBrowser(browser());
-#if defined(OS_CHROMEOS)
   ASSERT_TRUE(app_browser->is_type_panel());
-#else
-  ASSERT_TRUE(app_browser->is_type_popup());
-#endif
   ASSERT_TRUE(app_browser->is_app());
 }
 

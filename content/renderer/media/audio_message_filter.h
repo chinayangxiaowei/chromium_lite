@@ -16,18 +16,14 @@
 #include "base/shared_memory.h"
 #include "base/sync_socket.h"
 #include "content/common/media/audio_stream_state.h"
+#include "content/common/content_export.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "media/audio/audio_buffers_state.h"
 
-class MessageLoop;
-
-namespace base {
-class Time;
-}
-
-class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
+class CONTENT_EXPORT AudioMessageFilter
+    : public IPC::ChannelProxy::MessageFilter {
  public:
-  class Delegate {
+  class CONTENT_EXPORT Delegate {
    public:
     // Called when an audio packet is requested from the browser process.
     virtual void OnRequestPacket(AudioBuffersState buffers_state) = 0;
@@ -69,10 +65,10 @@ class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
   FRIEND_TEST_ALL_PREFIXES(AudioMessageFilterTest, Delegates);
 
   // IPC::ChannelProxy::MessageFilter override. Called on IO thread.
-  virtual bool OnMessageReceived(const IPC::Message& message);
-  virtual void OnFilterAdded(IPC::Channel* channel);
-  virtual void OnFilterRemoved();
-  virtual void OnChannelClosing();
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  virtual void OnFilterAdded(IPC::Channel* channel) OVERRIDE;
+  virtual void OnFilterRemoved() OVERRIDE;
+  virtual void OnChannelClosing() OVERRIDE;
 
   // Received when browser process wants more audio packet.
   void OnRequestPacket(int stream_id, AudioBuffersState buffers_state);

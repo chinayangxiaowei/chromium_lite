@@ -12,9 +12,10 @@
 #include "base/memory/ref_counted.h"
 #include "ppapi/c/pp_point.h"
 #include "ppapi/c/private/ppb_flash_menu.h"
+#include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/thunk/ppb_flash_menu_api.h"
-#include "webkit/plugins/ppapi/callbacks.h"
+#include "webkit/plugins/webkit_plugins_export.h"
 
 struct WebMenuItem;
 
@@ -38,7 +39,7 @@ class PPB_Flash_Menu_Impl : public ::ppapi::Resource,
                        PP_CompletionCallback callback) OVERRIDE;
 
   // Called to complete |Show()|.
-  void CompleteShow(int32_t result, unsigned action);
+  WEBKIT_PLUGINS_EXPORT void CompleteShow(int32_t result, unsigned action);
 
   typedef std::vector<WebMenuItem> MenuData;
   const MenuData& menu_data() const { return menu_data_; }
@@ -56,7 +57,7 @@ class PPB_Flash_Menu_Impl : public ::ppapi::Resource,
   std::vector<int32_t> menu_id_map_;
 
   // Any pending callback (for |Show()|).
-  scoped_refptr<TrackedCompletionCallback> callback_;
+  scoped_refptr< ::ppapi::TrackedCallback> callback_;
 
   // Output buffers to be filled in when the callback is completed successfully.
   int32_t* selected_id_out_;

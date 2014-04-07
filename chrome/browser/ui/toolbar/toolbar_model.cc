@@ -15,15 +15,22 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/browser/cert_store.h"
-#include "content/browser/tab_contents/navigation_controller.h"
-#include "content/browser/tab_contents/navigation_entry.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_constants.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/ssl_status.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/common/content_constants.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/cert_status_flags.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
+
+using content::NavigationController;
+using content::NavigationEntry;
+using content::SSLStatus;
+using content::WebContents;
 
 ToolbarModel::ToolbarModel(Browser* browser)
     : browser_(browser),
@@ -41,14 +48,13 @@ string16 ToolbarModel::GetText() const {
   NavigationController* navigation_controller = GetNavigationController();
   if (navigation_controller) {
     Profile* profile =
-        Profile::FromBrowserContext(navigation_controller->browser_context());
+        Profile::FromBrowserContext(navigation_controller->GetBrowserContext());
     languages = profile->GetPrefs()->GetString(prefs::kAcceptLanguages);
     NavigationEntry* entry = navigation_controller->GetVisibleEntry();
-    if (!navigation_controller->tab_contents()->ShouldDisplayURL()) {
-      // Explicitly hide the URL for this tab.
+    if (!ShouldDisplayURL()) {
       url = GURL();
     } else if (entry) {
-      url = entry->virtual_url();
+      url = entry->GetVirtualURL();
     }
   }
   if (url.spec().length() > content::kMaxURLDisplayChars)
@@ -58,7 +64,34 @@ string16 ToolbarModel::GetText() const {
   // the space.
   return AutocompleteInput::FormattedStringWithEquivalentMeaning(
       url, net::FormatUrl(url, languages, net::kFormatUrlOmitAll,
-                          UnescapeRule::NORMAL, NULL, NULL, NULL));
+                          net::UnescapeRule::NORMAL, NULL, NULL, NULL));
+}
+
+bool ToolbarModel::ShouldDisplayURL() const {
+  // Note: The order here is important.
+  // - The WebUI test must come before the extension scheme test because there
+  //   can be WebUIs that have extension schemes (e.g. the bookmark manager). In
+  //   that case, we should prefer what the WebUI instance says.
+  // - The view-source test must come before the WebUI test because of the case
+  //   of view-source:chrome://newtab, which should display its URL despite what
+  //   chrome://newtab's WebUI says.
+  NavigationController* controller = GetNavigationController();
+  NavigationEntry* entry = controller ? controller->GetVisibleEntry() : NULL;
+  if (entry) {
+    if (entry->IsViewSourceMode() ||
+        entry->GetPageType() == content::PAGE_TYPE_INTERSTITIAL) {
+      return true;
+    }
+  }
+
+  WebContents* web_contents = browser_->GetSelectedWebContents();
+  if (web_contents && web_contents->GetWebUIForCurrentState())
+    return !web_contents->GetWebUIForCurrentState()->ShouldHideURL();
+
+  if (entry && entry->GetURL().SchemeIs(chrome::kExtensionScheme))
+    return false;
+
+  return true;
 }
 
 ToolbarModel::SecurityLevel ToolbarModel::GetSecurityLevel() const {
@@ -73,25 +106,24 @@ ToolbarModel::SecurityLevel ToolbarModel::GetSecurityLevel() const {
   if (!entry)
     return NONE;
 
-  const NavigationEntry::SSLStatus& ssl = entry->ssl();
-  switch (ssl.security_style()) {
-    case SECURITY_STYLE_UNKNOWN:
-    case SECURITY_STYLE_UNAUTHENTICATED:
+  const SSLStatus& ssl = entry->GetSSL();
+  switch (ssl.security_style) {
+    case content::SECURITY_STYLE_UNKNOWN:
+    case content::SECURITY_STYLE_UNAUTHENTICATED:
       return NONE;
 
-    case SECURITY_STYLE_AUTHENTICATION_BROKEN:
+    case content::SECURITY_STYLE_AUTHENTICATION_BROKEN:
       return SECURITY_ERROR;
 
-    case SECURITY_STYLE_AUTHENTICATED:
-      if (ssl.displayed_insecure_content())
+    case content::SECURITY_STYLE_AUTHENTICATED:
+      if (!!(ssl.content_status & SSLStatus::DISPLAYED_INSECURE_CONTENT))
         return SECURITY_WARNING;
-      if (net::IsCertStatusError(ssl.cert_status())) {
-        DCHECK_EQ(ssl.cert_status() & net::CERT_STATUS_ALL_ERRORS,
-                  net::CERT_STATUS_UNABLE_TO_CHECK_REVOCATION);
+      if (net::IsCertStatusError(ssl.cert_status)) {
+        DCHECK(net::IsCertStatusMinorError(ssl.cert_status));
         return SECURITY_WARNING;
       }
-      if ((ssl.cert_status() & net::CERT_STATUS_IS_EV) &&
-          CertStore::GetInstance()->RetrieveCert(ssl.cert_id(), NULL))
+      if ((ssl.cert_status & net::CERT_STATUS_IS_EV) &&
+          CertStore::GetInstance()->RetrieveCert(ssl.cert_id, NULL))
         return EV_SECURE;
       return SECURE;
 
@@ -119,7 +151,7 @@ string16 ToolbarModel::GetEVCertName() const {
   // Note: Navigation controller and active entry are guaranteed non-NULL or
   // the security level would be NONE.
   CertStore::GetInstance()->RetrieveCert(
-      GetNavigationController()->GetVisibleEntry()->ssl().cert_id(), &cert);
+      GetNavigationController()->GetVisibleEntry()->GetSSL().cert_id, &cert);
   return GetEVCertName(*cert);
 }
 
@@ -142,6 +174,6 @@ NavigationController* ToolbarModel::GetNavigationController() const {
   // This |current_tab| can be NULL during the initialization of the
   // toolbar during window creation (i.e. before any tabs have been added
   // to the window).
-  TabContents* current_tab = browser_->GetSelectedTabContents();
-  return current_tab ? &current_tab->controller() : NULL;
+  WebContents* current_tab = browser_->GetSelectedWebContents();
+  return current_tab ? &current_tab->GetController() : NULL;
 }

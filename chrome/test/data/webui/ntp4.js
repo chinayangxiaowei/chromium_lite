@@ -21,6 +21,7 @@ NTP4WebUITest.prototype = {
 // Test loading new tab page and selecting each card doesn't have console
 // errors.
 TEST_F('NTP4WebUITest', 'TestBrowsePages', function() {
+// This tests the ntp4 new tab page which is not used on touch builds.
   var cardSlider = ntp4.getCardSlider();
   assertNotEquals(null, cardSlider);
   for (var i = 0; i < cardSlider.cardCount; ++i) {

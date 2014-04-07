@@ -16,7 +16,6 @@
 #include "base/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/sys_info.h"
-#include "base/task.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
@@ -30,9 +29,11 @@
 #include "base/win/win_util.h"
 #endif
 
-#if defined(OS_MACOSX) || defined(OS_WIN) || defined(OS_ANDROID)
-// The following are glibc-specific
 namespace {
+
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(OS_ANDROID) || \
+    defined(OS_OPENBSD)
+// The following are glibc-specific
 
 size_t fread_unlocked(void *ptr, size_t size, size_t n, FILE *file) {
   return fread(ptr, size, n, file);
@@ -56,8 +57,18 @@ int fdatasync(int fildes) {
 }
 #endif
 
-}
 #endif
+
+// Wide-char safe fopen wrapper.
+FILE* fopen_internal(const char* fname, const char* mode) {
+#if defined(OS_WIN)
+  return _wfopen(UTF8ToUTF16(fname).c_str(), ASCIIToUTF16(mode).c_str());
+#else
+  return fopen(fname, mode);
+#endif
+}
+
+}  // namespace
 
 namespace leveldb {
 
@@ -174,7 +185,7 @@ class ChromiumRandomAccessFile: public RandomAccessFile {
     *result = Slice(scratch, (r < 0) ? 0 : r);
     if (r < 0) {
       // An error: return a non-ok status
-      s = Status::IOError(filename_, "Could not preform read");
+      s = Status::IOError(filename_, "Could not perform read");
     }
     return s;
   }
@@ -247,7 +258,7 @@ class ChromiumEnv : public Env {
 
   virtual Status NewSequentialFile(const std::string& fname,
                                    SequentialFile** result) {
-    FILE* f = fopen(fname.c_str(), "rb");
+    FILE* f = fopen_internal(fname.c_str(), "rb");
     if (f == NULL) {
       *result = NULL;
       return Status::IOError(fname, strerror(errno));
@@ -275,7 +286,7 @@ class ChromiumEnv : public Env {
   virtual Status NewWritableFile(const std::string& fname,
                                  WritableFile** result) {
     *result = NULL;
-    FILE* f = fopen(fname.c_str(), "wb");
+    FILE* f = fopen_internal(fname.c_str(), "wb");
     if (f == NULL) {
       return Status::IOError(fname, strerror(errno));
     } else {
@@ -432,12 +443,12 @@ class ChromiumEnv : public Env {
   }
 
   virtual uint64_t NowMicros() {
-    return ::base::TimeTicks::HighResNow().ToInternalValue();
+    return ::base::TimeTicks::Now().ToInternalValue();
   }
 
   virtual void SleepForMicroseconds(int micros) {
     // Round up to the next millisecond.
-    ::base::PlatformThread::Sleep((micros + 999) / 1000);
+    ::base::PlatformThread::Sleep(::base::TimeDelta::FromMicroseconds(micros));
   }
 
  private:
@@ -533,8 +544,8 @@ void ChromiumEnv::StartThread(void (*function)(void* arg), void* arg) {
   new Thread(function, arg); // Will self-delete.
 }
 
-::base::LazyInstance<ChromiumEnv, ::base::LeakyLazyInstanceTraits<ChromiumEnv> >
-    default_env(::base::LINKER_INITIALIZED);
+::base::LazyInstance<ChromiumEnv>::Leaky
+    default_env = LAZY_INSTANCE_INITIALIZER;
 
 }
 

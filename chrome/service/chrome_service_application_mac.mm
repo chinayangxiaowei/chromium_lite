@@ -1,27 +1,27 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/service/chrome_service_application_mac.h"
 
-#include "base/logging.h"
 #include "base/mac/foundation_util.h"
-#import "content/common/cloud_print_class_mac.h"
+#include "base/mac/mac_logging.h"
+#import "chrome/common/cloud_print/cloud_print_class_mac.h"
 #include "chrome/common/chrome_switches.h"
 
-@interface ServiceCrApplication ()
+@interface ServiceApplication ()
 - (void)setCloudPrintHandler;
 - (void)submitPrint:(NSAppleEventDescriptor*)event;
 @end
 
-@implementation ServiceCrApplication
+@implementation ServiceApplication
 
--(void)setCloudPrintHandler {
+- (void)setCloudPrintHandler {
   NSAppleEventManager* em = [NSAppleEventManager sharedAppleEventManager];
   [em setEventHandler:self
           andSelector:@selector(submitPrint:)
-        forEventClass:content::kAECloudPrintClass
-           andEventID:content::kAECloudPrintClass];
+        forEventClass:cloud_print::kAECloudPrintClass
+           andEventID:cloud_print::kAECloudPrintClass];
 }
 
 // Event handler for Cloud Print Event. Forwards print job received to Chrome,
@@ -36,36 +36,33 @@
   CFArrayRef passArgv =
       CFArrayCreate(NULL, (const void**) flags, 1, &kCFTypeArrayCallBacks);
   FSRef ref;
-  OSStatus status = noErr;
   CFURLRef* kDontWantURL = NULL;
   // Get Chrome's bundle ID.
   std::string bundleID =  base::mac::BaseBundleID();
   CFStringRef bundleIDCF =
       CFStringCreateWithCString(NULL, bundleID.c_str(), kCFStringEncodingUTF8);
   // Use Launch Services to locate Chrome using its bundleID.
-  status = LSFindApplicationForInfo(kLSUnknownCreator, bundleIDCF,
-                                    NULL, &ref, kDontWantURL);
+  OSStatus status = LSFindApplicationForInfo(kLSUnknownCreator, bundleIDCF,
+                                             NULL, &ref, kDontWantURL);
 
   if (status != noErr) {
-    LOG(ERROR) << "Failed to make path ref";
-    LOG(ERROR) << GetMacOSStatusErrorString(status);
-    LOG(ERROR) << GetMacOSStatusCommentString(status);
+    OSSTATUS_LOG(ERROR, status) << "Failed to make path ref";
     return;
   }
   // Actually create the Apple Event.
   NSAppleEventDescriptor* sendEvent =
       [NSAppleEventDescriptor
-           appleEventWithEventClass:content::kAECloudPrintClass
-                            eventID:content::kAECloudPrintClass
+           appleEventWithEventClass:cloud_print::kAECloudPrintClass
+                            eventID:cloud_print::kAECloudPrintClass
                    targetDescriptor:nil
                            returnID:kAutoGenerateReturnID
                       transactionID:kAnyTransactionID];
   // Pull the parameters out of AppleEvent sent to us and attach them
   // to our Apple Event.
   NSAppleEventDescriptor* parameters =
-      [event paramDescriptorForKeyword:content::kAECloudPrintClass];
+      [event paramDescriptorForKeyword:cloud_print::kAECloudPrintClass];
   [sendEvent setParamDescriptor:parameters
-                     forKeyword:content::kAECloudPrintClass];
+                     forKeyword:cloud_print::kAECloudPrintClass];
   LSApplicationParameters params = { 0,
                                      kLSLaunchDefaults,
                                      &ref,
@@ -78,9 +75,7 @@
   // Send the Apple Event Using launch services, launching Chrome if necessary.
   status = LSOpenApplication(&params, NULL);
   if (status != noErr) {
-    LOG(ERROR) << "Unable to launch";
-    LOG(ERROR) << GetMacOSStatusErrorString(status);
-    LOG(ERROR) << GetMacOSStatusCommentString(status);
+    OSSTATUS_LOG(ERROR, status) << "Unable to launch";
   }
 }
 
@@ -90,12 +85,11 @@
 
 namespace chrome_service_application_mac {
 
-void RegisterServiceCrApp() {
-  ServiceCrApplication* var =
-      static_cast<ServiceCrApplication*>
-          ([ServiceCrApplication sharedApplication]);
+void RegisterServiceApp() {
+  ServiceApplication* var =
+      base::mac::ObjCCastStrict<ServiceApplication>(
+          [ServiceApplication sharedApplication]);
   [var setCloudPrintHandler];
 }
 
 }  // namespace chrome_service_application_mac
-

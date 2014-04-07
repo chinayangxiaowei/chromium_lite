@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,25 +18,24 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
+#include "chrome/browser/extensions/api/webrequest/webrequest_api.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/extension_message_service.h"
 #include "chrome/browser/extensions/extension_pref_store.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
-#include "chrome/browser/extensions/extension_webrequest_api.h"
-#include "chrome/browser/net/pref_proxy_config_service.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/off_the_record_profile_io_data.h"
 #include "chrome/browser/profiles/profile_dependency_manager.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/sync_prefs.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/transport_security_persister.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
-#include "chrome/browser/ui/webui/extension_icon_source.h"
+#include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
@@ -46,28 +45,20 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "content/browser/browser_thread.h"
 #include "content/browser/chrome_blob_storage_context.h"
-#include "content/browser/download/download_manager.h"
 #include "content/browser/file_system/browser_file_system_helper.h"
-#include "content/browser/host_zoom_map.h"
 #include "content/browser/in_process_webkit/webkit_context.h"
 #include "content/browser/ssl/ssl_host_state.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/webui/web_ui.h"
-#include "content/common/notification_service.h"
-#include "grit/locale_settings.h"
-#include "net/base/transport_security_state.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "webkit/database/database_tracker.h"
 #include "webkit/quota/quota_manager.h"
 
 #if defined(TOOLKIT_USES_GTK)
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
-#endif
-
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/preferences.h"
 #endif
 
 using base::Time;
@@ -79,16 +70,11 @@ net::URLRequestContextGetter* Profile::default_request_context_;
 
 namespace {
 
-// Used to tag the first profile launched in a Chrome session.
-bool g_first_profile_launched = true;
-
 }  // namespace
 
 Profile::Profile()
     : restored_last_session_(false),
-      first_launched_(g_first_profile_launched),
       accessibility_pause_level_(0) {
-  g_first_profile_launched = false;
 }
 
 // static
@@ -98,8 +84,17 @@ Profile* Profile::FromBrowserContext(content::BrowserContext* browser_context) {
 }
 
 // static
-Profile* Profile::FromWebUI(WebUI* web_ui) {
-  return FromBrowserContext(web_ui->tab_contents()->browser_context());
+Profile* Profile::FromWebUI(content::WebUI* web_ui) {
+  // TODO(dhollowa): Crash diagnosis http://crbug.com/97802
+  CHECK(web_ui);
+  CHECK(web_ui->GetWebContents());
+  CHECK(web_ui->GetWebContents()->GetBrowserContext());
+
+  return FromBrowserContext(web_ui->GetWebContents()->GetBrowserContext());
+}
+
+TestingProfile* Profile::AsTestingProfile() {
+  return NULL;
 }
 
 // static
@@ -125,25 +120,11 @@ void Profile::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kSafeBrowsingReportingEnabled,
                              false,
                              PrefService::UNSYNCABLE_PREF);
-  // TODO(estade): IDS_SPELLCHECK_DICTIONARY should be an ASCII string.
-  prefs->RegisterLocalizedStringPref(prefs::kSpellCheckDictionary,
-                                     IDS_SPELLCHECK_DICTIONARY,
-                                     PrefService::UNSYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kSpellCheckUseSpellingService,
-#if defined(GOOGLE_CHROME_BUILD)
+  prefs->RegisterBooleanPref(prefs::kSpeechInputFilterProfanities,
                              true,
-#else
+                             PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kSpeechInputTrayNotificationShown,
                              false,
-#endif
-                             PrefService::UNSYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kEnableSpellCheck,
-                             true,
-                             PrefService::SYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kEnableAutoSpellCorrect,
-                             true,
-                             PrefService::UNSYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kSpeechInputCensorResults,
-                             true,
                              PrefService::UNSYNCABLE_PREF);
 #if defined(TOOLKIT_USES_GTK)
   prefs->RegisterBooleanPref(prefs::kUsesSystemTheme,
@@ -167,6 +148,8 @@ void Profile::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kDisableExtensions,
                              false,
                              PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kExtensionAlertsInitializedPref,
+                             false, PrefService::UNSYNCABLE_PREF);
   prefs->RegisterStringPref(prefs::kSelectFileLastDirectory,
                             "",
                             PrefService::UNSYNCABLE_PREF);
@@ -175,6 +158,9 @@ void Profile::RegisterUserPrefs(PrefService* prefs) {
                             PrefService::UNSYNCABLE_PREF);
   prefs->RegisterDictionaryPref(prefs::kPerHostZoomLevels,
                                 PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterStringPref(prefs::kDefaultApps,
+                            "install",
+                            PrefService::UNSYNCABLE_PREF);
 #if defined(OS_CHROMEOS)
   // TODO(dilmah): For OS_CHROMEOS we maintain kApplicationLocale in both
   // local state and user's profile.  For other platforms we maintain
@@ -191,10 +177,6 @@ void Profile::RegisterUserPrefs(PrefService* prefs) {
                             "",
                             PrefService::UNSYNCABLE_PREF);
 #endif
-
-  prefs->RegisterBooleanPref(prefs::kSyncPromoExpanded,
-                             true,
-                             PrefService::UNSYNCABLE_PREF);
 }
 
 // static
@@ -222,6 +204,6 @@ bool Profile::IsGuestSession() {
 }
 
 bool Profile::IsSyncAccessible() {
-  ProfileSyncService* syncService = GetProfileSyncService();
-  return syncService && !syncService->IsManaged();
+  browser_sync::SyncPrefs prefs(GetPrefs());
+  return ProfileSyncService::IsSyncEnabled() && !prefs.IsManaged();
 }

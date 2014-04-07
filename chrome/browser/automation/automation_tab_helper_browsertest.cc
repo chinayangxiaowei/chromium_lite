@@ -6,6 +6,7 @@
 
 #include "base/file_path.h"
 #include "base/path_service.h"
+#include "base/string16.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/automation/automation_tab_helper.h"
@@ -18,33 +19,33 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
-#include "content/common/notification_service.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
 #include "net/base/net_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
 
-class MockNotificationObserver : public NotificationObserver {
+class MockNotificationObserver : public content::NotificationObserver {
  public:
   MockNotificationObserver() { }
   virtual ~MockNotificationObserver() { }
 
   MOCK_METHOD3(Observe, void(int type,
-                             const NotificationSource& source,
-                             const NotificationDetails& details));
+                             const content::NotificationSource& source,
+                             const content::NotificationDetails& details));
 
-  void Register(int type, const NotificationSource& source) {
+  void Register(int type, const content::NotificationSource& source) {
     registrar_.Add(this, type, source);
   }
 
  private:
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(MockNotificationObserver);
 };
@@ -69,7 +70,7 @@ class AutomationTabHelperBrowserTest : public InProcessBrowserTest {
       MockNotificationObserver* mock_notification_observer) {
     mock_notification_observer->Register(
         chrome::NOTIFICATION_DOM_OPERATION_RESPONSE,
-        NotificationService::AllSources());
+        content::NotificationService::AllSources());
 
     testing::InSequence expect_in_sequence;
     EXPECT_CALL(*mock_tab_observer, OnFirstPendingLoad(_));
@@ -90,14 +91,14 @@ class AutomationTabHelperBrowserTest : public InProcessBrowserTest {
     std::string script = base::StringPrintf("runTestCase(%d);",
                                             test_case_number);
     RenderViewHost* host =
-        browser()->GetSelectedTabContents()->render_view_host();
+        browser()->GetSelectedWebContents()->GetRenderViewHost();
     if (wait_for_response) {
       ASSERT_TRUE(ui_test_utils::ExecuteJavaScript(
           host, L"", ASCIIToWide(script)));
     } else {
       script += "window.domAutomationController.setAutomationId(0);"
                 "window.domAutomationController.send(0);";
-      host->ExecuteJavascriptInWebFrame(ASCIIToUTF16(""), ASCIIToUTF16(script));
+      host->ExecuteJavascriptInWebFrame(string16(), ASCIIToUTF16(script));
     }
   }
 
@@ -185,7 +186,7 @@ IN_PROC_BROWSER_TEST_F(AutomationTabHelperBrowserTest,
   MockNotificationObserver mock_notification_observer;
   mock_notification_observer.Register(
       chrome::NOTIFICATION_DOM_OPERATION_RESPONSE,
-      NotificationService::AllSources());
+      content::NotificationService::AllSources());
   MockTabEventObserver mock_tab_observer(tab_helper());
 
   EXPECT_CALL(mock_tab_observer, OnFirstPendingLoad(_));

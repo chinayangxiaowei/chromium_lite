@@ -1,13 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/ui/cocoa/extensions/extension_action_context_menu.h"
 
 #include "base/sys_string_conversions.h"
-#include "base/task.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_tabs_module.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/pref_service.h"
@@ -26,11 +25,18 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+
+using content::OpenURLParams;
+using content::Referrer;
+using content::WebContents;
 
 // A class that loads the extension icon on the I/O thread before showing the
 // confirmation dialog to uninstall the given extension.
@@ -40,18 +46,19 @@ class AsyncUninstaller : public ExtensionUninstallDialog::Delegate {
   AsyncUninstaller(const Extension* extension, Profile* profile)
       : extension_(extension),
         profile_(profile) {
-    extension_uninstall_dialog_.reset(new ExtensionUninstallDialog(profile));
-    extension_uninstall_dialog_->ConfirmUninstall(this, extension_);
+    extension_uninstall_dialog_.reset(
+        ExtensionUninstallDialog::Create(profile, this));
+    extension_uninstall_dialog_->ConfirmUninstall(extension_);
   }
 
   ~AsyncUninstaller() {}
 
   // ExtensionUninstallDialog::Delegate:
-  virtual void ExtensionDialogAccepted() {
+  virtual void ExtensionUninstallAccepted() {
     profile_->GetExtensionService()->
         UninstallExtension(extension_->id(), false, NULL);
   }
-  virtual void ExtensionDialogCanceled() {}
+  virtual void ExtensionUninstallCanceled() {}
 
  private:
   // The extension that we're loading the icon for. Weak.
@@ -67,7 +74,7 @@ class AsyncUninstaller : public ExtensionUninstallDialog::Delegate {
 
 namespace extension_action_context_menu {
 
-class DevmodeObserver : public NotificationObserver {
+class DevmodeObserver : public content::NotificationObserver {
  public:
   DevmodeObserver(ExtensionActionContextMenu* menu,
                              PrefService* service)
@@ -78,8 +85,8 @@ class DevmodeObserver : public NotificationObserver {
   virtual ~DevmodeObserver() {}
 
   void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details) {
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) {
     if (type == chrome::NOTIFICATION_PREF_CHANGED)
       [menu_ updateInspectorItem];
     else
@@ -92,24 +99,24 @@ class DevmodeObserver : public NotificationObserver {
   PrefChangeRegistrar registrar_;
 };
 
-class ProfileObserverBridge : public NotificationObserver {
+class ProfileObserverBridge : public content::NotificationObserver {
  public:
   ProfileObserverBridge(ExtensionActionContextMenu* owner,
                         const Profile* profile)
       : owner_(owner),
         profile_(profile) {
     registrar_.Add(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
-                   Source<Profile>(profile));
+                   content::Source<Profile>(profile));
   }
 
   ~ProfileObserverBridge() {}
 
-  // Overridden from NotificationObserver
+  // Overridden from content::NotificationObserver
   void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details) {
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) {
     if (type == chrome::NOTIFICATION_PROFILE_DESTROYED &&
-        source == Source<Profile>(profile_)) {
+        source == content::Source<Profile>(profile_)) {
       [owner_ invalidateProfile];
     }
   }
@@ -117,7 +124,7 @@ class ProfileObserverBridge : public NotificationObserver {
  private:
   ExtensionActionContextMenu* owner_;
   const Profile* profile_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 };
 
 }  // namespace extension_action_context_menu
@@ -146,7 +153,7 @@ int CurrentTabId() {
   Browser* browser = BrowserList::GetLastActive();
   if(!browser)
     return -1;
-  TabContents* contents = browser->GetSelectedTabContents();
+  WebContents* contents = browser->GetSelectedWebContents();
   if (!contents)
     return -1;
   return ExtensionTabUtil::GetTabId(contents);
@@ -165,7 +172,7 @@ int CurrentTabId() {
     NSArray* menuItems = [NSArray arrayWithObjects:
         base::SysUTF8ToNSString(extension->name()),
         [NSMenuItem separatorItem],
-        l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_OPTIONS),
+        l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_OPTIONS_MENU_ITEM),
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_DISABLE),
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_UNINSTALL),
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_HIDE_BUTTON),
@@ -239,7 +246,10 @@ int CurrentTabId() {
     case kExtensionContextName: {
       GURL url(std::string(extension_urls::kGalleryBrowsePrefix) +
                std::string("/detail/") + extension_->id());
-      browser->OpenURL(url, GURL(), NEW_FOREGROUND_TAB, PageTransition::LINK);
+      OpenURLParams params(
+          url, Referrer(), NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK,
+           false);
+      browser->OpenURL(params);
       break;
     }
     case kExtensionContextOptions: {

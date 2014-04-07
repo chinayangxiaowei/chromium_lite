@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,8 @@
 
 #include <algorithm>
 
-#include "base/task.h"
+#include "base/message_loop_proxy.h"
 #include "remoting/host/capturer.h"
-#include "remoting/host/user_authenticator.h"
-#include "remoting/proto/auth.pb.h"
 #include "remoting/proto/event.pb.h"
 
 // The number of remote mouse events to record for the purpose of eliminating
@@ -29,55 +27,32 @@ using protocol::MouseEvent;
 
 ClientSession::ClientSession(
     EventHandler* event_handler,
-    UserAuthenticator* user_authenticator,
-    scoped_refptr<protocol::ConnectionToClient> connection,
+    protocol::ConnectionToClient* connection,
     protocol::InputStub* input_stub,
     Capturer* capturer)
     : event_handler_(event_handler),
-      user_authenticator_(user_authenticator),
       connection_(connection),
+      client_jid_(connection->session()->jid()),
       input_stub_(input_stub),
       capturer_(capturer),
       authenticated_(false),
       awaiting_continue_approval_(false),
       remote_mouse_button_state_(0) {
+  connection_->SetEventHandler(this);
+
+  // TODO(sergeyu): Currently ConnectionToClient expects stubs to be
+  // set before channels are connected. Make it possible to set stubs
+  // later and set them only when connection is authenticated.
+  connection_->set_host_stub(this);
+  connection_->set_input_stub(this);
 }
 
 ClientSession::~ClientSession() {
 }
 
-void ClientSession::BeginSessionRequest(
-    const protocol::LocalLoginCredentials* credentials, Task* done) {
-  DCHECK(event_handler_);
-
-  base::ScopedTaskRunner done_runner(done);
-
-  bool success = false;
-  switch (credentials->type()) {
-    case protocol::PASSWORD:
-      success = user_authenticator_->Authenticate(credentials->username(),
-                                                  credentials->credential());
-      break;
-
-    default:
-      LOG(ERROR) << "Invalid credentials type " << credentials->type();
-      break;
-  }
-
-  OnAuthorizationComplete(success);
-}
-
-void ClientSession::OnAuthorizationComplete(bool success) {
-  if (success) {
-    authenticated_ = true;
-    event_handler_->LocalLoginSucceeded(connection_.get());
-  } else {
-    LOG(WARNING) << "Login failed";
-    event_handler_->LocalLoginFailed(connection_.get());
-  }
-}
-
 void ClientSession::InjectKeyEvent(const KeyEvent& event) {
+  DCHECK(CalledOnValidThread());
+
   if (authenticated_ && !ShouldIgnoreRemoteKeyboardInput(event)) {
     RecordKeyEvent(event);
     input_stub_->InjectKeyEvent(event);
@@ -85,6 +60,8 @@ void ClientSession::InjectKeyEvent(const KeyEvent& event) {
 }
 
 void ClientSession::InjectMouseEvent(const MouseEvent& event) {
+  DCHECK(CalledOnValidThread());
+
   if (authenticated_ && !ShouldIgnoreRemoteMouseInput(event)) {
     RecordMouseButtonState(event);
     MouseEvent event_to_inject = event;
@@ -93,10 +70,10 @@ void ClientSession::InjectMouseEvent(const MouseEvent& event) {
       // the event to lie within the current screen area.  This is better than
       // simply discarding the event, which might lose a button-up event at the
       // end of a drag'n'drop (or cause other related problems).
-      gfx::Point pos(event.x(), event.y());
-      const gfx::Size& screen = capturer_->size_most_recent();
-      pos.set_x(std::max(0, std::min(screen.width() - 1, pos.x())));
-      pos.set_y(std::max(0, std::min(screen.height() - 1, pos.y())));
+      SkIPoint pos(SkIPoint::Make(event.x(), event.y()));
+      const SkISize& screen = capturer_->size_most_recent();
+      pos.setX(std::max(0, std::min(screen.width() - 1, pos.x())));
+      pos.setY(std::max(0, std::min(screen.height() - 1, pos.y())));
       event_to_inject.set_x(pos.x());
       event_to_inject.set_y(pos.y());
 
@@ -115,16 +92,65 @@ void ClientSession::InjectMouseEvent(const MouseEvent& event) {
   }
 }
 
-void ClientSession::OnDisconnected() {
-  RestoreEventState();
-  authenticated_ = false;
+void ClientSession::OnConnectionOpened(
+    protocol::ConnectionToClient* connection) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+  authenticated_ = true;
+  event_handler_->OnSessionAuthenticated(this);
 }
 
-void ClientSession::LocalMouseMoved(const gfx::Point& mouse_pos) {
+void ClientSession::OnConnectionClosed(
+    protocol::ConnectionToClient* connection) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+  event_handler_->OnSessionClosed(this);
+}
+
+void ClientSession::OnConnectionFailed(
+    protocol::ConnectionToClient* connection,
+    protocol::Session::Error error) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+  if (error == protocol::Session::AUTHENTICATION_FAILED)
+    event_handler_->OnSessionAuthenticationFailed(this);
+  // TODO(sergeyu): Log failure reason?
+  event_handler_->OnSessionClosed(this);
+}
+
+void ClientSession::OnSequenceNumberUpdated(
+    protocol::ConnectionToClient* connection, int64 sequence_number) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+  event_handler_->OnSessionSequenceNumber(this, sequence_number);
+}
+
+void ClientSession::OnClientIpAddress(protocol::ConnectionToClient* connection,
+                                      const std::string& channel_name,
+                                      const net::IPEndPoint& end_point) {
+  DCHECK(CalledOnValidThread());
+  DCHECK_EQ(connection_.get(), connection);
+  event_handler_->OnSessionIpAddress(this, channel_name, end_point);
+}
+
+void ClientSession::Disconnect() {
+  DCHECK(CalledOnValidThread());
+  DCHECK(connection_.get());
+  authenticated_ = false;
+  RestoreEventState();
+
+  // This triggers OnSessionClosed() and the session may be destroyed
+  // as the result, so this call must be the last in this method.
+  connection_->Disconnect();
+}
+
+void ClientSession::LocalMouseMoved(const SkIPoint& mouse_pos) {
+  DCHECK(CalledOnValidThread());
+
   // If this is a genuine local input event (rather than an echo of a remote
   // input event that we've just injected), then ignore remote inputs for a
   // short time.
-  std::list<gfx::Point>::iterator found_position =
+  std::list<SkIPoint>::iterator found_position =
       std::find(injected_mouse_positions_.begin(),
                 injected_mouse_positions_.end(), mouse_pos);
   if (found_position != injected_mouse_positions_.end()) {
@@ -145,6 +171,8 @@ void ClientSession::LocalMouseMoved(const gfx::Point& mouse_pos) {
 
 bool ClientSession::ShouldIgnoreRemoteMouseInput(
     const protocol::MouseEvent& event) const {
+  DCHECK(CalledOnValidThread());
+
   // If the last remote input event was a click or a drag, then it's not safe
   // to block remote mouse events. For example, it might result in the host
   // missing the mouse-up event and being stuck with the button pressed.
@@ -164,6 +192,8 @@ bool ClientSession::ShouldIgnoreRemoteMouseInput(
 
 bool ClientSession::ShouldIgnoreRemoteKeyboardInput(
     const KeyEvent& event) const {
+  DCHECK(CalledOnValidThread());
+
   // If the host user has not yet approved the continuation of the connection,
   // then all remote keyboard input is ignored, except to release keys that
   // were already pressed.
@@ -175,6 +205,8 @@ bool ClientSession::ShouldIgnoreRemoteKeyboardInput(
 }
 
 void ClientSession::RecordKeyEvent(const KeyEvent& event) {
+  DCHECK(CalledOnValidThread());
+
   if (event.pressed()) {
     pressed_keys_.insert(event.keycode());
   } else {
@@ -183,6 +215,8 @@ void ClientSession::RecordKeyEvent(const KeyEvent& event) {
 }
 
 void ClientSession::RecordMouseButtonState(const MouseEvent& event) {
+  DCHECK(CalledOnValidThread());
+
   if (event.has_button() && event.has_button_down()) {
     // Button values are defined in remoting/proto/event.proto.
     if (event.button() >= 1 && event.button() < MouseEvent::BUTTON_MAX) {
@@ -197,6 +231,8 @@ void ClientSession::RecordMouseButtonState(const MouseEvent& event) {
 }
 
 void ClientSession::RestoreEventState() {
+  DCHECK(CalledOnValidThread());
+
   // Undo any currently pressed keys.
   std::set<int>::iterator i;
   for (i = pressed_keys_.begin(); i != pressed_keys_.end(); ++i) {
@@ -211,6 +247,7 @@ void ClientSession::RestoreEventState() {
   for (int i = 1; i < MouseEvent::BUTTON_MAX; i++) {
     if (remote_mouse_button_state_ & (1 << (i - 1))) {
       MouseEvent mouse;
+      // TODO(wez): Shouldn't [need to] set position here.
       mouse.set_x(remote_mouse_pos_.x());
       mouse.set_y(remote_mouse_pos_.y());
       mouse.set_button((MouseEvent::MouseButton)i);

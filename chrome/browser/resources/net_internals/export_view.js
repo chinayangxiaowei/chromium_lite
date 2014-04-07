@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,6 @@
  */
 var ExportView = (function() {
   'use strict';
-
-  // IDs for special HTML elements in export_view.html
-  var MAIN_BOX_ID = 'export-view-tab-content';
-  var DOWNLOAD_IFRAME_ID = 'export-view-download-iframe';
-  var SAVE_FILE_BUTTON_ID = 'export-view-save-log-file';
-  var SAVE_STATUS_TEXT_ID = 'export-view-save-status-text';
-  var SECURITY_STRIPPING_CHECKBOX_ID =
-    'export-view-security-stripping-checkbox';
-  var USER_COMMENTS_TEXT_AREA_ID = 'export-view-user-comments';
 
   // We inherit from DivView.
   var superClass = DivView;
@@ -27,27 +18,40 @@ var ExportView = (function() {
     assertFirstConstructorCall(ExportView);
 
     // Call superclass's constructor.
-    superClass.call(this, MAIN_BOX_ID);
+    superClass.call(this, ExportView.MAIN_BOX_ID);
 
-    var securityStrippingCheckbox = $(SECURITY_STRIPPING_CHECKBOX_ID);
+    var securityStrippingCheckbox =
+        $(ExportView.SECURITY_STRIPPING_CHECKBOX_ID);
     securityStrippingCheckbox.onclick =
         this.onSetSecurityStripping_.bind(this, securityStrippingCheckbox);
 
-    this.downloadIframe_ = $(DOWNLOAD_IFRAME_ID);
+    this.downloadIframe_ = $(ExportView.DOWNLOAD_IFRAME_ID);
 
-    this.saveFileButton_ = $(SAVE_FILE_BUTTON_ID);
+    this.saveFileButton_ = $(ExportView.SAVE_FILE_BUTTON_ID);
     this.saveFileButton_.onclick = this.onSaveFile_.bind(this);
-    this.saveStatusText_ = $(SAVE_STATUS_TEXT_ID);
+    this.saveStatusText_ = $(ExportView.SAVE_STATUS_TEXT_ID);
 
-    this.userCommentsTextArea_ = $(USER_COMMENTS_TEXT_AREA_ID);
+    this.userCommentsTextArea_ = $(ExportView.USER_COMMENTS_TEXT_AREA_ID);
 
     // Track blob for previous log dump so it can be revoked when a new dump is
     // saved.
     this.lastBlobURL_ = null;
+
+    // Cached copy of the last loaded log dump, for use when exporting.
+    this.loadedLogDump_ = null;
   }
 
   // ID for special HTML element in category_tabs.html
   ExportView.TAB_HANDLE_ID = 'tab-handle-export';
+
+  // IDs for special HTML elements in export_view.html
+  ExportView.MAIN_BOX_ID = 'export-view-tab-content';
+  ExportView.DOWNLOAD_IFRAME_ID = 'export-view-download-iframe';
+  ExportView.SAVE_FILE_BUTTON_ID = 'export-view-save-log-file';
+  ExportView.SAVE_STATUS_TEXT_ID = 'export-view-save-status-text';
+  ExportView.SECURITY_STRIPPING_CHECKBOX_ID =
+      'export-view-security-stripping-checkbox';
+  ExportView.USER_COMMENTS_TEXT_AREA_ID = 'export-view-user-comments';
 
   cr.addSingletonGetter(ExportView);
 
@@ -64,16 +68,14 @@ var ExportView = (function() {
           securityStrippingCheckbox.checked);
     },
 
-    onSecurityStrippingChanged: function() {
-    },
-
     /**
-     * Called when a log file is loaded, after clearing the old log entries and
-     * loading the new ones.  Returns false to indicate the view should be
-     * hidden.
+     * When loading a log dump, cache it for future export and continue showing
+     * the ExportView.
      */
-    onLoadLogFinish: function(data) {
-      return false;
+    onLoadLogFinish: function(polledData, tabData, logDump) {
+      this.loadedLogDump_ = logDump;
+      this.setUserComments_(logDump.userComments);
+      return true;
     },
 
     /**
@@ -100,21 +102,49 @@ var ExportView = (function() {
       if (this.saveFileButton_.disabled)
         return;
 
+      // Clean up previous blob, if any, to reduce resource usage.
+      if (this.lastBlobURL_) {
+        window.webkitURL.revokeObjectURL(this.lastBlobURL_);
+        this.lastBlobURL_ = null;
+      }
+      this.createLogDump_(this.onLogDumpCreated_.bind(this));
+    },
+
+    /**
+     * Creates a log dump, and either synchronously or asynchronously calls
+     * |callback| if it succeeds.  Separate from onSaveFile_ for unit tests.
+     */
+    createLogDump_: function(callback) {
       // Get an explanation for the dump file (this is mandatory!)
       var userComments = this.getNonEmptyUserComments_();
       if (userComments == undefined) {
         return;
       }
 
-      // Clean up previous blob, if any, to reduce resource usage.
-      if (this.lastBlobURL_) {
-        window.webkitURL.revokeObjectURL(this.lastBlobURL_);
-        this.lastBlobURL_ = null;
-      }
       this.setSaveFileStatus('Preparing data...', true);
 
-      logutil.createLogDumpAsync(userComments,
-                                 this.onLogDumpCreated_.bind(this));
+      var securityStripping = g_browser.sourceTracker.getSecurityStripping();
+
+      // If we have a cached log dump, update it synchronously.
+      if (this.loadedLogDump_) {
+        var dumpText = log_util.createUpdatedLogDump(userComments,
+                                                     this.loadedLogDump_,
+                                                     securityStripping);
+        callback(dumpText);
+        return;
+      }
+
+      // Otherwise, poll information from the browser before creating one.
+      log_util.createLogDumpAsync(userComments,
+                                  callback,
+                                  securityStripping);
+    },
+
+    /**
+     * Sets the user comments.
+     */
+    setUserComments_: function(userComments) {
+      this.userCommentsTextArea_.value = userComments;
     },
 
     /**

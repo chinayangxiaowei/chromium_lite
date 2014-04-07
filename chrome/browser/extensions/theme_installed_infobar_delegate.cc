@@ -13,28 +13,29 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
 ThemeInstalledInfoBarDelegate::ThemeInstalledInfoBarDelegate(
-    TabContents* tab_contents,
+    InfoBarTabHelper* infobar_helper,
+    ExtensionService* extension_service,
+    ThemeService* theme_service,
     const Extension* new_theme,
     const std::string& previous_theme_id,
     bool previous_using_native_theme)
-    : ConfirmInfoBarDelegate(tab_contents),
-      profile_(Profile::FromBrowserContext(tab_contents->browser_context())),
-      theme_service_(ThemeServiceFactory::GetForProfile(profile_)),
+    : ConfirmInfoBarDelegate(infobar_helper),
+      extension_service_(extension_service),
+      theme_service_(theme_service),
       name_(new_theme->name()),
       theme_id_(new_theme->id()),
       previous_theme_id_(previous_theme_id),
       previous_using_native_theme_(previous_using_native_theme) {
   theme_service_->OnInfobarDisplayed();
   registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 Source<ThemeService>(theme_service_));
+                 content::Source<ThemeService>(theme_service_));
 }
 
 bool ThemeInstalledInfoBarDelegate::MatchesTheme(const Extension* theme) const {
@@ -50,23 +51,19 @@ ThemeInstalledInfoBarDelegate::~ThemeInstalledInfoBarDelegate() {
 
 bool ThemeInstalledInfoBarDelegate::Cancel() {
   if (!previous_theme_id_.empty()) {
-    ExtensionService* service = profile_->GetExtensionService();
-    if (service) {
-      const Extension* previous_theme =
-          service->GetExtensionById(previous_theme_id_, true);
-      if (previous_theme) {
-        theme_service_->SetTheme(previous_theme);
-        return true;
-      }
+    const Extension* previous_theme =
+        extension_service_->GetExtensionById(previous_theme_id_, true);
+    if (previous_theme) {
+      theme_service_->SetTheme(previous_theme);
+        return false;  // The theme change will close us.
     }
   }
 
-  if (previous_using_native_theme_) {
+  if (previous_using_native_theme_)
     theme_service_->SetNativeTheme();
-  } else {
+  else
     theme_service_->UseDefaultTheme();
-  }
-  return true;
+  return false;  // The theme change will close us.
 }
 
 gfx::Image* ThemeInstalledInfoBarDelegate::GetIcon() const {
@@ -102,8 +99,8 @@ string16 ThemeInstalledInfoBarDelegate::GetButtonLabel(
 
 void ThemeInstalledInfoBarDelegate::Observe(
     int type,
-    const NotificationSource& source,
-    const NotificationDetails& details) {
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK_EQ(chrome::NOTIFICATION_BROWSER_THEME_CHANGED, type);
   // If the new theme is different from what this info bar is associated with,
   // close this info bar since it is no longer relevant.

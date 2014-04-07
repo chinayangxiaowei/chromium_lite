@@ -9,7 +9,6 @@
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebAccessibilityCache.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebAccessibilityObject.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebAccessibilityRole.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebAttribute.h"
@@ -21,16 +20,23 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebNamedNodeMap.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRect.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSize.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebVector.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebRect.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebSize.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebVector.h"
+
+#ifndef NDEBUG
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebAccessibilityNotification.h"
+#endif
 
 using base::DoubleToString;
 using base::IntToString;
-using WebKit::WebAccessibilityCache;
 using WebKit::WebAccessibilityRole;
 using WebKit::WebAccessibilityObject;
+
+#ifndef NDEBUG
+using WebKit::WebAccessibilityNotification;
+#endif
 
 namespace {
 
@@ -321,24 +327,87 @@ uint32 ConvertState(const WebAccessibilityObject& o) {
 
 WebAccessibility::WebAccessibility()
     : id(-1),
-      role(ROLE_NONE),
+      role(ROLE_UNKNOWN),
       state(-1) {
 }
 
 WebAccessibility::WebAccessibility(const WebKit::WebAccessibilityObject& src,
-                                   WebKit::WebAccessibilityCache* cache,
                                    bool include_children) {
-  Init(src, cache, include_children);
+  Init(src, include_children);
 }
 
 WebAccessibility::~WebAccessibility() {
 }
 
 #ifndef NDEBUG
-std::string WebAccessibility::DebugString(bool recursive) {
+std::string WebAccessibility::DebugString(bool recursive,
+                                          int render_routing_id,
+                                          int notification) const {
   std::string result;
   static int indent = 0;
 
+  if (render_routing_id != 0) {
+    WebKit::WebAccessibilityNotification notification_type =
+        static_cast<WebKit::WebAccessibilityNotification>(notification);
+    result += "routing id=";
+    result += IntToString(render_routing_id);
+    result += " notification=";
+
+    switch (notification_type) {
+      case WebKit::WebAccessibilityNotificationActiveDescendantChanged:
+        result += "active descendant changed";
+        break;
+      case WebKit::WebAccessibilityNotificationCheckedStateChanged:
+        result += "check state changed";
+        break;
+      case WebKit::WebAccessibilityNotificationChildrenChanged:
+        result += "children changed";
+        break;
+      case WebKit::WebAccessibilityNotificationFocusedUIElementChanged:
+        result += "focus changed";
+        break;
+      case WebKit::WebAccessibilityNotificationLayoutComplete:
+        result += "layout complete";
+        break;
+      case WebKit::WebAccessibilityNotificationLiveRegionChanged:
+        result += "live region changed";
+        break;
+      case WebKit::WebAccessibilityNotificationLoadComplete:
+        result += "load complete";
+        break;
+      case WebKit::WebAccessibilityNotificationMenuListValueChanged:
+        result += "menu list changed";
+        break;
+      case WebKit::WebAccessibilityNotificationRowCountChanged:
+        result += "row count changed";
+        break;
+      case WebKit::WebAccessibilityNotificationRowCollapsed:
+        result += "row collapsed";
+        break;
+      case WebKit::WebAccessibilityNotificationRowExpanded:
+        result += "row expanded";
+        break;
+      case WebKit::WebAccessibilityNotificationScrolledToAnchor:
+        result += "scrolled to anchor";
+        break;
+      case WebKit::WebAccessibilityNotificationSelectedChildrenChanged:
+        result += "selected children changed";
+        break;
+      case WebKit::WebAccessibilityNotificationSelectedTextChanged:
+        result += "selected text changed";
+        break;
+      case WebKit::WebAccessibilityNotificationValueChanged:
+        result += "value changed";
+        break;
+      case WebKit::WebAccessibilityNotificationInvalid:
+        result += "invalid notification";
+        break;
+      default:
+        NOTREACHED();
+    }
+  }
+
+  result += "\n";
   for (int i = 0; i < indent; ++i)
     result += "  ";
 
@@ -407,6 +476,7 @@ std::string WebAccessibility::DebugString(bool recursive) {
     case ROLE_RADIO_BUTTON: result += " RADIO_BUTTON"; break;
     case ROLE_RADIO_GROUP: result += " RADIO_GROUP"; break;
     case ROLE_REGION: result += " REGION"; break;
+    case ROLE_ROOT_WEB_AREA: result += " ROOT_WEB_AREA"; break;
     case ROLE_ROW: result += " ROW"; break;
     case ROLE_ROW_HEADER: result += " ROW_HEADER"; break;
     case ROLE_RULER: result += " RULER"; break;
@@ -512,11 +582,23 @@ std::string WebAccessibility::DebugString(bool recursive) {
        ++iter) {
     std::string value = IntToString(iter->second);
     switch (iter->first) {
-      case ATTR_DOC_SCROLLX:
-        result += " scrollx=" + value;
+      case ATTR_SCROLL_X:
+        result += " scroll_x=" + value;
         break;
-      case ATTR_DOC_SCROLLY:
-        result += " scrolly=" + value;
+      case ATTR_SCROLL_X_MIN:
+        result += " scroll_x_min=" + value;
+        break;
+      case ATTR_SCROLL_X_MAX:
+        result += " scroll_x_max=" + value;
+        break;
+      case ATTR_SCROLL_Y:
+        result += " scroll_y=" + value;
+        break;
+      case ATTR_SCROLL_Y_MIN:
+        result += " scroll_y_min=" + value;
+        break;
+      case ATTR_SCROLL_Y_MAX:
+        result += " scroll_y_max=" + value;
         break;
       case ATTR_HIERARCHICAL_LEVEL:
         result += " level=" + value;
@@ -544,6 +626,9 @@ std::string WebAccessibility::DebugString(bool recursive) {
         break;
       case ATTR_TABLE_CELL_ROW_SPAN:
         result += " rowspan=" + value;
+        break;
+    case ATTR_TITLE_UI_ELEMENT:
+        result += " title_elem=" + value;
         break;
     }
   }
@@ -656,6 +741,9 @@ std::string WebAccessibility::DebugString(bool recursive) {
       case ATTR_ARIA_READONLY:
         result += " aria_readonly=" + value;
         break;
+    case ATTR_CAN_SET_VALUE:
+        result += " can_set_value=" + value;
+        break;
     }
   }
 
@@ -675,7 +763,7 @@ std::string WebAccessibility::DebugString(bool recursive) {
     result += "\n";
     ++indent;
     for (size_t i = 0; i < children.size(); ++i)
-      result += children[i].DebugString(true);
+      result += children[i].DebugString(true, 0, 0);
     --indent;
   }
 
@@ -684,12 +772,12 @@ std::string WebAccessibility::DebugString(bool recursive) {
 #endif  // ifndef NDEBUG
 
 void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
-                            WebKit::WebAccessibilityCache* cache,
                             bool include_children) {
   name = src.title();
   role = ConvertRole(src.roleValue());
   state = ConvertState(src);
   location = src.boundingBoxRect();
+  id = src.axID();
 
   if (src.valueDescription().length())
     value = src.valueDescription();
@@ -704,6 +792,8 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
     bool_attributes[ATTR_ARIA_READONLY] = true;
   if (src.isButtonStateMixed())
     bool_attributes[ATTR_BUTTON_MIXED] = true;
+  if (src.canSetValueAttribute())
+    bool_attributes[ATTR_CAN_SET_VALUE] = true;
   if (src.accessibilityDescription().length())
     string_attributes[ATTR_DESCRIPTION] = src.accessibilityDescription();
   if (src.hasComputedStyle())
@@ -712,6 +802,8 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
     string_attributes[ATTR_HELP] = src.helpText();
   if (src.keyboardShortcut().length())
     string_attributes[ATTR_SHORTCUT] = src.keyboardShortcut();
+  if (src.titleUIElement().isValid())
+    int_attributes[ATTR_TITLE_UI_ELEMENT] = src.titleUIElement().axID();
   if (!src.url().isEmpty())
     string_attributes[ATTR_URL] = src.url().spec().utf16();
 
@@ -720,6 +812,10 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
 
   if (role == ROLE_SLIDER)
     include_children = false;
+
+  // Treat the active list box item as focused.
+  if (role == ROLE_LISTBOX_OPTION && src.isSelectedOptionActive())
+    state |= (1 << WebAccessibility::STATE_FOCUSED);
 
   WebKit::WebNode node = src.node();
   bool is_iframe = false;
@@ -740,22 +836,19 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
       html_attributes.push_back(std::pair<string16, string16>(name, value));
     }
 
-    if (element.isFormControlElement()) {
-      WebKit::WebFormControlElement form_element =
-          element.to<WebKit::WebFormControlElement>();
-      if (form_element.formControlType() == ASCIIToUTF16("text") ||
-          form_element.formControlType() == ASCIIToUTF16("textarea")) {
-        // Jaws gets confused by children of text fields, so we ignore them.
-        include_children = false;
+    if (role == ROLE_EDITABLE_TEXT ||
+        role == ROLE_TEXTAREA ||
+        role == ROLE_TEXT_FIELD) {
+      // Jaws gets confused by children of text fields, so we ignore them.
+      include_children = false;
 
-        int_attributes[ATTR_TEXT_SEL_START] = src.selectionStart();
-        int_attributes[ATTR_TEXT_SEL_END] = src.selectionEnd();
-        WebKit::WebVector<int> src_line_breaks;
-        src.lineBreaks(src_line_breaks);
-        line_breaks.reserve(src_line_breaks.size());
-        for (size_t i = 0; i < src_line_breaks.size(); ++i)
-          line_breaks.push_back(src_line_breaks[i]);
-      }
+      int_attributes[ATTR_TEXT_SEL_START] = src.selectionStart();
+      int_attributes[ATTR_TEXT_SEL_END] = src.selectionEnd();
+      WebKit::WebVector<int> src_line_breaks;
+      src.lineBreaks(src_line_breaks);
+      line_breaks.reserve(src_line_breaks.size());
+      for (size_t i = 0; i < src_line_breaks.size(); ++i)
+        line_breaks.push_back(src_line_breaks[i]);
     }
 
     // ARIA role.
@@ -847,8 +940,16 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
       string_attributes[ATTR_DOC_DOCTYPE] = doctype.name();
 
     const gfx::Size& scroll_offset = document.frame()->scrollOffset();
-    int_attributes[ATTR_DOC_SCROLLX] = scroll_offset.width();
-    int_attributes[ATTR_DOC_SCROLLY] = scroll_offset.height();
+    int_attributes[ATTR_SCROLL_X] = scroll_offset.width();
+    int_attributes[ATTR_SCROLL_Y] = scroll_offset.height();
+
+    const gfx::Size& min_offset = document.frame()->minimumScrollOffset();
+    int_attributes[ATTR_SCROLL_X_MIN] = min_offset.width();
+    int_attributes[ATTR_SCROLL_Y_MIN] = min_offset.height();
+
+    const gfx::Size& max_offset = document.frame()->maximumScrollOffset();
+    int_attributes[ATTR_SCROLL_X_MAX] = max_offset.width();
+    int_attributes[ATTR_SCROLL_Y_MAX] = max_offset.height();
   }
 
   if (role == WebAccessibility::ROLE_TABLE) {
@@ -863,7 +964,7 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
             i % column_count, i / column_count);
         int cell_id = -1;
         if (!cell.isNull()) {
-          cell_id = cache->addOrGetId(cell);
+          cell_id = cell.axID();
           if (unique_cell_id_set.find(cell_id) == unique_cell_id_set.end()) {
             unique_cell_id_set.insert(cell_id);
             unique_cell_ids.push_back(cell_id);
@@ -883,16 +984,13 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
     int_attributes[ATTR_TABLE_CELL_ROW_SPAN] = src.cellRowSpan();
   }
 
-  // Add the source object to the cache and store its id.
-  id = cache->addOrGetId(src);
-
   if (include_children) {
     // Recursively create children.
     int child_count = src.childCount();
     std::set<int32> child_ids;
     for (int i = 0; i < child_count; ++i) {
       WebAccessibilityObject child = src.childAt(i);
-      int32 child_id = cache->addOrGetId(child);
+      int32 child_id = child.axID();
 
       // The child may be invalid due to issues in webkit accessibility code.
       // Don't add children that are invalid thus preventing a crash.
@@ -917,7 +1015,7 @@ void WebAccessibility::Init(const WebKit::WebAccessibilityObject& src,
       // As an exception, also add children of an iframe element.
       // https://bugs.webkit.org/show_bug.cgi?id=57066
       if (is_iframe || IsParentUnignoredOf(src, child)) {
-        children.push_back(WebAccessibility(child, cache, include_children));
+        children.push_back(WebAccessibility(child, include_children));
       } else {
         indirect_child_ids.push_back(child_id);
       }

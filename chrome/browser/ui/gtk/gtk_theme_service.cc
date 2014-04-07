@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 
+#include "base/debug/trace_event.h"
 #include "base/environment.h"
 #include "base/nix/xdg_util.h"
 #include "base/stl_util.h"
@@ -17,7 +18,6 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/gtk/cairo_cached_surface.h"
 #include "chrome/browser/ui/gtk/chrome_gtk_frame.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_button.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
@@ -25,10 +25,9 @@
 #include "chrome/browser/ui/gtk/hover_controller_gtk.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_service.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "grit/ui_resources.h"
@@ -42,6 +41,7 @@
 #include "ui/gfx/canvas_skia.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/gtk_util.h"
+#include "ui/gfx/image/cairo_cached_surface.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/skbitmap_operations.h"
 #include "ui/gfx/skia_util.h"
@@ -85,13 +85,6 @@ const double kMidSeparatorColor[] =
 const double kTopSeparatorColor[] =
     { 222.0 / 255.0, 234.0 / 255.0, 248.0 / 255.0 };
 
-// Converts a GdkColor to a SkColor.
-SkColor GdkToSkColor(const GdkColor* color) {
-  return SkColorSetRGB(color->red >> 8,
-                       color->green >> 8,
-                       color->blue >> 8);
-}
-
 // A list of images that we provide while in gtk mode.
 const int kThemeImages[] = {
   IDR_THEME_TOOLBAR,
@@ -121,7 +114,7 @@ const int kAutocompleteImages[] = {
 };
 
 bool IsOverridableImage(int id) {
-  static std::set<int> images;
+  CR_DEFINE_STATIC_LOCAL(std::set<int>, images, ());
   if (images.empty()) {
     images.insert(kThemeImages, kThemeImages + arraysize(kThemeImages));
     images.insert(kAutocompleteImages,
@@ -145,15 +138,16 @@ void PickButtonTintFromColors(const GdkColor& accent_gdk_color,
                               const GdkColor& text_color,
                               const GdkColor& background_color,
                               color_utils::HSL* tint) {
-  SkColor accent_color = GdkToSkColor(&accent_gdk_color);
+  SkColor accent_color = gfx::GdkColorToSkColor(accent_gdk_color);
   color_utils::HSL accent_tint;
   color_utils::SkColorToHSL(accent_color, &accent_tint);
 
   color_utils::HSL text_tint;
-  color_utils::SkColorToHSL(GdkToSkColor(&text_color), &text_tint);
+  color_utils::SkColorToHSL(gfx::GdkColorToSkColor(text_color), &text_tint);
 
   color_utils::HSL background_tint;
-  color_utils::SkColorToHSL(GdkToSkColor(&background_color), &background_tint);
+  color_utils::SkColorToHSL(gfx::GdkColorToSkColor(background_color),
+                            &background_tint);
 
   // If the accent color is gray, then our normal HSL tomfoolery will bring out
   // whatever color is oddly dominant (for example, in rgb space [125, 128,
@@ -204,8 +198,8 @@ void BuildIconFromIDRWithColor(int id,
                                GtkStyle* style,
                                GtkStateType state,
                                GtkIconSet* icon_set) {
-  SkColor color = GdkToSkColor(&style->fg[state]);
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  SkColor color = gfx::GdkColorToSkColor(style->fg[state]);
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   SkBitmap original = *rb.GetBitmapNamed(id);
 
   SkBitmap fill_color;
@@ -237,7 +231,8 @@ void BuildIconFromIDRWithColor(int id,
 
 // Applies an HSL shift to a GdkColor (instead of an SkColor)
 void GdkColorHSLShift(const color_utils::HSL& shift, GdkColor* frame_color) {
-  SkColor shifted = color_utils::HSLShift(GdkToSkColor(frame_color), shift);
+  SkColor shifted = color_utils::HSLShift(gfx::GdkColorToSkColor(*frame_color),
+                                                                 shift);
   frame_color->pixel = 0;
   frame_color->red = SkColorGetR(shifted) * ui::kSkiaToGDKMultiplier;
   frame_color->green = SkColorGetG(shifted) * ui::kSkiaToGDKMultiplier;
@@ -247,8 +242,8 @@ void GdkColorHSLShift(const color_utils::HSL& shift, GdkColor* frame_color) {
 }  // namespace
 
 GtkWidget* GtkThemeService::icon_widget_ = NULL;
-GdkPixbuf* GtkThemeService::default_folder_icon_ = NULL;
-GdkPixbuf* GtkThemeService::default_bookmark_icon_ = NULL;
+gfx::Image* GtkThemeService::default_folder_icon_ = NULL;
+gfx::Image* GtkThemeService::default_bookmark_icon_ = NULL;
 
 // static
 GtkThemeService* GtkThemeService::GetFrom(Profile* profile) {
@@ -302,19 +297,25 @@ void GtkThemeService::Init(Profile* profile) {
 }
 
 SkBitmap* GtkThemeService::GetBitmapNamed(int id) const {
+  // TODO(erg): Remove this const cast. The gfx::Image interface returns its
+  // images const. GetBitmapNamed() also should but doesn't and has a million
+  // callsites.
+  return const_cast<SkBitmap*>(GetImageNamed(id)->ToSkBitmap());
+}
+
+const gfx::Image* GtkThemeService::GetImageNamed(int id) const {
   // Try to get our cached version:
   ImageCache::const_iterator it = gtk_images_.find(id);
   if (it != gtk_images_.end())
     return it->second;
 
   if (use_gtk_ && IsOverridableImage(id)) {
-    // We haven't built this image yet:
-    SkBitmap* bitmap = GenerateGtkThemeBitmap(id);
-    gtk_images_[id] = bitmap;
-    return bitmap;
+    gfx::Image* image = new gfx::Image(GenerateGtkThemeBitmap(id));
+    gtk_images_[id] = image;
+    return image;
   }
 
-  return ThemeService::GetBitmapNamed(id);
+  return ThemeService::GetImageNamed(id);
 }
 
 SkColor GtkThemeService::GetColor(int id) const {
@@ -336,8 +337,8 @@ bool GtkThemeService::HasCustomImage(int id) const {
 
 void GtkThemeService::InitThemesFor(NotificationObserver* observer) {
   observer->Observe(chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                    Source<ThemeService>(this),
-                    NotificationService::NoDetails());
+                    content::Source<ThemeService>(this),
+                    content::NotificationService::NoDetails());
 }
 
 void GtkThemeService::SetTheme(const Extension* extension) {
@@ -368,10 +369,11 @@ bool GtkThemeService::UsingNativeTheme() const {
 }
 
 void GtkThemeService::Observe(int type,
-                              const NotificationSource& source,
-                              const NotificationDetails& details) {
+                              const content::NotificationSource& source,
+                              const content::NotificationDetails& details) {
   if ((type == chrome::NOTIFICATION_PREF_CHANGED) &&
-      (*Details<std::string>(details).ptr() == prefs::kUsesSystemTheme)) {
+      (*content::Details<std::string>(details).ptr() ==
+          prefs::kUsesSystemTheme)) {
 #if !defined(OS_CHROMEOS)
     use_gtk_ = profile()->GetPrefs()->GetBoolean(prefs::kUsesSystemTheme);
 #endif
@@ -561,78 +563,44 @@ void GtkThemeService::GetScrollbarColors(GdkColor* thumb_active_color,
     *track_color = *theme_trough_color;
 }
 
-CairoCachedSurface* GtkThemeService::GetSurfaceNamed(
-    int id,
-    GtkWidget* widget_on_display) {
-  return GetSurfaceNamedImpl(id,
-                             &per_display_surfaces_,
-                             GetPixbufNamed(id),
-                             widget_on_display);
-}
-
-CairoCachedSurface* GtkThemeService::GetRTLEnabledSurfaceNamed(
-    int id,
-    GtkWidget* widget_on_display) {
-  // We flip the sign of |id| when passing it to GetSurfaceNamedImpl() for the
-  // same reason that ThemeService::GetPixbufImpl() does: so that if one
-  // location calls this function with a resource ID, and another place calls
-  // GetSurfaceNamed() with the same ID, they'll correctly get different
-  // surfaces in RTL mode.
-  return GetSurfaceNamedImpl(-id,
-                             &per_display_surfaces_,
-                             GetRTLEnabledPixbufNamed(id),
-                             widget_on_display);
-}
-
-CairoCachedSurface* GtkThemeService::GetUnthemedSurfaceNamed(
-    int id,
-    GtkWidget* widget_on_display) {
-  return GetSurfaceNamedImpl(id,
-      &per_display_unthemed_surfaces_,
-      ResourceBundle::GetSharedInstance().GetNativeImageNamed(id),
-      widget_on_display);
-}
-
 // static
-GdkPixbuf* GtkThemeService::GetFolderIcon(bool native) {
+gfx::Image* GtkThemeService::GetFolderIcon(bool native) {
   if (native) {
     if (!icon_widget_)
       icon_widget_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     // We never release our ref, so we will leak this on program shutdown.
     if (!default_folder_icon_) {
-      default_folder_icon_ =
-          gtk_widget_render_icon(icon_widget_, GTK_STOCK_DIRECTORY,
-                                 GTK_ICON_SIZE_MENU, NULL);
+      GdkPixbuf* pixbuf = gtk_widget_render_icon(
+          icon_widget_, GTK_STOCK_DIRECTORY, GTK_ICON_SIZE_MENU, NULL);
+      if (pixbuf)
+        default_folder_icon_ = new gfx::Image(pixbuf);
     }
     if (default_folder_icon_)
       return default_folder_icon_;
   }
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  static GdkPixbuf* default_folder_icon_ = rb.GetNativeImageNamed(
+  return &ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
       IDR_BOOKMARK_BAR_FOLDER);
-  return default_folder_icon_;
 }
 
 // static
-GdkPixbuf* GtkThemeService::GetDefaultFavicon(bool native) {
+gfx::Image* GtkThemeService::GetDefaultFavicon(bool native) {
   if (native) {
     if (!icon_widget_)
       icon_widget_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     // We never release our ref, so we will leak this on program shutdown.
     if (!default_bookmark_icon_) {
-      default_bookmark_icon_ =
-          gtk_widget_render_icon(icon_widget_, GTK_STOCK_FILE,
-                                 GTK_ICON_SIZE_MENU, NULL);
+      GdkPixbuf* pixbuf = gtk_widget_render_icon(
+          icon_widget_, GTK_STOCK_FILE, GTK_ICON_SIZE_MENU, NULL);
+      if (pixbuf)
+        default_bookmark_icon_ = new gfx::Image(pixbuf);
     }
     if (default_bookmark_icon_)
       return default_bookmark_icon_;
   }
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  static GdkPixbuf* default_bookmark_icon_ = rb.GetNativeImageNamed(
+  return &ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
       IDR_DEFAULT_FAVICON);
-  return default_bookmark_icon_;
 }
 
 // static
@@ -700,15 +668,13 @@ void GtkThemeService::NotifyThemeChanged() {
 
 void GtkThemeService::FreePlatformCaches() {
   ThemeService::FreePlatformCaches();
-  FreePerDisplaySurfaces(&per_display_surfaces_);
-  FreePerDisplaySurfaces(&per_display_unthemed_surfaces_);
   STLDeleteValues(&gtk_images_);
 }
 
 void GtkThemeService::OnStyleSet(GtkWidget* widget,
                                  GtkStyle* previous_style) {
-  GdkPixbuf* default_folder_icon = default_folder_icon_;
-  GdkPixbuf* default_bookmark_icon = default_bookmark_icon_;
+  gfx::Image* default_folder_icon = default_folder_icon_;
+  gfx::Image* default_bookmark_icon = default_bookmark_icon_;
   default_folder_icon_ = NULL;
   default_bookmark_icon_ = NULL;
 
@@ -723,9 +689,9 @@ void GtkThemeService::OnStyleSet(GtkWidget* widget,
   // Free the old icons only after the theme change notification has gone
   // through.
   if (default_folder_icon)
-    g_object_unref(default_folder_icon);
+    delete default_folder_icon;
   if (default_bookmark_icon)
-    g_object_unref(default_bookmark_icon);
+    delete default_bookmark_icon;
 }
 
 void GtkThemeService::LoadGtkValues() {
@@ -738,8 +704,6 @@ void GtkThemeService::LoadGtkValues() {
 
   GtkStyle* window_style = gtk_rc_get_style(fake_window_);
   SetThemeColorFromGtk(ThemeService::COLOR_CONTROL_BACKGROUND,
-                       &window_style->bg[GTK_STATE_NORMAL]);
-  SetThemeColorFromGtk(ThemeService::COLOR_BUTTON_BACKGROUND,
                        &window_style->bg[GTK_STATE_NORMAL]);
 
   GdkColor toolbar_color = window_style->bg[GTK_STATE_NORMAL];
@@ -820,25 +784,25 @@ void GtkThemeService::LoadGtkValues() {
                        link_color);
 
   // Generate the colors that we pass to WebKit.
-  focus_ring_color_ = GdkToSkColor(&frame_color);
+  focus_ring_color_ = gfx::GdkColorToSkColor(frame_color);
   GdkColor thumb_active_color, thumb_inactive_color, track_color;
   GtkThemeService::GetScrollbarColors(&thumb_active_color,
                                       &thumb_inactive_color,
                                       &track_color);
-  thumb_active_color_ = GdkToSkColor(&thumb_active_color);
-  thumb_inactive_color_ = GdkToSkColor(&thumb_inactive_color);
-  track_color_ = GdkToSkColor(&track_color);
+  thumb_active_color_ = gfx::GdkColorToSkColor(thumb_active_color);
+  thumb_inactive_color_ = gfx::GdkColorToSkColor(thumb_inactive_color);
+  track_color_ = gfx::GdkColorToSkColor(track_color);
 
   // Some GTK themes only define the text selection colors on the GtkEntry
   // class, so we need to use that for getting selection colors.
   active_selection_bg_color_ =
-      GdkToSkColor(&entry_style->base[GTK_STATE_SELECTED]);
+      gfx::GdkColorToSkColor(entry_style->base[GTK_STATE_SELECTED]);
   active_selection_fg_color_ =
-      GdkToSkColor(&entry_style->text[GTK_STATE_SELECTED]);
+      gfx::GdkColorToSkColor(entry_style->text[GTK_STATE_SELECTED]);
   inactive_selection_bg_color_ =
-      GdkToSkColor(&entry_style->base[GTK_STATE_ACTIVE]);
+      gfx::GdkColorToSkColor(entry_style->base[GTK_STATE_ACTIVE]);
   inactive_selection_fg_color_ =
-      GdkToSkColor(&entry_style->text[GTK_STATE_ACTIVE]);
+      gfx::GdkColorToSkColor(entry_style->text[GTK_STATE_ACTIVE]);
 }
 
 GdkColor GtkThemeService::BuildFrameColors(GtkStyle* frame_style) {
@@ -915,13 +879,13 @@ void GtkThemeService::RebuildMenuIconSets() {
 }
 
 void GtkThemeService::SetThemeColorFromGtk(int id, const GdkColor* color) {
-  colors_[id] = GdkToSkColor(color);
+  colors_[id] = gfx::GdkColorToSkColor(*color);
 }
 
 void GtkThemeService::SetThemeTintFromGtk(int id, const GdkColor* color) {
   color_utils::HSL default_tint = GetDefaultTint(id);
   color_utils::HSL hsl;
-  color_utils::SkColorToHSL(GdkToSkColor(color), &hsl);
+  color_utils::SkColorToHSL(gfx::GdkColorToSkColor(*color), &hsl);
 
   if (default_tint.s != -1)
     hsl.s = default_tint.s;
@@ -950,18 +914,6 @@ GdkColor GtkThemeService::BuildAndSetFrameColor(const GdkColor* base,
   SetThemeTintFromGtk(tint_id, &out_color);
 
   return out_color;
-}
-
-void GtkThemeService::FreePerDisplaySurfaces(
-    PerDisplaySurfaceMap* per_display_map) {
-  for (PerDisplaySurfaceMap::iterator it = per_display_map->begin();
-       it != per_display_map->end(); ++it) {
-    for (CairoCachedSurfaceMap::iterator jt = it->second.begin();
-         jt != it->second.end(); ++jt) {
-      delete jt->second;
-    }
-  }
-  per_display_map->clear();
 }
 
 void GtkThemeService::FreeIconSets() {
@@ -1041,7 +993,8 @@ SkBitmap* GtkThemeService::GenerateFrameImage(
   DCHECK(it != colors_.end());
   SkColor base = it->second;
 
-  gfx::CanvasSkia canvas(kToolbarImageWidth, kToolbarImageHeight, true);
+  gfx::CanvasSkia canvas(gfx::Size(kToolbarImageWidth, kToolbarImageHeight),
+                         true);
 
   int gradient_size;
   const GdkColor* gradient_top_color = NULL;
@@ -1050,8 +1003,9 @@ SkBitmap* GtkThemeService::GenerateFrameImage(
                        gradient_name, &gradient_top_color,
                        NULL);
   if (gradient_size) {
-    SkColor lighter = gradient_top_color ? GdkToSkColor(gradient_top_color)
-                      : color_utils::HSLShift(base, kGtkFrameShift);
+    SkColor lighter = gradient_top_color ?
+        gfx::GdkColorToSkColor(*gradient_top_color) :
+        color_utils::HSLShift(base, kGtkFrameShift);
     SkShader* shader = gfx::CreateGradientShader(
         0, gradient_size, lighter, base);
     SkPaint paint;
@@ -1060,12 +1014,12 @@ SkBitmap* GtkThemeService::GenerateFrameImage(
     paint.setShader(shader);
     shader->unref();
 
-    canvas.DrawRectInt(0, 0, kToolbarImageWidth, gradient_size, paint);
+    canvas.DrawRect(gfx::Rect(0, 0, kToolbarImageWidth, gradient_size), paint);
   }
 
-  canvas.FillRectInt(base, 0, gradient_size,
-                     kToolbarImageWidth,
-                     kToolbarImageHeight - gradient_size);
+  canvas.FillRect(base, gfx::Rect(0, gradient_size,
+                                  kToolbarImageWidth,
+                                  kToolbarImageHeight - gradient_size));
   return new SkBitmap(canvas.ExtractBitmap());
 }
 
@@ -1080,7 +1034,7 @@ SkBitmap* GtkThemeService::GenerateTabImage(int base_id) const {
 SkBitmap* GtkThemeService::GenerateTintedIcon(
     int base_id,
     const color_utils::HSL& tint) const {
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   return new SkBitmap(SkBitmapOperations::CreateHSLShiftedBitmap(
       *rb.GetBitmapNamed(base_id), tint));
 }
@@ -1116,28 +1070,7 @@ void GtkThemeService::GetSelectedEntryForegroundHSL(
   // base[GTK_STATE_SELECTED].
   GtkStyle* style = gtk_rc_get_style(fake_entry_.get());
   const GdkColor color = style->text[GTK_STATE_SELECTED];
-  color_utils::SkColorToHSL(GdkToSkColor(&color), tint);
-}
-
-CairoCachedSurface* GtkThemeService::GetSurfaceNamedImpl(
-    int id,
-    PerDisplaySurfaceMap* display_surface_map,
-    GdkPixbuf* pixbuf,
-    GtkWidget* widget_on_display) {
-  GdkDisplay* display = gtk_widget_get_display(widget_on_display);
-  CairoCachedSurfaceMap& surface_map = (*display_surface_map)[display];
-
-  // Check to see if we already have the pixbuf in the cache.
-  CairoCachedSurfaceMap::const_iterator found = surface_map.find(id);
-  if (found != surface_map.end())
-    return found->second;
-
-  CairoCachedSurface* surface = new CairoCachedSurface;
-  surface->UsePixbuf(pixbuf);
-
-  surface_map[id] = surface;
-
-  return surface;
+  color_utils::SkColorToHSL(gfx::GdkColorToSkColor(color), tint);
 }
 
 void GtkThemeService::OnDestroyChromeButton(GtkWidget* button) {
@@ -1162,6 +1095,7 @@ void GtkThemeService::OnDestroyLabel(GtkWidget* button) {
 
 gboolean GtkThemeService::OnSeparatorExpose(GtkWidget* widget,
                                             GdkEventExpose* event) {
+  UNSHIPPED_TRACE_EVENT0("ui::gtk", "GtkThemeService::OnSeparatorExpose");
   if (UsingNativeTheme())
     return FALSE;
 
@@ -1175,11 +1109,13 @@ gboolean GtkThemeService::OnSeparatorExpose(GtkWidget* widget,
       static_cast<double>(bottom_color.green / 257) / 255.0,
       static_cast<double>(bottom_color.blue / 257) / 255.0, };
 
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(widget, &allocation);
+
   cairo_pattern_t* pattern =
-      cairo_pattern_create_linear(widget->allocation.x, widget->allocation.y,
-                                  widget->allocation.x,
-                                  widget->allocation.y +
-                                  widget->allocation.height);
+      cairo_pattern_create_linear(allocation.x, allocation.y,
+                                  allocation.x,
+                                  allocation.y + allocation.height);
   cairo_pattern_add_color_stop_rgb(
       pattern, 0.0,
       kTopSeparatorColor[0], kTopSeparatorColor[1], kTopSeparatorColor[2]);
@@ -1191,12 +1127,11 @@ gboolean GtkThemeService::OnSeparatorExpose(GtkWidget* widget,
       bottom_color_rgb[0], bottom_color_rgb[1], bottom_color_rgb[2]);
   cairo_set_source(cr, pattern);
 
-  double start_x = 0.5 + widget->allocation.x;
+  double start_x = 0.5 + allocation.x;
   cairo_new_path(cr);
   cairo_set_line_width(cr, 1.0);
-  cairo_move_to(cr, start_x, widget->allocation.y);
-  cairo_line_to(cr, start_x,
-                widget->allocation.y + widget->allocation.height);
+  cairo_move_to(cr, start_x, allocation.y);
+  cairo_line_to(cr, start_x, allocation.y + allocation.height);
   cairo_stroke(cr);
   cairo_destroy(cr);
   cairo_pattern_destroy(pattern);

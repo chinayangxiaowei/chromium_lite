@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/browser/ui/webui/task_manager_handler.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "grit/chromium_strings.h"
@@ -20,37 +20,49 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
-namespace {
+using content::WebContents;
 
-// Convenience macro for AddLocalizedString() method.
-#define SET_LOCALIZED_STRING(ID) \
-  source->AddLocalizedString(#ID, IDS_TASK_MANAGER_##ID)
+namespace {
 
 ChromeWebUIDataSource* CreateTaskManagerUIHTMLSource() {
   ChromeWebUIDataSource* source =
       new ChromeWebUIDataSource(chrome::kChromeUITaskManagerHost);
 
-  source->AddLocalizedString("CLOSE_WINDOW", IDS_CLOSE);
-  SET_LOCALIZED_STRING(TITLE);
-  SET_LOCALIZED_STRING(ABOUT_MEMORY_LINK);
-  SET_LOCALIZED_STRING(KILL_CHROMEOS);
-  SET_LOCALIZED_STRING(PROCESS_ID_COLUMN);
-  SET_LOCALIZED_STRING(PAGE_COLUMN);
-  SET_LOCALIZED_STRING(NET_COLUMN);
-  SET_LOCALIZED_STRING(CPU_COLUMN);
-  SET_LOCALIZED_STRING(PHYSICAL_MEM_COLUMN);
-  SET_LOCALIZED_STRING(SHARED_MEM_COLUMN);
-  SET_LOCALIZED_STRING(PRIVATE_MEM_COLUMN);
-  SET_LOCALIZED_STRING(GOATS_TELEPORTED_COLUMN);
-  SET_LOCALIZED_STRING(WEBCORE_IMAGE_CACHE_COLUMN);
-  SET_LOCALIZED_STRING(WEBCORE_SCRIPTS_CACHE_COLUMN);
-  SET_LOCALIZED_STRING(WEBCORE_CSS_CACHE_COLUMN);
-  SET_LOCALIZED_STRING(FPS_COLUMN);
-  SET_LOCALIZED_STRING(SQLITE_MEMORY_USED_COLUMN);
-  SET_LOCALIZED_STRING(JAVASCRIPT_MEMORY_ALLOCATED_COLUMN);
+  source->AddLocalizedString("closeWindow", IDS_CLOSE);
+  source->AddLocalizedString("title",IDS_TASK_MANAGER_TITLE);
+  source->AddLocalizedString("aboutMemoryLink",
+                             IDS_TASK_MANAGER_ABOUT_MEMORY_LINK);
+  source->AddLocalizedString("killChromeOS", IDS_TASK_MANAGER_KILL_CHROMEOS);
+  source->AddLocalizedString("processIDColumn",
+                             IDS_TASK_MANAGER_PROCESS_ID_COLUMN);
+  source->AddLocalizedString("pageColumn", IDS_TASK_MANAGER_PAGE_COLUMN);
+  source->AddLocalizedString("profileNameColumn",
+                             IDS_TASK_MANAGER_PROFILE_NAME_COLUMN);
+  source->AddLocalizedString("netColumn", IDS_TASK_MANAGER_NET_COLUMN);
+  source->AddLocalizedString("cpuColumn", IDS_TASK_MANAGER_CPU_COLUMN);
+  source->AddLocalizedString("physicalMemColumn",
+                             IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN);
+  source->AddLocalizedString("sharedMemColumn",
+                             IDS_TASK_MANAGER_SHARED_MEM_COLUMN);
+  source->AddLocalizedString("privateMemColumn",
+                             IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN);
+  source->AddLocalizedString("goatsTeleportedColumn",
+                             IDS_TASK_MANAGER_GOATS_TELEPORTED_COLUMN);
+  source->AddLocalizedString("webcoreImageCacheColumn",
+                             IDS_TASK_MANAGER_WEBCORE_IMAGE_CACHE_COLUMN);
+  source->AddLocalizedString("webcoreScriptsCacheColumn",
+                             IDS_TASK_MANAGER_WEBCORE_SCRIPTS_CACHE_COLUMN);
+  source->AddLocalizedString("webcoreCSSCacheColumn",
+                             IDS_TASK_MANAGER_WEBCORE_CSS_CACHE_COLUMN);
+  source->AddLocalizedString("fpsColumn",IDS_TASK_MANAGER_FPS_COLUMN);
+  source->AddLocalizedString("sqliteMemoryUsedColumn",
+                             IDS_TASK_MANAGER_SQLITE_MEMORY_USED_COLUMN);
+  source->AddLocalizedString(
+      "javascriptMemoryAllocatedColumn",
+      IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN);
+  source->AddLocalizedString("inspect", IDS_TASK_MANAGER_INSPECT);
+  source->AddLocalizedString("activate", IDS_TASK_MANAGER_ACTIVATE);
   source->set_json_path("strings.js");
-  source->add_resource_path("main.js", IDR_TASK_MANAGER_JS);
-  source->add_resource_path("includes.js", IDR_TASK_MANAGER_INCLUDES_JS);
   source->set_default_resource(IDR_TASK_MANAGER_HTML);
 
   return source;
@@ -64,17 +76,11 @@ ChromeWebUIDataSource* CreateTaskManagerUIHTMLSource() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-TaskManagerUI::TaskManagerUI(TabContents* contents) : ChromeWebUI(contents) {
-  TaskManagerHandler* handler =
-      new TaskManagerHandler(TaskManager::GetInstance());
-
-  handler->Attach(this);
-  handler->Init();
-  AddMessageHandler(handler);
+TaskManagerUI::TaskManagerUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  web_ui->AddMessageHandler(new TaskManagerHandler(TaskManager::GetInstance()));
 
   // Set up the chrome://taskmanager/ source.
   ChromeWebUIDataSource* html_source = CreateTaskManagerUIHTMLSource();
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(html_source);
 }
-

@@ -14,20 +14,20 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/shared_memory.h"
+#include "base/string_piece.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/extensions/user_script.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
-namespace base {
-class StringPiece;
+namespace content {
+class RenderProcessHost;
 }
 
 class Profile;
-class RenderProcessHost;
 
 typedef std::map<std::string, ExtensionSet::ExtensionPathAndDefaultLocale>
     ExtensionsInfo;
@@ -35,7 +35,7 @@ typedef std::map<std::string, ExtensionSet::ExtensionPathAndDefaultLocale>
 // Manages a segment of shared memory that contains the user scripts the user
 // has installed.  Lives on the UI thread.
 class UserScriptMaster : public base::RefCountedThreadSafe<UserScriptMaster>,
-                         public NotificationObserver {
+                         public content::NotificationObserver {
  public:
   explicit UserScriptMaster(Profile* profile);
 
@@ -123,23 +123,23 @@ class UserScriptMaster : public base::RefCountedThreadSafe<UserScriptMaster>,
 
     // The message loop to call our master back on.
     // Expected to always outlive us.
-    BrowserThread::ID master_thread_id_;
+    content::BrowserThread::ID master_thread_id_;
 
     DISALLOW_COPY_AND_ASSIGN(ScriptReloader);
   };
 
  private:
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Sends the renderer process a new set of user scripts.
-  void SendUpdate(RenderProcessHost* process,
+  void SendUpdate(content::RenderProcessHost* process,
                   base::SharedMemory* shared_memory);
 
   // Manages our notification registrations.
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // We hang on to our pointer to know if we've already got one running.
   scoped_refptr<ScriptReloader> script_reloader_;

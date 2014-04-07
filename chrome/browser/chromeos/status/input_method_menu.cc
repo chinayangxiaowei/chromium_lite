@@ -14,20 +14,23 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/chromeos/language_preferences.h"
+#include "chrome/browser/chromeos/status/status_area_view_chromeos.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/user_metrics.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/user_metrics.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "views/controls/menu/menu_model_adapter.h"
-#include "views/controls/menu/menu_runner.h"
-#include "views/controls/menu/submenu_view.h"
-#include "views/widget/widget.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/widget/widget.h"
+
+using content::UserMetricsAction;
 
 // The language menu consists of 3 parts (in this order):
 //
@@ -116,10 +119,10 @@ const size_t kMappingFromIdToIndicatorTextLen =
     ARRAYSIZE_UNSAFE(kMappingFromIdToIndicatorText);
 
 // Returns the language name for the given |language_code|.
-std::wstring GetLanguageName(const std::string& language_code) {
+string16 GetLanguageName(const std::string& language_code) {
   const string16 language_name = l10n_util::GetDisplayNameForLocale(
       language_code, g_browser_process->GetApplicationLocale(), true);
-  return UTF16ToWide(language_name);
+  return language_name;
 }
 
 }  // namespace
@@ -132,9 +135,10 @@ using input_method::InputMethodManager;
 // InputMethodMenu
 
 InputMethodMenu::InputMethodMenu(PrefService* pref_service,
-                                 StatusAreaHost::ScreenMode screen_mode,
                                  bool for_out_of_box_experience_dialog)
-    : input_method_descriptors_(InputMethodManager::GetInstance()->
+    : initialized_prefs_(false),
+      initialized_observers_(false),
+      input_method_descriptors_(InputMethodManager::GetInstance()->
                                 GetActiveInputMethods()),
       model_(new ui::SimpleMenuModel(NULL)),
       ALLOW_THIS_IN_INITIALIZER_LIST(input_method_menu_delegate_(
@@ -145,35 +149,36 @@ InputMethodMenu::InputMethodMenu(PrefService* pref_service,
       minimum_input_method_menu_width_(0),
       menu_alignment_(views::MenuItemView::TOPRIGHT),
       pref_service_(pref_service),
-      screen_mode_(screen_mode),
       for_out_of_box_experience_dialog_(for_out_of_box_experience_dialog) {
   DCHECK(input_method_descriptors_.get() &&
          !input_method_descriptors_->empty());
 
   // Sync current and previous input methods on Chrome prefs with ibus-daemon.
-  if (pref_service_ && (screen_mode_ == StatusAreaHost::kBrowserMode)) {
-    previous_input_method_pref_.Init(
-        prefs::kLanguagePreviousInputMethod, pref_service, this);
-    current_input_method_pref_.Init(
-        prefs::kLanguageCurrentInputMethod, pref_service, this);
+  if (pref_service_ && StatusAreaViewChromeos::IsBrowserMode()) {
+    InitializePrefMembers();
   }
 
-  InputMethodManager* manager = InputMethodManager::GetInstance();
-  manager->AddObserver(this);  // FirstObserverIsAdded() might be called back.
-
-  if (screen_mode_ == StatusAreaHost::kViewsLoginMode ||
-      screen_mode_ == StatusAreaHost::kWebUILoginMode) {
-    // This button is for the login screen.
+  if (StatusAreaViewChromeos::IsLoginMode()) {
     registrar_.Add(this,
                    chrome::NOTIFICATION_LOGIN_USER_CHANGED,
-                   NotificationService::AllSources());
+                   content::NotificationService::AllSources());
+#if defined(USE_AURA)
+    // On Aura status area is not recreated on sign in.
+    // In case of Chrome crash, Chrome will be reloaded but IsLoginMode() will
+    // return false at this point so NOTIFICATION_PROFILE_CREATED will be
+    // ignored and all initialization will happen in ctor.
+    registrar_.Add(this,
+                   chrome::NOTIFICATION_PROFILE_CREATED,
+                   content::NotificationService::AllSources());
+#endif
   }
+  AddObservers();
 }
 
 InputMethodMenu::~InputMethodMenu() {
-  // RemoveObserver() is no-op if |this| object is already removed from the
-  // observer list.
-  InputMethodManager::GetInstance()->RemoveObserver(this);
+  // RemoveObservers() is no-op if |this| object is already removed from the
+  // observer list
+  RemoveObservers();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -312,19 +317,18 @@ string16 InputMethodMenu::GetLabelAt(int index) const {
     return l10n_util::GetStringUTF16(IDS_OPTIONS_SETTINGS_LANGUAGES_CUSTOMIZE);
   }
 
-  std::wstring name;
+  string16 name;
   if (IndexIsInInputMethodList(index)) {
     name = GetTextForMenu(input_method_descriptors_->at(index));
   } else if (GetPropertyIndex(index, &index)) {
     InputMethodManager* manager = InputMethodManager::GetInstance();
     const input_method::ImePropertyList& property_list =
         manager->current_ime_properties();
-    const std::string& input_method_id = manager->current_input_method().id();
-    return input_method::GetStringUTF16(
-        property_list.at(index).label, input_method_id);
+    return manager->GetInputMethodUtil()->TranslateString(
+        property_list.at(index).label);
   }
 
-  return WideToUTF16(name);
+  return name;
 }
 
 void InputMethodMenu::ActivatedAt(int index) {
@@ -342,7 +346,7 @@ void InputMethodMenu::ActivatedAt(int index) {
         = input_method_descriptors_->at(index);
     InputMethodManager::GetInstance()->ChangeInputMethod(
         input_method.id());
-    UserMetrics::RecordAction(
+    content::RecordAction(
         UserMetricsAction("LanguageMenuButton_InputMethodChanged"));
     return;
   }
@@ -413,19 +417,16 @@ void InputMethodMenu::PreferenceUpdateNeeded(
     InputMethodManager* manager,
     const input_method::InputMethodDescriptor& previous_input_method,
     const input_method::InputMethodDescriptor& current_input_method) {
-  if (screen_mode_ == StatusAreaHost::kBrowserMode) {
+  if (StatusAreaViewChromeos::IsBrowserMode()) {
     if (pref_service_) {  // make sure we're not in unit tests.
       // Sometimes (e.g. initial boot) |previous_input_method.id()| is empty.
       previous_input_method_pref_.SetValue(previous_input_method.id());
       current_input_method_pref_.SetValue(current_input_method.id());
-      pref_service_->ScheduleSavePersistentPrefs();
     }
-  } else if (screen_mode_ == StatusAreaHost::kViewsLoginMode ||
-      screen_mode_ == StatusAreaHost::kWebUILoginMode) {
+  } else if (StatusAreaViewChromeos::IsLoginMode()) {
     if (g_browser_process && g_browser_process->local_state()) {
       g_browser_process->local_state()->SetString(
           language_prefs::kPreferredKeyboardLayout, current_input_method.id());
-      g_browser_process->local_state()->SavePersistentPrefs();
     }
   }
 }
@@ -457,7 +458,7 @@ void InputMethodMenu::FirstObserverIsAdded(InputMethodManager* manager) {
   // NOTICE: Since this function might be called from the constructor of this
   // class, it's better to avoid calling virtual functions.
 
-  if (pref_service_ && (screen_mode_ == StatusAreaHost::kBrowserMode)) {
+  if (pref_service_ && (StatusAreaViewChromeos::IsBrowserMode())) {
     // Get the input method name in the Preferences file which was in use last
     // time, and switch to the method. We remember two input method names in the
     // preference so that the Control+space hot-key could work fine from the
@@ -477,7 +478,7 @@ void InputMethodMenu::FirstObserverIsAdded(InputMethodManager* manager) {
 }
 
 void InputMethodMenu::PrepareForMenuOpen() {
-  UserMetrics::RecordAction(UserMetricsAction("LanguageMenuButton_Open"));
+  content::RecordAction(UserMetricsAction("LanguageMenuButton_Open"));
   PrepareMenuModel();
 }
 
@@ -499,8 +500,8 @@ void InputMethodMenu::ActiveInputMethodsChanged(
 void InputMethodMenu::UpdateUIFromInputMethod(
     const input_method::InputMethodDescriptor& input_method,
     size_t num_active_input_methods) {
-  const std::wstring name = GetTextForIndicator(input_method);
-  const std::wstring tooltip = GetTextForMenu(input_method);
+  const string16 name = GetTextForIndicator(input_method);
+  const string16 tooltip = GetTextForMenu(input_method);
   UpdateUI(input_method.id(), name, tooltip, num_active_input_methods);
 }
 
@@ -592,25 +593,30 @@ bool InputMethodMenu::IndexPointsToConfigureImeMenuItem(int index) const {
           (model_->GetCommandIdAt(index) == COMMAND_ID_CUSTOMIZE_LANGUAGE));
 }
 
-std::wstring InputMethodMenu::GetTextForIndicator(
+string16 InputMethodMenu::GetTextForIndicator(
     const input_method::InputMethodDescriptor& input_method) {
+  input_method::InputMethodManager* manager =
+      input_method::InputMethodManager::GetInstance();
+
   // For the status area, we use two-letter, upper-case language code like
   // "US" and "JP".
-  std::wstring text;
+  string16 text;
 
   // Check special cases first.
   for (size_t i = 0; i < kMappingFromIdToIndicatorTextLen; ++i) {
     if (kMappingFromIdToIndicatorText[i].input_method_id == input_method.id()) {
-      text = UTF8ToWide(kMappingFromIdToIndicatorText[i].indicator_text);
+      text = UTF8ToUTF16(kMappingFromIdToIndicatorText[i].indicator_text);
       break;
     }
   }
 
   // Display the keyboard layout name when using a keyboard layout.
-  if (text.empty() && input_method::IsKeyboardLayout(input_method.id())) {
+  if (text.empty() &&
+      input_method::InputMethodUtil::IsKeyboardLayout(input_method.id())) {
     const size_t kMaxKeyboardLayoutNameLen = 2;
-    const std::wstring keyboard_layout = UTF8ToWide(
-        input_method::GetKeyboardLayoutName(input_method.id()));
+    const string16 keyboard_layout =
+        UTF8ToUTF16(manager->GetInputMethodUtil()->GetKeyboardLayoutName(
+            input_method.id()));
     text = StringToUpperASCII(keyboard_layout).substr(
         0, kMaxKeyboardLayoutNameLen);
   }
@@ -624,7 +630,8 @@ std::wstring InputMethodMenu::GetTextForIndicator(
   if (text.empty()) {
     const size_t kMaxLanguageNameLen = 2;
     std::string language_code =
-        input_method::GetLanguageCodeFromDescriptor(input_method);
+        manager->GetInputMethodUtil()->GetLanguageCodeFromDescriptor(
+            input_method);
 
     // Use "CN" for simplified Chinese and "TW" for traditonal Chinese,
     // rather than "ZH".
@@ -636,41 +643,44 @@ std::wstring InputMethodMenu::GetTextForIndicator(
       }
     }
 
-    text = StringToUpperASCII(UTF8ToWide(language_code)).substr(
+    text = StringToUpperASCII(UTF8ToUTF16(language_code)).substr(
         0, kMaxLanguageNameLen);
   }
   DCHECK(!text.empty());
   return text;
 }
 
-std::wstring InputMethodMenu::GetTextForMenu(
+string16 InputMethodMenu::GetTextForMenu(
     const input_method::InputMethodDescriptor& input_method) {
+  if (!input_method.name().empty()) {
+    // If the descriptor has a name, use it.
+    return UTF8ToUTF16(input_method.name());
+  }
+
   // We don't show language here.  Name of keyboard layout or input method
   // usually imply (or explicitly include) its language.
 
-  // Special case for Dutch, French and German: these languages have multiple
-  // keyboard layouts and share the same laout of keyboard (Belgian). We need to
-  // show explicitly the language for the layout.
-  // For Arabic, Amharic, and Indic languages: they share "Standard Input
-  // Method".
-  const std::string language_code
-      = input_method::GetLanguageCodeFromDescriptor(input_method);
-  std::wstring text;
-  // TODO(yusukes): Add Telugu and Kanada.
-  if (language_code == "am" ||
-      language_code == "ar" ||
-      language_code == "bn" ||
-      language_code == "de" ||
-      language_code == "fr" ||
-      language_code == "gu" ||
-      language_code == "hi" ||
-      language_code == "ml" ||
-      language_code == "mr" ||
-      language_code == "nl" ||
-      language_code == "ta") {
-    text = GetLanguageName(language_code) + L" - ";
+  input_method::InputMethodManager* manager =
+      input_method::InputMethodManager::GetInstance();
+
+  // Special case for German, French and Dutch: these languages have multiple
+  // keyboard layouts and share the same layout of keyboard (Belgian). We need
+  // to show explicitly the language for the layout. For Arabic, Amharic, and
+  // Indic languages: they share "Standard Input Method".
+  const string16 standard_input_method_text = l10n_util::GetStringUTF16(
+      IDS_OPTIONS_SETTINGS_LANGUAGES_M17N_STANDARD_INPUT_METHOD);
+  const std::string language_code =
+      manager->GetInputMethodUtil()->GetLanguageCodeFromDescriptor(
+          input_method);
+
+  string16 text =
+      manager->GetInputMethodUtil()->TranslateString(input_method.id());
+  if (text == standard_input_method_text ||
+             language_code == "de" ||
+             language_code == "fr" ||
+             language_code == "nl") {
+    text = GetLanguageName(language_code) + UTF8ToUTF16(" - ") + text;
   }
-  text += input_method::GetString(input_method.id(), input_method.id());
 
   DCHECK(!text.empty());
   return text;
@@ -687,19 +697,67 @@ void InputMethodMenu::RegisterPrefs(PrefService* local_state) {
 }
 
 void InputMethodMenu::Observe(int type,
-                              const NotificationSource& source,
-                              const NotificationDetails& details) {
+                              const content::NotificationSource& source,
+                              const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_LOGIN_USER_CHANGED) {
     // When a user logs in, we should remove |this| object from the observer
     // list so that PreferenceUpdateNeeded() does not update the local state
     // anymore.
-    InputMethodManager::GetInstance()->RemoveObserver(this);
+    RemoveObservers();
   }
+#if defined(USE_AURA)
+  if (type == chrome::NOTIFICATION_PROFILE_CREATED) {
+    // On Aura status area is not recreated on login for normal user sign in.
+    // NOTIFICATION_LOGIN_USER_CHANGED has been notified early in login process.
+    InitializePrefMembers();
+    AddObservers();
+  }
+#endif
 }
 
 void InputMethodMenu::SetMinimumWidth(int width) {
   // On the OOBE network selection screen, fixed width menu would be preferable.
   minimum_input_method_menu_width_ = width;
+}
+
+void InputMethodMenu::AddObservers() {
+  if (initialized_observers_)
+    return;
+  InputMethodManager* manager = InputMethodManager::GetInstance();
+  if (StatusAreaViewChromeos::IsLoginMode()) {
+    manager->AddPreLoginPreferenceObserver(this);
+  } else if (StatusAreaViewChromeos::IsBrowserMode()) {
+    manager->AddPostLoginPreferenceObserver(this);
+  }
+  // AddObserver() should be called after AddXXXLoginPreferenceObserver. This is
+  // because when the function is called FirstObserverIsAdded might be called
+  // back, and FirstObserverIsAdded might then might call ChangeInputMethod() in
+  // InputMethodManager. We have to prevent the manager function from calling
+  // callback functions like InputMethodChanged since they touch (yet
+  // uninitialized) UI elements.
+  manager->AddObserver(this);
+  initialized_observers_ = true;
+}
+
+void InputMethodMenu::RemoveObservers() {
+  InputMethodManager* manager = InputMethodManager::GetInstance();
+  if (StatusAreaViewChromeos::IsLoginMode()) {
+    manager->RemovePreLoginPreferenceObserver(this);
+  } else if (StatusAreaViewChromeos::IsBrowserMode()) {
+    manager->RemovePostLoginPreferenceObserver(this);
+  }
+  manager->RemoveObserver(this);
+  initialized_observers_ = false;
+}
+
+void InputMethodMenu::InitializePrefMembers() {
+  if (!initialized_prefs_) {
+    initialized_prefs_ = true;
+    previous_input_method_pref_.Init(
+        prefs::kLanguagePreviousInputMethod, pref_service_, this);
+    current_input_method_pref_.Init(
+        prefs::kLanguageCurrentInputMethod, pref_service_, this);
+  }
 }
 
 }  // namespace chromeos

@@ -7,7 +7,9 @@
 #pragma once
 
 #include "base/file_path.h"
-#include "content/common/page_transition_types.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/download_danger_type.h"
+#include "content/public/common/page_transition_types.h"
 
 // Contains information relating to the process of determining what to do with
 // the download.
@@ -18,14 +20,11 @@ struct DownloadStateInfo {
   DownloadStateInfo(const FilePath& target,
                     const FilePath& forced_name,
                     bool has_user_gesture,
-                    PageTransition::Type transition_type,
-                    bool prompt_user_for_save_location,
-                    int uniquifier,
-                    bool dangerous_file,
-                    bool dangerous_url);
+                    content::PageTransition transition_type,
+                    bool prompt_user_for_save_location);
 
   // Indicates if the download is dangerous.
-  bool IsDangerous() const;
+  CONTENT_EXPORT bool IsDangerous() const;
 
   // The original name for a dangerous download, specified by the request.
   FilePath target_name;
@@ -41,7 +40,7 @@ struct DownloadStateInfo {
   // True if the download is the result of user action.
   bool has_user_gesture;
 
-  PageTransition::Type transition_type;
+  content::PageTransition transition_type;
 
   // True if we should display the 'save as...' UI and prompt the user
   // for the download location.
@@ -49,11 +48,7 @@ struct DownloadStateInfo {
   // default location.
   bool prompt_user_for_save_location;
 
-  // True if this download file is potentially dangerous (ex: exe, dll, ...).
-  bool is_dangerous_file;
-
-  // If safebrowsing believes this URL leads to malware.
-  bool is_dangerous_url;
+  content::DownloadDangerType danger;
 
   // True if this download's file name was specified initially.
   FilePath force_file_name;

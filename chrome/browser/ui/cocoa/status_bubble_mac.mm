@@ -6,6 +6,7 @@
 
 #include <limits>
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/mac/mac_util.h"
 #include "base/message_loop.h"
@@ -147,7 +148,7 @@ void StatusBubbleMac::SetURL(const GURL& url, const std::string& languages) {
   scaled_width = [[parent_ contentView] convertSize:scaled_width fromView:nil];
   text_width = static_cast<int>(scaled_width.width);
   NSFont* font = [[window_ contentView] font];
-  gfx::Font font_chr(base::SysNSStringToUTF16([font fontName]),
+  gfx::Font font_chr(base::SysNSStringToUTF8([font fontName]),
                      [font pointSize]);
 
   string16 original_url_text = net::FormatUrl(url, languages);
@@ -169,8 +170,9 @@ void StatusBubbleMac::SetURL(const GURL& url, const std::string& languages) {
     ExpandBubble();
   } else if (original_url_text.length() > status.length()) {
     MessageLoop::current()->PostDelayedTask(FROM_HERE,
-        expand_timer_factory_.NewRunnableMethod(
-            &StatusBubbleMac::ExpandBubble), kExpandHoverDelay);
+        base::Bind(&StatusBubbleMac::ExpandBubble,
+                   expand_timer_factory_.GetWeakPtr()),
+        kExpandHoverDelay);
   }
 }
 
@@ -377,6 +379,10 @@ void StatusBubbleMac::Create() {
 
   [window_ setAlphaValue:0.0];
 
+  // TODO(dtseng): Ignore until we provide NSAccessibility support.
+  [window_ accessibilitySetOverrideValue:NSAccessibilityUnknownRole
+      forAttribute:NSAccessibilityRoleAttribute];
+
   // Set a delegate for the fade-in and fade-out transitions to be notified
   // when fades are complete.  The ownership model is for window_ to own
   // animation_dictionary, which owns animation, which owns
@@ -506,17 +512,16 @@ void StatusBubbleMac::StartTimer(int64 delay_ms) {
   // There can only be one running timer.
   CancelTimer();
 
-  MessageLoop::current()->PostDelayedTask(
-      FROM_HERE,
-      timer_factory_.NewRunnableMethod(&StatusBubbleMac::TimerFired),
+  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+      base::Bind(&StatusBubbleMac::TimerFired, timer_factory_.GetWeakPtr()),
       delay_ms);
 }
 
 void StatusBubbleMac::CancelTimer() {
   DCHECK([NSThread isMainThread]);
 
-  if (!timer_factory_.empty())
-    timer_factory_.RevokeAll();
+  if (timer_factory_.HasWeakPtrs())
+    timer_factory_.InvalidateWeakPtrs();
 }
 
 void StatusBubbleMac::TimerFired() {
@@ -583,7 +588,7 @@ void StatusBubbleMac::StartHiding() {
 
 void StatusBubbleMac::CancelExpandTimer() {
   DCHECK([NSThread isMainThread]);
-  expand_timer_factory_.RevokeAll();
+  expand_timer_factory_.InvalidateWeakPtrs();
 }
 
 // Get the current location of the mouse in screen coordinates. To make this
@@ -604,7 +609,7 @@ void StatusBubbleMac::ExpandBubble() {
 
   // Generate the URL string that fits in the expanded bubble.
   NSFont* font = [[window_ contentView] font];
-  gfx::Font font_chr(base::SysNSStringToUTF16([font fontName]),
+  gfx::Font font_chr(base::SysNSStringToUTF8([font fontName]),
       [font pointSize]);
   string16 expanded_url = ui::ElideUrl(
       url_, font_chr, max_bubble_width, languages_);

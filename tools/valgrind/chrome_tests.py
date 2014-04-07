@@ -1,9 +1,7 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-# chrome_tests.py
 
 ''' Runs various chrome tests through valgrind_test.py.'''
 
@@ -29,6 +27,8 @@ class BuildDirNotFound(Exception): pass
 class BuildDirAmbiguous(Exception): pass
 
 class ChromeTests:
+  SLOW_TOOLS = ["memcheck", "tsan", "tsan_rv", "drmemory"]
+
   def __init__(self, options, args, test):
     if ':' in test:
       (self._test, self._gtest_filter) = test.split(':', 1)
@@ -72,6 +72,10 @@ class ChromeTests:
         self._options.build_dir = build_dir[0]
       else:
         self._options.build_dir = None
+
+    if self._options.build_dir:
+      build_dir = os.path.abspath(self._options.build_dir)
+      self._command_preamble += ["--build_dir=%s" % (self._options.build_dir)]
 
   def _EnsureBuildDirFound(self):
     if not self._options.build_dir:
@@ -123,15 +127,28 @@ class ChromeTests:
     return self._test_list[self._test](self)
 
   def _AppendGtestFilter(self, tool, name, cmd):
-    '''Read a file which is a list of tests to filter out with --gtest_filter
-    and append the command-line option to cmd.
+    '''Append an appropriate --gtest_filter flag to the googletest binary
+       invocation.
+       If the user passed his own filter mentioning only one test, just use it.
+       Othewise, filter out tests listed in the appropriate gtest_exclude files.
     '''
+    if (self._gtest_filter and
+        ":" not in self._gtest_filter and
+        "?" not in self._gtest_filter and
+        "*" not in self._gtest_filter):
+      cmd.append("--gtest_filter=%s" % self._gtest_filter)
+      return
+
     filters = []
     gtest_files_dir = os.path.join(path_utils.ScriptDir(), "gtest_exclude")
 
     gtest_filter_files = [
-        os.path.join(gtest_files_dir, name + ".gtest.txt"),
         os.path.join(gtest_files_dir, name + ".gtest-%s.txt" % tool.ToolName())]
+    # Use ".gtest.txt" files only for slow tools, as they now contain
+    # Valgrind- and Dr.Memory-specific filters.
+    # TODO(glider): rename the files to ".gtest_slow.txt"
+    if tool.ToolName() in ChromeTests.SLOW_TOOLS:
+      gtest_filter_files += [os.path.join(gtest_files_dir, name + ".gtest.txt")]
     for platform_suffix in common.PlatformNames():
       gtest_filter_files += [
         os.path.join(gtest_files_dir, name + ".gtest_%s.txt" % platform_suffix),
@@ -239,14 +256,17 @@ class ChromeTests:
   def TestNet(self):
     return self.SimpleTest("net", "net_unittests")
 
+  def TestPPAPI(self):
+    return self.SimpleTest("chrome", "ppapi_unittests")
+
   def TestPrinting(self):
     return self.SimpleTest("chrome", "printing_unittests")
 
   def TestRemoting(self):
     return self.SimpleTest("chrome", "remoting_unittests",
                            cmd_args=[
-                               "--ui-test-action-timeout=120000",
-                               "--ui-test-action-max-timeout=280000"])
+                               "--ui-test-action-timeout=60000",
+                               "--ui-test-action-max-timeout=150000"])
 
   def TestSql(self):
     return self.SimpleTest("chrome", "sql_unittests")
@@ -267,10 +287,10 @@ class ChromeTests:
     return self.SimpleTest("views", "views_unittests")
 
   # Valgrind timeouts are in seconds.
-  UI_VALGRIND_ARGS = ["--timeout=7200", "--trace_children", "--indirect"]
+  UI_VALGRIND_ARGS = ["--timeout=14400", "--trace_children", "--indirect"]
   # UI test timeouts are in milliseconds.
-  UI_TEST_ARGS = ["--ui-test-action-timeout=120000",
-                  "--ui-test-action-max-timeout=280000"]
+  UI_TEST_ARGS = ["--ui-test-action-timeout=60000",
+                  "--ui-test-action-max-timeout=150000"]
 
   def TestAutomatedUI(self):
     return self.SimpleTest("chrome", "automated_ui_tests",
@@ -298,12 +318,12 @@ class ChromeTests:
   def TestSafeBrowsing(self):
     return self.SimpleTest("chrome", "safe_browsing_tests",
                            valgrind_test_args=self.UI_VALGRIND_ARGS,
-                           cmd_args=(["--ui-test-action-max-timeout=900000"]))
+                           cmd_args=(["--ui-test-action-max-timeout=450000"]))
 
   def TestSyncIntegration(self):
     return self.SimpleTest("chrome", "sync_integration_tests",
                            valgrind_test_args=self.UI_VALGRIND_ARGS,
-                           cmd_args=(["--ui-test-action-max-timeout=900000"]))
+                           cmd_args=(["--ui-test-action-max-timeout=450000"]))
 
   def TestUI(self):
     return self.SimpleTest("chrome", "ui_tests",
@@ -325,7 +345,7 @@ class ChromeTests:
     tool = valgrind_test.CreateTool(self._options.valgrind_tool)
     cmd = self._DefaultCommand(tool)
     cmd.append("--trace_children")
-    cmd.append("--indirect")
+    cmd.append("--indirect_webkit_layout")
     cmd.append("--ignore_exit_code")
     # Now build script_cmd, the run_webkits_tests.py commandline
     # Store each chunk in its own directory so that we can find the data later
@@ -341,8 +361,11 @@ class ChromeTests:
       os.makedirs(out_dir)
     script = os.path.join(self._source_dir, "webkit", "tools", "layout_tests",
                           "run_webkit_tests.py")
-    script_cmd = ["python", script, "--run-singly", "-v",
-                  "--noshow-results", "--time-out-ms=200000",
+    script_cmd = ["python", script, "-v",
+                  "--run-singly",  # run a separate DumpRenderTree for each test
+                  "--experimental-fully-parallel",
+                  "--time-out-ms=200000",
+                  "--noshow-results",
                   "--nocheck-sys-deps"]
     # Pass build mode to run_webkit_tests.py.  We aren't passed it directly,
     # so parse it out of build_dir.  run_webkit_tests.py can only handle
@@ -429,6 +452,7 @@ class ChromeTests:
     "media": TestMedia,          "media_unittests": TestMedia,
     "net": TestNet,              "net_unittests": TestNet,
     "jingle": TestJingle,        "jingle_unittests": TestJingle,
+    "ppapi": TestPPAPI,          "ppapi_unittests": TestPPAPI,
     "printing": TestPrinting,    "printing_unittests": TestPrinting,
     "reliability": TestReliability, "reliability_tests": TestReliability,
     "remoting": TestRemoting,    "remoting_unittests": TestRemoting,
@@ -446,7 +470,8 @@ class ChromeTests:
     "views": TestViews,          "views_unittests": TestViews,
   }
 
-def _main(_):
+
+def _main():
   parser = optparse.OptionParser("usage: %prog -b <dir> -t <test> "
                                  "[-t <test> ...]")
   parser.disable_interspersed_args()
@@ -472,11 +497,7 @@ def _main(_):
                          "instead of /tmp.\nThis can be useful for tool "
                          "developers/maintainers.\nPlease note that the <tool>"
                          ".logs directory will be clobbered on tool startup.")
-  # My machine can do about 120 layout tests/hour in release mode.
-  # Let's do 30 minutes worth per run.
-  # The CPU is mostly idle, so perhaps we can raise this when
-  # we figure out how to run them more efficiently.
-  parser.add_option("-n", "--num_tests", default=60, type="int",
+  parser.add_option("-n", "--num_tests", default=1500, type="int",
                     help="for layout tests: # of subtests per run.  0 for all.")
 
   options, args = parser.parse_args()
@@ -500,5 +521,4 @@ def _main(_):
 
 
 if __name__ == "__main__":
-  ret = _main(sys.argv)
-  sys.exit(ret)
+  sys.exit(_main())

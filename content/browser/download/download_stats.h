@@ -11,8 +11,11 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "content/common/content_export.h"
+#include "content/browser/download/interrupt_reasons.h"
 
 namespace base {
+class Time;
 class TimeTicks;
 }
 
@@ -23,9 +26,11 @@ namespace download_stats {
 enum DownloadCountTypes {
   // The download was initiated by navigating to a URL (e.g. by user
   // click).
+  // This is now unused, but left around so that the values don't change.
   INITIATED_BY_NAVIGATION_COUNT = 0,
 
   // The download was initiated by invoking a context menu within a page.
+  // This is now unused, but left around so that the values don't change.
   INITIATED_BY_CONTEXT_MENU_COUNT,
 
   // The download was initiated when the SavePackage system rejected
@@ -57,20 +62,69 @@ enum DownloadCountTypes {
   // Downloads that were interrupted by the OS.
   INTERRUPTED_COUNT,
 
+  // Write sizes for downloads.
+  WRITE_SIZE_COUNT,
+
+  // Counts iterations of the BaseFile::AppendDataToFile() loop.
+  WRITE_LOOP_COUNT,
+
+  // Counts interruptions that happened at the end of the download.
+  INTERRUPTED_AT_END_COUNT,
+
+  // Counts errors due to writes to BaseFiles that have been detached already.
+  // This can happen when saving web pages as complete packages. It happens
+  // when we get messages to append data to files that have already finished and
+  // been detached, but haven't yet been removed from the list of files in
+  // progress.
+  APPEND_TO_DETACHED_FILE_COUNT,
+
   DOWNLOAD_COUNT_TYPES_LAST_ENTRY
 };
 
 // Increment one of the above counts.
-void RecordDownloadCount(DownloadCountTypes type);
+CONTENT_EXPORT void RecordDownloadCount(DownloadCountTypes type);
 
 // Record COMPLETED_COUNT and how long the download took.
-void RecordDownloadCompleted(const base::TimeTicks& start);
+void RecordDownloadCompleted(const base::TimeTicks& start, int64 download_len);
 
-// Record INTERRUPTED_COUNT, |error|, |received| and |total| bytes.
-void RecordDownloadInterrupted(int error, int64 received, int64 total);
+// Record INTERRUPTED_COUNT, |reason|, |received| and |total| bytes.
+void RecordDownloadInterrupted(InterruptReason reason,
+                               int64 received,
+                               int64 total);
 
 // Records the mime type of the download.
 void RecordDownloadMimeType(const std::string& mime_type);
+
+// Record WRITE_SIZE_COUNT and data_len.
+void RecordDownloadWriteSize(size_t data_len);
+
+// Record WRITE_LOOP_COUNT and number of loops.
+void RecordDownloadWriteLoopCount(int count);
+
+// Record the number of buffers piled up by the IO thread
+// before the file thread gets to draining them.
+void RecordFileThreadReceiveBuffers(size_t num_buffers);
+
+// Record the bandwidth seen in DownloadResourceHandler
+// |actual_bandwidth| and |potential_bandwidth| are in bytes/second.
+void RecordBandwidth(double actual_bandwidth, double potential_bandwidth);
+
+// Record the time of both the first open and all subsequent opens since the
+// download completed.
+void RecordOpen(const base::Time& end, bool first);
+
+// Record the number of items that are in the history at the time that a
+// new download is added to the history.
+void RecordHistorySize(int size);
+
+// Record whether or not the server accepts ranges, and the download size.
+void RecordAcceptsRanges(const std::string& accepts_ranges, int64 download_len);
+
+// Record the number of downloads removed by ClearAll.
+void RecordClearAllSize(int size);
+
+// Record the number of completed unopened downloads when a download is opened.
+void RecordOpensOutstanding(int size);
 
 }  // namespace download_stats
 

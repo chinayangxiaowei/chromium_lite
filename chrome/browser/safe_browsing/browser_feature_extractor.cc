@@ -7,30 +7,34 @@
 #include <map>
 #include <utility>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
+#include "base/format_macros.h"
 #include "base/stl_util.h"
 #include "base/stringprintf.h"
-#include "base/string_util.h"
-#include "base/task.h"
 #include "base/time.h"
-#include "chrome/common/safe_browsing/csd.pb.h"
+#include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/browser_features.h"
 #include "chrome/browser/safe_browsing/client_side_detection_service.h"
-#include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "content/common/page_transition_types.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/cancelable_request.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "crypto/sha2.h"
+#include "chrome/common/safe_browsing/csd.pb.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/page_transition_types.h"
 #include "googleurl/src/gurl.h"
+
+using content::BrowserThread;
+using content::NavigationController;
+using content::NavigationEntry;
+using content::WebContents;
 
 namespace safe_browsing {
 
-const int BrowserFeatureExtractor::kHashPrefixLength = 5;
-
-BrowseInfo::BrowseInfo() {}
+BrowseInfo::BrowseInfo() : http_status_code(0) {}
 
 BrowseInfo::~BrowseInfo() {}
 
@@ -45,17 +49,19 @@ static void AddFeature(const std::string& feature_name,
   VLOG(2) << "Browser feature: " << feature->name() << " " << feature->value();
 }
 
-static void AddNavigationFeatures(const std::string& feature_prefix,
-                                  const NavigationController& controller,
-                                  int index,
-                                  ClientPhishingRequest* request) {
+static void AddNavigationFeatures(
+    const std::string& feature_prefix,
+    const NavigationController& controller,
+    int index,
+    const std::vector<GURL>& redirect_chain,
+    ClientPhishingRequest* request) {
   NavigationEntry* entry = controller.GetEntryAtIndex(index);
-  bool is_secure_referrer = entry->referrer().SchemeIsSecure();
+  bool is_secure_referrer = entry->GetReferrer().url.SchemeIsSecure();
   if (!is_secure_referrer) {
     AddFeature(StringPrintf("%s%s=%s",
                             feature_prefix.c_str(),
                             features::kReferrer,
-                            entry->referrer().spec().c_str()),
+                            entry->GetReferrer().url.spec().c_str()),
                1.0,
                request);
   }
@@ -64,50 +70,62 @@ static void AddNavigationFeatures(const std::string& feature_prefix,
              request);
   AddFeature(feature_prefix + features::kPageTransitionType,
              static_cast<double>(
-                 PageTransition::StripQualifier(entry->transition_type())),
+                 content::PageTransitionStripQualifier(
+                    entry->GetTransitionType())),
              request);
   AddFeature(feature_prefix + features::kIsFirstNavigation,
              index == 0 ? 1.0 : 0.0,
              request);
-}
-
-static void PossiblyAddRedirectNavigationFeatures(
-    const std::string& feature_prefix,
-    const NavigationController& controller,
-    int index,
-    ClientPhishingRequest* request) {
-  NavigationEntry* entry = controller.GetEntryAtIndex(index);
-  // Add additional features for the start of the redirect chain, if this entry
-  // is part of one and the chain starts on a different page.
-  if (PageTransition::IsRedirect(entry->transition_type()) &&
-      (entry->transition_type() & PageTransition::CHAIN_START) == 0) {
-    for (index--; index >= 0; index--) {
-      entry = controller.GetEntryAtIndex(index);
-      if (entry->transition_type() & PageTransition::CHAIN_START) {
-        AddNavigationFeatures(feature_prefix + features::kRedirectPrefix,
-                              controller,
-                              index,
-                              request);
-        return;
-      }
+  // Redirect chain should always be at least of size one, as the rendered
+  // url is the last element in the chain.
+  if (redirect_chain.empty()) {
+    NOTREACHED();
+    return;
+  }
+  if (redirect_chain.back() != entry->GetURL()) {
+    // I originally had this as a DCHECK but I saw a failure once that I
+    // can't reproduce. It looks like it might be related to the
+    // navigation controller only keeping a limited number of navigation
+    // events. For now we'll just attach a feature specifying that this is
+    // a mismatch and try and figure out what to do with it on the server.
+    DLOG(WARNING) << "Expected:" << entry->GetURL()
+                 << " Actual:" << redirect_chain.back();
+    AddFeature(feature_prefix + features::kRedirectUrlMismatch,
+               1.0,
+               request);
+    return;
+  }
+  // We skip the last element since it should just be the current url.
+  for (size_t i = 0; i < redirect_chain.size() - 1; i++) {
+    std::string printable_redirect = redirect_chain[i].spec();
+    if (redirect_chain[i].SchemeIsSecure()) {
+      printable_redirect = features::kSecureRedirectValue;
     }
+    AddFeature(StringPrintf("%s%s[%"PRIuS"]=%s",
+                            feature_prefix.c_str(),
+                            features::kRedirect,
+                            i,
+                            printable_redirect.c_str()),
+               1.0,
+               request);
   }
 }
 
 BrowserFeatureExtractor::BrowserFeatureExtractor(
-    TabContents* tab,
+    WebContents* tab,
     ClientSideDetectionService* service)
     : tab_(tab),
       service_(service),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   DCHECK(tab);
 }
 
 BrowserFeatureExtractor::~BrowserFeatureExtractor() {
-  method_factory_.RevokeAll();
+  weak_factory_.InvalidateWeakPtrs();
   // Delete all the pending extractions (delete callback and request objects).
-  STLDeleteContainerPairPointers(pending_extractions_.begin(),
-                                 pending_extractions_.end());
+  STLDeleteContainerPairFirstPointers(pending_extractions_.begin(),
+                                      pending_extractions_.end());
+
   // Also cancel all the pending history service queries.
   HistoryService* history;
   bool success = GetHistoryService(&history);
@@ -120,26 +138,25 @@ BrowserFeatureExtractor::~BrowserFeatureExtractor() {
     }
     ExtractionData& extraction = it->second;
     delete extraction.first;  // delete request
-    delete extraction.second;  // delete callback
   }
   pending_queries_.clear();
 }
 
 void BrowserFeatureExtractor::ExtractFeatures(const BrowseInfo* info,
                                               ClientPhishingRequest* request,
-                                              DoneCallback* callback) {
+                                              const DoneCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(request);
   DCHECK(info);
   DCHECK_EQ(0U, request->url().find("http:"));
-  DCHECK(callback);
-  if (!callback) {
+  DCHECK(!callback.is_null());
+  if (callback.is_null()) {
     DLOG(ERROR) << "ExtractFeatures called without a callback object";
     return;
   }
 
   // Extract features pertaining to this navigation.
-  const NavigationController& controller = tab_->controller();
+  const NavigationController& controller = tab_->GetController();
   int url_index = -1;
   int first_host_index = -1;
 
@@ -149,7 +166,7 @@ void BrowserFeatureExtractor::ExtractFeatures(const BrowseInfo* info,
   DCHECK_NE(index, -1);
   for (; index >= 0; index--) {
     NavigationEntry* entry = controller.GetEntryAtIndex(index);
-    if (url_index == -1 && entry->url() == request_url) {
+    if (url_index == -1 && entry->GetURL() == request_url) {
       // It's possible that we've been on the on the possibly phishy url before
       // in this tab, so make sure that we use the latest navigation for
       // features.
@@ -159,7 +176,7 @@ void BrowserFeatureExtractor::ExtractFeatures(const BrowseInfo* info,
       // be cautious.
       url_index = index;
     } else if (index < url_index) {
-      if (entry->url().host() == request_url.host()) {
+      if (entry->GetURL().host() == request_url.host()) {
         first_host_index = index;
       } else {
         // We have found the possibly phishing url, but we are no longer on the
@@ -171,34 +188,26 @@ void BrowserFeatureExtractor::ExtractFeatures(const BrowseInfo* info,
 
   // Add features pertaining to how we got to
   //   1) The candidate url
-  //   2) The redirect leading to the candidate url (assuming there was one).
-  //   3) The first url on the same host as the candidate url (assuming that
+  //   2) The first url on the same host as the candidate url (assuming that
   //      it's different from the candidate url).
-  //   4) The redirect leading to the first url on the host (assuming there was
-  //      one).
   if (url_index != -1) {
-    AddNavigationFeatures("", controller, url_index, request);
-    PossiblyAddRedirectNavigationFeatures("", controller, url_index, request);
+    AddNavigationFeatures("", controller, url_index, info->url_redirects,
+                          request);
   }
   if (first_host_index != -1) {
     AddNavigationFeatures(features::kHostPrefix,
                           controller,
                           first_host_index,
+                          info->host_redirects,
                           request);
-    PossiblyAddRedirectNavigationFeatures(features::kHostPrefix,
-                                          controller,
-                                          first_host_index,
-                                          request);
   }
 
   ExtractBrowseInfoFeatures(*info, request);
-  ComputeURLHash(request);
-  pending_extractions_.insert(std::make_pair(request, callback));
+  pending_extractions_[request] = callback;
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      method_factory_.NewRunnableMethod(
-          &BrowserFeatureExtractor::StartExtractFeatures,
-          request, callback));
+      base::Bind(&BrowserFeatureExtractor::StartExtractFeatures,
+                 weak_factory_.GetWeakPtr(), request, callback));
 }
 
 void BrowserFeatureExtractor::ExtractBrowseInfoFeatures(
@@ -229,28 +238,28 @@ void BrowserFeatureExtractor::ExtractBrowseInfoFeatures(
                static_cast<double>(info.unsafe_resource->threat_type),
                request);
   }
-
+  if (info.http_status_code != 0) {
+    AddFeature(features::kHttpStatusCode, info.http_status_code, request);
+  }
 }
 
 void BrowserFeatureExtractor::StartExtractFeatures(
     ClientPhishingRequest* request,
-    DoneCallback* callback) {
+    const DoneCallback& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  ExtractionData extraction = std::make_pair(request, callback);
-  size_t removed = pending_extractions_.erase(extraction);
+  size_t removed = pending_extractions_.erase(request);
   DCHECK_EQ(1U, removed);
   HistoryService* history;
   if (!request || !request->IsInitialized() || !GetHistoryService(&history)) {
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   CancelableRequestProvider::Handle handle = history->QueryURL(
       GURL(request->url()),
       true /* wants_visits */,
       &request_consumer_,
-      NewCallback(this,
-                  &BrowserFeatureExtractor::QueryUrlHistoryDone));
+      base::Bind(&BrowserFeatureExtractor::QueryUrlHistoryDone,
+                 base::Unretained(this)));
 
   StorePendingQuery(handle, request, callback);
 }
@@ -262,19 +271,18 @@ void BrowserFeatureExtractor::QueryUrlHistoryDone(
     history::VisitVector* visits) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   ClientPhishingRequest* request;
-  DoneCallback* callback;
+  DoneCallback callback;
   if (!GetPendingQuery(handle, &request, &callback)) {
     DLOG(FATAL) << "No pending history query found";
     return;
   }
   DCHECK(request);
-  DCHECK(callback);
+  DCHECK(!callback.is_null());
   if (!success) {
     // URL is not found in the history.  In practice this should not
     // happen (unless there is a real error) because we just visited
     // that URL.
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   AddFeature(features::kUrlHistoryVisitCount,
@@ -287,17 +295,17 @@ void BrowserFeatureExtractor::QueryUrlHistoryDone(
   int num_visits_link = 0;
   for (history::VisitVector::const_iterator it = visits->begin();
        it != visits->end(); ++it) {
-    if (!PageTransition::IsMainFrame(it->transition)) {
+    if (!content::PageTransitionIsMainFrame(it->transition)) {
       continue;
     }
     if (it->visit_time < threshold) {
       ++num_visits_24h_ago;
     }
-    PageTransition::Type transition = PageTransition::StripQualifier(
+    content::PageTransition transition = content::PageTransitionStripQualifier(
         it->transition);
-    if (transition == PageTransition::TYPED) {
+    if (transition == content::PAGE_TRANSITION_TYPED) {
       ++num_visits_typed;
-    } else if (transition == PageTransition::LINK) {
+    } else if (transition == content::PAGE_TRANSITION_LINK) {
       ++num_visits_link;
     }
   }
@@ -314,15 +322,15 @@ void BrowserFeatureExtractor::QueryUrlHistoryDone(
   // Issue next history lookup for host visits.
   HistoryService* history;
   if (!GetHistoryService(&history)) {
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   CancelableRequestProvider::Handle next_handle =
       history->GetVisibleVisitCountToHost(
           GURL(request->url()),
           &request_consumer_,
-          NewCallback(this, &BrowserFeatureExtractor::QueryHttpHostVisitsDone));
+          base::Bind(&BrowserFeatureExtractor::QueryHttpHostVisitsDone,
+                     base::Unretained(this)));
   StorePendingQuery(next_handle, request, callback);
 }
 
@@ -333,16 +341,15 @@ void BrowserFeatureExtractor::QueryHttpHostVisitsDone(
     base::Time first_visit) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   ClientPhishingRequest* request;
-  DoneCallback* callback;
+  DoneCallback callback;
   if (!GetPendingQuery(handle, &request, &callback)) {
     DLOG(FATAL) << "No pending history query found";
     return;
   }
   DCHECK(request);
-  DCHECK(callback);
+  DCHECK(!callback.is_null());
   if (!success) {
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   SetHostVisitsFeatures(num_visits, first_visit, true, request);
@@ -350,8 +357,7 @@ void BrowserFeatureExtractor::QueryHttpHostVisitsDone(
   // Same lookup but for the HTTPS URL.
   HistoryService* history;
   if (!GetHistoryService(&history)) {
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   std::string https_url = request->url();
@@ -359,8 +365,8 @@ void BrowserFeatureExtractor::QueryHttpHostVisitsDone(
       history->GetVisibleVisitCountToHost(
           GURL(https_url.replace(0, 5, "https:")),
           &request_consumer_,
-          NewCallback(this,
-                      &BrowserFeatureExtractor::QueryHttpsHostVisitsDone));
+          base::Bind(&BrowserFeatureExtractor::QueryHttpsHostVisitsDone,
+                     base::Unretained(this)));
   StorePendingQuery(next_handle, request, callback);
 }
 
@@ -371,21 +377,19 @@ void BrowserFeatureExtractor::QueryHttpsHostVisitsDone(
     base::Time first_visit) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   ClientPhishingRequest* request;
-  DoneCallback* callback;
+  DoneCallback callback;
   if (!GetPendingQuery(handle, &request, &callback)) {
     DLOG(FATAL) << "No pending history query found";
     return;
   }
   DCHECK(request);
-  DCHECK(callback);
+  DCHECK(!callback.is_null());
   if (!success) {
-    callback->Run(false, request);
-    delete callback;
+    callback.Run(false, request);
     return;
   }
   SetHostVisitsFeatures(num_visits, first_visit, false, request);
-  callback->Run(true, request);  // We're done with all the history lookups.
-  delete callback;
+  callback.Run(true, request);  // We're done with all the history lookups.
 }
 
 void BrowserFeatureExtractor::SetHostVisitsFeatures(
@@ -412,7 +416,7 @@ void BrowserFeatureExtractor::SetHostVisitsFeatures(
 void BrowserFeatureExtractor::StorePendingQuery(
     CancelableRequestProvider::Handle handle,
     ClientPhishingRequest* request,
-    DoneCallback* callback) {
+    const DoneCallback& callback) {
   DCHECK_EQ(0U, pending_queries_.count(handle));
   pending_queries_[handle] = std::make_pair(request, callback);
 }
@@ -420,7 +424,7 @@ void BrowserFeatureExtractor::StorePendingQuery(
 bool BrowserFeatureExtractor::GetPendingQuery(
     CancelableRequestProvider::Handle handle,
     ClientPhishingRequest** request,
-    DoneCallback** callback) {
+    DoneCallback* callback) {
   PendingQueriesMap::iterator it = pending_queries_.find(handle);
   DCHECK(it != pending_queries_.end());
   if (it != pending_queries_.end()) {
@@ -434,8 +438,8 @@ bool BrowserFeatureExtractor::GetPendingQuery(
 
 bool BrowserFeatureExtractor::GetHistoryService(HistoryService** history) {
   *history = NULL;
-  if (tab_ && tab_->browser_context()) {
-    Profile* profile = Profile::FromBrowserContext(tab_->browser_context());
+  if (tab_ && tab_->GetBrowserContext()) {
+    Profile* profile = Profile::FromBrowserContext(tab_->GetBrowserContext());
     *history = profile->GetHistoryService(Profile::EXPLICIT_ACCESS);
     if (*history) {
       return true;
@@ -445,36 +449,4 @@ bool BrowserFeatureExtractor::GetHistoryService(HistoryService** history) {
   return false;
 }
 
-void BrowserFeatureExtractor::ComputeURLHash(
-    ClientPhishingRequest* request) {
-  // Put the url into SafeBrowsing host suffix / path prefix format, with
-  // query parameters stripped.
-  std::string host, path, query;
-  safe_browsing_util::CanonicalizeUrl(GURL(request->url()),
-                                      &host, &path, &query);
-  DCHECK(!host.empty()) << request->url();
-  DCHECK(!path.empty()) << request->url();
-
-  // Lowercase the URL.  Note: canonicalization converts the URL to ASCII.
-  // Percent encoded characters will not be lowercased but this is consistent
-  // with what we're doing on the server side.
-  StringToLowerASCII(&host);
-  StringToLowerASCII(&path);
-
-  // Remove leading 'www.' from the host.
-  if (host.size() > 4 && host.substr(0, 4) == "www.") {
-    host.erase(0, 4);
-  }
-  // Remove everything after the last '/' to broaden the pattern.
-  if (path.size() > 1 && *(path.rbegin()) != '/') {
-    // The pattern never ends in foo.com/test? because we stripped CGI params.
-    // Remove everything that comes after the last '/'.
-    size_t last_path = path.rfind("/");
-    path.erase(last_path + 1);
-  }
-
-  request->set_hash_prefix(crypto::SHA256HashString(host + path).substr(
-      0, kHashPrefixLength));
-}
-
-};  // namespace safe_browsing
+}  // namespace safe_browsing

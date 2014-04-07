@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,33 +9,33 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
+#include "base/time.h"
 #include "base/timer.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
-#include "chrome/browser/ui/webui/chrome_web_ui.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_ui_controller.h"
 
 class GURL;
-class MessageLoop;
 class PrefService;
 class Profile;
 
 // The TabContents used for the New Tab page.
-class NewTabUI : public ChromeWebUI,
-                 public NotificationObserver {
+class NewTabUI : public content::WebUIController,
+                 public content::NotificationObserver {
  public:
-  explicit NewTabUI(TabContents* manager);
+  explicit NewTabUI(content::WebUI* web_ui);
   virtual ~NewTabUI();
 
-  // Override WebUI methods so we can hook up the paint timer to the render
-  // view host.
-  virtual void RenderViewCreated(RenderViewHost* render_view_host) OVERRIDE;
-  virtual void RenderViewReused(RenderViewHost* render_view_host) OVERRIDE;
-
   static void RegisterUserPrefs(PrefService* prefs);
-  static void MigrateUserPrefs(PrefService* prefs, int old_pref_version,
-                               int new_pref_version);
+
+  // Sets up any experiment in which the NTP might want to participate.
+  // The CWS footer link is one such example.
+  static void SetupFieldTrials();
+
+  // Returns whether or not the CWS footer experiment is enabled.
+  static bool IsWebStoreExperimentEnabled();
 
   // Adds "url", "title", and "direction" keys on incoming dictionary, setting
   // title as the url as a fallback on empty title.
@@ -43,11 +43,23 @@ class NewTabUI : public ChromeWebUI,
                                       const string16& title,
                                       const GURL& gurl);
 
+  // Returns a pointer to a NewTabUI if the WebUIController object is a new tab
+  // page.
+  static NewTabUI* FromWebUIController(content::WebUIController* ui);
+
   // The current preference version.
   static int current_pref_version() { return current_pref_version_; }
 
-  // Returns whether NTP4 is enabled.
-  static bool NTP4Enabled();
+  // WebUIController implementation:
+  virtual void RenderViewCreated(RenderViewHost* render_view_host) OVERRIDE;
+  virtual void RenderViewReused(RenderViewHost* render_view_host) OVERRIDE;
+
+  // Returns true if the bookmark bar can be displayed over this webui, detached
+  // from the location bar.
+  bool CanShowBookmarkBar() const;
+
+  bool showing_sync_bubble() { return showing_sync_bubble_; }
+  void set_showing_sync_bubble(bool showing) { showing_sync_bubble_ = showing; }
 
   class NewTabHTMLSource : public ChromeURLDataManager::DataSource {
    public:
@@ -61,7 +73,7 @@ class NewTabUI : public ChromeWebUI,
 
     virtual std::string GetMimeType(const std::string&) const OVERRIDE;
 
-    virtual bool ShouldReplaceExistingSource() const;
+    virtual bool ShouldReplaceExistingSource() const OVERRIDE;
 
    private:
     virtual ~NewTabHTMLSource() {}
@@ -76,8 +88,8 @@ class NewTabUI : public ChromeWebUI,
   FRIEND_TEST_ALL_PREFIXES(NewTabUITest, UpdateUserPrefsVersion);
 
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Reset the CSS caches.
   void InitializeCSSCaches();
@@ -85,11 +97,9 @@ class NewTabUI : public ChromeWebUI,
   void StartTimingPaint(RenderViewHost* render_view_host);
   void PaintTimeout();
 
-  // Updates the user prefs version and calls |MigrateUserPrefs| if needed.
-  // Returns true if the version was updated.
-  static bool UpdateUserPrefsVersion(PrefService* prefs);
+  Profile* GetProfile() const;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // The time when we started benchmarking.
   base::TimeTicks start_;
@@ -99,6 +109,9 @@ class NewTabUI : public ChromeWebUI,
   base::OneShotTimer<NewTabUI> timer_;
   // The preference version. This used for migrating prefs of the NTP.
   static const int current_pref_version_ = 3;
+
+  // If the sync promo NTP bubble is being shown.
+  bool showing_sync_bubble_;
 
   DISALLOW_COPY_AND_ASSIGN(NewTabUI);
 };

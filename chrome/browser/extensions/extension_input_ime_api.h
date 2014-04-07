@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,13 +32,24 @@ class ExtensionInputImeEventRouter {
   bool RegisterIme(Profile* profile,
                    const std::string& extension_id,
                    const Extension::InputComponentInfo& component);
+  void UnregisterAllImes(Profile* profile, const std::string& extension_id);
   chromeos::InputMethodEngine* GetEngine(const std::string& extension_id,
                                          const std::string& engine_id);
   chromeos::InputMethodEngine* GetActiveEngine(const std::string& extension_id);
 
 
+  // Called when a key event was handled.
+  void OnEventHandled(const std::string& extension_id,
+                      const std::string& request_id,
+                      bool handled);
+
+  std::string AddRequest(const std::string& engine_id,
+                         chromeos::input_method::KeyEventHandle* key_data);
+
  private:
   friend struct DefaultSingletonTraits<ExtensionInputImeEventRouter>;
+  typedef std::map<std::string, std::pair<std::string,
+          chromeos::input_method::KeyEventHandle*> > RequestMap;
 
   ExtensionInputImeEventRouter();
   ~ExtensionInputImeEventRouter();
@@ -48,67 +59,68 @@ class ExtensionInputImeEventRouter {
   std::map<std::string, std::map<std::string, chromeos::ImeObserver*> >
       observers_;
 
+  unsigned int next_request_id_;
+  RequestMap request_map_;
+
   DISALLOW_COPY_AND_ASSIGN(ExtensionInputImeEventRouter);
 };
 
-class SetCompositionFunction : public AsyncExtensionFunction {
+class SetCompositionFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.setComposition");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.setComposition");
 };
 
-class ClearCompositionFunction : public AsyncExtensionFunction {
+class ClearCompositionFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.clearComposition");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.clearComposition");
 };
 
-class CommitTextFunction : public AsyncExtensionFunction {
+class CommitTextFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.commitText");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.commitText");
 };
 
-class SetCandidateWindowPropertiesFunction : public AsyncExtensionFunction {
+class SetCandidateWindowPropertiesFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.setCandidateWindowProperties");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.setCandidateWindowProperties");
 };
 
-class SetCandidatesFunction : public AsyncExtensionFunction {
+class SetCandidatesFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.setCandidates");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.setCandidates");
  private:
   bool ReadCandidates(
       ListValue* candidates,
       std::vector<chromeos::InputMethodEngine::Candidate>* output);
 };
 
-class SetCursorPositionFunction : public AsyncExtensionFunction {
+class SetCursorPositionFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.setCursorPosition");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.setCursorPosition");
 };
 
-class SetMenuItemsFunction : public AsyncExtensionFunction {
+class SetMenuItemsFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.setMenuItems");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.setMenuItems");
 };
 
-class UpdateMenuItemsFunction : public AsyncExtensionFunction {
+class UpdateMenuItemsFunction : public SyncExtensionFunction {
  public:
-  virtual bool RunImpl();
-  DECLARE_EXTENSION_FUNCTION_NAME(
-      "experimental.input.updateMenuItems");
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.updateMenuItems");
+};
+
+class InputEventHandled : public AsyncExtensionFunction {
+ public:
+  virtual bool RunImpl() OVERRIDE;
+  DECLARE_EXTENSION_FUNCTION_NAME("input.ime.eventHandled");
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_INPUT_IME_API_H_

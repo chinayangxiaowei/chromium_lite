@@ -14,21 +14,22 @@
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
 
 using chromeos::CrosLibrary;
 using chromeos::NetworkLibrary;
 
 NetworkManagerInitObserver::NetworkManagerInitObserver(
     AutomationProvider* automation)
-    : automation_(automation->AsWeakPtr()) {}
+    : automation_(automation->AsWeakPtr()) {
+}
 
 NetworkManagerInitObserver::~NetworkManagerInitObserver() {
     CrosLibrary::Get()->GetNetworkLibrary()->RemoveNetworkManagerObserver(this);
 }
 
 bool NetworkManagerInitObserver::Init() {
-  if (!CrosLibrary::Get()->EnsureLoaded()) {
+  if (!CrosLibrary::Get()->libcros_loaded()) {
     // If cros library fails to load, don't wait for the network
     // library to finish initializing, because it'll wait forever.
     automation_->OnNetworkLibraryInit();
@@ -41,7 +42,8 @@ bool NetworkManagerInitObserver::Init() {
 
 void NetworkManagerInitObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
   if (!obj->wifi_scanning()) {
-    automation_->OnNetworkLibraryInit();
+    if (automation_)
+      automation_->OnNetworkLibraryInit();
     delete this;
   }
 }
@@ -50,17 +52,19 @@ LoginWebuiReadyObserver::LoginWebuiReadyObserver(
     AutomationProvider* automation)
     : automation_(automation->AsWeakPtr()) {
   registrar_.Add(this, chrome::NOTIFICATION_LOGIN_WEBUI_READY,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
 }
 
 LoginWebuiReadyObserver::~LoginWebuiReadyObserver() {
 }
 
-void LoginWebuiReadyObserver::Observe(int type,
-                                      const NotificationSource& source,
-                                      const NotificationDetails& details) {
+void LoginWebuiReadyObserver::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_LOGIN_WEBUI_READY);
-  automation_->OnLoginWebuiReady();
+  if (automation_)
+    automation_->OnLoginWebuiReady();
   delete this;
 }
 
@@ -104,18 +108,19 @@ ScreenLockUnlockObserver::ScreenLockUnlockObserver(
       reply_message_(reply_message),
       lock_screen_(lock_screen) {
   registrar_.Add(this, chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllSources());
 }
 
 ScreenLockUnlockObserver::~ScreenLockUnlockObserver() {}
 
-void ScreenLockUnlockObserver::Observe(int type,
-                                       const NotificationSource& source,
-                                       const NotificationDetails& details) {
+void ScreenLockUnlockObserver::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED);
   if (automation_) {
     AutomationJSONReply reply(automation_, reply_message_.release());
-    bool is_screen_locked = *Details<bool>(details).ptr();
+    bool is_screen_locked = *content::Details<bool>(details).ptr();
     if (lock_screen_ == is_screen_locked)
       reply.SendSuccess(NULL);
     else
@@ -195,23 +200,23 @@ void ToggleNetworkDeviceObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
   }
 }
 
-NetworkConnectObserver::NetworkConnectObserver(AutomationProvider* automation,
+NetworkStatusObserver::NetworkStatusObserver(AutomationProvider* automation,
                                                IPC::Message* reply_message)
     : automation_(automation->AsWeakPtr()), reply_message_(reply_message) {
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   network_library->AddNetworkManagerObserver(this);
 }
 
-NetworkConnectObserver::~NetworkConnectObserver() {
+NetworkStatusObserver::~NetworkStatusObserver() {
   NetworkLibrary* network_library = CrosLibrary::Get()->GetNetworkLibrary();
   network_library->RemoveNetworkManagerObserver(this);
 }
 
-void NetworkConnectObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
-  const chromeos::WifiNetwork* wifi = GetWifiNetwork(obj);
-  if (!wifi) {
+void NetworkStatusObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
+  const chromeos::Network* network = GetNetwork(obj);
+  if (!network) {
     // The network was not found, and we assume it no longer exists.
-    // This could be because the SSID is invalid, or the network went away.
+    // This could be because the ssid is invalid, or the network went away.
     if (automation_) {
       scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
       return_value->SetString("error_string", "Network not found.");
@@ -222,15 +227,24 @@ void NetworkConnectObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
     return;
   }
 
-  if (wifi->failed()) {
+  NetworkStatusCheck(network);
+}
+
+NetworkConnectObserver::NetworkConnectObserver(
+    AutomationProvider* automation, IPC::Message* reply_message)
+    : NetworkStatusObserver(automation, reply_message) {}
+
+void NetworkConnectObserver::NetworkStatusCheck(const chromeos::Network*
+                                                network) {
+  if (network->failed()) {
     if (automation_) {
       scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
-      return_value->SetString("error_string", wifi->GetErrorString());
+      return_value->SetString("error_string", network->GetErrorString());
       AutomationJSONReply(automation_, reply_message_.release())
           .SendSuccess(return_value.get());
     }
     delete this;
-  } else if (wifi->connected()) {
+  } else if (network->connected()) {
     if (automation_)
       AutomationJSONReply(automation_,
                           reply_message_.release()).SendSuccess(NULL);
@@ -241,15 +255,53 @@ void NetworkConnectObserver::OnNetworkManagerChanged(NetworkLibrary* obj) {
   // success condition, so just continue waiting for more network events.
 }
 
+NetworkDisconnectObserver::NetworkDisconnectObserver(
+    AutomationProvider* automation, IPC::Message* reply_message,
+    const std::string& service_path)
+    : NetworkStatusObserver(automation, reply_message),
+      service_path_(service_path) {}
+
+void NetworkDisconnectObserver::NetworkStatusCheck(const chromeos::Network*
+                                                   network) {
+  if (!network->connected()) {
+      AutomationJSONReply(automation_, reply_message_.release()).SendSuccess(
+                                                                 NULL);
+      delete this;
+  }
+}
+
+const chromeos::Network* NetworkDisconnectObserver::GetNetwork(
+    NetworkLibrary* network_library) {
+  return network_library->FindNetworkByPath(service_path_);
+}
+
 ServicePathConnectObserver::ServicePathConnectObserver(
     AutomationProvider* automation, IPC::Message* reply_message,
     const std::string& service_path)
     : NetworkConnectObserver(automation, reply_message),
-    service_path_(service_path) {}
+      service_path_(service_path) {}
 
-const chromeos::WifiNetwork* ServicePathConnectObserver::GetWifiNetwork(
+const chromeos::Network* ServicePathConnectObserver::GetNetwork(
     NetworkLibrary* network_library) {
-  return network_library->FindWifiNetworkByPath(service_path_);
+  return network_library->FindNetworkByPath(service_path_);
+}
+
+SSIDConnectObserver::SSIDConnectObserver(
+    AutomationProvider* automation, IPC::Message* reply_message,
+    const std::string& ssid)
+    : NetworkConnectObserver(automation, reply_message), ssid_(ssid) {}
+
+const chromeos::Network* SSIDConnectObserver::GetNetwork(
+    NetworkLibrary* network_library) {
+  const chromeos::WifiNetworkVector& wifi_networks =
+      network_library->wifi_networks();
+  for (chromeos::WifiNetworkVector::const_iterator iter = wifi_networks.begin();
+       iter != wifi_networks.end(); ++iter) {
+    const chromeos::WifiNetwork* wifi = *iter;
+    if (wifi->name() == ssid_)
+      return wifi;
+  }
+  return NULL;
 }
 
 VirtualConnectObserver::VirtualConnectObserver(AutomationProvider* automation,
@@ -310,40 +362,6 @@ chromeos::VirtualNetwork* VirtualConnectObserver::GetVirtualNetwork(
   return virt;
 }
 
-CloudPolicyObserver::CloudPolicyObserver(AutomationProvider* automation,
-    IPC::Message* reply_message,
-    policy::BrowserPolicyConnector* browser_policy_connector,
-    policy::CloudPolicySubsystem* policy_subsystem)
-    : automation_(automation->AsWeakPtr()),
-      reply_message_(reply_message) {
-  observer_registrar_.reset(
-      new policy::CloudPolicySubsystem::ObserverRegistrar(policy_subsystem,
-                                                          this));
-}
-
-CloudPolicyObserver::~CloudPolicyObserver() {}
-
-void CloudPolicyObserver::OnPolicyStateChanged(
-    policy::CloudPolicySubsystem::PolicySubsystemState state,
-    policy::CloudPolicySubsystem::ErrorDetails error_details) {
-  if (state == policy::CloudPolicySubsystem::TOKEN_FETCHED) {
-    // fetched the token, now return and wait for a call with state SUCCESS
-    return;
-  } else if (automation_) {
-    if (state == policy::CloudPolicySubsystem::SUCCESS) {
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendSuccess(NULL);
-    } else {
-      // fetch returned an error
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendError(
-                              "Policy fetch failed.");
-    }
-  }
-  delete this;
-  return;
-}
-
 EnrollmentObserver::EnrollmentObserver(AutomationProvider* automation,
     IPC::Message* reply_message,
     chromeos::EnterpriseEnrollmentScreenActor* enrollment_screen_actor,
@@ -365,30 +383,13 @@ void EnrollmentObserver::OnEnrollmentComplete(
       AutomationJSONReply(automation_,
                           reply_message_.release()).SendSuccess(NULL);
     } else {
-      AutomationJSONReply(automation_,
-                          reply_message_.release()).SendError(
-                              "Enrollment failed.");
+      scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+      return_value->SetString("error_string", "Enrollment failed.");
+      AutomationJSONReply(automation_, reply_message_.release())
+          .SendSuccess(return_value.get());
     }
   }
   delete this;
-}
-
-SSIDConnectObserver::SSIDConnectObserver(
-    AutomationProvider* automation, IPC::Message* reply_message,
-    const std::string& ssid)
-    : NetworkConnectObserver(automation, reply_message), ssid_(ssid) {}
-
-const chromeos::WifiNetwork* SSIDConnectObserver::GetWifiNetwork(
-    NetworkLibrary* network_library) {
-  const chromeos::WifiNetworkVector& wifi_networks =
-      network_library->wifi_networks();
-  for (chromeos::WifiNetworkVector::const_iterator iter = wifi_networks.begin();
-       iter != wifi_networks.end(); ++iter) {
-    const chromeos::WifiNetwork* wifi = *iter;
-    if (wifi->name() == ssid_)
-      return wifi;
-  }
-  return NULL;
 }
 
 PhotoCaptureObserver::PhotoCaptureObserver(
@@ -412,8 +413,10 @@ void PhotoCaptureObserver::OnCaptureSuccess(
 void PhotoCaptureObserver::OnCaptureFailure(
     chromeos::TakePhotoDialog* take_photo_dialog,
     chromeos::TakePhotoView* take_photo_view) {
-  AutomationJSONReply(automation_,
-                      reply_message_.release()).SendError("Capture failure");
+  if (automation_) {
+    AutomationJSONReply(automation_,
+                        reply_message_.release()).SendError("Capture failure");
+  }
   delete this;
 }
 
@@ -424,32 +427,37 @@ void PhotoCaptureObserver::OnCapturingStopped(
   const SkBitmap& photo = take_photo_view->GetImage();
   chromeos::UserManager* user_manager = chromeos::UserManager::Get();
   if (!user_manager) {
-    AutomationJSONReply(automation_,
-                        reply_message_.release()).SendError(
-                            "No user manager");
+    if (automation_) {
+      AutomationJSONReply(
+          automation_,
+          reply_message_.release()).SendError("No user manager");
+    }
     delete this;
     return;
   }
 
-  const chromeos::UserManager::User& user = user_manager->logged_in_user();
+  const chromeos::User& user = user_manager->logged_in_user();
   if (user.email().empty()) {
-    AutomationJSONReply(automation_,
-                        reply_message_.release()).SendError(
-                            "User email is not set");
+    if (automation_) {
+      AutomationJSONReply(
+          automation_,
+          reply_message_.release()).SendError("User email is not set");
+    }
     delete this;
     return;
   }
 
   // Set up an observer for UserManager (it will delete itself).
   user_manager->AddObserver(this);
-  user_manager->SetLoggedInUserImage(
-      photo, chromeos::UserManager::User::kExternalImageIndex);
   user_manager->SaveUserImage(user.email(), photo);
 }
 
 void PhotoCaptureObserver::LocalStateChanged(
     chromeos::UserManager* user_manager) {
   user_manager->RemoveObserver(this);
-  AutomationJSONReply(automation_, reply_message_.release()).SendSuccess(NULL);
+  if (automation_) {
+    AutomationJSONReply(
+        automation_, reply_message_.release()).SendSuccess(NULL);
+  }
   delete this;
 }

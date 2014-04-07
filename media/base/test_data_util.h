@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,13 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "media/base/data_buffer.h"
 
 namespace media {
+
+// Returns a URL path for a file in the media/test/data directory.
+std::string GetTestDataURL(const std::string& name);
 
 // Reads a test file from media/test/data directory and stores it in
 // a scoped_array.
@@ -23,7 +26,7 @@ void ReadTestDataFile(const std::string& name,
                       scoped_array<uint8>* buffer,
                       int* size);
 
-// Reads a test file from media/test/data directory and stored it in
+// Reads a test file from media/test/data directory and stores it in
 // a Buffer.
 //
 //  |name| - The name of the file.

@@ -7,6 +7,8 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/gtk/tabs/tab_renderer_gtk.h"
@@ -14,10 +16,6 @@
 
 class TabStripMenuController;
 class ThemeService;
-
-namespace gfx {
-class Path;
-}
 
 class TabGtk : public TabRendererGtk,
                public MessageLoopForUI::Observer {
@@ -86,7 +84,7 @@ class TabGtk : public TabRendererGtk,
     virtual bool HasAvailableDragActions() const = 0;
 
     // Returns the theme provider for icons and colors.
-    virtual ThemeService* GetThemeProvider() = 0;
+    virtual GtkThemeService* GetThemeProvider() = 0;
 
     // Returns a context menu controller for |tab|. Caller takes ownership of
     // the pointed object.
@@ -113,21 +111,26 @@ class TabGtk : public TabRendererGtk,
   void set_dragging(bool dragging) { dragging_ = dragging; }
   bool dragging() const { return dragging_; }
 
+  // Raise to top of Z-order.
+  void Raise() const;
+
   // TabRendererGtk overrides:
-  virtual bool IsActive() const;
-  virtual bool IsSelected() const;
-  virtual bool IsVisible() const;
-  virtual void SetVisible(bool visible) const;
-  virtual void CloseButtonClicked();
-  virtual void UpdateData(TabContents* contents, bool app, bool loading_only);
-  virtual void SetBounds(const gfx::Rect& bounds);
+  virtual bool IsActive() const OVERRIDE;
+  virtual bool IsSelected() const OVERRIDE;
+  virtual bool IsVisible() const OVERRIDE;
+  virtual void SetVisible(bool visible) const OVERRIDE;
+  virtual void CloseButtonClicked() OVERRIDE;
+  virtual void UpdateData(content::WebContents* contents,
+                          bool app,
+                          bool loading_only) OVERRIDE;
+  virtual void SetBounds(const gfx::Rect& bounds) OVERRIDE;
 
  private:
   class TabGtkObserverHelper;
 
   // MessageLoop::Observer implementation:
-  virtual void WillProcessEvent(GdkEvent* event);
-  virtual void DidProcessEvent(GdkEvent* event);
+  virtual void WillProcessEvent(GdkEvent* event) OVERRIDE;
+  virtual void DidProcessEvent(GdkEvent* event) OVERRIDE;
 
   // button-press-event handler that handles mouse clicks.
   CHROMEGTK_CALLBACK_1(TabGtk, gboolean, OnButtonPressEvent, GdkEventButton*);
@@ -209,14 +212,14 @@ class TabGtk : public TabRendererGtk,
   scoped_ptr<TabGtkObserverHelper> observer_;
 
   // Used to destroy the drag widget after a return to the message loop.
-  ScopedRunnableMethodFactory<TabGtk> destroy_factory_;
+  base::WeakPtrFactory<TabGtk> destroy_factory_;
 
   // Due to a bug in GTK+, we need to force the end of a drag when we get a
   // mouse release event on the the dragged widget, otherwise, we don't know
   // when the drag has ended when the user presses space or enter.  We queue
   // a task to end the drag and only run it if GTK+ didn't send us the
   // drag-failed event.
-  ScopedRunnableMethodFactory<TabGtk> drag_end_factory_;
+  base::WeakPtrFactory<TabGtk> drag_end_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(TabGtk);
 };

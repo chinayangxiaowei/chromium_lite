@@ -14,13 +14,16 @@
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_registrar.h"
 #if defined(TOOLKIT_VIEWS)
-#include "views/focus/focus_manager.h"
-#include "views/view.h"
+#include "ui/views/focus/widget_focus_manager.h"
 #elif defined(TOOLKIT_GTK)
-#include "ui/base/x/active_window_watcher_x.h"
+#include "ui/base/x/active_window_watcher_x_observer.h"
 #endif
+
+namespace content {
+class WebContents;
+}
 
 // The ExtensionBrowserEventRouter listens to Browser window & tab events
 // and routes them to listeners inside extension process renderers.
@@ -31,10 +34,10 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
 #if defined(TOOLKIT_VIEWS)
                                     public views::WidgetFocusChangeListener,
 #elif defined(TOOLKIT_GTK)
-                                    public ui::ActiveWindowWatcherX::Observer,
+                                    public ui::ActiveWindowWatcherXObserver,
 #endif
                                     public BrowserList::Observer,
-                                    public NotificationObserver {
+                                    public content::NotificationObserver {
  public:
   explicit ExtensionBrowserEventRouter(Profile* profile);
   virtual ~ExtensionBrowserEventRouter();
@@ -48,8 +51,8 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
   virtual void OnBrowserSetLastActive(const Browser* browser) OVERRIDE;
 
 #if defined(TOOLKIT_VIEWS)
-  virtual void NativeFocusWillChange(gfx::NativeView focused_before,
-                                     gfx::NativeView focused_now) OVERRIDE;
+  virtual void OnNativeFocusChange(gfx::NativeView focused_before,
+                                   gfx::NativeView focused_now) OVERRIDE;
 #elif defined(TOOLKIT_GTK)
   virtual void ActiveWindowChanged(GdkWindow* active_window) OVERRIDE;
 #endif
@@ -69,6 +72,9 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
                                 TabContentsWrapper* new_contents,
                                 int index,
                                 bool user_gesture) OVERRIDE;
+  virtual void TabSelectionChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripSelectionModel& old_model) OVERRIDE;
   virtual void TabMoved(TabContentsWrapper* contents, int from_index,
                         int to_index) OVERRIDE;
   virtual void TabChangedAt(TabContentsWrapper* contents, int index,
@@ -93,17 +99,17 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
                              const std::string& extension_id,
                              Browser* browser);
 
-  // NotificationObserver.
+  // content::NotificationObserver.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
  private:
   // "Synthetic" event. Called from TabInsertedAt if new tab is detected.
-  void TabCreatedAt(TabContents* contents, int index, bool active);
+  void TabCreatedAt(content::WebContents* contents, int index, bool active);
 
   // Internal processing of tab updated events. Is called by both TabChangedAt
   // and Observe/NAV_ENTRY_COMMITTED.
-  void TabUpdated(TabContents* contents, bool did_navigate);
+  void TabUpdated(content::WebContents* contents, bool did_navigate);
 
   // The DispatchEvent methods forward events to the |profile|'s event router.
   // The ExtensionBrowserEventRouter listens to events for all profiles,
@@ -125,7 +131,7 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
   void DispatchEventWithTab(Profile* profile,
                             const std::string& extension_id,
                             const char* event_name,
-                            const TabContents* tab_contents,
+                            const content::WebContents* web_contents,
                             bool active);
 
   void DispatchSimpleBrowserEvent(Profile* profile,
@@ -134,7 +140,7 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
 
   // Packages |changed_properties| as a tab updated event for the tab |contents|
   // and dispatches the event to the extension.
-  void DispatchTabUpdatedEvent(TabContents* contents,
+  void DispatchTabUpdatedEvent(content::WebContents* contents,
                                DictionaryValue* changed_properties);
 
   // Called to dispatch a deprecated style page action click event that was
@@ -153,12 +159,12 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
 
   // Register ourselves to receive the various notifications we are interested
   // in for a tab.
-  void RegisterForTabNotifications(TabContents* contents);
+  void RegisterForTabNotifications(content::WebContents* contents);
 
   // Removes notifications added in RegisterForTabNotifications.
-  void UnregisterForTabNotifications(TabContents* contents);
+  void UnregisterForTabNotifications(content::WebContents* contents);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   bool initialized_;
 
@@ -174,18 +180,18 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
     // std::map<> by value.
     TabEntry();
 
-    // Update the load state of the tab based on its TabContents.  Returns true
+    // Update the load state of the tab based on its WebContents.  Returns true
     // if the state changed, false otherwise.  Whether the state has changed or
     // not is used to determine if events needs to be sent to extensions during
     // processing of TabChangedAt(). This method will "hold" a state-change
     // to "loading", until the DidNavigate() method which should always follow
     // it. Returns NULL if no updates should be sent.
-    DictionaryValue* UpdateLoadState(const TabContents* contents);
+    DictionaryValue* UpdateLoadState(const content::WebContents* contents);
 
     // Indicates that a tab load has resulted in a navigation and the
     // destination url is available for inspection. Returns NULL if no updates
     // should be sent.
-    DictionaryValue* DidNavigate(const TabContents* contents);
+    DictionaryValue* DidNavigate(const content::WebContents* contents);
 
    private:
     // Whether we are waiting to fire the 'complete' status change. This will
@@ -199,7 +205,7 @@ class ExtensionBrowserEventRouter : public TabStripModelObserver,
 
   // Gets the TabEntry for the given |contents|. Returns TabEntry* if
   // found, NULL if not.
-  TabEntry* GetTabEntry(const TabContents* contents);
+  TabEntry* GetTabEntry(const content::WebContents* contents);
 
   std::map<int, TabEntry> tab_entries_;
 

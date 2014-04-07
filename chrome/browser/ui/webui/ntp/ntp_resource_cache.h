@@ -7,19 +7,20 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/string16.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 class Profile;
 class RefCountedMemory;
 
 // This class keeps a cache of NTP resources (HTML and CSS) so we don't have to
 // regenerate them all the time.
-class NTPResourceCache : public NotificationObserver,
+class NTPResourceCache : public content::NotificationObserver,
                          public ProfileKeyedService {
  public:
   explicit NTPResourceCache(Profile* profile);
@@ -28,10 +29,10 @@ class NTPResourceCache : public NotificationObserver,
   RefCountedMemory* GetNewTabHTML(bool is_incognito);
   RefCountedMemory* GetNewTabCSS(bool is_incognito);
 
-  // NotificationObserver interface.
+  // content::NotificationObserver interface.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  private:
   Profile* profile_;
@@ -50,7 +51,7 @@ class NTPResourceCache : public NotificationObserver,
   void CreateNewTabCSS();
   scoped_refptr<RefCountedMemory> new_tab_css_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
   PrefChangeRegistrar pref_change_registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(NTPResourceCache);

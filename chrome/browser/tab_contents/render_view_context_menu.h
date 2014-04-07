@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,16 +17,21 @@
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/extensions/extension_menu_manager.h"
 #include "chrome/browser/tab_contents/render_view_context_menu_observer.h"
-#include "content/common/page_transition_types.h"
+#include "content/public/common/page_transition_types.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "webkit/glue/context_menu.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class ExtensionMenuItem;
+class PrintPreviewContextMenuObserver;
 class Profile;
 class RenderViewHost;
-class TabContents;
 class SpellingMenuObserver;
+class SpellCheckerSubMenuObserver;
+
+namespace content {
+class WebContents;
+}
 
 namespace gfx {
 class Point;
@@ -34,6 +39,7 @@ class Point;
 
 namespace WebKit {
 struct WebMediaPlayerAction;
+struct WebPluginAction;
 }
 
 // An interface that controls a RenderViewContextMenu instance from observers.
@@ -46,7 +52,7 @@ struct WebMediaPlayerAction;
 // The following snippet describes the simple usage that updates a context-menu
 // item with this interface.
 //
-//   class MyTask : public URLFetcher::Delegate {
+//   class MyTask : public content::URLFetcherDelegate {
 //    public:
 //     MyTask(RenderViewContextMenuProxy* proxy, int id)
 //         : proxy_(proxy),
@@ -54,7 +60,7 @@ struct WebMediaPlayerAction;
 //     }
 //     virtual ~MyTask() {
 //     }
-//     virtual void OnURLFetchComplete(const URLFetcher* source,
+//     virtual void OnURLFetchComplete(const content::URLFetcher* source,
 //                                     const GURL& url,
 //                                     const net::URLRequestStatus& status,
 //                                     int response,
@@ -66,7 +72,7 @@ struct WebMediaPlayerAction;
 //     }
 //     void Start(const GURL* url, net::URLRequestContextGetter* context) {
 //       fetcher_.reset(new URLFetcher(url, URLFetcher::GET, this));
-//       fetcher_->set_request_context(context);
+//       fetcher_->SetRequestContext(context);
 //       fetcher_->Start();
 //     }
 //
@@ -90,10 +96,17 @@ class RenderViewContextMenuProxy {
  public:
   // Add a menu item to a context menu.
   virtual void AddMenuItem(int command_id, const string16& title) = 0;
+  virtual void AddSeparator() = 0;
+
+  // Add a submenu item to a context menu.
+  virtual void AddSubMenu(int command_id,
+                          const string16& label,
+                          ui::MenuModel* model) = 0;
 
   // Update the status and text of the specified context-menu item.
   virtual void UpdateMenuItem(int command_id,
                               bool enabled,
+                              bool hidden,
                               const string16& title) = 0;
 
   // Retrieve the RenderViewHost (or Profile) instance associated with a context
@@ -108,7 +121,7 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   static const size_t kMaxExtensionItemTitleLength;
   static const size_t kMaxSelectionTextLength;
 
-  RenderViewContextMenu(TabContents* tab_contents,
+  RenderViewContextMenu(content::WebContents* web_contents,
                         const ContextMenuParams& params);
 
   virtual ~RenderViewContextMenu();
@@ -123,16 +136,22 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
   virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
   virtual void ExecuteCommand(int command_id) OVERRIDE;
+  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
   virtual void MenuWillShow(ui::SimpleMenuModel* source) OVERRIDE;
   virtual void MenuClosed(ui::SimpleMenuModel* source) OVERRIDE;
 
   // RenderViewContextMenuDelegate implementation.
   virtual void AddMenuItem(int command_id, const string16& title) OVERRIDE;
+  virtual void AddSeparator() OVERRIDE;
+  virtual void AddSubMenu(int command_id,
+                          const string16& label,
+                          ui::MenuModel* model) OVERRIDE;
   virtual void UpdateMenuItem(int command_id,
                               bool enabled,
+                              bool hidden,
                               const string16& title) OVERRIDE;
-  virtual RenderViewHost* GetRenderViewHost() const;
-  virtual Profile* GetProfile() const;
+  virtual RenderViewHost* GetRenderViewHost() const OVERRIDE;
+  virtual Profile* GetProfile() const OVERRIDE;
 
  protected:
   void InitMenu();
@@ -148,7 +167,7 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   ExtensionMenuItem* GetExtensionMenuItem(int id) const;
 
   ContextMenuParams params_;
-  TabContents* source_tab_contents_;
+  content::WebContents* source_web_contents_;
   Profile* profile_;
 
   ui::SimpleMenuModel menu_model_;
@@ -175,6 +194,11 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
       const ContextMenuParams& params,
       Profile* profile,
       bool can_cross_incognito);
+
+  // Gets the platform app (if any) associated with the TabContents that we're
+  // in.
+  const Extension* GetPlatformApp() const;
+  void AppendPlatformAppItems();
   bool AppendCustomItems();
   void AppendDeveloperItems();
   void AppendLinkItems();
@@ -214,7 +238,7 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   // independent of that frame (e.g. protocol handler settings).
   void OpenURL(const GURL& url, const GURL& referrer, int64 frame_id,
                WindowOpenDisposition disposition,
-               PageTransition::Type transition);
+               content::PageTransition transition);
 
   // Copy to the clipboard an image located at a point in the RenderView
   void CopyImageAt(int x, int y);
@@ -227,6 +251,8 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
 
   void MediaPlayerActionAt(const gfx::Point& location,
                            const WebKit::WebMediaPlayerAction& action);
+  void PluginActionAt(const gfx::Point& location,
+                      const WebKit::WebPluginAction& action);
 
   bool IsDevCommandEnabled(int id) const;
 
@@ -242,15 +268,20 @@ class RenderViewContextMenu : public ui::SimpleMenuModel::Delegate,
   // a text selection.
   GURL selection_navigation_url_;
 
-  ui::SimpleMenuModel spellcheck_submenu_model_;
   ui::SimpleMenuModel speech_input_submenu_model_;
   ui::SimpleMenuModel bidi_submenu_model_;
   ui::SimpleMenuModel protocol_handler_submenu_model_;
   ScopedVector<ui::SimpleMenuModel> extension_menu_models_;
   scoped_refptr<ProtocolHandlerRegistry> protocol_handler_registry_;
 
-  // An observer that handles a spelling-menu items.
+  // An observer that handles spelling-menu items.
   scoped_ptr<SpellingMenuObserver> spelling_menu_observer_;
+
+  // An observer that handles a 'spell-checker options' submenu.
+  scoped_ptr<SpellCheckerSubMenuObserver> spellchecker_submenu_observer_;
+
+  // An observer that disables menu items when print preview is active.
+  scoped_ptr<PrintPreviewContextMenuObserver> print_preview_menu_observer_;
 
   // Our observers.
   mutable ObserverList<RenderViewContextMenuObserver> observers_;

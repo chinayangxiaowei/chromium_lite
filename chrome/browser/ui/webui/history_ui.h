@@ -9,23 +9,21 @@
 #include <string>
 
 #include "base/string16.h"
+#include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
-#include "chrome/browser/ui/webui/chrome_web_ui.h"
-#include "content/browser/cancelable_request.h"
-#include "content/common/notification_registrar.h"
-
-class GURL;
+#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_ui_controller.h"
+#include "content/public/browser/web_ui_message_handler.h"
 
 // The handler for Javascript messages related to the "history" view.
-class BrowsingHistoryHandler : public WebUIMessageHandler,
-                               public NotificationObserver {
+class BrowsingHistoryHandler : public content::WebUIMessageHandler,
+                               public content::NotificationObserver {
  public:
   BrowsingHistoryHandler();
   virtual ~BrowsingHistoryHandler();
 
   // WebUIMessageHandler implementation.
-  virtual WebUIMessageHandler* Attach(WebUI* web_ui) OVERRIDE;
   virtual void RegisterMessages() OVERRIDE;
 
   // Callback for the "getHistory" message.
@@ -40,10 +38,10 @@ class BrowsingHistoryHandler : public WebUIMessageHandler,
   // Handle for "clearBrowsingData" message.
   void HandleClearBrowsingData(const base::ListValue* args);
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  private:
   // Callback from the history system when the history list is available.
@@ -61,7 +59,7 @@ class BrowsingHistoryHandler : public WebUIMessageHandler,
   // Figure out the query options for a month-wide query.
   history::QueryOptions CreateMonthQueryOptions(int month);
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   // Current search text.
   string16 search_text_;
@@ -72,12 +70,15 @@ class BrowsingHistoryHandler : public WebUIMessageHandler,
   // Our consumer for delete requests to the history service.
   CancelableRequestConsumerT<int, 0> cancelable_delete_consumer_;
 
+  // The list of URLs that are in the process of being deleted.
+  std::set<GURL> urls_to_be_deleted_;
+
   DISALLOW_COPY_AND_ASSIGN(BrowsingHistoryHandler);
 };
 
-class HistoryUI : public ChromeWebUI {
+class HistoryUI : public content::WebUIController {
  public:
-  explicit HistoryUI(TabContents* contents);
+  explicit HistoryUI(content::WebUI* web_ui);
 
   // Return the URL for a given search term.
   static const GURL GetHistoryURLWithSearchText(const string16& text);

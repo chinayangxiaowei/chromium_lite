@@ -12,9 +12,10 @@
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_accessibility_helper.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -25,6 +26,9 @@ namespace {
 // The resolution of the picture we want to get from the camera.
 const int kFrameWidth = 480;
 const int kFrameHeight = 480;
+
+// Time histogram suffix for profile image download.
+const char kProfileDownloadReason[] = "OOBE";
 
 }  // namespace
 
@@ -39,7 +43,11 @@ UserImageScreen::UserImageScreen(ScreenObserver* screen_observer,
   registrar_.Add(
       this,
       chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED,
-      NotificationService::AllSources());
+      content::NotificationService::AllSources());
+  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_IMAGE_UPDATED,
+      content::NotificationService::AllSources());
+  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_IMAGE_UPDATE_FAILED,
+      content::NotificationService::AllSources());
 }
 
 UserImageScreen::~UserImageScreen() {
@@ -57,17 +65,10 @@ void UserImageScreen::Show() {
     return;
 
   actor_->Show();
+  actor_->SelectImage(UserManager::Get()->logged_in_user().image_index());
 
-  UserManager* user_manager = UserManager::Get();
-  std::string logged_in_user = user_manager->logged_in_user().email();
-  int selected_image_index =
-      user_manager->GetUserDefaultImageIndex(logged_in_user);
-  // The image must have been assigned by UserManager on new user login but
-  // under some circumstances (i.e. the data is not written to Local State
-  // or the file was corrupt) |kExternalImageIndex| could still be returned.
-  if (selected_image_index == UserManager::User::kInvalidImageIndex)
-    selected_image_index = 0;
-  actor_->SelectImage(selected_image_index);
+  // Start fetching the profile image.
+  UserManager::Get()->DownloadProfileImage(kProfileDownloadReason);
 
   WizardAccessibilityHelper::GetInstance()->MaybeSpeak(
       l10n_util::GetStringUTF8(IDS_OPTIONS_CHANGE_PICTURE_DIALOG_TEXT).c_str(),
@@ -108,17 +109,9 @@ void UserImageScreen::StopCamera() {
 }
 
 void UserImageScreen::OnPhotoTaken(const SkBitmap& image) {
-  camera_controller_.Stop();
-
   UserManager* user_manager = UserManager::Get();
-  DCHECK(user_manager);
+  user_manager->SaveUserImage(user_manager->logged_in_user().email(), image);
 
-  const UserManager::User& user = user_manager->logged_in_user();
-  DCHECK(!user.email().empty());
-
-  user_manager->SetLoggedInUserImage(image,
-                                     UserManager::User::kExternalImageIndex);
-  user_manager->SaveUserImage(user.email(), image);
   get_screen_observer()->OnExit(ScreenObserver::USER_IMAGE_SELECTED);
 
   UMA_HISTOGRAM_ENUMERATION("UserImage.FirstTimeChoice",
@@ -126,21 +119,23 @@ void UserImageScreen::OnPhotoTaken(const SkBitmap& image) {
                             kHistogramImagesCount);
 }
 
-void UserImageScreen::OnDefaultImageSelected(int index) {
-  camera_controller_.Stop();
-
+void UserImageScreen::OnProfileImageSelected() {
   UserManager* user_manager = UserManager::Get();
-  DCHECK(user_manager);
+  user_manager->SaveUserImageFromProfileImage(
+      user_manager->logged_in_user().email());
 
-  const UserManager::User& user = user_manager->logged_in_user();
-  DCHECK(!user.email().empty());
+  get_screen_observer()->OnExit(ScreenObserver::USER_IMAGE_SELECTED);
 
-  const SkBitmap* image = ResourceBundle::GetSharedInstance().GetBitmapNamed(
-      kDefaultImageResources[index]);
-  user_manager->SetLoggedInUserImage(*image, index);
-  user_manager->SaveUserImagePath(
-      user.email(),
-      GetDefaultImagePath(static_cast<size_t>(index)));
+  UMA_HISTOGRAM_ENUMERATION("UserImage.FirstTimeChoice",
+                            kHistogramImageFromProfile,
+                            kHistogramImagesCount);
+}
+
+void UserImageScreen::OnDefaultImageSelected(int index) {
+  UserManager* user_manager = UserManager::Get();
+  user_manager->SaveUserDefaultImageIndex(
+      user_manager->logged_in_user().email(), index);
+
   get_screen_observer()->OnExit(ScreenObserver::USER_IMAGE_SELECTED);
 
   UMA_HISTOGRAM_ENUMERATION("UserImage.FirstTimeChoice",
@@ -154,16 +149,33 @@ void UserImageScreen::OnActorDestroyed(UserImageScreenActor* actor) {
 }
 
 void UserImageScreen::Observe(int type,
-                              const NotificationSource& source,
-                              const NotificationDetails& details) {
-  if (type != chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED)
-    return;
-
-  bool is_screen_locked = *Details<bool>(details).ptr();
-  if (is_screen_locked)
-    StopCamera();
-  else if (actor_ && actor_->IsCapturing())
-    StartCamera();
+                              const content::NotificationSource& source,
+                              const content::NotificationDetails& details) {
+  switch (type) {
+    case chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED: {
+      bool is_screen_locked = *content::Details<bool>(details).ptr();
+      if (is_screen_locked)
+        StopCamera();
+      else if (actor_ && actor_->IsCapturing())
+        StartCamera();
+      break;
+    }
+    case chrome::NOTIFICATION_PROFILE_IMAGE_UPDATED: {
+      // We've got a new profile image.
+      if (actor_)
+        actor_->AddProfileImage(
+            *content::Details<const SkBitmap>(details).ptr());
+      break;
+    }
+    case chrome::NOTIFICATION_PROFILE_IMAGE_UPDATE_FAILED: {
+      // User has a default profile image or fetching profile image has failed.
+      if (actor_)
+        actor_->OnProfileImageAbsent();
+      break;
+    }
+    default:
+      NOTREACHED();
+  }
 }
 
 }  // namespace chromeos

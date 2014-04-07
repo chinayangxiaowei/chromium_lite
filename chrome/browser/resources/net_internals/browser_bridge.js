@@ -25,6 +25,7 @@ var BrowserBridge = (function() {
     this.hstsObservers_ = [];
     this.httpThrottlingObservers_ = [];
     this.constantsObservers_ = [];
+    this.crosONCFileParseObservers_ = [];
 
     this.pollableDataHelpers_ = {};
     this.pollableDataHelpers_.proxySettings =
@@ -60,6 +61,9 @@ var BrowserBridge = (function() {
     this.pollableDataHelpers_.prerenderInfo =
         new PollableDataHelper('onPrerenderInfoChanged',
                                this.sendGetPrerenderInfo.bind(this));
+    this.pollableDataHelpers_.httpPipeliningStatus =
+        new PollableDataHelper('onHttpPipeliningStatusChanged',
+                               this.sendGetHttpPipeliningStatus.bind(this));
 
     // NetLog entries are all sent to the |SourceTracker|, which both tracks
     // them and manages its own observer list.
@@ -148,6 +152,15 @@ var BrowserBridge = (function() {
       this.send('clearHostResolverCache');
     },
 
+    sendClearBrowserCache: function() {
+      this.send('clearBrowserCache');
+    },
+
+    sendClearAllCache: function() {
+      this.sendClearHostResolverCache();
+      this.sendClearBrowserCache();
+    },
+
     sendStartConnectionTests: function(url) {
       this.send('startConnectionTests', [url]);
     },
@@ -220,6 +233,14 @@ var BrowserBridge = (function() {
       this.send('getSystemLog', [log_key, cellId]);
     },
 
+    importONCFile: function(fileContent, passcode) {
+      this.send('importONCFile', [fileContent, passcode]);
+    },
+
+    sendGetHttpPipeliningStatus: function() {
+      this.send('getHttpPipeliningStatus');
+    },
+
     //--------------------------------------------------------------------------
     // Messages received from the browser.
     //--------------------------------------------------------------------------
@@ -232,7 +253,7 @@ var BrowserBridge = (function() {
     },
 
     receivedConstants: function(constants) {
-      for (var i = 0; i < this.constantsObservers_.length; ++i)
+      for (var i = 0; i < this.constantsObservers_.length; i++)
         this.constantsObservers_[i].onReceivedConstants(constants);
     },
 
@@ -279,32 +300,37 @@ var BrowserBridge = (function() {
     },
 
     receivedStartConnectionTestSuite: function() {
-      for (var i = 0; i < this.connectionTestsObservers_.length; ++i)
+      for (var i = 0; i < this.connectionTestsObservers_.length; i++)
         this.connectionTestsObservers_[i].onStartedConnectionTestSuite();
     },
 
     receivedStartConnectionTestExperiment: function(experiment) {
-      for (var i = 0; i < this.connectionTestsObservers_.length; ++i) {
+      for (var i = 0; i < this.connectionTestsObservers_.length; i++) {
         this.connectionTestsObservers_[i].onStartedConnectionTestExperiment(
             experiment);
       }
     },
 
     receivedCompletedConnectionTestExperiment: function(info) {
-      for (var i = 0; i < this.connectionTestsObservers_.length; ++i) {
+      for (var i = 0; i < this.connectionTestsObservers_.length; i++) {
         this.connectionTestsObservers_[i].onCompletedConnectionTestExperiment(
             info.experiment, info.result);
       }
     },
 
     receivedCompletedConnectionTestSuite: function() {
-      for (var i = 0; i < this.connectionTestsObservers_.length; ++i)
+      for (var i = 0; i < this.connectionTestsObservers_.length; i++)
         this.connectionTestsObservers_[i].onCompletedConnectionTestSuite();
     },
 
     receivedHSTSResult: function(info) {
-      for (var i = 0; i < this.hstsObservers_.length; ++i)
+      for (var i = 0; i < this.hstsObservers_.length; i++)
         this.hstsObservers_[i].onHSTSQueryResult(info);
+    },
+
+    receivedONCFileParse: function(error) {
+      for (var i = 0; i < this.crosONCFileParseObservers_.length; i++)
+        this.crosONCFileParseObservers_[i].onONCFileParse(error);
     },
 
     receivedHttpCacheInfo: function(info) {
@@ -312,7 +338,7 @@ var BrowserBridge = (function() {
     },
 
     receivedHttpThrottlingEnabledPrefChanged: function(enabled) {
-      for (var i = 0; i < this.httpThrottlingObservers_.length; ++i) {
+      for (var i = 0; i < this.httpThrottlingObservers_.length; i++) {
         this.httpThrottlingObservers_[i].onHttpThrottlingEnabledPrefChanged(
             enabled);
       }
@@ -320,6 +346,11 @@ var BrowserBridge = (function() {
 
     receivedPrerenderInfo: function(prerenderInfo) {
       this.pollableDataHelpers_.prerenderInfo.update(prerenderInfo);
+    },
+
+    receivedHttpPipeliningStatus: function(httpPipeliningStatus) {
+      this.pollableDataHelpers_.httpPipeliningStatus.update(
+          httpPipeliningStatus);
     },
 
     //--------------------------------------------------------------------------
@@ -330,6 +361,13 @@ var BrowserBridge = (function() {
     disable: function() {
       this.disabled_ = true;
       this.setPollInterval(0);
+    },
+
+    /**
+     * Returns true if the BrowserBridge has been disabled.
+     */
+    isDisabled: function() {
+      return this.disabled_;
     },
 
     /**
@@ -348,9 +386,13 @@ var BrowserBridge = (function() {
      *
      * Each of these two configurations is formatted as a string, and may be
      * omitted if not yet initialized.
+     *
+     * If |ignoreWhenUnchanged| is true, data is only sent when it changes.
+     * If it's false, data is sent whenever it's received from the browser.
      */
-    addProxySettingsObserver: function(observer) {
-      this.pollableDataHelpers_.proxySettings.addObserver(observer);
+    addProxySettingsObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.proxySettings.addObserver(observer,
+                                                          ignoreWhenUnchanged);
     },
 
     /**
@@ -364,8 +406,9 @@ var BrowserBridge = (function() {
      *   badProxies[i].bad_until: The time when the proxy stops being considered
      *                            bad. Note the time is in time ticks.
      */
-    addBadProxiesObserver: function(observer) {
-      this.pollableDataHelpers_.badProxies.addObserver(observer);
+    addBadProxiesObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.badProxies.addObserver(observer,
+                                                       ignoreWhenUnchanged);
     },
 
     /**
@@ -374,8 +417,9 @@ var BrowserBridge = (function() {
      *
      *   observer.onHostResolverInfoChanged(hostResolverInfo)
      */
-    addHostResolverInfoObserver: function(observer) {
-      this.pollableDataHelpers_.hostResolverInfo.addObserver(observer);
+    addHostResolverInfoObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.hostResolverInfo.addObserver(
+          observer, ignoreWhenUnchanged);
     },
 
     /**
@@ -384,8 +428,9 @@ var BrowserBridge = (function() {
      *
      *   observer.onSocketPoolInfoChanged(socketPoolInfo)
      */
-    addSocketPoolInfoObserver: function(observer) {
-      this.pollableDataHelpers_.socketPoolInfo.addObserver(observer);
+    addSocketPoolInfoObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.socketPoolInfo.addObserver(observer,
+                                                           ignoreWhenUnchanged);
     },
 
     /**
@@ -394,8 +439,9 @@ var BrowserBridge = (function() {
      *
      *   observer.onSpdySessionInfoChanged(spdySessionInfo)
      */
-    addSpdySessionInfoObserver: function(observer) {
-      this.pollableDataHelpers_.spdySessionInfo.addObserver(observer);
+    addSpdySessionInfoObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.spdySessionInfo.addObserver(
+          observer, ignoreWhenUnchanged);
     },
 
     /**
@@ -404,8 +450,9 @@ var BrowserBridge = (function() {
      *
      *   observer.onSpdyStatusChanged(spdyStatus)
      */
-    addSpdyStatusObserver: function(observer) {
-      this.pollableDataHelpers_.spdyStatus.addObserver(observer);
+    addSpdyStatusObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.spdyStatus.addObserver(observer,
+                                                       ignoreWhenUnchanged);
     },
 
     /**
@@ -415,9 +462,10 @@ var BrowserBridge = (function() {
      *   observer.onSpdyAlternateProtocolMappingsChanged(
      *       spdyAlternateProtocolMappings)
      */
-    addSpdyAlternateProtocolMappingsObserver: function(observer) {
+    addSpdyAlternateProtocolMappingsObserver: function(observer,
+                                                       ignoreWhenUnchanged) {
       this.pollableDataHelpers_.spdyAlternateProtocolMappings.addObserver(
-          observer);
+          observer, ignoreWhenUnchanged);
     },
 
     /**
@@ -429,9 +477,11 @@ var BrowserBridge = (function() {
      * Will do nothing if on a platform other than Windows, as service providers
      * are only present on Windows.
      */
-    addServiceProvidersObserver: function(observer) {
-      if (this.pollableDataHelpers_.serviceProviders)
-        this.pollableDataHelpers_.serviceProviders.addObserver(observer);
+    addServiceProvidersObserver: function(observer, ignoreWhenUnchanged) {
+      if (this.pollableDataHelpers_.serviceProviders) {
+        this.pollableDataHelpers_.serviceProviders.addObserver(
+            observer, ignoreWhenUnchanged);
+      }
     },
 
     /**
@@ -453,8 +503,9 @@ var BrowserBridge = (function() {
      *
      *   observer.onHttpCacheInfoChanged(info);
      */
-    addHttpCacheInfoObserver: function(observer) {
-      this.pollableDataHelpers_.httpCacheInfo.addObserver(observer);
+    addHttpCacheInfoObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.httpCacheInfo.addObserver(
+          observer, ignoreWhenUnchanged);
     },
 
     /**
@@ -465,6 +516,16 @@ var BrowserBridge = (function() {
      */
     addHSTSObserver: function(observer) {
       this.hstsObservers_.push(observer);
+    },
+
+    /**
+     * Adds a listener for ONC file parse status. The observer will be called
+     * back with:
+     *
+     *   observer.onONCFileParse(error);
+     */
+    addCrosONCFileParseObserver: function(observer) {
+      this.crosONCFileParseObservers_.push(observer);
     },
 
     /**
@@ -493,8 +554,20 @@ var BrowserBridge = (function() {
      *
      *   observer.onPrerenderInfoChanged(prerenderInfo);
      */
-    addPrerenderInfoObserver: function(observer) {
-      this.pollableDataHelpers_.prerenderInfo.addObserver(observer);
+    addPrerenderInfoObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.prerenderInfo.addObserver(
+          observer, ignoreWhenUnchanged);
+    },
+
+    /**
+     * Adds a listener of HTTP pipelining status. |observer| will be called
+     * back when data is received, through:
+     *
+     *   observer.onHttpPipelineStatusChanged(httpPipeliningStatus)
+     */
+    addHttpPipeliningStatusObserver: function(observer, ignoreWhenUnchanged) {
+      this.pollableDataHelpers_.httpPipeliningStatus.addObserver(
+          observer, ignoreWhenUnchanged);
     },
 
     /**
@@ -540,19 +613,23 @@ var BrowserBridge = (function() {
     },
 
     isObserver: function(object) {
-      for (var i = 0; i < this.observerInfos_.length; ++i) {
+      for (var i = 0; i < this.observerInfos_.length; i++) {
         if (this.observerInfos_[i].observer === object)
           return true;
       }
       return false;
     },
 
-    addObserver: function(observer) {
-      this.observerInfos_.push(new ObserverInfo(observer));
+    /**
+     * If |ignoreWhenUnchanged| is true, we won't send data again until it
+     * changes.
+     */
+    addObserver: function(observer, ignoreWhenUnchanged) {
+      this.observerInfos_.push(new ObserverInfo(observer, ignoreWhenUnchanged));
     },
 
     removeObserver: function(observer) {
-      for (var i = 0; i < this.observerInfos_.length; ++i) {
+      for (var i = 0; i < this.observerInfos_.length; i++) {
         if (this.observerInfos_[i].observer === observer) {
           this.observerInfos_.splice(i, 1);
           return;
@@ -578,9 +655,10 @@ var BrowserBridge = (function() {
       }
 
       // Notify the observers of the change, as needed.
-      for (var i = 0; i < this.observerInfos_.length; ++i) {
+      for (var i = 0; i < this.observerInfos_.length; i++) {
         var observerInfo = this.observerInfos_[i];
-        if (changed || !observerInfo.hasReceivedData) {
+        if (changed || !observerInfo.hasReceivedData ||
+            !observerInfo.ignoreWhenUnchanged) {
           observerInfo.observer[this.observerMethodName_](this.currentData_);
           observerInfo.hasReceivedData = true;
         }
@@ -592,7 +670,7 @@ var BrowserBridge = (function() {
      * (i.e. is visible).
      */
     hasActiveObserver: function() {
-      for (var i = 0; i < this.observerInfos_.length; ++i) {
+      for (var i = 0; i < this.observerInfos_.length; i++) {
         if (this.observerInfos_[i].observer.isActive())
           return true;
       }
@@ -607,9 +685,10 @@ var BrowserBridge = (function() {
    * update following their creation.
    * @constructor
    */
-  function ObserverInfo(observer) {
+  function ObserverInfo(observer, ignoreWhenUnchanged) {
     this.observer = observer;
     this.hasReceivedData = false;
+    this.ignoreWhenUnchanged = ignoreWhenUnchanged;
   }
 
   /**

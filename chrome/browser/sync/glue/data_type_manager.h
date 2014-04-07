@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 #define CHROME_BROWSER_SYNC_GLUE_DATA_TYPE_MANAGER_H__
 #pragma once
 
+#include <list>
 #include <set>
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "base/task.h"
+#include "chrome/browser/sync/api/sync_error.h"
 #include "chrome/browser/sync/glue/data_type_controller.h"
 #include "chrome/browser/sync/internal_api/configure_reason.h"
 #include "chrome/browser/sync/syncable/model_type.h"
@@ -38,30 +39,30 @@ class DataTypeManager {
   // Update NotifyDone() in data_type_manager_impl.cc if you update
   // this.
   enum ConfigureStatus {
+    UNKNOWN = -1,
     OK,                  // Configuration finished without error.
-    ASSOCIATION_FAILED,  // An error occurred during model association.
+    PARTIAL_SUCCESS,     // Some data types had an error while starting up.
     ABORTED,             // Start was aborted by calling Stop() before
                          // all types were started.
-    UNRECOVERABLE_ERROR  // A data type experienced an unrecoverable error
-                         // during startup.
+    RETRY,               // Download failed due to a transient error and it
+                         // is being retried.
+    UNRECOVERABLE_ERROR  // We got an unrecoverable error during startup.
   };
 
-  typedef std::set<syncable::ModelType> TypeSet;
+  typedef syncable::ModelTypeSet TypeSet;
 
-  // Note: location and failed_types are only filled when status is not OK.
+  // Note: |errors| is only filled when status is not OK.
   struct ConfigureResult {
     ConfigureResult();
     ConfigureResult(ConfigureStatus status,
                     TypeSet requested_types);
     ConfigureResult(ConfigureStatus status,
                     TypeSet requested_types,
-                    TypeSet failed_types,
-                    const tracked_objects::Location& location);
+                    const std::list<SyncError>& errors);
     ~ConfigureResult();
     ConfigureStatus status;
     TypeSet requested_types;
-    TypeSet failed_types;
-    tracked_objects::Location location;
+    std::list<SyncError> errors;
   };
 
   virtual ~DataTypeManager() {}
@@ -81,10 +82,10 @@ class DataTypeManager {
   // Note that you may call Configure() while configuration is in
   // progress.  Configuration will be complete only when the
   // desired_types supplied in the last call to Configure is achieved.
-  virtual void Configure(const TypeSet& desired_types,
+  virtual void Configure(TypeSet desired_types,
                          sync_api::ConfigureReason reason) = 0;
 
-  virtual void ConfigureWithoutNigori(const TypeSet& desired_types,
+  virtual void ConfigureWithoutNigori(TypeSet desired_types,
       sync_api::ConfigureReason reason) = 0;
 
   // Synchronously stops all registered data types.  If called after

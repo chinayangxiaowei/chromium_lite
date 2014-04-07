@@ -6,7 +6,12 @@
 
 #include <map>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "content/browser/geolocation/arbitrator_dependency_factory.h"
+#include "content/public/browser/access_token_store.h"
+
+using content::AccessTokenStore;
 
 namespace {
 
@@ -62,9 +67,8 @@ void GeolocationArbitrator::StartProviders(
   if (providers_.empty()) {
     DCHECK(GURL(kDefaultNetworkProviderUrl).is_valid());
     access_token_store_->LoadAccessTokens(
-        &request_consumer_,
-        NewCallback(this,
-                    &GeolocationArbitrator::OnAccessTokenStoresLoaded));
+        base::Bind(&GeolocationArbitrator::OnAccessTokenStoresLoaded,
+                   base::Unretained(this)));
   } else {
     DoStartProviders();
   }

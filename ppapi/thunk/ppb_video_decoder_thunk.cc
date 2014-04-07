@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,12 +17,12 @@ namespace {
 typedef EnterResource<PPB_VideoDecoder_API> EnterVideoDecoder;
 
 PP_Resource Create(PP_Instance instance,
-                   PP_Resource context_3d,
+                   PP_Resource graphics_3d,
                    PP_VideoDecoder_Profile profile) {
   EnterFunction<ResourceCreationAPI> enter(instance, true);
   if (enter.failed())
     return 0;
-  return enter.functions()->CreateVideoDecoder(instance, context_3d, profile);
+  return enter.functions()->CreateVideoDecoder(instance, graphics_3d, profile);
 }
 
 PP_Bool IsVideoDecoder(PP_Resource resource) {
@@ -90,7 +90,7 @@ const PPB_VideoDecoder_Dev g_ppb_videodecoder_thunk = {
 
 }  // namespace
 
-const PPB_VideoDecoder_Dev* GetPPB_VideoDecoder_Thunk() {
+const PPB_VideoDecoder_Dev_0_16* GetPPB_VideoDecoder_Dev_0_16_Thunk() {
   return &g_ppb_videodecoder_thunk;
 }
 

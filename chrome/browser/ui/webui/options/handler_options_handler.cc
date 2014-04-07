@@ -6,14 +6,16 @@
 
 #include <vector>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-
 
 HandlerOptionsHandler::HandlerOptionsHandler() {
 }
@@ -45,26 +47,29 @@ void HandlerOptionsHandler::Initialize() {
   UpdateHandlerList();
   notification_registrar_.Add(
       this, chrome::NOTIFICATION_PROTOCOL_HANDLER_REGISTRY_CHANGED,
-      Source<Profile>(Profile::FromWebUI(web_ui_)));
+      content::Source<Profile>(Profile::FromWebUI(web_ui())));
 }
 
 void HandlerOptionsHandler::RegisterMessages() {
-  DCHECK(web_ui_);
-  web_ui_->RegisterMessageCallback("clearDefault",
-      NewCallback(this, &HandlerOptionsHandler::ClearDefault));
-  web_ui_->RegisterMessageCallback("removeHandler",
-      NewCallback(this, &HandlerOptionsHandler::RemoveHandler));
-  web_ui_->RegisterMessageCallback("setHandlersEnabled",
-      NewCallback(this, &HandlerOptionsHandler::SetHandlersEnabled));
-  web_ui_->RegisterMessageCallback("setDefault",
-      NewCallback(this, &HandlerOptionsHandler::SetDefault));
-  web_ui_->RegisterMessageCallback("removeIgnoredHandler",
-      NewCallback(this, &HandlerOptionsHandler::RemoveIgnoredHandler));
+  web_ui()->RegisterMessageCallback("clearDefault",
+      base::Bind(&HandlerOptionsHandler::ClearDefault,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("removeHandler",
+      base::Bind(&HandlerOptionsHandler::RemoveHandler,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("setHandlersEnabled",
+      base::Bind(&HandlerOptionsHandler::SetHandlersEnabled,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("setDefault",
+      base::Bind(&HandlerOptionsHandler::SetDefault,
+                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("removeIgnoredHandler",
+      base::Bind(&HandlerOptionsHandler::RemoveIgnoredHandler,
+                 base::Unretained(this)));
 }
 
 ProtocolHandlerRegistry* HandlerOptionsHandler::GetProtocolHandlerRegistry() {
-  DCHECK(web_ui_);
-  return Profile::FromWebUI(web_ui_)->GetProtocolHandlerRegistry();
+  return Profile::FromWebUI(web_ui())->GetProtocolHandlerRegistry();
 }
 
 static void GetHandlersAsListValue(
@@ -116,9 +121,9 @@ void HandlerOptionsHandler::UpdateHandlerList() {
 
   scoped_ptr<ListValue> ignored_handlers(new ListValue());
   GetIgnoredHandlers(ignored_handlers.get());
-  web_ui_->CallJavascriptFunction("HandlerOptions.setHandlers", handlers);
-  web_ui_->CallJavascriptFunction("HandlerOptions.setIgnoredHandlers",
-                                  *ignored_handlers);
+  web_ui()->CallJavascriptFunction("HandlerOptions.setHandlers", handlers);
+  web_ui()->CallJavascriptFunction("HandlerOptions.setIgnoredHandlers",
+                                   *ignored_handlers);
 #endif // defined(ENABLE_REGISTER_PROTOCOL_HANDLER)
 }
 
@@ -189,9 +194,10 @@ ProtocolHandler HandlerOptionsHandler::ParseHandlerFromArgs(
                                                 title);
 }
 
-void HandlerOptionsHandler::Observe(int type,
-                                    const NotificationSource& source,
-                                    const NotificationDetails& details) {
+void HandlerOptionsHandler::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_PROTOCOL_HANDLER_REGISTRY_CHANGED)
     UpdateHandlerList();
   else

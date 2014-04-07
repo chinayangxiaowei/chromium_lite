@@ -8,12 +8,12 @@
 #include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "views/controls/button/menu_button.h"
-#include "views/controls/label.h"
-#include "views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/menu/menu_item_view.h"
 
 AfterTranslateInfoBar::AfterTranslateInfoBar(
-    TabContentsWrapper* owner,
+    InfoBarTabHelper* owner,
     TranslateInfoBarDelegate* delegate)
     : TranslateInfoBarBase(owner, delegate),
       label_1_(NULL),
@@ -126,6 +126,8 @@ void AfterTranslateInfoBar::ViewHierarchyChanged(bool is_add,
 
 void AfterTranslateInfoBar::ButtonPressed(views::Button* sender,
                                           const views::Event& event) {
+  if (!owned())
+    return;  // We're closing; don't call anything, it might access the owner.
   if (sender == revert_button_)
     GetDelegate()->RevertTranslation();
   else
@@ -163,6 +165,8 @@ void AfterTranslateInfoBar::TargetLanguageChanged() {
 }
 
 void AfterTranslateInfoBar::RunMenu(View* source, const gfx::Point& pt) {
+  if (!owned())
+    return;  // We're closing; don't call anything, it might access the owner.
   ui::MenuModel* menu_model = NULL;
   views::MenuButton* button = NULL;
   views::MenuItemView::AnchorPosition anchor = views::MenuItemView::TOPLEFT;
@@ -179,5 +183,4 @@ void AfterTranslateInfoBar::RunMenu(View* source, const gfx::Point& pt) {
     anchor = views::MenuItemView::TOPRIGHT;
   }
   RunMenuAt(menu_model, button, anchor);
-  // TODO(pkasting): this may be deleted after rewrite.
 }

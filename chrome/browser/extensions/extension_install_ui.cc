@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/message_loop.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
@@ -33,15 +34,17 @@
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/extensions/url_pattern.h"
 #include "chrome/common/url_constants.h"
-#include "content/common/notification_service.h"
+#include "content/public/browser/notification_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
+using content::WebContents;
+
 static const int kTitleIds[ExtensionInstallUI::NUM_PROMPT_TYPES] = {
-  IDS_EXTENSION_INSTALL_PROMPT_TITLE,
+  0,
   IDS_EXTENSION_INLINE_INSTALL_PROMPT_TITLE,
   IDS_EXTENSION_RE_ENABLE_PROMPT_TITLE,
   IDS_EXTENSION_PERMISSIONS_PROMPT_TITLE
@@ -54,7 +57,7 @@ static const int kHeadingIds[ExtensionInstallUI::NUM_PROMPT_TYPES] = {
 };
 static const int kAcceptButtonIds[ExtensionInstallUI::NUM_PROMPT_TYPES] = {
   IDS_EXTENSION_PROMPT_INSTALL_BUTTON,
-  IDS_EXTENSION_PROMPT_INLINE_INSTALL_BUTTON,
+  IDS_EXTENSION_PROMPT_INSTALL_BUTTON,
   IDS_EXTENSION_PROMPT_RE_ENABLE_BUTTON,
   IDS_EXTENSION_PROMPT_PERMISSIONS_BUTTON
 };
@@ -78,7 +81,10 @@ const int kIconSize = 69;
 
 }  // namespace
 
-ExtensionInstallUI::Prompt::Prompt(PromptType type) : type_(type) {
+ExtensionInstallUI::Prompt::Prompt(PromptType type)
+    : type_(type),
+      average_rating_(0.0),
+      rating_count_(0) {
 }
 
 ExtensionInstallUI::Prompt::~Prompt() {
@@ -90,7 +96,7 @@ void ExtensionInstallUI::Prompt::SetPermissions(
 }
 
 void ExtensionInstallUI::Prompt::SetInlineInstallWebstoreData(
-    std::string localized_user_count,
+    const std::string& localized_user_count,
     double average_rating,
     int rating_count) {
   CHECK_EQ(INLINE_INSTALL_PROMPT, type_);
@@ -99,17 +105,19 @@ void ExtensionInstallUI::Prompt::SetInlineInstallWebstoreData(
   rating_count_ = rating_count;
 }
 
-string16 ExtensionInstallUI::Prompt::GetDialogTitle() const {
-  if (type_ == INLINE_INSTALL_PROMPT) {
-    return l10n_util::GetStringFUTF16(
-      kTitleIds[type_], l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_NAME));
+string16 ExtensionInstallUI::Prompt::GetDialogTitle(
+    const Extension* extension) const {
+  if (type_ == INSTALL_PROMPT) {
+    return l10n_util::GetStringUTF16(extension->is_app() ?
+        IDS_EXTENSION_INSTALL_APP_PROMPT_TITLE :
+        IDS_EXTENSION_INSTALL_EXTENSION_PROMPT_TITLE);
   } else {
     return l10n_util::GetStringUTF16(kTitleIds[type_]);
   }
 }
 
-string16 ExtensionInstallUI::Prompt::GetHeading(std::string extension_name)
-    const {
+string16 ExtensionInstallUI::Prompt::GetHeading(
+    const std::string& extension_name) const {
   if (type_ == INLINE_INSTALL_PROMPT) {
     return UTF8ToUTF16(extension_name);
   } else {
@@ -195,7 +203,8 @@ ExtensionInstallUI::ExtensionInstallUI(Profile* profile)
       delegate_(NULL),
       prompt_type_(NUM_PROMPT_TYPES),
       ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)),
-      use_app_installed_bubble_(false) {
+      use_app_installed_bubble_(false),
+      skip_post_install_ui_(false) {
   // Remember the current theme in case the user presses undo.
   if (profile_) {
     const Extension* previous_theme =
@@ -252,6 +261,9 @@ void ExtensionInstallUI::ConfirmPermissions(
 
 void ExtensionInstallUI::OnInstallSuccess(const Extension* extension,
                                           SkBitmap* icon) {
+  if (skip_post_install_ui_)
+    return;
+
   extension_ = extension;
   SetIcon(icon);
 
@@ -291,7 +303,7 @@ bool disable_failure_ui_for_tests = false;
 
 }  // namespace
 
-void ExtensionInstallUI::OnInstallFailure(const std::string& error) {
+void ExtensionInstallUI::OnInstallFailure(const string16& error) {
   DCHECK(ui_loop_ == MessageLoop::current());
 
   Browser* browser = BrowserList::GetLastActiveWithProfile(profile_);
@@ -300,7 +312,7 @@ void ExtensionInstallUI::OnInstallFailure(const std::string& error) {
   browser::ShowErrorBox(
       browser ? browser->window()->GetNativeHandle() : NULL,
       l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALL_FAILURE_TITLE),
-      UTF8ToUTF16(error));
+      error);
 }
 
 void ExtensionInstallUI::SetIcon(SkBitmap* image) {
@@ -320,10 +332,11 @@ void ExtensionInstallUI::OnImageLoaded(
     case PERMISSIONS_PROMPT:
     case RE_ENABLE_PROMPT:
     case INSTALL_PROMPT: {
-      NotificationService* service = NotificationService::current();
+      content::NotificationService* service =
+          content::NotificationService::current();
       service->Notify(chrome::NOTIFICATION_EXTENSION_WILL_SHOW_CONFIRM_DIALOG,
-          Source<ExtensionInstallUI>(this),
-          NotificationService::NoDetails());
+          content::Source<ExtensionInstallUI>(this),
+          content::NotificationService::NoDetails());
 
       Prompt prompt(prompt_type_);
       prompt.SetPermissions(permissions_->GetWarningMessages());
@@ -344,10 +357,10 @@ void ExtensionInstallUI::OpenAppInstalledNTP(Browser* browser,
       browser->GetSingletonTabNavigateParams(GURL(chrome::kChromeUINewTabURL));
   browser::Navigate(&params);
 
-  NotificationService::current()->Notify(
+  content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_APP_INSTALLED_TO_NTP,
-      Source<TabContents>(params.target_contents->tab_contents()),
-      Details<const std::string>(&app_id));
+      content::Source<WebContents>(params.target_contents->web_contents()),
+      content::Details<const std::string>(&app_id));
 }
 
 // static
@@ -391,8 +404,7 @@ void ExtensionInstallUI::ShowThemeInfoBar(const std::string& previous_theme_id,
 
   // Then either replace that old one or add a new one.
   InfoBarDelegate* new_delegate = GetNewThemeInstalledInfoBarDelegate(
-      tab_contents->tab_contents(), new_theme, previous_theme_id,
-      previous_using_native_theme);
+      tab_contents, new_theme, previous_theme_id, previous_using_native_theme);
 
   if (old_delegate)
     infobar_helper->ReplaceInfoBar(old_delegate, new_delegate);
@@ -412,11 +424,16 @@ void ExtensionInstallUI::ShowConfirmation(PromptType prompt_type) {
 }
 
 InfoBarDelegate* ExtensionInstallUI::GetNewThemeInstalledInfoBarDelegate(
-    TabContents* tab_contents,
+    TabContentsWrapper* tab_contents,
     const Extension* new_theme,
     const std::string& previous_theme_id,
     bool previous_using_native_theme) {
-  return new ThemeInstalledInfoBarDelegate(tab_contents, new_theme,
-                                           previous_theme_id,
-                                           previous_using_native_theme);
+  Profile* profile = tab_contents->profile();
+  return new ThemeInstalledInfoBarDelegate(
+      tab_contents->infobar_tab_helper(),
+      profile->GetExtensionService(),
+      ThemeServiceFactory::GetForProfile(profile),
+      new_theme,
+      previous_theme_id,
+      previous_using_native_theme);
 }

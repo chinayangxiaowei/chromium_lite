@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,12 +19,16 @@ ImageUtil.trace = (function() {
   };
 
   PerformanceTrace.prototype.report = function(key, value) {
-    if (!this.container_) return;
     if (!(key in this.lines_)) {
-      var div = this.lines_[key] = document.createElement('div');
-      this.container_.appendChild(div);
+      if (this.container_) {
+        var div = this.lines_[key] = document.createElement('div');
+        this.container_.appendChild(div);
+      } else {
+        this.lines_[key] = {};
+      }
     }
     this.lines_[key].textContent = key + ': ' + value;
+    if (localStorage.logTrace) this.dumpLine(key);
   };
 
   PerformanceTrace.prototype.resetTimer = function(key) {
@@ -33,6 +37,15 @@ ImageUtil.trace = (function() {
 
   PerformanceTrace.prototype.reportTimer = function(key) {
     this.report(key, (Date.now() - this.timers_[key]) + 'ms');
+  };
+
+  PerformanceTrace.prototype.dump = function() {
+    for (var key in this.lines_)
+      this.dumpLine(key);
+  };
+
+  PerformanceTrace.prototype.dumpLine = function(key) {
+    console.log('trace.' + this.lines_[key].textContent);
   };
 
   return new PerformanceTrace();
@@ -152,6 +165,20 @@ Rect.prototype.inside = function(x, y) {
          this.top <= y && y < this.top + this.height;
 };
 
+Rect.prototype.intersects = function(rect) {
+  return (this.left + this.width) > rect.left &&
+         (rect.left + rect.width) > this.left &&
+         (this.top + this.height) > rect.top &&
+         (rect.top + rect.height) > this.top;
+};
+
+Rect.prototype.contains = function(rect) {
+  return (this.left <= rect.left) &&
+         (rect.left + rect.width) <= (this.left + this.width) &&
+         (this.top <= rect.top) &&
+         (rect.top + rect.height) <= (this.top + this.height);
+};
+
 /**
  * Clamp the rectangle to the bounds by moving it.
  * Decrease the size only if necessary.
@@ -182,6 +209,10 @@ Rect.prototype.clamp = function(bounds) {
   return rect;
 };
 
+Rect.prototype.toString = function() {
+  return '(' + this.left + ',' + this.top + '):' +
+         '(' + (this.left + this.width) + ',' + (this.top + this.height) + ')';
+};
 /*
  * Useful shortcuts for drawing (static functions).
  */
@@ -253,3 +284,215 @@ Circle.prototype.inside = function(x, y) {
   y -= this.y;
   return x * x + y * y <= this.squaredR;
 };
+
+/**
+ * Copy an image applying scaling and rotation.
+ *
+ * @param {HTMLCanvasElement} dst destination
+ * @param {HTMLCanvasElement|HTMLImageElement} src source
+ * @param {number} scaleX
+ * @param {number} scaleY
+ * @param {number} angle (in radians)
+ */
+ImageUtil.drawImageTransformed = function(dst, src, scaleX, scaleY, angle) {
+  var context = dst.getContext('2d');
+  context.save();
+  context.translate(context.canvas.width / 2, context.canvas.height / 2);
+  context.rotate(angle);
+  context.scale(scaleX, scaleY);
+  context.drawImage(src, -src.width / 2, -src.height / 2);
+  context.restore();
+};
+
+
+ImageUtil.deepCopy = function(obj) {
+  if (obj == null || typeof obj != 'object')
+    return obj;  // Copy built-in types as is.
+
+  var res;
+  if (obj.constructor.name == 'Array') {
+    // obj.constructor == Array would give a false negative if obj came
+    // from a different context.
+    res = [];
+    for (var i = 0; i != obj.length; i++) {
+      res[i] = ImageUtil.deepCopy(obj[i]);
+    }
+  } else {
+    res = {};
+    for (var p in obj) {
+      res[p] = ImageUtil.deepCopy(obj[p]);
+    }
+  }
+  return res;
+};
+
+ImageUtil.setAttribute = function(element, attribute, on) {
+  if (on)
+    element.setAttribute(attribute, attribute);
+  else
+    element.removeAttribute(attribute);
+};
+
+/*
+ * ImageLoader loads an image from a given URL into a canvas in two steps:
+ * 1. Loads the image into an HTMLImageElement.
+ * 2. Copies pixels from HTMLImageElement to HTMLCanvasElement. This is done
+ *    stripe-by-stripe to avoid freezing up the UI. The transform is taken into
+ *    account.
+ */
+
+ImageUtil.ImageLoader = function(document) {
+  this.document_ = document;
+  this.image_ = null;
+};
+
+/**
+ * @param {string} url
+ * @param {{scaleX: number, scaleY: number, rotate90: number}} transform
+ * @param {function(HTMLCanvasElement} callback
+ * @param {number} opt_delay Load delay in milliseconds, useful to let the
+ *        animations play out before the computation heavy image loading starts.
+ */
+ImageUtil.ImageLoader.prototype.load = function(
+    url, transform, callback, opt_delay) {
+  this.cancel();
+
+  this.url_ = url;
+  this.transform_ = transform || { scaleX: 1, scaleY: 1, rotate90: 0};
+  this.callback_ = callback;
+
+  var self = this;
+  function startLoad() {
+    ImageUtil.metrics.startInterval(ImageUtil.getMetricName('LoadTime'));
+    self.timeout_ = null;
+    // The clients of this class sometimes request the same url repeatedly.
+    // The onload fires only if the src is different from the previous value.
+    // To work around that we create a new Image every time.
+    self.image_ = new Image();
+    self.image_.onload = function(e) {
+      self.image_ = null;
+      self.convertImage_(e.target);
+    };
+    self.image_.src = url;
+  }
+  if (opt_delay) {
+    this.timeout_ = setTimeout(startLoad, opt_delay);
+  } else {
+    startLoad();
+  }
+};
+
+ImageUtil.ImageLoader.prototype.isBusy = function() {
+  return !!this.callback_;
+};
+
+ImageUtil.ImageLoader.prototype.isLoading = function(url) {
+  return this.isBusy() && (this.url_ == url);
+};
+
+ImageUtil.ImageLoader.prototype.setCallback = function(callback) {
+  this.callback_ = callback;
+};
+
+ImageUtil.ImageLoader.prototype.cancel = function() {
+  if (!this.callback_) return;
+  this.callback_ = null;
+  if (this.timeout_) {
+    clearTimeout(this.timeout_);
+    this.timeout_ = null;
+  }
+  if (this.image_) {
+    this.image_.onload = function(){};
+    this.image_ = null;
+  }
+};
+
+ImageUtil.ImageLoader.prototype.convertImage_ = function(image) {
+  var canvas = this.document_.createElement('canvas');
+
+  if (this.transform_.rotate90 & 1) {  // Rotated +/-90deg, swap the dimensions.
+    canvas.width = image.height;
+    canvas.height = image.width;
+  } else  {
+    canvas.width = image.width;
+    canvas.height = image.height;
+  }
+
+  var context = canvas.getContext('2d');
+  context.save();
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(this.transform_.rotate90 * Math.PI/2);
+  context.scale(this.transform_.scaleX, this.transform_.scaleY);
+
+  var stripCount = Math.ceil(image.width * image.height / ( 1 << 21));
+  var step = Math.max(16, Math.ceil(image.height / stripCount)) & 0xFFFFF0;
+
+  this.copyStrip_(context, image, 0, step);
+};
+
+ImageUtil.ImageLoader.prototype.copyStrip_ = function(
+    context, image, firstRow, rowCount) {
+  var lastRow = Math.min (firstRow + rowCount, image.height);
+
+  context.drawImage(
+      image, 0, firstRow, image.width, lastRow - firstRow,
+      -image.width / 2, firstRow - image.height / 2,
+      image.width, lastRow - firstRow);
+
+  if (lastRow == image.height) {
+    context.restore();
+    if (this.url_.substr(0, 5) != 'data:') {  // Ignore data urls.
+      ImageUtil.metrics.recordInterval(ImageUtil.getMetricName('LoadTime'));
+    }
+    var callback = this.callback_;
+    this.callback_ = null;
+    callback(context.canvas);
+  } else {
+    var self = this;
+    this.timeout_ = setTimeout(
+        function() {
+          self.timeout_ = null;
+          self.copyStrip_(context, image, lastRow, rowCount);
+        }, 0);
+  }
+};
+
+ImageUtil.removeChildren = function(element) {
+  element.textContent = '';
+};
+
+ImageUtil.getFullNameFromUrl = function(url) {
+  url = unescape(url);
+  if (url.indexOf('/') != -1)
+    return url.substr(url.lastIndexOf('/') + 1);
+  else
+    return url;
+};
+
+ImageUtil.getFileNameFromFullName = function(name) {
+  var index = name.lastIndexOf('.');
+  if (index != -1)
+    return name.substr(0, index);
+  else
+    return name;
+};
+
+ImageUtil.getFileNameFromUrl = function(url) {
+  return ImageUtil.getFileNameFromFullName(ImageUtil.getFullNameFromUrl(url));
+};
+
+ImageUtil.replaceFileNameInFullName = function(fullName, name) {
+  var index = fullName.lastIndexOf('.');
+  if (index != -1)
+    return name + fullName.substr(index);
+  else
+    return name;
+};
+
+ImageUtil.metrics = null;
+
+ImageUtil.getMetricName = function(name) { return 'PhotoEditor.' + name }
+
+// Used for metrics reporting, keep in sync with the histogram description.
+ImageUtil.FILE_TYPES = ['jpg', 'png', 'gif', 'bmp', 'webp'];
+

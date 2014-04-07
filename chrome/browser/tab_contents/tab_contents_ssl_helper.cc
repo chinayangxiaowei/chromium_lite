@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,22 +14,25 @@
 #include "base/values.h"
 #include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/infobars/infobar.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/ssl_add_cert_handler.h"
 #include "chrome/browser/ssl_client_certificate_selector.h"
 #include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
-#include "chrome/browser/tab_contents/infobar.h"
 #include "chrome/browser/tab_contents/simple_alert_infobar_delegate.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/browser/ssl/ssl_client_auth_handler.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "net/base/net_errors.h"
+#include "net/base/x509_certificate.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -41,29 +44,11 @@ gfx::Image* GetCertIcon() {
       IDR_INFOBAR_SAVE_PASSWORD);
 }
 
-bool CertMatchesFilter(const net::X509Certificate& cert,
-                       const base::DictionaryValue& filter) {
-  // TODO(markusheintz): This is the minimal required filter implementation.
-  // Implement a better matcher.
-
-  // An empty filter matches any client certificate since no requirements are
-  // specified at all.
-  if (filter.empty())
-    return true;
-
-  std::string common_name;
-  if (filter.GetString("ISSUER.CN", &common_name) &&
-      (cert.issuer().common_name == common_name)) {
-    return true;
-  }
-  return false;
-}
-
 // SSLCertAddedInfoBarDelegate ------------------------------------------------
 
 class SSLCertAddedInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  SSLCertAddedInfoBarDelegate(TabContents* tab_contents,
+  SSLCertAddedInfoBarDelegate(InfoBarTabHelper* infobar_helper,
                               net::X509Certificate* cert);
 
  private:
@@ -77,15 +62,13 @@ class SSLCertAddedInfoBarDelegate : public ConfirmInfoBarDelegate {
   virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
   virtual bool Accept() OVERRIDE;
 
-  TabContents* tab_contents_;  // The TabContents we are attached to.
   scoped_refptr<net::X509Certificate> cert_;  // The cert we added.
 };
 
 SSLCertAddedInfoBarDelegate::SSLCertAddedInfoBarDelegate(
-    TabContents* tab_contents,
+    InfoBarTabHelper* infobar_helper,
     net::X509Certificate* cert)
-    : ConfirmInfoBarDelegate(tab_contents),
-      tab_contents_(tab_contents),
+    : ConfirmInfoBarDelegate(infobar_helper),
       cert_(cert) {
 }
 
@@ -117,7 +100,8 @@ string16 SSLCertAddedInfoBarDelegate::GetButtonLabel(
 }
 
 bool SSLCertAddedInfoBarDelegate::Accept() {
-  ShowCertificateViewer(tab_contents_->GetDialogRootWindow(), cert_);
+  ShowCertificateViewer(
+      owner()->web_contents()->GetView()->GetTopLevelNativeWindow(), cert_);
   return false;  // Hiding the infobar just as the dialog opens looks weird.
 }
 
@@ -126,7 +110,8 @@ bool SSLCertAddedInfoBarDelegate::Accept() {
 
 // TabContentsSSLHelper::SSLAddCertData ---------------------------------------
 
-class TabContentsSSLHelper::SSLAddCertData : public NotificationObserver {
+class TabContentsSSLHelper::SSLAddCertData
+    : public content::NotificationObserver {
  public:
   explicit SSLAddCertData(TabContentsWrapper* tab_contents);
   virtual ~SSLAddCertData();
@@ -140,14 +125,14 @@ class TabContentsSSLHelper::SSLAddCertData : public NotificationObserver {
   void ShowErrorInfoBar(const string16& message);
 
  private:
-  // NotificationObserver:
+  // content::NotificationObserver:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details);
 
   TabContentsWrapper* tab_contents_;
   InfoBarDelegate* infobar_delegate_;
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(SSLAddCertData);
 };
@@ -156,7 +141,7 @@ TabContentsSSLHelper::SSLAddCertData::SSLAddCertData(
     TabContentsWrapper* tab_contents)
     : tab_contents_(tab_contents),
       infobar_delegate_(NULL) {
-  Source<TabContentsWrapper> source(tab_contents_);
+  content::Source<InfoBarTabHelper> source(tab_contents_->infobar_tab_helper());
   registrar_.Add(this, chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED,
                  source);
   registrar_.Add(this, chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REPLACED,
@@ -179,19 +164,19 @@ void TabContentsSSLHelper::SSLAddCertData::ShowInfoBar(
 void TabContentsSSLHelper::SSLAddCertData::ShowErrorInfoBar(
     const string16& message) {
   ShowInfoBar(new SimpleAlertInfoBarDelegate(
-      tab_contents_->tab_contents(), GetCertIcon(), message, true));
+      tab_contents_->infobar_tab_helper(), GetCertIcon(), message, true));
 }
 
 void TabContentsSSLHelper::SSLAddCertData::Observe(
     int type,
-    const NotificationSource& source,
-    const NotificationDetails& details) {
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED ||
          type == chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REPLACED);
   if (infobar_delegate_ ==
       ((type == chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED) ?
-          Details<InfoBarRemovedDetails>(details)->first :
-          Details<InfoBarReplacedDetails>(details)->first))
+          content::Details<InfoBarRemovedDetails>(details)->first :
+          content::Details<InfoBarReplacedDetails>(details)->first))
     infobar_delegate_ = NULL;
 }
 
@@ -205,49 +190,10 @@ TabContentsSSLHelper::TabContentsSSLHelper(TabContentsWrapper* tab_contents)
 TabContentsSSLHelper::~TabContentsSSLHelper() {
 }
 
-void TabContentsSSLHelper::SelectClientCertificate(
-    scoped_refptr<SSLClientAuthHandler> handler) {
-  net::SSLCertRequestInfo* cert_request_info = handler->cert_request_info();
-  GURL requesting_url("https://" + cert_request_info->host_and_port);
-  DCHECK(requesting_url.is_valid()) << "Invalid URL string: https://"
-                                    << cert_request_info->host_and_port;
-
-  HostContentSettingsMap* map =
-      tab_contents_->profile()->GetHostContentSettingsMap();
-  scoped_ptr<Value> filter(map->GetContentSettingValue(
-      requesting_url,
-      requesting_url,
-      CONTENT_SETTINGS_TYPE_AUTO_SELECT_CERTIFICATE,
-      std::string()));
-
-  scoped_refptr<net::X509Certificate> selected_cert;
-  if (filter.get()) {
-    // Try to automatically select a client certificate.
-    DCHECK(filter->IsType(Value::TYPE_DICTIONARY));
-    DictionaryValue* filter_dict = static_cast<DictionaryValue*>(filter.get());
-
-    const std::vector<scoped_refptr<net::X509Certificate> >& all_client_certs =
-        cert_request_info->client_certs;
-    for (size_t i = 0; i < all_client_certs.size(); ++i) {
-      if (CertMatchesFilter(*all_client_certs[i], *filter_dict)) {
-        selected_cert = all_client_certs[i];
-        // Use the first certificate that is matched by the filter.
-        break;
-      }
-    }
-  }
-
-  if (selected_cert) {
-    handler->CertificateSelected(selected_cert);
-  } else {
-    ShowClientCertificateRequestDialog(handler);
-  }
-}
-
 void TabContentsSSLHelper::ShowClientCertificateRequestDialog(
     scoped_refptr<SSLClientAuthHandler> handler) {
   browser::ShowSSLClientCertificateSelector(
-      tab_contents_->tab_contents(), handler->cert_request_info(), handler);
+      tab_contents_, handler->cert_request_info(), handler);
 }
 
 void TabContentsSSLHelper::OnVerifyClientCertificateError(
@@ -271,7 +217,7 @@ void TabContentsSSLHelper::OnAddClientCertificateSuccess(
   SSLAddCertData* add_cert_data = GetAddCertData(handler);
   // Display an infobar to inform the user.
   add_cert_data->ShowInfoBar(new SSLCertAddedInfoBarDelegate(
-      tab_contents_->tab_contents(), handler->cert()));
+      tab_contents_->infobar_tab_helper(), handler->cert()));
 }
 
 void TabContentsSSLHelper::OnAddClientCertificateError(

@@ -1,23 +1,27 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/sessions_ui.h"
 
 #include <algorithm>
+#include <vector>
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/glue/synced_session.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/common/chrome_version_info.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/browser/webui/web_ui.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -25,6 +29,9 @@
 #include "grit/theme_resources_standard.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 namespace {
 
@@ -61,7 +68,6 @@ class SessionsDOMHandler : public WebUIMessageHandler {
   virtual ~SessionsDOMHandler();
 
   // WebUIMessageHandler implementation.
-  virtual WebUIMessageHandler* Attach(WebUI* web_ui) OVERRIDE;
   virtual void RegisterMessages() OVERRIDE;
 
  private:
@@ -78,8 +84,9 @@ class SessionsDOMHandler : public WebUIMessageHandler {
   void GetTabList(const std::vector<SessionTab*>& tabs, ListValue* tab_list);
 
   // Appends each entry in |windows| to |window_list| as a DictonaryValue.
-  void GetWindowList(const std::vector<SessionWindow*>& windows,
-                     ListValue* window_list);
+  void GetWindowList(
+      const browser_sync::SyncedSession::SyncedWindowMap& windows,
+      ListValue* window_list);
 
   // Appends each entry in |sessions| to |session_list| as a DictonaryValue.
   void GetSessionList(
@@ -105,13 +112,10 @@ SessionsDOMHandler::SessionsDOMHandler() {
 SessionsDOMHandler::~SessionsDOMHandler() {
 }
 
-WebUIMessageHandler* SessionsDOMHandler::Attach(WebUI* web_ui) {
-  return WebUIMessageHandler::Attach(web_ui);
-}
-
 void SessionsDOMHandler::RegisterMessages() {
-  web_ui_->RegisterMessageCallback("requestSessionList",
-      NewCallback(this, &SessionsDOMHandler::HandleRequestSessions));
+  web_ui()->RegisterMessageCallback("requestSessionList",
+      base::Bind(&SessionsDOMHandler::HandleRequestSessions,
+                 base::Unretained(this)));
 }
 
 void SessionsDOMHandler::HandleRequestSessions(const ListValue* args) {
@@ -121,10 +125,11 @@ void SessionsDOMHandler::HandleRequestSessions(const ListValue* args) {
 browser_sync::SessionModelAssociator* SessionsDOMHandler::GetModelAssociator() {
   // We only want to get the model associator if there is one, and it is done
   // syncing sessions.
-  Profile* profile = Profile::FromWebUI(web_ui_);
+  Profile* profile = Profile::FromWebUI(web_ui());
   if (!profile->HasProfileSyncService())
     return NULL;
-  ProfileSyncService* service = profile->GetProfileSyncService();
+  ProfileSyncService* service(ProfileSyncServiceFactory::
+      GetInstance()->GetForProfile(profile));
   if (!service->ShouldPushChanges())
     return NULL;
   return service->GetSessionModelAssociator();
@@ -156,10 +161,11 @@ void SessionsDOMHandler::GetTabList(
 }
 
 void SessionsDOMHandler::GetWindowList(
-    const std::vector<SessionWindow*>& windows, ListValue* window_list) {
-  for (std::vector<SessionWindow*>::const_iterator it =
+    const browser_sync::SyncedSession::SyncedWindowMap& windows,
+    ListValue* window_list) {
+  for (browser_sync::SyncedSession::SyncedWindowMap::const_iterator it =
       windows.begin(); it != windows.end(); ++it) {
-    const SessionWindow* window = *it;
+    const SessionWindow* window = it->second;
     scoped_ptr<DictionaryValue> window_data(new DictionaryValue());
     window_data->SetInteger("id", window->window_id.id());
     window_data->SetDouble("timestamp",
@@ -179,6 +185,7 @@ void SessionsDOMHandler::GetSessionList(
     const browser_sync::SyncedSession* session = *it;
     scoped_ptr<DictionaryValue> session_data(new DictionaryValue());
     session_data->SetString("tag", session->session_tag);
+    session_data->SetString("name", session->session_name);
     scoped_ptr<ListValue> window_list(new ListValue());
     GetWindowList(session->windows, window_list.get());
     session_data->Set("windows", window_list.release());
@@ -190,9 +197,12 @@ void SessionsDOMHandler::GetAllTabs(
     const std::vector<const browser_sync::SyncedSession*>& sessions,
     std::vector<SessionTab*>* all_tabs) {
   for (size_t i = 0; i < sessions.size(); i++) {
-    const std::vector<SessionWindow*>& windows = sessions[i]->windows;
-    for (size_t j = 0; j < windows.size(); j++) {
-      const std::vector<SessionTab*>& tabs = windows[j]->tabs;
+    const browser_sync::SyncedSession::SyncedWindowMap& windows =
+        sessions[i]->windows;
+    for (browser_sync::SyncedSession::SyncedWindowMap::const_iterator iter =
+             windows.begin();
+         iter != windows.end(); ++iter) {
+      const std::vector<SessionTab*>& tabs = iter->second->tabs;
       all_tabs->insert(all_tabs->end(), tabs.begin(), tabs.end());
     }
   }
@@ -236,9 +246,9 @@ void SessionsDOMHandler::UpdateUI() {
 
   // Send the results to JavaScript, even if the lists are empty, so that the
   // UI can show a message that there is nothing.
-  web_ui_->CallJavascriptFunction("updateSessionList",
-                                  session_list,
-                                  magic_list);
+  web_ui()->CallJavascriptFunction("updateSessionList",
+                                   session_list,
+                                   magic_list);
 }
 
 }  // namespace
@@ -249,11 +259,11 @@ void SessionsDOMHandler::UpdateUI() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-SessionsUI::SessionsUI(TabContents* contents) : ChromeWebUI(contents) {
-  AddMessageHandler((new SessionsDOMHandler())->Attach(this));
+SessionsUI::SessionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  web_ui->AddMessageHandler(new SessionsDOMHandler());
 
   // Set up the chrome://sessions/ source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  Profile* profile = Profile::FromWebUI(web_ui);
   profile->GetChromeURLDataManager()->AddDataSource(
       CreateSessionsUIHTMLSource());
 }

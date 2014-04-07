@@ -3,10 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/logging.h"
+#include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
+#include "chrome/browser/infobars/infobar.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
-#include "chrome/browser/tab_contents/infobar.h"
 #import "chrome/browser/ui/cocoa/animatable_view.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
@@ -14,13 +15,13 @@
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/common/notification_details.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "skia/ext/skia_utils_mac.h"
 
 // C++ class that receives INFOBAR_ADDED and INFOBAR_REMOVED
 // notifications and proxies them back to |controller|.
-class InfoBarNotificationObserver : public NotificationObserver {
+class InfoBarNotificationObserver : public content::NotificationObserver {
  public:
   InfoBarNotificationObserver(InfoBarContainerController* controller)
       : controller_(controller) {
@@ -29,19 +30,20 @@ class InfoBarNotificationObserver : public NotificationObserver {
  private:
   // NotificationObserver implementation
   void Observe(int type,
-               const NotificationSource& source,
-               const NotificationDetails& details) {
-    TabContentsWrapper* tab_contents = Source<TabContentsWrapper>(source).ptr();
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) {
+    InfoBarTabHelper* infobar_helper =
+        content::Source<InfoBarTabHelper>(source).ptr();
     switch (type) {
       case chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_ADDED:
-        [controller_ addInfoBar:Details<InfoBarAddedDetails>(details)->
-                                    CreateInfoBar(tab_contents)
+        [controller_ addInfoBar:content::Details<InfoBarAddedDetails>(details)->
+                                    CreateInfoBar(infobar_helper)
                         animate:YES];
         break;
 
       case chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED: {
         InfoBarRemovedDetails* removed_details =
-            Details<InfoBarRemovedDetails>(details).ptr();
+            content::Details<InfoBarRemovedDetails>(details).ptr();
         [controller_
             closeInfoBarsForDelegate:removed_details->first
                              animate:(removed_details->second ? YES : NO)];
@@ -50,11 +52,11 @@ class InfoBarNotificationObserver : public NotificationObserver {
 
       case chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REPLACED: {
         InfoBarReplacedDetails* replaced_details =
-            Details<InfoBarReplacedDetails>(details).ptr();
+            content::Details<InfoBarReplacedDetails>(details).ptr();
         [controller_ closeInfoBarsForDelegate:replaced_details->first
                                       animate:NO];
         [controller_ addInfoBar:replaced_details->second->
-                                    CreateInfoBar(tab_contents)
+                                    CreateInfoBar(infobar_helper)
                         animate:NO];
         break;
       }
@@ -84,7 +86,7 @@ class InfoBarNotificationObserver : public NotificationObserver {
 - (id)initWithResizeDelegate:(id<ViewResizer>)resizeDelegate {
   DCHECK(resizeDelegate);
   if ((self = [super initWithNibName:@"InfoBarContainer"
-                              bundle:base::mac::MainAppBundle()])) {
+                              bundle:base::mac::FrameworkBundle()])) {
     resizeDelegate_ = resizeDelegate;
     infoBarObserver_.reset(new InfoBarNotificationObserver(self));
 
@@ -144,11 +146,11 @@ class InfoBarNotificationObserver : public NotificationObserver {
         currentTabContents_->infobar_tab_helper();
     for (size_t i = 0; i < infobar_helper->infobar_count(); ++i) {
       InfoBar* infobar = infobar_helper->
-          GetInfoBarDelegateAt(i)->CreateInfoBar(currentTabContents_);
+          GetInfoBarDelegateAt(i)->CreateInfoBar(infobar_helper);
       [self addInfoBar:infobar animate:NO];
     }
 
-    Source<TabContentsWrapper> source(currentTabContents_);
+    content::Source<InfoBarTabHelper> source(infobar_helper);
     registrar_.Add(infoBarObserver_.get(),
                    chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_ADDED, source);
     registrar_.Add(infoBarObserver_.get(),
@@ -240,6 +242,10 @@ class InfoBarNotificationObserver : public NotificationObserver {
   for (InfoBarController* controller in
        [NSArray arrayWithArray:infobarControllers_.get()]) {
     [[controller animatableView] stopAnimation];
+    // This code can be executed while InfoBarController is still on the stack,
+    // so we retain and autorelease the controller to prevent it from being
+    // dealloc'ed too early.
+    [[controller retain] autorelease];
     [[controller view] removeFromSuperview];
   }
   [infobarControllers_ removeAllObjects];

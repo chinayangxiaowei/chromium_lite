@@ -9,25 +9,29 @@
 #include "base/threading/thread.h"
 #include "base/values.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/download/download_service.h"
+#include "chrome/browser/download/download_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/browser/ui/webui/downloads_dom_handler.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/browser_thread.h"
-#include "content/browser/download/download_manager.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/theme_resources_standard.h"
 #include "ui/base/resource/resource_bundle.h"
 
+using content::DownloadManager;
+using content::WebContents;
 
 namespace {
 
-ChromeWebUIDataSource *CreateDownloadsUIHTMLSource() {
-  ChromeWebUIDataSource *source =
+ChromeWebUIDataSource* CreateDownloadsUIHTMLSource() {
+  ChromeWebUIDataSource* source =
       new ChromeWebUIDataSource(chrome::kChromeUIDownloadsHost);
 
   source->AddLocalizedString("title", IDS_DOWNLOAD_TITLE);
@@ -48,7 +52,10 @@ ChromeWebUIDataSource *CreateDownloadsUIHTMLSource() {
 
   // Dangerous file.
   source->AddLocalizedString("danger_file_desc", IDS_PROMPT_DANGEROUS_DOWNLOAD);
-  source->AddLocalizedString("danger_url_desc", IDS_PROMPT_UNSAFE_DOWNLOAD_URL);
+  source->AddLocalizedString("danger_url_desc",
+                             IDS_PROMPT_MALICIOUS_DOWNLOAD_URL);
+  source->AddLocalizedString("danger_content_desc",
+                             IDS_PROMPT_MALICIOUS_DOWNLOAD_CONTENT);
   source->AddLocalizedString("danger_save", IDS_CONFIRM_DOWNLOAD);
   source->AddLocalizedString("danger_discard", IDS_DISCARD_DOWNLOAD);
 
@@ -78,16 +85,16 @@ ChromeWebUIDataSource *CreateDownloadsUIHTMLSource() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-DownloadsUI::DownloadsUI(TabContents* contents) : ChromeWebUI(contents) {
-  DownloadManager* dlm = GetProfile()->GetDownloadManager();
+DownloadsUI::DownloadsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+  Profile* profile = Profile::FromWebUI(web_ui);
+  DownloadManager* dlm =
+      DownloadServiceFactory::GetForProfile(profile)->GetDownloadManager();
 
   DownloadsDOMHandler* handler = new DownloadsDOMHandler(dlm);
-  AddMessageHandler(handler);
-  handler->Attach(this);
+  web_ui->AddMessageHandler(handler);
   handler->Init();
 
   // Set up the chrome://downloads/ source.
-  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
   profile->GetChromeURLDataManager()->AddDataSource(
       CreateDownloadsUIHTMLSource());
 }

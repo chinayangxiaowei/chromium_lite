@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,18 @@
 #include "base/sys_string_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "base/utf_string_conversions.h"
+#include "remoting/jingle_glue/xmpp_signal_strategy.h"
 #include "remoting/base/auth_token_util.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
 #include "remoting/host/desktop_environment.h"
-#include "remoting/host/host_config.h"
 #include "remoting/host/host_key_pair.h"
-#include "remoting/host/in_memory_host_config.h"
+#include "remoting/host/host_secret.h"
+#include "remoting/host/it2me_host_user_interface.h"
 #include "remoting/host/plugin/host_log_handler.h"
 #include "remoting/host/plugin/policy_hack/nat_policy.h"
 #include "remoting/host/register_support_host_request.h"
-#include "remoting/host/support_access_verifier.h"
+#include "remoting/protocol/it2me_host_authenticator_factory.h"
 
 namespace remoting {
 
@@ -41,7 +42,8 @@ namespace remoting {
 // }
 //
 // attribute Function void logDebugInfo(string);
-// attribute Function void onStateChanged();
+// attribute Function void onNatTraversalPolicyChanged(boolean);
+// attribute Function void onStateChanged(state);
 //
 // // The |auth_service_with_token| parameter should be in the format
 // // "auth_service:auth_token".  An example would be "oauth2:1/2a3912vd".
@@ -56,6 +58,8 @@ const char* kAttrNameAccessCodeLifetime = "accessCodeLifetime";
 const char* kAttrNameClient = "client";
 const char* kAttrNameState = "state";
 const char* kAttrNameLogDebugInfo = "logDebugInfo";
+const char* kAttrNameOnNatTraversalPolicyChanged =
+    "onNatTraversalPolicyChanged";
 const char* kAttrNameOnStateChanged = "onStateChanged";
 const char* kFuncNameConnect = "connect";
 const char* kFuncNameDisconnect = "disconnect";
@@ -95,10 +99,10 @@ HostNPScriptObject::HostNPScriptObject(
 HostNPScriptObject::~HostNPScriptObject() {
   CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
 
-  // Shutdown DesktopEnvironment first so that it doesn't try to post
+  // Shutdown It2MeHostUserInterface first so that it doesn't try to post
   // tasks on the UI thread while we are stopping the host.
-  if (desktop_environment_.get()) {
-    desktop_environment_->Shutdown();
+  if (it2me_host_user_interface_.get()) {
+    it2me_host_user_interface_->Shutdown();
   }
 
   HostLogHandler::UnregisterLoggingScriptObject(this);
@@ -126,6 +130,7 @@ HostNPScriptObject::~HostNPScriptObject() {
 }
 
 bool HostNPScriptObject::Init() {
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
   VLOG(2) << "Init";
   // TODO(wez): This starts a bunch of threads, which might fail.
   host_context_.Start();
@@ -180,6 +185,7 @@ bool HostNPScriptObject::HasProperty(const std::string& property_name) {
           property_name == kAttrNameClient ||
           property_name == kAttrNameState ||
           property_name == kAttrNameLogDebugInfo ||
+          property_name == kAttrNameOnNatTraversalPolicyChanged ||
           property_name == kAttrNameOnStateChanged ||
           property_name == kAttrNameDisconnected ||
           property_name == kAttrNameStarting ||
@@ -199,7 +205,10 @@ bool HostNPScriptObject::GetProperty(const std::string& property_name,
     return false;
   }
 
-  if (property_name == kAttrNameOnStateChanged) {
+  if (property_name == kAttrNameOnNatTraversalPolicyChanged) {
+    OBJECT_TO_NPVARIANT(on_nat_traversal_policy_changed_func_.get(), *result);
+    return true;
+  } else if (property_name == kAttrNameOnStateChanged) {
     OBJECT_TO_NPVARIANT(on_state_changed_func_.get(), *result);
     return true;
   } else if (property_name == kAttrNameLogDebugInfo) {
@@ -250,6 +259,26 @@ bool HostNPScriptObject::SetProperty(const std::string& property_name,
                                      const NPVariant* value) {
   VLOG(2) <<  "SetProperty " << property_name;
   CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
+
+  if (property_name == kAttrNameOnNatTraversalPolicyChanged) {
+    if (NPVARIANT_IS_OBJECT(*value)) {
+      on_nat_traversal_policy_changed_func_ = NPVARIANT_TO_OBJECT(*value);
+      bool policy_received, nat_traversal_enabled;
+      {
+        base::AutoLock lock(nat_policy_lock_);
+        policy_received = policy_received_;
+        nat_traversal_enabled = nat_traversal_enabled_;
+      }
+      if (policy_received) {
+        UpdateWebappNatPolicy(nat_traversal_enabled);
+      }
+      return true;
+    } else {
+      SetException("SetProperty: unexpected type for property " +
+                   property_name);
+    }
+    return false;
+  }
 
   if (property_name == kAttrNameOnStateChanged) {
     if (NPVARIANT_IS_OBJECT(*value)) {
@@ -308,31 +337,24 @@ bool HostNPScriptObject::Enumerate(std::vector<std::string>* values) {
   return true;
 }
 
-void HostNPScriptObject::OnSignallingConnected(SignalStrategy* signal_strategy,
-                                               const std::string& full_jid) {
-}
-
-void HostNPScriptObject::OnSignallingDisconnected() {
-}
-
-void HostNPScriptObject::OnAccessDenied() {
+void HostNPScriptObject::OnAccessDenied(const std::string& jid) {
   DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
 
   ++failed_login_attempts_;
-  if (failed_login_attempts_ == kMaxLoginAttempts)
+  if (failed_login_attempts_ == kMaxLoginAttempts) {
     DisconnectInternal();
+  }
 }
 
-void HostNPScriptObject::OnClientAuthenticated(
-    remoting::protocol::ConnectionToClient* client) {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
+void HostNPScriptObject::OnClientAuthenticated(const std::string& jid) {
+  DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
 
   if (state_ == kDisconnecting) {
     // Ignore the new connection if we are disconnecting.
     return;
   }
 
-  client_username_ = client->session()->jid();
+  client_username_ = jid;
   size_t pos = client_username_.find('/');
   if (pos != std::string::npos)
     client_username_.replace(pos, std::string::npos, "");
@@ -340,20 +362,21 @@ void HostNPScriptObject::OnClientAuthenticated(
   SetState(kConnected);
 }
 
-void HostNPScriptObject::OnClientDisconnected(
-    remoting::protocol::ConnectionToClient* client) {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
-
+void HostNPScriptObject::OnClientDisconnected(const std::string& jid) {
+  DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
   client_username_.clear();
-
-  // Disconnect the host when a client disconnects.
   DisconnectInternal();
 }
 
 void HostNPScriptObject::OnShutdown() {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
+  DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
 
+  register_request_.reset();
+  log_to_server_.reset();
+  signal_strategy_.reset();
+  host_->RemoveStatusObserver(this);
   host_ = NULL;
+
   if (state_ != kDisconnected) {
     SetState(kDisconnected);
   }
@@ -363,7 +386,7 @@ void HostNPScriptObject::OnShutdown() {
 bool HostNPScriptObject::Connect(const NPVariant* args,
                                  uint32_t arg_count,
                                  NPVariant* result) {
-  CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
 
   LOG(INFO) << "Connecting...";
 
@@ -401,8 +424,8 @@ bool HostNPScriptObject::Connect(const NPVariant* args,
 void HostNPScriptObject::ReadPolicyAndConnect(const std::string& uid,
                                               const std::string& auth_token,
                                               const std::string& auth_service) {
-  if (MessageLoop::current() != host_context_.main_message_loop()) {
-    host_context_.main_message_loop()->PostTask(
+  if (!host_context_.network_message_loop()->BelongsToCurrentThread()) {
+    host_context_.network_message_loop()->PostTask(
         FROM_HERE, base::Bind(
             &HostNPScriptObject::ReadPolicyAndConnect, base::Unretained(this),
             uid, auth_token, auth_service));
@@ -414,80 +437,96 @@ void HostNPScriptObject::ReadPolicyAndConnect(const std::string& uid,
   // Only proceed to FinishConnect() if at least one policy update has been
   // received.
   if (policy_received_) {
-    FinishConnect(uid, auth_token, auth_service);
+    FinishConnectMainThread(uid, auth_token, auth_service);
   } else {
     // Otherwise, create the policy watcher, and thunk the connect.
     pending_connect_ =
-        base::Bind(&HostNPScriptObject::FinishConnect,
+        base::Bind(&HostNPScriptObject::FinishConnectMainThread,
                    base::Unretained(this), uid, auth_token, auth_service);
   }
 }
 
-void HostNPScriptObject::FinishConnect(
+void HostNPScriptObject::FinishConnectMainThread(
     const std::string& uid,
     const std::string& auth_token,
     const std::string& auth_service) {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
+  if (host_context_.main_message_loop() != MessageLoop::current()) {
+    host_context_.main_message_loop()->PostTask(FROM_HERE, base::Bind(
+        &HostNPScriptObject::FinishConnectMainThread, base::Unretained(this),
+        uid, auth_token, auth_service));
+    return;
+  }
+
+  // DesktopEnvironment must be initialized on the main thread.
+  //
+  // TODO(sergeyu): Fix DesktopEnvironment so that it can be created
+  // on either the UI or the network thread so that we can avoid
+  // jumping to the main thread here.
+  desktop_environment_.reset(DesktopEnvironment::Create(&host_context_));
+
+  FinishConnectNetworkThread(uid, auth_token, auth_service);
+}
+
+void HostNPScriptObject::FinishConnectNetworkThread(
+    const std::string& uid,
+    const std::string& auth_token,
+    const std::string& auth_service) {
+  if (!host_context_.network_message_loop()->BelongsToCurrentThread()) {
+    host_context_.network_message_loop()->PostTask(FROM_HERE, base::Bind(
+        &HostNPScriptObject::FinishConnectNetworkThread, base::Unretained(this),
+        uid, auth_token, auth_service));
+    return;
+  }
 
   if (state_ != kStarting) {
     // Host has been stopped while we were fetching policy.
     return;
   }
 
-  // Store the supplied user ID and token to the Host configuration.
-  scoped_refptr<MutableHostConfig> host_config = new InMemoryHostConfig();
-  host_config->SetString(kXmppLoginConfigPath, uid);
-  host_config->SetString(kXmppAuthTokenConfigPath, auth_token);
-  host_config->SetString(kXmppAuthServiceConfigPath, auth_service);
-
-  // Create an access verifier and fetch the host secret.
-  scoped_ptr<SupportAccessVerifier> access_verifier;
-  access_verifier.reset(new SupportAccessVerifier());
-
-  // Generate a key pair for the Host to use.
-  // TODO(wez): Move this to the worker thread.
-  HostKeyPair host_key_pair;
-  host_key_pair.Generate();
-  host_key_pair.Save(host_config);
-
-  // Request registration of the host for support.
-  scoped_ptr<RegisterSupportHostRequest> register_request(
-      new RegisterSupportHostRequest());
-  if (!register_request->Init(
-          host_config.get(),
-          base::Bind(&HostNPScriptObject::OnReceivedSupportID,
-                     base::Unretained(this),
-                     access_verifier.get()))) {
-    SetState(kError);
-    return;
-  }
-
-  // Create DesktopEnvironment.
-  desktop_environment_.reset(DesktopEnvironment::Create(&host_context_));
+  // Verify that DesktopEnvironment has been created.
   if (desktop_environment_.get() == NULL) {
     SetState(kError);
     return;
   }
 
+  // Generate a key pair for the Host to use.
+  // TODO(wez): Move this to the worker thread.
+  host_key_pair_.Generate();
+
+  // Create XMPP connection.
+  scoped_ptr<SignalStrategy> signal_strategy(
+      new XmppSignalStrategy(host_context_.jingle_thread(), uid,
+                             auth_token, auth_service));
+
+  // Request registration of the host for support.
+  scoped_ptr<RegisterSupportHostRequest> register_request(
+      new RegisterSupportHostRequest(
+          signal_strategy.get(), &host_key_pair_,
+          base::Bind(&HostNPScriptObject::OnReceivedSupportID,
+                     base::Unretained(this))));
+
   // Beyond this point nothing can fail, so save the config and request.
-  host_config_ = host_config;
+  signal_strategy_.reset(signal_strategy.release());
   register_request_.reset(register_request.release());
 
   // Create the Host.
-  LOG(INFO) << "Connecting with NAT state: " << nat_traversal_enabled_;
-  host_ = ChromotingHost::Create(
-      &host_context_, host_config_, desktop_environment_.get(),
-      access_verifier.release(), nat_traversal_enabled_);
+  LOG(INFO) << "NAT state: " << nat_traversal_enabled_;
+  host_ = new ChromotingHost(
+      &host_context_, signal_strategy_.get(), desktop_environment_.get(),
+      protocol::NetworkSettings(nat_traversal_enabled_));
   host_->AddStatusObserver(this);
-  host_->AddStatusObserver(register_request_.get());
-  host_->set_it2me(true);
+  log_to_server_.reset(
+      new LogToServer(host_, ServerLogEntry::IT2ME, signal_strategy_.get()));
+  it2me_host_user_interface_.reset(
+      new It2MeHostUserInterface(host_.get(), &host_context_));
+  it2me_host_user_interface_->Init();
 
   {
     base::AutoLock auto_lock(ui_strings_lock_);
     host_->SetUiStrings(ui_strings_);
   }
 
-  // Start the Host.
+  signal_strategy_->Connect();
   host_->Start();
 
   SetState(kRequestedAccessCode);
@@ -497,7 +536,7 @@ void HostNPScriptObject::FinishConnect(
 bool HostNPScriptObject::Disconnect(const NPVariant* args,
                                     uint32_t arg_count,
                                     NPVariant* result) {
-  CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
   if (arg_count != 0) {
     SetException("disconnect: bad number of arguments");
     return false;
@@ -511,7 +550,7 @@ bool HostNPScriptObject::Disconnect(const NPVariant* args,
 bool HostNPScriptObject::Localize(const NPVariant* args,
                                   uint32_t arg_count,
                                   NPVariant* result) {
-  CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
   if (arg_count != 1) {
     SetException("localize: bad number of arguments");
     return false;
@@ -528,8 +567,8 @@ bool HostNPScriptObject::Localize(const NPVariant* args,
 }
 
 void HostNPScriptObject::DisconnectInternal() {
-  if (MessageLoop::current() != host_context_.main_message_loop()) {
-    host_context_.main_message_loop()->PostTask(
+  if (!host_context_.network_message_loop()->BelongsToCurrentThread()) {
+    host_context_.network_message_loop()->PostTask(
         FROM_HERE, base::Bind(&HostNPScriptObject::DisconnectInternal,
                               base::Unretained(this)));
     return;
@@ -552,20 +591,28 @@ void HostNPScriptObject::DisconnectInternal() {
     default:
       DCHECK(host_);
       SetState(kDisconnecting);
-      host_->Shutdown(
-          NewRunnableMethod(this, &HostNPScriptObject::OnShutdownFinished));
+
+      // ChromotingHost::Shutdown() may destroy SignalStrategy
+      // synchronously, bug SignalStrategy::Listener handlers are not
+      // allowed to destroy SignalStrategy, so post task to call
+      // Shutdown() later.
+      host_context_.network_message_loop()->PostTask(
+          FROM_HERE, base::Bind(
+              &ChromotingHost::Shutdown, host_,
+              base::Bind(&HostNPScriptObject::OnShutdownFinished,
+                         base::Unretained(this))));
   }
 }
 
 void HostNPScriptObject::OnShutdownFinished() {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
+  DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
 
   disconnected_event_.Signal();
 }
 
 void HostNPScriptObject::OnNatPolicyUpdate(bool nat_traversal_enabled) {
-  if (MessageLoop::current() != host_context_.main_message_loop()) {
-    host_context_.main_message_loop()->PostTask(
+  if (!host_context_.network_message_loop()->BelongsToCurrentThread()) {
+    host_context_.network_message_loop()->PostTask(
         FROM_HERE,
         base::Bind(&HostNPScriptObject::OnNatPolicyUpdate,
                    base::Unretained(this), nat_traversal_enabled));
@@ -580,8 +627,13 @@ void HostNPScriptObject::OnNatPolicyUpdate(bool nat_traversal_enabled) {
     DisconnectInternal();
   }
 
-  policy_received_ = true;
-  nat_traversal_enabled_ = nat_traversal_enabled;
+  {
+    base::AutoLock lock(nat_policy_lock_);
+    policy_received_ = true;
+    nat_traversal_enabled_ = nat_traversal_enabled;
+  }
+
+  UpdateWebappNatPolicy(nat_traversal_enabled_);
 
   if (!pending_connect_.is_null()) {
     pending_connect_.Run();
@@ -590,22 +642,24 @@ void HostNPScriptObject::OnNatPolicyUpdate(bool nat_traversal_enabled) {
 }
 
 void HostNPScriptObject::OnReceivedSupportID(
-    SupportAccessVerifier* access_verifier,
     bool success,
     const std::string& support_id,
     const base::TimeDelta& lifetime) {
   DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
 
   if (!success) {
-    host_context_.main_message_loop()->PostTask(FROM_HERE, base::Bind(
-        &HostNPScriptObject::NotifyAccessCode, base::Unretained(this), false));
+    SetState(kError);
     DisconnectInternal();
     return;
   }
 
-  access_verifier->OnIT2MeHostRegistered(success, support_id);
-  std::string access_code = support_id + access_verifier->host_secret();
-  host_->set_access_code(access_code);
+  std::string host_secret = GenerateSupportHostSecret();
+  std::string access_code = support_id + host_secret;
+  scoped_ptr<protocol::AuthenticatorFactory> factory(
+      new protocol::It2MeHostAuthenticatorFactory(
+          host_key_pair_.GenerateCertificate(), *host_key_pair_.private_key(),
+          access_code));
+  host_->SetAuthenticatorFactory(factory.Pass());
 
   {
     base::AutoLock lock(access_code_lock_);
@@ -613,19 +667,11 @@ void HostNPScriptObject::OnReceivedSupportID(
     access_code_lifetime_ = lifetime;
   }
 
-  host_context_.main_message_loop()->PostTask(FROM_HERE, base::Bind(
-      &HostNPScriptObject::NotifyAccessCode, base::Unretained(this), true));
-}
-
-void HostNPScriptObject::NotifyAccessCode(bool success) {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
-  if (state_ == kRequestedAccessCode) {
-    SetState(success ? kReceivedAccessCode : kError);
-  }
+  SetState(kReceivedAccessCode);
 }
 
 void HostNPScriptObject::SetState(State state) {
-  DCHECK_EQ(MessageLoop::current(), host_context_.main_message_loop());
+  DCHECK(host_context_.network_message_loop()->BelongsToCurrentThread());
   switch (state_) {
     case kDisconnected:
       DCHECK(state == kStarting ||
@@ -671,8 +717,10 @@ void HostNPScriptObject::NotifyStateChanged(State state) {
   }
   if (on_state_changed_func_.get()) {
     VLOG(2) << "Calling state changed " << state;
+    NPVariant state_var;
+    INT32_TO_NPVARIANT(state, state_var);
     bool is_good = InvokeAndIgnoreResult(on_state_changed_func_.get(),
-                                         NULL, 0);
+                                         &state_var, 1);
     LOG_IF(ERROR, !is_good) << "OnStateChanged failed";
   }
 }
@@ -693,6 +741,7 @@ void HostNPScriptObject::PostLogDebugInfo(const std::string& message) {
 }
 
 void HostNPScriptObject::LogDebugInfo(const std::string& message) {
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
   if (log_debug_info_func_.get()) {
     am_currently_logging_ = true;
     NPVariant log_message;
@@ -707,7 +756,7 @@ void HostNPScriptObject::LogDebugInfo(const std::string& message) {
 }
 
 void HostNPScriptObject::SetException(const std::string& exception_string) {
-  CHECK_EQ(base::PlatformThread::CurrentId(), np_thread_id_);
+  DCHECK(plugin_message_loop_proxy_->BelongsToCurrentThread());
   g_npnetscape_funcs->setexception(parent_, exception_string.c_str());
   LOG(INFO) << exception_string;
 }
@@ -722,7 +771,7 @@ void HostNPScriptObject::LocalizeStrings(NPObject* localize_func) {
       remoting::UiStrings::RTL : remoting::UiStrings::LTR;
   LocalizeString(localize_func, /*i18n-content*/"PRODUCT_NAME",
                  &ui_strings.product_name);
-  LocalizeString(localize_func, /*i18n-content*/"DISCONNECT_BUTTON",
+  LocalizeString(localize_func, /*i18n-content*/"DISCONNECT_OTHER_BUTTON",
                  &ui_strings.disconnect_button_text);
   LocalizeString(localize_func,
 #if defined(OS_WIN)
@@ -765,6 +814,21 @@ bool HostNPScriptObject::LocalizeString(NPObject* localize_func,
   }
   *result = UTF8ToUTF16(translation);
   return true;
+}
+
+void HostNPScriptObject::UpdateWebappNatPolicy(bool nat_traversal_enabled) {
+  if (!plugin_message_loop_proxy_->BelongsToCurrentThread()) {
+    plugin_message_loop_proxy_->PostTask(
+        FROM_HERE, base::Bind(&HostNPScriptObject::UpdateWebappNatPolicy,
+                              base::Unretained(this), nat_traversal_enabled));
+    return;
+  }
+  if (on_nat_traversal_policy_changed_func_.get()) {
+    NPVariant policy;
+    BOOLEAN_TO_NPVARIANT(nat_traversal_enabled, policy);
+    InvokeAndIgnoreResult(on_nat_traversal_policy_changed_func_.get(),
+                          &policy, 1);
+  }
 }
 
 bool HostNPScriptObject::InvokeAndIgnoreResult(NPObject* func,

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,14 +18,10 @@ namespace proxy {
 
 class PPP_VideoDecoder_Proxy : public InterfaceProxy {
  public:
-  PPP_VideoDecoder_Proxy(Dispatcher* dispatcher, const void* target_interface);
+  PPP_VideoDecoder_Proxy(Dispatcher* dispatcher);
   virtual ~PPP_VideoDecoder_Proxy();
 
   static const Info* GetInfo();
-
-  const PPP_VideoDecoder_Dev* ppp_video_decoder_target() const {
-    return static_cast<const PPP_VideoDecoder_Dev*>(target_interface());
-  }
 
   // InterfaceProxy implementation.
   virtual bool OnMessageReceived(const IPC::Message& msg);
@@ -39,9 +35,13 @@ class PPP_VideoDecoder_Proxy : public InterfaceProxy {
                                  int32_t picture_id);
   void OnMsgPictureReady(const ppapi::HostResource& decoder,
                          const PP_Picture_Dev& picture_buffer);
-  void OnMsgNotifyEndOfStream(const ppapi::HostResource& decoder);
   void OnMsgNotifyError(const ppapi::HostResource& decoder,
                         PP_VideoDecodeError_Dev error);
+
+  // When this proxy is in the plugin side, this value caches the interface
+  // pointer so we don't have to retrieve it from the dispatcher each time.
+  // In the host, this value is always NULL.
+  const PPP_VideoDecoder_Dev* ppp_video_decoder_impl_;
 
   DISALLOW_COPY_AND_ASSIGN(PPP_VideoDecoder_Proxy);
 };

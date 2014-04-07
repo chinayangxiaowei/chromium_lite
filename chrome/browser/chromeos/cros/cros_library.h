@@ -16,19 +16,11 @@ template <typename T> struct DefaultLazyInstanceTraits;
 
 namespace chromeos {
 
-class BrightnessLibrary;
 class BurnLibrary;
 class CertLibrary;
 class CryptohomeLibrary;
-class LibCrosServiceLibrary;
 class LibraryLoader;
-class LoginLibrary;
-class MountLibrary;
 class NetworkLibrary;
-class PowerLibrary;
-class ScreenLockLibrary;
-class SpeechSynthesisLibrary;
-class UpdateLibrary;
 
 // This class handles access to sub-parts of ChromeOS library. it provides
 // a level of indirection so individual libraries that it exposes can
@@ -48,18 +40,10 @@ class CrosLibrary {
     // when the CrosLibrary is deleted (or other mocks are set).
     // Setter for LibraryLoader.
     void SetLibraryLoader(LibraryLoader* loader, bool own);
-    void SetBrightnessLibrary(BrightnessLibrary* library, bool own);
     void SetCertLibrary(CertLibrary* library, bool own);
     void SetBurnLibrary(BurnLibrary* library, bool own);
     void SetCryptohomeLibrary(CryptohomeLibrary* library, bool own);
-    void SetLibCrosServiceLibrary(LibCrosServiceLibrary* library, bool own);
-    void SetLoginLibrary(LoginLibrary* library, bool own);
-    void SetMountLibrary(MountLibrary* library, bool own);
     void SetNetworkLibrary(NetworkLibrary* library, bool own);
-    void SetPowerLibrary(PowerLibrary* library, bool own);
-    void SetScreenLockLibrary(ScreenLockLibrary* library, bool own);
-    void SetSpeechSynthesisLibrary(SpeechSynthesisLibrary* library, bool own);
-    void SetUpdateLibrary(UpdateLibrary* library, bool own);
 
    private:
     friend class CrosLibrary;
@@ -78,26 +62,13 @@ class CrosLibrary {
   // called (or Shutdown() has been called).
   static CrosLibrary* Get();
 
-  BrightnessLibrary* GetBrightnessLibrary();
   BurnLibrary* GetBurnLibrary();
   CertLibrary* GetCertLibrary();
   CryptohomeLibrary* GetCryptohomeLibrary();
-  LibCrosServiceLibrary* GetLibCrosServiceLibrary();
-  LoginLibrary* GetLoginLibrary();
-  MountLibrary* GetMountLibrary();
   NetworkLibrary* GetNetworkLibrary();
-  PowerLibrary* GetPowerLibrary();
-  ScreenLockLibrary* GetScreenLockLibrary();
-  SpeechSynthesisLibrary* GetSpeechSynthesisLibrary();
-  UpdateLibrary* GetUpdateLibrary();
 
   // Getter for Test API that gives access to internal members of this class.
   TestApi* GetTestApi();
-
-  // TODO(stevenjb): Deprecate this. Libraries should fall back to stub
-  // implementations if libcros_loaded() is false, and/or use libcros_loaded()
-  // to protect calls to libcros. http://crosbug.com/19886
-  bool EnsureLoaded() { return use_stub_impl_ || libcros_loaded_; }
 
   bool libcros_loaded() { return libcros_loaded_; }
 
@@ -153,18 +124,10 @@ class CrosLibrary {
     bool own_;
   };
 
-  Library<BrightnessLibrary> brightness_lib_;
   Library<BurnLibrary> burn_lib_;
   Library<CertLibrary> cert_lib_;
   Library<CryptohomeLibrary> crypto_lib_;
-  Library<LibCrosServiceLibrary> libcros_service_lib_;
-  Library<LoginLibrary> login_lib_;
-  Library<MountLibrary> mount_lib_;
   Library<NetworkLibrary> network_lib_;
-  Library<PowerLibrary> power_lib_;
-  Library<ScreenLockLibrary> screen_lock_lib_;
-  Library<SpeechSynthesisLibrary> speech_synthesis_lib_;
-  Library<UpdateLibrary> update_lib_;
 
   // Stub implementations of the libraries should be used.
   bool use_stub_impl_;

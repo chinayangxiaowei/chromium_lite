@@ -1,15 +1,20 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/media/media_internals_proxy.h"
 
+#include "base/bind.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/media/media_internals.h"
 #include "chrome/browser/ui/webui/media/media_internals_handler.h"
-#include "content/common/notification_service.h"
-#include "content/browser/renderer_host/render_process_host.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_ui.h"
+
+using content::BrowserThread;
 
 static const int kMediaInternalsProxyEventDelayMilliseconds = 100;
 
@@ -25,40 +30,44 @@ MediaInternalsProxy::MediaInternalsProxy()
     : ThreadSafeObserverImpl(net::NetLog::LOG_ALL_BUT_BYTES) {
   io_thread_ = g_browser_process->io_thread();
   registrar_.Add(this, content::NOTIFICATION_RENDERER_PROCESS_TERMINATED,
-                 NotificationService::AllSources());
+                 content::NotificationService::AllBrowserContextsAndSources());
 }
 
-void MediaInternalsProxy::Observe(int type, const NotificationSource& source,
-                                  const NotificationDetails& details) {
+void MediaInternalsProxy::Observe(int type,
+                                  const content::NotificationSource& source,
+                                  const content::NotificationDetails& details) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK_EQ(type, content::NOTIFICATION_RENDERER_PROCESS_TERMINATED);
-  RenderProcessHost* process = Source<RenderProcessHost>(source).ptr();
+  content::RenderProcessHost* process =
+      content::Source<content::RenderProcessHost>(source).ptr();
   CallJavaScriptFunctionOnUIThread("media.onRendererTerminated",
-      base::Value::CreateIntegerValue(process->id()));
+      base::Value::CreateIntegerValue(process->GetID()));
 }
 
 void MediaInternalsProxy::Attach(MediaInternalsMessageHandler* handler) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   handler_ = handler;
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(this,
-          &MediaInternalsProxy::ObserveMediaInternalsOnIOThread));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(&MediaInternalsProxy::ObserveMediaInternalsOnIOThread, this));
 }
 
 void MediaInternalsProxy::Detach() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   handler_ = NULL;
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(this,
-          &MediaInternalsProxy::StopObservingMediaInternalsOnIOThread));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(
+          &MediaInternalsProxy::StopObservingMediaInternalsOnIOThread, this));
 }
 
 void MediaInternalsProxy::GetEverything() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // Ask MediaInternals for all its data.
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      NewRunnableMethod(this, &MediaInternalsProxy::GetEverythingOnIOThread));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::Bind(&MediaInternalsProxy::GetEverythingOnIOThread, this));
 
   // Send the page names for constants.
   CallJavaScriptFunctionOnUIThread("media.onReceiveConstants", GetConstants());
@@ -66,9 +75,9 @@ void MediaInternalsProxy::GetEverything() {
 
 void MediaInternalsProxy::OnUpdate(const string16& update) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(this,
-          &MediaInternalsProxy::UpdateUIOnUIThread, update));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      base::Bind(&MediaInternalsProxy::UpdateUIOnUIThread, this, update));
 }
 
 void MediaInternalsProxy::OnAddEntry(net::NetLog::EventType type,
@@ -87,9 +96,9 @@ void MediaInternalsProxy::OnAddEntry(net::NetLog::EventType type,
   if (!is_event_interesting)
     return;
 
-  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-      NewRunnableMethod(
-          this, &MediaInternalsProxy::AddNetEventOnUIThread,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      base::Bind(&MediaInternalsProxy::AddNetEventOnUIThread, this,
           net::NetLog::EntryToDictionaryValue(type, time, source, phase,
                                               params, false)));
 }
@@ -156,10 +165,12 @@ void MediaInternalsProxy::AddNetEventOnUIThread(Value* entry) {
   // if an update is not already pending.
   if (!pending_net_updates_.get()) {
     pending_net_updates_.reset(new ListValue());
-    MessageLoop::current()->PostDelayedTask(FROM_HERE,
-        NewRunnableMethod(
-            this, &MediaInternalsProxy::SendNetEventsOnUIThread),
-        kMediaInternalsProxyEventDelayMilliseconds);
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE,
+        base::Bind(
+            &MediaInternalsProxy::SendNetEventsOnUIThread, this),
+        base::TimeDelta::FromMilliseconds(
+            kMediaInternalsProxyEventDelayMilliseconds));
   }
   pending_net_updates_->Append(entry);
 }
@@ -176,6 +187,6 @@ void MediaInternalsProxy::CallJavaScriptFunctionOnUIThread(
   scoped_ptr<Value> args_value(args);
   std::vector<const Value*> args_vector;
   args_vector.push_back(args_value.get());
-  string16 update = WebUI::GetJavascriptCall(function, args_vector);
+  string16 update = content::WebUI::GetJavascriptCall(function, args_vector);
   UpdateUIOnUIThread(update);
 }

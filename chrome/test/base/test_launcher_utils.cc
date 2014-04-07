@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/test/base/test_launcher_utils.h"
+
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/logging.h"
@@ -10,17 +12,7 @@
 #include "base/string_number_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/test_launcher_utils.h"
 #include "ui/gfx/gl/gl_switches.h"
-
-namespace {
-
-// A multiplier for slow tests. We generally avoid multiplying
-// test timeouts by any constants. Here it is used as last resort
-// to implement the SLOW_ test prefix.
-static const int kSlowTestTimeoutMultiplier = 5;
-
-}  // namespace
 
 namespace test_launcher_utils {
 
@@ -46,6 +38,16 @@ void PrepareBrowserCommandLineForTests(CommandLine* command_line) {
   // Disable safebrowsing autoupdate.
   command_line->AppendSwitch(switches::kSbDisableAutoUpdate);
 
+  // Don't install default apps.
+  command_line->AppendSwitch(switches::kDisableDefaultApps);
+
+  // Don't collect GPU info, load GPU blacklist, or schedule a GPU blacklist
+  // auto-update.
+  command_line->AppendSwitch(switches::kSkipGpuDataLoading);
+
+  // The tests assume that file:// URIs can freely access other file:// URIs.
+  command_line->AppendSwitch(switches::kAllowFileAccessFromFiles);
+
 #if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_CHROMEOS)
   // Don't use the native password stores on Linux since they may
   // prompt for additional UI during tests and cause test failures or
@@ -57,10 +59,12 @@ void PrepareBrowserCommandLineForTests(CommandLine* command_line) {
 
 #if defined(OS_MACOSX)
   // Use mock keychain on mac to prevent blocking permissions dialogs.
-  // TODO(sync): Re-enable when mock keyring works with sync integration tests.
-  // See crbug.com/89808.
-  // command_line->AppendSwitch(switches::kUseMockKeychain);
+  command_line->AppendSwitch(switches::kUseMockKeychain);
 #endif
+
+  // Disable the Instant field trial, which may cause unexpected page loads.
+  if (!command_line->HasSwitch(switches::kInstantFieldTrial))
+    command_line->AppendSwitchASCII(switches::kInstantFieldTrial, "disabled");
 }
 
 bool OverrideUserDataDir(const FilePath& user_data_dir) {
@@ -92,19 +96,6 @@ bool OverrideGLImplementation(CommandLine* command_line,
   command_line->AppendSwitchASCII(switches::kUseGL, implementation_name);
 
   return true;
-}
-
-int GetTestTerminationTimeout(const std::string& test_name,
-                              int default_timeout_ms) {
-  int timeout_ms = default_timeout_ms;
-
-  // Make it possible for selected tests to request a longer timeout.
-  // Generally tests should really avoid doing too much, and splitting
-  // a test instead of using SLOW prefix is strongly preferred.
-  if (test_name.find("SLOW_") != std::string::npos)
-    timeout_ms *= kSlowTestTimeoutMultiplier;
-
-  return timeout_ms;
 }
 
 }  // namespace test_launcher_utils

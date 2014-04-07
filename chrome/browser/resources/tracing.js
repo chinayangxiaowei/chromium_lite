@@ -6,7 +6,10 @@
 <include src="tracing/overlay.js">
 <include src="tracing/tracing_controller.js">
 <include src="tracing/timeline_model.js">
+<include src="tracing/linux_perf_importer.js">
+<include src="tracing/trace_event_importer.js">
 <include src="tracing/sorted_array_utils.js">
+<include src="tracing/measuring_stick.js">
 <include src="tracing/timeline.js">
 <include src="tracing/timeline_track.js">
 <include src="tracing/fast_rect_renderer.js">

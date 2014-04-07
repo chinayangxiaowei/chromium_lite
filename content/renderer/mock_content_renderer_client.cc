@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,22 +29,38 @@ std::string MockContentRendererClient::GetDefaultEncoding() {
   return std::string();
 }
 
-WebKit::WebPlugin* MockContentRendererClient::CreatePlugin(
+bool MockContentRendererClient::OverrideCreatePlugin(
     RenderView* render_view,
     WebKit::WebFrame* frame,
-    const WebKit::WebPluginParams& params) {
+    const WebKit::WebPluginParams& params,
+    WebKit::WebPlugin** plugin) {
+  return false;
+}
+
+bool MockContentRendererClient::HasErrorPage(int http_status_code,
+                                             std::string* error_domain) {
+  return false;
+}
+
+webkit_media::WebMediaPlayerImpl*
+MockContentRendererClient::OverrideCreateWebMediaPlayer(
+    RenderView* render_view,
+    WebKit::WebFrame* frame,
+    WebKit::WebMediaPlayerClient* client,
+    base::WeakPtr<webkit_media::WebMediaPlayerDelegate> delegate,
+    media::FilterCollection* collection,
+    WebKit::WebAudioSourceProvider* audio_source_provider,
+    media::MessageLoopFactory* message_loop_factory,
+    webkit_media::MediaStreamClient* media_stream_client,
+    media::MediaLog* media_log) {
   return NULL;
 }
 
-void MockContentRendererClient::ShowErrorPage(RenderView* render_view,
-                                              WebKit::WebFrame* frame,
-                                              int http_status_code) {
-}
-
-std::string MockContentRendererClient::GetNavigationErrorHtml(
+void MockContentRendererClient::GetNavigationErrorStrings(
     const WebKit::WebURLRequest& failed_request,
-    const WebKit::WebURLError& error) {
-  return std::string();
+    const WebKit::WebURLError& error,
+    std::string* error_html,
+    string16* error_description) {
 }
 
 bool MockContentRendererClient::RunIdleHandlerWhenWidgetsHidden() {
@@ -74,15 +90,11 @@ bool MockContentRendererClient::ShouldPumpEventsDuringCookieMessage() {
 }
 
 void MockContentRendererClient::DidCreateScriptContext(
-    WebKit::WebFrame* frame) {
+    WebKit::WebFrame* frame, v8::Handle<v8::Context> context, int world_id) {
 }
 
-void MockContentRendererClient::DidDestroyScriptContext(
-    WebKit::WebFrame* frame) {
-}
-
-void MockContentRendererClient::DidCreateIsolatedScriptContext(
-    WebKit::WebFrame* frame, int world_id, v8::Handle<v8::Context> context) {
+void MockContentRendererClient::WillReleaseScriptContext(
+    WebKit::WebFrame* frame, v8::Handle<v8::Context> context, int world_id) {
 }
 
 unsigned long long MockContentRendererClient::VisitedLinkHash(
@@ -119,4 +131,9 @@ bool MockContentRendererClient::HandleSetCookieRequest(
     const std::string& value) {
   return false;
 }
+
+void MockContentRendererClient::RegisterPPAPIInterfaceFactories(
+    webkit::ppapi::PpapiInterfaceFactoryManager* factory_manager) {
+}
+
 }  // namespace content

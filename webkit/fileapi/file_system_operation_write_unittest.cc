@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,6 +7,8 @@
 // to instantiate a MessageLoop of type TYPE_IO.  test_shell_tests uses
 // TYPE_UI, which URLRequest doesn't allow.
 //
+
+#include <vector>
 
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
@@ -25,7 +27,6 @@
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_file_util.h"
 #include "webkit/fileapi/file_system_operation.h"
-#include "webkit/fileapi/file_system_path_manager.h"
 #include "webkit/fileapi/file_system_test_helper.h"
 #include "webkit/fileapi/file_system_util.h"
 #include "webkit/fileapi/local_file_util.h"
@@ -48,10 +49,10 @@ class MockQuotaManager : public QuotaManager {
         usage_(0),
         quota_(quota) {}
 
-  virtual void GetUsageAndQuota(const GURL& origin, quota::StorageType type,
-                                GetUsageAndQuotaCallback* callback) {
-    callback->Run(quota::kQuotaStatusOk, usage_, quota_);
-    delete callback;
+  virtual void GetUsageAndQuota(
+      const GURL& origin, quota::StorageType type,
+      const GetUsageAndQuotaCallback& callback) OVERRIDE {
+    callback.Run(quota::kQuotaStatusOk, usage_, quota_);
   }
 
   void set_usage(int64 usage) { usage_ = usage; }
@@ -193,7 +194,6 @@ void FileSystemOperationWriteTest::SetUp() {
 
   quota_manager_ = new MockQuotaManager(base_dir, 1024);
   test_helper_.SetUp(base_dir,
-                     false /* incognito */,
                      false /* unlimited quota */,
                      quota_manager_->proxy(),
                      local_file_util_.get());
@@ -223,14 +223,14 @@ TEST_F(FileSystemOperationWriteTest, TestWriteSuccess) {
 
   scoped_refptr<TestURLRequestContext> url_request_context(
       new TestURLRequestContext());
-  url_request_context->blob_storage_controller()->
-      RegisterBlobUrl(blob_url, blob_data);
+  url_request_context->blob_storage_controller()->AddFinishedBlob(
+      blob_url, blob_data);
 
   operation()->Write(url_request_context, URLForPath(virtual_path_), blob_url,
                      0);
   MessageLoop::current()->Run();
 
-  url_request_context->blob_storage_controller()->UnregisterBlobUrl(blob_url);
+  url_request_context->blob_storage_controller()->RemoveBlob(blob_url);
 
   EXPECT_EQ(14, bytes_written());
   EXPECT_EQ(base::PLATFORM_FILE_OK, status());
@@ -244,14 +244,14 @@ TEST_F(FileSystemOperationWriteTest, TestWriteZero) {
 
   scoped_refptr<TestURLRequestContext> url_request_context(
       new TestURLRequestContext());
-  url_request_context->blob_storage_controller()->
-      RegisterBlobUrl(blob_url, blob_data);
+  url_request_context->blob_storage_controller()->AddFinishedBlob(
+      blob_url, blob_data);
 
   operation()->Write(url_request_context, URLForPath(virtual_path_),
                      blob_url, 0);
   MessageLoop::current()->Run();
 
-  url_request_context->blob_storage_controller()->UnregisterBlobUrl(blob_url);
+  url_request_context->blob_storage_controller()->RemoveBlob(blob_url);
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::PLATFORM_FILE_OK, status());
@@ -267,7 +267,7 @@ TEST_F(FileSystemOperationWriteTest, TestWriteInvalidBlobUrl) {
   MessageLoop::current()->Run();
 
   EXPECT_EQ(0, bytes_written());
-  EXPECT_EQ(base::PLATFORM_FILE_OK, status());
+  EXPECT_EQ(base::PLATFORM_FILE_ERROR_FAILED, status());
   EXPECT_TRUE(complete());
 }
 
@@ -278,15 +278,15 @@ TEST_F(FileSystemOperationWriteTest, TestWriteInvalidFile) {
 
   scoped_refptr<TestURLRequestContext> url_request_context(
       new TestURLRequestContext());
-  url_request_context->blob_storage_controller()->
-      RegisterBlobUrl(blob_url, blob_data);
+  url_request_context->blob_storage_controller()->AddFinishedBlob(
+      blob_url, blob_data);
 
   operation()->Write(url_request_context,
                      URLForPath(FilePath(FILE_PATH_LITERAL("nonexist"))),
                      blob_url, 0);
   MessageLoop::current()->Run();
 
-  url_request_context->blob_storage_controller()->UnregisterBlobUrl(blob_url);
+  url_request_context->blob_storage_controller()->RemoveBlob(blob_url);
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::PLATFORM_FILE_ERROR_NOT_FOUND, status());
@@ -306,14 +306,14 @@ TEST_F(FileSystemOperationWriteTest, TestWriteDir) {
 
   scoped_refptr<TestURLRequestContext> url_request_context(
       new TestURLRequestContext());
-  url_request_context->blob_storage_controller()->
-      RegisterBlobUrl(blob_url, blob_data);
+  url_request_context->blob_storage_controller()->AddFinishedBlob(
+      blob_url, blob_data);
 
   operation()->Write(url_request_context, URLForPath(virtual_subdir_path),
                      blob_url, 0);
   MessageLoop::current()->Run();
 
-  url_request_context->blob_storage_controller()->UnregisterBlobUrl(blob_url);
+  url_request_context->blob_storage_controller()->RemoveBlob(blob_url);
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::PLATFORM_FILE_ERROR_ACCESS_DENIED, status());
@@ -327,15 +327,15 @@ TEST_F(FileSystemOperationWriteTest, TestWriteFailureByQuota) {
 
   scoped_refptr<TestURLRequestContext> url_request_context(
       new TestURLRequestContext());
-  url_request_context->blob_storage_controller()->
-      RegisterBlobUrl(blob_url, blob_data);
+  url_request_context->blob_storage_controller()->AddFinishedBlob(
+      blob_url, blob_data);
 
   quota_manager_->set_quota(10);
   operation()->Write(url_request_context, URLForPath(virtual_path_), blob_url,
                      0);
   MessageLoop::current()->Run();
 
-  url_request_context->blob_storage_controller()->UnregisterBlobUrl(blob_url);
+  url_request_context->blob_storage_controller()->RemoveBlob(blob_url);
 
   EXPECT_EQ(10, bytes_written());
   EXPECT_EQ(base::PLATFORM_FILE_ERROR_NO_SPACE, status());

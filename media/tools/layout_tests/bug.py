@@ -1,12 +1,13 @@
-#!/usr/bin/python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+"""Bug module that is necessary for the layout analyzer."""
+
 import re
 
 
-class Bug:
+class Bug(object):
   """A class representing a bug.
 
   TODO(imasaki): add more functionalities here if bug-tracker API is available.

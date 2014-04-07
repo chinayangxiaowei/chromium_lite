@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
  * the page.
  */
 var View = (function() {
+  'use strict';
+
   /**
    * @constructor
    */
@@ -75,10 +77,12 @@ var View = (function() {
     /**
      * Called when loading a log file, after clearing all events, but before
      * loading the new ones.  |polledData| contains the data from all
-     * PollableData helpers, and |tabData| contains the data for the particular
-     * tab.
+     * PollableData helpers.  |tabData| contains the data for the particular
+     * tab.  |logDump| is the entire log dump, which includes the other two
+     * values.  It's included separately so most views don't have to depend on
+     * its specifics.
      */
-    onLoadLogStart: function(polledData, tabData) {
+    onLoadLogStart: function(polledData, tabData, logDump) {
     },
 
     /**
@@ -86,7 +90,7 @@ var View = (function() {
      * as onLoadLogStart.  Returns true to indicate the tab should be shown,
      * false otherwise.
      */
-    onLoadLogFinish: function(polledData, tabData) {
+    onLoadLogFinish: function(polledData, tabData, logDump) {
       return false;
     }
   };
@@ -100,6 +104,8 @@ var View = (function() {
  * DivView is an implementation of View that wraps a DIV.
  */
 var DivView = (function() {
+  'use strict';
+
   // We inherit from View.
   var superClass = View;
 
@@ -156,6 +162,8 @@ var DivView = (function() {
  * @param {!View} childView
  */
 var WindowView = (function() {
+  'use strict';
+
   // We inherit from View.
   var superClass = View;
 
@@ -210,6 +218,8 @@ var WindowView = (function() {
  *  +-----------------------------------+
  */
 var VerticalSplitView = (function() {
+  'use strict';
+
   // We inherit from View.
   var superClass = View;
 

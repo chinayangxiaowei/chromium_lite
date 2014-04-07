@@ -11,8 +11,9 @@ cr.define('options', function() {
 
   /**
    * Creates a new user images grid item.
-   * @param {{url: string, title: string=, clickHandler: function=}} imageInfo
-   *     User image URL, title and optional click handler.
+   * @param {{url: string, title: string=, decorateFn: function=,
+   *     clickHandler: function=}} imageInfo User image URL, optional title,
+   *     decorator callback and click handler.
    * @constructor
    * @extends {cr.ui.GridItem}
    */
@@ -31,15 +32,16 @@ cr.define('options', function() {
       var imageEl = cr.doc.createElement('img');
       imageEl.src = this.dataItem.url;
       imageEl.title = this.dataItem.title || '';
-      imageEl.setAttribute(
-          'aria-label',
-          imageEl.src.replace(/(.*\/|\.png)/g, '').replace(/_/g, ' '));
+      var label = imageEl.src.replace(/(.*\/|\.png)/g, '');
+      imageEl.setAttribute('aria-label', label.replace(/_/g, ' '));
       if (typeof this.dataItem.clickHandler == 'function')
         imageEl.addEventListener('click', this.dataItem.clickHandler);
       // Remove any garbage added by GridItem and ListItem decorators.
       this.textContent = '';
       this.appendChild(imageEl);
-    },
+      if (typeof this.dataItem.decorateFn == 'function')
+        this.dataItem.decorateFn(this);
+    }
   };
 
   /**
@@ -103,6 +105,16 @@ cr.define('options', function() {
       this.dataModel = new ArrayDataModel([]);
       this.itemConstructor = UserImagesGridItem;
       this.selectionModel = new ListSingleSelectionModel();
+      this.inProgramSelection_ = false;
+    },
+
+    /**
+     * Should only be queried from the 'change' event listener, true if the
+     * change event was triggered by a programmatical selection change.
+     * @type {boolean}
+     */
+    get inProgramSelection() {
+      return this.inProgramSelection_;
     },
 
     /**
@@ -116,8 +128,10 @@ cr.define('options', function() {
     set selectedItemUrl(url) {
       for (var i = 0, el; el = this.dataModel.item(i); i++) {
         if (el.url === url) {
+          this.inProgramSelection_ = true;
           this.selectionModel.selectedIndex = i;
           this.selectionModel.leadIndex = i;
+          this.inProgramSelection_ = false;
         }
       }
     },
@@ -128,9 +142,11 @@ cr.define('options', function() {
       return index != -1 ? this.dataModel.item(index) : null;
     },
     set selectedItem(selectedItem) {
-      var index = this.dataModel.indexOf(selectedItem);
+      var index = this.indexOf(selectedItem);
+      this.inProgramSelection_ = true;
       this.selectionModel.selectedIndex = index;
       this.selectionModel.leadIndex = index;
+      this.inProgramSelection_ = false;
     },
 
     /**
@@ -140,20 +156,58 @@ cr.define('options', function() {
      * @param {function=} opt_clickHandler Image click handler.
      * @param {number=} opt_position If given, inserts new image into
      *     that position (0-based) in image list.
+     * @param {function=} opt_decorateFn Function called with the list element
+     *     as argument to do any final decoration.
      * @return {!Object} Image data inserted into the data model.
-     * @private
      */
-    addItem: function(url, opt_title, opt_clickHandler, opt_position) {
+    // TODO(ivankr): this function needs some argument list refactoring.
+    addItem: function(url, opt_title, opt_clickHandler, opt_position,
+                      opt_decorateFn) {
       var imageInfo = {
         url: url,
         title: opt_title,
-        clickHandler: opt_clickHandler
+        clickHandler: opt_clickHandler,
+        decorateFn: opt_decorateFn
       };
-      if (opt_position)
+      this.inProgramSelection_ = true;
+      if (opt_position !== undefined)
         this.dataModel.splice(opt_position, 0, imageInfo);
       else
         this.dataModel.push(imageInfo);
+      this.inProgramSelection_ = false;
       return imageInfo;
+    },
+
+    /**
+     * Returns index of an image in grid.
+     * @param {Object} imageInfo Image data returned from addItem() call.
+     * @return {number} Image index (0-based) or -1 if image was not found.
+     */
+    indexOf: function(imageInfo) {
+      return this.dataModel.indexOf(imageInfo);
+    },
+
+    /**
+     * Replaces an image in the grid.
+     * @param {Object} imageInfo Image data returned from addItem() call.
+     * @param {string} imageUrl New image URL.
+     * @param {string=} opt_title New image tooltip (if undefined, tooltip
+     *     is left unchanged).
+     * @return {!Object} Image data of the added or updated image.
+     */
+    updateItem: function(imageInfo, imageUrl, opt_title) {
+      var imageIndex = this.indexOf(imageInfo);
+      var wasSelected = this.selectionModel.selectedIndex == imageIndex;
+      this.removeItem(imageInfo);
+      var newInfo = this.addItem(
+          imageUrl,
+          opt_title === undefined ? imageInfo.title : opt_title,
+          imageInfo.clickHandler,
+          imageIndex,
+          imageInfo.decorateFn);
+      if (wasSelected)
+        this.selectedItem = newInfo;
+      return newInfo;
     },
 
     /**
@@ -161,9 +215,12 @@ cr.define('options', function() {
      * @param {Object} imageInfo Image data returned from the addItem() call.
      */
     removeItem: function(imageInfo) {
-      var index = this.dataModel.indexOf(imageInfo);
-      if (index != -1)
+      var index = this.indexOf(imageInfo);
+      if (index != -1) {
+        this.inProgramSelection_ = true;
         this.dataModel.splice(index, 1);
+        this.inProgramSelection_ = false;
+      }
     },
 
     /**
@@ -184,7 +241,8 @@ cr.define('options', function() {
    */
   UserImagesGrid.ButtonImages = {
     TAKE_PHOTO: 'chrome://theme/IDR_BUTTON_USER_IMAGE_TAKE_PHOTO',
-    CHOOSE_FILE: 'chrome://theme/IDR_BUTTON_USER_IMAGE_CHOOSE_FILE'
+    CHOOSE_FILE: 'chrome://theme/IDR_BUTTON_USER_IMAGE_CHOOSE_FILE',
+    PROFILE_PICTURE: 'chrome://theme/IDR_PROFILE_PICTURE_LOADING'
   };
 
   return {

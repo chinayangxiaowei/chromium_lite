@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/ui/views/html_dialog_view.h"
 #include "chrome/browser/ui/webui/html_dialog_ui.h"
 #include "chrome/common/url_constants.h"
@@ -15,6 +16,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/screen.h"
 
+using content::WebContents;
+using content::WebUIMessageHandler;
 
 static const int kBaseWidth = 1252;
 static const int kBaseHeight = 516;
@@ -29,8 +32,8 @@ KeyboardOverlayDelegate::KeyboardOverlayDelegate(
 KeyboardOverlayDelegate::~KeyboardOverlayDelegate() {
 }
 
-bool KeyboardOverlayDelegate::IsDialogModal() const {
-  return true;
+ui::ModalType KeyboardOverlayDelegate::GetDialogModalType() const {
+  return ui::MODAL_TYPE_SYSTEM;
 }
 
 string16 KeyboardOverlayDelegate::GetDialogTitle() const {
@@ -63,11 +66,13 @@ std::string KeyboardOverlayDelegate::GetDialogArgs() const {
 
 void KeyboardOverlayDelegate::OnDialogClosed(
     const std::string& json_retval) {
+  // Re-enable Shift+Alt. crosbug.com/17208.
+  chromeos::input_method::InputMethodManager::GetInstance()->AddHotkeys();
   delete this;
   return;
 }
 
-void KeyboardOverlayDelegate::OnCloseContents(TabContents* source,
+void KeyboardOverlayDelegate::OnCloseContents(WebContents* source,
                                               bool* out_close_dialog) {
 }
 

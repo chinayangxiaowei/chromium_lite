@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -8,17 +9,18 @@ import sys
 
 from autofill_merge_common import SerializeProfiles, ColumnNameToFieldType
 
+
 def main():
   """Serializes the autofill_profiles table from the specified database."""
 
   if len(sys.argv) != 2:
     print "Usage: python serialize_profiles.py <path/to/database>"
-    return
+    return 1
 
   database = sys.argv[1]
   if not os.path.isfile(database):
     print "Cannot read database at \"%s\"" % database
-    return
+    return 1
 
   # Read the autofill_profile_names table.
   try:
@@ -74,13 +76,11 @@ def main():
 
   for profile in cursor:
     guid = profile[0]
-    if int(profile[1]) == 0:
-      profiles[guid].append(("PHONE_HOME_WHOLE_NUMBER", profile[2]))
-    else:
-      profiles[guid].append(("PHONE_FAX_WHOLE_NUMBER", profile[2]))
+    profiles[guid].append(("PHONE_HOME_WHOLE_NUMBER", profile[2]))
 
   print SerializeProfiles(profiles.values())
+  return 0
 
 
 if __name__ == '__main__':
-  main()
+  sys.exit(main())

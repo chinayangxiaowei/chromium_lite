@@ -9,7 +9,7 @@
 
 TestExtensionService::~TestExtensionService() {}
 
-const ExtensionList* TestExtensionService::extensions() const {
+const ExtensionSet* TestExtensionService::extensions() const {
   ADD_FAILURE();
   return NULL;
 }
@@ -88,4 +88,19 @@ SyncError TestExtensionService::ProcessSyncChanges(
     const SyncChangeList& change_list) {
   ADD_FAILURE();
   return SyncError();
+}
+
+bool TestExtensionService::is_ready() {
+  ADD_FAILURE();
+  return false;
+}
+
+void TestExtensionService::AddExtension(const Extension* extension) {
+  ADD_FAILURE();
+}
+
+void TestExtensionService::UnloadExtension(
+    const std::string& extension_id,
+    extension_misc::UnloadedExtensionReason reason) {
+  ADD_FAILURE();
 }

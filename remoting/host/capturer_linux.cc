@@ -23,10 +23,12 @@ namespace {
 
 static const int kBytesPerPixel = 4;
 
+// Default to false, since many systems have broken XDamage support - see
+// http://crbug.com/73423.
+static bool g_should_use_x_damage = false;
+
 static bool ShouldUseXDamage() {
-  // For now, always use full-screen polling instead of the DAMAGE extension,
-  // as this extension is broken on many current systems OOTB.
-  return false;
+  return g_should_use_x_damage;
 }
 
 // A class representing a full-frame pixel buffer
@@ -41,7 +43,7 @@ class VideoFrameBuffer {
       XGetWindowAttributes(display, root_window, &root_attr);
       if (root_attr.width != size_.width() ||
           root_attr.height != size_.height()) {
-        size_.SetSize(root_attr.width, root_attr.height);
+        size_.set(root_attr.width, root_attr.height);
         bytes_per_row_ = size_.width() * kBytesPerPixel;
         size_t buffer_size = size_.width() * size_.height() * kBytesPerPixel;
         ptr_.reset(new uint8[buffer_size]);
@@ -49,14 +51,14 @@ class VideoFrameBuffer {
     }
   }
 
-  gfx::Size size() const { return size_; }
+  SkISize size() const { return size_; }
   int bytes_per_row() const { return bytes_per_row_; }
   uint8* ptr() const { return ptr_.get(); }
 
   void set_needs_update() { needs_update_ = true; }
 
  private:
-  gfx::Size size_;
+  SkISize size_;
   int bytes_per_row_;
   scoped_array<uint8> ptr_;
   bool needs_update_;
@@ -77,11 +79,11 @@ class CapturerLinux : public Capturer {
   virtual media::VideoFrame::Format pixel_format() const OVERRIDE;
   virtual void ClearInvalidRegion() OVERRIDE;
   virtual void InvalidateRegion(const SkRegion& invalid_region) OVERRIDE;
-  virtual void InvalidateScreen(const gfx::Size& size) OVERRIDE;
+  virtual void InvalidateScreen(const SkISize& size) OVERRIDE;
   virtual void InvalidateFullScreen() OVERRIDE;
-  virtual void CaptureInvalidRegion(CaptureCompletedCallback* callback)
-      OVERRIDE;
-  virtual const gfx::Size& size_most_recent() const OVERRIDE;
+  virtual void CaptureInvalidRegion(
+      const CaptureCompletedCallback& callback) OVERRIDE;
+  virtual const SkISize& size_most_recent() const OVERRIDE;
 
  private:
   void InitXDamage();
@@ -254,7 +256,7 @@ void CapturerLinux::InvalidateRegion(const SkRegion& invalid_region) {
   helper_.InvalidateRegion(invalid_region);
 }
 
-void CapturerLinux::InvalidateScreen(const gfx::Size& size) {
+void CapturerLinux::InvalidateScreen(const SkISize& size) {
   helper_.InvalidateScreen(size);
 }
 
@@ -264,9 +266,7 @@ void CapturerLinux::InvalidateFullScreen() {
 }
 
 void CapturerLinux::CaptureInvalidRegion(
-    CaptureCompletedCallback* callback) {
-  scoped_ptr<CaptureCompletedCallback> callback_deleter(callback);
-
+    const CaptureCompletedCallback& callback) {
   // TODO(lambroslambrou): In the non-DAMAGE case, there should be no need
   // for any X event processing in this class.
   ProcessPendingXEvents();
@@ -286,7 +286,7 @@ void CapturerLinux::CaptureInvalidRegion(
   current_buffer_ = (current_buffer_ + 1) % kNumBuffers;
   helper_.set_size_most_recent(capture_data->size());
 
-  callback->Run(capture_data);
+  callback.Run(capture_data);
 }
 
 void CapturerLinux::ProcessPendingXEvents() {
@@ -499,7 +499,7 @@ void CapturerLinux::SlowBlit(uint8* image, const SkIRect& rect,
   }
 }
 
-const gfx::Size& CapturerLinux::size_most_recent() const {
+const SkISize& CapturerLinux::size_most_recent() const {
   return helper_.size_most_recent();
 }
 
@@ -513,6 +513,11 @@ Capturer* Capturer::Create() {
     capturer = NULL;
   }
   return capturer;
+}
+
+// static
+void Capturer::EnableXDamage(bool enable) {
+  g_should_use_x_damage = enable;
 }
 
 }  // namespace remoting

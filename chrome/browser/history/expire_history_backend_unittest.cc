@@ -27,7 +27,7 @@
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/tools/profiles/thumbnail-inl.h"
-#include "content/browser/browser_thread.h"
+#include "content/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -35,6 +35,7 @@
 using base::Time;
 using base::TimeDelta;
 using base::TimeTicks;
+using content::BrowserThread;
 
 // Filename constants.
 static const FilePath::CharType kHistoryFile[] = FILE_PATH_LITERAL("History");
@@ -103,8 +104,8 @@ class ExpireHistoryTest : public testing::Test,
   BookmarkModel bookmark_model_;
 
   MessageLoopForUI message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread db_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread db_thread_;
 
   ExpireHistoryBackend expirer_;
 
@@ -255,7 +256,7 @@ void ExpireHistoryTest::AddExampleData(URLID url_ids[3], Time visit_times[4]) {
   visit_row3.url_id = url_ids[1];
   visit_row3.visit_time = visit_times[2];
   visit_row3.is_indexed = true;
-  visit_row3.transition = PageTransition::TYPED;
+  visit_row3.transition = content::PAGE_TRANSITION_TYPED;
   main_db_->AddVisit(&visit_row3, SOURCE_BROWSED);
 
   VisitRow visit_row4;
@@ -297,18 +298,19 @@ void ExpireHistoryTest::AddExampleSourceData(const GURL& url, URLID* id) {
 
   // Four times for each visit.
   VisitRow visit_row1(url_id, last_visit_time - TimeDelta::FromDays(4), 0,
-                      PageTransition::TYPED, 0);
+                      content::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row1, SOURCE_SYNCED);
 
   VisitRow visit_row2(url_id, last_visit_time - TimeDelta::FromDays(3), 0,
-                      PageTransition::TYPED, 0);
+                      content::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row2, SOURCE_BROWSED);
 
   VisitRow visit_row3(url_id, last_visit_time - TimeDelta::FromDays(2), 0,
-                      PageTransition::TYPED, 0);
+                      content::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row3, SOURCE_EXTENSION);
 
-  VisitRow visit_row4(url_id, last_visit_time, 0, PageTransition::TYPED, 0);
+  VisitRow visit_row4(
+      url_id, last_visit_time, 0, content::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row4, SOURCE_FIREFOX_IMPORTED);
 }
 
@@ -336,7 +338,7 @@ bool ExpireHistoryTest::HasThumbnail(URLID url_id) {
   if (!main_db_->GetURLRow(url_id, &info))
     return false;
   GURL url = info.url();
-  scoped_refptr<RefCountedBytes> data;
+  scoped_refptr<RefCountedMemory> data;
   return top_sites_->GetPageThumbnail(url, &data);
 }
 
@@ -522,7 +524,7 @@ TEST_F(ExpireHistoryTest, DeleteURLWithoutFavicon) {
   // Delete the URL and its dependencies.
   expirer_.DeleteURL(last_row.url());
 
-  // All the normal data + the favicon should be gone.
+  // All the normal data except the favicon should be gone.
   EnsureURLInfoGone(last_row);
   EXPECT_TRUE(HasFavicon(favicon_id));
 }
@@ -568,6 +570,43 @@ TEST_F(ExpireHistoryTest, DontDeleteStarredURL) {
 
   // Now it should be completely deleted.
   EnsureURLInfoGone(url_row);
+}
+
+// Deletes multiple URLs at once.  The favicon for the third one but
+// not the first two should be deleted.
+TEST_F(ExpireHistoryTest, DeleteURLs) {
+  URLID url_ids[3];
+  Time visit_times[4];
+  AddExampleData(url_ids, visit_times);
+
+  // Verify things are the way we expect with URL rows, favicons,
+  // thumbnails.
+  URLRow rows[3];
+  FaviconID favicon_ids[3];
+  std::vector<GURL> urls;
+  // Push back a bogus URL (which shouldn't change anything).
+  urls.push_back(GURL());
+  for (size_t i = 0; i < arraysize(rows); ++i) {
+    ASSERT_TRUE(main_db_->GetURLRow(url_ids[i], &rows[i]));
+    favicon_ids[i] = GetFavicon(rows[i].url(), FAVICON);
+    EXPECT_TRUE(HasFavicon(favicon_ids[i]));
+    // TODO(sky): fix this, see comment in HasThumbnail.
+    // EXPECT_TRUE(HasThumbnail(url_ids[i]));
+    urls.push_back(rows[i].url());
+  }
+
+  StarURL(rows[0].url());
+
+  // Delete the URLs and their dependencies.
+  expirer_.DeleteURLs(urls);
+
+  // First one should still be around (since it was starred).
+  ASSERT_TRUE(main_db_->GetRowForURL(rows[0].url(), &rows[0]));
+  EnsureURLInfoGone(rows[1]);
+  EnsureURLInfoGone(rows[2]);
+  EXPECT_TRUE(HasFavicon(favicon_ids[0]));
+  EXPECT_TRUE(HasFavicon(favicon_ids[1]));
+  EXPECT_FALSE(HasFavicon(favicon_ids[2]));
 }
 
 // Expires all URLs more recent than a given time, with no starred items.

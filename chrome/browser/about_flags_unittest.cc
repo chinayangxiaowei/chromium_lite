@@ -88,17 +88,6 @@ class AboutFlagsTest : public ::testing::Test {
   AboutFlagsTest() {
     prefs_.RegisterListPref(prefs::kEnabledLabsExperiments,
                             PrefService::UNSYNCABLE_PREF);
-#if defined(OS_CHROMEOS)
-    prefs_.RegisterBooleanPref(prefs::kLabsMediaplayerEnabled,
-                               false,
-                               PrefService::UNSYNCABLE_PREF);
-    prefs_.RegisterBooleanPref(prefs::kLabsAdvancedFilesystemEnabled,
-                               false,
-                               PrefService::UNSYNCABLE_PREF);
-    prefs_.RegisterBooleanPref(prefs::kUseVerticalTabs,
-                               false,
-                               PrefService::UNSYNCABLE_PREF);
-#endif
     testing::ClearState();
   }
 
@@ -234,7 +223,7 @@ TEST_F(AboutFlagsTest, PersistAndPrune) {
   // Experiment 3 should show still be persisted in preferences though.
   scoped_ptr<ListValue> switch_prefs(GetFlagsExperimentsData(&prefs_));
   ASSERT_TRUE(switch_prefs.get());
-  EXPECT_EQ(arraysize(kExperiments) - 1, switch_prefs->GetSize());
+  EXPECT_EQ(arraysize(kExperiments), switch_prefs->GetSize());
 }
 
 // Tests that switches which should have values get them in the command
@@ -284,7 +273,7 @@ TEST_F(AboutFlagsTest, CheckValues) {
   // And it should persist
   scoped_ptr<ListValue> switch_prefs(GetFlagsExperimentsData(&prefs_));
   ASSERT_TRUE(switch_prefs.get());
-  EXPECT_EQ(arraysize(kExperiments) - 1, switch_prefs->GetSize());
+  EXPECT_EQ(arraysize(kExperiments), switch_prefs->GetSize());
 }
 
 // Tests multi-value type experiments.

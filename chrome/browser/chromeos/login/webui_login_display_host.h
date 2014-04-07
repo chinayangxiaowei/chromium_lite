@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,7 @@ class Rect;
 namespace chromeos {
 
 class OobeUI;
+class WebUILoginDisplay;
 class WebUILoginView;
 
 // WebUI-specific implementation of the OOBE/login screen host. Uses
@@ -27,18 +28,20 @@ class WebUILoginDisplayHost : public BaseLoginDisplayHost {
   virtual ~WebUILoginDisplayHost();
 
   // LoginDisplayHost implementation:
-  virtual LoginDisplay* CreateLoginDisplay(LoginDisplay::Delegate* delegate)
-      const OVERRIDE;
+  virtual LoginDisplay* CreateLoginDisplay(
+      LoginDisplay::Delegate* delegate) OVERRIDE;
   virtual gfx::NativeWindow GetNativeWindow() const OVERRIDE;
-  virtual void SetOobeProgress(BackgroundView::LoginStep step) OVERRIDE;
+  virtual views::Widget* GetWidget() const OVERRIDE;
+  virtual void OpenProxySettings() OVERRIDE;
   virtual void SetOobeProgressBarVisible(bool visible) OVERRIDE;
   virtual void SetShutdownButtonEnabled(bool enable) OVERRIDE;
   virtual void SetStatusAreaEnabled(bool enable) OVERRIDE;
   virtual void SetStatusAreaVisible(bool visible) OVERRIDE;
-  virtual void ShowBackground() OVERRIDE;
   virtual void StartWizard(const std::string& first_screen_name,
-                           const GURL& start_url) OVERRIDE;
+                           DictionaryValue* screen_parameters) OVERRIDE;
   virtual void StartSignInScreen() OVERRIDE;
+  virtual void CloseWindow() OVERRIDE;
+  virtual void OnPreferencesChanged() OVERRIDE;
 
   // BaseLoginDisplayHost overrides:
   virtual WizardController* CreateWizardController() OVERRIDE;
@@ -54,6 +57,12 @@ class WebUILoginDisplayHost : public BaseLoginDisplayHost {
 
   // Container of the view we are displaying.
   WebUILoginView* login_view_;
+
+  // Login display we are using.
+  WebUILoginDisplay* webui_login_display_;
+
+  // True if the login display is the current screen.
+  bool is_showing_login_;
 
   DISALLOW_COPY_AND_ASSIGN(WebUILoginDisplayHost);
 };

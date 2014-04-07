@@ -23,8 +23,8 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/notification_source.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -33,13 +33,14 @@
 #include "ui/base/message_box_win.h"
 #endif
 
+using content::BrowserThread;
+
 ImporterHost::ImporterHost()
     : profile_(NULL),
-      task_(NULL),
-      importer_(NULL),
       waiting_for_bookmarkbar_model_(false),
       installed_bookmark_observer_(false),
       is_source_readable_(true),
+      importer_(NULL),
       headless_(false),
       parent_window_(NULL),
       observer_(NULL) {
@@ -65,10 +66,9 @@ void ImporterHost::OnImportLockDialogEnd(bool is_continue) {
       ShowWarningDialog();
     }
   } else {
-    // User chose to skip the import process. We should delete
-    // the task and notify the ImporterHost to finish.
-    delete task_;
-    task_ = NULL;
+    // User chose to skip the import process. We should reset the |task_| and
+    // notify the ImporterHost to finish.
+    task_ = base::Closure();
     importer_ = NULL;
     NotifyImportEnded();
   }
@@ -138,8 +138,8 @@ void ImporterHost::StartImportSettings(
 
   scoped_refptr<InProcessImporterBridge> bridge(
       new InProcessImporterBridge(writer_.get(), this));
-  task_ = NewRunnableMethod(
-      importer_, &Importer::StartImport, source_profile, items, bridge);
+  task_ = base::Bind(
+      &Importer::StartImport, importer_, source_profile, items, bridge);
 
   CheckForFirefoxLock(source_profile, items, first_run);
 
@@ -169,12 +169,14 @@ void ImporterHost::OnGoogleGAIACookieChecked(bool result) {
         MB_OK | MB_TOPMOST);
 
     GURL url("https://www.google.com/accounts/ServiceLogin");
-    BrowserList::GetLastActive()->AddSelectedTabWithURL(
-        url, PageTransition::TYPED);
+    DCHECK(profile_);
+    Browser* browser = BrowserList::GetLastActiveWithProfile(profile_);
+    if (browser)
+      browser->AddSelectedTabWithURL(url, content::PAGE_TRANSITION_TYPED);
 
-    MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
-        this, &ImporterHost::OnImportLockDialogEnd, false));
-    } else {
+    MessageLoop::current()->PostTask(FROM_HERE, base::Bind(
+        &ImporterHost::OnImportLockDialogEnd, this, false));
+  } else {
     is_source_readable_ = true;
     InvokeTaskIfDone();
   }
@@ -233,7 +235,7 @@ void ImporterHost::CheckForLoadedModels(uint16 items) {
       TemplateURLService* model =
           TemplateURLServiceFactory::GetForProfile(profile_);
       registrar_.Add(this, chrome::NOTIFICATION_TEMPLATE_URL_SERVICE_LOADED,
-                     Source<TemplateURLService>(model));
+                     content::Source<TemplateURLService>(model));
       model->Load();
     }
   }
@@ -263,8 +265,8 @@ void ImporterHost::BookmarkModelChanged() {
 }
 
 void ImporterHost::Observe(int type,
-                           const NotificationSource& source,
-                           const NotificationDetails& details) {
+                           const content::NotificationSource& source,
+                           const content::NotificationDetails& details) {
   DCHECK(type == chrome::NOTIFICATION_TEMPLATE_URL_SERVICE_LOADED);
   registrar_.RemoveAll();
   InvokeTaskIfDone();

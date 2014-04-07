@@ -14,7 +14,7 @@
 #include "base/sys_info.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "content/common/gpu/gpu_info.h"
+#include "content/public/common/gpu_info.h"
 
 namespace {
 
@@ -32,14 +32,6 @@ Version* GetDateFromString(const std::string& date_string) {
     date_as_version_string += pieces[i];
   }
   return Version::GetVersionFromString(date_as_version_string);
-}
-
-Value* NewStatusValue(const char* name, const char* status)
-{
-  DictionaryValue* value = new DictionaryValue();
-  value->SetString("name", name);
-  value->SetString("status", status);
-  return value;
 }
 
 }  // namespace anonymous
@@ -223,6 +215,12 @@ GpuBlacklist::GpuBlacklistEntry::GetGpuBlacklistEntryFromValue(
       return NULL;
     }
     dictionary_entry_count++;
+
+    bool disabled;
+    if (value->GetBoolean("disabled", &disabled)) {
+      entry->SetDisabled(disabled);
+      dictionary_entry_count++;
+    }
   }
 
   std::string description;
@@ -429,24 +427,6 @@ GpuBlacklist::GpuBlacklistEntry::GetGpuBlacklistEntryFromValue(
       dictionary_entry_count++;
   }
 
-  ListValue* channel_list_value = NULL;
-  if (value->GetList("browser_channels", &channel_list_value)) {
-    for (size_t i = 0; i < channel_list_value->GetSize(); ++i) {
-      std::string channel_value;
-      if (!channel_list_value->GetString(i, &channel_value)) {
-        LOG(WARNING) << "Malformed browser_channels entry " << entry->id();
-        return NULL;
-      }
-      BrowserChannel channel = StringToBrowserChannel(channel_value);
-      if (channel == kUnknown) {
-        LOG(WARNING) << "Malformed browser_channels entry " << entry->id();
-        return NULL;
-      }
-      entry->AddBrowserChannel(channel);
-    }
-    dictionary_entry_count++;
-  }
-
   if (value->size() != dictionary_entry_count) {
     LOG(WARNING) << "Entry with unknown fields " << entry->id();
     entry->contains_unknown_fields_ = true;
@@ -456,6 +436,7 @@ GpuBlacklist::GpuBlacklistEntry::GetGpuBlacklistEntryFromValue(
 
 GpuBlacklist::GpuBlacklistEntry::GpuBlacklistEntry()
     : id_(0),
+      disabled_(false),
       vendor_id_(0),
       contains_unknown_fields_(false),
       contains_unknown_features_(false) {
@@ -467,6 +448,10 @@ bool GpuBlacklist::GpuBlacklistEntry::SetId(uint32 id) {
     return true;
   }
   return false;
+}
+
+void GpuBlacklist::GpuBlacklistEntry::SetDisabled(bool disabled) {
+  disabled_ = disabled;
 }
 
 bool GpuBlacklist::GpuBlacklistEntry::SetOsInfo(
@@ -570,15 +555,9 @@ void GpuBlacklist::GpuBlacklistEntry::AddException(
   exceptions_.push_back(exception);
 }
 
-void GpuBlacklist::GpuBlacklistEntry::AddBrowserChannel(
-    BrowserChannel channel) {
-  DCHECK(channel != kUnknown);
-  browser_channels_.push_back(channel);
-}
-
 bool GpuBlacklist::GpuBlacklistEntry::Contains(
-    OsType os_type, const Version& os_version, BrowserChannel channel,
-    const GPUInfo& gpu_info) const {
+    OsType os_type, const Version& os_version,
+    const content::GPUInfo& gpu_info) const {
   DCHECK(os_type != kOsAny);
   if (os_info_.get() != NULL && !os_info_->Contains(os_type, os_version))
     return false;
@@ -618,20 +597,10 @@ bool GpuBlacklist::GpuBlacklistEntry::Contains(
       !gl_renderer_info_->Contains(gpu_info.gl_renderer))
     return false;
   for (size_t i = 0; i < exceptions_.size(); ++i) {
-    if (exceptions_[i]->Contains(os_type, os_version, channel, gpu_info))
+    if (exceptions_[i]->Contains(os_type, os_version, gpu_info))
       return false;
   }
-  bool rt = true;
-  if (browser_channels_.size() > 0) {
-    rt = false;
-    for (size_t i = 0; i < browser_channels_.size(); ++i) {
-      if (browser_channels_[i] == channel) {
-        rt = true;
-        break;
-      }
-    }
-  }
-  return rt;
+  return true;
 }
 
 GpuBlacklist::OsType GpuBlacklist::GpuBlacklistEntry::GetOsType() const {
@@ -644,14 +613,18 @@ uint32 GpuBlacklist::GpuBlacklistEntry::id() const {
   return id_;
 }
 
+bool GpuBlacklist::GpuBlacklistEntry::disabled() const {
+  return disabled_;
+}
+
 GpuFeatureFlags GpuBlacklist::GpuBlacklistEntry::GetGpuFeatureFlags() const {
   return *feature_flags_;
 }
 
-GpuBlacklist::GpuBlacklist(const std::string& browser_info_string)
+GpuBlacklist::GpuBlacklist(const std::string& browser_version_string)
     : max_entry_id_(0),
       contains_unknown_fields_(false) {
-  SetBrowserInfo(browser_info_string);
+  SetBrowserVersion(browser_version_string);
 }
 
 GpuBlacklist::~GpuBlacklist() {
@@ -733,7 +706,7 @@ bool GpuBlacklist::LoadGpuBlacklist(
 GpuFeatureFlags GpuBlacklist::DetermineGpuFeatureFlags(
     GpuBlacklist::OsType os,
     Version* os_version,
-    const GPUInfo& gpu_info) {
+    const content::GPUInfo& gpu_info) {
   active_entries_.clear();
   GpuFeatureFlags flags;
 
@@ -751,8 +724,9 @@ GpuFeatureFlags GpuBlacklist::DetermineGpuFeatureFlags(
   DCHECK(os_version != NULL);
 
   for (size_t i = 0; i < blacklist_.size(); ++i) {
-    if (blacklist_[i]->Contains(os, *os_version, browser_channel_, gpu_info)) {
-      flags.Combine(blacklist_[i]->GetGpuFeatureFlags());
+    if (blacklist_[i]->Contains(os, *os_version, gpu_info)) {
+      if (!blacklist_[i]->disabled())
+        flags.Combine(blacklist_[i]->GetGpuFeatureFlags());
       active_entries_.push_back(blacklist_[i]);
     }
   }
@@ -761,189 +735,40 @@ GpuFeatureFlags GpuBlacklist::DetermineGpuFeatureFlags(
 
 void GpuBlacklist::GetGpuFeatureFlagEntries(
     GpuFeatureFlags::GpuFeatureType feature,
-    std::vector<uint32>& entry_ids) const {
+    std::vector<uint32>& entry_ids,
+    bool disabled) const {
   entry_ids.clear();
   for (size_t i = 0; i < active_entries_.size(); ++i) {
-    if ((feature & active_entries_[i]->GetGpuFeatureFlags().flags()) != 0)
+    if (((feature & active_entries_[i]->GetGpuFeatureFlags().flags()) != 0) &&
+        disabled == active_entries_[i]->disabled())
       entry_ids.push_back(active_entries_[i]->id());
   }
 }
 
-bool GpuBlacklist::IsFeatureBlacklisted(
-    GpuFeatureFlags::GpuFeatureType feature) const
-{
+void GpuBlacklist::GetBlacklistReasons(ListValue* problem_list) const {
+  DCHECK(problem_list);
   for (size_t i = 0; i < active_entries_.size(); ++i) {
-    if (active_entries_[i]->GetGpuFeatureFlags().flags() & feature)
-      return true;
+    GpuBlacklistEntry* entry = active_entries_[i];
+    if (entry->disabled())
+      continue;
+    DictionaryValue* problem = new DictionaryValue();
+
+    problem->SetString("description", entry->description());
+
+    ListValue* cr_bugs = new ListValue();
+    for (size_t j = 0; j < entry->cr_bugs().size(); ++j)
+      cr_bugs->Append(Value::CreateIntegerValue(entry->cr_bugs()[j]));
+    problem->Set("crBugs", cr_bugs);
+
+    ListValue* webkit_bugs = new ListValue();
+    for (size_t j = 0; j < entry->webkit_bugs().size(); ++j) {
+      webkit_bugs->Append(Value::CreateIntegerValue(
+          entry->webkit_bugs()[j]));
+    }
+    problem->Set("webkitBugs", webkit_bugs);
+
+    problem_list->Append(problem);
   }
-  return false;
-}
-
-Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
-                                      bool disable_accelerated_compositing,
-                                      bool disable_accelerated_2D_canvas,
-                                      bool disable_experimental_webgl,
-                                      bool disable_multisampling) const {
-  DictionaryValue* status = new DictionaryValue();
-
-  // Build the feature_status field.
-  {
-    ListValue* feature_status_list = new ListValue();
-
-    // 2d_canvas.
-    if (!gpu_access_allowed) {
-      if (disable_accelerated_2D_canvas)
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "software"));
-      else
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "unavailable_software"));
-    } else if (!disable_accelerated_2D_canvas) {
-      if (IsFeatureBlacklisted(
-              GpuFeatureFlags::kGpuFeatureAccelerated2dCanvas))
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "unavailable_software"));
-      else if (disable_accelerated_compositing)
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "disabled_software"));
-      else
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "enabled"));
-    } else {
-      feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                 "software"));
-    }
-
-    // 3d css and compositing.
-    if (!gpu_access_allowed) {
-      feature_status_list->Append(NewStatusValue("3d_css",
-                                                 "unavailable_off"));
-      feature_status_list->Append(NewStatusValue("compositing",
-                                                 "unavailable_software"));
-    } else if (disable_accelerated_compositing) {
-      feature_status_list->Append(NewStatusValue("3d_css",
-                                                 "unavailable_off"));
-      feature_status_list->Append(NewStatusValue("compositing",
-                                                 "disabled_software"));
-    } else if (IsFeatureBlacklisted(
-        GpuFeatureFlags::kGpuFeatureAcceleratedCompositing)) {
-      feature_status_list->Append(NewStatusValue("3d_css",
-                                                 "unavailable_off"));
-      feature_status_list->Append(NewStatusValue("compositing",
-                                                 "disabled_software"));
-    } else {
-      feature_status_list->Append(NewStatusValue("3d_css",
-                                                 "enabled"));
-      feature_status_list->Append(NewStatusValue("compositing",
-                                                 "enabled"));
-    }
-
-    // webgl
-    if (!gpu_access_allowed)
-      feature_status_list->Append(NewStatusValue("webgl",
-                                                 "unavailable_off"));
-    else if (disable_experimental_webgl)
-      feature_status_list->Append(NewStatusValue("webgl",
-                                                 "disabled_off"));
-    else if (IsFeatureBlacklisted(
-        GpuFeatureFlags::kGpuFeatureWebgl))
-      feature_status_list->Append(NewStatusValue("webgl",
-                                                 "unavailable_off"));
-    else if (disable_accelerated_compositing)
-      feature_status_list->Append(NewStatusValue("webgl",
-                                                 "enabled_readback"));
-    else
-      feature_status_list->Append(NewStatusValue("webgl",
-                                                 "enabled"));
-
-    // multisampling
-    if (!gpu_access_allowed)
-      feature_status_list->Append(NewStatusValue("multisampling",
-                                                 "unavailable_off"));
-    else if (disable_multisampling)
-      feature_status_list->Append(NewStatusValue("multisampling",
-                                                 "disabled_off"));
-    else if (IsFeatureBlacklisted(
-        GpuFeatureFlags::kGpuFeatureMultisampling))
-      feature_status_list->Append(NewStatusValue("multisampling",
-                                                 "disabled_off"));
-    else
-      feature_status_list->Append(NewStatusValue("multisampling",
-                                                 "enabled"));
-
-    status->Set("featureStatus", feature_status_list);
-  }
-
-  // Build the problems list.
-  {
-    ListValue* problem_list = new ListValue();
-    if (!gpu_access_allowed) {
-      DictionaryValue* problem = new DictionaryValue();
-      problem->SetString("description",
-          "GPU process was unable to boot. Access to GPU disallowed.");
-      problem->Set("crBugs", new ListValue());
-      problem->Set("webkitBugs", new ListValue());
-      problem_list->Append(problem);
-    }
-    if (disable_accelerated_2D_canvas) {
-      DictionaryValue* problem = new DictionaryValue();
-      problem->SetString("description",
-          "Accelerated 2D canvas has been disabled at the command line");
-      problem->Set("crBugs", new ListValue());
-      problem->Set("webkitBugs", new ListValue());
-      problem_list->Append(problem);
-    }
-    if (disable_accelerated_compositing) {
-      DictionaryValue* problem = new DictionaryValue();
-      problem->SetString("description",
-          "Accelerated compositing has been disabled, either via about:flags "
-          "or command line. This adversely affects performance of all hardware "
-          " accelerated features.");
-      problem->Set("crBugs", new ListValue());
-      problem->Set("webkitBugs", new ListValue());
-      problem_list->Append(problem);
-    }
-    if (disable_experimental_webgl) {
-      DictionaryValue* problem = new DictionaryValue();
-      problem->SetString("description",
-          "WebGL has been disabled, either via about:flags "
-          "or command line");
-      problem->Set("crBugs", new ListValue());
-      problem->Set("webkitBugs", new ListValue());
-      problem_list->Append(problem);
-    }
-    if (disable_multisampling) {
-      DictionaryValue* problem = new DictionaryValue();
-      problem->SetString("description",
-          "Multisampling has been disabled, either via about:flags "
-          "or command line");
-      problem->Set("crBugs", new ListValue());
-      problem->Set("webkitBugs", new ListValue());
-      problem_list->Append(problem);
-    }
-    for (size_t i = 0; i < active_entries_.size(); ++i) {
-      ScopedGpuBlacklistEntry entry = active_entries_[i];
-      DictionaryValue* problem = new DictionaryValue();
-
-      problem->SetString("description", entry->description());
-
-      ListValue* cr_bugs = new ListValue();
-      for (size_t j = 0; j < entry->cr_bugs().size(); ++j)
-        cr_bugs->Append(Value::CreateIntegerValue(
-            entry->cr_bugs()[j]));
-      problem->Set("crBugs", cr_bugs);
-
-      ListValue* webkit_bugs = new ListValue();
-      for (size_t j = 0; j < entry->webkit_bugs().size(); ++j)
-        webkit_bugs->Append(Value::CreateIntegerValue(
-            entry->webkit_bugs()[j]));
-      problem->Set("webkitBugs", webkit_bugs);
-
-      problem_list->Append(problem);
-    }
-    status->Set("problems", problem_list);
-  }
-  return status;
 }
 
 size_t GpuBlacklist::num_entries() const {
@@ -992,7 +817,7 @@ GpuBlacklist::OsType GpuBlacklist::GetOsType() {
   return kOsChromeOS;
 #elif defined(OS_WIN)
   return kOsWin;
-#elif defined(OS_LINUX)
+#elif defined(OS_LINUX) || defined(OS_OPENBSD)
   return kOsLinux;
 #elif defined(OS_MACOSX)
   return kOsMacosx;
@@ -1032,32 +857,8 @@ GpuBlacklist::IsEntrySupportedByCurrentBrowserVersion(
   return kSupported;
 }
 
-void GpuBlacklist::SetBrowserInfo(const std::string& browser_info_string) {
-  std::vector<std::string> pieces;
-  base::SplitString(browser_info_string, ' ', &pieces);
-  if (pieces.size() != 2) {
-      pieces.resize(2);
-      pieces[0] = "0";
-      pieces[1] = "unknown";
-  }
-
-  browser_version_.reset(Version::GetVersionFromString(pieces[0]));
+void GpuBlacklist::SetBrowserVersion(const std::string& version_string) {
+  browser_version_.reset(Version::GetVersionFromString(version_string));
   DCHECK(browser_version_.get() != NULL);
-
-  browser_channel_ = StringToBrowserChannel(pieces[1]);
-}
-
-// static
-GpuBlacklist::BrowserChannel GpuBlacklist::StringToBrowserChannel(
-    const std::string& value) {
-  if (value == "stable")
-    return kStable;
-  if (value == "beta")
-    return kBeta;
-  if (value == "dev")
-    return kDev;
-  if (value == "canary")
-    return kCanary;
-  return kUnknown;
 }
 

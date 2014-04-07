@@ -4,6 +4,8 @@
 
 #include "chrome/renderer/external_host_bindings.h"
 
+#include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/values.h"
 #include "chrome/common/render_messages.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebBindings.h"
@@ -12,15 +14,18 @@
 
 using WebKit::WebBindings;
 
-ExternalHostBindings::ExternalHostBindings() : frame_(NULL) {
-  BindMethod("postMessage", &ExternalHostBindings::postMessage);
+ExternalHostBindings::ExternalHostBindings(IPC::Message::Sender* sender,
+                                           int routing_id)
+    : frame_(NULL), sender_(sender), routing_id_(routing_id) {
+  BindCallback("postMessage", base::Bind(&ExternalHostBindings::PostMessage,
+                                         base::Unretained(this)));
   BindProperty("onmessage", &on_message_handler_);
 }
 
 ExternalHostBindings::~ExternalHostBindings() {
 }
 
-void ExternalHostBindings::postMessage(
+void ExternalHostBindings::PostMessage(
     const CppArgumentList& args, CppVariant* result) {
   DCHECK(result);
 
@@ -50,9 +55,9 @@ void ExternalHostBindings::postMessage(
 
   std::string origin = frame_->document().securityOrigin().toString().utf8();
 
-  result->Set(sender()->Send(
+  result->Set(sender_->Send(
       new ChromeViewHostMsg_ForwardMessageToExternalHost(
-          routing_id(), message, origin, target)));
+          routing_id_, message, origin, target)));
 }
 
 bool ExternalHostBindings::ForwardMessageFromExternalHost(
@@ -135,6 +140,12 @@ bool ExternalHostBindings::ForwardMessageFromExternalHost(
   }
 
   return status;
+}
+
+void ExternalHostBindings::BindToJavascript(WebKit::WebFrame* frame,
+                                            const std::string& classname) {
+  frame_ = frame;
+  CppBoundClass::BindToJavascript(frame, classname);
 }
 
 bool ExternalHostBindings::CreateMessageEvent(NPObject** message_event) {

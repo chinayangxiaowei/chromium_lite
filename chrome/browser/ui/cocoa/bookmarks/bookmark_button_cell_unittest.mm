@@ -7,7 +7,7 @@
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_button_cell.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu.h"
-#include "chrome/browser/ui/cocoa/browser_test_helper.h"
+#include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -36,9 +36,7 @@
 
 namespace {
 
-class BookmarkButtonCellTest : public CocoaTest {
-  public:
-    BrowserTestHelper helper_;
+class BookmarkButtonCellTest : public CocoaProfileTest {
 };
 
 // Make sure it's not totally bogus
@@ -94,7 +92,7 @@ TEST_F(BookmarkButtonCellTest, MouseEnterStuff) {
   [cell setMenu:[[[BookmarkMenu alloc] initWithTitle:@"foo"] autorelease]];
   EXPECT_FALSE([cell menu]);
 
-  BookmarkModel* model = helper_.profile()->GetBookmarkModel();
+  BookmarkModel* model = profile()->GetBookmarkModel();
   const BookmarkNode* node = model->bookmark_bar_node();
   [cell setEmpty:NO];
   [cell setBookmarkNode:node];
@@ -107,7 +105,7 @@ TEST_F(BookmarkButtonCellTest, MouseEnterStuff) {
 }
 
 TEST_F(BookmarkButtonCellTest, BookmarkNode) {
-  BookmarkModel& model(*(helper_.profile()->GetBookmarkModel()));
+  BookmarkModel& model(*(profile()->GetBookmarkModel()));
   scoped_nsobject<BookmarkButtonCell> cell(
       [[BookmarkButtonCell alloc] initTextCell:@"Testing"]);
 
@@ -156,7 +154,7 @@ TEST_F(BookmarkButtonCellTest, Awake) {
 
 // Subfolder arrow details.
 TEST_F(BookmarkButtonCellTest, FolderArrow) {
-  BookmarkModel* model = helper_.profile()->GetBookmarkModel();
+  BookmarkModel* model = profile()->GetBookmarkModel();
   const BookmarkNode* bar = model->bookmark_bar_node();
   const BookmarkNode* node = model->AddURL(bar, bar->child_count(),
                                            ASCIIToUTF16("title"),
@@ -177,6 +175,31 @@ TEST_F(BookmarkButtonCellTest, FolderArrow) {
   [cell setDrawFolderArrow:YES];
   NSSize arrowSize = [cell cellSize];
   EXPECT_GT(arrowSize.width, size.width);
+}
+
+TEST_F(BookmarkButtonCellTest, VerticalTextOffset) {
+  BookmarkModel* model = profile()->GetBookmarkModel();
+  const BookmarkNode* bar = model->bookmark_bar_node();
+  const BookmarkNode* node = model->AddURL(bar, bar->child_count(),
+                                           ASCIIToUTF16("title"),
+                                           GURL("http://www.google.com"));
+
+  scoped_nsobject<GradientButtonCell> gradient_cell(
+      [[GradientButtonCell alloc] initTextCell:@"Testing"]);
+  scoped_nsobject<BookmarkButtonCell> bookmark_cell(
+      [[BookmarkButtonCell alloc] initForNode:node
+                                  contextMenu:nil
+                                     cellText:@"small"
+                                    cellImage:nil]);
+
+  ASSERT_TRUE(gradient_cell.get());
+  ASSERT_TRUE(bookmark_cell.get());
+
+  EXPECT_EQ(1, [gradient_cell verticalTextOffset]);
+  EXPECT_EQ(0, [bookmark_cell verticalTextOffset]);
+
+  EXPECT_NE([bookmark_cell verticalTextOffset],
+            [gradient_cell verticalTextOffset]);
 }
 
 }  // namespace

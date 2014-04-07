@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,28 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+namespace testing {
+
+class ProfileManager : public ::ProfileManager {
+ public:
+  explicit ProfileManager(const FilePath& user_data_dir)
+      : ::ProfileManager(user_data_dir) {}
+
+ protected:
+  virtual Profile* CreateProfileHelper(const FilePath& file_path) OVERRIDE {
+    return new TestingProfile(file_path);
+  }
+
+#if defined(OS_WIN)
+  virtual ProfileShortcutManagerWin* CreateShortcutManager() OVERRIDE {
+    // We should avoid creating shortcuts in these tests.
+    return NULL;
+  }
+#endif
+};
+
+}  // namespace testing
 
 TestingProfileManager::TestingProfileManager(TestingBrowserProcess* process)
     : called_set_up_(false),
@@ -64,12 +86,20 @@ void TestingProfileManager::DeleteTestingProfile(const std::string& name) {
   TestingProfilesMap::iterator it = testing_profiles_.find(name);
   DCHECK(it != testing_profiles_.end());
 
-  scoped_ptr<TestingProfile> profile(it->second);
-
-  profile_manager_->profiles_info_.erase(profile->GetPath());
+  TestingProfile* profile = it->second;
 
   ProfileInfoCache& cache = profile_manager_->GetProfileInfoCache();
   cache.DeleteProfileFromCache(profile->GetPath());
+
+  profile_manager_->profiles_info_.erase(profile->GetPath());
+}
+
+void TestingProfileManager::DeleteProfileInfoCache() {
+  profile_manager_->profile_info_cache_.reset(NULL);
+}
+
+void TestingProfileManager::SetLoggedIn(bool logged_in) {
+  profile_manager_->logged_in_ = logged_in;
 }
 
 ProfileManager* TestingProfileManager::profile_manager() {
@@ -89,7 +119,7 @@ void TestingProfileManager::SetUpInternal() {
   // Set up the directory for profiles.
   ASSERT_TRUE(profiles_dir_.CreateUniqueTempDir());
 
-  profile_manager_ = new ProfileManager(profiles_dir_.path());
+  profile_manager_ = new testing::ProfileManager(profiles_dir_.path());
   browser_process_->SetProfileManager(profile_manager_);  // Takes ownership.
 
   called_set_up_ = true;

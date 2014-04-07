@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,8 +19,8 @@ namespace base {
 class StringValue;
 }
 
-namespace sqlite_utils {
-class SQLStatement;
+namespace sql {
+class Statement;
 }
 
 namespace syncable {
@@ -87,6 +87,11 @@ class Id {
   inline bool operator > (const Id& that) const {
     return s_ > that.s_;
   }
+
+  const std::string& value() const {
+    return s_;
+  }
+
   // Return the next highest ID in the lexicographic ordering.  This is
   // useful for computing upper bounds on std::sets that are ordered
   // by operator<.
@@ -112,10 +117,9 @@ class Id {
   static Id GetLeastIdForLexicographicComparison();
 
  private:
-  friend int UnpackEntry(sqlite_utils::SQLStatement* statement,
-                         syncable::EntryKernel** kernel);
-  friend int BindFields(const EntryKernel& entry,
-                         sqlite_utils::SQLStatement* statement);
+  friend EntryKernel* UnpackEntry(sql::Statement* statement);
+  friend void BindFields(const EntryKernel& entry,
+                         sql::Statement* statement);
   friend std::ostream& operator<<(std::ostream& out, const Id& id);
   friend class MockConnectionManager;
   friend class SyncableIdTest;

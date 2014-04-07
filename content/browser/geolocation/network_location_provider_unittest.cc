@@ -15,6 +15,8 @@
 #include "net/url_request/url_request_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using content::FakeAccessTokenStore;
+
 namespace {
 
 // Constants used in multiple tests.
@@ -286,9 +288,9 @@ TEST_F(GeolocationNetworkProviderTest, StartProvider) {
   ASSERT_TRUE(fetcher != NULL);
 
   EXPECT_EQ(test_server_url_.spec() + kTestJson,
-            fetcher->original_url().spec());
+            fetcher->GetOriginalURL().spec());
 
-  CheckRequestIsValid(fetcher->original_url().spec(), 0, 0, 0, "");
+  CheckRequestIsValid(fetcher->GetOriginalURL().spec(), 0, 0, 0, "");
 }
 
 TEST_F(GeolocationNetworkProviderTest, StartProviderLongRequest) {
@@ -302,8 +304,8 @@ TEST_F(GeolocationNetworkProviderTest, StartProviderLongRequest) {
   // The request url should have been shortened to less than 2048 characters
   // in length by not including access points with the lowest signal strength
   // in the request.
-  EXPECT_LT(fetcher->original_url().spec().size(), size_t(2048));
-  CheckRequestIsValid(fetcher->original_url().spec(), 0, 16, 4, "");
+  EXPECT_LT(fetcher->GetOriginalURL().spec().size(), size_t(2048));
+  CheckRequestIsValid(fetcher->GetOriginalURL().spec(), 0, 16, 4, "");
 }
 
 TEST_F(GeolocationNetworkProviderTest, MultipleStartProvider) {
@@ -358,15 +360,18 @@ TEST_F(GeolocationNetworkProviderTest, MultipleWifiScansComplete) {
   TestURLFetcher* fetcher = get_url_fetcher_and_advance_id();
   ASSERT_TRUE(fetcher != NULL);
   EXPECT_EQ(test_server_url_.spec() + kTestJson,
-            fetcher->original_url().spec());
+            fetcher->GetOriginalURL().spec());
+
   // Complete the network request with bad position fix.
   const char* kNoFixNetworkResponse =
       "{"
       "  \"status\": \"ZERO_RESULTS\""
       "}";
-  fetcher->delegate()->OnURLFetchComplete(
-      fetcher, test_server_url_, net::URLRequestStatus(), 200,  // OK
-      net::ResponseCookies(), kNoFixNetworkResponse);
+  fetcher->set_url(test_server_url_);
+  fetcher->set_status(net::URLRequestStatus());
+  fetcher->set_response_code(200);  // OK
+  fetcher->SetResponseString(kNoFixNetworkResponse);
+  fetcher->delegate()->OnURLFetchComplete(fetcher);
 
   Geoposition position;
   provider->GetPosition(&position);
@@ -379,7 +384,8 @@ TEST_F(GeolocationNetworkProviderTest, MultipleWifiScansComplete) {
   fetcher = get_url_fetcher_and_advance_id();
   ASSERT_TRUE(fetcher != NULL);
   // The request should have the wifi data.
-  CheckRequestIsValid(fetcher->original_url().spec(), 0, kFirstScanAps, 0, "");
+  CheckRequestIsValid(
+      fetcher->GetOriginalURL().spec(), 0, kFirstScanAps, 0, "");
 
   // Send a reply with good position fix.
   const char* kReferenceNetworkResponse =
@@ -392,9 +398,11 @@ TEST_F(GeolocationNetworkProviderTest, MultipleWifiScansComplete) {
       "    \"lng\": -0.1"
       "  }"
       "}";
-  fetcher->delegate()->OnURLFetchComplete(
-      fetcher, test_server_url_, net::URLRequestStatus(), 200,  // OK
-      net::ResponseCookies(), kReferenceNetworkResponse);
+  fetcher->set_url(test_server_url_);
+  fetcher->set_status(net::URLRequestStatus());
+  fetcher->set_response_code(200);  // OK
+  fetcher->SetResponseString(kReferenceNetworkResponse);
+  fetcher->delegate()->OnURLFetchComplete(fetcher);
 
   provider->GetPosition(&position);
   EXPECT_EQ(51.0, position.latitude);
@@ -426,15 +434,16 @@ TEST_F(GeolocationNetworkProviderTest, MultipleWifiScansComplete) {
   main_message_loop_.RunAllPending();
   fetcher = get_url_fetcher_and_advance_id();
   EXPECT_TRUE(fetcher);
-  CheckRequestIsValid(fetcher->original_url().spec(), 0,
+  CheckRequestIsValid(fetcher->GetOriginalURL().spec(), 0,
                       kThirdScanAps, 0,
                       REFERENCE_ACCESS_TOKEN);
   // ...reply with a network error.
-  fetcher->delegate()->OnURLFetchComplete(
-      fetcher, test_server_url_,
-      net::URLRequestStatus(net::URLRequestStatus::FAILED, -1),
-      200,  // should be ignored
-      net::ResponseCookies(), "");
+
+  fetcher->set_url(test_server_url_);
+  fetcher->set_status(net::URLRequestStatus(net::URLRequestStatus::FAILED, -1));
+  fetcher->set_response_code(200);  // should be ignored
+  fetcher->SetResponseString("");
+  fetcher->delegate()->OnURLFetchComplete(fetcher);
 
   // Error means we now no longer have a fix.
   provider->GetPosition(&position);
@@ -494,7 +503,7 @@ TEST_F(GeolocationNetworkProviderTest, NetworkRequestDeferredForPermission) {
   ASSERT_TRUE(fetcher != NULL);
 
   EXPECT_EQ(test_server_url_.spec() + kTestJson,
-            fetcher->original_url().spec());
+            fetcher->GetOriginalURL().spec());
 }
 
 TEST_F(GeolocationNetworkProviderTest,
@@ -518,7 +527,7 @@ TEST_F(GeolocationNetworkProviderTest,
   fetcher = get_url_fetcher_and_advance_id();
   ASSERT_TRUE(fetcher != NULL);
 
-  CheckRequestIsValid(fetcher->original_url().spec(), 0,
+  CheckRequestIsValid(fetcher->GetOriginalURL().spec(), 0,
                       kScanCount, 0, REFERENCE_ACCESS_TOKEN);
 }
 

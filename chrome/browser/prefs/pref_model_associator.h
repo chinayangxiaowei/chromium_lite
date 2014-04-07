@@ -32,7 +32,7 @@ class PrefModelAssociator
     : public SyncableService,
       public base::NonThreadSafe {
  public:
-  explicit PrefModelAssociator(PrefService* pref_service);
+  PrefModelAssociator();
   virtual ~PrefModelAssociator();
 
   // SyncableService implementation.
@@ -60,9 +60,15 @@ class PrefModelAssociator
   // Returns true if the specified preference is registered for syncing.
   virtual bool IsPrefRegistered(const char* name);
 
+  // Unregisters a previously registered preference. This must be called
+  // prior to making the first sync.
+  virtual void UnregisterPref(const char* name);
+
   // Process a local preference change. This can trigger new SyncChanges being
   // sent to the syncer.
   virtual void ProcessPrefChange(const std::string& name);
+
+  void SetPrefService(PrefService* pref_service);
 
   // Merges the value of local_pref into the supplied server_value and returns
   // the result (caller takes ownership). If there is a conflict, the server
@@ -89,9 +95,6 @@ class PrefModelAssociator
 
   typedef std::map<std::string, SyncData> SyncDataMap;
 
-  // For testing.
-  PrefModelAssociator();
-
   // Create an association for a given preference. If |sync_pref| is valid,
   // signifying that sync has data for this preference, we reconcile their data
   // with ours and append a new UPDATE SyncChange to |sync_changes|. If
@@ -103,10 +106,6 @@ class PrefModelAssociator
   void InitPrefAndAssociate(const SyncData& sync_pref,
                             const std::string& pref_name,
                             SyncChangeList* sync_changes);
-
-  // Perform any additional local operations that need to happen after a
-  // preference has been updated.
-  void SendUpdateNotificationsIfNecessary(const std::string& pref_name);
 
   static base::Value* MergeListValues(
       const base::Value& from_value, const base::Value& to_value);

@@ -5,13 +5,14 @@
 #ifndef MEDIA_AUDIO_AUDIO_INPUT_CONTROLLER_H_
 #define MEDIA_AUDIO_AUDIO_INPUT_CONTROLLER_H_
 
+#include <string>
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread.h"
 #include "base/timer.h"
 #include "media/audio/audio_io.h"
-#include "media/audio/audio_manager.h"
+#include "media/audio/audio_manager_base.h"
 
 // An AudioInputController controls an AudioInputStream and records data
 // from this input stream. It has an important function that it executes
@@ -41,7 +42,7 @@ class MEDIA_EXPORT AudioInputController
  public:
   // An event handler that receives events from the AudioInputController. The
   // following methods are called on the audio input controller thread.
-  class EventHandler {
+  class MEDIA_EXPORT EventHandler {
    public:
     virtual ~EventHandler() {}
     virtual void OnCreated(AudioInputController* controller) = 0;
@@ -58,7 +59,7 @@ class MEDIA_EXPORT AudioInputController
     virtual ~SyncWriter() {}
 
     // Notify the synchronous writer about the number of bytes in the
-    // AudioInputController which has been recorded.
+    // soundcard which has been recorded.
     virtual void UpdateRecordedBytes(uint32 bytes) = 0;
 
     // Write certain amount of data from |data|. This method returns
@@ -73,8 +74,10 @@ class MEDIA_EXPORT AudioInputController
   // create the AudioInputController. Factory is intended for testing.
   class Factory {
    public:
-    virtual AudioInputController* Create(EventHandler* event_handler,
-                                         AudioParameters params) = 0;
+    virtual AudioInputController* Create(
+        AudioManager* audio_manager,
+        EventHandler* event_handler,
+        AudioParameters params) = 0;
    protected:
     virtual ~Factory() {}
   };
@@ -86,13 +89,16 @@ class MEDIA_EXPORT AudioInputController
   // device will be created on the new thread and when that is done event
   // handler will receive a OnCreated() call.
   static scoped_refptr<AudioInputController> Create(
+      AudioManager* audio_manager,
       EventHandler* event_handler,
       const AudioParameters& params);
 
   // Factory method for creating a low latency audio stream.
   static scoped_refptr<AudioInputController> CreateLowLatency(
+      AudioManager* audio_manager,
       EventHandler* event_handler,
       const AudioParameters& params,
+      const std::string& device_id,
       // External synchronous reader for audio controller.
       SyncWriter* sync_writer);
 
@@ -117,9 +123,10 @@ class MEDIA_EXPORT AudioInputController
 
   ///////////////////////////////////////////////////////////////////////////
   // AudioInputCallback methods.
-  virtual void OnData(AudioInputStream* stream, const uint8* src, uint32 size);
-  virtual void OnClose(AudioInputStream* stream);
-  virtual void OnError(AudioInputStream* stream, int code);
+  virtual void OnData(AudioInputStream* stream, const uint8* src, uint32 size,
+                      uint32 hardware_delay_bytes) OVERRIDE;
+  virtual void OnClose(AudioInputStream* stream) OVERRIDE;
+  virtual void OnError(AudioInputStream* stream, int code) OVERRIDE;
 
  protected:
   // Internal state of the source.
@@ -131,16 +138,18 @@ class MEDIA_EXPORT AudioInputController
     kError
   };
 
-  AudioInputController(EventHandler* handler, SyncWriter* sync_writer);
+  AudioInputController(AudioManager* audio_manager, EventHandler* handler,
+                       SyncWriter* sync_writer);
 
   // The following methods are executed on the audio controller thread.
-  void DoCreate(const AudioParameters& params);
+  void DoCreate(const AudioParameters& params, const std::string& device_id);
   void DoRecord();
   void DoClose();
   void DoReportError(int code);
   void DoReportNoDataError();
   void DoResetNoDataTimer();
 
+  scoped_refptr<AudioManager> audio_manager_;
   EventHandler* handler_;
   AudioInputStream* stream_;
 

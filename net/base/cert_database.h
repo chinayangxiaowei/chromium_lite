@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,11 +43,16 @@ class NET_EXPORT CertDatabase {
     virtual ~Observer() {}
 
     // Will be called when a new user certificate is added.
-    // Note that |cert| could be NULL when called.
+    // Called with |cert| == NULL after importing a list of certificates
+    // in ImportFromPKCS12().
     virtual void OnUserCertAdded(const X509Certificate* cert) {}
 
+    // Will be called when a user certificate is removed.
+    virtual void OnUserCertRemoved(const X509Certificate* cert) {}
+
     // Will be called when a certificate's trust is changed.
-    // Note that |cert| could be NULL when called.
+    // Called with |cert| == NULL after importing a list of certificates
+    // in ImportCACerts().
     virtual void OnCertTrustChanged(const X509Certificate* cert) {}
 
    protected:
@@ -77,6 +82,9 @@ class NET_EXPORT CertDatabase {
   // trusted as a server.
   // For EMAIL_CERT, only TRUSTED_EMAIL makes sense, and specifies the cert is
   // trusted for email.
+  // NOTE: The actual constants are defined using an enum instead of static
+  // consts due to compilation/linkage constraints with template functions.
+  typedef uint32 TrustBits;
   enum {
     UNTRUSTED        =      0,
     TRUSTED_SSL      = 1 << 0,
@@ -96,8 +104,8 @@ class NET_EXPORT CertDatabase {
   int AddUserCert(X509Certificate* cert);
 
 #if defined(USE_NSS) || defined(USE_OPENSSL)
-  // Get a list of unique certificates in the certificate database.  (One
-  // instance of all certificates.)
+  // Get a list of unique certificates in the certificate database (one
+  // instance of all certificates).
   void ListCerts(CertificateList* certs);
 
   // Get the default module for public key data.
@@ -116,11 +124,13 @@ class NET_EXPORT CertDatabase {
   // If |is_extractable| is false, mark the private key as being unextractable
   // from the module.
   // Returns OK or a network error code such as ERR_PKCS12_IMPORT_BAD_PASSWORD
-  // or ERR_PKCS12_IMPORT_ERROR.
+  // or ERR_PKCS12_IMPORT_ERROR. |imported_certs|, if non-NULL, returns a list
+  // of certs that were imported.
   int ImportFromPKCS12(CryptoModule* module,
                        const std::string& data,
                        const string16& password,
-                       bool is_extractable);
+                       bool is_extractable,
+                       CertificateList* imported_certs);
 
   // Export the given certificates and private keys into a PKCS #12 blob,
   // storing into |output|.
@@ -142,7 +152,7 @@ class NET_EXPORT CertDatabase {
   // |not_imported| should be checked for any certificates that were not
   // imported.
   bool ImportCACerts(const CertificateList& certificates,
-                     unsigned int trust_bits,
+                     TrustBits trust_bits,
                      ImportCertFailureList* not_imported);
 
   // Import server certificate.  The first cert should be the server cert.  Any
@@ -157,17 +167,22 @@ class NET_EXPORT CertDatabase {
                         ImportCertFailureList* not_imported);
 
   // Get trust bits for certificate.
-  unsigned int GetCertTrust(const X509Certificate* cert, CertType type) const;
+  TrustBits GetCertTrust(const X509Certificate* cert, CertType type) const;
+
+  // IsUntrusted returns true if |cert| is specifically untrusted. These
+  // certificates are stored in the database for the specific purpose of
+  // rejecting them.
+  bool IsUntrusted(const X509Certificate* cert) const;
 
   // Set trust values for certificate.
   // Returns true on success or false on failure.
   bool SetCertTrust(const X509Certificate* cert,
                     CertType type,
-                    unsigned int trust_bits);
+                    TrustBits trust_bits);
 
   // Delete certificate and associated private key (if one exists).
-  // Returns true on success or false on failure.
-  // |cert| is still valid when this function returns.
+  // |cert| is still valid when this function returns. Returns true on
+  // success.
   bool DeleteCertAndKey(const X509Certificate* cert);
 
   // Check whether cert is stored in a readonly slot.
@@ -186,6 +201,7 @@ class NET_EXPORT CertDatabase {
  private:
   // Broadcasts notifications to all registered observers.
   static void NotifyObserversOfUserCertAdded(const X509Certificate* cert);
+  static void NotifyObserversOfUserCertRemoved(const X509Certificate* cert);
   static void NotifyObserversOfCertTrustChanged(const X509Certificate* cert);
 
   DISALLOW_COPY_AND_ASSIGN(CertDatabase);

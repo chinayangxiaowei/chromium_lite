@@ -11,6 +11,8 @@
 #include "base/basictypes.h"
 #include "base/time.h"
 #include "base/memory/ref_counted.h"
+#include "chrome/browser/extensions/extensions_quota_service.h"
+#include "chrome/browser/extensions/process_map.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_set.h"
 
@@ -28,6 +30,8 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
   const ExtensionSet& disabled_extensions() const {
     return disabled_extensions_;
   }
+
+  const extensions::ProcessMap& process_map() const;
 
   // Callback for when new extensions are loaded.
   void AddExtension(const Extension* extension,
@@ -49,6 +53,25 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
   // sub-profile (incognito to original profile, or vice versa).
   bool CanCrossIncognito(const Extension* extension);
 
+  // Adds an entry to process_map_.
+  void RegisterExtensionProcess(const std::string& extension_id,
+                                int process_id,
+                                int site_instance_id);
+
+  // Removes an entry from process_map_.
+  void UnregisterExtensionProcess(const std::string& extension_id,
+                                  int process_id,
+                                  int site_instance_id);
+  void UnregisterAllExtensionsInProcess(int process_id);
+
+  // Returns true if there is exists an extension with the same origin as
+  // |origin| in |process_id| with |permission|.
+  bool SecurityOriginHasAPIPermission(
+      const GURL& origin, int process_id,
+      ExtensionAPIPermission::ID permission) const;
+
+  ExtensionsQuotaService* quota_service() { return &quota_service_; }
+
  private:
   // Extra dynamic data related to an extension.
   struct ExtraData;
@@ -60,6 +83,12 @@ class ExtensionInfoMap : public base::RefCountedThreadSafe<ExtensionInfoMap> {
 
   // Extra data associated with enabled extensions.
   ExtraDataMap extra_data_;
+
+  // Used by dispatchers to limit API quota for individual extensions.
+  ExtensionsQuotaService quota_service_;
+
+  // Assignment of extensions to processes.
+  extensions::ProcessMap process_map_;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_INFO_MAP_H_

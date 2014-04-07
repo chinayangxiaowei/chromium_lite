@@ -9,11 +9,13 @@
 #include "base/logging.h"
 #import "base/memory/scoped_nsobject.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
-#import "chrome/browser/ui/cocoa/bookmarks/bookmark_button_cell.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_folder_window.h"
+#import "chrome/browser/ui/cocoa/bookmarks/bookmark_button_cell.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "content/browser/user_metrics.h"
+#include "content/public/browser/user_metrics.h"
+
+using content::UserMetricsAction;
 
 // The opacity of the bookmark button drag image.
 static const CGFloat kDragImageOpacity = 0.7;
@@ -196,9 +198,9 @@ BookmarkButton* gDraggedButton = nil; // Weak
   const BookmarkNode* node = [self bookmarkNode];
   const BookmarkNode* parent = node ? node->parent() : NULL;
   if (parent && parent->type() == BookmarkNode::FOLDER) {
-    UserMetrics::RecordAction(UserMetricsAction("BookmarkBarFolder_DragStart"));
+    content::RecordAction(UserMetricsAction("BookmarkBarFolder_DragStart"));
   } else {
-    UserMetrics::RecordAction(UserMetricsAction("BookmarkBar_DragStart"));
+    content::RecordAction(UserMetricsAction("BookmarkBar_DragStart"));
   }
 
   dragMouseOffset_ = [self convertPointFromBase:[event locationInWindow]];
@@ -266,7 +268,6 @@ BookmarkButton* gDraggedButton = nil; // Weak
   BOOL keepGoing = YES;
   [[self target] performSelector:[self action] withObject:self];
   self.draggableButton.actionHasFired = YES;
-  return kDraggableButtonMixinDidWork;
 
   DraggableButton* insideBtn = nil;
 
@@ -326,6 +327,7 @@ BookmarkButton* gDraggedButton = nil; // Weak
         break;
     }
   }
+  return kDraggableButtonMixinDidWork;
 }
 
 

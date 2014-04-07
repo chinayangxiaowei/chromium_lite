@@ -13,6 +13,7 @@
 #include "base/logging.h"
 #include "base/stringize_macros.h"
 #include "remoting/base/plugin_message_loop_proxy.h"
+#include "remoting/host/plugin/constants.h"
 #include "remoting/host/plugin/host_log_handler.h"
 #include "remoting/host/plugin/host_plugin_utils.h"
 #include "remoting/host/plugin/host_script_object.h"
@@ -52,12 +53,6 @@ namespace {
 
 base::AtExitManager* g_at_exit_manager = NULL;
 
-// The name and description are returned by GetValue, but are also
-// combined with the MIME type to satisfy GetMIMEDescription, so we
-// use macros here to allow that to happen at compile-time.
-#define HOST_PLUGIN_NAME "Remoting Host Plugin"
-#define HOST_PLUGIN_DESCRIPTION "Remoting Host Plugin"
-
 // NPAPI plugin implementation for remoting host.
 // Documentation for most of the calls in this class can be found here:
 // https://developer.mozilla.org/en/Gecko_Plugin_API_Reference/Scripting_plugins
@@ -70,8 +65,7 @@ class HostNPPlugin : public remoting::PluginMessageLoopProxy::Delegate {
   //              content in the window.
   HostNPPlugin(NPP instance, uint16 mode)
       : instance_(instance),
-        scriptable_object_(NULL),
-        np_thread_id_(base::PlatformThread::CurrentId()) {
+        scriptable_object_(NULL) {
   }
 
   ~HostNPPlugin() {
@@ -165,10 +159,6 @@ class HostNPPlugin : public remoting::PluginMessageLoopProxy::Delegate {
       timers_[timer_id] = task;
     }
     return true;
-  }
-
-  virtual bool IsPluginThread() OVERRIDE {
-    return np_thread_id_ == base::PlatformThread::CurrentId();
   }
 
   static void NPDelayedTaskSpringboard(NPP npp, uint32_t timer_id) {
@@ -336,7 +326,6 @@ class HostNPPlugin : public remoting::PluginMessageLoopProxy::Delegate {
   NPP instance_;
   NPObject* scriptable_object_;
 
-  base::PlatformThreadId np_thread_id_;
   std::map<uint32_t, DelayedTask> timers_;
   base::Lock timers_lock_;
 };
@@ -502,7 +491,7 @@ EXPORT NPError API_CALL NP_Shutdown() {
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
 EXPORT const char* API_CALL NP_GetMIMEDescription(void) {
   VLOG(2) << "NP_GetMIMEDescription";
-  return STRINGIZE(HOST_PLUGIN_MIME_TYPE) ":"
+  return HOST_PLUGIN_MIME_TYPE ":"
       HOST_PLUGIN_NAME ":"
       HOST_PLUGIN_DESCRIPTION;
 }

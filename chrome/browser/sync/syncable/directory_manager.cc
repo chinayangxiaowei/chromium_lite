@@ -15,6 +15,7 @@
 #include "chrome/browser/sync/syncable/syncable.h"
 
 using browser_sync::Cryptographer;
+using browser_sync::UnrecoverableErrorHandler;
 
 namespace syncable {
 
@@ -42,19 +43,29 @@ DirectoryManager::~DirectoryManager() {
       << "Dir " << managed_directory_->name() << " not closed!";
 }
 
-bool DirectoryManager::Open(const std::string& name,
-                            DirectoryChangeDelegate* delegate) {
+bool DirectoryManager::Open(
+    const std::string& name,
+    DirectoryChangeDelegate* delegate,
+    UnrecoverableErrorHandler* unrecoverable_error_handler,
+    const browser_sync::WeakHandle<TransactionObserver>&
+        transaction_observer) {
   bool was_open = false;
   const DirOpenResult result =
-      OpenImpl(name, GetSyncDataDatabasePath(), delegate, &was_open);
+      OpenImpl(name, GetSyncDataDatabasePath(), delegate,
+               unrecoverable_error_handler,
+               transaction_observer, &was_open);
   return syncable::OPENED == result;
 }
 
 // Opens a directory.  Returns false on error.
-DirOpenResult DirectoryManager::OpenImpl(const std::string& name,
-                                         const FilePath& path,
-                                         DirectoryChangeDelegate* delegate,
-                                         bool* was_open) {
+DirOpenResult DirectoryManager::OpenImpl(
+    const std::string& name,
+    const FilePath& path,
+    DirectoryChangeDelegate* delegate,
+    UnrecoverableErrorHandler* unrecoverable_error_handler,
+    const browser_sync::WeakHandle<TransactionObserver>&
+        transaction_observer,
+    bool* was_open) {
   bool opened = false;
   {
     base::AutoLock lock(lock_);
@@ -71,8 +82,9 @@ DirOpenResult DirectoryManager::OpenImpl(const std::string& name,
     return syncable::OPENED;
   // Otherwise, open it.
 
-  scoped_ptr<Directory> dir(new Directory);
-  const DirOpenResult result = dir->Open(path, name, delegate);
+  scoped_ptr<Directory> dir(new Directory(unrecoverable_error_handler));
+  const DirOpenResult result =
+      dir->Open(path, name, delegate, transaction_observer);
   if (syncable::OPENED == result) {
     base::AutoLock lock(lock_);
     managed_directory_ = dir.release();

@@ -16,12 +16,13 @@
 #include "net/base/ssl_config_service_defaults.h"
 #include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_server_properties_impl.h"
 #include "net/proxy/proxy_config_service.h"
 #include "net/proxy/proxy_config_service_fixed.h"
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_request_job_factory.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebKitPlatformSupport.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebKitPlatformSupport.h"
 #include "webkit/blob/blob_storage_controller.h"
 #include "webkit/blob/blob_url_request_job_factory.h"
 #include "webkit/fileapi/file_system_context.h"
@@ -84,16 +85,26 @@ void TestShellRequestContext::Init(
 
   storage_.set_http_auth_handler_factory(
       net::HttpAuthHandlerFactory::CreateDefault(host_resolver()));
+  storage_.set_http_server_properties(
+      new net::HttpServerPropertiesImpl);
 
   net::HttpCache::DefaultBackend* backend = new net::HttpCache::DefaultBackend(
       cache_path.empty() ? net::MEMORY_CACHE : net::DISK_CACHE,
       cache_path, 0, SimpleResourceLoaderBridge::GetCacheThread());
 
   net::HttpCache* cache =
-      new net::HttpCache(host_resolver(), cert_verifier(),
-                         origin_bound_cert_service(), NULL, NULL,
-                         proxy_service(), ssl_config_service(),
-                         http_auth_handler_factory(), NULL, NULL, backend);
+      new net::HttpCache(host_resolver(),
+                         cert_verifier(),
+                         origin_bound_cert_service(),
+                         NULL, // transport_security_state
+                         proxy_service(),
+                         "",  // ssl_session_cache_shard
+                         ssl_config_service(),
+                         http_auth_handler_factory(),
+                         NULL,  // network_delegate
+                         http_server_properties(),
+                         NULL,  // netlog
+                         backend);
 
   cache->set_mode(cache_mode);
   storage_.set_http_transaction_factory(cache);

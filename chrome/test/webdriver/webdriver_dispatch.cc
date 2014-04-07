@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,10 @@
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/sys_info.h"
+#include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/test/webdriver/commands/command.h"
 #include "chrome/test/webdriver/http_response.h"
 #include "chrome/test/webdriver/webdriver_logging.h"
@@ -40,6 +43,32 @@ bool ForbidsMessageBody(const std::string& request_method,
          (response.status() >= 100 && response.status() < 200);
 }
 
+void ReadRequestBody(const struct mg_request_info* const request_info,
+                     struct mg_connection* const connection,
+                     std::string* request_body) {
+  int content_length = 0;
+  // 64 maximum header count hard-coded in mongoose.h
+  for (int header_index = 0; header_index < 64; ++header_index) {
+    if (request_info->http_headers[header_index].name == NULL) {
+      break;
+    }
+    if (strcmp(request_info->http_headers[header_index].name,
+               "Content-Length") == 0) {
+      content_length = atoi(request_info->http_headers[header_index].value);
+      break;
+    }
+  }
+  if (content_length > 0) {
+    request_body->resize(content_length);
+    int bytes_read = 0;
+    while (bytes_read < content_length) {
+      bytes_read += mg_read(connection,
+                            &(*request_body)[bytes_read],
+                            content_length - bytes_read);
+    }
+  }
+}
+
 void DispatchCommand(Command* const command,
                      const std::string& method,
                      Response* response) {
@@ -55,16 +84,7 @@ void DispatchCommand(Command* const command,
   } else {
     NOTREACHED();
   }
-  command->Finish();
-}
-
-void Shutdown(struct mg_connection* connection,
-              const struct mg_request_info* request_info,
-              void* user_data) {
-  base::WaitableEvent* shutdown_event =
-      reinterpret_cast<base::WaitableEvent*>(user_data);
-  mg_printf(connection, "HTTP/1.1 200 OK\r\n\r\n");
-  shutdown_event->Signal();
+  command->Finish(response);
 }
 
 void SendOkWithBody(struct mg_connection* connection,
@@ -77,17 +97,48 @@ void SendOkWithBody(struct mg_connection* connection,
   mg_write(connection, response.data(), response.length());
 }
 
-void SendHealthz(struct mg_connection* connection,
-                 const struct mg_request_info* request_info,
-                 void* user_data) {
-  SendOkWithBody(connection, "ok");
+void Shutdown(struct mg_connection* connection,
+              const struct mg_request_info* request_info,
+              void* user_data) {
+  base::WaitableEvent* shutdown_event =
+      reinterpret_cast<base::WaitableEvent*>(user_data);
+  mg_printf(connection, "HTTP/1.1 200 OK\r\n\r\n\r\n");
+  shutdown_event->Signal();
+}
+
+void SendStatus(struct mg_connection* connection,
+                const struct mg_request_info* request_info,
+                void* user_data) {
+  chrome::VersionInfo version_info;
+  DictionaryValue* build_info = new DictionaryValue;
+  build_info->SetString("time",
+                        base::StringPrintf("%s %s PST", __DATE__, __TIME__));
+  build_info->SetString("version", version_info.Version());
+  build_info->SetString("revision", version_info.LastChange());
+
+  DictionaryValue* os_info = new DictionaryValue;
+  os_info->SetString("name", base::SysInfo::OperatingSystemName());
+  os_info->SetString("version", base::SysInfo::OperatingSystemVersion());
+  os_info->SetString("arch", base::SysInfo::CPUArchitecture());
+
+  DictionaryValue* status = new DictionaryValue;
+  status->Set("build", build_info);
+  status->Set("os", os_info);
+
+  Response response;
+  response.SetStatus(kSuccess);
+  response.SetValue(status);  // Assumes ownership of |status|.
+
+  internal::SendResponse(connection,
+                         request_info->request_method,
+                         response);
 }
 
 void SendLog(struct mg_connection* connection,
              const struct mg_request_info* request_info,
              void* user_data) {
   std::string content, log;
-  if (GetLogContents(&log)) {
+  if (FileLog::Get()->GetLogContents(&log)) {
     content = "START ChromeDriver log";
     const size_t kMaxSizeWithoutHeaders = kMaxHttpMessageSize - 10000;
     if (log.size() > kMaxSizeWithoutHeaders) {
@@ -99,6 +150,12 @@ void SendLog(struct mg_connection* connection,
     content = "No ChromeDriver log found";
   }
   SendOkWithBody(connection, content);
+}
+
+void SimulateHang(struct mg_connection* connection,
+                  const struct mg_request_info* request_info,
+                  void* user_data) {
+  base::PlatformThread::Sleep(base::TimeDelta::FromMinutes(5));
 }
 
 void SendNoContentResponse(struct mg_connection* connection,
@@ -240,6 +297,7 @@ void SendResponse(struct mg_connection* const connection,
 }
 
 bool ParseRequestInfo(const struct mg_request_info* const request_info,
+                      struct mg_connection* const connection,
                       std::string* method,
                       std::vector<std::string>* path_segments,
                       DictionaryValue** parameters,
@@ -256,24 +314,28 @@ bool ParseRequestInfo(const struct mg_request_info* const request_info,
 
   base::SplitString(uri, '/', path_segments);
 
-  if (*method == "POST" && request_info->post_data_len > 0) {
-    std::string json(request_info->post_data, request_info->post_data_len);
-    std::string error_msg;
-    scoped_ptr<Value> params(base::JSONReader::ReadAndReturnError(
-        json, true, NULL, &error_msg));
-    if (!params.get()) {
-      response->SetError(new Error(
-          kBadRequest,
-          "Failed to parse command data: " + error_msg + "\n  Data: " + json));
-      return false;
+  if (*method == "POST") {
+    std::string json;
+    ReadRequestBody(request_info, connection, &json);
+    if (json.length() > 0) {
+      std::string error_msg;
+      scoped_ptr<Value> params(base::JSONReader::ReadAndReturnError(
+          json, true, NULL, &error_msg));
+      if (!params.get()) {
+        response->SetError(new Error(
+            kBadRequest,
+            "Failed to parse command data: " + error_msg +
+                "\n  Data: " + json));
+        return false;
+      }
+      if (!params->IsType(Value::TYPE_DICTIONARY)) {
+        response->SetError(new Error(
+            kBadRequest,
+            "Data passed in URL must be a dictionary. Data: " + json));
+        return false;
+      }
+      *parameters = static_cast<DictionaryValue*>(params.release());
     }
-    if (!params->IsType(Value::TYPE_DICTIONARY)) {
-      response->SetError(new Error(
-          kBadRequest,
-          "Data passed in URL must be a dictionary. Data: " + json));
-      return false;
-    }
-    *parameters = static_cast<DictionaryValue*>(params.release());
   }
   return true;
 }
@@ -306,36 +368,60 @@ void DispatchHelper(Command* command_ptr,
 
 }  // namespace internal
 
-Dispatcher::Dispatcher(struct mg_context* context, const std::string& root)
-    : context_(context), root_(root) {
+Dispatcher::Dispatcher(const std::string& url_base)
+    : url_base_(url_base) {
   // Overwrite mongoose's default handler for /favicon.ico to always return a
   // 204 response so we don't spam the logs with 404s.
-  mg_set_uri_callback(context_, "/favicon.ico", &SendNoContentResponse, NULL);
+  AddCallback("/favicon.ico", &SendNoContentResponse, NULL);
+  AddCallback("/hang", &SimulateHang, NULL);
 }
 
 Dispatcher::~Dispatcher() {}
 
 void Dispatcher::AddShutdown(const std::string& pattern,
                              base::WaitableEvent* shutdown_event) {
-  mg_set_uri_callback(context_, (root_ + pattern).c_str(), &Shutdown,
-                      shutdown_event);
+  AddCallback(url_base_ + pattern, &Shutdown, shutdown_event);
 }
 
-void Dispatcher::AddHealthz(const std::string& pattern) {
-  mg_set_uri_callback(context_, (root_ + pattern).c_str(), &SendHealthz, NULL);
+void Dispatcher::AddStatus(const std::string& pattern) {
+  AddCallback(url_base_ + pattern, &SendStatus, NULL);
 }
 
 void Dispatcher::AddLog(const std::string& pattern) {
-  mg_set_uri_callback(context_, (root_ + pattern).c_str(), &SendLog, NULL);
+  AddCallback(url_base_ + pattern, &SendLog, NULL);
 }
 
 void Dispatcher::SetNotImplemented(const std::string& pattern) {
-  mg_set_uri_callback(context_, (root_ + pattern).c_str(),
-                      &SendNotImplementedError, NULL);
+  AddCallback(url_base_ + pattern, &SendNotImplementedError, NULL);
 }
 
 void Dispatcher::ForbidAllOtherRequests() {
-  mg_set_uri_callback(context_, "*", &SendForbidden, NULL);
+  AddCallback("*", &SendForbidden, NULL);
+}
+
+void Dispatcher::AddCallback(const std::string& uri_pattern,
+                             webdriver::mongoose::HttpCallback callback,
+                             void* user_data) {
+  callbacks_.push_back(webdriver::mongoose::CallbackDetails(
+    uri_pattern,
+    callback,
+    user_data));
+}
+
+
+bool Dispatcher::ProcessHttpRequest(
+    struct mg_connection* connection,
+    const struct mg_request_info* request_info) {
+  std::vector<webdriver::mongoose::CallbackDetails>::const_iterator callback;
+  for (callback = callbacks_.begin();
+       callback < callbacks_.end();
+       ++callback) {
+    if (MatchPattern(request_info->uri, callback->uri_regex_)) {
+      callback->func_(connection, request_info, callback->user_data_);
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace webdriver

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@ class VideoDecoderClient_Dev {
   // Callback to provide buffers for the decoded output pictures.
   virtual void ProvidePictureBuffers(PP_Resource decoder,
                                      uint32_t req_num_of_bufs,
-                                     struct PP_Size dimensions) = 0;
+                                     const PP_Size& dimensions) = 0;
 
   // Callback for decoder to deliver unneeded picture buffers back to the
   // plugin.
@@ -35,10 +35,6 @@ class VideoDecoderClient_Dev {
   // Callback to deliver decoded pictures ready to be displayed.
   virtual void PictureReady(PP_Resource decoder,
                             const PP_Picture_Dev& picture) = 0;
-
-  // Callback to notify that decoder has decoded end of stream marker and has
-  // outputted all displayable pictures.
-  virtual void EndOfStream(PP_Resource decoder) = 0;
 
   // Callback to notify about decoding errors.
   virtual void NotifyError(PP_Resource decoder,

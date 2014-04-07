@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,21 +19,20 @@
 #include "base/time.h"
 #include "remoting/base/plugin_message_loop_proxy.h"
 #include "remoting/host/chromoting_host_context.h"
+#include "remoting/host/host_key_pair.h"
 #include "remoting/host/host_status_observer.h"
+#include "remoting/host/log_to_server.h"
 #include "remoting/host/plugin/host_plugin_utils.h"
 #include "remoting/host/ui_strings.h"
 #include "third_party/npapi/bindings/npapi.h"
 #include "third_party/npapi/bindings/npfunctions.h"
 #include "third_party/npapi/bindings/npruntime.h"
 
-namespace tracked_objects {
-class Location;
-}  // namespace tracked_objects
-
 namespace remoting {
 
 class ChromotingHost;
 class DesktopEnvironment;
+class It2MeHostUserInterface;
 class MutableHostConfig;
 class RegisterSupportHostRequest;
 class SignalStrategy;
@@ -70,14 +69,9 @@ class HostNPScriptObject : public HostStatusObserver {
   bool Enumerate(std::vector<std::string>* values);
 
   // remoting::HostStatusObserver implementation.
-  virtual void OnSignallingConnected(remoting::SignalStrategy* signal_strategy,
-                                     const std::string& full_jid) OVERRIDE;
-  virtual void OnSignallingDisconnected() OVERRIDE;
-  virtual void OnAccessDenied() OVERRIDE;
-  virtual void OnClientAuthenticated(
-      remoting::protocol::ConnectionToClient* client) OVERRIDE;
-  virtual void OnClientDisconnected(
-      remoting::protocol::ConnectionToClient* client) OVERRIDE;
+  virtual void OnAccessDenied(const std::string& jid) OVERRIDE;
+  virtual void OnClientAuthenticated(const std::string& jid) OVERRIDE;
+  virtual void OnClientDisconnected(const std::string& jid) OVERRIDE;
   virtual void OnShutdown() OVERRIDE;
 
   // Post LogDebugInfo to the correct proxy (and thus, on the correct thread).
@@ -86,6 +80,8 @@ class HostNPScriptObject : public HostStatusObserver {
   void PostLogDebugInfo(const std::string& message);
 
  private:
+  // These state values are duplicated in the JS code. Remember to update both
+  // copies when making changes.
   enum State {
     kDisconnected,
     kStarting,
@@ -121,20 +117,21 @@ class HostNPScriptObject : public HostStatusObserver {
   void LogDebugInfo(const std::string& message);
 
   // Callbacks invoked during session setup.
-  void OnReceivedSupportID(remoting::SupportAccessVerifier* access_verifier,
-                           bool success,
+  void OnReceivedSupportID(bool success,
                            const std::string& support_id,
                            const base::TimeDelta& lifetime);
-  void NotifyAccessCode(bool success);
 
   // Helper functions that run on main thread. Can be called on any
   // other thread.
   void ReadPolicyAndConnect(const std::string& uid,
                             const std::string& auth_token,
                             const std::string& auth_service);
-  void FinishConnect(const std::string& uid,
-                       const std::string& auth_token,
-                       const std::string& auth_service);
+  void FinishConnectMainThread(const std::string& uid,
+                               const std::string& auth_token,
+                               const std::string& auth_service);
+  void FinishConnectNetworkThread(const std::string& uid,
+                                  const std::string& auth_token,
+                                  const std::string& auth_service);
   void DisconnectInternal();
 
   // Callback for ChromotingHost::Shutdown().
@@ -152,6 +149,10 @@ class HostNPScriptObject : public HostStatusObserver {
   bool LocalizeString(NPObject* localize_func, const char* tag,
                       string16* result);
 
+  // If the web-app has registered a callback to be notified of changes to the
+  // NAT traversal policy, notify it.
+  void UpdateWebappNatPolicy(bool nat_traversal_enabled);
+
   // Helper function for executing InvokeDefault on an NPObject, and ignoring
   // the return value.
   bool InvokeAndIgnoreResult(NPObject* func,
@@ -163,6 +164,7 @@ class HostNPScriptObject : public HostStatusObserver {
 
   NPP plugin_;
   NPObject* parent_;
+
   State state_;
 
   base::Lock access_code_lock_;
@@ -171,14 +173,18 @@ class HostNPScriptObject : public HostStatusObserver {
 
   std::string client_username_;
   ScopedRefNPObject log_debug_info_func_;
+  ScopedRefNPObject on_nat_traversal_policy_changed_func_;
   ScopedRefNPObject on_state_changed_func_;
   base::PlatformThreadId np_thread_id_;
   scoped_refptr<PluginMessageLoopProxy> plugin_message_loop_proxy_;
 
-  scoped_ptr<RegisterSupportHostRequest> register_request_;
-  scoped_refptr<MutableHostConfig> host_config_;
   ChromotingHostContext host_context_;
+  HostKeyPair host_key_pair_;
+  scoped_ptr<SignalStrategy> signal_strategy_;
+  scoped_ptr<RegisterSupportHostRequest> register_request_;
+  scoped_ptr<LogToServer> log_to_server_;
   scoped_ptr<DesktopEnvironment> desktop_environment_;
+  scoped_ptr<It2MeHostUserInterface> it2me_host_user_interface_;
 
   scoped_refptr<ChromotingHost> host_;
   int failed_login_attempts_;
@@ -191,12 +197,14 @@ class HostNPScriptObject : public HostStatusObserver {
   // True if we're in the middle of handling a log message.
   bool am_currently_logging_;
 
+  base::Lock nat_policy_lock_;
+
   scoped_ptr<policy_hack::NatPolicy> nat_policy_;
 
   // Host the current nat traversal policy setting.
   bool nat_traversal_enabled_;
 
-  // Indiciates whether or not a policy has ever been read. This is to ensure
+  // Indicates whether or not a policy has ever been read. This is to ensure
   // that on startup, we do not accidentally start a connection before we have
   // queried our policy restrictions.
   bool policy_received_;
@@ -209,7 +217,5 @@ class HostNPScriptObject : public HostStatusObserver {
 };
 
 }  // namespace remoting
-
-DISABLE_RUNNABLE_METHOD_REFCOUNT(remoting::HostNPScriptObject);
 
 #endif  // REMOTING_HOST_PLUGIN_HOST_SCRIPT_OBJECT_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,10 @@
 #include <vector>
 
 namespace chromeos {
+
+namespace input_method {
+struct KeyEventHandle;
+}  // namespace input_method
 
 extern const char* kExtensionImePrefix;
 
@@ -23,10 +27,36 @@ class InputMethodEngine {
 
     std::string type;
     std::string key;
-    std::string key_code;
     bool alt_key;
     bool ctrl_key;
     bool shift_key;
+  };
+
+  enum {
+    MENU_ITEM_MODIFIED_LABEL        = 0x0001,
+    MENU_ITEM_MODIFIED_STYLE        = 0x0002,
+    MENU_ITEM_MODIFIED_VISIBLE      = 0x0004,
+    MENU_ITEM_MODIFIED_ENABLED      = 0x0008,
+    MENU_ITEM_MODIFIED_CHECKED      = 0x0010,
+    MENU_ITEM_MODIFIED_ICON         = 0x0020,
+  };
+
+  enum MenuItemStyle {
+    MENU_ITEM_STYLE_NONE,
+    MENU_ITEM_STYLE_CHECK,
+    MENU_ITEM_STYLE_RADIO,
+    MENU_ITEM_STYLE_SEPARATOR,
+  };
+
+  enum MouseButtonEvent {
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE,
+  };
+
+  enum SegmentStyle {
+    SEGMENT_STYLE_UNDERLINE,
+    SEGMENT_STYLE_DOUBLE_UNDERLINE,
   };
 
   struct MenuItem {
@@ -35,12 +65,12 @@ class InputMethodEngine {
 
     std::string id;
     std::string label;
-    int style;
+    MenuItemStyle style;
     bool visible;
     bool enabled;
     bool checked;
-    std::string icon;
-    KeyboardEvent shortcut_key;
+
+    unsigned int modified;
     std::vector<MenuItem> children;
   };
 
@@ -63,7 +93,7 @@ class InputMethodEngine {
   struct SegmentInfo {
     int start;
     int end;
-    int style;
+    SegmentStyle style;
   };
 
   class Observer {
@@ -87,34 +117,17 @@ class InputMethodEngine {
 
     // Called when the user pressed a key with a text field focused.
     virtual void OnKeyEvent(const std::string& engine_id,
-                            const KeyboardEvent& event) = 0;
+                            const KeyboardEvent& event,
+                            input_method::KeyEventHandle* key_data) = 0;
 
     // Called when the user clicks on an item in the candidate list.
     virtual void OnCandidateClicked(const std::string& engine_id,
                                     int candidate_id,
-                                    int button) = 0;
+                                    MouseButtonEvent button) = 0;
 
     // Called when a menu item for this IME is interacted with.
     virtual void OnMenuItemActivated(const std::string& engine_id,
                                      const std::string& menu_id) = 0;
-  };
-
-  enum {
-    MENU_ITEM_STYLE_NONE,
-    MENU_ITEM_STYLE_CHECK,
-    MENU_ITEM_STYLE_RADIO,
-    MENU_ITEM_STYLE_SEPARATOR,
-  };
-
-  enum {
-    MOUSE_BUTTON_LEFT,
-    MOUSE_BUTTON_RIGHT,
-    MOUSE_BUTTON_MIDDLE,
-  };
-
-  enum {
-    SEGMENT_STYLE_UNDERLINE,
-    SEGMENT_STYLE_DOUBLE_UNDERLINE,
   };
 
   virtual ~InputMethodEngine() {}
@@ -124,6 +137,7 @@ class InputMethodEngine {
                               const char* text,
                               int selection_start,
                               int selection_end,
+                              int cursor,
                               const std::vector<SegmentInfo>& segments,
                               std::string* error) = 0;
 
@@ -164,13 +178,17 @@ class InputMethodEngine {
 
   // Set the list of items that appears in the language menu when this IME is
   // active.
-  virtual void SetMenuItems(const std::vector<MenuItem>& items) = 0;
+  virtual bool SetMenuItems(const std::vector<MenuItem>& items) = 0;
 
   // Update the state of the menu items.
-  virtual void UpdateMenuItems(const std::vector<MenuItem>& items) = 0;
+  virtual bool UpdateMenuItems(const std::vector<MenuItem>& items) = 0;
 
   // Returns true if this IME is active, false if not.
   virtual bool IsActive() const = 0;
+
+  // Inform the engine that a key event has been processed.
+  virtual void KeyEventDone(input_method::KeyEventHandle* key_data,
+                            bool handled) = 0;
 
   // Create an IME engine.
   static InputMethodEngine* CreateEngine(
@@ -181,7 +199,6 @@ class InputMethodEngine {
       const char* description,
       const char* language,
       const std::vector<std::string>& layouts,
-      KeyboardEvent& shortcut_key,
       std::string* error);
 };
 

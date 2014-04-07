@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include "base/process_util.h"
 #include "base/threading/platform_thread.h"
 #include "chrome/common/about_handler.h"
-#include "content/common/url_constants.h"
+#include "content/public/common/url_constants.h"
 #include "googleurl/src/gurl.h"
 
 typedef void (*AboutHandlerFuncPtr)();
@@ -61,13 +61,13 @@ void AboutHandler::AboutKill() {
 // static
 void AboutHandler::AboutHang() {
   for (;;) {
-    base::PlatformThread::Sleep(1000);
+    base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
   }
 }
 
 // static
 void AboutHandler::AboutShortHang() {
-  base::PlatformThread::Sleep(20000);
+  base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(20));
 }
 
 // static

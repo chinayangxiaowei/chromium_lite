@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,8 @@ const SCREEN_ACCOUNT_PICKER = 'account-picker';
 const ACCELERATOR_ACCESSIBILITY = 'accessibility';
 const ACCELERATOR_CANCEL = 'cancel';
 const ACCELERATOR_ENROLLMENT = 'enrollment';
+const ACCELERATOR_EXIT = 'exit';
+const ACCELERATOR_VERSION = 'version';
 
 cr.define('cr.ui.login', function() {
   /**
@@ -39,6 +41,12 @@ cr.define('cr.ui.login', function() {
     currentStep_: 0,
 
     /**
+     * Whether version label can be toggled by ACCELERATOR_VERSION.
+     * @type {boolean}
+     */
+    allowToggleVersion_: false,
+
+    /**
      * Gets current screen element.
      * @type {HTMLElement}
      */
@@ -48,10 +56,20 @@ cr.define('cr.ui.login', function() {
 
     /**
      * Hides/shows header (Shutdown/Add User/Cancel buttons).
-     * @param {bool} hidden Whether header is hidden.
+     * @param {boolean} hidden Whether header is hidden.
      */
     set headerHidden(hidden) {
       $('login-header-bar').hidden = hidden;
+    },
+
+    /**
+     * Shows/hides version labels.
+     * @param {boolean} show Whether labels should be visible by default. If
+     *     false, visibility can be toggled by ACCELERATOR_VERSION.
+     */
+    showVersion: function(show) {
+      $('version-labels').hidden = !show;
+      this.allowToggleVersion_ = !show;
     },
 
     /**
@@ -65,12 +83,19 @@ cr.define('cr.ui.login', function() {
         if (this.currentScreen.cancel) {
           this.currentScreen.cancel();
         }
-      } else if (ACCELERATOR_ENROLLMENT) {
+      } else if (name == ACCELERATOR_ENROLLMENT) {
         var currentStepId = this.screens_[this.currentStep_];
         if (currentStepId == SCREEN_SIGNIN ||
             currentStepId == SCREEN_GAIA_SIGNIN) {
           chrome.send('toggleEnrollmentScreen', []);
         }
+      } else if (name == ACCELERATOR_EXIT) {
+        if (this.currentScreen.exit) {
+          this.currentScreen.exit();
+        }
+      } else if (name == ACCELERATOR_VERSION) {
+        if (this.allowToggleVersion_)
+          $('version-labels').hidden = !$('version-labels').hidden;
       }
     },
 
@@ -78,7 +103,7 @@ cr.define('cr.ui.login', function() {
      * Appends buttons to the button strip.
      * @param {Array} buttons Array with the buttons to append.
      */
-    appendButtons_ : function(buttons) {
+    appendButtons_: function(buttons) {
       if (buttons) {
         var buttonStrip = $('button-strip');
         for (var i = 0; i < buttons.length; ++i) {
@@ -97,7 +122,7 @@ cr.define('cr.ui.login', function() {
       var stepId = this.screens_[stepIndex];
       var step = $(stepId);
       var header = $('header-' + stepId);
-      var states = [ 'left', 'right', 'current' ];
+      var states = ['left', 'right', 'current'];
       for (var i = 0; i < states.length; ++i) {
         if (states[i] != state) {
           step.classList.remove(states[i]);
@@ -151,7 +176,11 @@ cr.define('cr.ui.login', function() {
           !oldStep.classList.contains('hidden')) {
         oldStep.addEventListener('webkitTransitionEnd', function f(e) {
           oldStep.removeEventListener('webkitTransitionEnd', f);
-          oldStep.classList.add('hidden');
+          if (oldStep.classList.contains('faded') ||
+              oldStep.classList.contains('left') ||
+              oldStep.classList.contains('right')) {
+            oldStep.classList.add('hidden');
+          }
         });
       } else {
         // First screen on OOBE launch.
@@ -164,14 +193,17 @@ cr.define('cr.ui.login', function() {
     /**
      * Show screen of given screen id.
      * @param {Object} screen Screen params dict,
-     *                        e.g. {id: screenId, data: data}
+     *     e.g. {id: screenId, data: data}.
      */
     showScreen: function(screen) {
       var screenId = screen.id;
 
       // Show sign-in screen instead of account picker if pod row is empty.
       if (screenId == SCREEN_ACCOUNT_PICKER && $('pod-row').pods.length == 0) {
-        Oobe.showSigninUI();
+        // Manually hide 'add-user' header bar, because of the case when
+        // 'Cancel' button is used on the offline login page.
+        $('add-user-header-bar-item').hidden = true;
+        Oobe.showSigninUI(true);
         return;
       }
 
@@ -179,7 +211,7 @@ cr.define('cr.ui.login', function() {
       var index = this.getScreenIndex_(screenId);
       if (index >= 0)
         this.toggleStep_(index, data);
-      $('offline-message').update();
+      $('error-message').update();
     },
 
     /**
@@ -218,22 +250,33 @@ cr.define('cr.ui.login', function() {
     },
 
     /**
-     * Updates headers and buttons of the screens.
+     * Updates localized content of the screens like headers, buttons and links.
      * Should be executed on language change.
      */
-    updateHeadersAndButtons_: function() {
+    updateLocalizedContent_: function() {
       $('button-strip').innerHTML = '';
       for (var i = 0, screenId; screenId = this.screens_[i]; ++i) {
         var screen = $(screenId);
         $('header-' + screenId).textContent = screen.header;
         this.appendButtons_(screen.buttons);
+        if (screen.updateLocalizedContent)
+          screen.updateLocalizedContent();
       }
+
+      // This screen is a special case as it's not registered with the rest of
+      // the screens.
+      login.ErrorMessageScreen.updateLocalizedContent();
+
+      // Trigger network drop-down to reload its state
+      // so that strings are reloaded.
+      // Will be reloaded if drowdown is actually shown.
+      cr.ui.DropDown.refresh();
     },
 
     /**
      * Prepares screens to use in login display.
      */
-    prepareForLoginDisplay_ : function() {
+    prepareForLoginDisplay_: function() {
       for (var i = 0, screenId; screenId = this.screens_[i]; ++i) {
         var screen = $(screenId);
         screen.classList.add('faded');
@@ -252,18 +295,26 @@ cr.define('cr.ui.login', function() {
 
   /**
    * Returns offset (top, left) of the element.
-   * @param {!Element} element HTML element
+   * @param {!Element} element HTML element.
    * @return {!Object} The offset (top, left).
    */
   DisplayManager.getOffset = function(element) {
     var x = 0;
     var y = 0;
-    while(element && !isNaN(element.offsetLeft) && !isNaN(element.offsetTop)) {
+    while (element && !isNaN(element.offsetLeft) && !isNaN(element.offsetTop)) {
       x += element.offsetLeft - element.scrollLeft;
       y += element.offsetTop - element.scrollTop;
       element = element.offsetParent;
     }
     return { top: y, left: x };
+  };
+
+  /**
+   * Disables signin UI.
+   */
+  DisplayManager.disableSigninUI = function() {
+    $('login-header-bar').disabled = true;
+    $('pod-row').disabled = true;
   };
 
   /**
@@ -273,21 +324,20 @@ cr.define('cr.ui.login', function() {
   DisplayManager.showSigninUI = function(opt_email) {
     $('add-user-button').hidden = true;
     $('cancel-add-user-button').hidden = false;
-    $('add-user-header-bar-item').hidden = $('pod-row').pods.length == 0;
     chrome.send('showAddUser', [opt_email]);
   };
 
   /**
    * Resets sign-in input fields.
+   * @param {boolean} forceOnline Whether online sign-in should be forced.
+   *     If |forceOnline| is false previously used sign-in type will be used.
    */
-  DisplayManager.resetSigninUI = function() {
+  DisplayManager.resetSigninUI = function(forceOnline) {
     var currentScreenId = Oobe.getInstance().currentScreen.id;
 
-    if (localStrings.getString('authType') == 'webui')
-      $(SCREEN_SIGNIN).reset(currentScreenId == SCREEN_SIGNIN);
-    else
-      $(SCREEN_GAIA_SIGNIN).reset(currentScreenId == SCREEN_GAIA_SIGNIN);
-
+    $(SCREEN_GAIA_SIGNIN).reset(
+        currentScreenId == SCREEN_GAIA_SIGNIN, forceOnline);
+    $('login-header-bar').disabled = false;
     $('pod-row').reset(currentScreenId == SCREEN_ACCOUNT_PICKER);
   };
 
@@ -309,6 +359,14 @@ cr.define('cr.ui.login', function() {
       // Show email field so that bubble shows up at the right location.
       $(SCREEN_SIGNIN).reset(true);
     } else if (currentScreenId == SCREEN_GAIA_SIGNIN) {
+      if ($(SCREEN_GAIA_SIGNIN).isLocal) {
+        $('add-user-button').hidden = true;
+        $('cancel-add-user-button').hidden = false;
+        // Reload offline version of the sign-in extension, which will show
+        // error itself.
+        chrome.send('offlineLogin', [$(SCREEN_GAIA_SIGNIN).email]);
+        return;
+      }
       // Use anchorPos since we won't be able to get the input fields of Gaia.
       anchorPos = DisplayManager.getOffset(Oobe.getInstance().currentScreen);
 
@@ -323,14 +381,14 @@ cr.define('cr.ui.login', function() {
       anchorPos.left += 60;
       anchorPos.top += 105;
     } else if (currentScreenId == SCREEN_ACCOUNT_PICKER &&
-               $('pod-row').activated) {
+               $('pod-row').activatedPod) {
       const MAX_LOGIN_ATTEMMPTS_IN_POD = 3;
       if (loginAttempts > MAX_LOGIN_ATTEMMPTS_IN_POD) {
-        Oobe.showSigninUI($('pod-row').activated.user.emailAddress);
+        $('pod-row').activatedPod.showSigninUI();
         return;
       }
 
-      anchor = $('pod-row').activated.mainInput;
+      anchor = $('pod-row').activatedPod.mainInput;
     }
     if (!anchor && !anchorPos) {
       console.log('Warning: Failed to find anchor for error :' +
@@ -353,7 +411,7 @@ cr.define('cr.ui.login', function() {
       helpLink.textContent = link;
       helpLink.onclick = function(e) {
         chrome.send('launchHelpApp', [helpId]);
-      }
+      };
       error.appendChild(helpLink);
     }
 

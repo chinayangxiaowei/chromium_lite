@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/proxy_cros_settings_provider.h"
-#include "chrome/browser/ui/webui/options/chromeos/cros_options_page_ui_handler.h"
-#include "content/common/notification_registrar.h"
+#include "chrome/browser/chromeos/cros/network_ui_data.h"
+#include "chrome/browser/ui/webui/options/options_ui.h"
+#include "content/public/browser/notification_registrar.h"
 #include "ui/gfx/native_widget_types.h"
 
 class SkBitmap;
@@ -20,7 +21,7 @@ class WidgetDelegate;
 
 // ChromeOS internet options page UI handler.
 class InternetOptionsHandler
-  : public chromeos::CrosOptionsPageUIHandler,
+  : public OptionsPageUIHandler,
     public chromeos::NetworkLibrary::NetworkManagerObserver,
     public chromeos::NetworkLibrary::NetworkObserver,
     public chromeos::NetworkLibrary::CellularDataPlanObserver {
@@ -29,24 +30,27 @@ class InternetOptionsHandler
   virtual ~InternetOptionsHandler();
 
   // OptionsPageUIHandler implementation.
-  virtual void GetLocalizedValues(base::DictionaryValue* localized_strings);
-  virtual void Initialize();
+  virtual void GetLocalizedValues(
+      base::DictionaryValue* localized_strings) OVERRIDE;
+  virtual void Initialize() OVERRIDE;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages();
+  virtual void RegisterMessages() OVERRIDE;
 
   // NetworkLibrary::NetworkManagerObserver implementation.
-  virtual void OnNetworkManagerChanged(chromeos::NetworkLibrary* network_lib);
+  virtual void OnNetworkManagerChanged(
+      chromeos::NetworkLibrary* network_lib) OVERRIDE;
   // NetworkLibrary::NetworkObserver implementation.
   virtual void OnNetworkChanged(chromeos::NetworkLibrary* network_lib,
-                                const chromeos::Network* network);
+                                const chromeos::Network* network) OVERRIDE;
   // NetworkLibrary::CellularDataPlanObserver implementation.
-  virtual void OnCellularDataPlanChanged(chromeos::NetworkLibrary* network_lib);
+  virtual void OnCellularDataPlanChanged(
+      chromeos::NetworkLibrary* network_lib) OVERRIDE;
 
-  // NotificationObserver implementation.
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
  private:
   // Opens a modal popup dialog.
@@ -73,7 +77,8 @@ class InternetOptionsHandler
   void RefreshCellularPlanCallback(const base::ListValue* args);
   void SetActivationButtonVisibility(
       const chromeos::CellularNetwork* cellular,
-      base::DictionaryValue* dictionary);
+      base::DictionaryValue* dictionary,
+      const std::string& carrier_id);
 
   void SetPreferNetworkCallback(const base::ListValue* args);
   void SetAutoConnectCallback(const base::ListValue* args);
@@ -88,6 +93,7 @@ class InternetOptionsHandler
   void SetSimCardLockCallback(const base::ListValue* args);
   void ChangePinCallback(const base::ListValue* args);
   void ShareNetworkCallback(const base::ListValue* args);
+  void ShowMorePlanInfoCallback(const ListValue* args);
 
   // Populates the ui with the details of the given device path. This forces
   // an overlay to be displayed in the UI.
@@ -108,19 +114,6 @@ class InternetOptionsHandler
   base::DictionaryValue* CreateDictionaryFromCellularApn(
       const chromeos::CellularApn& apn);
 
-  // Creates the map of a network.
-  base::ListValue* GetNetwork(const std::string& service_path,
-                              const SkBitmap& icon,
-                              const std::string& name,
-                              bool connecting,
-                              bool connected,
-                              bool connectable,
-                              chromeos::ConnectionType connection_type,
-                              bool remembered,
-                              bool shared,
-                              chromeos::ActivationState activation_state,
-                              bool restricted_ip);
-
   // Creates the map of wired networks.
   base::ListValue* GetWiredList();
   // Creates the map of wireless networks.
@@ -138,14 +131,18 @@ class InternetOptionsHandler
   // case of cellular networks, network technology and roaming status.
   void MonitorNetworks();
 
-  chromeos::ProxyCrosSettingsProvider* proxy_settings();
+  // Stores a dictionary under |key| in |settings| that is suitable to be sent
+  // to the webui that contains the actual value of a setting and whether it's
+  // controlled by policy. Takes ownership of |value|.
+  void SetValueDictionary(DictionaryValue* settings,
+                          const char* key,
+                          base::Value* value,
+                          const chromeos::NetworkPropertyUIData& ui_data);
 
   // Convenience pointer to netwrok library (will not change).
   chromeos::NetworkLibrary* cros_;
 
-  NotificationRegistrar registrar_;
-
-  chromeos::ProxyCrosSettingsProvider* proxy_settings_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(InternetOptionsHandler);
 };

@@ -37,8 +37,8 @@ struct PrintDebugDumpPath {
   FilePath debug_dump_path;
 };
 
-static base::LazyInstance<PrintDebugDumpPath> g_debug_dump_info(
-    base::LINKER_INITIALIZED);
+base::LazyInstance<PrintDebugDumpPath> g_debug_dump_info =
+    LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
@@ -67,8 +67,7 @@ void PrintedDocument::SetPage(int page_number,
                               Metafile* metafile,
                               double shrink,
                               const gfx::Size& paper_size,
-                              const gfx::Rect& page_rect,
-                              bool has_visible_overlays) {
+                              const gfx::Rect& page_rect) {
   // Notice the page_number + 1, the reason is that this is the value that will
   // be shown. Users dislike 0-based counting.
   scoped_refptr<PrintedPage> page(
@@ -76,7 +75,7 @@ void PrintedDocument::SetPage(int page_number,
                       metafile,
                       paper_size,
                       page_rect,
-                      has_visible_overlays));
+                      shrink));
   {
     base::AutoLock lock(lock_);
     mutable_.pages_[page_number] = page;
@@ -85,12 +84,6 @@ void PrintedDocument::SetPage(int page_number,
     if (page_number < mutable_.first_page)
       mutable_.first_page = page_number;
 #endif
-
-    if (mutable_.shrink_factor == 0) {
-      mutable_.shrink_factor = shrink;
-    } else {
-      DCHECK_EQ(mutable_.shrink_factor, shrink);
-    }
   }
   DebugDump(*page);
 }
@@ -210,8 +203,7 @@ const FilePath& PrintedDocument::debug_dump_path() {
 PrintedDocument::Mutable::Mutable(PrintedPagesSource* source)
     : source_(source),
       expected_page_count_(0),
-      page_count_(0),
-      shrink_factor(0) {
+      page_count_(0) {
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
   first_page = INT_MAX;
 #endif
@@ -226,11 +218,17 @@ PrintedDocument::Immutable::Immutable(const PrintSettings& settings,
     : settings_(settings),
       source_message_loop_(MessageLoop::current()),
       name_(source->RenderSourceName()),
-      url_(source->RenderSourceUrl()),
       cookie_(cookie) {
 }
 
 PrintedDocument::Immutable::~Immutable() {
 }
+
+#if defined(OS_POSIX) && defined(USE_AURA)
+// This function is not used on aura linux/chromeos.
+void PrintedDocument::RenderPrintedPage(const PrintedPage& page,
+                                        PrintingContext* context) const {
+}
+#endif
 
 }  // namespace printing

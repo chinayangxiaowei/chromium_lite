@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,7 @@
 #include "chrome/browser/google/google_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/gtk/cairo_cached_surface.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
-#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
@@ -26,8 +24,11 @@
 #include "ui/base/gtk/gtk_hig_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image/cairo_cached_surface.h"
 #include "ui/gfx/image/image.h"
 #include "webkit/glue/webkit_glue.h"
+
+using content::OpenURLParams;
 
 namespace {
 
@@ -69,27 +70,29 @@ GtkWidget* MakeMarkupLabel(const char* format, const std::string& str) {
 
 void OnLinkButtonClick(GtkWidget* button, const char* url) {
   BrowserList::GetLastActive()->OpenURL(OpenURLParams(
-      GURL(url), GURL(), NEW_WINDOW, PageTransition::LINK));
+      GURL(url), content::Referrer(), NEW_WINDOW, content::PAGE_TRANSITION_LINK,
+      false));
 }
 
 const char* GetChromiumUrl() {
-  static GURL url = google_util::AppendGoogleLocaleParam(
-      GURL(chrome::kChromiumProjectURL));
+  CR_DEFINE_STATIC_LOCAL(GURL, url, (google_util::AppendGoogleLocaleParam(
+      GURL(chrome::kChromiumProjectURL))));
   return url.spec().c_str();
 }
 
 gboolean OnEventBoxExpose(GtkWidget* event_box,
                           GdkEventExpose* expose,
                           gboolean user_data) {
-  cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(event_box->window));
+  cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(
+      gtk_widget_get_window(event_box)));
   gdk_cairo_rectangle(cr, &expose->area);
   cairo_clip(cr);
-  GtkThemeService* theme_provider =
-      GtkThemeService::GetFrom(BrowserList::GetLastActive()->profile());
-  CairoCachedSurface* background = theme_provider->GetSurfaceNamed(
-      IDR_ABOUT_BACKGROUND_COLOR, event_box);
 
-  background->SetSource(cr, 0, 0);
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  gfx::CairoCachedSurface* background =
+      rb.GetNativeImageNamed(IDR_ABOUT_BACKGROUND_COLOR).ToCairo();
+  background->SetSource(cr, event_box, 0, 0);
+
   cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_REPEAT);
   gdk_cairo_rectangle(cr, &expose->area);
   cairo_fill(cr);
@@ -100,7 +103,7 @@ gboolean OnEventBoxExpose(GtkWidget* event_box,
 }  // namespace
 
 void ShowAboutDialogForProfile(GtkWindow* parent, Profile* profile) {
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   static GdkPixbuf* background = rb.GetNativeImageNamed(IDR_ABOUT_BACKGROUND);
 
   // Build the dialog.
@@ -113,7 +116,9 @@ void ShowAboutDialogForProfile(GtkWindow* parent, Profile* profile) {
   // The layout of this dialog is special because the logo should be flush
   // with the edges of the window.
   gtk_widget_set_name(dialog, "about-dialog");
+#if !GTK_CHECK_VERSION(2, 22, 0)
   gtk_dialog_set_has_separator(GTK_DIALOG(dialog), FALSE);
+#endif
 
   GtkWidget* close_button = gtk_dialog_add_button(GTK_DIALOG(dialog),
       GTK_STOCK_CLOSE, GTK_RESPONSE_CLOSE);

@@ -4,17 +4,29 @@
 
 #include "chrome/browser/ui/webui/chrome_web_ui.h"
 
-#include "chrome/browser/profiles/profile.h"
-#include "content/browser/tab_contents/tab_contents.h"
+#include "base/command_line.h"
+#include "chrome/common/chrome_switches.h"
 
-ChromeWebUI::ChromeWebUI(TabContents* contents)
-    : WebUI(contents),
-      force_bookmark_bar_visible_(false) {
+#if defined(TOOLKIT_VIEWS)
+#include "ui/views/widget/widget.h"
+#endif
+
+namespace chrome_web_ui {
+
+// If true, overrides IsMoreWebUI flag.
+static bool g_override_more_webui = false;
+
+bool IsMoreWebUI() {
+  bool more_webui = CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kUseMoreWebUI) || g_override_more_webui;
+#if defined(TOOLKIT_VIEWS)
+  more_webui |= views::Widget::IsPureViews();
+#endif
+  return more_webui;
 }
 
-ChromeWebUI::~ChromeWebUI() {
+void OverrideMoreWebUI(bool use_more_webui) {
+  g_override_more_webui = use_more_webui;
 }
 
-Profile* ChromeWebUI::GetProfile() const {
-  return Profile::FromBrowserContext(tab_contents()->browser_context());
-}
+}  // namespace chrome_web_ui

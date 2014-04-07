@@ -11,27 +11,39 @@
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/memory/scoped_ptr.h"
-#include "content/renderer/render_process_observer.h"
+#include "chrome/common/content_settings.h"
+#include "content/public/renderer/render_process_observer.h"
+
+class GURL;
+struct ContentSettings;
 
 namespace chrome {
 class ChromeContentRendererClient;
 }
 
-class GURL;
+namespace content {
 class ResourceDispatcherDelegate;
-struct ContentSettings;
+}
 
 // This class filters the incoming control messages (i.e. ones not destined for
 // a RenderView) for Chrome specific messages that the content layer doesn't
 // happen.  If a few messages are related, they should probably have their own
 // observer.
-class ChromeRenderProcessObserver : public RenderProcessObserver {
+class ChromeRenderProcessObserver : public content::RenderProcessObserver {
  public:
   explicit ChromeRenderProcessObserver(
       chrome::ChromeContentRendererClient* client);
   virtual ~ChromeRenderProcessObserver();
 
   static bool is_incognito_process() { return is_incognito_process_; }
+
+  // Needs to be called by RenderViews in case of navigations to execute
+  // any 'clear cache' commands that were delayed until the next navigation.
+  void ExecutePendingClearCache();
+
+  // Returns a pointer to the content setting rules owned by
+  // |ChromeRenderProcessObserver|.
+  const RendererContentSettingRules* content_setting_rules() const;
 
  private:
   // RenderProcessObserver implementation.
@@ -41,11 +53,13 @@ class ChromeRenderProcessObserver : public RenderProcessObserver {
   void OnSetIsIncognitoProcess(bool is_incognito_process);
   void OnSetContentSettingsForCurrentURL(
       const GURL& url, const ContentSettings& content_settings);
-  void OnSetDefaultContentSettings(const ContentSettings& content_settings);
+  void OnSetContentSettingRules(const RendererContentSettingRules& rules);
   void OnSetCacheCapacities(size_t min_dead_capacity,
                             size_t max_dead_capacity,
                             size_t capacity);
-  void OnClearCache();
+  // If |on_navigation| is true, the clearing is delayed until the next
+  // navigation event.
+  void OnClearCache(bool on_navigation);
   void OnGetCacheResourceStats();
   void OnSetFieldTrialGroup(const std::string& fiel_trial_name,
                             const std::string& group_name);
@@ -56,8 +70,11 @@ class ChromeRenderProcessObserver : public RenderProcessObserver {
   void OnPurgeMemory();
 
   static bool is_incognito_process_;
-  scoped_ptr<ResourceDispatcherDelegate> resource_delegate_;
+  scoped_ptr<content::ResourceDispatcherDelegate> resource_delegate_;
   chrome::ChromeContentRendererClient* client_;
+  // If true, the web cache shall be cleared before the next navigation event.
+  bool clear_cache_pending_;
+  RendererContentSettingRules content_setting_rules_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeRenderProcessObserver);
 };

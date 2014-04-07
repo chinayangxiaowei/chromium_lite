@@ -12,6 +12,7 @@
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
@@ -23,8 +24,8 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_notification_types.h"
+#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // Autocomplete test is flaky on ChromeOS.
@@ -149,10 +150,12 @@ IN_PROC_BROWSER_TEST_F(AutocompleteBrowserTest, TabAwayRevertSelect) {
   EXPECT_EQ(UTF8ToUTF16(chrome::kAboutBlankURL),
             location_bar->location_entry()->GetText());
   location_bar->location_entry()->SetUserText(string16());
+  ui_test_utils::WindowedNotificationObserver observer(
+      content::NOTIFICATION_LOAD_STOP,
+      content::NotificationService::AllSources());
   browser()->AddSelectedTabWithURL(GURL(chrome::kAboutBlankURL),
-                                   PageTransition::START_PAGE);
-  ui_test_utils::WaitForNavigation(
-      &browser()->GetSelectedTabContents()->controller());
+                                   content::PAGE_TRANSITION_START_PAGE);
+  observer.Wait();
   EXPECT_EQ(UTF8ToUTF16(chrome::kAboutBlankURL),
             location_bar->location_entry()->GetText());
   browser()->CloseTab();
@@ -261,12 +264,12 @@ IN_PROC_BROWSER_TEST_F(AutocompleteBrowserTest, ExtensionAppProvider) {
   FilePath test_dir;
   ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_dir));
   // Load a packaged app.
-  service->LoadExtension(test_dir.AppendASCII("extensions")
-                                 .AppendASCII("packaged_app"));
+  extensions::UnpackedInstaller::Create(service)->Load(
+      test_dir.AppendASCII("extensions").AppendASCII("packaged_app"));
   WaitForExtensionLoad();
   // Load a hosted app.
-  service->LoadExtension(test_dir.AppendASCII("extensions")
-                                 .AppendASCII("app"));
+  extensions::UnpackedInstaller::Create(service)->Load(
+      test_dir.AppendASCII("extensions").AppendASCII("app"));
   WaitForExtensionLoad();
   ASSERT_EQ(extension_count + 2U, service->extensions()->size());
 

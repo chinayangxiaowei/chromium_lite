@@ -1,105 +1,72 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 {
-  'target_defaults': {
-    'variables': {
-      'chrome_dll_target': 0,
-    },
-    'target_conditions': [
-      ['chrome_dll_target==1', {
-        'conditions': [
-          ['OS=="win"', {
-            'include_dirs': [
-              '<(DEPTH)/third_party/wtl/include',
-            ],
-            'defines': [
-              'CHROME_DLL',
-              'BROWSER_DLL',
-              'RENDERER_DLL',
-              'PLUGIN_DLL',
-            ],
-            'msvs_settings': {
-              'VCLinkerTool': {
-                'BaseAddress': '0x01c30000',
-                'DelayLoadDLLs': [
-                  'comdlg32.dll',
-                  'crypt32.dll',
-                  'cryptui.dll',
-                  'dhcpcsvc.dll',
-                  'imagehlp.dll',
-                  'imm32.dll',
-                  'iphlpapi.dll',
-                  'setupapi.dll',
-                  'urlmon.dll',
-                  'winhttp.dll',
-                  'wininet.dll',
-                  'winspool.drv',
-                  'ws2_32.dll',
-                  'wsock32.dll',
-                ],
-                # Set /SUBSYSTEM:WINDOWS for chrome.dll (for consistency).
-                'SubSystem': '2',
-              },
-              'VCManifestTool': {
-                'AdditionalManifestFiles': '$(ProjectDir)\\app\\chrome.dll.manifest',
-              },
-            },
-            'configurations': {
-              'Debug_Base': {
-                'msvs_settings': {
-                  'VCLinkerTool': {
-                    'LinkIncremental': '<(msvs_large_module_debug_link_mode)',
-                  },
-                },
-              },
-            },
-          }],  # OS=="win"
-        ],  # conditions
-      }],
-    ],
-  },
   'conditions': [
     ['OS=="mac" or OS=="win"', {
       'targets': [
         {
-          'variables': {
-            'chrome_dll_target': 1,
-            'conditions' : [
-              ['OS=="win" and optimize_with_syzygy==1', {
-                # On Windows we use build chrome_dll as an intermediate target
-                # then have a subsequent step which either optimizes it to its
-                # final location, or copies it to its final location, depending
-                # on whether or not optimize_with_syzygy==1.  Please, refer to
-                # chrome_dll_syzygy.gypi for the subsequent defintion of the
-                # Windows chrome_dll target.
-                'dll_target_name': 'chrome_dll_initial',
-              }, {
-                'dll_target_name': 'chrome_dll',
-              }],
-            ],
-          },
-          'target_name': '<(dll_target_name)',
+          'target_name': 'chrome_dll',
+          'type': 'none',
+          'dependencies': [
+            'chrome_main_dll',
+          ],
+          'conditions': [
+            ['incremental_chrome_dll==1', {
+              # Linking to a different directory and then hardlinking back
+              # to OutDir is a workaround to avoid having the .ilk for
+              # chrome.exe and chrome.dll conflicting. See crbug.com/92528
+              # for more information. Done on the dll instead of the exe so
+              # that people launching from VS don't need to modify
+              # $(TargetPath) for the exe.
+              'actions': [
+                {
+                  'action_name': 'hardlink_to_output',
+                  'inputs': [
+                    '$(OutDir)\\initial\\chrome.dll',
+                  ],
+                  'outputs': [
+                    '$(OutDir)\\chrome.dll',
+                  ],
+                  'action': ['tools\\build\\win\\hardlink_failsafe.bat',
+                             '$(OutDir)\\initial\\chrome.dll',
+                             '$(OutDir)\\chrome.dll'],
+                  'msvs_cygwin_shell': 0,
+                }
+              ],
+            }],
+          ]
+        },
+        {
+          'target_name': 'chrome_main_dll',
           'type': 'shared_library',
+          'variables': {
+            'enable_wexit_time_destructors': 1,
+          },
           'dependencies': [
             '<@(chromium_dependencies)',
             'app/policy/cloud_policy_codegen.gyp:policy',
           ],
           'conditions': [
+            ['use_aura==1', {
+              'dependencies': [
+                '../ui/gfx/compositor/compositor.gyp:compositor',
+              ],
+            }],
             ['OS=="win"', {
               'product_name': 'chrome',
               'dependencies': [
                 # On Windows, link the dependencies (libraries) that make
                 # up actual Chromium functionality into this .dll.
+                'chrome_resources.gyp:chrome_resources',
                 'chrome_version_resources',
-                'chrome_resources',
                 'installer_util_strings',
                 '../content/content.gyp:content_worker',
                 '../crypto/crypto.gyp:crypto',
                 '../printing/printing.gyp:printing',
                 '../net/net.gyp:net_resources',
                 '../third_party/cld/cld.gyp:cld',
-                '../views/views.gyp:views',
+                '../ui/views/views.gyp:views',
                 '../webkit/support/webkit_support.gyp:webkit_resources',
               ],
               'sources': [
@@ -107,8 +74,11 @@
                 'app/chrome_dll.rc',
                 'app/chrome_dll_resource.h',
                 'app/chrome_main.cc',
+                'app/chrome_main_delegate.cc',
+                'app/chrome_main_delegate.h',
 
                 '<(SHARED_INTERMEDIATE_DIR)/chrome_version/chrome_dll_version.rc',
+                '../base/win/dllmain.cc',
 
                 '../webkit/glue/resources/aliasb.cur',
                 '../webkit/glue/resources/cell.cur',
@@ -125,7 +95,6 @@
                 # their various targets (net.gyp:net_resources, etc.),
                 # but that causes errors in other targets when
                 # resulting .res files get referenced multiple times.
-                '<(SHARED_INTERMEDIATE_DIR)/chrome/autofill_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/browser_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/common_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/renderer_resources.rc',
@@ -143,35 +112,58 @@
                 #'app/check_dependents.bat',
                 #'app/chrome.dll.deps',
               ],
+              'include_dirs': [
+                '<(DEPTH)/third_party/wtl/include',
+              ],
+              'defines': [
+                'CHROME_DLL',
+                'BROWSER_DLL',
+                'RENDERER_DLL',
+                'PLUGIN_DLL',
+              ],
+              'configurations': {
+                'Debug_Base': {
+                  'msvs_settings': {
+                    'VCLinkerTool': {
+                      'LinkIncremental': '<(msvs_large_module_debug_link_mode)',
+                    },
+                  },
+                },
+              },
               'msvs_settings': {
                 'VCLinkerTool': {
+                  'BaseAddress': '0x01c30000',
                   'ImportLibrary': '$(OutDir)\\lib\\chrome_dll.lib',
                   'ProgramDatabaseFile': '$(OutDir)\\chrome_dll.pdb',
+                  # Set /SUBSYSTEM:WINDOWS for chrome.dll (for consistency).
+                  'SubSystem': '2',
                   'conditions': [
-                    ['optimize_with_syzygy==1', {
-                      # When syzygy is enabled we use build chrome_dll as an
-                      # intermediate target then have a subsequent step which
-                      # optimizes it to its final location
-                      'ProgramDatabaseFile': '$(OutDir)\\initial\\chrome_dll.pdb',
-                      'OutputFile': '$(OutDir)\\initial\\chrome.dll',
-                    }], ['incremental_chrome_dll==1', {
+                    ['incremental_chrome_dll==1', {
                       'OutputFile': '$(OutDir)\\initial\\chrome.dll',
                       'UseLibraryDependencyInputs': "true",
                     }],
                   ],
+                  'DelayLoadDLLs': [
+                    'comdlg32.dll',
+                    'crypt32.dll',
+                    'cryptui.dll',
+                    'dhcpcsvc.dll',
+                    'imagehlp.dll',
+                    'imm32.dll',
+                    'iphlpapi.dll',
+                    'setupapi.dll',
+                    'urlmon.dll',
+                    'winhttp.dll',
+                    'wininet.dll',
+                    'winspool.drv',
+                    'ws2_32.dll',
+                    'wsock32.dll',
+                  ],
+                },
+                'VCManifestTool': {
+                  'AdditionalManifestFiles': '$(ProjectDir)\\app\\chrome.dll.manifest',
                 },
               },
-              'conditions': [
-                ['incremental_chrome_dll==1 and optimize_with_syzygy==0', {
-                  # Linking to a different directory and then hardlinking back
-                  # to OutDir is a workaround to avoid having the .ilk for
-                  # chrome.exe and chrome.dll conflicting. See crbug.com/92528
-                  # for more information. Done on the dll instead of the exe so
-                  # that people launching from VS don't need to modify
-                  # $(TargetPath) for the exe.
-                  'msvs_postbuild': 'tools\\build\\win\\hardlink_failsafe.bat $(OutDir)\\initial\\chrome.dll $(OutDir)\\chrome.dll'
-                }]
-              ]
             }],  # OS=="win"
             ['OS=="mac"', {
               # The main browser executable's name is <(mac_product_name).
@@ -216,6 +208,8 @@
                 'app/chrome_command_ids.h',
                 'app/chrome_dll_resource.h',
                 'app/chrome_main.cc',
+                'app/chrome_main_delegate.cc',
+                'app/chrome_main_delegate.h',
                 'app/chrome_main_app_mode_mac.mm',
                 'app/chrome_main_mac.mm',
                 'app/chrome_main_mac.h',
@@ -266,6 +260,7 @@
                 'app/nibs/FirstRunBubble.xib',
                 'app/nibs/FirstRunDialog.xib',
                 'app/nibs/FullscreenExitBubble.xib',
+                'app/nibs/GlobalErrorBubble.xib',
                 'app/nibs/HungRendererDialog.xib',
                 'app/nibs/HttpAuthLoginSheet.xib',
                 'app/nibs/ImportProgressDialog.xib',
@@ -276,14 +271,13 @@
                 'app/nibs/Notification.xib',
                 'app/nibs/Panel.xib',
                 'app/nibs/PreviewableContents.xib',
-                'app/nibs/ReportBug.xib',
                 'app/nibs/SaveAccessoryView.xib',
                 'app/nibs/SadTab.xib',
-                'app/nibs/SearchEngineDialog.xib',
                 'app/nibs/SpeechInputBubble.xib',
                 'app/nibs/TabView.xib',
                 'app/nibs/TaskManager.xib',
                 'app/nibs/Toolbar.xib',
+                'app/nibs/WrenchMenu.xib',
                 'app/theme/balloon_wrench.pdf',
                 'app/theme/chevron.pdf',
                 'app/theme/find_next_Template.pdf',
@@ -292,9 +286,6 @@
                 'app/theme/menu_overflow_down.pdf',
                 'app/theme/menu_overflow_up.pdf',
                 'app/theme/nav.pdf',
-                'app/theme/newtab.pdf',
-                'app/theme/newtab_h.pdf',
-                'app/theme/newtab_p.pdf',
                 'app/theme/omnibox_extension_app.pdf',
                 'app/theme/omnibox_history.pdf',
                 'app/theme/omnibox_http.pdf',
@@ -302,12 +293,17 @@
                 'app/theme/omnibox_https_valid.pdf',
                 'app/theme/omnibox_https_warning.pdf',
                 'app/theme/omnibox_search.pdf',
-                'app/theme/omnibox_star.pdf',
+                'app/theme/omnibox_tts.pdf',
                 'app/theme/otr_icon.pdf',
-                'app/theme/popup_window_animation.pdf',
                 'app/theme/star.pdf',
                 'app/theme/star_lit.pdf',
                 'browser/mac/install.sh',
+                 '<(SHARED_INTERMEDIATE_DIR)/repack/chrome.pak',
+                 '<(SHARED_INTERMEDIATE_DIR)/repack/resources.pak',
+                '<!@pymod_do_main(repack_locales -o -g <(grit_out_dir) -s <(SHARED_INTERMEDIATE_DIR) -x <(SHARED_INTERMEDIATE_DIR) <(locales))',
+                # Note: pseudo_locales are generated via the packed_resources
+                # dependency but not copied to the final target.  See
+                # common.gypi for more info.
               ],
               'mac_bundle_resources!': [
                 'app/framework-Info.plist',
@@ -320,6 +316,8 @@
                 # dependency here. flash_player.gyp will copy the Flash bundle
                 # into PRODUCT_DIR.
                 '../third_party/adobe/flash/flash_player.gyp:flash_player',
+                'chrome_resources.gyp:packed_extra_resources',
+                'chrome_resources.gyp:packed_resources',
               ],
               'rules': [
                 {
@@ -344,154 +342,11 @@
                     'theme_dir_name': 'chromium',
                   }],
                 ],
-                'repack_path': '../tools/data_pack/repack.py',
+                'repack_path': '../tools/grit/grit/format/repack.py',
               },
               'actions': [
-                # TODO(mark): These actions are duplicated for Linux and
-                # FreeBSD in the chrome target.  Can they be unified?
                 {
-                  'action_name': 'repack_chrome',
-                  'variables': {
-                    'pak_inputs': [
-                      '<(grit_out_dir)/autofill_resources.pak',
-                      '<(grit_out_dir)/browser_resources.pak',
-                      '<(grit_out_dir)/common_resources.pak',
-                      '<(grit_out_dir)/default_plugin_resources/default_plugin_resources.pak',
-                      '<(grit_out_dir)/renderer_resources.pak',
-                      '<(grit_out_dir)/theme_resources.pak',
-                      '<(grit_out_dir)/theme_resources_standard.pak',
-                      '<(SHARED_INTERMEDIATE_DIR)/net/net_resources.pak',
-                      '<(SHARED_INTERMEDIATE_DIR)/ui/ui_resources/ui_resources.pak',
-                      '<(SHARED_INTERMEDIATE_DIR)/ui/ui_resources_standard/ui_resources_standard.pak',
-                      '<(SHARED_INTERMEDIATE_DIR)/webkit/webkit_chromium_resources.pak',
-                      '<(SHARED_INTERMEDIATE_DIR)/webkit/webkit_resources.pak',
-                    ],
-                  },
-                  'inputs': [
-                    '<(repack_path)',
-                    '<@(pak_inputs)',
-                  ],
-                  'outputs': [
-                    '<(INTERMEDIATE_DIR)/repack/chrome.pak',
-                  ],
-                  'action': ['python', '<(repack_path)', '<@(_outputs)',
-                             '<@(pak_inputs)'],
-                  'process_outputs_as_mac_bundle_resources': 1,
-                },
-                {
-                  'action_name': 'repack_theme_resources_large',
-                  'variables': {
-                    'pak_inputs': [
-                      '<(grit_out_dir)/theme_resources_large.pak',
-                    ],
-                  },
-                  'inputs': [
-                    '<(repack_path)',
-                    '<@(pak_inputs)',
-                  ],
-                  'outputs': [
-                    '<(INTERMEDIATE_DIR)/repack/theme_resources_large.pak',
-                  ],
-                  'action': ['python', '<(repack_path)', '<@(_outputs)',
-                             '<@(pak_inputs)'],
-                  'process_outputs_as_mac_bundle_resources': 1,
-                },
-                {
-                  'action_name': 'repack_locales',
-                  'process_outputs_as_mac_bundle_resources': 1,
-                  'variables': {
-                    'conditions': [
-                      ['branding=="Chrome"', {
-                        'branding_flag': ['-b', 'google_chrome',],
-                      }, {  # else: branding!="Chrome"
-                        'branding_flag': ['-b', 'chromium',],
-                      }],
-                    ],
-                  },
-                  'inputs': [
-                    'tools/build/repack_locales.py',
-                    # NOTE: Ideally the common command args would be shared
-                    # amongst inputs/outputs/action, but the args include shell
-                    # variables which need to be passed intact, and command
-                    # expansion wants to expand the shell variables. Adding the
-                    # explicit quoting here was the only way it seemed to work.
-                    '>!@(<(repack_locales_cmd) -i <(branding_flag) -g \'<(grit_out_dir)\' -s \'<(SHARED_INTERMEDIATE_DIR)\' -x \'<(INTERMEDIATE_DIR)\' <(locales))',
-                  ],
-                  'outputs': [
-                    '>!@(<(repack_locales_cmd) -o -g \'<(grit_out_dir)\' -s \'<(SHARED_INTERMEDIATE_DIR)\' -x \'<(INTERMEDIATE_DIR)\' <(locales))',
-                  ],
-                  'action': [
-                    '<@(repack_locales_cmd)',
-                    '<@(branding_flag)',
-                    '-g', '<(grit_out_dir)',
-                    '-s', '<(SHARED_INTERMEDIATE_DIR)',
-                    '-x', '<(INTERMEDIATE_DIR)',
-                    '<@(locales)',
-                  ],
-                },
-                {
-                  # This is an exact copy of the above phase, except for two
-                  # changes:
-                  # 1. process_outputs_as_mac_bundle_resources is omitted.
-                  # 2. We pass 'pseudo_locales' instead of 'locales' wherever
-                  #    'locales' is used.
-                  # The result is a build phase that builds all pseudo locales
-                  # but doesn't copy them to the final dll/framework.
-                  'action_name': 'repack_pseudo_locales',
-                  'variables': {
-                    'conditions': [
-                      ['branding=="Chrome"', {
-                        'branding_flag': ['-b', 'google_chrome',],
-                      }, {  # else: branding!="Chrome"
-                        'branding_flag': ['-b', 'chromium',],
-                      }],
-                    ],
-                  },
-                  'inputs': [
-                    'tools/build/repack_locales.py',
-                    # NOTE: Ideally the common command args would be shared
-                    # amongst inputs/outputs/action, but the args include shell
-                    # variables which need to be passed intact, and command
-                    # expansion wants to expand the shell variables. Adding the
-                    # explicit quoting here was the only way it seemed to work.
-                    '>!@(<(repack_locales_cmd) -i <(branding_flag) -g \'<(grit_out_dir)\' -s \'<(SHARED_INTERMEDIATE_DIR)\' -x \'<(INTERMEDIATE_DIR)\' <(pseudo_locales))',
-                  ],
-                  'outputs': [
-                    '<(INTERMEDIATE_DIR)/<(pseudo_locales).pak'
-                  ],
-                  'action': [
-                    '<@(repack_locales_cmd)',
-                    '<@(branding_flag)',
-                    '-g', '<(grit_out_dir)',
-                    '-s', '<(SHARED_INTERMEDIATE_DIR)',
-                    '-x', '<(INTERMEDIATE_DIR)',
-                    '<@(pseudo_locales)',
-                  ],
-                },
-                {
-                  'action_name': 'repack_resources',
-                  'variables': {
-                    'pak_inputs': [
-                      '<(grit_out_dir)/component_extension_resources.pak',
-                      '<(grit_out_dir)/devtools_frontend_resources.pak',
-                      '<(grit_out_dir)/devtools_resources.pak',
-                      '<(grit_out_dir)/net_internals_resources.pak',
-                      '<(grit_out_dir)/options_resources.pak',
-                      '<(grit_out_dir)/shared_resources.pak',
-                      '<(grit_out_dir)/sync_internals_resources.pak',
-                      '<(grit_out_dir)/workers_resources.pak',
-                    ],
-                  },
-                  'inputs': [
-                    '<(repack_path)',
-                    '<@(pak_inputs)',
-                  ],
-                  'outputs': [
-                    '<(INTERMEDIATE_DIR)/repack/resources.pak',
-                  ],
-                  'action': ['python', '<(repack_path)', '<@(_outputs)',
-                             '<@(pak_inputs)'],
-                  'process_outputs_as_mac_bundle_resources': 1,
+                  'includes': ['chrome_repack_theme_resources_large.gypi']
                 },
               ],
               'postbuilds': [
@@ -519,7 +374,8 @@
                   # but this seems like a really good place to store them.
                   'postbuild_name': 'Tweak Info.plist',
                   'action': ['<(tweak_info_plist_path)',
-                             '-b<(mac_breakpad)',
+                             '--breakpad=<(mac_breakpad_compiled_in)',
+                             '--breakpad_uploads=<(mac_breakpad_uploads)',
                              '-k0',
                              '-s1',
                              '<(branding)',
@@ -537,11 +393,9 @@
               ],
               'copies': [
                 {
-                  'destination':
-                      '<(PRODUCT_DIR)/$(CONTENTS_FOLDER_PATH)/Libraries',
+                  # Copy FFmpeg binaries for audio/video support.
+                  'destination': '<(PRODUCT_DIR)/$(CONTENTS_FOLDER_PATH)/Libraries',
                   'files': [
-                    # TODO(ajwong): Find a way to share this path with
-                    # ffmpeg.gyp so they don't diverge. (BUG=23602)
                     '<(PRODUCT_DIR)/ffmpegsumo.so',
                   ],
                 },
@@ -571,15 +425,17 @@
                   ],
                 },
                 {
+                  # Copy of resources used by tests.
                   'destination': '<(PRODUCT_DIR)',
                   'files': [
-                      '<(INTERMEDIATE_DIR)/repack/resources.pak'
+                      '<(SHARED_INTERMEDIATE_DIR)/repack/resources.pak'
                   ],
                 },
                 {
+                  # Copy of resources used by tests.
                   'destination': '<(PRODUCT_DIR)/pseudo_locales',
                   'files': [
-                      '<(INTERMEDIATE_DIR)/<(pseudo_locales).pak'
+                      '<(SHARED_INTERMEDIATE_DIR)/<(pseudo_locales).pak'
                   ],
                 },
                 {
@@ -595,11 +451,26 @@
                 },
               ],
               'conditions': [
+                ['branding=="Chrome"', {
+                  'copies': [
+                    {
+                      # This location is for the Mac build. Note that the
+                      # copying of these files for Windows and Linux is handled
+                      # in chrome.gyp, as Mac needs to be dropped inside the
+                      # framework.
+                      'destination':
+                          '<(PRODUCT_DIR)/$(CONTENTS_FOLDER_PATH)/Default Apps',
+                      'files': ['<@(default_apps_list)'],
+                    },
+                  ],
+                }],
                 ['mac_breakpad==1', {
                   'variables': {
                     # A real .dSYM is needed for dump_syms to operate on.
                     'mac_real_dsym': 1,
                   },
+                }],
+                ['mac_breakpad_compiled_in==1', {
                   'sources': [
                     'app/breakpad_mac.mm',
                     'app/breakpad_mac.h',
@@ -617,13 +488,13 @@
                       ],
                     },
                   ],
-                }, {  # else: mac_breakpad!=1
+                }, {  # else: mac_breakpad_compiled_in!=1
                   # No Breakpad, put in the stubs.
                   'sources': [
                     'app/breakpad_mac_stubs.mm',
                     'app/breakpad_mac.h',
                   ],
-                }],  # mac_breakpad
+                }],  # mac_breakpad_compiled_in
                 ['mac_keystone==1', {
                   'mac_bundle_resources': [
                     'browser/mac/keystone_promote_preflight.sh',
@@ -660,105 +531,5 @@
         },  # target chrome_dll
       ],  # targets
     }],  # OS=="mac" or OS=="win"
-    [ 'OS=="win"', {
-      'targets': [
-        {
-          'target_name': 'chrome_dll_nacl_win64',
-          'type': 'shared_library',
-          'product_name': 'nacl64',
-          'variables': {
-            'chrome_dll_target': 1,
-          },
-          'include_dirs': [
-            '..',
-          ],
-          'dependencies': [
-            '<@(nacl_win64_dependencies)',
-            'chrome_version_resources',
-            'nacl_win64',
-            '../base/base.gyp:base_i18n_nacl_win64',
-          ],
-          'defines': [
-            '<@(nacl_win64_defines)',
-            # Required to build gl_switches.cc as part of this binary.
-            'GL_IMPLEMENTATION'
-          ],
-          'sources': [
-            'app/chrome_command_ids.h',
-            'app/chrome_dll_resource.h',
-            'app/chrome_main.cc',
-            # Parsing is needed for the UserDataDir policy which is read much
-            # earlier than the initialization of the policy/pref system.
-            'browser/policy/policy_path_parser_win.cc',
-            'browser/renderer_host/render_process_host_dummy.cc',
-            'common/googleurl_dummy.cc',
-
-            '<(SHARED_INTERMEDIATE_DIR)/chrome_version/nacl64_dll_version.rc',
-
-            # TODO:  It would be nice to have these pulled in
-            # automatically from direct_dependent_settings in
-            # their various targets (net.gyp:net_resources, etc.),
-            # but that causes errors in other targets when
-            # resulting .res files get referenced multiple times.
-            '<(SHARED_INTERMEDIATE_DIR)/chrome/autofill_resources.rc',
-            '<(SHARED_INTERMEDIATE_DIR)/chrome/common_resources.rc',
-            '<(SHARED_INTERMEDIATE_DIR)/ui/ui_resources/ui_resources.rc',
-
-            # TODO(sgk):  left-over from pre-gyp build, figure out
-            # if we still need them and/or how to update to gyp.
-            #'app/check_dependents.bat',
-            #'app/chrome.dll.deps',
-
-            # Stub entry points for process types that are not supported
-            # by NaCl Win64 executable
-            'app/dummy_main_functions.cc',
-
-            # TODO(bradnelson): once automatic generation of 64 bit targets on
-            # Windows is ready, take this out and add a dependency on
-            # content_common.gypi and common.gypi in nacl_win64_dependencies
-            # and get rid of the common_constants.gypi which was added as a hack
-            # to avoid making common compile on 64 bit on Windows.
-            '../chrome/common/chrome_content_client.cc',
-            '../chrome/common/chrome_content_plugin_client.cc',
-            '../content/app/content_main.cc',
-            '../content/common/child_process.cc',
-            '../content/common/child_thread.cc',
-            '../content/common/content_client.cc',
-            '../content/common/content_constants.cc',
-            '../content/common/content_counters.cc',
-            '../content/common/content_message_generator.cc',
-            '../content/common/content_paths.cc',
-            '../content/common/content_switches.cc',
-            '../content/common/debug_flags.cc',
-            '../content/common/hi_res_timer_manager_win.cc',
-            '../content/common/notification_details.cc',
-            '../content/common/notification_service.cc',
-            '../content/common/notification_source.cc',
-            '../content/common/sandbox_policy.cc',
-            '../content/common/sandbox_init_wrapper_win.cc',
-            '../content/common/url_constants.cc',
-            '../ui/gfx/gl/gl_switches.cc',
-          ],
-          'msvs_settings': {
-            'VCLinkerTool': {
-              'ImportLibrary': '$(OutDir)\\lib\\nacl64_dll.lib',
-              'ProgramDatabaseFile': '$(OutDir)\\nacl64_dll.pdb',
-            },
-          },
-          'configurations': {
-            'Common_Base': {
-              'msvs_target_platform': 'x64',
-            },
-            'Debug_Base': {
-              'msvs_settings': {
-                'VCLinkerTool': {
-                  'LinkIncremental': '<(msvs_debug_link_nonincremental)',
-                },
-              },
-            },
-          },
-        },  # target chrome_dll
-      ],
-    }],
   ],
 }

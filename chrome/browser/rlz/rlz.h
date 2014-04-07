@@ -14,11 +14,10 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/singleton.h"
-#include "base/task.h"
-#include "content/common/notification_observer.h"
-#include "content/common/notification_registrar.h"
+#include "base/string16.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 #include "rlz/win/lib/rlz_lib.h"
 
 // RLZ is a library which is used to measure distribution scenarios.
@@ -31,7 +30,7 @@
 // For partner or bundled installs, the RLZ might send more information
 // according to the terms disclosed in the EULA.
 
-class RLZTracker : public NotificationObserver {
+class RLZTracker : public content::NotificationObserver {
  public:
   // Initializes the RLZ library services for use in chrome. Schedules a
   // delayed task (delayed by |delay| seconds) that performs the ping and
@@ -52,7 +51,7 @@ class RLZTracker : public NotificationObserver {
   // Get the RLZ value of the access point.
   // Returns false if the rlz string could not be obtained. In some cases
   // an empty string can be returned which is not an error.
-  static bool GetAccessPointRlz(rlz_lib::AccessPoint point, std::wstring* rlz);
+  static bool GetAccessPointRlz(rlz_lib::AccessPoint point, string16* rlz);
 
   // Invoked during shutdown to clean up any state created by RLZTracker.
   static void CleanupRlz();
@@ -74,10 +73,10 @@ class RLZTracker : public NotificationObserver {
   // that it does not interfere with chrome startup time.
   virtual void DelayedInit();
 
-  // NotificationObserver implementation:
+  // content::NotificationObserver implementation:
   virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE;
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Used by test code to override the default RLZTracker instance returned
   // by GetInstance().
@@ -94,7 +93,7 @@ class RLZTracker : public NotificationObserver {
             bool google_default_homepage);
 
   // Implementation called from RecordProductEvent() static method.
-  bool GetAccessPointRlzImpl(rlz_lib::AccessPoint point, std::wstring* rlz);
+  bool GetAccessPointRlzImpl(rlz_lib::AccessPoint point, string16* rlz);
 
   // Schedules the delayed initialization. This method is virtual to allow
   // tests to override how the scheduling is done.
@@ -116,10 +115,9 @@ class RLZTracker : public NotificationObserver {
 
   // Sends the financial ping to the RLZ servers. This method is virtual to
   // allow tests to override.
-  virtual bool SendFinancialPing(const std::wstring& brand,
-                                 const std::wstring& lang,
-                                 const std::wstring& referral,
-                                 bool exclude_id);
+  virtual bool SendFinancialPing(const std::string& brand,
+                                 const string16& lang,
+                                 const string16& referral);
 
   // Tracker used for testing purposes only. If this value is non-NULL, it
   // will be returned from GetInstance() instead of the regular singleton.
@@ -139,20 +137,16 @@ class RLZTracker : public NotificationObserver {
   // The cache must be protected by a lock since it may be accessed from
   // the UI thread for reading and the IO thread for reading and/or writing.
   base::Lock cache_lock_;
-  std::map<rlz_lib::AccessPoint, std::wstring> rlz_cache_;
+  std::map<rlz_lib::AccessPoint, string16> rlz_cache_;
 
   // Keeps track of whether the omnibox or host page have been used.
   bool omnibox_used_;
   bool homepage_used_;
 
-  NotificationRegistrar registrar_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(RLZTracker);
 };
-
-// The RLZTracker is a singleton object that outlives any runnable tasks
-// that will be queued up.
-DISABLE_RUNNABLE_METHOD_REFCOUNT(RLZTracker);
 
 #endif  // defined(OS_WIN)
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/format_macros.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/json/json_value_serializer.h"
 #include "base/path_service.h"
 #include "base/stringprintf.h"
 #include "base/string_number_conversions.h"
@@ -17,7 +18,6 @@
 #include "chrome/common/extensions/extension_error_utils.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/url_constants.h"
-#include "content/common/json_value_serializer.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/mime_sniffer.h"
 #include "skia/ext/image_operations.h"
@@ -512,7 +512,6 @@ TEST(ExtensionTest, ApiPermissions) {
     { "non_existing_permission", false },
     // Test default module/package permission.
     { "browserAction",  true },
-    { "browserActions", true },
     { "devtools",       true },
     { "extension",      true },
     { "i18n",           true },
@@ -559,7 +558,7 @@ TEST(ExtensionTest, GetPermissionMessages_ManyApiPermissions) {
   EXPECT_EQ("Your physical location", UTF16ToUTF8(warnings[2]));
   EXPECT_EQ("Your browsing history", UTF16ToUTF8(warnings[3]));
   EXPECT_EQ("Your tabs and browsing activity", UTF16ToUTF8(warnings[4]));
-  EXPECT_EQ("Your list of installed apps, extensions, and themes",
+  EXPECT_EQ("Your list of apps, extensions, and themes",
             UTF16ToUTF8(warnings[5]));
 }
 
@@ -806,6 +805,7 @@ TEST(ExtensionTest, GenerateId) {
 namespace {
 enum SyncTestExtensionType {
   EXTENSION,
+  APP,
   USER_SCRIPT,
   THEME
 };
@@ -821,9 +821,10 @@ static scoped_refptr<Extension> MakeSyncTestExtension(
   source.SetString(extension_manifest_keys::kName,
                    "PossiblySyncableExtension");
   source.SetString(extension_manifest_keys::kVersion, "0.0.0.0");
-  if (type == THEME) {
+  if (type == APP)
+    source.SetString(extension_manifest_keys::kApp, "true");
+  if (type == THEME)
     source.Set(extension_manifest_keys::kTheme, new DictionaryValue());
-  }
   if (!update_url.is_empty()) {
     source.SetString(extension_manifest_keys::kUpdateURL,
                      update_url.spec());
@@ -906,6 +907,18 @@ TEST(ExtensionTest, GetSyncTypeUserScriptThirdPartyUpdateUrl) {
           USER_SCRIPT, GURL("http://third-party.update_url.com"), GURL(),
           Extension::INTERNAL, 0, FilePath()));
   EXPECT_EQ(extension->GetSyncType(), Extension::SYNC_TYPE_NONE);
+}
+
+TEST(ExtensionTest, OnlyDisplayAppsInLauncher) {
+  scoped_refptr<Extension> extension(
+      MakeSyncTestExtension(EXTENSION, GURL(), GURL(),
+                            Extension::INTERNAL, 0, FilePath()));
+  EXPECT_FALSE(extension->ShouldDisplayInLauncher());
+
+  scoped_refptr<Extension> app(
+      MakeSyncTestExtension(APP, GURL(), GURL("http://www.google.com"),
+                            Extension::INTERNAL, 0, FilePath()));
+  EXPECT_TRUE(app->ShouldDisplayInLauncher());
 }
 
 // These last 2 tests don't make sense on Chrome OS, where extension plugins

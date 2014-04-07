@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -39,6 +39,11 @@ class TestTestExpectations(unittest.TestCase):
             'tiled-layer-recursion.html = CRASH')
     self.assertEquals(TestExpectations.ExtractTestOrDirectoryName(line),
                       'compositing/scaling/tiled-layer-recursion.html')
+
+  def testExtractTestOrDirectoryNameWithSvg(self):
+    line = 'BUGWK43668 SKIP : media/track/x.svg = TIMEOUT'
+    self.assertEquals(TestExpectations.ExtractTestOrDirectoryName(line),
+                      'media/track/x.svg')
 
   def testExtractTestOrDirectoryNameWithDirName(self):
     line = 'BUGWK43668 SKIP : media/track/ = TIMEOUT'

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/task.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/cros/power_library.h"
+#include "chrome/browser/chromeos/dbus/power_manager_client.h"
 #include "net/base/network_change_notifier.h"
 
 namespace chromeos {
@@ -19,18 +19,27 @@ class OnlineStatusReportThreadTask;
 
 class NetworkChangeNotifierChromeos
     : public net::NetworkChangeNotifier,
-      public chromeos::PowerLibrary::Observer,
+      public chromeos::PowerManagerClient::Observer,
       public chromeos::NetworkLibrary::NetworkObserver,
       public chromeos::NetworkLibrary::NetworkManagerObserver {
  public:
   NetworkChangeNotifierChromeos();
   virtual ~NetworkChangeNotifierChromeos();
 
+  // Initializes the network change notifier. Starts to observe changes
+  // from the power manager and the network manager.
+  void Init();
+
+  // Shutdowns the network change notifier. Stops observing changes from
+  // the power manager and the network manager.
+  void Shutdown();
+
  private:
   friend class OnlineStatusReportThreadTask;
 
-  // PowerLibrary::Observer overrides.
-  virtual void PowerChanged(PowerLibrary* obj) OVERRIDE;
+  // PowerManagerClient::Observer overrides.
+  virtual void PowerChanged(const PowerSupplyStatus& status) OVERRIDE;
+
   virtual void SystemResumed() OVERRIDE;
 
   // NetworkChangeNotifier overrides.
@@ -45,6 +54,7 @@ class NetworkChangeNotifierChromeos
 
   // Initiate online status change reporting.
   void ReportOnlineStateChange(bool is_online);
+  void ReportOnlineStateChangeOnUIThread();
   // Callback from online_notification_task_ when online state notification
   // is actually scheduled.
   void OnOnlineStateNotificationFired();
@@ -68,10 +78,13 @@ class NetworkChangeNotifierChromeos
   // Current active network's IP address.
   std::string ip_address_;
 
-  OnlineStatusReportThreadTask* online_notification_task_;
+  // The last reported online state.
+  bool is_online_;
+  base::WeakPtrFactory<NetworkChangeNotifierChromeos> weak_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(NetworkChangeNotifierChromeos);
 };
 
-}  // namespace net
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_NET_NETWORK_CHANGE_NOTIFIER_CHROMEOS_H_

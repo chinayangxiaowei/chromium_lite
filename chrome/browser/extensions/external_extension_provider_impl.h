@@ -1,10 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTERNAL_EXTENSION_PROVIDER_IMPL_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTERNAL_EXTENSION_PROVIDER_IMPL_H_
 #pragma once
+
+#include <string>
 
 #include "chrome/browser/extensions/external_extension_provider_interface.h"
 
@@ -17,7 +19,6 @@ class Version;
 
 namespace base {
 class DictionaryValue;
-class ValueSerializer;
 }
 
 // A specialization of the ExternalExtensionProvider that uses an instance
@@ -38,7 +39,8 @@ class ExternalExtensionProviderImpl
       VisitorInterface* service,
       ExternalExtensionLoader* loader,
       Extension::Location crx_location,
-      Extension::Location download_location);
+      Extension::Location download_location,
+      int creation_flags);
 
   virtual ~ExternalExtensionProviderImpl();
 
@@ -53,17 +55,15 @@ class ExternalExtensionProviderImpl
   void SetPrefs(base::DictionaryValue* prefs);
 
   // ExternalExtensionProvider implementation:
-  virtual void VisitRegisteredExtension() const;
-
-  virtual bool HasExtension(const std::string& id) const;
-
+  virtual void ServiceShutdown() OVERRIDE;
+  virtual void VisitRegisteredExtension() OVERRIDE;
+  virtual bool HasExtension(const std::string& id) const OVERRIDE;
   virtual bool GetExtensionDetails(const std::string& id,
                                    Extension::Location* location,
-                                   scoped_ptr<Version>* version) const;
+                                   scoped_ptr<Version>* version) const OVERRIDE;
 
-  virtual void ServiceShutdown();
-
-  virtual bool IsReady();
+  virtual bool IsReady() const OVERRIDE;
+  virtual int GetCreationFlags() const OVERRIDE;
 
   static const char kLocation[];
   static const char kState[];
@@ -71,6 +71,10 @@ class ExternalExtensionProviderImpl
   static const char kExternalVersion[];
   static const char kExternalUpdateUrl[];
   static const char kSupportedLocales[];
+
+  void set_auto_acknowledge(bool auto_acknowledge) {
+    auto_acknowledge_ = auto_acknowledge;
+  }
 
  private:
   // Location for external extensions that are provided by this provider from
@@ -81,7 +85,6 @@ class ExternalExtensionProviderImpl
   // update URLs.
   const Extension::Location download_location_;
 
- private:
   // Weak pointer to the object that consumes the external extensions.
   // This is zeroed out by: ServiceShutdown()
   VisitorInterface* service_;  // weak
@@ -96,6 +99,14 @@ class ExternalExtensionProviderImpl
   // The loader that loads the list of external extensions and reports them
   // via |SetPrefs|.
   scoped_refptr<ExternalExtensionLoader> loader_;
+
+  // Creation flags to use for the extension.  These flags will be used
+  // when calling Extenion::Create() by the crx installer.
+  int creation_flags_;
+
+  // Whether loaded extensions should be automatically acknowledged, so that
+  // the user doesn't see an alert about them.
+  bool auto_acknowledge_;
 
   DISALLOW_COPY_AND_ASSIGN(ExternalExtensionProviderImpl);
 };

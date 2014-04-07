@@ -8,32 +8,44 @@
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/common/render_messages.h"
-#include "content/common/view_messages.h"
-#include "content/renderer/pepper_plugin_delegate_impl.h"
-#include "content/renderer/render_thread.h"
+#include "chrome/renderer/print_web_view_helper.h"
+#include "content/public/common/child_process_sandbox_support_linux.h"
+#include "content/public/common/content_client.h"
+#include "content/public/renderer/render_thread.h"
+#include "content/public/renderer/render_view.h"
 #include "grit/webkit_resources.h"
 #include "grit/webkit_strings.h"
 #include "ppapi/c/pp_resource.h"
 #include "ppapi/c/private/ppb_pdf.h"
 #include "ppapi/shared_impl/resource.h"
 #include "ppapi/shared_impl/resource_tracker.h"
-#include "ppapi/shared_impl/tracker_base.h"
 #include "ppapi/shared_impl/var.h"
 #include "skia/ext/platform_canvas.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "unicode/usearch.h"
-#include "webkit/glue/webkit_glue.h"
+#include "webkit/plugins/ppapi/host_globals.h"
 #include "webkit/plugins/ppapi/plugin_delegate.h"
-#include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 #include "webkit/plugins/ppapi/ppb_image_data_impl.h"
-#include "webkit/plugins/ppapi/resource_tracker.h"
+
+using ppapi::PpapiGlobals;
+using webkit::ppapi::HostGlobals;
+using webkit::ppapi::PluginInstance;
+using WebKit::WebElement;
+using WebKit::WebView;
+using content::RenderThread;
 
 namespace chrome {
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_OPENBSD)
 class PrivateFontFile : public ppapi::Resource {
  public:
   PrivateFontFile(PP_Instance instance, int fd) : Resource(instance), fd_(fd) {
@@ -45,7 +57,7 @@ class PrivateFontFile : public ppapi::Resource {
                     void* output,
                     uint32_t* output_length) {
     size_t temp_size = static_cast<size_t>(*output_length);
-    bool rv = webkit_glue::GetFontTable(
+    bool rv = content::GetFontTable(
         fd_, table, static_cast<uint8_t*>(output), &temp_size);
     *output_length = static_cast<uint32_t>(temp_size);
     return rv;
@@ -109,14 +121,16 @@ static const ResourceImageInfo kResourceImageMap[] = {
   { PP_RESOURCEIMAGE_PDF_PROGRESS_BAR_8, IDR_PDF_PROGRESS_BAR_8 },
   { PP_RESOURCEIMAGE_PDF_PROGRESS_BAR_BACKGROUND,
       IDR_PDF_PROGRESS_BAR_BACKGROUND },
+  { PP_RESOURCEIMAGE_PDF_PAGE_INDICATOR_BACKGROUND,
+      IDR_PDF_PAGE_INDICATOR_BACKGROUND },
   { PP_RESOURCEIMAGE_PDF_PAGE_DROPSHADOW, IDR_PDF_PAGE_DROPSHADOW },
   { PP_RESOURCEIMAGE_PDF_PAN_SCROLL_ICON, IDR_PAN_SCROLL_ICON },
 };
 
 PP_Var GetLocalizedString(PP_Instance instance_id,
                           PP_ResourceString string_id) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance =
+      content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return PP_MakeUndefined();
 
@@ -133,7 +147,7 @@ PP_Var GetLocalizedString(PP_Instance instance_id,
     NOTREACHED();
   }
 
-  return ppapi::StringVar::StringToPPVar(instance->module()->pp_module(), rv);
+  return ppapi::StringVar::StringToPPVar(rv);
 }
 
 PP_Resource GetResourceImage(PP_Instance instance_id,
@@ -152,7 +166,7 @@ PP_Resource GetResourceImage(PP_Instance instance_id,
       ResourceBundle::GetSharedInstance().GetBitmapNamed(res_id);
 
   // Validate the instance.
-  if (!webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id))
+  if (!content::GetHostGlobals()->GetInstance(instance_id))
     return 0;
   scoped_refptr<webkit::ppapi::PPB_ImageData_Impl> image_data(
       new webkit::ppapi::PPB_ImageData_Impl(instance_id));
@@ -166,10 +180,10 @@ PP_Resource GetResourceImage(PP_Instance instance_id,
   if (!mapper.is_valid())
     return 0;
 
-  skia::PlatformCanvas* canvas = image_data->mapped_canvas();
+  skia::PlatformCanvas* canvas = image_data->GetPlatformCanvas();
   // Note: Do not skBitmap::copyTo the canvas bitmap directly because it will
   // ignore the allocated pixels in shared memory and re-allocate a new buffer.
-  skia::GetTopDevice(*canvas)->writePixels(*res_bitmap, 0, 0);
+  canvas->writePixels(*res_bitmap, 0, 0);
 
   return image_data->GetReference();
 }
@@ -178,9 +192,9 @@ PP_Resource GetFontFileWithFallback(
     PP_Instance instance_id,
     const PP_FontDescription_Dev* description,
     PP_PrivateFontCharset charset) {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_OPENBSD)
   // Validate the instance before using it below.
-  if (!webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id))
+  if (!content::GetHostGlobals()->GetInstance(instance_id))
     return 0;
 
   scoped_refptr<ppapi::StringVar> face_name(ppapi::StringVar::FromPPVar(
@@ -188,7 +202,7 @@ PP_Resource GetFontFileWithFallback(
   if (!face_name)
     return 0;
 
-  int fd = webkit_glue::MatchFontWithFallback(
+  int fd = content::MatchFontWithFallback(
       face_name->value().c_str(),
       description->weight >= PP_FONTWEIGHT_BOLD,
       description->italic,
@@ -210,9 +224,9 @@ bool GetFontTableForPrivateFontFile(PP_Resource font_file,
                                     uint32_t table,
                                     void* output,
                                     uint32_t* output_length) {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_OPENBSD)
   ppapi::Resource* resource =
-      ppapi::TrackerBase::Get()->GetResourceTracker()->GetResource(font_file);
+      PpapiGlobals::Get()->GetResourceTracker()->GetResource(font_file);
   if (!resource)
     return false;
 
@@ -234,7 +248,7 @@ void SearchString(PP_Instance instance,
 
   UErrorCode status = U_ZERO_ERROR;
   UStringSearch* searcher = usearch_open(
-      term, -1, string, -1, webkit_glue::GetWebKitLocale().c_str(), 0,
+      term, -1, string, -1, RenderThread::Get()->GetLocale().c_str(), 0,
       &status);
   DCHECK(status == U_ZERO_ERROR || status == U_USING_FALLBACK_WARNING ||
          status == U_USING_DEFAULT_WARNING);
@@ -274,24 +288,23 @@ void SearchString(PP_Instance instance,
 }
 
 void DidStartLoading(PP_Instance instance_id) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance = content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return;
   instance->delegate()->DidStartLoading();
 }
 
 void DidStopLoading(PP_Instance instance_id) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance =
+      content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return;
   instance->delegate()->DidStopLoading();
 }
 
 void SetContentRestriction(PP_Instance instance_id, int restrictions) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance =
+      content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return;
   instance->delegate()->SetContentRestriction(restrictions);
@@ -304,15 +317,13 @@ void HistogramPDFPageCount(int count) {
 void UserMetricsRecordAction(PP_Var action) {
   scoped_refptr<ppapi::StringVar> action_str(
       ppapi::StringVar::FromPPVar(action));
-  if (action_str) {
-    RenderThread::current()->Send(
-        new ViewHostMsg_UserMetricsRecordAction(action_str->value()));
-  }
+  if (action_str)
+    RenderThread::Get()->RecordUserMetrics(action_str->value());
 }
 
 void HasUnsupportedFeature(PP_Instance instance_id) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance =
+      content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return;
 
@@ -320,20 +331,33 @@ void HasUnsupportedFeature(PP_Instance instance_id) {
   if (!instance->IsFullPagePlugin())
     return;
 
-  PepperPluginDelegateImpl* pepper_delegate =
-      static_cast<PepperPluginDelegateImpl*>(instance->delegate());
-
-  RenderThread::current()->Send(
-      new ChromeViewHostMsg_PDFHasUnsupportedFeature(
-          pepper_delegate->GetRoutingId()));
+  WebView* view = instance->container()->element().document().frame()->view();
+  content::RenderView* render_view = content::RenderView::FromWebView(view);
+  render_view->Send(new ChromeViewHostMsg_PDFHasUnsupportedFeature(
+      render_view->GetRoutingId()));
 }
 
 void SaveAs(PP_Instance instance_id) {
-  webkit::ppapi::PluginInstance* instance =
-      webkit::ppapi::ResourceTracker::Get()->GetInstance(instance_id);
+  PluginInstance* instance =
+      content::GetHostGlobals()->GetInstance(instance_id);
   if (!instance)
     return;
   instance->delegate()->SaveURLAs(instance->plugin_url());
+}
+
+void Print(PP_Instance instance_id) {
+  PluginInstance* instance = HostGlobals::Get()->GetInstance(instance_id);
+  if (!instance)
+    return;
+
+  WebElement element = instance->container()->element();
+  WebView* view = element.document().frame()->view();
+  content::RenderView* render_view = content::RenderView::FromWebView(view);
+
+  PrintWebViewHelper* print_view_helper = PrintWebViewHelper::Get(render_view);
+  if (print_view_helper) {
+    print_view_helper->PrintNode(element);
+  }
 }
 
 const PPB_PDF ppb_pdf = {
@@ -348,7 +372,8 @@ const PPB_PDF ppb_pdf = {
   &HistogramPDFPageCount,
   &UserMetricsRecordAction,
   &HasUnsupportedFeature,
-  &SaveAs
+  &SaveAs,
+  &Print
 };
 
 // static
@@ -357,4 +382,3 @@ const PPB_PDF* PPB_PDF_Impl::GetInterface() {
 }
 
 }  // namespace chrome
-

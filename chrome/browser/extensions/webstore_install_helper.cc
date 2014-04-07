@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,16 @@
 
 #include <string>
 
-#include "base/task.h"
+#include "base/bind.h"
 #include "base/values.h"
 #include "chrome/common/chrome_utility_messages.h"
-#include "content/browser/browser_thread.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/common/url_fetcher.h"
+#include "net/base/load_flags.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_status.h"
+
+using content::BrowserThread;
 
 namespace {
 
@@ -21,16 +25,17 @@ const char kImageDecodeError[] = "Image decode failed";
 
 WebstoreInstallHelper::WebstoreInstallHelper(
     Delegate* delegate,
+    const std::string& id,
     const std::string& manifest,
     const std::string& icon_data,
     const GURL& icon_url,
     net::URLRequestContextGetter* context_getter)
     : delegate_(delegate),
+      id_(id),
       manifest_(manifest),
       icon_base64_data_(icon_data),
       icon_url_(icon_url),
       context_getter_(context_getter),
-      utility_host_(NULL),
       icon_decode_complete_(false),
       manifest_parse_complete_(false),
       parse_error_(Delegate::UNKNOWN_ERROR) {}
@@ -47,13 +52,14 @@ void WebstoreInstallHelper::Start() {
   BrowserThread::PostTask(
       BrowserThread::IO,
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &WebstoreInstallHelper::StartWorkOnIOThread));
+      base::Bind(&WebstoreInstallHelper::StartWorkOnIOThread, this));
 
   if (!icon_url_.is_empty()) {
     CHECK(context_getter_);
-    url_fetcher_.reset(new URLFetcher(icon_url_, URLFetcher::GET, this));
-    url_fetcher_->set_request_context(context_getter_);
+    url_fetcher_.reset(content::URLFetcher::Create(
+        icon_url_, content::URLFetcher::GET, this));
+    url_fetcher_->SetRequestContext(context_getter_);
+    url_fetcher_->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES);
 
     url_fetcher_->Start();
     // We'll get called back in OnURLFetchComplete.
@@ -62,7 +68,9 @@ void WebstoreInstallHelper::Start() {
 
 void WebstoreInstallHelper::StartWorkOnIOThread() {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  utility_host_ = new UtilityProcessHost(this, BrowserThread::IO);
+  utility_host_ =
+      (new UtilityProcessHost(this, BrowserThread::IO))->AsWeakPtr();
+  utility_host_->set_use_linux_zygote(true);
   utility_host_->StartBatchMode();
 
   if (!icon_base64_data_.empty())
@@ -72,16 +80,16 @@ void WebstoreInstallHelper::StartWorkOnIOThread() {
   utility_host_->Send(new ChromeUtilityMsg_ParseJSON(manifest_));
 }
 
-void WebstoreInstallHelper::OnURLFetchComplete(const URLFetcher* source) {
+void WebstoreInstallHelper::OnURLFetchComplete(
+    const content::URLFetcher* source) {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   CHECK(source == url_fetcher_.get());
-  if (source->status().status() != net::URLRequestStatus::SUCCESS ||
-      source->response_code() != 200) {
+  if (source->GetStatus().status() != net::URLRequestStatus::SUCCESS ||
+      source->GetResponseCode() != 200) {
     BrowserThread::PostTask(
         BrowserThread::IO,
         FROM_HERE,
-        NewRunnableMethod(this,
-                          &WebstoreInstallHelper::OnDecodeImageFailed));
+        base::Bind(&WebstoreInstallHelper::OnDecodeImageFailed, this));
   } else {
     std::string response_data;
     source->GetResponseAsString(&response_data);
@@ -91,8 +99,7 @@ void WebstoreInstallHelper::OnURLFetchComplete(const URLFetcher* source) {
     BrowserThread::PostTask(
         BrowserThread::IO,
         FROM_HERE,
-        NewRunnableMethod(this,
-                          &WebstoreInstallHelper::StartFetchedImageDecode));
+        base::Bind(&WebstoreInstallHelper::StartFetchedImageDecode, this));
   }
   url_fetcher_.reset();
 }
@@ -167,20 +174,21 @@ void WebstoreInstallHelper::ReportResultsIfComplete() {
     return;
 
   // The utility_host_ will take care of deleting itself after this call.
-  utility_host_->EndBatchMode();
-  utility_host_ = NULL;
+  if (utility_host_) {
+    utility_host_->EndBatchMode();
+    utility_host_.reset();
+  }
 
   BrowserThread::PostTask(
       BrowserThread::UI,
       FROM_HERE,
-      NewRunnableMethod(this,
-                        &WebstoreInstallHelper::ReportResultFromUIThread));
+      base::Bind(&WebstoreInstallHelper::ReportResultFromUIThread, this));
 }
 
 void WebstoreInstallHelper::ReportResultFromUIThread() {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (error_.empty() && parsed_manifest_.get())
-    delegate_->OnWebstoreParseSuccess(icon_, parsed_manifest_.release());
+    delegate_->OnWebstoreParseSuccess(id_, icon_, parsed_manifest_.release());
   else
-    delegate_->OnWebstoreParseFailure(parse_error_, error_);
+    delegate_->OnWebstoreParseFailure(id_, parse_error_, error_);
 }

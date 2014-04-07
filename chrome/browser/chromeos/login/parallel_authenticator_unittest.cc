@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/bind.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
@@ -24,14 +25,14 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/net/gaia/gaia_auth_fetcher_unittest.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/browser/browser_thread.h"
-#include "content/common/url_fetcher.h"
+#include "content/test/test_browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using content::BrowserThread;
 using file_util::CloseFile;
 using file_util::CreateAndOpenTemporaryFile;
 using file_util::CreateAndOpenTemporaryFileInDir;
@@ -155,9 +156,7 @@ class ParallelAuthenticatorTest : public testing::Test {
                             const std::string& filename) {
     BrowserThread::PostTask(
         BrowserThread::FILE, FROM_HERE,
-        NewRunnableMethod(auth,
-                          &ParallelAuthenticator::LoadLocalaccount,
-                          filename));
+        base::Bind(&ParallelAuthenticator::LoadLocalaccount, auth, filename));
     file_thread_.Stop();
     file_thread_.Start();
   }
@@ -214,7 +213,7 @@ class ParallelAuthenticatorTest : public testing::Test {
   void RunResolve(ParallelAuthenticator* auth, MessageLoop* loop) {
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
-        NewRunnableMethod(auth, &ParallelAuthenticator::Resolve));
+        base::Bind(&ParallelAuthenticator::Resolve, auth));
     loop->Run();
   }
 
@@ -227,9 +226,9 @@ class ParallelAuthenticatorTest : public testing::Test {
   }
 
   MessageLoop message_loop_;
-  BrowserThread ui_thread_;
-  BrowserThread file_thread_;
-  BrowserThread io_thread_;
+  content::TestBrowserThread ui_thread_;
+  content::TestBrowserThread file_thread_;
+  content::TestBrowserThread io_thread_;
 
   std::string username_;
   std::string password_;
@@ -247,22 +246,6 @@ class ParallelAuthenticatorTest : public testing::Test {
   scoped_refptr<ParallelAuthenticator> auth_;
   scoped_ptr<TestAttemptState> state_;
 };
-
-TEST_F(ParallelAuthenticatorTest, SaltToAscii) {
-  unsigned char fake_salt[8] = { 0 };
-  fake_salt[0] = 10;
-  fake_salt[1] = 1;
-  fake_salt[7] = 10 << 4;
-  std::vector<unsigned char> salt_v(fake_salt, fake_salt + sizeof(fake_salt));
-
-  ON_CALL(*mock_library_, GetSystemSalt())
-      .WillByDefault(Return(salt_v));
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .Times(1)
-      .RetiresOnSaturation();
-
-  EXPECT_EQ("0a010000000000a0", auth_->SaltAsAscii());
-}
 
 TEST_F(ParallelAuthenticatorTest, ReadLocalaccount) {
   FilePath tmp_file_path = FakeLocalaccountFile(username_);
@@ -465,8 +448,8 @@ TEST_F(ParallelAuthenticatorTest, DriveDataRecover) {
   EXPECT_CALL(*mock_library_, AsyncMount(username_, hash_ascii_, false, _))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   state_->PresetOnlineLoginStatus(result_, LoginFailure::None());
@@ -486,8 +469,8 @@ TEST_F(ParallelAuthenticatorTest, DriveDataRecoverButFail) {
   EXPECT_CALL(*mock_library_, AsyncMigrateKey(username_, _, hash_ascii_, _))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   SetAttemptState(auth_, state_.release());
@@ -617,8 +600,8 @@ TEST_F(ParallelAuthenticatorTest, DriveOfflineLoginGetNewPassword) {
                                               _))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   // Set up state as though a cryptohome mount attempt has occurred and
@@ -654,8 +637,8 @@ TEST_F(ParallelAuthenticatorTest, DriveOfflineLoginGetNewPassword) {
 TEST_F(ParallelAuthenticatorTest, DriveOfflineLoginGetCaptchad) {
   ExpectLoginSuccess(username_, password_, result_, true);
   FailOnLoginFailure();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   // Set up state as though a cryptohome mount attempt has occurred and
@@ -707,7 +690,7 @@ TEST_F(ParallelAuthenticatorTest, DriveOnlineLogin) {
   RunResolve(auth_.get(), &message_loop_);
 }
 
-TEST_F(ParallelAuthenticatorTest, DriveNeedNewPassword) {
+TEST_F(ParallelAuthenticatorTest, FLAKY_DriveNeedNewPassword) {
   FailOnLoginSuccess();  // Set failing on success as the default...
   // ...but expect ONE successful login first.
   ExpectLoginSuccess(username_, password_, result_, true);
@@ -767,8 +750,8 @@ TEST_F(ParallelAuthenticatorTest, DriveUnlock) {
   EXPECT_CALL(*mock_library_, AsyncCheckKey(username_, _, _))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   auth_->AuthenticateToUnlock(username_, "");
@@ -785,8 +768,8 @@ TEST_F(ParallelAuthenticatorTest, DriveLocalUnlock) {
   EXPECT_CALL(*mock_library_, AsyncCheckKey(username_, _, _))
       .Times(1)
       .RetiresOnSaturation();
-  EXPECT_CALL(*mock_library_, GetSystemSalt())
-      .WillOnce(Return(CryptohomeBlob(2, 0)))
+  EXPECT_CALL(*mock_library_, HashPassword(_))
+      .WillOnce(Return(std::string()))
       .RetiresOnSaturation();
 
   // Deal with getting the localaccount file

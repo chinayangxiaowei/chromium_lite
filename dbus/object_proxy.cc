@@ -29,6 +29,10 @@ std::string GetAbsoluteSignalName(
   return interface_name + "." + signal_name;
 }
 
+// An empty function used for ObjectProxy::EmptyResponseCallback().
+void EmptyResponseCallbackBody(dbus::Response* unused_response) {
+}
+
 }  // namespace
 
 namespace dbus {
@@ -95,14 +99,11 @@ void ObjectProxy::CallMethod(MethodCall* method_call,
   DBusMessage* request_message = method_call->raw_message();
   dbus_message_ref(request_message);
 
-  // Bind() won't compile if we pass request_message as-is since
-  // DBusMessage is an opaque struct which Bind() cannot handle.
-  // Hence we cast it to void* to workaround the issue.
   const base::TimeTicks start_time = base::TimeTicks::Now();
   base::Closure task = base::Bind(&ObjectProxy::StartAsyncMethodCall,
                                   this,
                                   timeout_ms,
-                                  static_cast<void*>(request_message),
+                                  request_message,
                                   callback,
                                   start_time);
   // Wait for the response in the D-Bus thread.
@@ -127,17 +128,27 @@ void ObjectProxy::ConnectToSignal(const std::string& interface_name,
 void ObjectProxy::Detach() {
   bus_->AssertOnDBusThread();
 
-  if (filter_added_)
-    bus_->RemoveFilterFunction(&ObjectProxy::HandleMessageThunk, this);
-
-  for (size_t i = 0; i < match_rules_.size(); ++i) {
-    ScopedDBusError error;
-    bus_->RemoveMatch(match_rules_[i], error.get());
-    if (error.is_set()) {
-      // There is nothing we can do to recover, so just print the error.
-      LOG(ERROR) << "Failed to remove match rule: " << match_rules_[i];
+  if (filter_added_) {
+    if (!bus_->RemoveFilterFunction(&ObjectProxy::HandleMessageThunk, this)) {
+      LOG(ERROR) << "Failed to remove filter function";
     }
   }
+
+  for (std::set<std::string>::iterator iter = match_rules_.begin();
+       iter != match_rules_.end(); ++iter) {
+    ScopedDBusError error;
+    bus_->RemoveMatch(*iter, error.get());
+    if (error.is_set()) {
+      // There is nothing we can do to recover, so just print the error.
+      LOG(ERROR) << "Failed to remove match rule: " << *iter;
+    }
+  }
+  match_rules_.clear();
+}
+
+// static
+ObjectProxy::ResponseCallback ObjectProxy::EmptyResponseCallback() {
+  return base::Bind(&EmptyResponseCallbackBody);
 }
 
 ObjectProxy::OnPendingCallIsCompleteData::OnPendingCallIsCompleteData(
@@ -153,7 +164,7 @@ ObjectProxy::OnPendingCallIsCompleteData::~OnPendingCallIsCompleteData() {
 }
 
 void ObjectProxy::StartAsyncMethodCall(int timeout_ms,
-                                       void* in_request_message,
+                                       DBusMessage* request_message,
                                        ResponseCallback response_callback,
                                        base::TimeTicks start_time) {
   bus_->AssertOnDBusThread();
@@ -161,18 +172,16 @@ void ObjectProxy::StartAsyncMethodCall(int timeout_ms,
   if (!bus_->Connect() || !bus_->SetUpAsyncOperations()) {
     // In case of a failure, run the callback with NULL response, that
     // indicates a failure.
-    Response* response = NULL;
+    DBusMessage* response_message = NULL;
     base::Closure task = base::Bind(&ObjectProxy::RunResponseCallback,
                                     this,
                                     response_callback,
                                     start_time,
-                                    response);
+                                    response_message);
     bus_->PostTaskToOriginThread(FROM_HERE, task);
     return;
   }
 
-  DBusMessage* request_message =
-      static_cast<DBusMessage*>(in_request_message);
   DBusPendingCall* pending_call = NULL;
 
   bus_->SendWithReply(request_message, &pending_call, timeout_ms);
@@ -201,25 +210,20 @@ void ObjectProxy::OnPendingCallIsComplete(DBusPendingCall* pending_call,
   bus_->AssertOnDBusThread();
 
   DBusMessage* response_message = dbus_pending_call_steal_reply(pending_call);
-  // |response_message| will be unref'ed in RunResponseCallback().
-  // Bind() won't compile if we pass response_message as-is.
-  // See CallMethod() for details.
   base::Closure task = base::Bind(&ObjectProxy::RunResponseCallback,
                                   this,
                                   response_callback,
                                   start_time,
-                                  static_cast<void*>(response_message));
+                                  response_message);
   bus_->PostTaskToOriginThread(FROM_HERE, task);
 }
 
 void ObjectProxy::RunResponseCallback(ResponseCallback response_callback,
                                       base::TimeTicks start_time,
-                                      void* in_response_message) {
+                                      DBusMessage* response_message) {
   bus_->AssertOnOriginThread();
-  DBusMessage* response_message =
-      static_cast<DBusMessage*>(in_response_message);
 
-  bool response_callback_called = false;
+  bool method_call_successful = false;
   if (!response_message) {
     // The response is not received.
     response_callback.Run(NULL);
@@ -242,14 +246,14 @@ void ObjectProxy::RunResponseCallback(ResponseCallback response_callback,
         dbus::Response::FromRawMessage(response_message));
     // The response is successfully received.
     response_callback.Run(response.get());
-    response_callback_called = true;
+    method_call_successful = true;
     // Record time spent for the method call. Don't include failures.
     UMA_HISTOGRAM_TIMES("DBus.AsyncMethodCallTime",
                         base::TimeTicks::Now() - start_time);
   }
   // Record if the method call is successful, or not. 1 if successful.
   UMA_HISTOGRAM_ENUMERATION("DBus.AsyncMethodCallSuccess",
-                            response_callback_called,
+                            method_call_successful,
                             kSuccessRatioHistogramMaxValue);
 }
 
@@ -287,22 +291,37 @@ void ObjectProxy::ConnectToSignalInternal(
     // We should add the filter only once. Otherwise, HandleMessage() will
     // be called more than once.
     if (!filter_added_) {
-      bus_->AddFilterFunction(&ObjectProxy::HandleMessageThunk, this);
-      filter_added_ = true;
+      if (bus_->AddFilterFunction(&ObjectProxy::HandleMessageThunk, this)) {
+        filter_added_ = true;
+      } else {
+        LOG(ERROR) << "Failed to add filter function";
+      }
     }
     // Add a match rule so the signal goes through HandleMessage().
+    //
+    // We don't restrict the sender object path to be |object_path_| here,
+    // to make it easy to test D-Bus signal handling with dbus-send, that
+    // uses "/" as the sender object path. We can make the object path
+    // restriction customizable when it becomes necessary.
     const std::string match_rule =
-        base::StringPrintf("type='signal', interface='%s', path='%s'",
-                           interface_name.c_str(),
-                           object_path_.c_str());
-    ScopedDBusError error;
-    bus_->AddMatch(match_rule, error.get());;
-    if (error.is_set()) {
-      LOG(ERROR) << "Failed to add match rule: " << match_rule;
+        base::StringPrintf("type='signal', interface='%s'",
+                           interface_name.c_str());
+
+    // Add the match rule if we don't have it.
+    if (match_rules_.find(match_rule) == match_rules_.end()) {
+      ScopedDBusError error;
+      bus_->AddMatch(match_rule, error.get());;
+      if (error.is_set()) {
+        LOG(ERROR) << "Failed to add match rule: " << match_rule;
+      } else {
+        // Store the match rule, so that we can remove this in Detach().
+        match_rules_.insert(match_rule);
+        // Add the signal callback to the method table.
+        method_table_[absolute_signal_name] = signal_callback;
+        success = true;
+      }
     } else {
-      // Store the match rule, so that we can remove this in Detach().
-      match_rules_.push_back(match_rule);
-      // Add the signal callback to the method table.
+      // We already have the match rule.
       method_table_[absolute_signal_name] = signal_callback;
       success = true;
     }
@@ -341,10 +360,6 @@ DBusHandlerResult ObjectProxy::HandleMessage(
   scoped_ptr<Signal> signal(
       Signal::FromRawMessage(raw_message));
 
-  // The signal is not coming from the remote object we are attaching to.
-  if (signal->GetPath() != object_path_)
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-
   const std::string interface = signal->GetInterface();
   const std::string member = signal->GetMember();
 
@@ -356,6 +371,7 @@ DBusHandlerResult ObjectProxy::HandleMessage(
     // Don't know about the signal.
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
   }
+  VLOG(1) << "Signal received: " << signal->ToString();
 
   const base::TimeTicks start_time = base::TimeTicks::Now();
   if (bus_->HasDBusThread()) {

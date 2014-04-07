@@ -22,9 +22,9 @@ class ExtensionPermissionSet;
 class MessageLoop;
 class Profile;
 class InfoBarDelegate;
-class TabContents;
+class TabContentsWrapper;
 
-// Displays all the UI around extension installation and uninstallation.
+// Displays all the UI around extension installation.
 class ExtensionInstallUI : public ImageLoadingTracker::Observer {
  public:
   enum PromptType {
@@ -46,15 +46,15 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
     ~Prompt();
 
     void SetPermissions(std::vector<string16> permissions);
-    void SetInlineInstallWebstoreData(std::string localized_user_count,
+    void SetInlineInstallWebstoreData(const std::string& localized_user_count,
                                       double average_rating,
                                       int rating_count);
 
     PromptType type() const { return type_; }
 
     // Getters for UI element labels.
-    string16 GetDialogTitle() const;
-    string16 GetHeading(std::string extension_name) const;
+    string16 GetDialogTitle(const Extension* extension) const;
+    string16 GetHeading(const std::string& extension_name) const;
     string16 GetAcceptButtonLabel() const;
     bool HasAbortButtonLabel() const;
     string16 GetAbortButtonLabel() const;
@@ -116,6 +116,11 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
     use_app_installed_bubble_ = use_bubble;
   }
 
+  // Whether or not to show the default UI after completing the installation.
+  void set_skip_post_install_ui(bool is_bundle) {
+    skip_post_install_ui_ = is_bundle;
+  }
+
   // This is called by the installer to verify whether the installation should
   // proceed. This is declared virtual for testing.
   //
@@ -140,7 +145,7 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   virtual void OnInstallSuccess(const Extension* extension, SkBitmap* icon);
 
   // Installation failed. This is declared virtual for testing.
-  virtual void OnInstallFailure(const std::string& error);
+  virtual void OnInstallFailure(const string16& error);
 
   // ImageLoadingTracker::Observer:
   virtual void OnImageLoaded(
@@ -152,6 +157,7 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
 
  protected:
   friend class ExtensionWebstorePrivateApiTest;
+  friend class WebstoreInlineInstallUnpackFailureTest;
 
   // Disables showing UI (ErrorBox, etc.) for install failures. To be used only
   // in tests.
@@ -179,7 +185,7 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   // Returns the delegate to control the browser's info bar. This is
   // within its own function due to its platform-specific nature.
   static InfoBarDelegate* GetNewThemeInstalledInfoBarDelegate(
-      TabContents* tab_contents,
+      TabContentsWrapper* tab_contents,
       const Extension* new_theme,
       const std::string& previous_theme_id,
       bool previous_using_native_theme);
@@ -213,6 +219,9 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   // Whether to show an installed bubble on app install, or use the default
   // action of opening a new tab page.
   bool use_app_installed_bubble_;
+
+  // Whether or not to show the default UI after completing the installation.
+  bool skip_post_install_ui_;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_INSTALL_UI_H_

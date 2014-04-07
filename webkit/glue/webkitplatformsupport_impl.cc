@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 
 #include <vector>
 
+#include "base/bind.h"
 #include "base/debug/trace_event.h"
 #include "base/memory/singleton.h"
 #include "base/message_loop.h"
@@ -28,21 +29,22 @@
 #include "grit/webkit_chromium_resources.h"
 #include "grit/webkit_resources.h"
 #include "grit/webkit_strings.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCookie.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebData.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebCookie.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebData.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrameClient.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginListBuilder.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScreenInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebURL.h"
-#include "webkit/glue/media/audio_decoder.h"
-#include "webkit/plugins/npapi/plugin_instance.h"
-#include "webkit/plugins/webplugininfo.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebVector.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURL.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/websocketstreamhandle_impl.h"
 #include "webkit/glue/webthread_impl.h"
 #include "webkit/glue/weburlloader_impl.h"
+#include "webkit/glue/worker_task_runner.h"
+#include "webkit/media/audio_decoder.h"
+#include "webkit/plugins/npapi/plugin_instance.h"
+#include "webkit/plugins/webplugininfo.h"
 
 #if defined(OS_LINUX)
 #include "v8/include/v8.h"
@@ -210,7 +212,8 @@ WebKitPlatformSupportImpl::WebKitPlatformSupportImpl()
     : main_loop_(MessageLoop::current()),
       shared_timer_func_(NULL),
       shared_timer_fire_time_(0.0),
-      shared_timer_suspended_(0) {
+      shared_timer_suspended_(0),
+      current_thread_slot_(&DestroyCurrentThread) {
 }
 
 WebKitPlatformSupportImpl::~WebKitPlatformSupportImpl() {
@@ -221,11 +224,11 @@ WebThemeEngine* WebKitPlatformSupportImpl::themeEngine() {
 }
 
 WebURLLoader* WebKitPlatformSupportImpl::createURLLoader() {
-  return new WebURLLoaderImpl();
+  return new WebURLLoaderImpl(this);
 }
 
 WebSocketStreamHandle* WebKitPlatformSupportImpl::createSocketStreamHandle() {
-  return new WebSocketStreamHandleImpl();
+  return new WebSocketStreamHandleImpl(this);
 }
 
 WebString WebKitPlatformSupportImpl::userAgent(const WebURL& url) {
@@ -288,6 +291,10 @@ void WebKitPlatformSupportImpl::histogramEnumeration(
   counter->Add(sample);
 }
 
+bool WebKitPlatformSupportImpl::isTraceEventEnabled() const {
+  return !!*base::debug::TraceLog::GetCategoryEnabled("webkit");
+}
+
 void WebKitPlatformSupportImpl::traceEventBegin(const char* name, void* id,
                                                 const char* extra) {
   TRACE_EVENT_BEGIN_ETW(name, id, extra);
@@ -298,9 +305,33 @@ void WebKitPlatformSupportImpl::traceEventEnd(const char* name, void* id,
   TRACE_EVENT_END_ETW(name, id, extra);
 }
 
+const unsigned char* WebKitPlatformSupportImpl::getTraceCategoryEnabledFlag(
+    const char* category_name) {
+  return TRACE_EVENT_API_GET_CATEGORY_ENABLED(category_name);
+}
+
+int WebKitPlatformSupportImpl::addTraceEvent(
+    char phase,
+    const unsigned char* category_enabled,
+    const char* name,
+    unsigned long long id,
+    int num_args,
+    const char** arg_names,
+    const unsigned char* arg_types,
+    const unsigned long long* arg_values,
+    int threshold_begin_id,
+    long long threshold,
+    unsigned char flags) {
+  return TRACE_EVENT_API_ADD_TRACE_EVENT(phase, category_enabled, name, id,
+                                         num_args, arg_names, arg_types,
+                                         arg_values, threshold_begin_id,
+                                         threshold, flags);
+}
+
 namespace {
 
-WebData loadAudioSpatializationResource(const char* name) {
+WebData loadAudioSpatializationResource(WebKitPlatformSupportImpl* platform,
+                                        const char* name) {
 #ifdef IDR_AUDIO_SPATIALIZATION_T000_P000
   const size_t kExpectedSpatializationNameLength = 31;
   if (strlen(name) != kExpectedSpatializationNameLength) {
@@ -340,7 +371,7 @@ WebData loadAudioSpatializationResource(const char* name) {
       is_resource_index_good) {
     const int kFirstAudioResourceIndex = IDR_AUDIO_SPATIALIZATION_T000_P000;
     base::StringPiece resource =
-        GetDataResource(kFirstAudioResourceIndex + resource_index);
+        platform->GetDataResource(kFirstAudioResourceIndex + resource_index);
     return WebData(resource.data(), resource.size());
   }
 #endif  // IDR_AUDIO_SPATIALIZATION_T000_P000
@@ -428,7 +459,7 @@ WebData WebKitPlatformSupportImpl::loadResource(const char* name) {
 
   // Check the name prefix to see if it's an audio resource.
   if (StartsWithASCII(name, "IRC_Composite", true))
-    return loadAudioSpatializationResource(name);
+    return loadAudioSpatializationResource(this, name);
 
   for (size_t i = 0; i < arraysize(kDataResources); ++i) {
     if (!strcmp(name, kDataResources[i].name)) {
@@ -444,10 +475,10 @@ WebData WebKitPlatformSupportImpl::loadResource(const char* name) {
 bool WebKitPlatformSupportImpl::loadAudioResource(
     WebKit::WebAudioBus* destination_bus, const char* audio_file_data,
     size_t data_size, double sample_rate) {
-  return DecodeAudioFileData(destination_bus,
-                             audio_file_data,
-                             data_size,
-                             sample_rate);
+  return webkit_media::DecodeAudioFileData(destination_bus,
+                                           audio_file_data,
+                                           data_size,
+                                           sample_rate);
 }
 
 WebString WebKitPlatformSupportImpl::queryLocalizedString(
@@ -538,11 +569,27 @@ void WebKitPlatformSupportImpl::stopSharedTimer() {
 
 void WebKitPlatformSupportImpl::callOnMainThread(
     void (*func)(void*), void* context) {
-  main_loop_->PostTask(FROM_HERE, NewRunnableFunction(func, context));
+  main_loop_->PostTask(FROM_HERE, base::Bind(func, context));
 }
 
 WebKit::WebThread* WebKitPlatformSupportImpl::createThread(const char* name) {
   return new WebThreadImpl(name);
+}
+
+WebKit::WebThread* WebKitPlatformSupportImpl::currentThread() {
+  WebThreadImplForMessageLoop* thread =
+      static_cast<WebThreadImplForMessageLoop*>(current_thread_slot_.Get());
+  if (thread)
+    return (thread);
+
+  scoped_refptr<base::MessageLoopProxy> message_loop =
+      base::MessageLoopProxy::current();
+  if (!message_loop)
+    return NULL;
+
+  thread = new WebThreadImplForMessageLoop(message_loop);
+  current_thread_slot_.Set(thread);
+  return thread;
 }
 
 base::PlatformFile WebKitPlatformSupportImpl::databaseOpenFile(
@@ -574,8 +621,7 @@ WebKit::WebString WebKitPlatformSupportImpl::signedPublicKeyAndChallengeString(
     unsigned key_size_index,
     const WebKit::WebString& challenge,
     const WebKit::WebURL& url) {
-  NOTREACHED();
-  return WebKit::WebString();
+  return WebKit::WebString("");
 }
 
 #if defined(OS_LINUX)
@@ -604,7 +650,7 @@ static size_t memoryUsageMBMac() {
       ProcessMetrics::CreateProcessMetrics(base::GetCurrentProcessHandle(),
                                            NULL);
   DCHECK(process_metrics);
-  return process_metrics->GetPagefileUsage() >> 20;
+  return process_metrics->GetWorkingSetSize() >> 20;
 }
 #endif
 
@@ -655,6 +701,25 @@ void WebKitPlatformSupportImpl::ResumeSharedTimer() {
     setSharedTimerFireInterval(
         monotonicallyIncreasingTime() - shared_timer_fire_time_);
   }
+}
+
+// static
+void WebKitPlatformSupportImpl::DestroyCurrentThread(void* thread) {
+  WebThreadImplForMessageLoop* impl =
+      static_cast<WebThreadImplForMessageLoop*>(thread);
+  delete impl;
+}
+
+void WebKitPlatformSupportImpl::didStartWorkerRunLoop(
+    const WebKit::WebWorkerRunLoop& runLoop) {
+  WorkerTaskRunner* worker_task_runner = WorkerTaskRunner::Instance();
+  worker_task_runner->OnWorkerRunLoopStarted(runLoop);
+}
+
+void WebKitPlatformSupportImpl::didStopWorkerRunLoop(
+    const WebKit::WebWorkerRunLoop& runLoop) {
+  WorkerTaskRunner* worker_task_runner = WorkerTaskRunner::Instance();
+  worker_task_runner->OnWorkerRunLoopStopped(runLoop);
 }
 
 }  // namespace webkit_glue

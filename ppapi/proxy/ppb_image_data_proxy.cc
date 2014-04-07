@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,49 +18,13 @@
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/shared_impl/host_resource.h"
 #include "ppapi/shared_impl/resource.h"
+#include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/thunk.h"
 #include "skia/ext/platform_canvas.h"
 #include "ui/gfx/surface/transport_dib.h"
 
 namespace ppapi {
 namespace proxy {
-
-namespace {
-
-InterfaceProxy* CreateImageDataProxy(Dispatcher* dispatcher,
-                                     const void* target_interface) {
-  return new PPB_ImageData_Proxy(dispatcher, target_interface);
-}
-
-}  // namespace
-
-// PPB_ImageData_Proxy ---------------------------------------------------------
-
-PPB_ImageData_Proxy::PPB_ImageData_Proxy(Dispatcher* dispatcher,
-                                         const void* target_interface)
-    : InterfaceProxy(dispatcher, target_interface) {
-}
-
-PPB_ImageData_Proxy::~PPB_ImageData_Proxy() {
-}
-
-// static
-const InterfaceProxy::Info* PPB_ImageData_Proxy::GetInfo() {
-  static const Info info = {
-    thunk::GetPPB_ImageData_Thunk(),
-    PPB_IMAGEDATA_INTERFACE,
-    INTERFACE_ID_PPB_IMAGE_DATA,
-    false,
-    &CreateImageDataProxy,
-  };
-  return &info;
-}
-
-bool PPB_ImageData_Proxy::OnMessageReceived(const IPC::Message& msg) {
-  return false;
-}
-
-// ImageData -------------------------------------------------------------------
 
 ImageData::ImageData(const HostResource& resource,
                      const PP_ImageDataDesc& desc,
@@ -113,9 +77,13 @@ int32_t ImageData::GetSharedMemory(int* /* handle */,
   return PP_ERROR_NOACCESS;
 }
 
+skia::PlatformCanvas* ImageData::GetPlatformCanvas() {
+  return mapped_canvas_.get();
+}
+
 #if defined(OS_WIN)
 const ImageHandle ImageData::NullHandle = NULL;
-#elif defined(OS_MACOSX)
+#elif defined(OS_MACOSX) || defined(OS_ANDROID)
 const ImageHandle ImageData::NullHandle = ImageHandle();
 #else
 const ImageHandle ImageData::NullHandle = 0;
@@ -124,11 +92,94 @@ const ImageHandle ImageData::NullHandle = 0;
 ImageHandle ImageData::HandleFromInt(int32_t i) {
 #if defined(OS_WIN)
     return reinterpret_cast<ImageHandle>(i);
-#elif defined(OS_MACOSX)
+#elif defined(OS_MACOSX) || defined(OS_ANDROID)
     return ImageHandle(i, false);
 #else
     return static_cast<ImageHandle>(i);
 #endif
+}
+
+PPB_ImageData_Proxy::PPB_ImageData_Proxy(Dispatcher* dispatcher)
+    : InterfaceProxy(dispatcher) {
+}
+
+PPB_ImageData_Proxy::~PPB_ImageData_Proxy() {
+}
+
+// static
+PP_Resource PPB_ImageData_Proxy::CreateProxyResource(PP_Instance instance,
+                                                     PP_ImageDataFormat format,
+                                                     const PP_Size& size,
+                                                     PP_Bool init_to_zero) {
+  PluginDispatcher* dispatcher = PluginDispatcher::GetForInstance(instance);
+  if (!dispatcher)
+    return 0;
+
+  HostResource result;
+  std::string image_data_desc;
+  ImageHandle image_handle = ImageData::NullHandle;
+  dispatcher->Send(new PpapiHostMsg_PPBImageData_Create(
+      kApiID, instance, format, size, init_to_zero,
+      &result, &image_data_desc, &image_handle));
+
+  if (result.is_null() || image_data_desc.size() != sizeof(PP_ImageDataDesc))
+    return 0;
+
+  // We serialize the PP_ImageDataDesc just by copying to a string.
+  PP_ImageDataDesc desc;
+  memcpy(&desc, image_data_desc.data(), sizeof(PP_ImageDataDesc));
+
+  return (new ImageData(result, desc, image_handle))->GetReference();
+}
+
+bool PPB_ImageData_Proxy::OnMessageReceived(const IPC::Message& msg) {
+  bool handled = true;
+  IPC_BEGIN_MESSAGE_MAP(PPB_ImageData_Proxy, msg)
+    IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBImageData_Create, OnHostMsgCreate)
+    IPC_MESSAGE_UNHANDLED(handled = false)
+  IPC_END_MESSAGE_MAP()
+  return handled;
+}
+
+void PPB_ImageData_Proxy::OnHostMsgCreate(PP_Instance instance,
+                                          int32_t format,
+                                          const PP_Size& size,
+                                          PP_Bool init_to_zero,
+                                          HostResource* result,
+                                          std::string* image_data_desc,
+                                          ImageHandle* result_image_handle) {
+  *result_image_handle = ImageData::NullHandle;
+
+  thunk::EnterResourceCreation enter(instance);
+  if (enter.failed())
+    return;
+
+  PP_Resource resource = enter.functions()->CreateImageData(
+      instance, static_cast<PP_ImageDataFormat>(format), size, init_to_zero);
+  if (!resource)
+    return;
+  result->SetHostResource(instance, resource);
+
+  // Get the description, it's just serialized as a string.
+  thunk::EnterResourceNoLock<thunk::PPB_ImageData_API> enter_resource(
+      resource, false);
+  PP_ImageDataDesc desc;
+  if (enter_resource.object()->Describe(&desc) == PP_TRUE) {
+    image_data_desc->resize(sizeof(PP_ImageDataDesc));
+    memcpy(&(*image_data_desc)[0], &desc, sizeof(PP_ImageDataDesc));
+  }
+
+  // Get the shared memory handle.
+  uint32_t byte_count = 0;
+  int32_t handle = 0;
+  if (enter_resource.object()->GetSharedMemory(&handle, &byte_count) == PP_OK) {
+#if defined(OS_WIN)
+    ImageHandle ih = ImageData::HandleFromInt(handle);
+    *result_image_handle = dispatcher()->ShareHandleWithRemote(ih, false);
+#else
+    *result_image_handle = ImageData::HandleFromInt(handle);
+#endif
+  }
 }
 
 }  // namespace proxy

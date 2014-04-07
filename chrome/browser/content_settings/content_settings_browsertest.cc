@@ -4,6 +4,7 @@
 
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/profiles/profile.h"
@@ -11,6 +12,7 @@
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/web_contents.h"
 #include "net/test/test_server.h"
 
 // Regression test for http://crbug.com/63649.
@@ -19,14 +21,14 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, RedirectLoopCookies) {
 
   GURL test_url = test_server()->GetURL("files/redirect-loop.html");
 
-  browser()->profile()->GetHostContentSettingsMap()->SetDefaultContentSetting(
-      CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_BLOCK);
+  CookieSettings::GetForProfile(browser()->profile())->
+      SetDefaultCookieSetting(CONTENT_SETTING_BLOCK);
 
   ui_test_utils::NavigateToURL(browser(), test_url);
 
   TabContentsWrapper* tab_contents = browser()->GetSelectedTabContentsWrapper();
   ASSERT_EQ(UTF8ToUTF16(test_url.spec() + " failed to load"),
-            tab_contents->tab_contents()->GetTitle());
+            tab_contents->web_contents()->GetTitle());
 
   EXPECT_TRUE(tab_contents->content_settings()->IsContentBlocked(
       CONTENT_SETTINGS_TYPE_COOKIES));
@@ -41,7 +43,7 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, ContentSettingsBlockDataURLs) {
   ui_test_utils::NavigateToURL(browser(), url);
 
   TabContentsWrapper* tab_contents = browser()->GetSelectedTabContentsWrapper();
-  ASSERT_EQ(UTF8ToUTF16("Data URL"), tab_contents->tab_contents()->GetTitle());
+  ASSERT_EQ(UTF8ToUTF16("Data URL"), tab_contents->web_contents()->GetTitle());
 
   EXPECT_TRUE(tab_contents->content_settings()->IsContentBlocked(
       CONTENT_SETTINGS_TYPE_JAVASCRIPT));
@@ -60,8 +62,8 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, RedirectCrossOrigin) {
       host_port.port()));
   GURL test_url = test_server()->GetURL("server-redirect?" + redirect);
 
-  browser()->profile()->GetHostContentSettingsMap()->SetDefaultContentSetting(
-      CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_BLOCK);
+  CookieSettings::GetForProfile(browser()->profile())->
+      SetDefaultCookieSetting(CONTENT_SETTING_BLOCK);
 
   ui_test_utils::NavigateToURL(browser(), test_url);
 

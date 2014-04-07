@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/memory/ref_counted.h"
@@ -11,9 +12,10 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/tab_contents/tab_contents.h"
-#include "content/common/content_switches.h"
+#include "content/public/common/content_switches.h"
 #include "webkit/quota/quota_manager.h"
 
+using content::BrowserThread;
 using quota::QuotaManager;
 
 // This browser test is aimed towards exercising the FileAPI bindings and
@@ -22,10 +24,6 @@ class FileSystemBrowserTest : public InProcessBrowserTest {
  public:
   FileSystemBrowserTest() {
     EnableDOMAutomation();
-  }
-
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    command_line->AppendSwitch(switches::kAllowFileAccessFromFiles);
   }
 
   GURL testUrl(const FilePath& file_path) {
@@ -42,11 +40,11 @@ class FileSystemBrowserTest : public InProcessBrowserTest {
     ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
         the_browser, test_url, 2);
     LOG(INFO) << "Navigation done.";
-    std::string result = the_browser->GetSelectedTabContents()->GetURL().ref();
+    std::string result = the_browser->GetSelectedWebContents()->GetURL().ref();
     if (result != "pass") {
       std::string js_result;
       ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractString(
-          the_browser->GetSelectedTabContents()->render_view_host(), L"",
+          the_browser->GetSelectedWebContents()->GetRenderViewHost(), L"",
           L"window.domAutomationController.send(getLog())", &js_result));
       FAIL() << "Failed: " << js_result;
     }
@@ -63,28 +61,16 @@ class FileSystemBrowserTestWithLowQuota : public FileSystemBrowserTest {
         kTemporaryStorageQuotaMaxSize, browser()->profile()->GetQuotaManager());
   }
 
-  class SetTempQuotaCallback : public quota::QuotaCallback {
-   public:
-    void Run(quota::QuotaStatusCode, quota::StorageType, int64) {
-      DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-    }
-
-    void RunWithParams(const Tuple3<quota::QuotaStatusCode,
-                                    quota::StorageType,
-                                    int64>& params) {
-      Run(params.a, params.b, params.c);
-    }
-  };
-
   static void SetTempQuota(int64 bytes, scoped_refptr<QuotaManager> qm) {
     if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
-      BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-          NewRunnableFunction(&FileSystemBrowserTestWithLowQuota::SetTempQuota,
-                              bytes, qm));
+      BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE,
+          base::Bind(&FileSystemBrowserTestWithLowQuota::SetTempQuota, bytes,
+                     qm));
       return;
     }
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-    qm->SetTemporaryGlobalQuota(bytes, new SetTempQuotaCallback);
+    qm->SetTemporaryGlobalOverrideQuota(bytes, quota::QuotaCallback());
     // Don't return until the quota has been set.
     scoped_refptr<base::ThreadTestHelper> helper(
         new base::ThreadTestHelper(
