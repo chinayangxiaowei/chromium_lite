@@ -73,7 +73,7 @@ class HttpNetworkLayerTest : public PlatformTest {
     request_info.load_flags = LOAD_NORMAL;
 
     scoped_ptr<HttpTransaction> trans;
-    int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+    int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
     EXPECT_EQ(OK, rv);
 
     rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
@@ -278,28 +278,28 @@ class HttpNetworkLayerTest : public PlatformTest {
 
 TEST_F(HttpNetworkLayerTest, CreateAndDestroy) {
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
   EXPECT_TRUE(trans.get() != NULL);
 }
 
 TEST_F(HttpNetworkLayerTest, Suspend) {
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 
   trans.reset();
 
   factory_->OnSuspend();
 
-  rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(ERR_NETWORK_IO_SUSPENDED, rv);
 
   ASSERT_TRUE(trans == NULL);
 
   factory_->OnResume();
 
-  rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 }
 
@@ -329,7 +329,7 @@ TEST_F(HttpNetworkLayerTest, GET) {
   request_info.load_flags = LOAD_NORMAL;
 
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
@@ -540,7 +540,7 @@ TEST_F(HttpNetworkLayerTest, ServerFallbackOn5xxError) {
     request_info.load_flags = LOAD_NORMAL;
 
     scoped_ptr<HttpTransaction> trans;
-    int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+    int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
     EXPECT_EQ(OK, rv);
 
     rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
@@ -593,7 +593,7 @@ TEST_F(HttpNetworkLayerTest, ProxyBypassIgnoredOnDirectConnectionPac) {
   request_info.load_flags = LOAD_NORMAL;
 
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
@@ -623,7 +623,7 @@ TEST_F(HttpNetworkLayerTest, ServerFallbackWithProxyTimedBypass) {
     MockRead("HTTP/1.1 200 OK\r\n"
              "Connection: keep-alive\r\n"
              "Chrome-Proxy: bypass=86400\r\n"
-             "Via: 1.1 Chrome Compression Proxy\r\n\r\n"),
+             "Via: 1.1 Chrome-Compression-Proxy\r\n\r\n"),
     MockRead("Bypass message"),
     MockRead(SYNCHRONOUS, OK),
   };
@@ -699,7 +699,28 @@ TEST_F(HttpNetworkLayerTest, NoServerFallbackWithChainedViaHeader) {
   MockRead data_reads[] = {
     MockRead("HTTP/1.1 200 OK\r\n"
              "Connection: keep-alive\r\n"
-             "Via: 1.1 Chrome Compression Proxy, 1.0 some-other-proxy\r\n\r\n"),
+             "Via: 1.1 Chrome-Compression-Proxy, 1.0 some-other-proxy\r\n\r\n"),
+    MockRead("Bypass message"),
+    MockRead(SYNCHRONOUS, OK),
+  };
+
+  TestProxyFallbackByMethodWithMockReads(chrome_proxy, std::string(),
+                                         data_reads, arraysize(data_reads),
+                                         "GET", "Bypass message", false, 0);
+}
+
+TEST_F(HttpNetworkLayerTest, NoServerFallbackWithDeprecatedViaHeader) {
+  // Verify that Chrome will not be induced to bypass the Chrome proxy when
+  // the deprecated Chrome Proxy via header is present, even if that header is
+  // chained.
+  std::string chrome_proxy = GetChromeProxy();
+  ConfigureTestDependencies(ProxyService::CreateFixedFromPacResult(
+      "PROXY " + chrome_proxy + "; PROXY good:8080"));
+
+  MockRead data_reads[] = {
+    MockRead("HTTP/1.1 200 OK\r\n"
+             "Connection: keep-alive\r\n"
+             "Via: 1.1 Chrome Compression Proxy\r\n\r\n"),
     MockRead("Bypass message"),
     MockRead(SYNCHRONOUS, OK),
   };
@@ -724,7 +745,7 @@ TEST_F(HttpNetworkLayerTest, ServerFallbackWithProxyTimedBypassAll) {
     MockRead("HTTP/1.1 200 OK\r\n"
              "Connection: keep-alive\r\n"
              "Chrome-Proxy: block=86400\r\n"
-             "Via: 1.1 Chrome Compression Proxy\r\n\r\n"),
+             "Via: 1.1 Chrome-Compression-Proxy\r\n\r\n"),
     MockRead("Bypass message"),
     MockRead(SYNCHRONOUS, OK),
   };
@@ -763,7 +784,7 @@ TEST_F(HttpNetworkLayerTest, NetworkVerified) {
   request_info.load_flags = LOAD_NORMAL;
 
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
@@ -796,7 +817,7 @@ TEST_F(HttpNetworkLayerTest, NetworkUnVerified) {
   request_info.load_flags = LOAD_NORMAL;
 
   scoped_ptr<HttpTransaction> trans;
-  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans, NULL);
+  int rv = factory_->CreateTransaction(DEFAULT_PRIORITY, &trans);
   EXPECT_EQ(OK, rv);
 
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());

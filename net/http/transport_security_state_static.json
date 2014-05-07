@@ -184,6 +184,7 @@
     { "name": "goto.google.com", "include_subdomains": true, "mode": "force-https", "pins": "google" },
     { "name": "cloud.google.com", "include_subdomains": true, "mode": "force-https", "pins": "google" },
     { "name": "glass.google.com", "include_subdomains": true, "mode": "force-https", "pins": "google" },
+    { "name": "admin.google.com", "include_subdomains": true, "mode": "force-https", "pins": "google" },
     // play.google.com doesn't have include_subdomains because of crbug.com/327834.
     { "name": "play.google.com", "mode": "force-https", "pins": "google" },
 
@@ -677,6 +678,27 @@
     { "name": "api.xero.com", "include_subdomains": true, "mode": "force-https" },
     { "name": "eff.org", "include_subdomains": true, "mode": "force-https" },
     { "name": "mail.de", "include_subdomains": true, "mode": "force-https" },
+    { "name": "passport.yandex.ru", "mode": "force-https" },
+    { "name": "passport.yandex.com", "mode": "force-https" },
+    { "name": "passport.yandex.ua", "mode": "force-https" },
+    { "name": "passport.yandex.by", "mode": "force-https" },
+    { "name": "passport.yandex.kz", "mode": "force-https" },
+    { "name": "passport.yandex.com.tr", "mode": "force-https" },
+    { "name": "mnsure.org", "include_subdomains": true, "mode": "force-https" },
+    { "name": "getcloak.com", "mode": "force-https" },
+    { "name": "www.getcloak.com", "mode": "force-https" },
+    { "name": "matteomarescotti.name", "include_subdomains": true, "mode": "force-https" },
+    { "name": "www.heliosnet.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "opsmate.com", "mode": "force-https" },
+    { "name": "www.opsmate.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "f-droid.org", "include_subdomains": true, "mode": "force-https" },
+    { "name": "www.evernote.com", "mode": "force-https" },
+    { "name": "app.yinxiang.com", "mode": "force-https" },
+    { "name": "neilwynne.com", "mode": "force-https" },
+    { "name": "calyxinstitute.org", "mode": "force-https" },
+    { "name": "www.calyxinstitute.org", "mode": "force-https" },
+    { "name": "blacklane.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "boxcryptor.com", "include_subdomains": true, "mode": "force-https" },
 
     // Entries that are only valid if the client supports SNI.
     { "name": "gmail.com", "mode": "force-https", "pins": "google", "snionly": true },
@@ -684,6 +706,7 @@
     { "name": "www.gmail.com", "mode": "force-https", "pins": "google", "snionly": true },
     { "name": "www.googlemail.com", "mode": "force-https", "pins": "google", "snionly": true },
     { "name": "google-analytics.com", "include_subdomains": true, "pins": "google", "snionly": true },
-    { "name": "googlegroups.com", "include_subdomains": true, "pins": "google", "snionly": true }
+    { "name": "googlegroups.com", "include_subdomains": true, "pins": "google", "snionly": true },
+    { "name": "mykolab.com", "include_subdomains": true, "mode": "force-https", "snionly": true }
   ]
 }

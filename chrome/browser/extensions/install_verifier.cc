@@ -13,12 +13,13 @@
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
-#include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/install_signer.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/common/content_switches.h"
+#include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/pref_names.h"
 #include "extensions/common/manifest.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -129,8 +130,16 @@ void LogInitResultHistogram(InitResult result) {
 }
 
 bool FromStore(const Extension& extension) {
-  bool updates_from_store = ManifestURL::UpdatesFromGallery(&extension);
-  return extension.from_webstore() || updates_from_store;
+  if (extension.from_webstore() || ManifestURL::UpdatesFromGallery(&extension))
+    return true;
+
+  // If an extension has no update url, our autoupdate code will ask the
+  // webstore about it (to aid in migrating to the webstore from self-hosting
+  // or sideloading based installs). So we want to do verification checks on
+  // such extensions too so that we don't accidentally disable old installs of
+  // extensions that did migrate to the webstore.
+  return (ManifestURL::GetUpdateURL(&extension).is_empty() &&
+          Manifest::IsAutoUpdateableLocation(extension.location()));
 }
 
 bool CanUseExtensionApis(const Extension& extension) {
@@ -150,7 +159,7 @@ void InstallVerifier::Init() {
   UMA_HISTOGRAM_ENUMERATION("ExtensionInstallVerifier.ActualStatus",
                             GetStatus(), VERIFY_STATUS_MAX);
 
-  const DictionaryValue* pref = prefs_->GetInstallSignature();
+  const base::DictionaryValue* pref = prefs_->GetInstallSignature();
   if (pref) {
     scoped_ptr<InstallSignature> signature_from_prefs =
         InstallSignature::FromValue(*pref);
@@ -180,6 +189,11 @@ base::Time InstallVerifier::SignatureTimestamp() {
     return signature_->timestamp;
   else
     return base::Time();
+}
+
+bool InstallVerifier::IsKnownId(const std::string& id) {
+  return signature_.get() && (ContainsKey(signature_->ids, id) ||
+                              ContainsKey(signature_->invalid_ids, id));
 }
 
 void InstallVerifier::Add(const std::string& id,
@@ -237,7 +251,8 @@ void InstallVerifier::RemoveMany(const ExtensionIdSet& ids) {
 
   bool found_any = false;
   for (ExtensionIdSet::const_iterator i = ids.begin(); i != ids.end(); ++i) {
-    if (ContainsKey(signature_->ids, *i)) {
+    if (ContainsKey(signature_->ids, *i) ||
+        ContainsKey(signature_->invalid_ids, *i)) {
       found_any = true;
       break;
     }
@@ -272,6 +287,8 @@ enum MustRemainDisabledOutcome {
   NOT_VERIFIED_BUT_NOT_ENFORCING,
   NOT_VERIFIED,
   NOT_VERIFIED_BUT_INSTALL_TIME_NEWER_THAN_SIGNATURE,
+  NOT_VERIFIED_BUT_UNKNOWN_ID,
+  COMPONENT,
 
   // This is used in histograms - do not remove or reorder entries above! Also
   // the "MAX" item below should always be the last element.
@@ -288,12 +305,17 @@ void MustRemainDisabledHistogram(MustRemainDisabledOutcome outcome) {
 bool InstallVerifier::MustRemainDisabled(const Extension* extension,
                                          Extension::DisableReason* reason,
                                          base::string16* error) const {
+  CHECK(extension);
   if (!CanUseExtensionApis(*extension)) {
     MustRemainDisabledHistogram(NOT_EXTENSION);
     return false;
   }
   if (Manifest::IsUnpackedLocation(extension->location())) {
     MustRemainDisabledHistogram(UNPACKED);
+    return false;
+  }
+  if (extension->location() == Manifest::COMPONENT) {
+    MustRemainDisabledHistogram(COMPONENT);
     return false;
   }
   if (AllowedByEnterprisePolicy(extension->id())) {
@@ -317,8 +339,8 @@ bool InstallVerifier::MustRemainDisabled(const Extension* extension,
     // get a signature.
     outcome = NO_SIGNATURE;
   } else if (!IsVerified(extension->id())) {
-    if (WasInstalledAfterSignature(extension->id())) {
-      outcome = NOT_VERIFIED_BUT_INSTALL_TIME_NEWER_THAN_SIGNATURE;
+    if (!ContainsKey(signature_->invalid_ids, extension->id())) {
+      outcome = NOT_VERIFIED_BUT_UNKNOWN_ID;
     } else {
       verified = false;
       outcome = NOT_VERIFIED;
@@ -354,6 +376,8 @@ void InstallVerifier::GarbageCollect() {
   }
   CHECK(signature_.get());
   ExtensionIdSet leftovers = signature_->ids;
+  leftovers.insert(signature_->invalid_ids.begin(),
+                   signature_->invalid_ids.end());
   ExtensionIdList all_ids;
   prefs_->GetExtensions(&all_ids);
   for (ExtensionIdList::const_iterator i = all_ids.begin();
@@ -369,16 +393,16 @@ void InstallVerifier::GarbageCollect() {
 
 bool InstallVerifier::AllowedByEnterprisePolicy(const std::string& id) const {
   PrefService* pref_service = prefs_->pref_service();
-  if (pref_service->IsManagedPreference(prefs::kExtensionInstallAllowList)) {
+  if (pref_service->IsManagedPreference(pref_names::kInstallAllowList)) {
     const base::ListValue* whitelist =
-        pref_service->GetList(prefs::kExtensionInstallAllowList);
+        pref_service->GetList(pref_names::kInstallAllowList);
     base::StringValue id_value(id);
     if (whitelist && whitelist->Find(id_value) != whitelist->end())
       return true;
   }
-  if (pref_service->IsManagedPreference(prefs::kExtensionInstallForceList)) {
+  if (pref_service->IsManagedPreference(pref_names::kInstallForceList)) {
     const base::DictionaryValue* forcelist =
-        pref_service->GetDictionary(prefs::kExtensionInstallForceList);
+        pref_service->GetDictionary(pref_names::kInstallForceList);
     if (forcelist && forcelist->HasKey(id))
       return true;
   }
@@ -388,19 +412,6 @@ bool InstallVerifier::AllowedByEnterprisePolicy(const std::string& id) const {
 bool InstallVerifier::IsVerified(const std::string& id) const {
   return ((signature_.get() && ContainsKey(signature_->ids, id)) ||
           ContainsKey(provisional_, id));
-}
-
-bool InstallVerifier::WasInstalledAfterSignature(const std::string& id) const {
-  if (!signature_.get() || signature_->timestamp.is_null())
-    return true;
-
-  base::Time install_time = prefs_->GetInstallTime(id);
-  // If the extension install time is in the future, just assume it isn't
-  // newer than the signature. (Either the clock went backwards, or
-  // an attacker changed the install time in the preferences).
-  if (install_time >= base::Time::Now())
-    return false;
-  return install_time > signature_->timestamp;
 }
 
 void InstallVerifier::BeginFetch() {
@@ -439,7 +450,7 @@ void InstallVerifier::SaveToPrefs() {
     DVLOG(1) << "SaveToPrefs - saving NULL";
     prefs_->SetInstallSignature(NULL);
   } else {
-    DictionaryValue pref;
+    base::DictionaryValue pref;
     signature_->ToValue(&pref);
     if (VLOG_IS_ON(1)) {
       DVLOG(1) << "SaveToPrefs - saving";

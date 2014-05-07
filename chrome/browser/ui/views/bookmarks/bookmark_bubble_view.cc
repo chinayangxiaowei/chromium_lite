@@ -33,7 +33,7 @@
 #include "ui/views/layout/layout_constants.h"
 #include "ui/views/widget/widget.h"
 
-using content::UserMetricsAction;
+using base::UserMetricsAction;
 using views::ColumnSet;
 using views::GridLayout;
 
@@ -134,19 +134,19 @@ void BookmarkBubbleView::Init() {
           newly_bookmarked_ ? IDS_BOOKMARK_BUBBLE_PAGE_BOOKMARKED :
                               IDS_BOOKMARK_BUBBLE_PAGE_BOOKMARK));
   ui::ResourceBundle* rb = &ui::ResourceBundle::GetSharedInstance();
-  title_label->SetFont(rb->GetFont(ui::ResourceBundle::MediumFont));
+  title_label->SetFontList(rb->GetFontList(ui::ResourceBundle::MediumFont));
 
   remove_button_ = new views::LabelButton(this, l10n_util::GetStringUTF16(
       IDS_BOOKMARK_BUBBLE_REMOVE_BOOKMARK));
-  remove_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  remove_button_->SetStyle(views::Button::STYLE_BUTTON);
 
   edit_button_ = new views::LabelButton(
       this, l10n_util::GetStringUTF16(IDS_BOOKMARK_BUBBLE_OPTIONS));
-  edit_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  edit_button_->SetStyle(views::Button::STYLE_BUTTON);
 
   close_button_ = new views::LabelButton(
       this, l10n_util::GetStringUTF16(IDS_DONE));
-  close_button_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  close_button_->SetStyle(views::Button::STYLE_BUTTON);
   close_button_->SetIsDefault(true);
 
   views::Label* combobox_label = new views::Label(
@@ -308,7 +308,7 @@ void BookmarkBubbleView::ButtonPressed(views::Button* sender,
   HandleButtonPressed(sender);
 }
 
-void BookmarkBubbleView::OnSelectedIndexChanged(views::Combobox* combobox) {
+void BookmarkBubbleView::OnPerformAction(views::Combobox* combobox) {
   if (combobox->selected_index() + 1 == parent_model_.GetItemCount()) {
     content::RecordAction(UserMetricsAction("BookmarkBubble_EditFromCombobox"));
     ShowEditor();

@@ -124,7 +124,6 @@ class ResourceSchedulerTest : public testing::Test {
  protected:
   ResourceSchedulerTest()
       : next_request_id_(0),
-        message_loop_(base::MessageLoop::TYPE_IO),
         ui_thread_(BrowserThread::UI, &message_loop_),
         io_thread_(BrowserThread::IO, &message_loop_) {
     scheduler_.OnClientCreated(kChildId, kRouteId);
@@ -159,7 +158,8 @@ class ResourceSchedulerTest : public testing::Test {
         false,                             // is_stream
         true,                              // allow_download
         false,                             // has_user_gesture
-        blink::WebReferrerPolicyDefault,  // referrer_policy
+        blink::WebReferrerPolicyDefault,   // referrer_policy
+        blink::WebPageVisibilityStateVisible,  // visibility_state
         NULL,                              // context
         base::WeakPtr<ResourceMessageFilter>(),  // filter
         true);                             // is_async
@@ -202,7 +202,7 @@ class ResourceSchedulerTest : public testing::Test {
   }
 
   int next_request_id_;
-  base::MessageLoop message_loop_;
+  base::MessageLoopForIO message_loop_;
   BrowserThreadImpl ui_thread_;
   BrowserThreadImpl io_thread_;
   ResourceDispatcherHostImpl rdh_;
@@ -462,6 +462,20 @@ TEST_F(ResourceSchedulerTest, NonHTTPSchedulesImmediately) {
   scoped_ptr<TestRequest> request(
       NewRequest("chrome-extension://req", net::LOWEST));
   EXPECT_TRUE(request->started());
+}
+
+TEST_F(ResourceSchedulerTest, SpdyProxySchedulesImmediately) {
+  scoped_ptr<TestRequest> high(NewRequest("http://host/high", net::HIGHEST));
+  scoped_ptr<TestRequest> low(NewRequest("http://host/low", net::LOWEST));
+
+  scoped_ptr<TestRequest> request(NewRequest("http://host/req", net::IDLE));
+  EXPECT_FALSE(request->started());
+
+  scheduler_.OnReceivedSpdyProxiedHttpResponse(kChildId, kRouteId);
+  EXPECT_TRUE(request->started());
+
+  scoped_ptr<TestRequest> after(NewRequest("http://host/after", net::IDLE));
+  EXPECT_TRUE(after->started());
 }
 
 }  // unnamed namespace

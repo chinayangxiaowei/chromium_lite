@@ -19,7 +19,6 @@
 #include "base/memory/weak_ptr.h"
 #include "ui/aura/client/activation_change_observer.h"
 #include "ui/aura/layout_manager.h"
-#include "ui/aura/window_observer.h"
 #include "ui/keyboard/keyboard_controller.h"
 #include "ui/keyboard/keyboard_controller_observer.h"
 
@@ -37,7 +36,7 @@ class Widget;
 }
 
 namespace ash {
-class Launcher;
+class Shelf;
 
 namespace internal {
 class PanelCalloutWidget;
@@ -56,7 +55,6 @@ class ASH_EXPORT PanelLayoutManager
     : public aura::LayoutManager,
       public ShelfIconObserver,
       public ShellObserver,
-      public aura::WindowObserver,
       public aura::client::ActivationChangeObserver,
       public keyboard::KeyboardControllerObserver,
       public DisplayController::Observer,
@@ -77,8 +75,8 @@ class ASH_EXPORT PanelLayoutManager
   // Returns the callout widget (arrow) for |panel|.
   views::Widget* GetCalloutWidgetForPanel(aura::Window* panel);
 
-  ash::Launcher* launcher() { return launcher_; }
-  void SetLauncher(ash::Launcher* launcher);
+  Shelf* shelf() { return shelf_; }
+  void SetShelf(Shelf* shelf);
 
   // Overridden from aura::LayoutManager:
   virtual void OnWindowResized() OVERRIDE;
@@ -97,12 +95,8 @@ class ASH_EXPORT PanelLayoutManager
   virtual void OnShelfAlignmentChanged(aura::Window* root_window) OVERRIDE;
 
   // Overridden from ash::wm::WindowStateObserver
-  virtual void OnWindowShowTypeChanged(wm::WindowState* window_state,
-                                       wm::WindowShowType old_type) OVERRIDE;
-
-  // Overridden from aura::WindowObserver
-  virtual void OnWindowVisibilityChanged(aura::Window* window,
-                                         bool visible) OVERRIDE;
+  virtual void OnPostWindowShowTypeChange(wm::WindowState* window_state,
+                                          wm::WindowShowType old_type) OVERRIDE;
 
   // Overridden from aura::client::ActivationChangeObserver
   virtual void OnWindowActivated(aura::Window* gained_active,
@@ -120,6 +114,7 @@ class ASH_EXPORT PanelLayoutManager
   friend class PanelWindowResizerTest;
   friend class DockedWindowResizerTest;
   friend class DockedWindowLayoutManagerTest;
+  friend class WorkspaceControllerTest;
 
   views::Widget* CreateCalloutWidget();
 
@@ -172,8 +167,8 @@ class ASH_EXPORT PanelLayoutManager
   PanelList panel_windows_;
   // The panel being dragged.
   aura::Window* dragged_panel_;
-  // The launcher we are observing for launcher icon changes.
-  Launcher* launcher_;
+  // The shelf we are observing for shelf icon changes.
+  Shelf* shelf_;
   // The shelf layout manager being observed for visibility changes.
   ShelfLayoutManager* shelf_layout_manager_;
 

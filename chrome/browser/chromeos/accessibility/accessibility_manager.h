@@ -14,11 +14,14 @@
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_util.h"
 #include "chrome/browser/extensions/api/braille_display_private/braille_controller.h"
-#include "chrome/browser/extensions/extension_system.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_system.h"
 
+namespace content {
+class RenderViewHost;
+}
 class Profile;
 
 namespace chromeos {
@@ -73,6 +76,9 @@ class AccessibilityManager : public content::NotificationObserver,
   // Returns true when the accessibility menu should be shown.
   bool ShouldShowAccessibilityMenu();
 
+  // Returns true when cursor compositing should be enabled.
+  bool ShouldEnableCursorCompositing();
+
   // Enables or disables the large cursor.
   void EnableLargeCursor(bool enabled);
   // Returns true if the large cursor is enabled, or false if not.
@@ -116,6 +122,11 @@ class AccessibilityManager : public content::NotificationObserver,
   // Returns the autoclick delay in milliseconds.
   int GetAutoclickDelay() const;
 
+  // Enables or disables the virtual keyboard.
+  void EnableVirtualKeyboard(bool enabled);
+  // Returns true if the virtual keyboard is enabled, otherwise false.
+  bool IsVirtualKeyboardEnabled();
+
   // SessionStateObserver overrides:
   virtual void ActiveUserChanged(const std::string& user_id) OVERRIDE;
 
@@ -129,6 +140,9 @@ class AccessibilityManager : public content::NotificationObserver,
 
   // Initiates play of shutdown sound and returns it's duration.
   base::TimeDelta PlayShutdownSound();
+
+  // Injects ChromeVox scripts into given |render_view_host|.
+  void InjectChromeVox(content::RenderViewHost* render_view_host);
 
  protected:
   AccessibilityManager();
@@ -149,6 +163,7 @@ class AccessibilityManager : public content::NotificationObserver,
   void UpdateHighContrastFromPref();
   void UpdateAutoclickFromPref();
   void UpdateAutoclickDelayFromPref();
+  void UpdateVirtualKeyboardFromPref();
   void LocalePrefChanged();
 
   void CheckBrailleState();
@@ -171,11 +186,6 @@ class AccessibilityManager : public content::NotificationObserver,
       const extensions::api::braille_display_private::DisplayState&
           display_state) OVERRIDE;
 
-  // Plays sound identified by |sound_key|.  |sound_key| must be an ID for sound
-  // registered by AccessibilityManager.  If there is no such sound, sound isn't
-  // played.
-  void PlaySound(int sound_key) const;
-
   // Profile which has the current a11y context.
   Profile* profile_;
 
@@ -194,6 +204,7 @@ class AccessibilityManager : public content::NotificationObserver,
   PrefHandler high_contrast_pref_handler_;
   PrefHandler autoclick_pref_handler_;
   PrefHandler autoclick_delay_pref_handler_;
+  PrefHandler virtual_keyboard_pref_handler_;
 
   bool large_cursor_enabled_;
   bool sticky_keys_enabled_;
@@ -201,6 +212,7 @@ class AccessibilityManager : public content::NotificationObserver,
   bool high_contrast_enabled_;
   bool autoclick_enabled_;
   int autoclick_delay_ms_;
+  bool virtual_keyboard_enabled_;
 
   ash::AccessibilityNotificationVisibility spoken_feedback_notification_;
 

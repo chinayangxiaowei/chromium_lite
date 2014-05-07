@@ -33,6 +33,15 @@ OSExchangeData::Provider* OSExchangeDataProviderAura::Clone() const {
   return ret;
 }
 
+void OSExchangeDataProviderAura::MarkOriginatedFromRenderer() {
+  // TODO(dcheng): Currently unneeded because ChromeOS Aura correctly separates
+  // URL and filename metadata, and does not implement the DownloadURL protocol.
+}
+
+bool OSExchangeDataProviderAura::DidOriginateFromRenderer() const {
+  return false;
+}
+
 void OSExchangeDataProviderAura::SetString(const base::string16& data) {
   string_ = data;
   formats_ |= OSExchangeData::STRING;
@@ -44,7 +53,7 @@ void OSExchangeDataProviderAura::SetURL(const GURL& url,
   title_ = title;
   formats_ |= OSExchangeData::URL;
 
-  SetString(UTF8ToUTF16(url.spec()));
+  SetString(base::UTF8ToUTF16(url.spec()));
 }
 
 void OSExchangeDataProviderAura::SetFilename(const base::FilePath& path) {

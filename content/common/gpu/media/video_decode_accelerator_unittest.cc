@@ -46,20 +46,24 @@
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
-#include "content/common/gpu/media/h264_parser.h"
 #include "content/common/gpu/media/rendering_helper.h"
 #include "content/common/gpu/media/video_accelerator_unittest_helpers.h"
 #include "content/public/common/content_switches.h"
+#include "media/filters/h264_parser.h"
 #include "ui/gfx/codec/png_codec.h"
 
 #if defined(OS_WIN)
 #include "content/common/gpu/media/dxva_video_decode_accelerator.h"
 #elif defined(OS_CHROMEOS)
 #if defined(ARCH_CPU_ARMEL)
-#include "content/common/gpu/media/exynos_video_decode_accelerator.h"
+#include "content/common/gpu/media/v4l2_video_decode_accelerator.h"
+#include "content/common/gpu/media/v4l2_video_device.h"
 #elif defined(ARCH_CPU_X86_FAMILY)
 #include "content/common/gpu/media/vaapi_video_decode_accelerator.h"
 #include "content/common/gpu/media/vaapi_wrapper.h"
+#if defined(USE_X11)
+#include "ui/gl/gl_implementation.h"
+#endif  // USE_X11
 #endif  // ARCH_CPU_ARMEL
 #else
 #error The VideoAccelerator tests are not supported on this platform.
@@ -411,8 +415,8 @@ class GLRenderingVDAClient
   int num_queued_fragments() { return num_queued_fragments_; }
   int num_decoded_frames();
   double frames_per_second();
-  // Return the median of the decode time in milliseconds.
-  int decode_time_median();
+  // Return the median of the decode time of all decoded frames.
+  base::TimeDelta decode_time_median();
   bool decoder_deleted() { return !decoder_.get(); }
 
  private:
@@ -506,7 +510,6 @@ GLRenderingVDAClient::GLRenderingVDAClient(
       num_queued_fragments_(0),
       num_decoded_frames_(0),
       num_done_bitstream_buffers_(0),
-      profile_(profile),
       texture_target_(0),
       suppress_rendering_(suppress_rendering),
       delay_reuse_after_frame_num_(delay_reuse_after_frame_num),
@@ -517,6 +520,12 @@ GLRenderingVDAClient::GLRenderingVDAClient(
   // |num_in_flight_decodes_| is unsupported if |decode_calls_per_second_| > 0.
   if (decode_calls_per_second_ > 0)
     CHECK_EQ(1, num_in_flight_decodes_);
+
+  // Default to H264 baseline if no profile provided.
+  profile_ = (profile != media::VIDEO_CODEC_PROFILE_UNKNOWN
+                  ? profile
+                  : media::H264PROFILE_BASELINE);
+
   if (rendering_fps > 0)
     throttling_client_.reset(new ThrottlingVDAClient(
         this,
@@ -549,17 +558,24 @@ void GLRenderingVDAClient::CreateAndStartDecoder() {
       new DXVAVideoDecodeAccelerator(client, base::Bind(&DoNothingReturnTrue)));
 #elif defined(OS_CHROMEOS)
 #if defined(ARCH_CPU_ARMEL)
-  decoder_.reset(new ExynosVideoDecodeAccelerator(
+
+  scoped_ptr<V4L2Device> device = V4L2Device::Create();
+  if (!device.get()) {
+    NotifyError(media::VideoDecodeAccelerator::PLATFORM_FAILURE);
+    return;
+  }
+  decoder_.reset(new V4L2VideoDecodeAccelerator(
       static_cast<EGLDisplay>(rendering_helper_->GetGLDisplay()),
-      static_cast<EGLContext>(rendering_helper_->GetGLContext()),
       client,
       weak_client,
       base::Bind(&DoNothingReturnTrue),
+      device.Pass(),
       base::MessageLoopProxy::current()));
 #elif defined(ARCH_CPU_X86_FAMILY)
+  CHECK_EQ(gfx::kGLImplementationDesktopGL, gfx::GetGLImplementation())
+      << "Hardware video decode does not work with OSMesa";
   decoder_.reset(new VaapiVideoDecodeAccelerator(
       static_cast<Display*>(rendering_helper_->GetGLDisplay()),
-      static_cast<GLXContext>(rendering_helper_->GetGLContext()),
       client,
       base::Bind(&DoNothingReturnTrue)));
 #endif  // ARCH_CPU_ARMEL
@@ -569,9 +585,6 @@ void GLRenderingVDAClient::CreateAndStartDecoder() {
   if (decoder_deleted())
     return;
 
-  // Configure the decoder.
-  profile_ = (profile_ != media::VIDEO_CODEC_PROFILE_UNKNOWN ?
-              profile_ : media::H264PROFILE_BASELINE);
   CHECK(decoder_->Initialize(profile_));
 }
 
@@ -841,22 +854,22 @@ static bool FragmentHasConfigInfo(const uint8* data, size_t size,
                                   media::VideoCodecProfile profile) {
   if (profile >= media::H264PROFILE_MIN &&
       profile <= media::H264PROFILE_MAX) {
-    content::H264Parser parser;
+    media::H264Parser parser;
     parser.SetStream(data, size);
-    content::H264NALU nalu;
-    content::H264Parser::Result result = parser.AdvanceToNextNALU(&nalu);
-    if (result != content::H264Parser::kOk) {
+    media::H264NALU nalu;
+    media::H264Parser::Result result = parser.AdvanceToNextNALU(&nalu);
+    if (result != media::H264Parser::kOk) {
       // Let the VDA figure out there's something wrong with the stream.
       return false;
     }
 
-    return nalu.nal_unit_type == content::H264NALU::kSPS;
+    return nalu.nal_unit_type == media::H264NALU::kSPS;
   } else if (profile >= media::VP8PROFILE_MIN &&
              profile <= media::VP8PROFILE_MAX) {
     return (size > 0 && !(data[0] & 0x01));
   }
-
-  CHECK(false) << "Invalid profile";  // Shouldn't happen at this point.
+  // Shouldn't happen at this point.
+  LOG(FATAL) << "Invalid profile: " << profile;
   return false;
 }
 
@@ -941,15 +954,15 @@ double GLRenderingVDAClient::frames_per_second() {
   return num_decoded_frames() / delta.InSecondsF();
 }
 
-int GLRenderingVDAClient::decode_time_median() {
+base::TimeDelta GLRenderingVDAClient::decode_time_median() {
   if (decode_time_.size() == 0)
-    return 0;
+    return base::TimeDelta();
   std::sort(decode_time_.begin(), decode_time_.end());
   int index = decode_time_.size() / 2;
   if (decode_time_.size() % 2 != 0)
-    return decode_time_[index].InMilliseconds();
+    return decode_time_[index];
 
-  return (decode_time_[index] + decode_time_[index - 1]).InMilliseconds() / 2;
+  return (decode_time_[index] + decode_time_[index - 1]) / 2;
 }
 
 class VideoDecodeAcceleratorTest : public ::testing::Test {
@@ -1507,11 +1520,11 @@ TEST_F(VideoDecodeAcceleratorTest, TestDecodeTimeMedian) {
   CreateAndStartDecoder(client, note);
   WaitUntilDecodeFinish(note);
 
-  int decode_time_median = client->decode_time_median();
+  base::TimeDelta decode_time_median = client->decode_time_median();
   std::string output_string =
-      base::StringPrintf("Decode time median: %d ms", decode_time_median);
+      base::StringPrintf("Decode time median: %" PRId64 " us",
+                         decode_time_median.InMicroseconds());
   VLOG(0) << output_string;
-  ASSERT_GT(decode_time_median, 0);
 
   if (g_output_log != NULL)
     OutputLogFile(g_output_log, output_string);
@@ -1551,9 +1564,8 @@ int main(int argc, char **argv) {
       content::g_test_video_data = it->second.c_str();
       continue;
     }
-    // TODO(wuchengli): remove frame_deliver_log after CrOS test get updated.
-    // See http://crosreview.com/175426.
-    if (it->first == "frame_delivery_log" || it->first == "output_log") {
+    // The output log for VDA performance test.
+    if (it->first == "output_log") {
       content::g_output_log = it->second.c_str();
       continue;
     }

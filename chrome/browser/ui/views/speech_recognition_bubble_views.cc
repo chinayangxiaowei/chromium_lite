@@ -26,6 +26,7 @@
 #include "ui/views/controls/link.h"
 #include "ui/views/controls/link_listener.h"
 #include "ui/views/layout/layout_constants.h"
+#include "ui/views/widget/widget_observer.h"
 
 using content::WebContents;
 
@@ -131,21 +132,18 @@ gfx::Rect SpeechRecognitionBubbleView::GetAnchorRect() {
 }
 
 void SpeechRecognitionBubbleView::Init() {
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  const gfx::Font& font = rb.GetFont(ResourceBundle::MediumFont);
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  const gfx::FontList& font_list =
+      rb.GetFontList(ui::ResourceBundle::MediumFont);
 
   heading_ = new views::Label(
-      l10n_util::GetStringUTF16(IDS_SPEECH_INPUT_BUBBLE_HEADING));
-  heading_->set_border(views::Border::CreateEmptyBorder(
+      l10n_util::GetStringUTF16(IDS_SPEECH_INPUT_BUBBLE_HEADING), font_list);
+  heading_->SetBorder(views::Border::CreateEmptyBorder(
       kBubbleHeadingVertMargin, 0, kBubbleHeadingVertMargin, 0));
-  heading_->SetFont(font);
   heading_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  heading_->SetText(
-      l10n_util::GetStringUTF16(IDS_SPEECH_INPUT_BUBBLE_HEADING));
   AddChildView(heading_);
 
-  message_ = new views::Label();
-  message_->SetFont(font);
+  message_ = new views::Label(base::string16(), font_list);
   message_->SetMultiLine(true);
   AddChildView(message_);
 
@@ -154,12 +152,12 @@ void SpeechRecognitionBubbleView::Init() {
   AddChildView(icon_);
 
   cancel_ = new views::LabelButton(this, l10n_util::GetStringUTF16(IDS_CANCEL));
-  cancel_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  cancel_->SetStyle(views::Button::STYLE_BUTTON);
   AddChildView(cancel_);
 
   try_again_ = new views::LabelButton(
       this, l10n_util::GetStringUTF16(IDS_SPEECH_INPUT_TRY_AGAIN));
-  try_again_->SetStyle(views::Button::STYLE_NATIVE_TEXTBUTTON);
+  try_again_->SetStyle(views::Button::STYLE_BUTTON);
   AddChildView(try_again_);
 
   mic_settings_ = new views::Link(
@@ -313,7 +311,9 @@ void SpeechRecognitionBubbleView::Layout() {
 }
 
 // Implementation of SpeechRecognitionBubble.
-class SpeechRecognitionBubbleImpl : public SpeechRecognitionBubbleBase {
+class SpeechRecognitionBubbleImpl
+    : public SpeechRecognitionBubbleBase,
+      public views::WidgetObserver {
  public:
   SpeechRecognitionBubbleImpl(int render_process_id, int render_view_id,
                               Delegate* delegate,
@@ -327,6 +327,9 @@ class SpeechRecognitionBubbleImpl : public SpeechRecognitionBubbleBase {
   // SpeechRecognitionBubbleBase methods.
   virtual void UpdateLayout() OVERRIDE;
   virtual void UpdateImage() OVERRIDE;
+
+  // views::WidgetObserver methods.
+  virtual void OnWidgetDestroying(views::Widget* widget) OVERRIDE;
 
  private:
   Delegate* delegate_;
@@ -347,9 +350,14 @@ SpeechRecognitionBubbleImpl::SpeechRecognitionBubbleImpl(
 
 SpeechRecognitionBubbleImpl::~SpeechRecognitionBubbleImpl() {
   if (bubble_) {
+    bubble_->GetWidget()->RemoveObserver(this);
     bubble_->set_notify_delegate_on_activation_change(false);
     bubble_->GetWidget()->Close();
   }
+}
+
+void SpeechRecognitionBubbleImpl::OnWidgetDestroying(views::Widget* widget) {
+  bubble_ = NULL;
 }
 
 void SpeechRecognitionBubbleImpl::Show() {
@@ -381,7 +389,8 @@ void SpeechRecognitionBubbleImpl::Show() {
 
     views::BubbleDelegateView::CreateBubble(bubble_);
     UpdateLayout();
-  }
+    bubble_->GetWidget()->AddObserver(this);
+   }
   bubble_->GetWidget()->Show();
 }
 

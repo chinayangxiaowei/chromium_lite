@@ -21,8 +21,6 @@ public class TranslateOptions {
     private static final int NEVER_DOMAIN = 1;
     private static final int ALWAYS_LANGUAGE = 2;
 
-    private static String EMOJI_TRANSLATION = "Emoji";
-
     private final String[] mAllLanguages;
 
     // Will reflect the state before the object was ever modified
@@ -33,15 +31,13 @@ public class TranslateOptions {
     private final boolean[] mOptions;
     private int mSourceLanguageIndex;
     private int mTargetLanguageIndex;
-    private final boolean mTriggeredFromMenu;
 
     private TranslateOptions(int sourceLanguageCode, int targetLanguageCode, String[] allLanguages,
             boolean neverLanguage, boolean neverDomain, boolean alwaysLanguage,
-            boolean triggeredFromMenu, boolean[] originalOptions) {
+            boolean[] originalOptions) {
         mAllLanguages = allLanguages;
         mSourceLanguageIndex = sourceLanguageCode;
         mTargetLanguageIndex = targetLanguageCode;
-        mTriggeredFromMenu = triggeredFromMenu;
 
         mOptions = new boolean[3];
         mOptions[NEVER_LANGUAGE] = neverLanguage;
@@ -59,18 +55,10 @@ public class TranslateOptions {
         mOriginalTargetLanguageIndex = mTargetLanguageIndex;
     }
 
-    /**
-     * Hook to inject the translation id of the word emoji from the
-     * downstream code to the upstream code.
-     */
-    public static void setEmojiTranslation(String emoji) {
-        EMOJI_TRANSLATION = emoji;
-    }
-
     public TranslateOptions(int sourceLanguageCode, int targetLanguageCode, String[] allLanguages,
-           boolean alwaysTranslate, boolean triggeredFromMenu) {
+            boolean alwaysTranslate) {
         this(sourceLanguageCode, targetLanguageCode, allLanguages, false, false, alwaysTranslate,
-                triggeredFromMenu, null);
+                null);
     }
 
     /**
@@ -79,28 +67,18 @@ public class TranslateOptions {
     public TranslateOptions(TranslateOptions other) {
         this(other.mSourceLanguageIndex, other.mTargetLanguageIndex, other.mAllLanguages,
                 other.mOptions[NEVER_LANGUAGE], other.mOptions[NEVER_DOMAIN],
-                other.mOptions[ALWAYS_LANGUAGE], other.mTriggeredFromMenu,
-                other.mOriginalOptions);
+                other.mOptions[ALWAYS_LANGUAGE], other.mOriginalOptions);
     }
 
     public String sourceLanguage() {
-        if (checkLanguageBoundaries(mSourceLanguageIndex)) {
-            if (mAllLanguages[mSourceLanguageIndex].isEmpty()) {
-                return EMOJI_TRANSLATION;
-            }
+        if (checkLanguageBoundaries(mSourceLanguageIndex))
             return mAllLanguages[mSourceLanguageIndex];
-        }
         return "";
     }
 
     public String targetLanguage() {
-        if (checkLanguageBoundaries(mTargetLanguageIndex)) {
-            if (mAllLanguages[mTargetLanguageIndex].isEmpty()) {
-                return EMOJI_TRANSLATION;
-            }
-
+        if (checkLanguageBoundaries(mTargetLanguageIndex))
             return mAllLanguages[mTargetLanguageIndex];
-        }
         return "";
     }
 
@@ -110,10 +88,6 @@ public class TranslateOptions {
 
     public int targetLanguageIndex() {
         return checkLanguageBoundaries(mTargetLanguageIndex) ? mTargetLanguageIndex : 0;
-    }
-
-    public boolean triggeredFromMenu() {
-        return mTriggeredFromMenu;
     }
 
     public boolean optionsChanged() {

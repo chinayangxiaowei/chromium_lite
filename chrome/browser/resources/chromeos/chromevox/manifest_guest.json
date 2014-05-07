@@ -18,11 +18,13 @@
     "tts",
     "systemPrivate",
     "brailleDisplayPrivate",
+    "commandLinePrivate",
     "<all_urls>"
   ],
   "content_scripts": [
     {
       "matches": [ "<all_urls>" ],
+      "exclude_globs": [ "chrome-extension://mndnfokpggljbaajbnioimlmbfngpief/chromevox/background/background.html" ],
       "all_frames": true,
       "js": [
         "chromeVoxChromePageScript.js"

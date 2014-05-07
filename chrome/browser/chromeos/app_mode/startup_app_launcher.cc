@@ -13,14 +13,16 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/app_mode/app_session_lifetime.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_diagnosis_runner.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/extensions/webstore_startup_installer.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/signin/profile_oauth2_token_service.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
+#include "chrome/browser/signin/signin_manager.h"
+#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -28,8 +30,10 @@
 #include "chrome/common/extensions/manifest_url_handler.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
+#include "extensions/common/manifest_handlers/offline_enabled_info.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
@@ -54,15 +58,20 @@ const char kOAuthClientSecret[] = "client_secret";
 const base::FilePath::CharType kOAuthFileName[] =
     FILE_PATH_LITERAL("kiosk_auth");
 
+const int kMaxInstallAttempt = 5;
+
 }  // namespace
 
 StartupAppLauncher::StartupAppLauncher(Profile* profile,
                                        const std::string& app_id,
+                                       bool diagnostic_mode,
                                        StartupAppLauncher::Delegate* delegate)
     : profile_(profile),
       app_id_(app_id),
+      diagnostic_mode_(diagnostic_mode),
       delegate_(delegate),
-      install_attempted_(false),
+      network_ready_handled_(false),
+      install_attempt_(0),
       ready_to_launch_(false) {
   DCHECK(profile_);
   DCHECK(Extension::IdIsValid(app_id_));
@@ -81,8 +90,8 @@ void StartupAppLauncher::Initialize() {
 
 void StartupAppLauncher::ContinueWithNetworkReady() {
   // Starts install if it is not started.
-  if (!install_attempted_) {
-    install_attempted_ = true;
+  if (!network_ready_handled_) {
+    network_ready_handled_ = true;
     MaybeInstall();
   }
 }
@@ -139,8 +148,25 @@ void StartupAppLauncher::OnOAuthFileLoaded(KioskOAuthParams* auth_params) {
   InitializeTokenService();
 }
 
-void StartupAppLauncher::InitializeNetwork() {
-  delegate_->InitializeNetwork();
+void StartupAppLauncher::MaybeInitializeNetwork() {
+  network_ready_handled_ = false;
+
+  const Extension* extension = extensions::ExtensionSystem::Get(profile_)->
+      extension_service()->GetInstalledExtension(app_id_);
+  const bool requires_network = !extension ||
+      !extensions::OfflineEnabledInfo::IsOfflineEnabled(extension);
+
+  if (requires_network) {
+    delegate_->InitializeNetwork();
+    return;
+  }
+
+  // Offline enabled app attempts update if network is ready. Otherwise,
+  // go directly to launch.
+  if (delegate_->IsNetworkReady())
+    ContinueWithNetworkReady();
+  else
+    OnReadyToLaunch();
 }
 
 void StartupAppLauncher::InitializeTokenService() {
@@ -148,10 +174,12 @@ void StartupAppLauncher::InitializeTokenService() {
 
   ProfileOAuth2TokenService* profile_token_service =
       ProfileOAuth2TokenServiceFactory::GetForProfile(profile_);
+  SigninManagerBase* signin_manager =
+      SigninManagerFactory::GetForProfile(profile_);
   if (profile_token_service->RefreshTokenIsAvailable(
-          profile_token_service->GetPrimaryAccountId()) ||
+          signin_manager->GetAuthenticatedAccountId()) ||
       auth_params_.refresh_token.empty()) {
-    InitializeNetwork();
+    MaybeInitializeNetwork();
   } else {
     // Pass oauth2 refresh token from the auth file.
     // TODO(zelidrag): We should probably remove this option after M27.
@@ -177,13 +205,13 @@ void StartupAppLauncher::OnRefreshTokenAvailable(
     const std::string& account_id) {
   ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
       ->RemoveObserver(this);
-  InitializeNetwork();
+  MaybeInitializeNetwork();
 }
 
 void StartupAppLauncher::OnRefreshTokensLoaded() {
   ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
       ->RemoveObserver(this);
-  InitializeNetwork();
+  MaybeInitializeNetwork();
 }
 
 void StartupAppLauncher::LaunchApp() {
@@ -213,6 +241,9 @@ void StartupAppLauncher::LaunchApp() {
       chrome::NOTIFICATION_KIOSK_APP_LAUNCHED,
       content::NotificationService::AllSources(),
       content::NotificationService::NoDetails());
+
+  if (diagnostic_mode_)
+    KioskDiagnosisRunner::Run(profile_, app_id_);
 
   OnLaunchSuccess();
 }
@@ -274,7 +305,19 @@ void StartupAppLauncher::InstallCallback(bool success,
     return;
   }
 
-  LOG(ERROR) << "App install failed: " << error;
+  LOG(ERROR) << "App install failed: " << error
+             << ", for attempt " << install_attempt_;
+
+  ++install_attempt_;
+  if (install_attempt_ < kMaxInstallAttempt) {
+    BrowserThread::PostTask(
+        BrowserThread::UI,
+        FROM_HERE,
+        base::Bind(&StartupAppLauncher::MaybeInitializeNetwork,
+                   AsWeakPtr()));
+    return;
+  }
+
   OnLaunchFailure(KioskAppLaunchError::UNABLE_TO_INSTALL);
 }
 

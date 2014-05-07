@@ -4,6 +4,8 @@
 
 #include "chrome/browser/chromeos/login/auth_sync_observer.h"
 
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/chromeos/login/supervised_user_manager.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
@@ -11,7 +13,6 @@
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/user_metrics.h"
-#include "content/public/common/user_metrics_action.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 
 class Profile;
@@ -71,8 +72,7 @@ void AuthSyncObserver::OnStateChanged() {
            base::Bind(&AuthSyncObserver::OnSupervisedTokenLoaded,
                base::Unretained(this)));
        content::RecordAction(
-           content::UserMetricsAction(
-               "ManagedUsers_Chromeos_Sync_Invalidated"));
+           base::UserMetricsAction("ManagedUsers_Chromeos_Sync_Invalidated"));
     }
   } else if (state == GoogleServiceAuthError::NONE) {
     if (user->GetType() == User::USER_TYPE_LOCALLY_MANAGED &&
@@ -83,7 +83,7 @@ void AuthSyncObserver::OnStateChanged() {
           user->email(),
           User::OAUTH2_TOKEN_STATUS_VALID);
        content::RecordAction(
-           content::UserMetricsAction("ManagedUsers_Chromeos_Sync_Recovered"));
+           base::UserMetricsAction("ManagedUsers_Chromeos_Sync_Recovered"));
     }
   }
 }

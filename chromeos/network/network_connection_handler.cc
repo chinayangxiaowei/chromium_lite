@@ -7,7 +7,9 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
+#include "base/location.h"
 #include "base/strings/string_number_conversions.h"
+#include "chromeos/cert_loader.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/shill_manager_client.h"
@@ -21,6 +23,7 @@
 #include "chromeos/network/network_state_handler.h"
 #include "chromeos/network/network_ui_data.h"
 #include "chromeos/network/shill_property_util.h"
+#include "chromeos/tpm_token_loader.h"
 #include "dbus/object_path.h"
 #include "net/cert/x509_certificate.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -165,14 +168,16 @@ void NetworkConnectionHandler::Init(
     LoginState::Get()->AddObserver(this);
     logged_in_ = LoginState::Get()->IsUserLoggedIn();
   }
+
   if (CertLoader::IsInitialized()) {
     cert_loader_ = CertLoader::Get();
     cert_loader_->AddObserver(this);
     certificates_loaded_ = cert_loader_->certificates_loaded();
   } else {
-    // TODO(stevenjb): Require a mock or stub cert_loader in tests.
+    // TODO(tbarzic): Require a mock or stub cert_loader in tests.
     certificates_loaded_ = true;
   }
+
   if (network_state_handler) {
     network_state_handler_ = network_state_handler;
     network_state_handler_->AddObserver(this, FROM_HERE);
@@ -195,9 +200,15 @@ void NetworkConnectionHandler::OnCertificatesLoaded(
   if (queued_connect_) {
     NET_LOG_EVENT("Connecting to Queued Network",
                   queued_connect_->service_path);
-    ConnectToNetwork(queued_connect_->service_path,
-                     queued_connect_->success_callback,
-                     queued_connect_->error_callback,
+
+    // Make a copy of |queued_connect_| parameters, because |queued_connect_|
+    // will get reset at the beginning of |ConnectToNetwork|.
+    std::string service_path = queued_connect_->service_path;
+    base::Closure success_callback = queued_connect_->success_callback;
+    network_handler::ErrorCallback error_callback =
+        queued_connect_->error_callback;
+
+    ConnectToNetwork(service_path, success_callback, error_callback,
                      false /* check_error_state */);
   } else if (initial_load) {
     // Once certificates have loaded, connect to the "best" available network.
@@ -429,6 +440,7 @@ void NetworkConnectionHandler::VerifyConfiguredAndConnect(
 
       // If certificates have not been loaded yet, queue the connect request.
       if (!certificates_loaded_) {
+        NET_LOG_EVENT("Certificates not loaded", "");
         ConnectRequest* request = GetPendingRequest(service_path);
         if (!request) {
           NET_LOG_ERROR("No pending request to queue", service_path);
@@ -463,8 +475,8 @@ void NetworkConnectionHandler::VerifyConfiguredAndConnect(
       // previously configured client cert.
       client_cert::SetShillProperties(
           client_cert_type,
-          base::IntToString(cert_loader_->tpm_token_slot_id()),
-          cert_loader_->tpm_user_pin(),
+          base::IntToString(cert_loader_->TPMTokenSlotID()),
+          TPMTokenLoader::Get()->tpm_user_pin(),
           pkcs11_id.empty() ? NULL : &pkcs11_id,
           &config_properties);
     }
@@ -651,7 +663,8 @@ std::string NetworkConnectionHandler::CertificateIsConfigured(
     return std::string();
   // Find the matching certificate.
   scoped_refptr<net::X509Certificate> matching_cert =
-      client_cert::GetCertificateMatch(ui_data->certificate_pattern());
+      client_cert::GetCertificateMatch(ui_data->certificate_pattern(),
+                                       cert_loader_->cert_list());
   if (!matching_cert.get())
     return std::string();
   return CertLoader::GetPkcs11IdForCert(*matching_cert.get());

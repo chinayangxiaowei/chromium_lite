@@ -45,6 +45,8 @@
 #include "net/url_request/url_request_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using base::ASCIIToUTF16;
+
 namespace {
 
 // Returns the first match in |matches| with |allowed_to_be_default_match|
@@ -291,13 +293,16 @@ void SearchProviderTest::RunTest(TestData* cases,
                                  bool prefer_keyword) {
   ACMatches matches;
   for (int i = 0; i < num_cases; ++i) {
-    AutocompleteInput input(cases[i].input, base::string16::npos, base::string16(), GURL(),
+    AutocompleteInput input(cases[i].input, base::string16::npos,
+                            base::string16(), GURL(),
                             AutocompleteInput::INVALID_SPEC, false,
                             prefer_keyword, true,
                             AutocompleteInput::ALL_MATCHES);
     provider_->Start(input, false);
     matches = provider_->matches();
-    base::string16 diagnostic_details = ASCIIToUTF16("Input was: ") + cases[i].input +
+    base::string16 diagnostic_details =
+        ASCIIToUTF16("Input was: ") +
+        cases[i].input +
         ASCIIToUTF16("; prefer_keyword was: ") +
         (prefer_keyword ? ASCIIToUTF16("true") : ASCIIToUTF16("false"));
     EXPECT_EQ(cases[i].num_results, matches.size()) << diagnostic_details;
@@ -561,7 +566,7 @@ TEST_F(SearchProviderTest, QueryKeywordProvider) {
   EXPECT_FALSE(match.keyword.empty());
 
   // The fill into edit should contain the keyword.
-  EXPECT_EQ(keyword_t_url_->keyword() + char16(' ') + keyword_term_,
+  EXPECT_EQ(keyword_t_url_->keyword() + base::char16(' ') + keyword_term_,
             match.fill_into_edit);
 }
 
@@ -3079,6 +3084,14 @@ TEST_F(SearchProviderTest, NavigationInline) {
     { "http://www.abc.com/", "http://www.abc.com",
                              "http://www.abc.com", std::string(), true, true },
 
+    // Inputs with trailing whitespace should inline when possible.
+    { "abc.com ",      "http://www.abc.com",
+                              "www.abc.com",      std::string(), true,  true },
+    { "abc.com/ ",     "http://www.abc.com",
+                              "www.abc.com",      std::string(), true,  true },
+    { "abc.com ",      "http://www.abc.com/bar",
+                              "www.abc.com/bar",  "/bar",        false, false },
+
     // Inline matches when the input is a leading substring of the scheme.
     { "h",             "http://www.abc.com",
                        "http://www.abc.com", "ttp://www.abc.com", true, false },
@@ -3177,7 +3190,7 @@ TEST_F(SearchProviderTest, NavigationInline) {
     AutocompleteMatch match(
         provider_->NavigationToMatch(SearchProvider::NavigationResult(
             *provider_.get(), GURL(cases[i].url), base::string16(), false, 0,
-            false)));
+            false, ASCIIToUTF16(cases[i].input), std::string())));
     EXPECT_EQ(ASCIIToUTF16(cases[i].inline_autocompletion),
               match.inline_autocompletion);
     EXPECT_EQ(ASCIIToUTF16(cases[i].fill_into_edit), match.fill_into_edit);
@@ -3189,7 +3202,7 @@ TEST_F(SearchProviderTest, NavigationInline) {
     AutocompleteMatch match_prevent_inline(
         provider_->NavigationToMatch(SearchProvider::NavigationResult(
             *provider_.get(), GURL(cases[i].url), base::string16(), false, 0,
-            false)));
+            false, ASCIIToUTF16(cases[i].input), std::string())));
     EXPECT_EQ(ASCIIToUTF16(cases[i].inline_autocompletion),
               match_prevent_inline.inline_autocompletion);
     EXPECT_EQ(ASCIIToUTF16(cases[i].fill_into_edit),
@@ -3204,7 +3217,8 @@ TEST_F(SearchProviderTest, NavigationInlineSchemeSubstring) {
   const base::string16 input(ASCIIToUTF16("ht"));
   const base::string16 url(ASCIIToUTF16("http://a.com"));
   const SearchProvider::NavigationResult result(
-      *provider_.get(), GURL(url), base::string16(), false, 0, false);
+      *provider_.get(), GURL(url), base::string16(), false, 0, false,
+      input, std::string());
 
   // Check the offset and strings when inline autocompletion is allowed.
   QueryForInput(input, false, false);
@@ -3227,8 +3241,8 @@ TEST_F(SearchProviderTest, NavigationInlineDomainClassify) {
   QueryForInput(ASCIIToUTF16("w"), false, false);
   AutocompleteMatch match(
       provider_->NavigationToMatch(SearchProvider::NavigationResult(
-          *provider_.get(), GURL("http://www.wow.com"), base::string16(), false, 0,
-          false)));
+          *provider_.get(), GURL("http://www.wow.com"), base::string16(), false,
+          0, false, ASCIIToUTF16("w"), std::string())));
   EXPECT_EQ(ASCIIToUTF16("ow.com"), match.inline_autocompletion);
   EXPECT_TRUE(match.allowed_to_be_default_match);
   EXPECT_EQ(ASCIIToUTF16("www.wow.com"), match.fill_into_edit);
@@ -3399,21 +3413,22 @@ TEST_F(SearchProviderTest, RemoveStaleResultsTest) {
         provider_->default_results_.navigation_results.push_back(
             SearchProvider::NavigationResult(
                 *provider_.get(), GURL(suggestion), base::string16(), false,
-                cases[i].results[j].relevance, false));
+                cases[i].results[j].relevance, false,
+                ASCIIToUTF16(cases[i].omnibox_input), std::string()));
       } else {
         provider_->default_results_.suggest_results.push_back(
             SearchProvider::SuggestResult(
                 ASCIIToUTF16(suggestion), AutocompleteMatchType::SEARCH_SUGGEST,
-                base::string16(), base::string16(), std::string(),
+                ASCIIToUTF16(suggestion), base::string16(), std::string(),
                 std::string(), false, cases[i].results[j].relevance, false,
-                false));
+                false, ASCIIToUTF16(cases[i].omnibox_input)));
       }
     }
 
     provider_->input_ = AutocompleteInput(
-        ASCIIToUTF16(cases[i].omnibox_input), base::string16::npos, base::string16(),
-        GURL(), AutocompleteInput::INVALID_SPEC, false, false, true,
-        AutocompleteInput::ALL_MATCHES);
+        ASCIIToUTF16(cases[i].omnibox_input), base::string16::npos,
+        base::string16(), GURL(), AutocompleteInput::INVALID_SPEC, false, false,
+        true, AutocompleteInput::ALL_MATCHES);
     provider_->RemoveAllStaleResults();
 
     // Check cached results.
@@ -3520,13 +3535,13 @@ TEST_F(SearchProviderTest, ParseEntitySuggestion) {
       const Match& match = cases[i].matches[j];
       SCOPED_TRACE(" and match index: " + base::IntToString(j));
       EXPECT_EQ(match.contents,
-                UTF16ToUTF8(matches[j].contents));
+                base::UTF16ToUTF8(matches[j].contents));
       EXPECT_EQ(match.description,
-                UTF16ToUTF8(matches[j].description));
+                base::UTF16ToUTF8(matches[j].description));
       EXPECT_EQ(match.query_params,
                 matches[j].search_terms_args->suggest_query_params);
       EXPECT_EQ(match.fill_into_edit,
-                UTF16ToUTF8(matches[j].fill_into_edit));
+                base::UTF16ToUTF8(matches[j].fill_into_edit));
       EXPECT_EQ(match.type, matches[j].type);
     }
     // Ensure that no expected matches are missing.
@@ -3668,7 +3683,8 @@ TEST_F(SearchProviderTest, PrefetchMetadataParsing) {
     // Ensure that the returned matches equal the expectations.
     for (size_t j = 0; j < matches.size(); ++j) {
       SCOPED_TRACE(description);
-      EXPECT_EQ(cases[i].matches[j].contents, UTF16ToUTF8(matches[j].contents));
+      EXPECT_EQ(cases[i].matches[j].contents,
+                base::UTF16ToUTF8(matches[j].contents));
       EXPECT_EQ(cases[i].matches[j].allowed_to_be_prefetched,
                 SearchProvider::ShouldPrefetch(matches[j]));
       EXPECT_EQ(cases[i].matches[j].type, matches[j].type);
@@ -3699,7 +3715,7 @@ TEST_F(SearchProviderTest, XSSIGuardedJSONParsing_InvalidResponse) {
 
   // Should have exactly one "search what you typed" match
   ASSERT_TRUE(matches.size() == 1);
-  EXPECT_EQ(input_str, UTF16ToUTF8(matches[0].contents));
+  EXPECT_EQ(input_str, base::UTF16ToUTF8(matches[0].contents));
   EXPECT_EQ(AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED,
             matches[0].type);
 }
@@ -3781,7 +3797,8 @@ TEST_F(SearchProviderTest, XSSIGuardedJSONParsing_ValidResponses) {
     // Ensure that the returned matches equal the expectations.
     for (; j < matches.size(); ++j) {
       SCOPED_TRACE("and match: " + base::IntToString(j));
-      EXPECT_EQ(cases[i].matches[j].contents, UTF16ToUTF8(matches[j].contents));
+      EXPECT_EQ(cases[i].matches[j].contents,
+                base::UTF16ToUTF8(matches[j].contents));
       EXPECT_EQ(cases[i].matches[j].type, matches[j].type);
     }
     for (; j < ARRAYSIZE_UNSAFE(cases[i].matches); ++j) {
@@ -3862,7 +3879,7 @@ TEST_F(SearchProviderTest, ParseDeletionUrl) {
        for (size_t j = 0; j < matches.size(); ++j) {
          const Match& match = cases[i].matches[j];
          SCOPED_TRACE(" and match index: " + base::IntToString(j));
-         EXPECT_EQ(match.contents, UTF16ToUTF8(matches[j].contents));
+         EXPECT_EQ(match.contents, base::UTF16ToUTF8(matches[j].contents));
          EXPECT_EQ(match.deletion_url, matches[j].GetAdditionalInfo(
              "deletion_url"));
        }

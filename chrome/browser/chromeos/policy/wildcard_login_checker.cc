@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/metrics/histogram.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/policy/policy_oauth2_token_fetcher.h"
-#include "chrome/browser/policy/browser_policy_connector.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
 #include "net/url_request/url_request_context_getter.h"
 
 namespace policy {
@@ -18,6 +19,14 @@ namespace {
 // Presence of this key in the userinfo response indicates whether the user is
 // on a hosted domain.
 const char kHostedDomainKey[] = "hd";
+
+// UMA histogram names.
+const char kUMADelayPolicyTokenFetch[] =
+    "Enterprise.WildcardLoginCheck.DelayPolicyTokenFetch";
+const char kUMADelayUserInfoFetch[] =
+    "Enterprise.WildcardLoginCheck.DelayUserInfoFetch";
+const char kUMADelayTotal[] =
+    "Enterprise.WildcardLoginCheck.DelayTotal";
 
 }  // namespace
 
@@ -30,6 +39,9 @@ void WildcardLoginChecker::Start(
     const StatusCallback& callback) {
   CHECK(!token_fetcher_);
   CHECK(!user_info_fetcher_);
+
+  start_timestamp_ = base::Time::Now();
+
   callback_ = callback;
   token_fetcher_.reset(new PolicyOAuth2TokenFetcher(
       signin_context,
@@ -51,13 +63,22 @@ void WildcardLoginChecker::StartWithAccessToken(
 
 void WildcardLoginChecker::OnGetUserInfoSuccess(
     const base::DictionaryValue* response) {
-  OnCheckCompleted(response->HasKey(kHostedDomainKey));
+  if (!start_timestamp_.is_null()) {
+    base::Time now = base::Time::Now();
+    UMA_HISTOGRAM_MEDIUM_TIMES(kUMADelayUserInfoFetch,
+                               now - token_available_timestamp_);
+    UMA_HISTOGRAM_MEDIUM_TIMES(kUMADelayTotal,
+                               now - start_timestamp_);
+  }
+
+  OnCheckCompleted(response->HasKey(kHostedDomainKey) ? RESULT_ALLOWED
+                                                      : RESULT_BLOCKED);
 }
 
 void WildcardLoginChecker::OnGetUserInfoFailure(
     const GoogleServiceAuthError& error) {
   LOG(ERROR) << "Failed to fetch user info " << error.ToString();
-  OnCheckCompleted(false);
+  OnCheckCompleted(RESULT_FAILED);
 }
 
 void WildcardLoginChecker::OnPolicyTokenFetched(
@@ -65,8 +86,14 @@ void WildcardLoginChecker::OnPolicyTokenFetched(
     const GoogleServiceAuthError& error) {
   if (error.state() != GoogleServiceAuthError::NONE) {
     LOG(ERROR) << "Failed to fetch policy token " << error.ToString();
-    OnCheckCompleted(false);
+    OnCheckCompleted(RESULT_FAILED);
     return;
+  }
+
+  if (!start_timestamp_.is_null()) {
+    token_available_timestamp_ = base::Time::Now();
+    UMA_HISTOGRAM_MEDIUM_TIMES(kUMADelayPolicyTokenFetch,
+                               token_available_timestamp_ - start_timestamp_);
   }
 
   token_fetcher_.reset();
@@ -80,7 +107,7 @@ void WildcardLoginChecker::StartUserInfoFetcher(
   user_info_fetcher_->Start(access_token);
 }
 
-void WildcardLoginChecker::OnCheckCompleted(bool result) {
+void WildcardLoginChecker::OnCheckCompleted(Result result) {
   if (!callback_.is_null())
     callback_.Run(result);
 }

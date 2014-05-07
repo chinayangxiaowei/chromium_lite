@@ -52,13 +52,13 @@
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/translate/translate_bubble_model.h"
 #include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/browser/upgrade_detector.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/content_restriction.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/pref_names.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -67,6 +67,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
@@ -94,12 +95,12 @@ namespace {
 const char kOsOverrideForTabletSite[] = "Linux; Android 4.0.3";
 }
 
+using base::UserMetricsAction;
 using content::NavigationController;
 using content::NavigationEntry;
 using content::OpenURLParams;
 using content::Referrer;
 using content::SSLStatus;
-using content::UserMetricsAction;
 using content::WebContents;
 using web_modal::WebContentsModalDialogManager;
 
@@ -397,8 +398,26 @@ void Home(Browser* browser, WindowOpenDisposition disposition) {
   }
 #endif
 
+  GURL url = browser->profile()->GetHomePage();
+
+  // Streamlined hosted apps should return to their launch page when the home
+  // button is pressed.
+  if (browser->is_app()) {
+    const ExtensionService* service = browser->profile()->GetExtensionService();
+    if (!service)
+      return;
+
+    const extensions::Extension* extension =
+        service->GetInstalledExtension(
+            web_app::GetExtensionIdFromApplicationName(browser->app_name()));
+    if (!extension)
+      return;
+
+    url = extensions::AppLaunchInfo::GetLaunchWebURL(extension);
+  }
+
   OpenURLParams params(
-      browser->profile()->GetHomePage(), Referrer(), disposition,
+      url, Referrer(), disposition,
       content::PageTransitionFromInt(
           content::PAGE_TRANSITION_AUTO_BOOKMARK |
           content::PAGE_TRANSITION_HOME_PAGE),
@@ -533,20 +552,6 @@ void SelectNextTab(Browser* browser) {
 void SelectPreviousTab(Browser* browser) {
   content::RecordAction(UserMetricsAction("SelectPrevTab"));
   browser->tab_strip_model()->SelectPreviousTab();
-}
-
-void OpenTabpose(Browser* browser) {
-#if defined(OS_MACOSX)
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kEnableExposeForTabs)) {
-    return;
-  }
-
-  content::RecordAction(UserMetricsAction("OpenTabpose"));
-  browser->window()->OpenTabpose();
-#else
-  NOTREACHED();
-#endif
 }
 
 void MoveTabNext(Browser* browser) {
@@ -693,16 +698,15 @@ void Translate(Browser* browser) {
   TranslateTabHelper* translate_tab_helper =
       TranslateTabHelper::FromWebContents(web_contents);
 
-  TranslateBubbleModel::ViewState view_state =
-      TranslateBubbleModel::VIEW_STATE_BEFORE_TRANSLATE;
+  TranslateTabHelper::TranslateStep step = TranslateTabHelper::BEFORE_TRANSLATE;
   if (translate_tab_helper) {
-    if (translate_tab_helper->language_state().translation_pending())
-      view_state = TranslateBubbleModel::VIEW_STATE_TRANSLATING;
-    else if (translate_tab_helper->language_state().IsPageTranslated())
-      view_state = TranslateBubbleModel::VIEW_STATE_AFTER_TRANSLATE;
+    if (translate_tab_helper->GetLanguageState().translation_pending())
+      step = TranslateTabHelper::TRANSLATING;
+    else if (translate_tab_helper->GetLanguageState().IsPageTranslated())
+      step = TranslateTabHelper::AFTER_TRANSLATE;
   }
-  browser->window()->ShowTranslateBubble(web_contents, view_state,
-                                         TranslateErrors::NONE);
+  browser->window()->ShowTranslateBubble(
+      web_contents, step, TranslateErrors::NONE);
 }
 
 void TogglePagePinnedToStartScreen(Browser* browser) {
@@ -811,7 +815,7 @@ void EmailPageLocation(Browser* browser) {
   DCHECK(wc);
 
   std::string title = net::EscapeQueryParamValue(
-      UTF16ToUTF8(wc->GetTitle()), false);
+      base::UTF16ToUTF8(wc->GetTitle()), false);
   std::string page_url = net::EscapeQueryParamValue(wc->GetURL().spec(), false);
   std::string mailto = std::string("mailto:?subject=Fwd:%20") +
       title + "&body=%0A%0A" + page_url;
@@ -872,9 +876,6 @@ void FindInPage(Browser* browser, bool find_next, bool forward_direction) {
 }
 
 void Zoom(Browser* browser, content::PageZoom zoom) {
-  if (browser->is_devtools())
-    return;
-
   chrome_page_zoom::Zoom(browser->tab_strip_model()->GetActiveWebContents(),
                          zoom);
 }
@@ -1080,7 +1081,7 @@ void ViewSource(Browser* browser,
   active_entry->SetPageState(page_state.RemoveScrollOffset());
 
   // Do not restore title, derive it from the url.
-  active_entry->SetTitle(string16());
+  active_entry->SetTitle(base::string16());
 
   // Now show view-source entry.
   if (browser->CanSupportWindowFeature(Browser::FEATURE_TABSTRIP)) {
@@ -1125,8 +1126,9 @@ void ViewSelectedSource(Browser* browser) {
 }
 
 bool CanViewSource(const Browser* browser) {
-  return browser->tab_strip_model()->GetActiveWebContents()->
-      GetController().CanViewSource();
+  return !browser->is_devtools() &&
+      browser->tab_strip_model()->GetActiveWebContents()->GetController().
+          CanViewSource();
 }
 
 void CreateApplicationShortcuts(Browser* browser) {

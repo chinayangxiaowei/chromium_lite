@@ -19,7 +19,6 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -50,11 +49,11 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
-#include "chrome/common/translate/language_detection_details.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/translate/core/common/language_detection_details.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/interstitial_page.h"
@@ -74,7 +73,9 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_set.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/dns/mock_host_resolver.h"
@@ -92,6 +93,7 @@
 #include "chrome/browser/browser_process.h"
 #endif
 
+using base::ASCIIToUTF16;
 using content::InterstitialPage;
 using content::HostZoomMap;
 using content::NavigationController;
@@ -352,9 +354,10 @@ class BrowserTest : public ExtensionBrowserTest {
 
   // Returns the app extension aptly named "App Test".
   const Extension* GetExtension() {
-    const ExtensionSet* extensions = extensions::ExtensionSystem::Get(
-        browser()->profile())->extension_service()->extensions();
-    for (ExtensionSet::const_iterator it = extensions->begin();
+    const extensions::ExtensionSet* extensions =
+        extensions::ExtensionSystem::Get(
+            browser()->profile())->extension_service()->extensions();
+    for (extensions::ExtensionSet::const_iterator it = extensions->begin();
          it != extensions->end(); ++it) {
       if ((*it)->name() == "App Test")
         return it->get();
@@ -514,9 +517,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, SadTabCancelsDialogs) {
 
   // Crash the renderer process and ensure the dialog is gone.
   content::RenderProcessHost* child_process = contents->GetRenderProcessHost();
-  content::WindowedNotificationObserver crash_observer(
-      content::NOTIFICATION_RENDERER_PROCESS_CLOSED,
-      content::Source<content::RenderProcessHost>(child_process));
+  content::RenderProcessHostWatcher crash_observer(
+      child_process,
+      content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
   base::KillProcess(child_process->GetHandle(), 0, false);
   crash_observer.Wait();
   EXPECT_FALSE(dialog_queue->HasActiveDialog());
@@ -1042,7 +1045,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutFile) {
       FILE_PATH_LITERAL("empty.html");
   GURL file_url(ui_test_utils::GetTestUrl(base::FilePath(
       base::FilePath::kCurrentDirectory), base::FilePath(kEmptyFile)));
-  ASSERT_TRUE(file_url.SchemeIs(chrome::kFileScheme));
+  ASSERT_TRUE(file_url.SchemeIs(content::kFileScheme));
   ui_test_utils::NavigateToURL(browser(), file_url);
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
 }
@@ -1187,7 +1190,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_FaviconChange) {
       FILE_PATH_LITERAL("onload_change_favicon.html");
   GURL file_url(ui_test_utils::GetTestUrl(base::FilePath(
       base::FilePath::kCurrentDirectory), base::FilePath(kFile)));
-  ASSERT_TRUE(file_url.SchemeIs(chrome::kFileScheme));
+  ASSERT_TRUE(file_url.SchemeIs(content::kFileScheme));
   ui_test_utils::NavigateToURL(browser(), file_url);
 
   NavigationEntry* entry = browser()->tab_strip_model()->
@@ -1307,12 +1310,12 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, PageLanguageDetection) {
     LanguageDetectionDetails>
       en_language_detected_signal(chrome::NOTIFICATION_TAB_LANGUAGE_DETERMINED,
                                   source);
-  EXPECT_EQ("", translate_tab_helper->language_state().original_language());
+  EXPECT_EQ("", translate_tab_helper->GetLanguageState().original_language());
   en_language_detected_signal.Wait();
   EXPECT_TRUE(en_language_detected_signal.GetDetailsFor(
         source.map_key(), &details));
   EXPECT_EQ("en", details.adopted_language);
-  EXPECT_EQ("en", translate_tab_helper->language_state().original_language());
+  EXPECT_EQ("en", translate_tab_helper->GetLanguageState().original_language());
 
   // Now navigate to a page in French.
   ui_test_utils::WindowedNotificationObserverWithDetails<
@@ -1326,7 +1329,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, PageLanguageDetection) {
   EXPECT_TRUE(fr_language_detected_signal.GetDetailsFor(
         source.map_key(), &details));
   EXPECT_EQ("fr", details.adopted_language);
-  EXPECT_EQ("fr", translate_tab_helper->language_state().original_language());
+  EXPECT_EQ("fr", translate_tab_helper->GetLanguageState().original_language());
 }
 
 // Chromeos defaults to restoring the last session, so this test isn't
@@ -2186,7 +2189,7 @@ IN_PROC_BROWSER_TEST_F(NoStartupWindowTest, NoStartupWindowBasicTest) {
 
   // Starting a browser window should work just fine.
   ui_test_utils::BrowserAddedObserver browser_added_observer;
-  CreateBrowser(ProfileManager::GetDefaultProfile());
+  CreateBrowser(ProfileManager::GetActiveUserProfile());
   browser_added_observer.WaitForSingleNewBrowser();
 
   EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
@@ -2202,7 +2205,7 @@ IN_PROC_BROWSER_TEST_F(NoStartupWindowTest, DontInitSessionServiceForApps) {
     return;
 #endif
 
-  Profile* profile = ProfileManager::GetDefaultProfile();
+  Profile* profile = ProfileManager::GetActiveUserProfile();
 
   SessionService* session_service =
       SessionServiceFactory::GetForProfile(profile);
@@ -2242,9 +2245,9 @@ IN_PROC_BROWSER_TEST_F(AppModeTest, EnableAppModeTest) {
   EXPECT_TRUE(browser()->is_app());
 }
 
-// Confirm about:version contains some expected content.
+// Confirm chrome://version contains some expected content.
 IN_PROC_BROWSER_TEST_F(BrowserTest, AboutVersion) {
-  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kAboutVersionURL));
+  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kChromeUIVersionURL));
   WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_GT(ui_test_utils::FindInPage(tab, ASCIIToUTF16("WebKit"), true, true,
                                       NULL, NULL),

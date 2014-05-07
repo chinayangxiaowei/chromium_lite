@@ -14,6 +14,7 @@
 #include "chrome/browser/chromeos/login/login_status_consumer.h"
 #include "chrome/browser/chromeos/login/online_attempt_host.h"
 #include "chrome/browser/chromeos/login/user.h"
+#include "chrome/browser/chromeos/policy/wildcard_login_checker.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -82,7 +83,8 @@ class LoginPerformer : public LoginStatusConsumer,
   void LoginAsPublicAccount(const std::string& username);
 
   // Performs a login into the kiosk mode account with |app_user_id|.
-  void LoginAsKioskAccount(const std::string& app_user_id);
+  void LoginAsKioskAccount(const std::string& app_user_id,
+                           bool force_ephemeral);
 
   // Migrates cryptohome using |old_password| specified.
   void RecoverEncryptedData(const std::string& old_password);
@@ -125,7 +127,8 @@ class LoginPerformer : public LoginStatusConsumer,
   // Completion callback for the online wildcard login check for enterprise
   // devices. Continues the login process or signals whitelist check failure
   // depending on the value of |result|.
-  void OnlineWildcardLoginCheckCompleted(bool result);
+  void OnlineWildcardLoginCheckCompleted(
+      policy::WildcardLoginChecker::Result result);
 
   // Used for logging in.
   scoped_refptr<Authenticator> authenticator_;

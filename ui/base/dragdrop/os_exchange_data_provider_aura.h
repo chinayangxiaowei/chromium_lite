@@ -19,7 +19,7 @@ namespace ui {
 class Clipboard;
 
 // OSExchangeData::Provider implementation for aura on linux.
-class UI_EXPORT OSExchangeDataProviderAura
+class UI_BASE_EXPORT OSExchangeDataProviderAura
     : public OSExchangeData::Provider {
  public:
   OSExchangeDataProviderAura();
@@ -27,6 +27,8 @@ class UI_EXPORT OSExchangeDataProviderAura
 
   // Overridden from OSExchangeData::Provider:
   virtual Provider* Clone() const OVERRIDE;
+  virtual void MarkOriginatedFromRenderer() OVERRIDE;
+  virtual bool DidOriginateFromRenderer() const OVERRIDE;
   virtual void SetString(const base::string16& data) OVERRIDE;
   virtual void SetURL(const GURL& url, const base::string16& title) OVERRIDE;
   virtual void SetFilename(const base::FilePath& path) OVERRIDE;

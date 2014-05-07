@@ -4,14 +4,14 @@
 
 #include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 
+#include "ash/audio/sounds.h"
 #include "ash/autoclick/autoclick_controller.h"
 #include "ash/high_contrast/high_contrast_controller.h"
 #include "ash/metrics/user_metrics_recorder.h"
 #include "ash/session_state_delegate.h"
 #include "ash/shell.h"
+#include "ash/sticky_keys/sticky_keys_controller.h"
 #include "ash/system/tray/system_tray_notifier.h"
-#include "ash/wm/event_rewriter_event_filter.h"
-#include "ash/wm/sticky_keys.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram.h"
@@ -32,7 +32,6 @@
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
@@ -51,6 +50,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/browser/file_reader.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_resource.h"
@@ -59,6 +59,8 @@
 #include "media/audio/sounds/sounds_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/keyboard/keyboard_controller.h"
+#include "ui/keyboard/keyboard_util.h"
 
 using content::BrowserThread;
 using content::RenderViewHost;
@@ -149,19 +151,18 @@ class ContentScriptLoader {
   std::queue<extensions::ExtensionResource> resources_;
 };
 
-void LoadChromeVoxExtension(Profile* profile, content::WebUI* login_web_ui) {
+void LoadChromeVoxExtension(Profile* profile,
+                            RenderViewHost* render_view_host) {
   ExtensionService* extension_service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
   std::string extension_id =
       extension_service->component_loader()->AddChromeVoxExtension();
-  if (login_web_ui) {
+  if (render_view_host) {
     ExtensionService* extension_service =
         extensions::ExtensionSystem::Get(profile)->extension_service();
     const extensions::Extension* extension =
         extension_service->extensions()->GetByID(extension_id);
 
-    RenderViewHost* render_view_host =
-        login_web_ui->GetWebContents()->GetRenderViewHost();
     // Set a flag to tell ChromeVox that it's just been enabled,
     // so that it won't interrupt our speech feedback enabled message.
     ExtensionMsg_ExecuteCode_Params params;
@@ -292,12 +293,14 @@ AccessibilityManager::AccessibilityManager()
       high_contrast_pref_handler_(prefs::kHighContrastEnabled),
       autoclick_pref_handler_(prefs::kAutoclickEnabled),
       autoclick_delay_pref_handler_(prefs::kAutoclickDelayMs),
+      virtual_keyboard_pref_handler_(prefs::kVirtualKeyboardEnabled),
       large_cursor_enabled_(false),
       sticky_keys_enabled_(false),
       spoken_feedback_enabled_(false),
       high_contrast_enabled_(false),
       autoclick_enabled_(false),
       autoclick_delay_ms_(ash::AutoclickController::kDefaultAutoclickDelayMs),
+      virtual_keyboard_enabled_(false),
       spoken_feedback_notification_(ash::A11Y_NOTIFICATION_NONE),
       weak_ptr_factory_(this),
       should_speak_chrome_vox_announcements_on_user_screen_(true),
@@ -348,9 +351,16 @@ bool AccessibilityManager::ShouldShowAccessibilityMenu() {
         pref_service->GetBoolean(prefs::kHighContrastEnabled) ||
         pref_service->GetBoolean(prefs::kAutoclickEnabled) ||
         pref_service->GetBoolean(prefs::kShouldAlwaysShowAccessibilityMenu) ||
-        pref_service->GetBoolean(prefs::kScreenMagnifierEnabled))
+        pref_service->GetBoolean(prefs::kScreenMagnifierEnabled) ||
+        pref_service->GetBoolean(prefs::kVirtualKeyboardEnabled))
       return true;
   }
+  return false;
+}
+
+bool AccessibilityManager::ShouldEnableCursorCompositing() {
+  // TODO(hshi): re-enable this on trunk after fixing issues. See
+  // http://crbug.com/362693, http://crosbug.com/p/28034.
   return false;
 }
 
@@ -385,6 +395,11 @@ void AccessibilityManager::UpdateLargeCursorFromPref() {
   // Large cursor is implemented only in ash.
   ash::Shell::GetInstance()->cursor_manager()->SetCursorSet(
       enabled ? ui::CURSOR_SET_LARGE : ui::CURSOR_SET_NORMAL);
+#endif
+
+#if defined(OS_CHROMEOS)
+  ash::Shell::GetInstance()->SetCursorCompositingEnabled(
+      ShouldEnableCursorCompositing());
 #endif
 }
 
@@ -423,7 +438,7 @@ void AccessibilityManager::UpdateStickyKeysFromPref() {
   sticky_keys_enabled_ = enabled;
 #if defined(USE_ASH)
   // Sticky keys is implemented only in ash.
-  ash::Shell::GetInstance()->sticky_keys()->Enable(enabled);
+  ash::Shell::GetInstance()->sticky_keys_controller()->Enable(enabled);
 #endif
 }
 
@@ -507,7 +522,8 @@ void AccessibilityManager::LoadChromeVoxToUserScreen() {
     }
   }
 
-  LoadChromeVoxExtension(profile_, login_web_ui);
+  LoadChromeVoxExtension(profile_, login_web_ui ?
+      login_web_ui->GetWebContents()->GetRenderViewHost() : NULL);
   chrome_vox_loaded_on_user_screen_ = true;
 }
 
@@ -520,7 +536,8 @@ void AccessibilityManager::LoadChromeVoxToLockScreen() {
     content::WebUI* lock_web_ui = screen_locker->GetAssociatedWebUI();
     if (lock_web_ui) {
       Profile* profile = Profile::FromWebUI(lock_web_ui);
-      LoadChromeVoxExtension(profile, lock_web_ui);
+      LoadChromeVoxExtension(profile,
+          lock_web_ui->GetWebContents()->GetRenderViewHost());
       chrome_vox_loaded_on_lock_screen_ = true;
     }
   }
@@ -583,6 +600,11 @@ void AccessibilityManager::UpdateHighContrastFromPref() {
 
 #if defined(USE_ASH)
   ash::Shell::GetInstance()->high_contrast_controller()->SetEnabled(enabled);
+#endif
+
+#if defined(OS_CHROMEOS)
+  ash::Shell::GetInstance()->SetCursorCompositingEnabled(
+      ShouldEnableCursorCompositing());
 #endif
 }
 
@@ -657,6 +679,50 @@ void AccessibilityManager::UpdateAutoclickDelayFromPref() {
 #endif
 }
 
+void AccessibilityManager::EnableVirtualKeyboard(bool enabled) {
+  if (!profile_)
+    return;
+
+  PrefService* pref_service = profile_->GetPrefs();
+  pref_service->SetBoolean(prefs::kVirtualKeyboardEnabled, enabled);
+  pref_service->CommitPendingWrite();
+}
+
+bool AccessibilityManager::IsVirtualKeyboardEnabled() {
+  return virtual_keyboard_enabled_;
+}
+
+void AccessibilityManager::UpdateVirtualKeyboardFromPref() {
+  if (!profile_)
+    return;
+
+  const bool enabled =
+      profile_->GetPrefs()->GetBoolean(prefs::kVirtualKeyboardEnabled);
+
+  if (virtual_keyboard_enabled_ == enabled)
+    return;
+  virtual_keyboard_enabled_ = enabled;
+
+  AccessibilityStatusEventDetails detail(enabled, ash::A11Y_NOTIFICATION_NONE);
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_CROS_ACCESSIBILITY_TOGGLE_VIRTUAL_KEYBOARD,
+      content::NotificationService::AllSources(),
+      content::Details<AccessibilityStatusEventDetails>(&detail));
+
+#if defined(USE_ASH)
+  keyboard::SetAccessibilityKeyboardEnabled(enabled);
+  if (enabled)
+    ash::Shell::GetInstance()->CreateKeyboard();
+  else if (!keyboard::IsKeyboardEnabled())
+    ash::Shell::GetInstance()->DeactivateKeyboard();
+#endif
+
+#if defined(OS_CHROMEOS)
+  ash::Shell::GetInstance()->SetCursorCompositingEnabled(
+      ShouldEnableCursorCompositing());
+#endif
+}
+
 void AccessibilityManager::CheckBrailleState() {
   BrowserThread::PostTaskAndReplyWithResult(
       BrowserThread::IO, FROM_HERE, base::Bind(
@@ -704,6 +770,10 @@ void AccessibilityManager::SetProfile(Profile* profile) {
         prefs::kAutoclickDelayMs,
         base::Bind(&AccessibilityManager::UpdateAutoclickDelayFromPref,
                    base::Unretained(this)));
+    pref_change_registrar_->Add(
+        prefs::kVirtualKeyboardEnabled,
+        base::Bind(&AccessibilityManager::UpdateVirtualKeyboardFromPref,
+                   base::Unretained(this)));
 
     local_state_pref_change_registrar_.reset(new PrefChangeRegistrar);
     local_state_pref_change_registrar_->Init(g_browser_process->local_state());
@@ -723,6 +793,7 @@ void AccessibilityManager::SetProfile(Profile* profile) {
   high_contrast_pref_handler_.HandleProfileChanged(profile_, profile);
   autoclick_pref_handler_.HandleProfileChanged(profile_, profile);
   autoclick_delay_pref_handler_.HandleProfileChanged(profile_, profile);
+  virtual_keyboard_pref_handler_.HandleProfileChanged(profile_, profile);
 
   if (!profile_ && profile)
     CheckBrailleState();
@@ -734,6 +805,7 @@ void AccessibilityManager::SetProfile(Profile* profile) {
   UpdateHighContrastFromPref();
   UpdateAutoclickFromPref();
   UpdateAutoclickDelayFromPref();
+  UpdateVirtualKeyboardFromPref();
 }
 
 void AccessibilityManager::ActiveUserChanged(const std::string& user_id) {
@@ -754,12 +826,16 @@ void AccessibilityManager::EnableSystemSounds(bool system_sounds_enabled) {
 }
 
 base::TimeDelta AccessibilityManager::PlayShutdownSound() {
-  if (!IsSpokenFeedbackEnabled() || !system_sounds_enabled_)
+  if (!system_sounds_enabled_)
     return base::TimeDelta();
   system_sounds_enabled_ = false;
-  media::SoundsManager* manager = media::SoundsManager::Get();
-  manager->Play(SOUND_SHUTDOWN);
-  return manager->GetDuration(SOUND_SHUTDOWN);
+  if (!ash::PlaySystemSound(SOUND_SHUTDOWN, true /* honor_spoken_feedback */))
+    return base::TimeDelta();
+  return media::SoundsManager::Get()->GetDuration(SOUND_SHUTDOWN);
+}
+
+void AccessibilityManager::InjectChromeVox(RenderViewHost* render_view_host) {
+  LoadChromeVoxExtension(profile_, render_view_host);
 }
 
 void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
@@ -768,7 +844,8 @@ void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
   UMA_HISTOGRAM_BOOLEAN("Accessibility.CrosHighContrast",
                         IsHighContrastEnabled());
   UMA_HISTOGRAM_BOOLEAN("Accessibility.CrosVirtualKeyboard",
-                        accessibility::IsVirtualKeyboardEnabled());
+                        IsVirtualKeyboardEnabled());
+  UMA_HISTOGRAM_BOOLEAN("Accessibility.CrosStickyKeys", IsStickyKeysEnabled());
   if (MagnificationManager::Get()) {
     uint32 type = MagnificationManager::Get()->IsMagnifierEnabled() ?
                       MagnificationManager::Get()->GetMagnifierType() : 0;
@@ -864,7 +941,11 @@ void AccessibilityManager::OnDisplayStateChanged(
 
 void AccessibilityManager::PostLoadChromeVox(Profile* profile) {
   // Do any setup work needed immediately after ChromeVox actually loads.
-  PlaySound(SOUND_SPOKEN_FEEDBACK_ENABLED);
+  if (system_sounds_enabled_) {
+    ash::PlaySystemSound(SOUND_SPOKEN_FEEDBACK_ENABLED,
+                         false /* honor_spoken_feedback */);
+  }
+
     ExtensionAccessibilityEventRouter::GetInstance()->
         OnChromeVoxLoadStateChanged(profile_,
             IsSpokenFeedbackEnabled(),
@@ -877,11 +958,10 @@ void AccessibilityManager::PostLoadChromeVox(Profile* profile) {
 
 void AccessibilityManager::PostUnloadChromeVox(Profile* profile) {
   // Do any teardown work needed immediately after ChromeVox actually unloads.
-  PlaySound(SOUND_SPOKEN_FEEDBACK_DISABLED);
-}
-
-void AccessibilityManager::PlaySound(int sound_key) const {
-  media::SoundsManager::Get()->Play(sound_key);
+  if (system_sounds_enabled_) {
+    ash::PlaySystemSound(SOUND_SPOKEN_FEEDBACK_DISABLED,
+                         false /* honor_spoken_feedback */);
+  }
 }
 
 }  // namespace chromeos
