@@ -104,6 +104,8 @@ Polymer('audio-player', {
       }
     }
 
+    // When the new status is "stopped".
+    this.cancelAutoAdvance_();
     this.audioElement.pause();
     this.currenttrackurl = '';
     this.lastAudioUpdateTime_ = null;
@@ -190,6 +192,17 @@ Polymer('audio-player', {
   },
 
   /**
+   * Invoked when receiving a request to replay the current music from the track
+   * list element.
+   */
+  onReplayCurrentTrack: function() {
+    // Changes the current time back to the beggining, regardless of the current
+    // status (playing or paused).
+    this.audioElement.currentTime = 0;
+    this.audioController.time = 0;
+  },
+
+  /**
    * Goes to the previous or the next track.
    * @param {boolean} forward True if next, false if previous.
    * @param {boolean} repeat True if repeat-mode is enabled. False otherwise.
@@ -203,6 +216,15 @@ Polymer('audio-player', {
         (this.trackList.getNextTrackIndex(forward, repeat) !== -1);
 
     this.audioController.playing = isNextTrackAvailable;
+
+    // If there is only a single file in the list, 'currentTrackInde' is not
+    // changed and the handler is not invoked. Instead, plays here.
+    // TODO(yoshiki): clean up the code around here.
+    if (isNextTrackAvailable &&
+        this.trackList.currentTrackIndex == nextTrackIndex) {
+      this.audioElement.play();
+    }
+
     this.trackList.currentTrackIndex = nextTrackIndex;
 
     Platform.performMicrotaskCheckpoint();

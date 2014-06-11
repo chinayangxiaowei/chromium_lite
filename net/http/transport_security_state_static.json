@@ -227,6 +227,7 @@
     { "name": "goo.gl", "include_subdomains": true, "pins": "google" },
     { "name": "g.co", "include_subdomains": true, "pins": "google" },
     { "name": "googletagmanager.com", "include_subdomains": true, "pins": "google" },
+    { "name": "googletagservices.com", "include_subdomains": true, "pins": "google" },
     { "name": "google.ac", "include_subdomains": true, "pins": "google" },
     { "name": "google.ad", "include_subdomains": true, "pins": "google" },
     { "name": "google.ae", "include_subdomains": true, "pins": "google" },
@@ -699,6 +700,24 @@
     { "name": "www.calyxinstitute.org", "mode": "force-https" },
     { "name": "blacklane.com", "include_subdomains": true, "mode": "force-https" },
     { "name": "boxcryptor.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "aclu.org", "mode": "force-https" },
+    { "name": "www.aclu.org", "mode": "force-https" },
+    { "name": "prodpad.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "mailbox.org", "include_subdomains": true, "mode": "force-https" },
+    { "name": "roddis.net", "mode": "force-https" },
+    { "name": "www.roddis.net", "mode": "force-https" },
+    { "name": "fiken.no", "include_subdomains": true, "mode": "force-https" },
+    { "name": "fairbill.com", "include_subdomains": true, "mode": "force-https" },
+    { "name": "nexth.net", "include_subdomains": true, "mode": "force-https" },
+    { "name": "nexth.us", "include_subdomains": true, "mode": "force-https" },
+    { "name": "nexth.de", "include_subdomains": true, "mode": "force-https" },
+    { "name": "souyar.net", "include_subdomains": true, "mode": "force-https" },
+    { "name": "souyar.de", "include_subdomains": true, "mode": "force-https" },
+    { "name": "souyar.us", "include_subdomains": true, "mode": "force-https" },
+    { "name": "www.banking.co.at", "mode": "force-https" },
+    { "name": "mbp.banking.co.at", "mode": "force-https" },
+    { "name": "feedbin.com", "mode": "force-https" },
+    { "name": "heha.co", "include_subdomains": true, "mode": "force-https" },
 
     // Entries that are only valid if the client supports SNI.
     { "name": "gmail.com", "mode": "force-https", "pins": "google", "snionly": true },
@@ -707,6 +726,7 @@
     { "name": "www.googlemail.com", "mode": "force-https", "pins": "google", "snionly": true },
     { "name": "google-analytics.com", "include_subdomains": true, "pins": "google", "snionly": true },
     { "name": "googlegroups.com", "include_subdomains": true, "pins": "google", "snionly": true },
-    { "name": "mykolab.com", "include_subdomains": true, "mode": "force-https", "snionly": true }
+    { "name": "mykolab.com", "include_subdomains": true, "mode": "force-https", "snionly": true },
+    { "name": "semenkovich.com", "include_subdomains": true, "mode": "force-https", "snionly": true }
   ]
 }

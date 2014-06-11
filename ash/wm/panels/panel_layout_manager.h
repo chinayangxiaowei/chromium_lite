@@ -17,10 +17,10 @@
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "ui/aura/client/activation_change_observer.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/keyboard/keyboard_controller.h"
 #include "ui/keyboard/keyboard_controller_observer.h"
+#include "ui/wm/public/activation_change_observer.h"
 
 namespace aura {
 class Window;
@@ -95,8 +95,9 @@ class ASH_EXPORT PanelLayoutManager
   virtual void OnShelfAlignmentChanged(aura::Window* root_window) OVERRIDE;
 
   // Overridden from ash::wm::WindowStateObserver
-  virtual void OnPostWindowShowTypeChange(wm::WindowState* window_state,
-                                          wm::WindowShowType old_type) OVERRIDE;
+  virtual void OnPostWindowStateTypeChange(
+      wm::WindowState* window_state,
+      wm::WindowStateType old_type) OVERRIDE;
 
   // Overridden from aura::client::ActivationChangeObserver
   virtual void OnWindowActivated(aura::Window* gained_active,

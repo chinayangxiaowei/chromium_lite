@@ -189,7 +189,11 @@
   <polymer-element name="audio-player"
                    attributes="tracks playing currenttrackurl">
     <template>
-      <track-list id="trackList" expanded?="{{model.expanded}}"></track-list>
+      <link rel="stylesheet"
+            href="audio_player/elements/audio_player.css"></link>
+
+      <track-list id="trackList" expanded?="{{model.expanded}}"
+                  on-replay="{{onReplayCurrentTrack}}"></track-list>
       <control-panel id="audioController"
                      on-next-clicked="{{onControllerNextClicked}}"
                      on-previous-clicked="{{onControllerPreviousClicked}}">

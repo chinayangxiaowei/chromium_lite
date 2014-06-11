@@ -181,8 +181,12 @@
         'services/broker_process.h',
         'services/init_process_reaper.cc',
         'services/init_process_reaper.h',
+        'services/scoped_process.cc',
+        'services/scoped_process.h',
         'services/thread_helpers.cc',
         'services/thread_helpers.h',
+        'services/yama.h',
+        'services/yama.cc',
       ],
       'dependencies': [
         '../base/base.gyp:base',
@@ -207,6 +211,7 @@
       'type': 'none',
       'sources': [
         'services/android_arm_ucontext.h',
+        'services/android_futex.h',
         'services/android_ucontext.h',
         'services/android_i386_ucontext.h',
         'services/arm_linux_syscalls.h',

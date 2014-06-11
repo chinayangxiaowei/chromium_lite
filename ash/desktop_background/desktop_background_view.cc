@@ -18,7 +18,7 @@
 #include "ash/wm/window_animations.h"
 #include "base/message_loop/message_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "ui/aura/root_window.h"
+#include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
@@ -188,10 +188,11 @@ views::Widget* CreateDesktopBackground(aura::Window* root_window,
     params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   params.parent = root_window->GetChildById(container_id);
   desktop_widget->Init(params);
+  desktop_widget->GetNativeWindow()->layer()->SetMasksToBounds(true);
   desktop_widget->SetContentsView(
       new LayerControlView(new DesktopBackgroundView()));
   int animation_type = wallpaper_delegate->GetAnimationType();
-  views::corewm::SetWindowVisibilityAnimationType(
+  wm::SetWindowVisibilityAnimationType(
       desktop_widget->GetNativeView(), animation_type);
 
   RootWindowController* root_window_controller =
@@ -205,18 +206,18 @@ views::Widget* CreateDesktopBackground(aura::Window* root_window,
   if (wallpaper_delegate->ShouldShowInitialAnimation() ||
       root_window_controller->animating_wallpaper_controller() ||
       Shell::GetInstance()->session_state_delegate()->NumberOfLoggedInUsers()) {
-    views::corewm::SetWindowVisibilityAnimationTransition(
-        desktop_widget->GetNativeView(), views::corewm::ANIMATE_SHOW);
+    wm::SetWindowVisibilityAnimationTransition(
+        desktop_widget->GetNativeView(), wm::ANIMATE_SHOW);
     int duration_override = wallpaper_delegate->GetAnimationDurationOverride();
     if (duration_override) {
-      views::corewm::SetWindowVisibilityAnimationDuration(
+      wm::SetWindowVisibilityAnimationDuration(
           desktop_widget->GetNativeView(),
           base::TimeDelta::FromMilliseconds(duration_override));
     }
   } else {
     // Disable animation if transition to login screen from an empty background.
-    views::corewm::SetWindowVisibilityAnimationTransition(
-        desktop_widget->GetNativeView(), views::corewm::ANIMATE_NONE);
+    wm::SetWindowVisibilityAnimationTransition(
+        desktop_widget->GetNativeView(), wm::ANIMATE_NONE);
   }
 
   desktop_widget->SetBounds(params.parent->bounds());
