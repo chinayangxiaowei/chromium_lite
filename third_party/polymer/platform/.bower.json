@@ -13,14 +13,14 @@
   ],
   "license": "BSD",
   "private": true,
-  "version": "0.1.4",
-  "_release": "0.1.4",
+  "version": "0.2.2",
+  "_release": "0.2.2",
   "_resolution": {
     "type": "version",
-    "tag": "0.1.4",
-    "commit": "4f1c8377e2ba49bf4aba73f7d74a79ea30d17d7e"
+    "tag": "0.2.2",
+    "commit": "ea89aef429d149c1481dfaa6cd26ed9945f27ff0"
   },
   "_source": "git://github.com/Polymer/platform.git",
-  "_target": "0.1.4",
+  "_target": "0.2.2",
   "_originalSource": "Polymer/platform"
 }

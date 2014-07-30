@@ -39,14 +39,6 @@
 
 namespace {
 
-inline bool RunningOnASAN() {
-#if defined(ADDRESS_SANITIZER)
-  return true;
-#else
-  return false;
-#endif
-}
-
 inline bool IsArchitectureX86_64() {
 #if defined(__x86_64__)
   return true;
@@ -63,28 +55,52 @@ inline bool IsArchitectureI386() {
 #endif
 }
 
+inline bool IsAndroid() {
+#if defined(OS_ANDROID)
+  return true;
+#else
+  return false;
+#endif
+}
+
 }  // namespace.
 
 namespace sandbox {
 
+// Allow Glibc's and Android pthread creation flags, crash on any other
+// thread creation attempts and EPERM attempts to use neither
+// CLONE_VM, nor CLONE_THREAD, which includes all fork() implementations.
 ErrorCode RestrictCloneToThreadsAndEPERMFork(SandboxBPF* sandbox) {
-  // Glibc's pthread.
-  if (!RunningOnASAN()) {
+  if (!IsAndroid()) {
+    const uint64_t kGlibcPthreadFlags =
+        CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD |
+        CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
+        CLONE_CHILD_CLEARTID;
+
     return sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_EQUAL,
-                         CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
-                         CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
-                         CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID,
+                         kGlibcPthreadFlags,
+                         ErrorCode(ErrorCode::ERR_ALLOWED),
+           sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_HAS_ANY_BITS,
+                         CLONE_VM | CLONE_THREAD,
+                         sandbox->Trap(SIGSYSCloneFailure, NULL),
+                         ErrorCode(EPERM)));
+  } else {
+    const uint64_t kAndroidCloneMask = CLONE_VM | CLONE_FS | CLONE_FILES |
+                                       CLONE_SIGHAND | CLONE_THREAD |
+                                       CLONE_SYSVSEM;
+    const uint64_t kObsoleteAndroidCloneMask =
+        kAndroidCloneMask | CLONE_DETACHED;
+
+    return sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_EQUAL,
+                         kAndroidCloneMask,
                          ErrorCode(ErrorCode::ERR_ALLOWED),
            sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_EQUAL,
-                         CLONE_PARENT_SETTID | SIGCHLD,
-                         ErrorCode(EPERM),
-           // ARM
-           sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_EQUAL,
-                         CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | SIGCHLD,
-                         ErrorCode(EPERM),
-           sandbox->Trap(SIGSYSCloneFailure, NULL))));
-  } else {
-    return ErrorCode(ErrorCode::ERR_ALLOWED);
+                         kObsoleteAndroidCloneMask,
+                         ErrorCode(ErrorCode::ERR_ALLOWED),
+           sandbox->Cond(0, ErrorCode::TP_32BIT, ErrorCode::OP_HAS_ANY_BITS,
+                         CLONE_VM | CLONE_THREAD,
+                         sandbox->Trap(SIGSYSCloneFailure, NULL),
+                         ErrorCode(EPERM))));
   }
 }
 
@@ -214,6 +230,24 @@ ErrorCode RestrictSocketcallCommand(SandboxBPF* sandbox) {
          ErrorCode(EPERM)))))))));
 }
 #endif
+
+ErrorCode RestrictKillTarget(pid_t target_pid, SandboxBPF* sandbox, int sysno) {
+  switch (sysno) {
+    case __NR_kill:
+    case __NR_tgkill:
+      return sandbox->Cond(0,
+                           ErrorCode::TP_32BIT,
+                           ErrorCode::OP_EQUAL,
+                           target_pid,
+                           ErrorCode(ErrorCode::ERR_ALLOWED),
+                           sandbox->Trap(SIGSYSKillFailure, NULL));
+    case __NR_tkill:
+      return sandbox->Trap(SIGSYSKillFailure, NULL);
+    default:
+      NOTREACHED();
+      return sandbox->Trap(CrashSIGSYS_Handler, NULL);
+  }
+}
 
 ErrorCode RestrictFutex(SandboxBPF* sandbox) {
   // In futex.c, the kernel does "int cmd = op & FUTEX_CMD_MASK;". We need to

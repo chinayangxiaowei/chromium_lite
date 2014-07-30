@@ -14,9 +14,10 @@
 # your project only builds in one or the other then this should be overridden
 # accordingly.
 #
-ALL_TOOLCHAINS ?= pnacl newlib glibc
 ifneq ($(ENABLE_BIONIC),)
-ALL_TOOLCHAINS += bionic
+ALL_TOOLCHAINS ?= pnacl newlib glibc bionic
+else
+ALL_TOOLCHAINS ?= pnacl newlib glibc
 endif
 
 VALID_TOOLCHAINS ?= $(ALL_TOOLCHAINS)
@@ -35,7 +36,6 @@ GETOS := python $(NACL_SDK_ROOT)/tools/getos.py
 NACL_CONFIG := python $(NACL_SDK_ROOT)/tools/nacl_config.py
 FIXDEPS := python $(NACL_SDK_ROOT)/tools/fix_deps.py -c
 OSNAME := $(shell $(GETOS))
-GDB_PATH := $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) --tool=gdb)
 
 
 #
@@ -478,6 +478,7 @@ CHROME_PATH ?= $(shell $(GETOS) --chrome 2> $(DEV_NULL))
 NULL :=
 SPACE := $(NULL) # one space after NULL is required
 CHROME_PATH_ESCAPE := $(subst $(SPACE),\ ,$(CHROME_PATH))
+GDB_PATH := $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) --tool=gdb)
 
 .PHONY: check_for_chrome
 check_for_chrome:
@@ -503,8 +504,11 @@ run_package: check_for_chrome all
 	$(CHROME_PATH_ESCAPE) --load-and-launch-app=$(CURDIR) $(CHROME_ARGS)
 
 GDB_ARGS += -D $(GDB_PATH)
+# PNaCl's nexe is acquired with "remote get nexe <path>" instead of the NMF.
+ifeq (,$(findstring $(TOOLCHAIN),pnacl))
 GDB_ARGS += -D --eval-command="nacl-manifest $(abspath $(OUTDIR))/$(TARGET).nmf"
 GDB_ARGS += -D $(GDB_DEBUG_TARGET)
+endif
 
 .PHONY: debug
 debug: check_for_chrome all $(PAGE)

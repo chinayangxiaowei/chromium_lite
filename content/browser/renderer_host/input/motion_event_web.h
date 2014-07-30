@@ -17,6 +17,7 @@ class MotionEventWeb : public ui::MotionEvent {
   virtual ~MotionEventWeb();
 
   // ui::MotionEvent
+  virtual int GetId() const OVERRIDE;
   virtual Action GetAction() const OVERRIDE;
   virtual int GetActionIndex() const OVERRIDE;
   virtual size_t GetPointerCount() const OVERRIDE;
@@ -38,6 +39,8 @@ class MotionEventWeb : public ui::MotionEvent {
   virtual float GetHistoricalY(
       size_t pointer_index,
       size_t historical_index) const OVERRIDE;
+  virtual ToolType GetToolType(size_t pointer_index) const OVERRIDE;
+  virtual int GetButtonState() const OVERRIDE;
   virtual scoped_ptr<MotionEvent> Clone() const OVERRIDE;
   virtual scoped_ptr<MotionEvent> Cancel() const OVERRIDE;
 

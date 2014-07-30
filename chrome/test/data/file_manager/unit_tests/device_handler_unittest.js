@@ -28,6 +28,7 @@ function setUp() {
     REMOVABLE_DEVICE_SCANNING_MESSAGE: 'Scanning...',
     DEVICE_UNKNOWN_MESSAGE: 'DEVICE_UNKNOWN: $1',
     DEVICE_UNSUPPORTED_MESSAGE: 'DEVICE_UNSUPPORTED: $1',
+    DEVICE_HARD_UNPLUGGED_MESSAGE: 'DEVICE_HARD_UNPLUGGED_MESSAGE',
     MULTIPART_DEVICE_UNSUPPORTED_MESSAGE: 'MULTIPART_DEVICE_UNSUPPORTED: $1',
     EXTERNAL_STORAGE_DISABLED_MESSAGE: 'EXTERNAL_STORAGE_DISABLED',
     FORMATTING_OF_DEVICE_PENDING_TITLE: 'FORMATTING_OF_DEVICE_PENDING_TITLE',
@@ -59,7 +60,12 @@ function setUp() {
         callback();
       },
       clear: function(id, callback) { delete this.items[id]; callback(); },
-      items: {}
+      items: {},
+      onButtonClicked: {
+        addListener: function(listener) {
+          this.dispatch = listener;
+        }
+      }
     },
     runtime: {
       getURL: function(path) { return path; }
@@ -403,4 +409,14 @@ function testFormatFailed() {
   assertEquals(1, Object.keys(chrome.notifications.items).length);
   assertEquals('FORMATTING_FINISHED_FAILURE',
                chrome.notifications.items['formatFail:/device/path'].message);
+}
+
+function testDeviceHardUnplugged() {
+  chrome.fileBrowserPrivate.onDeviceChanged.dispatch({
+    type: 'hard_unplugged',
+    devicePath: '/device/path'
+  });
+  assertEquals(1, Object.keys(chrome.notifications.items).length);
+  assertEquals('DEVICE_HARD_UNPLUGGED_MESSAGE',
+               chrome.notifications.items['deviceFail:/device/path'].message);
 }

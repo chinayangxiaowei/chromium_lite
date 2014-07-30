@@ -55,6 +55,8 @@ bool SpeechRecognitionDispatcherHost::OnMessageReceived(
                         OnAbortRequest)
     IPC_MESSAGE_HANDLER(SpeechRecognitionHostMsg_StopCaptureRequest,
                         OnStopCaptureRequest)
+    IPC_MESSAGE_HANDLER(SpeechRecognitionHostMsg_AbortAllRequests,
+                        OnAbortAllRequests)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -105,8 +107,7 @@ void SpeechRecognitionDispatcherHost::OnStartRequest(
   }
 
   // TODO(lazyboy): Check if filter_profanities should use |render_process_id|
-  // instead of |render_process_id_|. We are also using the same value in
-  // input_tag_dispatcher_host.cc
+  // instead of |render_process_id_|.
   bool filter_profanities =
       SpeechRecognitionManagerImpl::GetInstance() &&
       SpeechRecognitionManagerImpl::GetInstance()->delegate() &&
@@ -138,7 +139,6 @@ void SpeechRecognitionDispatcherHost::OnStartRequestOnIO(
   if (embedder_render_process_id)
     context.guest_render_view_id = params.render_view_id;
   context.request_id = params.request_id;
-  context.requested_by_page_element = false;
 
   SpeechRecognitionSessionConfig config;
   config.is_legacy_api = false;
@@ -168,6 +168,11 @@ void SpeechRecognitionDispatcherHost::OnAbortRequest(int render_view_id,
   // started as expected, e.g., due to unsatisfied security requirements.
   if (session_id != SpeechRecognitionManager::kSessionIDInvalid)
     SpeechRecognitionManager::GetInstance()->AbortSession(session_id);
+}
+
+void SpeechRecognitionDispatcherHost::OnAbortAllRequests(int render_view_id) {
+  SpeechRecognitionManager::GetInstance()->AbortAllSessionsForRenderView(
+      render_process_id_, render_view_id);
 }
 
 void SpeechRecognitionDispatcherHost::OnStopCaptureRequest(
