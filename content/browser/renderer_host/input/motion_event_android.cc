@@ -112,6 +112,8 @@ MotionEventAndroid::MotionEventAndroid(float pix_to_dip,
                                        jint pointer_id_1,
                                        jfloat touch_major_0_pixels,
                                        jfloat touch_major_1_pixels,
+                                       jfloat raw_pos_x_pixels,
+                                       jfloat raw_pos_y_pixels,
                                        jint android_tool_type_0,
                                        jint android_tool_type_1,
                                        jint android_button_state)
@@ -135,6 +137,9 @@ MotionEventAndroid::MotionEventAndroid(float pix_to_dip,
   cached_pointer_ids_[1] = pointer_id_1;
   cached_touch_majors_[0] = ToDips(touch_major_0_pixels);
   cached_touch_majors_[1] = ToDips(touch_major_1_pixels);
+  cached_raw_position_offset_ =
+      ToDips(gfx::PointF(raw_pos_x_pixels, raw_pos_y_pixels)) -
+      cached_positions_[0];
   cached_tool_types_[0] = FromAndroidToolType(android_tool_type_0);
   cached_tool_types_[1] = FromAndroidToolType(android_tool_type_1);
 }
@@ -171,6 +176,11 @@ MotionEventAndroid::MotionEventAndroid(float pix_to_dip,
       cached_tool_types_[i] = MotionEvent::TOOL_TYPE_UNKNOWN;
     }
   }
+
+  cached_raw_position_offset_ =
+      ToDips(gfx::PointF(Java_MotionEvent_getRawX(env, event),
+                         Java_MotionEvent_getRawY(env, event))) -
+      cached_positions_[0];
 }
 
 MotionEventAndroid::MotionEventAndroid(const MotionEventAndroid& other)
@@ -180,6 +190,7 @@ MotionEventAndroid::MotionEventAndroid(const MotionEventAndroid& other)
       cached_pointer_count_(other.cached_pointer_count_),
       cached_history_size_(other.cached_history_size_),
       cached_action_index_(other.cached_action_index_),
+      cached_raw_position_offset_(other.cached_raw_position_offset_),
       cached_button_state_(other.cached_button_state_),
       pix_to_dip_(other.pix_to_dip_),
       should_recycle_(true) {
@@ -205,7 +216,9 @@ MotionEventAndroid::Action MotionEventAndroid::GetAction() const {
   return cached_action_;
 }
 
-int MotionEventAndroid::GetActionIndex() const { return cached_action_index_; }
+int MotionEventAndroid::GetActionIndex() const {
+  return cached_action_index_;
+}
 
 size_t MotionEventAndroid::GetPointerCount() const {
   return cached_pointer_count_;
@@ -233,6 +246,14 @@ float MotionEventAndroid::GetY(size_t pointer_index) const {
     return cached_positions_[pointer_index].y();
   return ToDips(Java_MotionEvent_getYF_I(
       AttachCurrentThread(), event_.obj(), pointer_index));
+}
+
+float MotionEventAndroid::GetRawX(size_t pointer_index) const {
+  return GetX(pointer_index) + cached_raw_position_offset_.x();
+}
+
+float MotionEventAndroid::GetRawY(size_t pointer_index) const {
+  return GetY(pointer_index) + cached_raw_position_offset_.y();
 }
 
 float MotionEventAndroid::GetTouchMajor(size_t pointer_index) const {

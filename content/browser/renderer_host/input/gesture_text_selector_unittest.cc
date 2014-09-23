@@ -16,6 +16,7 @@
 #include "ui/gfx/geometry/rect_f.h"
 
 using ui::GestureEventData;
+using ui::GestureEventDetails;
 using ui::MotionEvent;
 using ui::test::MockMotionEvent;
 
@@ -130,24 +131,24 @@ TEST_F(GestureTextSelectorTest, PenDragging) {
   // Suppress most gesture events when in text selection mode.
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData double_tap(
-      ui::ET_GESTURE_DOUBLE_TAP, 0, event_time,
-      x2, y2, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_DOUBLE_TAP, 0, 0), 0, event_time,
+      x2, y2, x2, y2, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(double_tap));
   EXPECT_TRUE(event_log_.empty());
 
   // 4. ET_GESTURE_SCROLL_BEGIN
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData scroll_begin(
-      ui::ET_GESTURE_SCROLL_BEGIN, 0, event_time,
-      x1, y1, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_SCROLL_BEGIN, 0, 0), 0, event_time,
+      x1, y1, x1, y1, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(scroll_begin));
   EXPECT_EQ(1u, event_log_.size());  // Unselect
 
   // 5. ET_GESTURE_SCROLL_UPDATE
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData scroll_update(
-      ui::ET_GESTURE_SCROLL_UPDATE, 0, event_time,
-      x2, y2, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_SCROLL_UPDATE, 0, 0), 0, event_time,
+      x2, y2, x2, y2, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(scroll_update));
   EXPECT_EQ(3u, event_log_.size());  // Unselect, Show, SelectRange
   EXPECT_STREQ("SelectRange", event_log_.back().c_str());
@@ -163,8 +164,8 @@ TEST_F(GestureTextSelectorTest, PenDragging) {
   // 7. ET_GESTURE_SCROLL_END
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData scroll_end(
-      ui::ET_GESTURE_SCROLL_END, 0, event_time,
-      x2, y2, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_SCROLL_END, 0, 0), 0, event_time,
+      x2, y2, x2, y2, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(scroll_end));
   EXPECT_EQ(3u, event_log_.size());  // NO CHANGE
 }
@@ -186,8 +187,8 @@ TEST_F(GestureTextSelectorTest, TapToSelectWord) {
   // 5. TAP_DOWN
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData tap_down(
-      ui::ET_GESTURE_TAP_DOWN, 0, event_time,
-      x2, y2, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_TAP_DOWN, 0, 0), 0, event_time,
+      x2, y2, x2, y2, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(tap_down));
   EXPECT_TRUE(event_log_.empty());
 
@@ -210,8 +211,8 @@ TEST_F(GestureTextSelectorTest, TapToSelectWord) {
   // 4. TAP
   event_time += base::TimeDelta::FromMilliseconds(10);
   const GestureEventData tap(
-      ui::ET_GESTURE_TAP, 0, event_time,
-      x1, y1, 1, gfx::RectF(0, 0, 0, 0));
+      GestureEventDetails(ui::ET_GESTURE_TAP, 0, 0), 0, event_time,
+      x1, y1, x1, y1, 1, gfx::RectF(0, 0, 0, 0));
   EXPECT_TRUE(selector_->OnGestureEvent(tap));
   EXPECT_EQ(1u, event_log_.size());  // LongPress
   EXPECT_STREQ("LongPress", event_log_.back().c_str());

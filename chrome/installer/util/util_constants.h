@@ -92,13 +92,15 @@ enum InstallStatus {
   CPU_NOT_SUPPORTED,           // 54. Current OS not supported
   REENABLE_UPDATES_SUCCEEDED,  // 55. Autoupdates are now enabled.
   REENABLE_UPDATES_FAILED,     // 56. Autoupdates could not be enabled.
+  UNPACKING_FAILED,            // 57. Unpacking the (possibly patched)
+                               // uncompressed archive failed.
 
   // Friendly reminder: note the COMPILE_ASSERT below.
 };
 
 
 // Existing InstallStatus values must not change.  Always add to the end.
-COMPILE_ASSERT(installer::REENABLE_UPDATES_FAILED == 56,
+COMPILE_ASSERT(installer::UNPACKING_FAILED == 57,
                dont_change_enum);
 
 // The type of an update archive.
@@ -253,6 +255,7 @@ extern const wchar_t kChromeChannelCanary[];
 extern const wchar_t kChromeChannelDev[];
 extern const wchar_t kChromeChannelBeta[];
 extern const wchar_t kChromeChannelStable[];
+extern const wchar_t kChromeChannelStableExplicit[];
 
 extern const size_t kMaxAppModelIdLength;
 
