@@ -8,18 +8,24 @@
 
 android_webview_manifest_file := $(call my-dir)/AndroidManifest.xml
 
-# resources
+# Resources.
+# The res_hack folder is necessary to defeat a build system "optimization" which
+# ends up skipping running aapt if there are no resource files in any of the
+# resources dirs. Unfortunately, because all of our resources are generated at
+# build time and because this check is performed when processing the Makefile
+# it tests positive when building from clean resulting in a build failure.
+# We defeat the optimization by including an empty values.xml file in the list.
 android_webview_resources_dirs := \
-    $(call intermediates-dir-for,GYP,shared,,,$(TARGET_2ND_ARCH))/android_webview_jarjar_content_resources/jarjar_res \
-    $(call intermediates-dir-for,GYP,shared,,,$(TARGET_2ND_ARCH))/android_webview_jarjar_ui_resources/jarjar_res \
-    $(call intermediates-dir-for,GYP,ui_strings_grd,,,$(TARGET_2ND_ARCH))/ui_strings_grd/res_grit \
-    $(call intermediates-dir-for,GYP,content_strings_grd,,,$(TARGET_2ND_ARCH))/content_strings_grd/res_grit
+    $(call my-dir)/res_hack \
+    $(call intermediates-dir-for,GYP,shared)/android_webview_jarjar_content_resources/jarjar_res \
+    $(call intermediates-dir-for,GYP,shared)/android_webview_jarjar_ui_resources/jarjar_res \
+    $(call intermediates-dir-for,GYP,ui_strings_grd)/ui_strings_grd/res_grit \
+    $(call intermediates-dir-for,GYP,content_strings_grd)/content_strings_grd/res_grit
 
 android_webview_asset_dirs := \
     $(call intermediates-dir-for,APPS,webviewchromium-paks)
 
 android_webview_aapt_flags := --auto-add-overlay
-android_webview_aapt_flags += --custom-package com.android.webview.chromium
 android_webview_aapt_flags += --extra-packages org.chromium.ui
 android_webview_aapt_flags += --extra-packages org.chromium.content
 android_webview_aapt_flags += -0 pak
@@ -91,3 +97,7 @@ android_webview_final_pak_names := \
 android_webview_intermediates_pak_additional_deps := \
   $(foreach name,$(android_webview_final_pak_names), \
     $(call intermediates-dir-for,APPS,webviewchromium-paks)/$(name))
+
+# This is the stamp file for the android_webview_resources target.
+android_webview_resources_stamp := \
+  $(call intermediates-dir-for,GYP,android_webview_resources)/android_webview_resources.stamp
