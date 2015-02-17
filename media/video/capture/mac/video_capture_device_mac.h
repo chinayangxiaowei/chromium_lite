@@ -56,13 +56,12 @@ enum {
 class VideoCaptureDeviceMac : public VideoCaptureDevice {
  public:
   explicit VideoCaptureDeviceMac(const Name& device_name);
-  virtual ~VideoCaptureDeviceMac();
+  ~VideoCaptureDeviceMac() override;
 
   // VideoCaptureDevice implementation.
-  virtual void AllocateAndStart(
-      const VideoCaptureParams& params,
-      scoped_ptr<VideoCaptureDevice::Client> client) OVERRIDE;
-  virtual void StopAndDeAllocate() OVERRIDE;
+  void AllocateAndStart(const VideoCaptureParams& params,
+                        scoped_ptr<VideoCaptureDevice::Client> client) override;
+  void StopAndDeAllocate() override;
 
   bool Init(VideoCaptureDevice::Name::CaptureApiType capture_api_type);
 
@@ -73,11 +72,14 @@ class VideoCaptureDeviceMac : public VideoCaptureDevice {
                     int aspect_numerator,
                     int aspect_denominator);
 
+  // Forwarder to VideoCaptureDevice::Client::OnError().
   void ReceiveError(const std::string& reason);
+
+  // Forwarder to VideoCaptureDevice::Client::OnLog().
+  void LogMessage(const std::string& message);
 
  private:
   void SetErrorState(const std::string& reason);
-  void LogMessage(const std::string& message);
   bool UpdateCaptureResolution();
 
   // Flag indicating the internal state.

@@ -5,6 +5,7 @@
 {
   'targets': [
     {
+      # GN version: //components/bookmarks/browser
       'target_name': 'bookmarks_browser',
       'type': 'static_library',
       'include_dirs': [
@@ -59,6 +60,9 @@
       ],
       'conditions': [
         ['OS == "android"', {
+          # In GN, this android-specific stuff is its own target at
+          # //components/bookmarks/common/android
+          # TODO(cjhopman): This should be its own target in Gyp, too.
           'dependencies': [
             'bookmarks_jni_headers',
           ],
@@ -73,6 +77,7 @@
       ],
     },
     {
+      # GN version: //components/bookmarks/common
       'target_name': 'bookmarks_common',
       'type': 'static_library',
       'include_dirs': [
@@ -89,6 +94,7 @@
       ],
     },
     {
+      # GN version: //components/bookmarks/test
       'target_name': 'bookmarks_test_support',
       'type': 'static_library',
       'include_dirs': [
@@ -122,6 +128,7 @@
     ['OS=="android"', {
       'targets': [
         {
+          # GN: //components/bookmarks/common/android:bookmarks_java
           'target_name': 'bookmarks_java',
           'type': 'none',
           'dependencies': [
@@ -134,6 +141,7 @@
           'includes': [ '../build/java.gypi' ],
         },
         {
+          # GN: //components/bookmarks/common/android:bookmarks_jni_headers
           'target_name': 'bookmarks_jni_headers',
           'type': 'none',
           'sources': [
@@ -145,16 +153,13 @@
           'includes': [ '../build/jni_generator.gypi' ],
         },
         {
+          # GN: //components/bookmarks/common/android:bookmarks_type_javagen
           'target_name': 'bookmark_type_java',
           'type': 'none',
-          'sources': [
-            'bookmarks/common/android/java/src/org/chromium/components/bookmarks/BookmarkType.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/components/bookmarks',
-            'template_deps': ['bookmarks/common/android/bookmark_type_list.h'],
+            'source_file': 'bookmarks/common/android/bookmark_type.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
       ],
     }]

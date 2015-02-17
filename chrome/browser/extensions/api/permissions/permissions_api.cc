@@ -7,6 +7,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/permissions/permissions_api_helpers.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/permissions_updater.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/permissions.h"
@@ -30,6 +31,8 @@ namespace helpers = permissions_api_helpers;
 
 namespace {
 
+const char kBlockedByEnterprisePolicy[] =
+    "Permissions are blocked by enterprise policy.";
 const char kCantRemoveRequiredPermissionsError[] =
     "You cannot remove required permissions.";
 const char kNotInOptionalPermissionsError[] =
@@ -99,7 +102,7 @@ bool PermissionsRemoveFunction::RunSync() {
   scoped_refptr<const PermissionSet> required =
       PermissionsParser::GetRequiredPermissions(extension());
   scoped_refptr<PermissionSet> intersection(
-      PermissionSet::CreateIntersection(permissions.get(), required));
+      PermissionSet::CreateIntersection(permissions.get(), required.get()));
   if (!intersection->IsEmpty()) {
     error_ = kCantRemoveRequiredPermissionsError;
     return false;
@@ -175,8 +178,16 @@ bool PermissionsRequestFunction::RunAsync() {
 
   // The requested permissions must be defined as optional in the manifest.
   if (!PermissionsParser::GetOptionalPermissions(extension())
-           ->Contains(*requested_permissions_)) {
+           ->Contains(*requested_permissions_.get())) {
     error_ = kNotInOptionalPermissionsError;
+    return false;
+  }
+
+  // Automatically declines api permissions requests, which are blocked by
+  // enterprise policy.
+  if (!ExtensionManagementFactory::GetForBrowserContext(GetProfile())
+           ->IsPermissionSetAllowed(extension(), requested_permissions_)) {
+    error_ = kBlockedByEnterprisePolicy;
     return false;
   }
 
@@ -202,10 +213,10 @@ bool PermissionsRequestFunction::RunAsync() {
   // We don't need to show the prompt if there are no new warnings, or if
   // we're skipping the confirmation UI. All extension types but INTERNAL
   // are allowed to silently increase their permission level.
-  bool has_no_warnings =
-      PermissionMessageProvider::Get()
-          ->GetWarningMessages(requested_permissions_, extension()->GetType())
-          .empty();
+  bool has_no_warnings = PermissionMessageProvider::Get()
+                             ->GetWarningMessages(requested_permissions_.get(),
+                                                  extension()->GetType())
+                             .empty();
   if (auto_confirm_for_tests == PROCEED || has_no_warnings ||
       extension_->location() == Manifest::COMPONENT) {
     InstallUIProceed();

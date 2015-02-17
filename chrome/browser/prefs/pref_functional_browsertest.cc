@@ -4,7 +4,6 @@
 
 #include <string>
 
-#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/prefs/pref_service_syncable.h"
@@ -125,27 +124,18 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestJavascriptEnableDisable) {
             browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
 }
 
-// Verify DNS prefetching pref.
-IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestNetworkPredictionEnabledPref) {
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kNetworkPredictionEnabled));
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kNetworkPredictionEnabled,
-                                               false);
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kNetworkPredictionEnabled));
-}
-
 // Verify restore for bookmark bar visibility.
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest,
                        TestSessionRestoreShowBookmarkBar) {
   EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kShowBookmarkBar));
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+      bookmarks::prefs::kShowBookmarkBar));
+  browser()->profile()->GetPrefs()->SetBoolean(
+      bookmarks::prefs::kShowBookmarkBar, true);
   EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kShowBookmarkBar));
+      bookmarks::prefs::kShowBookmarkBar));
 
   EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kShowBookmarkBar));
+      bookmarks::prefs::kShowBookmarkBar));
   EXPECT_EQ(BookmarkBar::SHOW, browser()->bookmark_bar_state());
 }
 

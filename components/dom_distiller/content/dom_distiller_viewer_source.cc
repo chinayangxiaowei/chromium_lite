@@ -11,6 +11,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
+#include "base/metrics/user_metrics.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/dom_distiller/core/distilled_page_prefs.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/base/url_util.h"
@@ -42,25 +44,23 @@ class DomDistillerViewerSource::RequestViewerHandle
       const std::string& expected_request_path,
       const content::URLDataSource::GotDataCallback& callback,
       DistilledPagePrefs* distilled_page_prefs);
-  virtual ~RequestViewerHandle();
+  ~RequestViewerHandle() override;
 
   // ViewRequestDelegate implementation:
-  virtual void OnArticleReady(
-      const DistilledArticleProto* article_proto) OVERRIDE;
+  void OnArticleReady(const DistilledArticleProto* article_proto) override;
 
-  virtual void OnArticleUpdated(
-      ArticleDistillationUpdate article_update) OVERRIDE;
+  void OnArticleUpdated(ArticleDistillationUpdate article_update) override;
 
   void TakeViewerHandle(scoped_ptr<ViewerHandle> viewer_handle);
 
   // content::WebContentsObserver implementation:
-  virtual void DidNavigateMainFrame(
+  void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) OVERRIDE;
-  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
-  virtual void WebContentsDestroyed() OVERRIDE;
-  virtual void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                             const GURL& validated_url) OVERRIDE;
+      const content::FrameNavigateParams& params) override;
+  void RenderProcessGone(base::TerminationStatus status) override;
+  void WebContentsDestroyed() override;
+  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                     const GURL& validated_url) override;
 
  private:
   // Sends JavaScript to the attached Viewer, buffering data if the viewer isn't
@@ -73,9 +73,9 @@ class DomDistillerViewerSource::RequestViewerHandle
   void Cancel();
 
   // DistilledPagePrefs::Observer implementation:
-  virtual void OnChangeFontFamily(
-      DistilledPagePrefs::FontFamily new_font_family) OVERRIDE;
-  virtual void OnChangeTheme(DistilledPagePrefs::Theme new_theme) OVERRIDE;
+  void OnChangeFontFamily(
+      DistilledPagePrefs::FontFamily new_font_family) override;
+  void OnChangeTheme(DistilledPagePrefs::Theme new_theme) override;
 
   // The handle to the view request towards the DomDistillerService. It
   // needs to be kept around to ensure the distillation request finishes.
@@ -268,7 +268,7 @@ void DomDistillerViewerSource::StartDataRequest(
     const content::URLDataSource::GotDataCallback& callback) {
   content::RenderFrameHost* render_frame_host =
       content::RenderFrameHost::FromID(render_process_id, render_frame_id);
-  DCHECK(render_frame_host);
+  if (!render_frame_host) return;
   content::RenderViewHost* render_view_host =
       render_frame_host->GetRenderViewHost();
   DCHECK(render_view_host);
@@ -284,10 +284,13 @@ void DomDistillerViewerSource::StartDataRequest(
     callback.Run(base::RefCountedString::TakeString(&js));
     return;
   }
+  if (kViewerViewOriginalPath == path) {
+    content::RecordAction(base::UserMetricsAction("DomDistiller_ViewOriginal"));
+    callback.Run(NULL);
+    return;
+  }
   content::WebContents* web_contents =
-      content::WebContents::FromRenderFrameHost(
-          content::RenderFrameHost::FromID(render_process_id,
-                                           render_frame_id));
+      content::WebContents::FromRenderFrameHost(render_frame_host);
   DCHECK(web_contents);
   // An empty |path| is invalid, but guard against it. If not empty, assume
   // |path| starts with '?', which is stripped away.

@@ -6,14 +6,12 @@
 
 #include "base/base_paths.h"
 #include "base/big_endian.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "grit/ui_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -21,6 +19,8 @@
 #include "ui/base/resource/data_pack.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/resources/grit/ui_resources.h"
+
 #if defined(OS_WIN)
 #include "ui/gfx/win/dpi.h"
 #endif
@@ -76,20 +76,20 @@ class MockResourceBundleDelegate : public ui::ResourceBundle::Delegate {
       ui::ScaleFactor scale_factor));
   virtual bool GetRawDataResource(int resource_id,
                                   ui::ScaleFactor scale_factor,
-                                  base::StringPiece* value) OVERRIDE {
+                                  base::StringPiece* value) override {
     *value = GetRawDataResourceMock(resource_id, scale_factor);
     return true;
   }
   MOCK_METHOD1(GetLocalizedStringMock, base::string16(int message_id));
   virtual bool GetLocalizedString(int message_id,
-                                  base::string16* value) OVERRIDE {
+                                  base::string16* value) override {
     *value = GetLocalizedStringMock(message_id);
     return true;
   }
   MOCK_METHOD1(GetFontMock,
                gfx::Font*(ui::ResourceBundle::FontStyle style));
   virtual scoped_ptr<gfx::Font> GetFont(
-      ui::ResourceBundle::FontStyle style) OVERRIDE {
+      ui::ResourceBundle::FontStyle style) override {
     return scoped_ptr<gfx::Font>(GetFontMock(style));
   }
 };
@@ -148,13 +148,10 @@ class ResourceBundleTest : public testing::Test {
   ResourceBundleTest() : resource_bundle_(NULL) {
   }
 
-  virtual ~ResourceBundleTest() {
-  }
+  ~ResourceBundleTest() override {}
 
   // Overridden from testing::Test:
-  virtual void TearDown() OVERRIDE {
-    delete resource_bundle_;
-  }
+  void TearDown() override { delete resource_bundle_; }
 
   // Returns new ResoureBundle with the specified |delegate|. The
   // ResourceBundleTest class manages the lifetime of the returned
@@ -341,7 +338,7 @@ TEST_F(ResourceBundleTest, DelegateGetLocalizedStringWithOverride) {
   EXPECT_EQ(delegate_data, result);
 }
 
-#if defined(USE_OZONE) && !defined(USE_PANGO)
+#if (defined(USE_OZONE) && !defined(USE_PANGO)) || defined(OS_ANDROID)
 #define MAYBE_DelegateGetFontList DISABLED_DelegateGetFontList
 #else
 #define MAYBE_DelegateGetFontList DelegateGetFontList
@@ -379,10 +376,9 @@ class ResourceBundleImageTest : public ResourceBundleTest {
  public:
   ResourceBundleImageTest() {}
 
-  virtual ~ResourceBundleImageTest() {
-  }
+  ~ResourceBundleImageTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     // Create a temporary directory to write test resource bundles to.
     ASSERT_TRUE(dir_.CreateUniqueTempDir());
   }
@@ -472,7 +468,7 @@ TEST_F(ResourceBundleImageTest, GetRawDataResource) {
 // via ResourceBundle::GetImageNamed().
 TEST_F(ResourceBundleImageTest, GetImageNamed) {
 #if defined(OS_WIN)
-  gfx::ForceHighDPISupportForTesting(2.0);
+  gfx::InitDeviceScaleFactor(2.0);
 #endif
   std::vector<ScaleFactor> supported_factors;
   supported_factors.push_back(SCALE_FACTOR_100P);

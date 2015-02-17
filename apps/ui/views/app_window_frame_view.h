@@ -16,6 +16,10 @@
 
 class SkRegion;
 
+namespace extensions {
+class NativeAppWindow;
+}
+
 namespace gfx {
 class Canvas;
 class Point;
@@ -32,8 +36,6 @@ class Widget;
 
 namespace apps {
 
-class NativeAppWindow;
-
 // A frameless or non-Ash, non-panel NonClientFrameView for app windows.
 class AppWindowFrameView : public views::NonClientFrameView,
                            public views::ButtonListener {
@@ -49,7 +51,7 @@ class AppWindowFrameView : public views::NonClientFrameView,
   // TODO(benwells): Refactor this to split out frameless and colored frame
   // views. See http://crbug.com/359432.
   AppWindowFrameView(views::Widget* widget,
-                     NativeAppWindow* window,
+                     extensions::NativeAppWindow* window,
                      bool draw_frame,
                      const SkColor& active_frame_color,
                      const SkColor& inactive_frame_color);
@@ -66,27 +68,28 @@ class AppWindowFrameView : public views::NonClientFrameView,
 
  private:
   // views::NonClientFrameView implementation.
-  virtual gfx::Rect GetBoundsForClientView() const OVERRIDE;
+  virtual gfx::Rect GetBoundsForClientView() const override;
   virtual gfx::Rect GetWindowBoundsForClientBounds(
-      const gfx::Rect& client_bounds) const OVERRIDE;
-  virtual int NonClientHitTest(const gfx::Point& point) OVERRIDE;
+      const gfx::Rect& client_bounds) const override;
+  virtual int NonClientHitTest(const gfx::Point& point) override;
   virtual void GetWindowMask(const gfx::Size& size,
-                             gfx::Path* window_mask) OVERRIDE;
-  virtual void ResetWindowControls() OVERRIDE {}
-  virtual void UpdateWindowIcon() OVERRIDE {}
-  virtual void UpdateWindowTitle() OVERRIDE {}
+                             gfx::Path* window_mask) override;
+  virtual void ResetWindowControls() override {}
+  virtual void UpdateWindowIcon() override {}
+  virtual void UpdateWindowTitle() override {}
+  virtual void SizeConstraintsChanged() override;
 
   // views::View implementation.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
-  virtual const char* GetClassName() const OVERRIDE;
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
-  virtual gfx::Size GetMinimumSize() const OVERRIDE;
-  virtual gfx::Size GetMaximumSize() const OVERRIDE;
+  virtual gfx::Size GetPreferredSize() const override;
+  virtual void Layout() override;
+  virtual const char* GetClassName() const override;
+  virtual void OnPaint(gfx::Canvas* canvas) override;
+  virtual gfx::Size GetMinimumSize() const override;
+  virtual gfx::Size GetMaximumSize() const override;
 
   // views::ButtonListener implementation.
   virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+                             const ui::Event& event) override;
 
   // Some button images we use depend on the color of the frame. This
   // will set these images based on the color of the frame.
@@ -96,7 +99,7 @@ class AppWindowFrameView : public views::NonClientFrameView,
   SkColor CurrentFrameColor();
 
   views::Widget* widget_;
-  NativeAppWindow* window_;
+  extensions::NativeAppWindow* window_;
   bool draw_frame_;
   SkColor active_frame_color_;
   SkColor inactive_frame_color_;

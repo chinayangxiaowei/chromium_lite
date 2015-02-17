@@ -23,8 +23,8 @@
 #endif
 
 #if defined(USE_X11)
-#include "grit/ui_resources.h"
 #include "ui/base/cursor/cursor_loader_x11.h"
+#include "ui/resources/grit/ui_resources.h"
 #endif
 
 namespace ash {
@@ -36,7 +36,7 @@ namespace {
 class MouseEventLocationDelegate : public aura::test::TestWindowDelegate {
  public:
   MouseEventLocationDelegate() {}
-  virtual ~MouseEventLocationDelegate() {}
+  ~MouseEventLocationDelegate() override {}
 
   gfx::Point GetMouseEventLocationAndReset() {
     gfx::Point p = mouse_event_location_;
@@ -44,7 +44,7 @@ class MouseEventLocationDelegate : public aura::test::TestWindowDelegate {
     return p;
   }
 
-  virtual void OnMouseEvent(ui::MouseEvent* event) OVERRIDE {
+  void OnMouseEvent(ui::MouseEvent* event) override {
     mouse_event_location_ = event->location();
     event->SetHandled();
   }
@@ -165,20 +165,12 @@ TEST_F(AshNativeCursorManagerTest, UIScaleShouldNotChangeCursor) {
   CursorManagerTestApi test_api(cursor_manager);
   DisplayManager* display_manager = Shell::GetInstance()->display_manager();
 
-  DisplayInfo::SetAllowUpgradeToHighDPI(false);
   display_manager->SetDisplayUIScale(display_id, 0.5f);
   EXPECT_EQ(1.0f,
             Shell::GetScreen()->GetPrimaryDisplay().device_scale_factor());
   EXPECT_EQ(1.0f, test_api.GetCurrentCursor().device_scale_factor());
 
   display_manager->SetDisplayUIScale(display_id, 1.0f);
-
-  DisplayInfo::SetAllowUpgradeToHighDPI(true);
-  // 1x display should keep using 1x cursor even if the DSF is upgraded to 2x.
-  display_manager->SetDisplayUIScale(display_id, 0.5f);
-  EXPECT_EQ(2.0f,
-            Shell::GetScreen()->GetPrimaryDisplay().device_scale_factor());
-  EXPECT_EQ(1.0f, test_api.GetCurrentCursor().device_scale_factor());
 
   // 2x display should keep using 2x cursor regardless of the UI scale.
   UpdateDisplay("800x800*2");
@@ -192,7 +184,7 @@ TEST_F(AshNativeCursorManagerTest, UIScaleShouldNotChangeCursor) {
 }
 
 #if defined(USE_X11)
-// This test is in ash_unittests becuase ui_unittests does not include
+// This test is in ash_unittests because ui_base_unittests does not include
 // 2x assets. crbug.com/372541.
 TEST_F(AshNativeCursorManagerTest, CursorLoaderX11Test) {
   const int kCursorId = 1;

@@ -2,23 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <atlstr.h>
-#include <wincrypt.h>
 #include <windows.h>
+#include <atlstr.h>
 #include <wintrust.h>
 
 #include "base/base_paths.h"
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
-#include "crypto/sha2.h"
 #include "chrome/app/signature_validator_win.h"
+#include "crypto/sha2.h"
+#include "crypto/wincrypt_shim.h"
 #include "net/cert/test_root_certs.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,7 +36,7 @@ class SignatureValidatorTest : public testing::Test {
  protected:
   SignatureValidatorTest() {}
 
-  void SetUp() OVERRIDE {
+  void SetUp() override {
     test_roots_ = net::TestRootCerts::GetInstance();
     base::FilePath cert_path =
         GetTestCertsDirectory().Append(L"AuthorityCert.cer");
@@ -49,7 +49,7 @@ class SignatureValidatorTest : public testing::Test {
     SetExpectedHash(GetTestCertsDirectory().Append(L"ValidCert.cer"));
   }
 
-  void TearDown() OVERRIDE {
+  void TearDown() override {
     test_roots_->Clear();
     EXPECT_TRUE(test_roots_->IsEmpty());
   }

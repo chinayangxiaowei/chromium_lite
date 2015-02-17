@@ -147,10 +147,13 @@ def GenerateManifest(srcroot, dstroot, desc):
   srcpath = os.path.join(SDK_RESOURCE_DIR, 'manifest.json.template')
   dstpath = os.path.join(outdir, 'manifest.json')
   permissions = desc.get('PERMISSIONS', [])
-  socket_permissions = desc.get('SOCKET_PERMISSIONS', [])
   combined_permissions = list(permissions)
+  socket_permissions = desc.get('SOCKET_PERMISSIONS', [])
   if socket_permissions:
     combined_permissions.append({'socket': socket_permissions})
+  filesystem_permissions = desc.get('FILESYSTEM_PERMISSIONS', [])
+  if filesystem_permissions:
+    combined_permissions.append({'fileSystem': filesystem_permissions})
   pretty_permissions = json.dumps(combined_permissions,
                                   sort_keys=True, indent=4)
   replace = {
@@ -189,28 +192,11 @@ def ModifyDescInPlace(desc):
 
   Currently this consists of:
   - Add -Wall to CXXFLAGS
-  - Synthesize SEL_LDR_LIBS and SEL_LDR_DEPS by stripping
-    down LIBS and DEPS (removing certain ppapi-only libs).
   """
-
-  ppapi_only_libs = ['ppapi_simple']
 
   for target in desc['TARGETS']:
     target.setdefault('CXXFLAGS', [])
     target['CXXFLAGS'].insert(0, '-Wall')
-
-    def filter_out(key):
-      value = target.get(key, [])
-      if type(value) == dict:
-        value = dict(value)
-        for key in value.keys():
-          value[key] = [v for v in value[key] if v not in ppapi_only_libs]
-      else:
-        value = [v for v in value if v not in ppapi_only_libs]
-      return value
-
-    target['SEL_LDR_LIBS'] = filter_out('LIBS')
-    target['SEL_LDR_DEPS'] = filter_out('DEPS')
 
 
 def ProcessProject(pepperdir, srcroot, dstroot, desc, toolchains, configs=None,

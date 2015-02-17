@@ -11,8 +11,8 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
@@ -31,7 +31,6 @@
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/dbus/session_manager_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
@@ -136,11 +135,7 @@ class WallpaperManagerPolicyTest
   WallpaperManagerPolicyTest()
       : LoginManagerTest(true),
         wallpaper_change_count_(0),
-        fake_dbus_thread_manager_(new FakeDBusThreadManager),
         fake_session_manager_client_(new FakeSessionManagerClient) {
-    fake_dbus_thread_manager_->SetFakeClients();
-    fake_dbus_thread_manager_->SetSessionManagerClient(
-        scoped_ptr<SessionManagerClient>(fake_session_manager_client_));
   }
 
   scoped_ptr<policy::UserPolicyBuilder> GetUserPolicyBuilder(
@@ -168,13 +163,15 @@ class WallpaperManagerPolicyTest
   }
 
   // LoginManagerTest:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
-    DBusThreadManager::SetInstanceForTesting(fake_dbus_thread_manager_);
+  virtual void SetUpInProcessBrowserTestFixture() override {
+    DBusThreadManager::GetSetterForTesting()->SetSessionManagerClient(
+        scoped_ptr<SessionManagerClient>(fake_session_manager_client_));
+
     LoginManagerTest::SetUpInProcessBrowserTestFixture();
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir_));
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     // Set the same switches as LoginManagerTest, except that kMultiProfiles is
     // only set when GetParam() is true and except that kLoginProfile is set
     // when GetParam() is false.  The latter seems to be required for the sane
@@ -183,7 +180,7 @@ class WallpaperManagerPolicyTest
     command_line->AppendSwitch(switches::kForceLoginManagerInTests);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     LoginManagerTest::SetUpOnMainThread();
     ash::Shell::GetInstance()->
         desktop_background_controller()->AddObserver(this);
@@ -195,14 +192,14 @@ class WallpaperManagerPolicyTest
     ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     ash::Shell::GetInstance()->
         desktop_background_controller()->RemoveObserver(this);
     LoginManagerTest::TearDownOnMainThread();
   }
 
   // ash::DesktopBackgroundControllerObserver:
-  virtual void OnWallpaperDataChanged() OVERRIDE {
+  virtual void OnWallpaperDataChanged() override {
     ++wallpaper_change_count_;
     if (run_loop_)
       run_loop_->Quit();
@@ -266,7 +263,6 @@ class WallpaperManagerPolicyTest
   scoped_ptr<base::RunLoop> run_loop_;
   int wallpaper_change_count_;
   scoped_ptr<policy::UserPolicyBuilder> user_policy_builders_[2];
-  FakeDBusThreadManager* fake_dbus_thread_manager_;
   FakeSessionManagerClient* fake_session_manager_client_;
 
  private:

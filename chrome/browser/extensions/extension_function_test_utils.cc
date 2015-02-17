@@ -12,12 +12,11 @@
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "components/crx_file/id_util.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/id_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using content::WebContents;
@@ -32,17 +31,14 @@ class TestFunctionDispatcherDelegate
  public:
   explicit TestFunctionDispatcherDelegate(Browser* browser) :
       browser_(browser) {}
-  virtual ~TestFunctionDispatcherDelegate() {}
+  ~TestFunctionDispatcherDelegate() override {}
 
  private:
-  virtual extensions::WindowController* GetExtensionWindowController()
-      const OVERRIDE {
+  extensions::WindowController* GetExtensionWindowController() const override {
     return browser_->extension_window_controller();
   }
 
-  virtual WebContents* GetAssociatedWebContents() const OVERRIDE {
-    return NULL;
-  }
+  WebContents* GetAssociatedWebContents() const override { return NULL; }
 
   Browser* browser_;
 };
@@ -70,21 +66,22 @@ base::DictionaryValue* ParseDictionary(
   return dict;
 }
 
-bool GetBoolean(base::DictionaryValue* val, const std::string& key) {
+bool GetBoolean(const base::DictionaryValue* val, const std::string& key) {
   bool result = false;
   if (!val->GetBoolean(key, &result))
       ADD_FAILURE() << key << " does not exist or is not a boolean.";
   return result;
 }
 
-int GetInteger(base::DictionaryValue* val, const std::string& key) {
+int GetInteger(const base::DictionaryValue* val, const std::string& key) {
   int result = 0;
   if (!val->GetInteger(key, &result))
     ADD_FAILURE() << key << " does not exist or is not an integer.";
   return result;
 }
 
-std::string GetString(base::DictionaryValue* val, const std::string& key) {
+std::string GetString(const base::DictionaryValue* val,
+                      const std::string& key) {
   std::string result;
   if (!val->GetString(key, &result))
     ADD_FAILURE() << key << " does not exist or is not a string.";
@@ -103,23 +100,11 @@ base::ListValue* ToList(base::Value* val) {
   return static_cast<base::ListValue*>(val);
 }
 
-scoped_refptr<Extension> CreateEmptyExtension() {
-  return CreateEmptyExtensionWithLocation(Manifest::INTERNAL);
-}
-
 scoped_refptr<Extension> CreateEmptyExtensionWithLocation(
     Manifest::Location location) {
   scoped_ptr<base::DictionaryValue> test_extension_value(
       ParseDictionary("{\"name\": \"Test\", \"version\": \"1.0\"}"));
   return CreateExtension(location, test_extension_value.get(), std::string());
-}
-
-scoped_refptr<Extension> CreateEmptyExtension(
-    const std::string& id_input) {
-  scoped_ptr<base::DictionaryValue> test_extension_value(
-      ParseDictionary("{\"name\": \"Test\", \"version\": \"1.0\"}"));
-  return CreateExtension(Manifest::INTERNAL, test_extension_value.get(),
-                         id_input);
 }
 
 scoped_refptr<Extension> CreateExtension(
@@ -136,7 +121,7 @@ scoped_refptr<Extension> CreateExtension(
   const base::FilePath test_extension_path;
   std::string id;
   if (!id_input.empty())
-    id = extensions::id_util::GenerateId(id_input);
+    id = crx_file::id_util::GenerateId(id_input);
   scoped_refptr<Extension> extension(Extension::Create(
       test_extension_path,
       location,
@@ -221,9 +206,9 @@ class SendResponseDelegate
     return *response_.get();
   }
 
-  virtual void OnSendResponse(UIThreadExtensionFunction* function,
-                              bool success,
-                              bool bad_message) OVERRIDE {
+  void OnSendResponse(UIThreadExtensionFunction* function,
+                      bool success,
+                      bool bad_message) override {
     ASSERT_FALSE(bad_message);
     ASSERT_FALSE(HasResponse());
     response_.reset(new bool);
@@ -242,6 +227,16 @@ bool RunFunction(UIThreadExtensionFunction* function,
                  const std::string& args,
                  Browser* browser,
                  RunFunctionFlags flags) {
+  scoped_ptr<base::ListValue> parsed_args(ParseList(args));
+  EXPECT_TRUE(parsed_args.get())
+      << "Could not parse extension function arguments: " << args;
+  return RunFunction(function, parsed_args.Pass(), browser, flags);
+}
+
+bool RunFunction(UIThreadExtensionFunction* function,
+                 scoped_ptr<base::ListValue> args,
+                 Browser* browser,
+                 RunFunctionFlags flags) {
   TestFunctionDispatcherDelegate dispatcher_delegate(browser);
   scoped_ptr<extensions::ExtensionFunctionDispatcher> dispatcher(
       new extensions::ExtensionFunctionDispatcher(browser->profile(),
@@ -250,7 +245,7 @@ bool RunFunction(UIThreadExtensionFunction* function,
   // only one place.  See crbug.com/394840.
   return extensions::api_test_utils::RunFunction(
       function,
-      args,
+      args.Pass(),
       browser->profile(),
       dispatcher.Pass(),
       static_cast<extensions::api_test_utils::RunFunctionFlags>(flags));

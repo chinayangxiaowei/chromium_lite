@@ -47,9 +47,10 @@ class BASE_PREFS_EXPORT JsonPrefStore
       base::SequencedWorkerPool* worker_pool);
 
   // Same as the constructor below with no alternate filename.
-  JsonPrefStore(const base::FilePath& pref_filename,
-                base::SequencedTaskRunner* sequenced_task_runner,
-                scoped_ptr<PrefFilter> pref_filter);
+  JsonPrefStore(
+      const base::FilePath& pref_filename,
+      const scoped_refptr<base::SequencedTaskRunner>& sequenced_task_runner,
+      scoped_ptr<PrefFilter> pref_filter);
 
   // |sequenced_task_runner| must be a shutdown-blocking task runner, ideally
   // created by the GetTaskRunnerForFile() method above.
@@ -58,35 +59,34 @@ class BASE_PREFS_EXPORT JsonPrefStore
   // desired prefs may have previously been written to. If |pref_filename|
   // doesn't exist and |pref_alternate_filename| does, |pref_alternate_filename|
   // will be moved to |pref_filename| before the read occurs.
-  JsonPrefStore(const base::FilePath& pref_filename,
-                const base::FilePath& pref_alternate_filename,
-                base::SequencedTaskRunner* sequenced_task_runner,
-                scoped_ptr<PrefFilter> pref_filter);
+  JsonPrefStore(
+      const base::FilePath& pref_filename,
+      const base::FilePath& pref_alternate_filename,
+      const scoped_refptr<base::SequencedTaskRunner>& sequenced_task_runner,
+      scoped_ptr<PrefFilter> pref_filter);
 
   // PrefStore overrides:
-  virtual bool GetValue(const std::string& key,
-                        const base::Value** result) const OVERRIDE;
-  virtual void AddObserver(PrefStore::Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(PrefStore::Observer* observer) OVERRIDE;
-  virtual bool HasObservers() const OVERRIDE;
-  virtual bool IsInitializationComplete() const OVERRIDE;
+  bool GetValue(const std::string& key,
+                const base::Value** result) const override;
+  void AddObserver(PrefStore::Observer* observer) override;
+  void RemoveObserver(PrefStore::Observer* observer) override;
+  bool HasObservers() const override;
+  bool IsInitializationComplete() const override;
 
   // PersistentPrefStore overrides:
-  virtual bool GetMutableValue(const std::string& key,
-                               base::Value** result) OVERRIDE;
-  virtual void SetValue(const std::string& key, base::Value* value) OVERRIDE;
-  virtual void SetValueSilently(const std::string& key,
-                                base::Value* value) OVERRIDE;
-  virtual void RemoveValue(const std::string& key) OVERRIDE;
-  virtual bool ReadOnly() const OVERRIDE;
-  virtual PrefReadError GetReadError() const OVERRIDE;
+  bool GetMutableValue(const std::string& key, base::Value** result) override;
+  void SetValue(const std::string& key, base::Value* value) override;
+  void SetValueSilently(const std::string& key, base::Value* value) override;
+  void RemoveValue(const std::string& key) override;
+  bool ReadOnly() const override;
+  PrefReadError GetReadError() const override;
   // Note this method may be asynchronous if this instance has a |pref_filter_|
   // in which case it will return PREF_READ_ERROR_ASYNCHRONOUS_TASK_INCOMPLETE.
   // See details in pref_filter.h.
-  virtual PrefReadError ReadPrefs() OVERRIDE;
-  virtual void ReadPrefsAsync(ReadErrorDelegate* error_delegate) OVERRIDE;
-  virtual void CommitPendingWrite() OVERRIDE;
-  virtual void ReportValueChanged(const std::string& key) OVERRIDE;
+  PrefReadError ReadPrefs() override;
+  void ReadPrefsAsync(ReadErrorDelegate* error_delegate) override;
+  void CommitPendingWrite() override;
+  void ReportValueChanged(const std::string& key) override;
 
   // Just like RemoveValue(), but doesn't notify observers. Used when doing some
   // cleanup that shouldn't otherwise alert observers.
@@ -98,7 +98,7 @@ class BASE_PREFS_EXPORT JsonPrefStore
       const base::Closure& on_next_successful_write);
 
  private:
-  virtual ~JsonPrefStore();
+  ~JsonPrefStore() override;
 
   // This method is called after the JSON file has been read.  It then hands
   // |value| (or an empty dictionary in some read error cases) to the
@@ -109,7 +109,7 @@ class BASE_PREFS_EXPORT JsonPrefStore
   void OnFileRead(scoped_ptr<ReadResult> read_result);
 
   // ImportantFileWriter::DataSerializer overrides:
-  virtual bool SerializeData(std::string* output) OVERRIDE;
+  bool SerializeData(std::string* output) override;
 
   // This method is called after the JSON file has been read and the result has
   // potentially been intercepted and modified by |pref_filter_|.

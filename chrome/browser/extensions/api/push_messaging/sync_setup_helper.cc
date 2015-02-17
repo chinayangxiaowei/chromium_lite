@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -19,7 +19,6 @@
 #include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {

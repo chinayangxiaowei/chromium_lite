@@ -8,11 +8,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "components/signin/core/common/profile_management_switches.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/ui/webui/chromeos/login/inline_login_handler_chromeos.h"
 #else
@@ -25,12 +26,16 @@ content::WebUIDataSource* CreateWebUIDataSource() {
   content::WebUIDataSource* source =
         content::WebUIDataSource::Create(chrome::kChromeUIChromeSigninHost);
   source->OverrideContentSecurityPolicyFrameSrc("frame-src chrome-extension:;");
-  source->SetUseJsonJSFormatV2();
+  source->OverrideContentSecurityPolicyObjectSrc("object-src *;");
   source->SetJsonPath("strings.js");
 
-  source->SetDefaultResource(IDR_INLINE_LOGIN_HTML);
+  bool is_webview_signin_enabled = switches::IsEnableWebviewBasedSignin();
+  source->SetDefaultResource(is_webview_signin_enabled ?
+      IDR_NEW_INLINE_LOGIN_HTML : IDR_INLINE_LOGIN_HTML);
   source->AddResourcePath("inline_login.css", IDR_INLINE_LOGIN_CSS);
   source->AddResourcePath("inline_login.js", IDR_INLINE_LOGIN_JS);
+  source->AddResourcePath("gaia_auth_host.js", is_webview_signin_enabled ?
+      IDR_GAIA_AUTH_AUTHENTICATOR_JS : IDR_GAIA_AUTH_HOST_JS);
 
   source->AddLocalizedString("title", IDS_CHROME_SIGNIN_TITLE);
   return source;

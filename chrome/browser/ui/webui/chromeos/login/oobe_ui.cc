@@ -6,21 +6,26 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/kiosk_mode/kiosk_mode_settings.h"
 #include "chrome/browser/chromeos/login/enrollment/auto_enrollment_check_screen_actor.h"
 #include "chrome/browser/chromeos/login/enrollment/enrollment_screen_actor.h"
+#include "chrome/browser/chromeos/login/screens/error_screen.h"
+#include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/consumer_management_service.h"
 #include "chrome/browser/chromeos/system/input_device_settings.h"
+#include "chrome/browser/extensions/signin/gaia_auth_extension_loader.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/about_ui.h"
 #include "chrome/browser/ui/webui/chromeos/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/auto_enrollment_check_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/controller_pairing_screen_handler.h"
+#include "chrome/browser/ui/webui/chromeos/login/device_disabled_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/enrollment_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/eula_screen_handler.h"
@@ -33,6 +38,7 @@
 #include "chrome/browser/ui/webui/chromeos/login/network_dropdown_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_state_informer.h"
+#include "chrome/browser/ui/webui/chromeos/login/polymer_resources_map.h"
 #include "chrome/browser/ui/webui/chromeos/login/reset_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/supervised_user_creation_screen_handler.h"
@@ -48,6 +54,7 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
+#include "grit/chrome_unscaled_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
 
@@ -68,11 +75,18 @@ const char kLoginJSPath[] = "login.js";
 const char kOobeJSPath[] = "oobe.js";
 const char kKeyboardUtilsJSPath[] = "keyboard_utils.js";
 const char kDemoUserLoginJSPath[] = "demo_user_login.js";
+const char kCustomElementsHTMLPath[] = "custom_elements.html";
+const char kCustomElementsJSPath[] = "custom_elements.js";
 
 // Paths for deferred resource loading.
 const char kEnrollmentHTMLPath[] = "enrollment.html";
 const char kEnrollmentCSSPath[] = "enrollment.css";
 const char kEnrollmentJSPath[] = "enrollment.js";
+
+void AddPolymerResourcesPaths(content::WebUIDataSource* source) {
+  for (const auto& mapping: GetPolymerResourcesMap())
+    source->AddResourcePath(mapping.first, mapping.second);
+}
 
 // Creates a WebUIDataSource for chrome://oobe
 content::WebUIDataSource* CreateOobeUIDataSource(
@@ -80,7 +94,6 @@ content::WebUIDataSource* CreateOobeUIDataSource(
     const std::string& display_type) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIOobeHost);
-  source->SetUseJsonJSFormatV2();
   source->AddLocalizedStrings(localized_strings);
   source->SetJsonPath(kStringsJSPath);
 
@@ -98,13 +111,26 @@ content::WebUIDataSource* CreateOobeUIDataSource(
   }
   source->AddResourcePath(kKeyboardUtilsJSPath, IDR_KEYBOARD_UTILS_JS);
   source->OverrideContentSecurityPolicyFrameSrc(
-      "frame-src chrome://terms/ "
-      "chrome-extension://mfffpogegjflfpflabcdkioaeobkgjik/;");
+      base::StringPrintf(
+          "frame-src chrome://terms/ %s/;",
+          extensions::kGaiaAuthExtensionOrigin));
 
   // Serve deferred resources.
   source->AddResourcePath(kEnrollmentHTMLPath, IDR_OOBE_ENROLLMENT_HTML);
   source->AddResourcePath(kEnrollmentCSSPath, IDR_OOBE_ENROLLMENT_CSS);
   source->AddResourcePath(kEnrollmentJSPath, IDR_OOBE_ENROLLMENT_JS);
+
+  if (display_type == OobeUI::kOobeDisplay) {
+    AddPolymerResourcesPaths(source);
+    source->AddResourcePath(kCustomElementsHTMLPath, IDR_CUSTOM_ELEMENTS_HTML);
+    source->AddResourcePath(kCustomElementsJSPath, IDR_CUSTOM_ELEMENTS_JS);
+
+    source->AddResourcePath("Roboto-Thin.ttf", IDR_FONT_ROBOTO_THIN);
+    source->AddResourcePath("Roboto-Light.ttf", IDR_FONT_ROBOTO_LIGHT);
+    source->AddResourcePath("Roboto-Regular.ttf", IDR_FONT_ROBOTO_REGULAR);
+    source->AddResourcePath("Roboto-Medium.ttf", IDR_FONT_ROBOTO_MEDIUM);
+    source->AddResourcePath("Roboto-Bold.ttf", IDR_FONT_ROBOTO_BOLD);
+  }
 
   return source;
 }
@@ -155,6 +181,7 @@ const char OobeUI::kScreenConfirmPassword[] = "confirm-password";
 const char OobeUI::kScreenFatalError[] = "fatal-error";
 const char OobeUI::kScreenControllerPairing[] = "controller-pairing";
 const char OobeUI::kScreenHostPairing[] = "host-pairing";
+const char OobeUI::kScreenDeviceDisabled[] = "device-disabled";
 
 OobeUI::OobeUI(content::WebUI* web_ui, const GURL& url)
     : WebUIController(web_ui),
@@ -170,6 +197,10 @@ OobeUI::OobeUI(content::WebUI* web_ui, const GURL& url)
       wrong_hwid_screen_actor_(NULL),
       auto_enrollment_check_screen_actor_(NULL),
       supervised_user_creation_screen_actor_(NULL),
+      app_launch_splash_screen_actor_(NULL),
+      controller_pairing_screen_actor_(NULL),
+      host_pairing_screen_actor_(NULL),
+      device_disabled_screen_actor_(NULL),
       error_screen_handler_(NULL),
       signin_screen_handler_(NULL),
       terms_of_service_screen_actor_(NULL),
@@ -244,6 +275,15 @@ OobeUI::OobeUI(content::WebUI* web_ui, const GURL& url)
   error_screen_handler_ = new ErrorScreenHandler(network_state_informer_);
   AddScreenHandler(error_screen_handler_);
 
+  // Initialize ErrorScreen if it hasn't initialized.
+  if (WizardController::default_controller()) {
+    BaseScreen* screen = WizardController::default_controller()->GetScreen(
+        WizardController::kErrorScreenName);
+    CHECK(screen);
+  } else {
+    error_screen_.reset(new ErrorScreen(nullptr, error_screen_handler_));
+  }
+
   EnrollmentScreenHandler* enrollment_screen_handler =
       new EnrollmentScreenHandler(network_state_informer_,
                                   error_screen_handler_);
@@ -264,7 +304,8 @@ OobeUI::OobeUI(content::WebUI* web_ui, const GURL& url)
       g_browser_process->platform_part()->browser_policy_connector_chromeos()->
           GetConsumerManagementService();
   gaia_screen_handler_ =
-      new GaiaScreenHandler(network_state_informer_, consumer_management);
+      new GaiaScreenHandler(
+          core_handler_, network_state_informer_, consumer_management);
   AddScreenHandler(gaia_screen_handler_);
 
   signin_screen_handler_ = new SigninScreenHandler(network_state_informer_,
@@ -291,6 +332,11 @@ OobeUI::OobeUI(content::WebUI* web_ui, const GURL& url)
     host_pairing_screen_actor_ = handler;
     AddScreenHandler(handler);
   }
+
+  DeviceDisabledScreenHandler* device_disabled_screen_handler =
+      new DeviceDisabledScreenHandler;
+  device_disabled_screen_actor_ = device_disabled_screen_handler;
+  AddScreenHandler(device_disabled_screen_handler);
 
   // Initialize KioskAppMenuHandler. Note that it is NOT a screen handler.
   kiosk_app_menu_handler_ = new KioskAppMenuHandler(network_state_informer_);
@@ -381,6 +427,10 @@ HostPairingScreenActor* OobeUI::GetHostPairingScreenActor() {
   return host_pairing_screen_actor_;
 }
 
+DeviceDisabledScreenActor* OobeUI::GetDeviceDisabledScreenActor() {
+  return device_disabled_screen_actor_;
+}
+
 UserImageScreenActor* OobeUI::GetUserImageScreenActor() {
   return user_image_screen_actor_;
 }
@@ -456,6 +506,7 @@ void OobeUI::InitializeScreenMaps() {
   screen_names_[SCREEN_FATAL_ERROR] = kScreenFatalError;
   screen_names_[SCREEN_OOBE_CONTROLLER_PAIRING] = kScreenControllerPairing;
   screen_names_[SCREEN_OOBE_HOST_PAIRING] = kScreenHostPairing;
+  screen_names_[SCREEN_DEVICE_DISABLED] = kScreenDeviceDisabled;
 
   screen_ids_.clear();
   for (size_t i = 0; i < screen_names_.size(); ++i)

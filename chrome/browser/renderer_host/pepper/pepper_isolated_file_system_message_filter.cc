@@ -5,7 +5,9 @@
 #include "chrome/browser/renderer_host/pepper/pepper_isolated_file_system_message_filter.h"
 
 #include "chrome/browser/browser_process.h"
+#if defined(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/extension_service.h"
+#endif
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
@@ -14,17 +16,19 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/render_view_host.h"
+#if defined(ENABLE_EXTENSIONS)
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
+#endif
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/host/dispatch_host_message.h"
 #include "ppapi/host/host_message_context.h"
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/shared_impl/file_system_util.h"
-#include "webkit/browser/fileapi/isolated_context.h"
+#include "storage/browser/fileapi/isolated_context.h"
 
 namespace chrome {
 
@@ -98,6 +102,7 @@ Profile* PepperIsolatedFileSystemMessageFilter::GetProfile() {
 
 std::string PepperIsolatedFileSystemMessageFilter::CreateCrxFileSystem(
     Profile* profile) {
+#if defined(ENABLE_EXTENSIONS)
   extensions::ExtensionSystem* extension_system =
       extensions::ExtensionSystem::Get(profile);
   if (!extension_system)
@@ -115,11 +120,14 @@ std::string PepperIsolatedFileSystemMessageFilter::CreateCrxFileSystem(
 
   // First level directory for isolated filesystem to lookup.
   std::string kFirstLevelDirectory("crxfs");
-  return fileapi::IsolatedContext::GetInstance()->RegisterFileSystemForPath(
-      fileapi::kFileSystemTypeNativeLocal,
+  return storage::IsolatedContext::GetInstance()->RegisterFileSystemForPath(
+      storage::kFileSystemTypeNativeLocal,
       std::string(),
       extension->path(),
       &kFirstLevelDirectory);
+#else
+  return std::string();
+#endif
 }
 
 int32_t PepperIsolatedFileSystemMessageFilter::OnOpenFileSystem(
@@ -141,6 +149,7 @@ int32_t PepperIsolatedFileSystemMessageFilter::OnOpenFileSystem(
 
 int32_t PepperIsolatedFileSystemMessageFilter::OpenCrxFileSystem(
     ppapi::host::HostMessageContext* context) {
+#if defined(ENABLE_EXTENSIONS)
   Profile* profile = GetProfile();
   const extensions::ExtensionSet* extension_set = NULL;
   if (profile) {
@@ -173,6 +182,9 @@ int32_t PepperIsolatedFileSystemMessageFilter::OpenCrxFileSystem(
 
   context->reply_msg = PpapiPluginMsg_IsolatedFileSystem_BrowserOpenReply(fsid);
   return PP_OK;
+#else
+  return PP_ERROR_NOTSUPPORTED;
+#endif
 }
 
 int32_t PepperIsolatedFileSystemMessageFilter::OpenPluginPrivateFileSystem(
@@ -185,8 +197,8 @@ int32_t PepperIsolatedFileSystemMessageFilter::OpenPluginPrivateFileSystem(
   const std::string& root_name = ppapi::IsolatedFileSystemTypeToRootName(
       PP_ISOLATEDFILESYSTEMTYPE_PRIVATE_PLUGINPRIVATE);
   const std::string& fsid =
-      fileapi::IsolatedContext::GetInstance()->RegisterFileSystemForVirtualPath(
-          fileapi::kFileSystemTypePluginPrivate, root_name, base::FilePath());
+      storage::IsolatedContext::GetInstance()->RegisterFileSystemForVirtualPath(
+          storage::kFileSystemTypePluginPrivate, root_name, base::FilePath());
 
   // Grant full access of isolated filesystem to renderer process.
   content::ChildProcessSecurityPolicy* policy =

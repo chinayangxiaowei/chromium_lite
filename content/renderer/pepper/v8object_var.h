@@ -23,18 +23,18 @@ namespace ppapi {
 
 // Represents a JavaScript object Var. By itself, this represents random
 // v8 objects that a given plugin (identified by the resource's module) wants to
-// reference. If two different modules reference the same NPObject (like the
+// reference. If two different modules reference the same v8 object (like the
 // "window" object), then there will be different V8ObjectVar's (and hence
 // PP_Var IDs) for each module. This allows us to track all references owned by
 // a given module and free them when the plugin exits independently of other
 // plugins that may be running at the same time.
-class V8ObjectVar : public Var {
+class CONTENT_EXPORT V8ObjectVar : public Var {
  public:
   V8ObjectVar(PP_Instance instance, v8::Handle<v8::Object> v8_object);
 
   // Var overrides.
-  virtual V8ObjectVar* AsV8ObjectVar() OVERRIDE;
-  virtual PP_VarType GetType() const OVERRIDE;
+  V8ObjectVar* AsV8ObjectVar() override;
+  PP_VarType GetType() const override;
 
   // Returns the underlying v8 object corresponding to this V8ObjectVar. This
   // should only be used on the stack.
@@ -49,10 +49,10 @@ class V8ObjectVar : public Var {
 
   // Helper function that converts a PP_Var to an object. This will return NULL
   // if the PP_Var is not of object type or the object is invalid.
-  CONTENT_EXPORT static scoped_refptr<V8ObjectVar> FromPPVar(PP_Var var);
+  static scoped_refptr<V8ObjectVar> FromPPVar(PP_Var var);
 
  private:
-  virtual ~V8ObjectVar();
+  ~V8ObjectVar() override;
 
   content::PepperPluginInstanceImpl* instance_;
 

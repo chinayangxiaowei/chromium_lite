@@ -30,9 +30,9 @@ namespace views {
 class DesktopCaptureControllerTest : public ViewsTestBase {
  public:
   DesktopCaptureControllerTest() {}
-  virtual ~DesktopCaptureControllerTest() {}
+  ~DesktopCaptureControllerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     gfx::GLSurface::InitializeOneOffForTests();
     ui::RegisterPathProvider();
     base::FilePath ui_test_pak_path;
@@ -50,7 +50,7 @@ class DesktopViewInputTest : public View {
   DesktopViewInputTest()
       : received_gesture_event_(false) {}
 
-  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE {
+  void OnGestureEvent(ui::GestureEvent* event) override {
     received_gesture_event_ = true;
     return View::OnGestureEvent(event);
   }
@@ -167,12 +167,11 @@ TEST_F(DesktopCaptureControllerTest, CaptureWindowInputEventTest) {
   EXPECT_FALSE(widget2->GetNativeView()->HasCapture());
   EXPECT_EQ(capture_client->GetCaptureWindow(), widget1->GetNativeView());
 
-  ui::GestureEvent g1(
-      80,
-      80,
-      0,
-      base::TimeDelta(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS, 0.0f, 0.0f));
+  ui::GestureEvent g1(80,
+                      80,
+                      0,
+                      base::TimeDelta(),
+                      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
   details = root1->OnEventFromSource(&g1);
   EXPECT_FALSE(details.dispatcher_destroyed);
   EXPECT_FALSE(details.target_destroyed);

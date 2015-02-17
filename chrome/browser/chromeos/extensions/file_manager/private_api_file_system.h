@@ -16,11 +16,12 @@ class GURL;
 
 namespace base {
 class FilePath;
-}
+}  // namespace base
 
-namespace fileapi {
+namespace storage {
 class FileSystemContext;
-}
+class FileSystemURL;
+}  // namespace storage
 
 namespace file_manager {
 namespace util {
@@ -31,18 +32,18 @@ typedef std::vector<EntryDefinition> EntryDefinitionList;
 
 namespace extensions {
 
-// Implements the chrome.fileBrowserPrivate.requestFileSystem method.
-class FileBrowserPrivateRequestFileSystemFunction
+// Implements the chrome.fileManagerPrivate.requestFileSystem method.
+class FileManagerPrivateRequestFileSystemFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.requestFileSystem",
-                             FILEBROWSERPRIVATE_REQUESTFILESYSTEM)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.requestFileSystem",
+                             FILEMANAGERPRIVATE_REQUESTFILESYSTEM)
 
  protected:
-  virtual ~FileBrowserPrivateRequestFileSystemFunction() {}
+  virtual ~FileManagerPrivateRequestFileSystemFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 
  private:
   void RespondSuccessOnUIThread(const std::string& name,
@@ -56,7 +57,7 @@ class FileBrowserPrivateRequestFileSystemFunction
   // Sets up file system access permissions to the extension identified by
   // |child_id|.
   bool SetupFileSystemAccessPermissions(
-      scoped_refptr<fileapi::FileSystemContext> file_system_context,
+      scoped_refptr<storage::FileSystemContext> file_system_context,
       int child_id,
       Profile* profile,
       scoped_refptr<const extensions::Extension> extension);
@@ -66,74 +67,75 @@ class FileBrowserPrivateRequestFileSystemFunction
       const file_manager::util::EntryDefinition& entry_definition);
 };
 
-// Base class for FileBrowserPrivateAddFileWatchFunction and
-// FileBrowserPrivateRemoveFileWatchFunction. Although it's called "FileWatch",
+// Base class for FileManagerPrivateAddFileWatchFunction and
+// FileManagerPrivateRemoveFileWatchFunction. Although it's called "FileWatch",
 // the class and its sub classes are used only for watching changes in
 // directories.
 class FileWatchFunctionBase : public LoggedAsyncExtensionFunction {
+ public:
+  // Calls SendResponse() with |success| converted to base::Value.
+  void Respond(bool success);
+
  protected:
   virtual ~FileWatchFunctionBase() {}
 
   // Performs a file watch operation (ex. adds or removes a file watch).
   virtual void PerformFileWatchOperation(
-      const base::FilePath& local_path,
-      const base::FilePath& virtual_path,
+      scoped_refptr<storage::FileSystemContext> file_system_context,
+      const storage::FileSystemURL& file_system_url,
       const std::string& extension_id) = 0;
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
-
-  // Calls SendResponse() with |success| converted to base::Value.
-  void Respond(bool success);
+  virtual bool RunAsync() override;
 };
 
-// Implements the chrome.fileBrowserPrivate.addFileWatch method.
+// Implements the chrome.fileManagerPrivate.addFileWatch method.
 // Starts watching changes in directories.
-class FileBrowserPrivateAddFileWatchFunction : public FileWatchFunctionBase {
+class FileManagerPrivateAddFileWatchFunction : public FileWatchFunctionBase {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.addFileWatch",
-                             FILEBROWSERPRIVATE_ADDFILEWATCH)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.addFileWatch",
+                             FILEMANAGERPRIVATE_ADDFILEWATCH)
 
  protected:
-  virtual ~FileBrowserPrivateAddFileWatchFunction() {}
+  virtual ~FileManagerPrivateAddFileWatchFunction() {}
 
   // FileWatchFunctionBase override.
   virtual void PerformFileWatchOperation(
-      const base::FilePath& local_path,
-      const base::FilePath& virtual_path,
-      const std::string& extension_id) OVERRIDE;
+      scoped_refptr<storage::FileSystemContext> file_system_context,
+      const storage::FileSystemURL& file_system_url,
+      const std::string& extension_id) override;
 };
 
 
-// Implements the chrome.fileBrowserPrivate.removeFileWatch method.
+// Implements the chrome.fileManagerPrivate.removeFileWatch method.
 // Stops watching changes in directories.
-class FileBrowserPrivateRemoveFileWatchFunction : public FileWatchFunctionBase {
+class FileManagerPrivateRemoveFileWatchFunction : public FileWatchFunctionBase {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.removeFileWatch",
-                             FILEBROWSERPRIVATE_REMOVEFILEWATCH)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.removeFileWatch",
+                             FILEMANAGERPRIVATE_REMOVEFILEWATCH)
 
  protected:
-  virtual ~FileBrowserPrivateRemoveFileWatchFunction() {}
+  virtual ~FileManagerPrivateRemoveFileWatchFunction() {}
 
   // FileWatchFunctionBase override.
   virtual void PerformFileWatchOperation(
-      const base::FilePath& local_path,
-      const base::FilePath& virtual_path,
-      const std::string& extension_id) OVERRIDE;
+      scoped_refptr<storage::FileSystemContext> file_system_context,
+      const storage::FileSystemURL& file_system_url,
+      const std::string& extension_id) override;
 };
 
-// Implements the chrome.fileBrowserPrivate.getSizeStats method.
-class FileBrowserPrivateGetSizeStatsFunction
+// Implements the chrome.fileManagerPrivate.getSizeStats method.
+class FileManagerPrivateGetSizeStatsFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.getSizeStats",
-                             FILEBROWSERPRIVATE_GETSIZESTATS)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.getSizeStats",
+                             FILEMANAGERPRIVATE_GETSIZESTATS)
 
  protected:
-  virtual ~FileBrowserPrivateGetSizeStatsFunction() {}
+  virtual ~FileManagerPrivateGetSizeStatsFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 
  private:
   void GetDriveAvailableSpaceCallback(drive::FileError error,
@@ -144,83 +146,83 @@ class FileBrowserPrivateGetSizeStatsFunction
                             const uint64* remaining_size);
 };
 
-// Implements the chrome.fileBrowserPrivate.validatePathNameLength method.
-class FileBrowserPrivateValidatePathNameLengthFunction
+// Implements the chrome.fileManagerPrivate.validatePathNameLength method.
+class FileManagerPrivateValidatePathNameLengthFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.validatePathNameLength",
-                             FILEBROWSERPRIVATE_VALIDATEPATHNAMELENGTH)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.validatePathNameLength",
+                             FILEMANAGERPRIVATE_VALIDATEPATHNAMELENGTH)
 
  protected:
-  virtual ~FileBrowserPrivateValidatePathNameLengthFunction() {}
+  virtual ~FileManagerPrivateValidatePathNameLengthFunction() {}
 
   void OnFilePathLimitRetrieved(size_t current_length, size_t max_length);
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 };
 
-// Implements the chrome.fileBrowserPrivate.formatVolume method.
+// Implements the chrome.fileManagerPrivate.formatVolume method.
 // Formats Volume given its mount path.
-class FileBrowserPrivateFormatVolumeFunction
+class FileManagerPrivateFormatVolumeFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.formatVolume",
-                             FILEBROWSERPRIVATE_FORMATVOLUME)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.formatVolume",
+                             FILEMANAGERPRIVATE_FORMATVOLUME)
 
  protected:
-  virtual ~FileBrowserPrivateFormatVolumeFunction() {}
+  virtual ~FileManagerPrivateFormatVolumeFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 };
 
-// Implements the chrome.fileBrowserPrivate.startCopy method.
-class FileBrowserPrivateStartCopyFunction
+// Implements the chrome.fileManagerPrivate.startCopy method.
+class FileManagerPrivateStartCopyFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.startCopy",
-                             FILEBROWSERPRIVATE_STARTCOPY)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.startCopy",
+                             FILEMANAGERPRIVATE_STARTCOPY)
 
  protected:
-  virtual ~FileBrowserPrivateStartCopyFunction() {}
+  virtual ~FileManagerPrivateStartCopyFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 
  private:
   // Part of RunAsync(). Called after Copy() is started on IO thread.
   void RunAfterStartCopy(int operation_id);
 };
 
-// Implements the chrome.fileBrowserPrivate.cancelCopy method.
-class FileBrowserPrivateCancelCopyFunction
+// Implements the chrome.fileManagerPrivate.cancelCopy method.
+class FileManagerPrivateCancelCopyFunction
     : public LoggedAsyncExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("fileBrowserPrivate.cancelCopy",
-                             FILEBROWSERPRIVATE_CANCELCOPY)
+  DECLARE_EXTENSION_FUNCTION("fileManagerPrivate.cancelCopy",
+                             FILEMANAGERPRIVATE_CANCELCOPY)
 
  protected:
-  virtual ~FileBrowserPrivateCancelCopyFunction() {}
+  virtual ~FileManagerPrivateCancelCopyFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 };
 
-// Implements the chrome.fileBrowserPrivateInternal.resolveIsolatedEntries
+// Implements the chrome.fileManagerPrivateInternal.resolveIsolatedEntries
 // method.
-class FileBrowserPrivateInternalResolveIsolatedEntriesFunction
+class FileManagerPrivateInternalResolveIsolatedEntriesFunction
     : public ChromeAsyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION(
-      "fileBrowserPrivateInternal.resolveIsolatedEntries",
-      FILEBROWSERPRIVATE_RESOLVEISOLATEDENTRIES)
+      "fileManagerPrivateInternal.resolveIsolatedEntries",
+      FILEMANAGERPRIVATE_RESOLVEISOLATEDENTRIES)
 
  protected:
-  virtual ~FileBrowserPrivateInternalResolveIsolatedEntriesFunction() {}
+  virtual ~FileManagerPrivateInternalResolveIsolatedEntriesFunction() {}
 
   // AsyncExtensionFunction overrides.
-  virtual bool RunAsync() OVERRIDE;
+  virtual bool RunAsync() override;
 
  private:
   void RunAsyncAfterConvertFileDefinitionListToEntryDefinitionList(scoped_ptr<

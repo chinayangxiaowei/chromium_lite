@@ -10,11 +10,11 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string16.h"
-#include "chrome/browser/sync/glue/device_info.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/sync_driver/change_processor.h"
 #include "components/sync_driver/data_type_controller.h"
+#include "components/sync_driver/device_info.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/protocol/sync_protocol_error.h"
@@ -70,6 +70,7 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_METHOD0(GetJsController, base::WeakPtr<syncer::JsController>());
   MOCK_CONST_METHOD0(HasSyncSetupCompleted, bool());
 
+  MOCK_CONST_METHOD0(EncryptEverythingAllowed, bool());
   MOCK_CONST_METHOD0(EncryptEverythingEnabled, bool());
   MOCK_METHOD0(EnableEncryptEverything, void());
 
@@ -87,25 +88,18 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_CONST_METHOD0(FirstSetupInProgress, bool());
   MOCK_CONST_METHOD0(GetLastSyncedTimeString, base::string16());
   MOCK_CONST_METHOD0(HasUnrecoverableError, bool());
-  MOCK_CONST_METHOD0(sync_initialized, bool());
+  MOCK_CONST_METHOD0(SyncActive, bool());
+  MOCK_CONST_METHOD0(backend_initialized, bool());
   MOCK_CONST_METHOD0(IsStartSuppressed, bool());
   MOCK_CONST_METHOD0(waiting_for_auth, bool());
-  MOCK_METHOD1(OnActionableError, void(
-      const syncer::SyncProtocolError&));
+  MOCK_METHOD1(OnActionableError, void(const syncer::SyncProtocolError&));
   MOCK_METHOD1(SetSetupInProgress, void(bool));
-  MOCK_CONST_METHOD0(IsSessionsDataTypeControllerRunning, bool());
-
-  MOCK_CONST_METHOD0(GetAllSignedInDevicesMock,
-                     std::vector<browser_sync::DeviceInfo*>* ());
-  // This is to get around the fact that GMOCK does not handle Scoped*.
-  virtual ScopedVector<browser_sync::DeviceInfo>
-      GetAllSignedInDevices() const OVERRIDE;
+  MOCK_CONST_METHOD1(IsDataTypeControllerRunning, bool(syncer::ModelType));
 
   // DataTypeManagerObserver mocks.
   MOCK_METHOD0(OnConfigureBlocked, void());
   MOCK_METHOD1(OnConfigureDone,
                void(const sync_driver::DataTypeManager::ConfigureResult&));
-  MOCK_METHOD0(OnConfigureRetry, void());
   MOCK_METHOD0(OnConfigureStart, void());
 
   MOCK_METHOD0(IsSyncEnabledAndLoggedIn, bool());

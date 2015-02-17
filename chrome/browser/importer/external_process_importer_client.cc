@@ -12,10 +12,10 @@
 #include "chrome/common/importer/firefox_importer_utils.h"
 #include "chrome/common/importer/imported_bookmark_entry.h"
 #include "chrome/common/importer/profile_import_process_messages.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/utility_process_host.h"
 #include "grit/components_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using content::BrowserThread;
@@ -106,6 +106,10 @@ bool ExternalProcessImporterClient::OnMessageReceived(
                         OnKeywordsImportReady)
     IPC_MESSAGE_HANDLER(ProfileImportProcessHostMsg_NotifyFirefoxSearchEngData,
                         OnFirefoxSearchEngineDataReceived)
+    IPC_MESSAGE_HANDLER(ProfileImportProcessHostMsg_AutofillFormDataImportStart,
+                        OnAutofillFormDataImportStart)
+    IPC_MESSAGE_HANDLER(ProfileImportProcessHostMsg_AutofillFormDataImportGroup,
+                        OnAutofillFormDataImportGroup)
 #if defined(OS_WIN)
     IPC_MESSAGE_HANDLER(ProfileImportProcessHostMsg_NotifyIE7PasswordInfo,
                         OnIE7PasswordReceived)
@@ -170,7 +174,7 @@ void ExternalProcessImporterClient::OnHistoryImportGroup(
 
   history_rows_.insert(history_rows_.end(), history_rows_group.begin(),
                        history_rows_group.end());
-  if (history_rows_.size() == total_history_rows_count_)
+  if (history_rows_.size() >= total_history_rows_count_)
     bridge_->SetHistoryItems(history_rows_,
                              static_cast<importer::VisitSource>(visit_source));
 }
@@ -203,7 +207,7 @@ void ExternalProcessImporterClient::OnBookmarksImportGroup(
   // total_bookmarks_count_:
   bookmarks_.insert(bookmarks_.end(), bookmarks_group.begin(),
                     bookmarks_group.end());
-  if (bookmarks_.size() == total_bookmarks_count_)
+  if (bookmarks_.size() >= total_bookmarks_count_)
     bridge_->AddBookmarks(bookmarks_, bookmarks_first_folder_name_);
 }
 
@@ -223,7 +227,7 @@ void ExternalProcessImporterClient::OnFaviconsImportGroup(
 
   favicons_.insert(favicons_.end(), favicons_group.begin(),
                     favicons_group.end());
-  if (favicons_.size() == total_favicons_count_)
+  if (favicons_.size() >= total_favicons_count_)
     bridge_->SetFavicons(favicons_);
 }
 
@@ -248,6 +252,28 @@ void ExternalProcessImporterClient::OnFirefoxSearchEngineDataReceived(
   if (cancelled_)
     return;
   bridge_->SetFirefoxSearchEnginesXMLData(search_engine_data);
+}
+
+void ExternalProcessImporterClient::OnAutofillFormDataImportStart(
+    size_t total_autofill_form_data_entry_count) {
+  if (cancelled_)
+    return;
+
+  total_autofill_form_data_entry_count_ = total_autofill_form_data_entry_count;
+  autofill_form_data_.reserve(total_autofill_form_data_entry_count);
+}
+
+void ExternalProcessImporterClient::OnAutofillFormDataImportGroup(
+    const std::vector<ImporterAutofillFormDataEntry>&
+        autofill_form_data_entry_group) {
+  if (cancelled_)
+    return;
+
+  autofill_form_data_.insert(autofill_form_data_.end(),
+                             autofill_form_data_entry_group.begin(),
+                             autofill_form_data_entry_group.end());
+  if (autofill_form_data_.size() >= total_autofill_form_data_entry_count_)
+    bridge_->SetAutofillFormData(autofill_form_data_);
 }
 
 #if defined(OS_WIN)

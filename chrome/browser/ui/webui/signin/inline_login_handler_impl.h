@@ -11,7 +11,6 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/sync/one_click_signin_sync_starter.h"
 #include "chrome/browser/ui/webui/signin/inline_login_handler.h"
-#include "content/public/browser/web_contents_delegate.h"
 
 class GaiaAuthFetcher;
 
@@ -19,11 +18,10 @@ class GaiaAuthFetcher;
 // CrOS migrates to the same webview approach as desktop Chrome, much of the
 // code in this class should move to its base class |InlineLoginHandler|.
 class InlineLoginHandlerImpl : public InlineLoginHandler,
-                               public content::WebContentsDelegate,
                                public content::WebContentsObserver {
  public:
   InlineLoginHandlerImpl();
-  virtual ~InlineLoginHandlerImpl();
+  ~InlineLoginHandlerImpl() override;
 
   using InlineLoginHandler::web_ui;
 
@@ -40,23 +38,20 @@ class InlineLoginHandlerImpl : public InlineLoginHandler,
 
  private:
   // InlineLoginHandler overrides:
-  virtual void SetExtraInitParams(base::DictionaryValue& params) OVERRIDE;
-  virtual void CompleteLogin(const base::ListValue* args) OVERRIDE;
-
-  // Overridden from content::WebContentsDelegate.
-  virtual bool HandleContextMenu(
-      const content::ContextMenuParams& params) OVERRIDE;
+  void SetExtraInitParams(base::DictionaryValue& params) override;
+  void CompleteLogin(const base::ListValue* args) override;
 
   // Overridden from content::WebContentsObserver overrides.
-  virtual void DidCommitProvisionalLoadForFrame(
+  void DidCommitProvisionalLoadForFrame(
       content::RenderFrameHost* render_frame_host,
       const GURL& url,
-      content::PageTransition transition_type) OVERRIDE;
+      ui::PageTransition transition_type) override;
 
-  base::WeakPtrFactory<InlineLoginHandlerImpl> weak_factory_;
   // True if the user has navigated to untrusted domains during the signin
   // process.
   bool confirm_untrusted_signin_;
+
+  base::WeakPtrFactory<InlineLoginHandlerImpl> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(InlineLoginHandlerImpl);
 };

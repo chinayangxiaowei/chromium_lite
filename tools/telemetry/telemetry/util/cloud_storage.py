@@ -14,12 +14,20 @@ import sys
 import tarfile
 import urllib2
 
-from telemetry.core.backends.chrome import cros_interface
+from telemetry.core import platform
 from telemetry.util import path
+
 
 PUBLIC_BUCKET = 'chromium-telemetry'
 PARTNER_BUCKET = 'chrome-partner-telemetry'
 INTERNAL_BUCKET = 'chrome-telemetry'
+
+
+BUCKET_ALIASES = {
+    'public': PUBLIC_BUCKET,
+    'partner': PARTNER_BUCKET,
+    'internal': INTERNAL_BUCKET,
+}
 
 
 _GSUTIL_URL = 'http://storage.googleapis.com/pub/gsutil.tar.gz'
@@ -28,13 +36,14 @@ _DOWNLOAD_PATH = os.path.join(path.GetTelemetryDir(), 'third_party', 'gsutil')
 #     http://crbug.com/359293. See |_RunCommand|.
 _CROS_GSUTIL_HOME_WAR = '/home/chromeos-test/'
 
+
 class CloudStorageError(Exception):
   @staticmethod
   def _GetConfigInstructions(gsutil_path):
     if SupportsProdaccess(gsutil_path) and _FindExecutableInPath('prodaccess'):
       return 'Run prodaccess to authenticate.'
     else:
-      if cros_interface.IsRunningOnCrosDevice():
+      if platform.GetHostPlatform().GetOSName() == 'chromeos':
         gsutil_path = ('HOME=%s %s' % (_CROS_GSUTIL_HOME_WAR, gsutil_path))
       return ('To configure your credentials:\n'
               '  1. Run "%s config" and follow its instructions.\n'
@@ -60,6 +69,10 @@ class NotFoundError(CloudStorageError):
   pass
 
 
+class ServerError(CloudStorageError):
+  pass
+
+
 # TODO(tonyg/dtu): Can this be replaced with distutils.spawn.find_executable()?
 def _FindExecutableInPath(relative_executable_path, *extra_search_paths):
   search_paths = list(extra_search_paths) + os.environ['PATH'].split(os.pathsep)
@@ -72,7 +85,7 @@ def _FindExecutableInPath(relative_executable_path, *extra_search_paths):
 
 def _DownloadGsutil():
   logging.info('Downloading gsutil')
-  with contextlib.closing(urllib2.urlopen(_GSUTIL_URL), timeout=60) as response:
+  with contextlib.closing(urllib2.urlopen(_GSUTIL_URL, timeout=60)) as response:
     with tarfile.open(fileobj=cStringIO.StringIO(response.read())) as tar_file:
       tar_file.extractall(os.path.dirname(_DOWNLOAD_PATH))
   logging.info('Downloaded gsutil to %s' % _DOWNLOAD_PATH)
@@ -83,10 +96,11 @@ def _DownloadGsutil():
 def FindGsutil():
   """Return the gsutil executable path. If we can't find it, download it."""
   # Look for a depot_tools installation.
-  gsutil_path = _FindExecutableInPath(
-      os.path.join('third_party', 'gsutil', 'gsutil'), _DOWNLOAD_PATH)
-  if gsutil_path:
-    return gsutil_path
+  # FIXME: gsutil in depot_tools is not working correctly. crbug.com/413414
+  #gsutil_path = _FindExecutableInPath(
+  #    os.path.join('third_party', 'gsutil', 'gsutil'), _DOWNLOAD_PATH)
+  #if gsutil_path:
+  #  return gsutil_path
 
   # Look for a gsutil installation.
   gsutil_path = _FindExecutableInPath('gsutil', _DOWNLOAD_PATH)
@@ -113,7 +127,7 @@ def _RunCommand(args):
   # TODO(tbarzic): Figure out a better way to handle gsutil on cros.
   #     http://crbug.com/386416, http://crbug.com/359293.
   gsutil_env = None
-  if cros_interface.IsRunningOnCrosDevice():
+  if platform.GetHostPlatform().GetOSName() == 'chromeos':
     gsutil_env = os.environ.copy()
     gsutil_env['HOME'] = _CROS_GSUTIL_HOME_WAR
 
@@ -132,6 +146,8 @@ def _RunCommand(args):
     if (stderr.startswith('InvalidUriError') or 'No such object' in stderr or
         'No URLs matched' in stderr):
       raise NotFoundError(stderr)
+    if '500 Internal Server Error' in stderr:
+      raise ServerError(stderr)
     raise CloudStorageError(stderr)
 
   return stdout
@@ -167,7 +183,11 @@ def Delete(bucket, remote_path):
 def Get(bucket, remote_path, local_path):
   url = 'gs://%s/%s' % (bucket, remote_path)
   logging.info('Downloading %s to %s' % (url, local_path))
-  _RunCommand(['cp', url, local_path])
+  try:
+    _RunCommand(['cp', url, local_path])
+  except ServerError:
+    logging.info('Cloud Storage server error, retrying download')
+    _RunCommand(['cp', url, local_path])
 
 
 def Insert(bucket, remote_path, local_path, publicly_readable=False):
@@ -207,9 +227,7 @@ def GetIfChanged(file_path, bucket=None):
 
   for bucket in buckets:
     try:
-      url = 'gs://%s/%s' % (bucket, expected_hash)
-      _RunCommand(['cp', url, file_path])
-      logging.info('Downloaded %s to %s' % (url, file_path))
+      Get(bucket, expected_hash, file_path)
       return True
     except NotFoundError:
       continue

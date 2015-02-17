@@ -14,6 +14,7 @@
 #include "content/browser/renderer_host/delegated_frame_evictor.h"
 #include "content/browser/renderer_host/dip_util.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/public/browser/render_process_host.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
@@ -46,7 +47,6 @@ class CONTENT_EXPORT DelegatedFrameHostClient {
   virtual ui::Compositor* GetCompositor() const = 0;
   virtual ui::Layer* GetLayer() = 0;
   virtual RenderWidgetHostImpl* GetHost() = 0;
-  virtual void SchedulePaintInRect(const gfx::Rect& damage_rect_in_dip) = 0;
   virtual bool IsVisible() = 0;
   virtual scoped_ptr<ResizeLock> CreateResizeLock(
       bool defer_compositor_lock) = 0;
@@ -81,7 +81,7 @@ class CONTENT_EXPORT DelegatedFrameHost
       public base::SupportsWeakPtr<DelegatedFrameHost> {
  public:
   DelegatedFrameHost(DelegatedFrameHostClient* client);
-  virtual ~DelegatedFrameHost();
+  ~DelegatedFrameHost() override;
 
   bool CanCopyToBitmap() const;
 
@@ -98,11 +98,10 @@ class CONTENT_EXPORT DelegatedFrameHost
   gfx::Size GetRequestedRendererSize() const;
   void AddedToWindow();
   void RemovingFromWindow();
-  void CopyFromCompositingSurface(
-      const gfx::Rect& src_subrect,
-      const gfx::Size& output_size,
-      const base::Callback<void(bool, const SkBitmap&)>& callback,
-      const SkColorType color_type);
+  void CopyFromCompositingSurface(const gfx::Rect& src_subrect,
+                                  const gfx::Size& output_size,
+                                  CopyFromCompositingSurfaceCallback& callback,
+                                  const SkColorType color_type);
   void CopyFromCompositingSurfaceToVideoFrame(
       const gfx::Rect& src_subrect,
       const scoped_refptr<media::VideoFrame>& target,
@@ -118,12 +117,13 @@ class CONTENT_EXPORT DelegatedFrameHost
   cc::DelegatedFrameProvider* FrameProviderForTesting() const {
     return frame_provider_.get();
   }
+  cc::SurfaceId SurfaceIdForTesting() const { return surface_id_; }
   void OnCompositingDidCommitForTesting(ui::Compositor* compositor) {
     OnCompositingDidCommit(compositor);
   }
   bool ShouldCreateResizeLockForTesting() { return ShouldCreateResizeLock(); }
   bool ReleasedFrontLockActiveForTesting() const {
-    return !!released_front_lock_;
+    return !!released_front_lock_.get();
   }
 
  private:
@@ -145,24 +145,22 @@ class CONTENT_EXPORT DelegatedFrameHost
   void UnlockResources();
 
   // Overridden from ui::CompositorObserver:
-  virtual void OnCompositingDidCommit(ui::Compositor* compositor) OVERRIDE;
-  virtual void OnCompositingStarted(ui::Compositor* compositor,
-                                    base::TimeTicks start_time) OVERRIDE;
-  virtual void OnCompositingEnded(ui::Compositor* compositor) OVERRIDE;
-  virtual void OnCompositingAborted(ui::Compositor* compositor) OVERRIDE;
-  virtual void OnCompositingLockStateChanged(
-      ui::Compositor* compositor) OVERRIDE;
+  void OnCompositingDidCommit(ui::Compositor* compositor) override;
+  void OnCompositingStarted(ui::Compositor* compositor,
+                            base::TimeTicks start_time) override;
+  void OnCompositingEnded(ui::Compositor* compositor) override;
+  void OnCompositingAborted(ui::Compositor* compositor) override;
+  void OnCompositingLockStateChanged(ui::Compositor* compositor) override;
 
   // Overridden from ui::CompositorVSyncManager::Observer:
-  virtual void OnUpdateVSyncParameters(base::TimeTicks timebase,
-                                       base::TimeDelta interval) OVERRIDE;
+  void OnUpdateVSyncParameters(base::TimeTicks timebase,
+                               base::TimeDelta interval) override;
 
   // Overridden from ui::LayerOwnerObserver:
-  virtual void OnLayerRecreated(ui::Layer* old_layer,
-                                ui::Layer* new_layer) OVERRIDE;
+  void OnLayerRecreated(ui::Layer* old_layer, ui::Layer* new_layer) override;
 
   // Overridden from ImageTransportFactoryObserver:
-  virtual void OnLostResources() OVERRIDE;
+  void OnLostResources() override;
 
   bool ShouldSkipFrame(gfx::Size size_in_dip) const;
 
@@ -217,14 +215,13 @@ class CONTENT_EXPORT DelegatedFrameHost
   void SendReturnedDelegatedResources(uint32 output_surface_id);
 
   // DelegatedFrameEvictorClient implementation.
-  virtual void EvictDelegatedFrame() OVERRIDE;
+  void EvictDelegatedFrame() override;
 
   // cc::DelegatedFrameProviderClient implementation.
-  virtual void UnusedResourcesAreAvailable() OVERRIDE;
+  void UnusedResourcesAreAvailable() override;
 
   // cc::SurfaceFactoryClient implementation.
-  virtual void ReturnResources(
-      const cc::ReturnedResourceArray& resources) OVERRIDE;
+  void ReturnResources(const cc::ReturnedResourceArray& resources) override;
 
   void DidReceiveFrameFromRenderer(const gfx::Rect& damage_rect);
 

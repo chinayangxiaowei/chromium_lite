@@ -32,9 +32,9 @@ class AutofillDialogControllerAndroid : public AutofillDialogController {
   virtual ~AutofillDialogControllerAndroid();
 
   // AutofillDialogController implementation:
-  virtual void Show() OVERRIDE;
-  virtual void Hide() OVERRIDE;
-  virtual void TabActivated() OVERRIDE;
+  virtual void Show() override;
+  virtual void Hide() override;
+  virtual void TabActivated() override;
 
   // JNI bindings for Java-side AutofillDialogDelegate:
   void DialogCancel(JNIEnv* env, jobject obj);
@@ -94,14 +94,14 @@ class AutofillDialogControllerAndroid : public AutofillDialogController {
   // we should show a shipping section.
   bool cares_about_shipping_;
 
-  base::WeakPtrFactory<AutofillDialogControllerAndroid>
-      weak_ptr_factory_;
-
   // Whether the latency to display to the UI was logged to UMA yet.
   bool was_ui_latency_logged_;
 
   // The corresponding java object.
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
+
+  base::WeakPtrFactory<AutofillDialogControllerAndroid>
+      weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AutofillDialogControllerAndroid);
 };

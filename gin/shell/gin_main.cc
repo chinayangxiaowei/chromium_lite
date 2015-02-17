@@ -5,9 +5,10 @@
 #include "base/at_exit.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_loop.h"
+#include "gin/array_buffer.h"
 #include "gin/modules/console.h"
 #include "gin/modules/module_runner_delegate.h"
 #include "gin/public/isolate_holder.h"
@@ -43,8 +44,7 @@ class GinShellRunnerDelegate : public ModuleRunnerDelegate {
     AddBuiltinModule(Console::kModuleName, Console::GetModule);
   }
 
-  virtual void UnhandledException(ShellRunner* runner,
-                                  TryCatch& try_catch) OVERRIDE {
+  void UnhandledException(ShellRunner* runner, TryCatch& try_catch) override {
     ModuleRunnerDelegate::UnhandledException(runner, try_catch);
     LOG(ERROR) << try_catch.GetStackTrace();
   }
@@ -60,8 +60,13 @@ int main(int argc, char** argv) {
   base::AtExitManager at_exit;
   CommandLine::Init(argc, argv);
   base::i18n::InitializeICU();
+#ifdef V8_USE_EXTERNAL_STARTUP_DATA
+  gin::IsolateHolder::LoadV8Snapshot();
+#endif
 
-  gin::IsolateHolder instance(gin::IsolateHolder::kStrictMode);
+  gin::IsolateHolder::Initialize(gin::IsolateHolder::kStrictMode,
+                                 gin::ArrayBufferAllocator::SharedInstance());
+  gin::IsolateHolder instance;
 
   base::MessageLoop message_loop;
 

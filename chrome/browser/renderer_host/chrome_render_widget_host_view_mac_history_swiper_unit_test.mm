@@ -17,10 +17,8 @@
 - (BOOL)browserCanNavigateInDirection:
         (history_swiper::NavigationDirection)forward
                                 event:(NSEvent*)event;
-- (void)endHistorySwipe;
-- (void)beginHistorySwipeInDirection:
-        (history_swiper::NavigationDirection)goForward
-                               event:(NSEvent*)event;
+- (void)removeHistoryOverlay;
+- (void)showHistoryOverlay:(history_swiper::NavigationDirection)direction;
 - (void)navigateBrowserInDirection:(history_swiper::NavigationDirection)forward;
 - (void)initiateMagicMouseHistorySwipe:(BOOL)isRightScroll
                                  event:(NSEvent*)event;
@@ -28,7 +26,7 @@
 
 class MacHistorySwiperTest : public CocoaTest {
  public:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     CocoaTest::SetUp();
 
     [HistorySwiper resetMagicMouseState];
@@ -51,22 +49,18 @@ class MacHistorySwiperTest : public CocoaTest {
         browserCanNavigateInDirection:history_swiper::kBackwards
                                 event:[OCMArg any]];
     [[[[mockHistorySwiper stub] andDo:^(NSInvocation* invocation) {
-      ++begin_count_;
-      // beginHistorySwipeInDirection: calls endHistorySwipe internally.
-      --end_count_;
-    }] andForwardToRealObject]
-        beginHistorySwipeInDirection:history_swiper::kForwards
-                               event:[OCMArg any]];
+        ++begin_count_;
+        // showHistoryOverlay: calls removeHistoryOverlay internally.
+        --end_count_;
+    }] andForwardToRealObject] showHistoryOverlay:history_swiper::kForwards];
     [[[[mockHistorySwiper stub] andDo:^(NSInvocation* invocation) {
-      ++begin_count_;
-      // beginHistorySwipeInDirection: calls endHistorySwipe internally.
-      --end_count_;
-    }] andForwardToRealObject]
-        beginHistorySwipeInDirection:history_swiper::kBackwards
-                               event:[OCMArg any]];
+        ++begin_count_;
+        // showHistoryOverlay: calls removeHistoryOverlay internally.
+        --end_count_;
+    }] andForwardToRealObject] showHistoryOverlay:history_swiper::kBackwards];
     [[[[mockHistorySwiper stub] andDo:^(NSInvocation* invocation) {
-      ++end_count_;
-    }] andForwardToRealObject] endHistorySwipe];
+        ++end_count_;
+    }] andForwardToRealObject] removeHistoryOverlay];
     [[[mockHistorySwiper stub] andDo:^(NSInvocation* invocation) {
         navigated_right_ = true;
     }] navigateBrowserInDirection:history_swiper::kForwards];
@@ -90,7 +84,7 @@ class MacHistorySwiperTest : public CocoaTest {
     magic_mouse_history_swipe_ = false;
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     [view_ release];
     [historySwiper_ release];
     CocoaTest::TearDown();
@@ -283,10 +277,11 @@ TEST_F(MacHistorySwiperTest, SwipeDiagonal) {
 
   startGestureInMiddle();
   moveGestureInMiddle();
+  moveGestureInMiddle();
   moveGestureAtPoint(makePoint(0.6, 0.59));
   endGestureAtPoint(makePoint(0.6, 0.59));
 
-  EXPECT_EQ(begin_count_, 1);
+  EXPECT_EQ(begin_count_, 0);
   EXPECT_EQ(end_count_, 1);
   EXPECT_FALSE(navigated_right_);
   EXPECT_FALSE(navigated_left_);
@@ -372,10 +367,14 @@ TEST_F(MacHistorySwiperTest, NoSwipe) {
 
   startGestureInMiddle();
   moveGestureInMiddle();
-  moveGestureAtPoint(makePoint(0.5, 0.5));
-  endGestureAtPoint(makePoint(0.5, 0.5));
 
-  EXPECT_EQ(begin_count_, 1);
+  // Starts the gesture.
+  moveGestureAtPoint(makePoint(0.44, 0.44));
+
+  // No movement.
+  endGestureAtPoint(makePoint(0.44, 0.44));
+
+  EXPECT_EQ(begin_count_, 0);
   EXPECT_EQ(end_count_, 1);
   EXPECT_FALSE(navigated_right_);
   EXPECT_FALSE(navigated_left_);
@@ -404,4 +403,72 @@ TEST_F(MacHistorySwiperTest, TouchEventAfterGestureFinishes) {
   // New events should not be swallowed.
   NSEvent* beganEvent = scrollWheelEventWithPhase(NSEventPhaseBegan);
   EXPECT_FALSE([historySwiper_ handleEvent:beganEvent]);
+}
+
+// The history swipe logic should be resilient against the timing of the
+// different callbacks that result from scrolling.
+TEST_F(MacHistorySwiperTest, SwipeRightEventOrdering) {
+  // These tests require 10.7+ APIs.
+  if (![NSEvent
+          respondsToSelector:@selector(isSwipeTrackingFromScrollEventsEnabled)])
+    return;
+
+  // Touches began.
+  NSEvent* scrollEvent = scrollWheelEventWithPhase(NSEventPhaseBegan);
+  NSEvent* event = mockEventWithPoint(makePoint(0.5, 0.5), NSEventTypeGesture);
+  [historySwiper_ touchesBeganWithEvent:event];
+  [historySwiper_ handleEvent:scrollEvent];
+  rendererACKForBeganEvent();
+
+  // Touches moved.
+  moveGestureAtPoint(makePoint(0.5, 0.5));
+  EXPECT_EQ(begin_count_, 0);
+  EXPECT_EQ(end_count_, 0);
+
+  // Touches moved.
+  moveGestureAtPoint(makePoint(0.52, 0.5));
+
+  // Begin gesture callback is delayed.
+  [historySwiper_ beginGestureWithEvent:event];
+
+  // Touches moved.
+  moveGestureAtPoint(makePoint(0.52, 0.5));
+
+  // Complete the rest of the gesture.
+  moveGestureAtPoint(makePoint(0.60, 0.5));
+  scrollEvent = scrollWheelEventWithPhase(NSEventPhaseChanged);
+  [historySwiper_ handleEvent:scrollEvent];
+  endGestureAtPoint(makePoint(0.70, 0.5));
+
+  EXPECT_EQ(begin_count_, 1);
+  EXPECT_EQ(end_count_, 1);
+  EXPECT_TRUE(navigated_right_);
+  EXPECT_FALSE(navigated_left_);
+}
+
+// Substantial vertical scrolling followed by horizontal scrolling should not
+// result in navigation.
+TEST_F(MacHistorySwiperTest, SubstantialVerticalThenHorizontal) {
+  // These tests require 10.7+ APIs.
+  if (![NSEvent
+          respondsToSelector:@selector(isSwipeTrackingFromScrollEventsEnabled)])
+    return;
+
+  startGestureInMiddle();
+  moveGestureInMiddle();
+
+  // Move up, then move down.
+  for (CGFloat y = 0.51; y < 0.6; y += 0.01)
+    moveGestureAtPoint(makePoint(0.5, y));
+  for (CGFloat y = 0.59; y > 0.5; y -= 0.01)
+    moveGestureAtPoint(makePoint(0.5, y));
+
+  // Large movement to the right.
+  moveGestureAtPoint(makePoint(0.6, 0.51));
+  endGestureAtPoint(makePoint(0.6, 0.51));
+
+  EXPECT_EQ(begin_count_, 0);
+  EXPECT_EQ(end_count_, 1);
+  EXPECT_FALSE(navigated_right_);
+  EXPECT_FALSE(navigated_left_);
 }

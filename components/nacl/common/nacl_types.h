@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/memory/shared_memory.h"
 #include "base/process/process_handle.h"
 #include "build/build_config.h"
 #include "ipc/ipc_channel.h"
@@ -37,6 +38,24 @@ inline int ToNativeHandle(const FileDescriptor& desc) {
 }
 #endif
 
+// We allocate a page of shared memory for sharing crash information from
+// trusted code in the NaCl process to the renderer.
+static const int kNaClCrashInfoShmemSize = 4096;
+static const int kNaClCrashInfoMaxLogSize = 1024;
+
+// Types of untrusted NaCl processes.
+enum NaClAppProcessType {
+  kUnknownNaClProcessType,
+  // Runs user-provided *native* code. Enabled for Chrome Web Store apps.
+  kNativeNaClProcessType,
+  // Runs user-provided code that is translated from *bitcode* by an
+  // in-browser PNaCl translator.
+  kPNaClProcessType,
+  // Runs pnacl-llc/linker *native* code. These nexes are browser-provided
+  // (not user-provided).
+  kPNaClTranslatorProcessType,
+  kNumNaClProcessTypes
+};
 
 // Parameters sent to the NaCl process when we start it.
 struct NaClStartParams {
@@ -57,11 +76,13 @@ struct NaClStartParams {
   // executable or DLL.
   std::string version;
 
-  bool enable_exception_handling;
   bool enable_debug_stub;
   bool enable_ipc_proxy;
-  bool uses_irt;
-  bool enable_dyncode_syscalls;
+
+  NaClAppProcessType process_type;
+
+  // For NaCl <-> renderer crash information reporting.
+  base::SharedMemoryHandle crash_info_shmem_handle;
 
   // NOTE: Any new fields added here must also be added to the IPC
   // serialization in nacl_messages.h and (for POD fields) the constructor
@@ -80,11 +101,8 @@ struct NaClLaunchParams {
                    uint64_t nexe_token_hi,
                    int render_view_id,
                    uint32 permission_bits,
-                   bool uses_irt,
                    bool uses_nonsfi_mode,
-                   bool enable_dyncode_syscalls,
-                   bool enable_exception_handling,
-                   bool enable_crash_throttling);
+                   NaClAppProcessType process_type);
   ~NaClLaunchParams();
 
   std::string manifest_url;
@@ -97,11 +115,9 @@ struct NaClLaunchParams {
 
   int render_view_id;
   uint32 permission_bits;
-  bool uses_irt;
   bool uses_nonsfi_mode;
-  bool enable_dyncode_syscalls;
-  bool enable_exception_handling;
-  bool enable_crash_throttling;
+
+  NaClAppProcessType process_type;
 };
 
 struct NaClLaunchResult {
@@ -112,7 +128,8 @@ struct NaClLaunchResult {
       const IPC::ChannelHandle& trusted_ipc_channel_handle,
       const IPC::ChannelHandle& manifest_service_ipc_channel_handle,
       base::ProcessId plugin_pid,
-      int plugin_child_id);
+      int plugin_child_id,
+      base::SharedMemoryHandle crash_info_shmem_handle);
   ~NaClLaunchResult();
 
   // For plugin loader <-> renderer IMC communication.
@@ -130,6 +147,9 @@ struct NaClLaunchResult {
 
   base::ProcessId plugin_pid;
   int plugin_child_id;
+
+  // For NaCl <-> renderer crash information reporting.
+  base::SharedMemoryHandle crash_info_shmem_handle;
 };
 
 }  // namespace nacl

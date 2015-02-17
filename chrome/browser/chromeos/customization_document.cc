@@ -8,8 +8,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
@@ -25,7 +25,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/customization_wallpaper_downloader.h"
 #include "chrome/browser/chromeos/extensions/default_app_order.h"
-#include "chrome/browser/chromeos/login/users/wallpaper/wallpaper_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/net/delay_network_call.h"
 #include "chrome/browser/extensions/external_loader.h"
@@ -34,16 +33,20 @@
 #include "chrome/browser/ui/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ui/app_list/app_list_syncable_service_factory.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/system/statistics_provider.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/common/extension_urls.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_fetcher.h"
 #include "ui/base/l10n/l10n_util.h"
+
+#if !defined(USE_ATHENA)
+#include "chrome/browser/chromeos/login/users/wallpaper/wallpaper_manager.h"
+#endif
 
 using content::BrowserThread;
 
@@ -172,7 +175,7 @@ class ServicesCustomizationExternalLoader
   }
 
   // Implementation of extensions::ExternalLoader:
-  virtual void StartLoading() OVERRIDE {
+  virtual void StartLoading() override {
     if (!is_apps_set_) {
       ServicesCustomizationDocument::GetInstance()->StartFetching();
       // In case of missing customization ID, SetCurrentApps will be called
@@ -938,10 +941,12 @@ void ServicesCustomizationDocument::OnOEMWallpaperDownloaded(
     VLOG(1) << "Setting default wallpaper to '"
             << GetCustomizedWallpaperDownloadedFileName().value() << "' ('"
             << wallpaper_url.spec() << "')";
+#if !defined(USE_ATHENA)
     WallpaperManager::Get()->SetCustomizedDefaultWallpaper(
         wallpaper_url,
         GetCustomizedWallpaperDownloadedFileName(),
         GetCustomizedWallpaperCacheDir());
+#endif
   }
   wallpaper_downloader_.reset();
   applying->Finished(success);

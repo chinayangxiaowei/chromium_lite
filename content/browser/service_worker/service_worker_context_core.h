@@ -25,16 +25,17 @@ class GURL;
 
 namespace base {
 class FilePath;
-class MessageLoopProxy;
 class SequencedTaskRunner;
+class SingleThreadTaskRunner;
 }
 
 namespace net {
 class URLRequestContext;
 }
 
-namespace quota {
+namespace storage {
 class QuotaManagerProxy;
+class SpecialStoragePolicy;
 }
 
 namespace content {
@@ -43,6 +44,7 @@ class EmbeddedWorkerRegistry;
 class ServiceWorkerCacheStorageManager;
 class ServiceWorkerContextObserver;
 class ServiceWorkerContextWrapper;
+class ServiceWorkerDatabaseTaskManager;
 class ServiceWorkerHandle;
 class ServiceWorkerJobCoordinator;
 class ServiceWorkerProviderHost;
@@ -59,8 +61,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
  public:
   typedef base::Callback<void(ServiceWorkerStatusCode status)> StatusCallback;
   typedef base::Callback<void(ServiceWorkerStatusCode status,
-                              int64 registration_id,
-                              int64 version_id)> RegistrationCallback;
+                              int64 registration_id)> RegistrationCallback;
   typedef base::Callback<
       void(ServiceWorkerStatusCode status)> UnregistrationCallback;
   typedef IDMap<ServiceWorkerProviderHost, IDMapOwnPointer> ProviderMap;
@@ -97,32 +98,33 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   // be called on the thread which called AddObserver() of |observer_list|.
   ServiceWorkerContextCore(
       const base::FilePath& user_data_directory,
-      base::SequencedTaskRunner* cache_task_runner,
-      base::SequencedTaskRunner* database_task_runner,
-      base::MessageLoopProxy* disk_cache_thread,
-      quota::QuotaManagerProxy* quota_manager_proxy,
+      const scoped_refptr<base::SequencedTaskRunner>& cache_task_runner,
+      scoped_ptr<ServiceWorkerDatabaseTaskManager> database_task_runner_manager,
+      const scoped_refptr<base::SingleThreadTaskRunner>& disk_cache_thread,
+      storage::QuotaManagerProxy* quota_manager_proxy,
+      storage::SpecialStoragePolicy* special_storage_policy,
       ObserverListThreadSafe<ServiceWorkerContextObserver>* observer_list,
       ServiceWorkerContextWrapper* wrapper);
   ServiceWorkerContextCore(
       ServiceWorkerContextCore* old_context,
       ServiceWorkerContextWrapper* wrapper);
-  virtual ~ServiceWorkerContextCore();
+  ~ServiceWorkerContextCore() override;
 
   // ServiceWorkerVersion::Listener overrides.
-  virtual void OnWorkerStarted(ServiceWorkerVersion* version) OVERRIDE;
-  virtual void OnWorkerStopped(ServiceWorkerVersion* version) OVERRIDE;
-  virtual void OnVersionStateChanged(ServiceWorkerVersion* version) OVERRIDE;
-  virtual void OnErrorReported(ServiceWorkerVersion* version,
-                               const base::string16& error_message,
-                               int line_number,
-                               int column_number,
-                               const GURL& source_url) OVERRIDE;
-  virtual void OnReportConsoleMessage(ServiceWorkerVersion* version,
-                                      int source_identifier,
-                                      int message_level,
-                                      const base::string16& message,
-                                      int line_number,
-                                      const GURL& source_url) OVERRIDE;
+  void OnWorkerStarted(ServiceWorkerVersion* version) override;
+  void OnWorkerStopped(ServiceWorkerVersion* version) override;
+  void OnVersionStateChanged(ServiceWorkerVersion* version) override;
+  void OnErrorReported(ServiceWorkerVersion* version,
+                       const base::string16& error_message,
+                       int line_number,
+                       int column_number,
+                       const GURL& source_url) override;
+  void OnReportConsoleMessage(ServiceWorkerVersion* version,
+                              int source_identifier,
+                              int message_level,
+                              const base::string16& message,
+                              int line_number,
+                              const GURL& source_url) override;
 
   ServiceWorkerStorage* storage() { return storage_.get(); }
   ServiceWorkerCacheStorageManager* cache_manager() {
@@ -145,15 +147,18 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
   // A child process of |source_process_id| may be used to run the created
   // worker for initial installation.
-  // Non-null |provider_host| must be given if this is called from a document,
-  // whose process_id() must match with |source_process_id|.
+  // Non-null |provider_host| must be given if this is called from a document.
   void RegisterServiceWorker(const GURL& pattern,
                              const GURL& script_url,
-                             int source_process_id,
                              ServiceWorkerProviderHost* provider_host,
                              const RegistrationCallback& callback);
   void UnregisterServiceWorker(const GURL& pattern,
                                const UnregistrationCallback& callback);
+  // Callback is called issued after all unregistrations occur.  The Status
+  // is populated as SERVICE_WORKER_OK if all succeed, or SERVICE_WORKER_FAILED
+  // if any did not succeed.
+  void UnregisterServiceWorkers(const GURL& origin,
+                                const UnregistrationCallback& callback);
   void UpdateServiceWorker(ServiceWorkerRegistration* registration);
 
   // This class maintains collections of live instances, this class
@@ -180,7 +185,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
   void SetBlobParametersForCache(
       net::URLRequestContext* request_context,
-      base::WeakPtr<webkit_blob::BlobStorageContext> blob_storage_context);
+      base::WeakPtr<storage::BlobStorageContext> blob_storage_context);
 
   base::WeakPtr<ServiceWorkerContextCore> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -197,12 +202,16 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   void RegistrationComplete(const GURL& pattern,
                             const RegistrationCallback& callback,
                             ServiceWorkerStatusCode status,
-                            ServiceWorkerRegistration* registration,
-                            ServiceWorkerVersion* version);
+                            ServiceWorkerRegistration* registration);
 
   void UnregistrationComplete(const GURL& pattern,
                               const UnregistrationCallback& callback,
                               ServiceWorkerStatusCode status);
+
+  void DidGetAllRegistrationsForUnregisterForOrigin(
+      const UnregistrationCallback& result,
+      const GURL& origin,
+      const std::vector<ServiceWorkerRegistrationInfo>& registrations);
 
   base::WeakPtrFactory<ServiceWorkerContextCore> weak_factory_;
   // It's safe to store a raw pointer instead of a scoped_refptr to |wrapper_|

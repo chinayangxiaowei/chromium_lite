@@ -6,9 +6,14 @@
 
 #include <cstdlib>
 
+#include "base/bind.h"
 #include "base/files/file.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/thread_task_runner_handle.h"
+#include "base/threading/thread_restrictions.h"
 #include "device/hid/hid_connection_win.h"
 #include "device/hid/hid_device_info.h"
 #include "net/base/io_buffer.h"
@@ -16,16 +21,6 @@
 #if defined(OS_WIN)
 
 #define INITGUID
-
-#include <windows.h>
-#include <hidclass.h>
-
-extern "C" {
-
-#include <hidsdi.h>
-#include <hidpi.h>
-
-}
 
 #include <setupapi.h>
 #include <winioctl.h>
@@ -45,6 +40,9 @@ const char kHIDClass[] = "HIDClass";
 }  // namespace
 
 HidServiceWin::HidServiceWin() {
+  base::ThreadRestrictions::AssertIOAllowed();
+  task_runner_ = base::ThreadTaskRunnerHandle::Get();
+  DCHECK(task_runner_.get());
   Enumerate();
 }
 
@@ -143,10 +141,8 @@ void HidServiceWin::Enumerate() {
   }
 
   // Find disconnected devices.
-  const DeviceMap& devices = GetDevicesNoEnumerate();
   std::vector<std::string> disconnected_devices;
-  for (DeviceMap::const_iterator it = devices.begin();
-       it != devices.end();
+  for (DeviceMap::const_iterator it = devices().begin(); it != devices().end();
        ++it) {
     if (!ContainsKey(connected_devices, it->first)) {
       disconnected_devices.push_back(it->first);
@@ -156,6 +152,49 @@ void HidServiceWin::Enumerate() {
   // Remove disconnected devices.
   for (size_t i = 0; i < disconnected_devices.size(); ++i) {
     PlatformRemoveDevice(disconnected_devices[i]);
+  }
+}
+
+void HidServiceWin::CollectInfoFromButtonCaps(
+    PHIDP_PREPARSED_DATA preparsed_data,
+    HIDP_REPORT_TYPE report_type,
+    USHORT button_caps_length,
+    HidCollectionInfo* collection_info) {
+  if (button_caps_length > 0) {
+    scoped_ptr<HIDP_BUTTON_CAPS[]> button_caps(
+        new HIDP_BUTTON_CAPS[button_caps_length]);
+    if (HidP_GetButtonCaps(report_type,
+                           &button_caps[0],
+                           &button_caps_length,
+                           preparsed_data) == HIDP_STATUS_SUCCESS) {
+      for (size_t i = 0; i < button_caps_length; i++) {
+        int report_id = button_caps[i].ReportID;
+        if (report_id != 0) {
+          collection_info->report_ids.insert(report_id);
+        }
+      }
+    }
+  }
+}
+
+void HidServiceWin::CollectInfoFromValueCaps(
+    PHIDP_PREPARSED_DATA preparsed_data,
+    HIDP_REPORT_TYPE report_type,
+    USHORT value_caps_length,
+    HidCollectionInfo* collection_info) {
+  if (value_caps_length > 0) {
+    scoped_ptr<HIDP_VALUE_CAPS[]> value_caps(
+        new HIDP_VALUE_CAPS[value_caps_length]);
+    if (HidP_GetValueCaps(
+            report_type, &value_caps[0], &value_caps_length, preparsed_data) ==
+        HIDP_STATUS_SUCCESS) {
+      for (size_t i = 0; i < value_caps_length; i++) {
+        int report_id = value_caps[i].ReportID;
+        if (report_id != 0) {
+          collection_info->report_ids.insert(report_id);
+        }
+      }
+    }
   }
 }
 
@@ -215,39 +254,32 @@ void HidServiceWin::PlatformAddDevice(const std::string& device_path) {
       collection_info.usage = HidUsageAndPage(
           capabilities.Usage,
           static_cast<HidUsageAndPage::Page>(capabilities.UsagePage));
-      USHORT button_caps_length = capabilities.NumberInputButtonCaps;
-      if (button_caps_length > 0) {
-        scoped_ptr<HIDP_BUTTON_CAPS[]> button_caps(
-            new HIDP_BUTTON_CAPS[button_caps_length]);
-        if (HidP_GetButtonCaps(HidP_Input,
-                               &button_caps[0],
-                               &button_caps_length,
-                               preparsed_data) == HIDP_STATUS_SUCCESS) {
-          for (int i = 0; i < button_caps_length; i++) {
-            int report_id = button_caps[i].ReportID;
-            if (report_id != 0) {
-              collection_info.report_ids.insert(report_id);
-              device_info.has_report_id = true;
-            }
-          }
-        }
-      }
-      USHORT value_caps_length = capabilities.NumberInputValueCaps;
-      if (value_caps_length > 0) {
-        scoped_ptr<HIDP_VALUE_CAPS[]> value_caps(
-            new HIDP_VALUE_CAPS[value_caps_length]);
-        if (HidP_GetValueCaps(HidP_Input,
-                              &value_caps[0],
-                              &value_caps_length,
-                              preparsed_data) == HIDP_STATUS_SUCCESS) {
-          for (int i = 0; i < value_caps_length; i++) {
-            int report_id = value_caps[i].ReportID;
-            if (report_id != 0) {
-              collection_info.report_ids.insert(report_id);
-              device_info.has_report_id = true;
-            }
-          }
-        }
+      CollectInfoFromButtonCaps(preparsed_data,
+                                HidP_Input,
+                                capabilities.NumberInputButtonCaps,
+                                &collection_info);
+      CollectInfoFromButtonCaps(preparsed_data,
+                                HidP_Output,
+                                capabilities.NumberOutputButtonCaps,
+                                &collection_info);
+      CollectInfoFromButtonCaps(preparsed_data,
+                                HidP_Feature,
+                                capabilities.NumberFeatureButtonCaps,
+                                &collection_info);
+      CollectInfoFromValueCaps(preparsed_data,
+                               HidP_Input,
+                               capabilities.NumberInputValueCaps,
+                               &collection_info);
+      CollectInfoFromValueCaps(preparsed_data,
+                               HidP_Output,
+                               capabilities.NumberOutputValueCaps,
+                               &collection_info);
+      CollectInfoFromValueCaps(preparsed_data,
+                               HidP_Feature,
+                               capabilities.NumberFeatureValueCaps,
+                               &collection_info);
+      if (!collection_info.report_ids.empty()) {
+        device_info.has_report_id = true;
       }
       device_info.collections.push_back(collection_info);
     }
@@ -278,17 +310,22 @@ void HidServiceWin::GetDevices(std::vector<HidDeviceInfo>* devices) {
   HidService::GetDevices(devices);
 }
 
-scoped_refptr<HidConnection> HidServiceWin::Connect(
-    const HidDeviceId& device_id) {
-  HidDeviceInfo device_info;
-  if (!GetDeviceInfo(device_id, &device_info))
-    return NULL;
+void HidServiceWin::Connect(const HidDeviceId& device_id,
+                            const ConnectCallback& callback) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  const auto& map_entry = devices().find(device_id);
+  if (map_entry == devices().end()) {
+    task_runner_->PostTask(FROM_HERE, base::Bind(callback, nullptr));
+    return;
+  }
+  const HidDeviceInfo& device_info = map_entry->second;
+
   scoped_refptr<HidConnectionWin> connection(new HidConnectionWin(device_info));
   if (!connection->available()) {
-    PLOG(ERROR) << "Failed to open device.";
-    return NULL;
+    PLOG(ERROR) << "Failed to open device";
+    connection = nullptr;
   }
-  return connection;
+  task_runner_->PostTask(FROM_HERE, base::Bind(callback, connection));
 }
 
 }  // namespace device

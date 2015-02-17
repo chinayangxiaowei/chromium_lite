@@ -39,7 +39,6 @@ class CC_EXPORT CompositorFrameMetadata {
   // precise position is computed by the renderer compositor.
   gfx::Vector2dF location_bar_offset;
   gfx::Vector2dF location_bar_content_translation;
-  float overdraw_bottom_height;
 
   // Provides selection region updates relative to the current viewport. If the
   // selection is empty or otherwise unused, the bound types will indicate such.
@@ -47,6 +46,10 @@ class CC_EXPORT CompositorFrameMetadata {
   ViewportSelectionBound selection_end;
 
   std::vector<ui::LatencyInfo> latency_info;
+
+  // A set of SurfaceSequences that this frame satisfies (always in the same
+  // namespace as the current Surface).
+  std::vector<uint32_t> satisfies_sequences;
 };
 
 }  // namespace cc

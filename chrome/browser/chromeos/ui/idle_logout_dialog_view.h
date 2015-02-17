@@ -44,10 +44,10 @@ class IdleLogoutDialogView : public views::DialogDelegateView {
   static void CloseDialog();
 
   // views::DialogDelegateView:
-  virtual int GetDialogButtons() const OVERRIDE;
-  virtual ui::ModalType GetModalType() const OVERRIDE;
-  virtual base::string16 GetWindowTitle() const OVERRIDE;
-  virtual bool Close() OVERRIDE;
+  virtual int GetDialogButtons() const override;
+  virtual ui::ModalType GetModalType() const override;
+  virtual base::string16 GetWindowTitle() const override;
+  virtual bool Close() override;
 
  private:
   friend class MockIdleLogoutSettingsProvider;
@@ -77,9 +77,9 @@ class IdleLogoutDialogView : public views::DialogDelegateView {
 
   base::RepeatingTimer<IdleLogoutDialogView> timer_;
 
-  base::WeakPtrFactory<IdleLogoutDialogView> weak_ptr_factory_;
-
   static IdleLogoutSettingsProvider* provider_;
+
+  base::WeakPtrFactory<IdleLogoutDialogView> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(IdleLogoutDialogView);
 };

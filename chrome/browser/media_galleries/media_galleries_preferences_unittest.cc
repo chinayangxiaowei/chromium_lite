@@ -22,6 +22,7 @@
 #include "chrome/browser/media_galleries/media_galleries_test_util.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/storage_monitor/media_storage_util.h"
 #include "components/storage_monitor/storage_monitor.h"
@@ -31,7 +32,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/permissions/media_galleries_permission.h"
-#include "grit/generated_resources.h"
 #include "sync/api/string_ordinal.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -55,40 +55,40 @@ class MockGalleryChangeObserver
   explicit MockGalleryChangeObserver(MediaGalleriesPreferences* pref)
       : pref_(pref),
         notifications_(0) {}
-  virtual ~MockGalleryChangeObserver() {}
+  ~MockGalleryChangeObserver() override {}
 
   int notifications() const { return notifications_;}
 
  private:
   // MediaGalleriesPreferences::GalleryChangeObserver implementation.
-  virtual void OnPermissionAdded(MediaGalleriesPreferences* pref,
-                                 const std::string& extension_id,
-                                 MediaGalleryPrefId pref_id) OVERRIDE {
+  void OnPermissionAdded(MediaGalleriesPreferences* pref,
+                         const std::string& extension_id,
+                         MediaGalleryPrefId pref_id) override {
     EXPECT_EQ(pref_, pref);
     ++notifications_;
   }
 
-  virtual void OnPermissionRemoved(MediaGalleriesPreferences* pref,
-                                   const std::string& extension_id,
-                                   MediaGalleryPrefId pref_id) OVERRIDE {
+  void OnPermissionRemoved(MediaGalleriesPreferences* pref,
+                           const std::string& extension_id,
+                           MediaGalleryPrefId pref_id) override {
     EXPECT_EQ(pref_, pref);
     ++notifications_;
   }
 
-  virtual void OnGalleryAdded(MediaGalleriesPreferences* pref,
-                              MediaGalleryPrefId pref_id) OVERRIDE {
+  void OnGalleryAdded(MediaGalleriesPreferences* pref,
+                      MediaGalleryPrefId pref_id) override {
     EXPECT_EQ(pref_, pref);
     ++notifications_;
   }
 
-  virtual void OnGalleryRemoved(MediaGalleriesPreferences* pref,
-                                MediaGalleryPrefId pref_id) OVERRIDE {
+  void OnGalleryRemoved(MediaGalleriesPreferences* pref,
+                        MediaGalleryPrefId pref_id) override {
     EXPECT_EQ(pref_, pref);
     ++notifications_;
   }
 
-  virtual void OnGalleryInfoUpdated(MediaGalleriesPreferences* pref,
-                                    MediaGalleryPrefId pref_id) OVERRIDE {
+  void OnGalleryInfoUpdated(MediaGalleriesPreferences* pref,
+                            MediaGalleryPrefId pref_id) override {
     EXPECT_EQ(pref_, pref);
     ++notifications_;
   }
@@ -111,10 +111,9 @@ class MediaGalleriesPreferencesTest : public testing::Test {
         default_galleries_count_(0) {
   }
 
-  virtual ~MediaGalleriesPreferencesTest() {
-  }
+  ~MediaGalleriesPreferencesTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(TestStorageMonitor::CreateAndInstall());
 
     extensions::TestExtensionSystem* extension_system(
@@ -148,7 +147,7 @@ class MediaGalleriesPreferencesTest : public testing::Test {
         AddMediaGalleriesApp("no", read_permissions, profile_.get());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     Verify();
     TestStorageMonitor::Destroy();
   }

@@ -31,13 +31,13 @@ class ChromeNetworkDelegateTest : public testing::Test {
       : forwarder_(new extensions::EventRouterForwarder()) {
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     never_throttle_requests_original_value_ =
         ChromeNetworkDelegate::g_never_throttle_requests_;
     ChromeNetworkDelegate::g_never_throttle_requests_ = false;
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     ChromeNetworkDelegate::g_never_throttle_requests_ =
         never_throttle_requests_original_value_;
   }
@@ -52,22 +52,22 @@ class ChromeNetworkDelegateTest : public testing::Test {
     scoped_ptr<ChromeNetworkDelegate> delegate(CreateNetworkDelegate());
 
     net::TestURLRequestContext context;
-    net::TestURLRequest extension_request(
-        GURL("http://example.com/"), net::DEFAULT_PRIORITY, NULL, &context);
-    extension_request.set_first_party_for_cookies(
+    scoped_ptr<net::URLRequest> extension_request(context.CreateRequest(
+        GURL("http://example.com/"), net::DEFAULT_PRIORITY, NULL, NULL));
+    extension_request->set_first_party_for_cookies(
         GURL("chrome-extension://abcdef/bingo.html"));
-    net::TestURLRequest web_page_request(
-        GURL("http://example.com/"), net::DEFAULT_PRIORITY, NULL, &context);
-    web_page_request.set_first_party_for_cookies(
+    scoped_ptr<net::URLRequest> web_page_request(context.CreateRequest(
+        GURL("http://example.com/"), net::DEFAULT_PRIORITY, NULL, NULL));
+    web_page_request->set_first_party_for_cookies(
         GURL("http://example.com/helloworld.html"));
 
-    ASSERT_TRUE(delegate->OnCanThrottleRequest(extension_request));
-    ASSERT_FALSE(delegate->OnCanThrottleRequest(web_page_request));
+    ASSERT_TRUE(delegate->OnCanThrottleRequest(*extension_request));
+    ASSERT_FALSE(delegate->OnCanThrottleRequest(*web_page_request));
 
     delegate->NeverThrottleRequests();
     ASSERT_TRUE(ChromeNetworkDelegate::g_never_throttle_requests_);
-    ASSERT_FALSE(delegate->OnCanThrottleRequest(extension_request));
-    ASSERT_FALSE(delegate->OnCanThrottleRequest(web_page_request));
+    ASSERT_FALSE(delegate->OnCanThrottleRequest(*extension_request));
+    ASSERT_FALSE(delegate->OnCanThrottleRequest(*web_page_request));
 
     // Verify that the flag applies to later instances of the
     // ChromeNetworkDelegate.
@@ -77,8 +77,8 @@ class ChromeNetworkDelegateTest : public testing::Test {
     // implementation would show the same behavior, i.e. all instances
     // of ChromeNetworkDelegate after the flag is set obey the flag.
     scoped_ptr<ChromeNetworkDelegate> second_delegate(CreateNetworkDelegate());
-    ASSERT_FALSE(delegate->OnCanThrottleRequest(extension_request));
-    ASSERT_FALSE(delegate->OnCanThrottleRequest(web_page_request));
+    ASSERT_FALSE(delegate->OnCanThrottleRequest(*extension_request));
+    ASSERT_FALSE(delegate->OnCanThrottleRequest(*web_page_request));
   }
 
  private:
@@ -103,7 +103,7 @@ class ChromeNetworkDelegateSafeSearchTest : public testing::Test {
 #endif
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeNetworkDelegate::InitializePrefsOnUIThread(
         &enable_referrers_, NULL, &force_google_safe_search_,
         profile_.GetTestingPrefService());
@@ -114,7 +114,7 @@ class ChromeNetworkDelegateSafeSearchTest : public testing::Test {
     scoped_ptr<ChromeNetworkDelegate> network_delegate(
         new ChromeNetworkDelegate(forwarder(), &enable_referrers_));
     network_delegate->set_force_google_safe_search(&force_google_safe_search_);
-    return network_delegate.PassAs<net::NetworkDelegate>();
+    return network_delegate.Pass();
   }
 
   void SetSafeSearch(bool value) {
@@ -134,13 +134,13 @@ class ChromeNetworkDelegateSafeSearchTest : public testing::Test {
     // Show the URL in the trace so we know where we failed.
     SCOPED_TRACE(url_string);
 
-    net::TestURLRequest request(
-        GURL(url_string), net::DEFAULT_PRIORITY, &delegate_, &context_);
+    scoped_ptr<net::URLRequest> request(context_.CreateRequest(
+        GURL(url_string), net::DEFAULT_PRIORITY, &delegate_, NULL));
 
-    request.Start();
+    request->Start();
     base::MessageLoop::current()->RunUntilIdle();
 
-    EXPECT_EQ(expected_query_parameters, request.url().query());
+    EXPECT_EQ(expected_query_parameters, request->url().query());
   }
 
  private:
@@ -312,7 +312,7 @@ class ChromeNetworkDelegatePrivacyModeTest : public testing::Test {
         kFirstPartySite("http://cool.things.com"),
         kBlockedFirstPartySite("http://no.thirdparties.com") {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeNetworkDelegate::InitializePrefsOnUIThread(
         &enable_referrers_, NULL, NULL,
         profile_.GetTestingPrefService());

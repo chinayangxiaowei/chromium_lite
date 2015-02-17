@@ -25,12 +25,13 @@
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/prefs/browser_ui_prefs_migrator.h"
 #include "chrome/browser/prefs/command_line_pref_store.h"
-#include "chrome/browser/prefs/pref_hash_filter.h"
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/browser/prefs/pref_service_syncable_factory.h"
 #include "chrome/browser/prefs/profile_pref_store_manager.h"
+#include "chrome/browser/prefs/tracked/pref_hash_filter.h"
 #include "chrome/browser/profiles/file_path_verifier_win.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/default_search_pref_migration.h"
@@ -38,6 +39,9 @@
 #include "chrome/browser/ui/profile_error_dialog.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/component_updater/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/search_engines/default_search_manager.h"
 #include "components/search_engines/search_engines_pref_names.h"
@@ -45,8 +49,6 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -64,23 +66,14 @@
 #include "chrome/browser/supervised_user/supervised_user_pref_store.h"
 #endif
 
-#if defined(OS_WIN)
-#include "base/win/win_util.h"
-#if defined(ENABLE_RLZ)
+#if defined(OS_WIN) && defined(ENABLE_RLZ)
 #include "rlz/lib/machine_id.h"
-#endif  // defined(ENABLE_RLZ)
-#endif  // defined(OS_WIN)
+#endif  // defined(ENABLE_RLZ) && defined(OS_WIN)
 
 using content::BrowserContext;
 using content::BrowserThread;
 
 namespace {
-
-// Whether we are in testing mode; can be enabled via
-// DisableDelaysAndDomainCheckForTesting(). Forces startup checks to occur
-// with no delay and ignores the presence of a domain when determining the
-// active SettingsEnforcement group.
-bool g_disable_delays_and_domain_check_for_testing = false;
 
 // These preferences must be kept in sync with the TrackedPreference enum in
 // tools/metrics/histograms/histograms.xml. To add a new preference, append it
@@ -152,6 +145,11 @@ const PrefHashFilter::TrackedPreferenceMetadata kTrackedPrefs[] = {
     PrefHashFilter::ENFORCE_ON_LOAD,
     PrefHashFilter::TRACKING_STRATEGY_ATOMIC
   },
+  {
+    13, prefs::kProfileResetPromptMementoInProfilePrefs,
+    PrefHashFilter::ENFORCE_ON_LOAD,
+    PrefHashFilter::TRACKING_STRATEGY_ATOMIC
+  },
 #endif
   {
     14, DefaultSearchManager::kDefaultSearchProviderDataPrefName,
@@ -188,6 +186,25 @@ const PrefHashFilter::TrackedPreferenceMetadata kTrackedPrefs[] = {
     PrefHashFilter::ENFORCE_ON_LOAD,
     PrefHashFilter::TRACKING_STRATEGY_ATOMIC
   },
+#if defined(OS_WIN)
+  {
+    19, prefs::kSwReporterPromptVersion,
+    PrefHashFilter::ENFORCE_ON_LOAD,
+    PrefHashFilter::TRACKING_STRATEGY_ATOMIC
+  },
+  {
+    20, prefs::kSwReporterPromptReason,
+    PrefHashFilter::ENFORCE_ON_LOAD,
+    PrefHashFilter::TRACKING_STRATEGY_ATOMIC
+  },
+#endif
+  {
+    21, prefs::kGoogleServicesUsername,
+    PrefHashFilter::ENFORCE_ON_LOAD,
+    PrefHashFilter::TRACKING_STRATEGY_ATOMIC
+  },
+  // See note at top, new items added here also need to be added to
+  // histograms.xml's TrackedPreference enum.
 };
 
 // One more than the last tracked preferences ID above.
@@ -209,20 +226,6 @@ enum SettingsEnforcementGroup {
 };
 
 SettingsEnforcementGroup GetSettingsEnforcementGroup() {
-# if defined(OS_WIN)
-  if (!g_disable_delays_and_domain_check_for_testing) {
-    static bool first_call = true;
-    static const bool is_enrolled_to_domain = base::win::IsEnrolledToDomain();
-    if (first_call) {
-      UMA_HISTOGRAM_BOOLEAN("Settings.TrackedPreferencesNoEnforcementOnDomain",
-                            is_enrolled_to_domain);
-      first_call = false;
-    }
-    if (is_enrolled_to_domain)
-      return GROUP_NO_ENFORCEMENT;
-  }
-#endif
-
   struct {
     const char* group_name;
     SettingsEnforcementGroup group;
@@ -256,11 +259,7 @@ SettingsEnforcementGroup GetSettingsEnforcementGroup() {
           chrome_prefs::internals::kSettingsEnforcementTrialName);
   if (trial) {
     const std::string& group_name = trial->group_name();
-    // ARRAYSIZE_UNSAFE must be used since the array is declared locally; it is
-    // only unsafe because it could not trigger a compile error on some
-    // non-array pointer types; this is fine since kEnforcementLevelMap is
-    // clearly an array.
-    for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kEnforcementLevelMap); ++i) {
+    for (size_t i = 0; i < arraysize(kEnforcementLevelMap); ++i) {
       if (kEnforcementLevelMap[i].group_name == group_name) {
         enforcement_group = kEnforcementLevelMap[i].group;
         group_determined_from_trial = true;
@@ -307,7 +306,6 @@ GetTrackingConfiguration() {
   return result;
 }
 
-
 // Shows notifications which correspond to PersistentPrefStore's reading errors.
 void HandleReadError(PersistentPrefStore::PrefReadError error) {
   // Sample the histogram also for the successful case in order to get a
@@ -337,6 +335,13 @@ void HandleReadError(PersistentPrefStore::PrefReadError error) {
 #else
     // On ChromeOS error screen with message about broken local state
     // will be displayed.
+
+    // A supplementary error message about broken local state - is included
+    // in logs and user feedbacks.
+    if (error != PersistentPrefStore::PREF_READ_ERROR_NONE &&
+        error != PersistentPrefStore::PREF_READ_ERROR_NO_FILE) {
+      LOG(ERROR) << "An error happened during prefs loading: " << error;
+    }
 #endif
   }
 }
@@ -463,14 +468,18 @@ scoped_ptr<PrefServiceSyncable> CreateProfilePrefs(
                  syncer::PREFERENCES);
 
   PrefServiceSyncableFactory factory;
+  scoped_refptr<PersistentPrefStore> user_pref_store(
+      CreateProfilePrefStoreManager(profile_path)
+          ->CreateProfilePrefStore(pref_io_task_runner,
+                                   start_sync_flare_for_prefs,
+                                   validation_delegate));
+  // BrowserUIPrefsMigrator unregisters and deletes itself after it is done.
+  user_pref_store->AddObserver(
+      new BrowserUIPrefsMigrator(user_pref_store.get()));
   PrepareFactory(&factory,
                  policy_service,
                  supervised_user_settings,
-                 scoped_refptr<PersistentPrefStore>(
-                     CreateProfilePrefStoreManager(profile_path)
-                         ->CreateProfilePrefStore(pref_io_task_runner,
-                                                  start_sync_flare_for_prefs,
-                                                  validation_delegate)),
+                 user_pref_store,
                  extension_prefs,
                  async);
   scoped_ptr<PrefServiceSyncable> pref_service =
@@ -490,14 +499,8 @@ void SchedulePrefsFilePathVerification(const base::FilePath& profile_path) {
       base::Bind(&VerifyPreferencesFile,
                  ProfilePrefStoreManager::GetPrefFilePathFromProfilePath(
                      profile_path)),
-      base::TimeDelta::FromSeconds(g_disable_delays_and_domain_check_for_testing
-                                       ? 0
-                                       : kVerifyPrefsFileDelaySeconds));
+      base::TimeDelta::FromSeconds(kVerifyPrefsFileDelaySeconds));
 #endif
-}
-
-void DisableDelaysAndDomainCheckForTesting() {
-  g_disable_delays_and_domain_check_for_testing = true;
 }
 
 bool InitializePrefsFromMasterPrefs(

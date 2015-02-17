@@ -21,10 +21,11 @@
 #include "chrome/browser/ui/libgtk2ui/gtk2_signal.h"
 #include "chrome/browser/ui/libgtk2ui/gtk2_util.h"
 #include "chrome/browser/ui/libgtk2ui/select_file_dialog_impl.h"
-#include "grit/ui_strings.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/strings/grit/ui_strings.h"
+#include "ui/views/widget/desktop_aura/x11_desktop_handler.h"
 
 namespace {
 
@@ -52,28 +53,27 @@ class SelectFileDialogImplGTK : public SelectFileDialogImpl,
                                    ui::SelectFilePolicy* policy);
 
  protected:
-  virtual ~SelectFileDialogImplGTK();
+  ~SelectFileDialogImplGTK() override;
 
   // BaseShellDialog implementation:
-  virtual bool IsRunning(gfx::NativeWindow parent_window) const OVERRIDE;
+  bool IsRunning(gfx::NativeWindow parent_window) const override;
 
   // SelectFileDialog implementation.
   // |params| is user data we pass back via the Listener interface.
-  virtual void SelectFileImpl(
-      Type type,
-      const base::string16& title,
-      const base::FilePath& default_path,
-      const FileTypeInfo* file_types,
-      int file_type_index,
-      const base::FilePath::StringType& default_extension,
-      gfx::NativeWindow owning_window,
-      void* params) OVERRIDE;
+  void SelectFileImpl(Type type,
+                      const base::string16& title,
+                      const base::FilePath& default_path,
+                      const FileTypeInfo* file_types,
+                      int file_type_index,
+                      const base::FilePath::StringType& default_extension,
+                      gfx::NativeWindow owning_window,
+                      void* params) override;
 
  private:
-  virtual bool HasMultipleFileTypeChoicesImpl() OVERRIDE;
+  bool HasMultipleFileTypeChoicesImpl() override;
 
   // Overridden from aura::WindowObserver:
-  virtual void OnWindowDestroying(aura::Window* window) OVERRIDE;
+  void OnWindowDestroying(aura::Window* window) override;
 
   // Add the filters from |file_types_| to |chooser|.
   void AddFilters(GtkFileChooser* chooser);
@@ -277,6 +277,11 @@ void SelectFileDialogImplGTK::SelectFileImpl(
   gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
 
   gtk_widget_show_all(dialog);
+
+  // We need to call gtk_window_present after making the widgets visible to make
+  // sure window gets correctly raised and gets focus.
+  int time = views::X11DesktopHandler::get()->wm_user_time_ms();
+  gtk_window_present_with_time(GTK_WINDOW(dialog), time);
 }
 
 void SelectFileDialogImplGTK::AddFilters(GtkFileChooser* chooser) {

@@ -14,7 +14,6 @@
 #include "ash/system/user/user_accounts_delegate.h"
 #include "ash/system/user/user_view.h"
 #include "base/macros.h"
-#include "grit/ash_strings.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/label.h"
 
@@ -32,18 +31,17 @@ class AccountsDetailedView : public TrayDetailsView,
                              public ash::tray::UserAccountsDelegate::Observer {
  public:
   AccountsDetailedView(TrayUser* owner, user::LoginStatus login_status);
-  virtual ~AccountsDetailedView();
+  ~AccountsDetailedView() override;
 
  private:
   // Overridden from ViewClickListener.
-  virtual void OnViewClicked(views::View* sender) OVERRIDE;
+  void OnViewClicked(views::View* sender) override;
 
   // Overridden from views::ButtonListener.
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // Overridden from ash::tray::UserAccountsDelegate::Observer.
-  virtual void AccountListChanged() OVERRIDE;
+  void AccountListChanged() override;
 
   void AddHeader(user::LoginStatus login_status);
   void AddAccountList();

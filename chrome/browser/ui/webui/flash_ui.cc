@@ -25,6 +25,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/gpu_data_manager_observer.h"
 #include "content/public/browser/plugin_service.h"
@@ -37,9 +39,6 @@
 #include "content/public/common/webplugininfo.h"
 #include "gpu/config/gpu_info.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_WIN)
@@ -61,7 +60,6 @@ content::WebUIDataSource* CreateFlashUIHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIFlashHost);
 
-  source->SetUseJsonJSFormatV2();
   source->AddLocalizedString("loadingMessage", IDS_FLASH_LOADING_MESSAGE);
   source->AddLocalizedString("flashLongTitle", IDS_FLASH_TITLE_MESSAGE);
   source->SetJsonPath("strings.js");
@@ -84,16 +82,16 @@ class FlashDOMHandler : public WebUIMessageHandler,
                         public content::GpuDataManagerObserver {
  public:
   FlashDOMHandler();
-  virtual ~FlashDOMHandler();
+  ~FlashDOMHandler() override;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // CrashUploadList::Delegate implementation.
-  virtual void OnUploadListAvailable() OVERRIDE;
+  void OnUploadListAvailable() override;
 
   // GpuDataManager::Observer implementation.
-  virtual void OnGpuInfoUpdate() OVERRIDE;
+  void OnGpuInfoUpdate() override;
 
   // Callback for the "requestFlashInfo" message.
   void HandleRequestFlashInfo(const base::ListValue* args);

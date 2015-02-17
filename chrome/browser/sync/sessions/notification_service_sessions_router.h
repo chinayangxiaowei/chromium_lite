@@ -5,11 +5,16 @@
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_NOTIFICATION_SERVICE_SESSIONS_ROUTER_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_NOTIFICATION_SERVICE_SESSIONS_ROUTER_H_
 
+#include <set>
+
+#include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/sync/sessions/sessions_sync_manager.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
+class GURL;
+class HistoryService;
 class Profile;
 
 namespace content {
@@ -27,17 +32,17 @@ class NotificationServiceSessionsRouter
   NotificationServiceSessionsRouter(
       Profile* profile,
       const syncer::SyncableService::StartSyncFlare& flare);
-  virtual ~NotificationServiceSessionsRouter();
+  ~NotificationServiceSessionsRouter() override;
 
   // content::NotificationObserver implementation.
   // BrowserSessionProvider -> sync API model change application.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // SessionsSyncManager::LocalEventRouter implementation.
-  virtual void StartRoutingTo(LocalSessionEventHandler* handler) OVERRIDE;
-  virtual void Stop() OVERRIDE;
+  void StartRoutingTo(LocalSessionEventHandler* handler) override;
+  void Stop() override;
 
  private:
   // Called when the URL visited in |web_contents| was blocked by the
@@ -47,10 +52,17 @@ class NotificationServiceSessionsRouter
   // from WebContents.
   void OnNavigationBlocked(content::WebContents* web_contents);
 
+  // Called when the urls of favicon changed.
+  void OnFaviconChanged(const std::set<GURL>& changed_favicons);
+
   LocalSessionEventHandler* handler_;
   content::NotificationRegistrar registrar_;
   Profile* const profile_;
   syncer::SyncableService::StartSyncFlare flare_;
+
+  scoped_ptr<base::CallbackList<void(const std::set<GURL>&)>::Subscription>
+      favicon_changed_subscription_;
+
   base::WeakPtrFactory<NotificationServiceSessionsRouter> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(NotificationServiceSessionsRouter);

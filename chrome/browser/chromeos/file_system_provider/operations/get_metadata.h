@@ -30,21 +30,23 @@ class GetMetadata : public Operation {
  public:
   GetMetadata(extensions::EventRouter* event_router,
               const ProvidedFileSystemInfo& file_system_info,
-              const base::FilePath& directory_path,
+              const base::FilePath& entry_path,
+              ProvidedFileSystemInterface::MetadataFieldMask fields,
               const ProvidedFileSystemInterface::GetMetadataCallback& callback);
   virtual ~GetMetadata();
 
   // Operation overrides.
-  virtual bool Execute(int request_id) OVERRIDE;
+  virtual bool Execute(int request_id) override;
   virtual void OnSuccess(int request_id,
                          scoped_ptr<RequestValue> result,
-                         bool has_more) OVERRIDE;
+                         bool has_more) override;
   virtual void OnError(int request_id,
                        scoped_ptr<RequestValue> result,
-                       base::File::Error error) OVERRIDE;
+                       base::File::Error error) override;
 
  private:
   base::FilePath entry_path_;
+  ProvidedFileSystemInterface::MetadataFieldMask fields_;
   const ProvidedFileSystemInterface::GetMetadataCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(GetMetadata);

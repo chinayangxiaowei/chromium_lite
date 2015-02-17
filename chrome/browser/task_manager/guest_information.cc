@@ -12,6 +12,7 @@
 #include "chrome/browser/task_manager/resource_provider.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/browser/task_manager/task_manager_util.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -19,7 +20,8 @@
 #include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
+#include "extensions/browser/guest_view/guest_view_base.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
@@ -35,13 +37,13 @@ namespace task_manager {
 class GuestResource : public RendererResource {
  public:
   explicit GuestResource(content::RenderViewHost* render_view_host);
-  virtual ~GuestResource();
+  ~GuestResource() override;
 
   // Resource methods:
-  virtual Type GetType() const OVERRIDE;
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE;
-  virtual content::WebContents* GetWebContents() const OVERRIDE;
+  Type GetType() const override;
+  base::string16 GetTitle() const override;
+  gfx::ImageSkia GetIcon() const override;
+  content::WebContents* GetWebContents() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(GuestResource);
@@ -62,12 +64,15 @@ Resource::Type GuestResource::GetType() const {
 
 base::string16 GuestResource::GetTitle() const {
   WebContents* web_contents = GetWebContents();
-  const int message_id = IDS_TASK_MANAGER_WEBVIEW_TAG_PREFIX;
-  if (web_contents) {
-    base::string16 title = util::GetTitleFromWebContents(web_contents);
-    return l10n_util::GetStringFUTF16(message_id, title);
+  if (!web_contents) {
+    const int message_id = IDS_EXTENSION_TASK_MANAGER_WEBVIEW_TAG_PREFIX;
+    return l10n_util::GetStringFUTF16(message_id, base::string16());
   }
-  return l10n_util::GetStringFUTF16(message_id, base::string16());
+  extensions::GuestViewBase* guest =
+      extensions::GuestViewBase::FromWebContents(web_contents);
+  return l10n_util::GetStringFUTF16(
+      guest->GetTaskPrefix(),
+      util::GetTitleFromWebContents(web_contents));
 }
 
 gfx::ImageSkia GuestResource::GetIcon() const {
@@ -93,7 +98,7 @@ GuestInformation::~GuestInformation() {}
 
 bool GuestInformation::CheckOwnership(WebContents* web_contents) {
   // Guest WebContentses are created and owned internally by the content layer.
-  return web_contents->IsSubframe();
+  return extensions::GuestViewBase::IsGuest(web_contents);
 }
 
 void GuestInformation::GetAll(const NewWebContentsCallback& callback) {
@@ -103,7 +108,7 @@ void GuestInformation::GetAll(const NewWebContentsCallback& callback) {
     if (widget->IsRenderView()) {
       content::RenderViewHost* rvh = content::RenderViewHost::From(widget);
       WebContents* web_contents = WebContents::FromRenderViewHost(rvh);
-      if (web_contents && web_contents->IsSubframe())
+      if (web_contents && extensions::GuestViewBase::IsGuest(web_contents))
         callback.Run(web_contents);
     }
   }

@@ -23,7 +23,7 @@ void LogMessage(int stream_id, const std::string& msg) {
   DVLOG(1) << oss.str();
 }
 
-}
+}  // namespace
 
 namespace content {
 
@@ -32,17 +32,17 @@ class AudioInputMessageFilter::AudioInputIPCImpl
  public:
   AudioInputIPCImpl(const scoped_refptr<AudioInputMessageFilter>& filter,
                     int render_view_id);
-  virtual ~AudioInputIPCImpl();
+  ~AudioInputIPCImpl() override;
 
   // media::AudioInputIPC implementation.
-  virtual void CreateStream(media::AudioInputIPCDelegate* delegate,
-                            int session_id,
-                            const media::AudioParameters& params,
-                            bool automatic_gain_control,
-                            uint32 total_segments) OVERRIDE;
-  virtual void RecordStream() OVERRIDE;
-  virtual void SetVolume(double volume) OVERRIDE;
-  virtual void CloseStream() OVERRIDE;
+  void CreateStream(media::AudioInputIPCDelegate* delegate,
+                    int session_id,
+                    const media::AudioParameters& params,
+                    bool automatic_gain_control,
+                    uint32 total_segments) override;
+  void RecordStream() override;
+  void SetVolume(double volume) override;
+  void CloseStream() override;
 
  private:
   const scoped_refptr<AudioInputMessageFilter> filter_;
@@ -126,19 +126,14 @@ void AudioInputMessageFilter::OnChannelClosing() {
 void AudioInputMessageFilter::OnStreamCreated(
     int stream_id,
     base::SharedMemoryHandle handle,
-#if defined(OS_WIN)
-    base::SyncSocket::Handle socket_handle,
-#else
-    base::FileDescriptor socket_descriptor,
-#endif
+    base::SyncSocket::TransitDescriptor socket_descriptor,
     uint32 length,
     uint32 total_segments) {
   DCHECK(io_message_loop_->BelongsToCurrentThread());
   LogMessage(stream_id, "OnStreamCreated");
 
-#if !defined(OS_WIN)
-  base::SyncSocket::Handle socket_handle = socket_descriptor.fd;
-#endif
+  base::SyncSocket::Handle socket_handle =
+      base::SyncSocket::UnwrapHandle(socket_descriptor);
   media::AudioInputIPCDelegate* delegate = delegates_.Lookup(stream_id);
   if (!delegate) {
     DLOG(WARNING) << "Got audio stream event for a non-existent or removed"

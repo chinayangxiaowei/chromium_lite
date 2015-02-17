@@ -24,21 +24,20 @@ SharedChangeProcessor::SharedChangeProcessor()
 
 SharedChangeProcessor::~SharedChangeProcessor() {
   // We can either be deleted when the DTC is destroyed (on UI
-  // thread), or when the syncer::SyncableService stop's syncing (datatype
+  // thread), or when the syncer::SyncableService stops syncing (datatype
   // thread).  |generic_change_processor_|, if non-NULL, must be
   // deleted on |backend_loop_|.
-  if (frontend_loop_->BelongsToCurrentThread()) {
-    if (backend_loop_.get()) {
+  if (backend_loop_.get()) {
+    if (backend_loop_->BelongsToCurrentThread()) {
+      delete generic_change_processor_;
+    } else {
+      DCHECK(frontend_loop_->BelongsToCurrentThread());
       if (!backend_loop_->DeleteSoon(FROM_HERE, generic_change_processor_)) {
         NOTREACHED();
       }
-    } else {
-      DCHECK(!generic_change_processor_);
     }
   } else {
-    DCHECK(backend_loop_.get());
-    DCHECK(backend_loop_->BelongsToCurrentThread());
-    delete generic_change_processor_;
+    DCHECK(!generic_change_processor_);
   }
 }
 
@@ -67,7 +66,8 @@ base::WeakPtr<syncer::SyncableService> SharedChangeProcessor::Connect(
   }
 
   generic_change_processor_ =
-      processor_factory->CreateGenericChangeProcessor(user_share,
+      processor_factory->CreateGenericChangeProcessor(type,
+                                                      user_share,
                                                       error_handler,
                                                       local_service,
                                                       merge_result,
@@ -97,7 +97,7 @@ int SharedChangeProcessor::GetSyncCount() {
     LOG(ERROR) << "Change processor disconnected.";
     return 0;
   }
-  return generic_change_processor_->GetSyncCountForType(type_);
+  return generic_change_processor_->GetSyncCount();
 }
 
 syncer::SyncError SharedChangeProcessor::ProcessSyncChanges(
@@ -139,7 +139,7 @@ syncer::SyncError SharedChangeProcessor::GetAllSyncDataReturnError(
                             type_);
     return error;
   }
-  return generic_change_processor_->GetAllSyncDataReturnError(type, data);
+  return generic_change_processor_->GetAllSyncDataReturnError(data);
 }
 
 syncer::SyncError SharedChangeProcessor::UpdateDataTypeContext(
@@ -168,8 +168,7 @@ bool SharedChangeProcessor::SyncModelHasUserCreatedNodes(bool* has_nodes) {
     LOG(ERROR) << "Change processor disconnected.";
     return false;
   }
-  return generic_change_processor_->SyncModelHasUserCreatedNodes(
-      type_, has_nodes);
+  return generic_change_processor_->SyncModelHasUserCreatedNodes(has_nodes);
 }
 
 bool SharedChangeProcessor::CryptoReadyIfNecessary() {
@@ -180,7 +179,7 @@ bool SharedChangeProcessor::CryptoReadyIfNecessary() {
     LOG(ERROR) << "Change processor disconnected.";
     return true;  // Otherwise we get into infinite spin waiting.
   }
-  return generic_change_processor_->CryptoReadyIfNecessary(type_);
+  return generic_change_processor_->CryptoReadyIfNecessary();
 }
 
 bool SharedChangeProcessor::GetDataTypeContext(std::string* context) const {
@@ -191,7 +190,7 @@ bool SharedChangeProcessor::GetDataTypeContext(std::string* context) const {
     LOG(ERROR) << "Change processor disconnected.";
     return false;
   }
-  return generic_change_processor_->GetDataTypeContext(type_, context);
+  return generic_change_processor_->GetDataTypeContext(context);
 }
 
 syncer::SyncError SharedChangeProcessor::CreateAndUploadError(

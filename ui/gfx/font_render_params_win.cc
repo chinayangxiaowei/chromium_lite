@@ -19,7 +19,7 @@ class CachedFontRenderParams : public gfx::SingletonHwnd::Observer {
     return Singleton<CachedFontRenderParams>::get();
   }
 
-  const FontRenderParams& GetParams() {
+  const FontRenderParams& GetParams(bool for_web_contents) {
     if (params_)
       return *params_;
 
@@ -34,7 +34,8 @@ class CachedFontRenderParams : public gfx::SingletonHwnd::Observer {
     BOOL enabled = false;
     if (SystemParametersInfo(SPI_GETFONTSMOOTHING, 0, &enabled, 0) && enabled) {
       params_->antialiasing = true;
-      params_->subpixel_positioning = true;
+      // Subpixel positioning is not yet implemented for UI. crbug.com/389649
+      params_->subpixel_positioning = for_web_contents;
 
       UINT type = 0;
       if (SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE, 0, &type, 0) &&
@@ -58,7 +59,7 @@ class CachedFontRenderParams : public gfx::SingletonHwnd::Observer {
   virtual void OnWndProc(HWND hwnd,
                          UINT message,
                          WPARAM wparam,
-                         LPARAM lparam) OVERRIDE {
+                         LPARAM lparam) override {
     if (message == WM_SETTINGCHANGE) {
       params_.reset();
       gfx::SingletonHwnd::GetInstance()->RemoveObserver(this);
@@ -74,10 +75,11 @@ class CachedFontRenderParams : public gfx::SingletonHwnd::Observer {
 
 FontRenderParams GetFontRenderParams(const FontRenderParamsQuery& query,
                                      std::string* family_out) {
-  // Customized font rendering settings are not supported, only defaults.
-  if (!query.is_empty() || family_out)
+  if (family_out)
     NOTIMPLEMENTED();
-  return CachedFontRenderParams::GetInstance()->GetParams();
+  // Customized font rendering settings are not supported, only defaults.
+  return CachedFontRenderParams::GetInstance()->GetParams(
+      query.for_web_contents);
 }
 
 }  // namespace gfx

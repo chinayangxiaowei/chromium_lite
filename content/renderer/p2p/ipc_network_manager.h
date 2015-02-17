@@ -10,8 +10,8 @@
 #include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
+#include "content/renderer/p2p/network_list_manager.h"
 #include "content/renderer/p2p/network_list_observer.h"
-#include "content/renderer/p2p/socket_dispatcher.h"
 #include "third_party/webrtc/base/network.h"
 
 namespace content {
@@ -21,21 +21,20 @@ namespace content {
 class IpcNetworkManager : public rtc::NetworkManagerBase,
                           public NetworkListObserver {
  public:
-  // Constructor doesn't take ownership of the |socket_dispatcher|.
-  CONTENT_EXPORT IpcNetworkManager(P2PSocketDispatcher* socket_dispatcher);
-  virtual ~IpcNetworkManager();
+  // Constructor doesn't take ownership of the |network_list_manager|.
+  CONTENT_EXPORT IpcNetworkManager(NetworkListManager* network_list_manager);
+  ~IpcNetworkManager() override;
 
-  virtual void StartUpdating() OVERRIDE;
-  virtual void StopUpdating() OVERRIDE;
+  void StartUpdating() override;
+  void StopUpdating() override;
 
   // P2PSocketDispatcher::NetworkListObserver interface.
-  virtual void OnNetworkListChanged(
-      const net::NetworkInterfaceList& list) OVERRIDE;
+  void OnNetworkListChanged(const net::NetworkInterfaceList& list) override;
 
  private:
   void SendNetworksChangedSignal();
 
-  P2PSocketDispatcher* socket_dispatcher_;
+  NetworkListManager* network_list_manager_;
   int start_count_;
   bool network_list_received_;
 

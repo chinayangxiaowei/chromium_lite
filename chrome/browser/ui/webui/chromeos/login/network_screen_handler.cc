@@ -22,11 +22,10 @@
 #include "chrome/browser/ui/webui/chromeos/login/l10n_util.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/ime/extension_ime_util.h"
 #include "chromeos/network/network_handler.h"
 #include "chromeos/network/network_state_handler.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/rect.h"
 #include "ui/views/layout/fill_layout.h"
@@ -48,7 +47,6 @@ const char kJsApiNetworkOnTimezoneChanged[] = "networkOnTimezoneChanged";
 // "selected" only if loaded_locale is a backup for "requested_locale".
 std::string CalculateSelectedLanguage(const std::string& requested_locale,
                                       const std::string& loaded_locale) {
-
   std::string resolved_locale;
   if (!l10n_util::CheckAndResolveLocale(requested_locale, &resolved_locale))
     return loaded_locale;
@@ -109,7 +107,7 @@ void NetworkScreenHandler::Show() {
   if (selected_language_code_.empty()) {
     const StartupCustomizationDocument* startup_manifest =
         StartupCustomizationDocument::GetInstance();
-    HandleOnLanguageChanged(startup_manifest->initial_locale_default());
+    SetApplicationLocale(startup_manifest->initial_locale_default());
   }
 
   PrefService* prefs = g_browser_process->local_state();
@@ -179,13 +177,16 @@ void NetworkScreenHandler::GetAdditionalParameters(
   const std::string selected_language = selected_language_code_.empty() ?
       application_locale : selected_language_code_;
   const std::string selected_input_method =
-      input_method::InputMethodManager::Get()->GetCurrentInputMethod().id();
+      input_method::InputMethodManager::Get()
+          ->GetActiveIMEState()
+          ->GetCurrentInputMethod()
+          .id();
 
   dict->Set("languageList",
             GetUILanguageList(NULL, selected_language).release());
   dict->Set("inputMethodsList",
-            GetLoginKeyboardLayouts(application_locale,
-                                    selected_input_method).release());
+            GetAndActivateLoginKeyboardLayouts(
+                application_locale, selected_input_method).release());
   dict->Set("timezoneList", GetTimezoneList());
 }
 
@@ -208,11 +209,11 @@ void NetworkScreenHandler::Initialize() {
 void NetworkScreenHandler::RegisterMessages() {
   AddCallback(kJsApiNetworkOnExit, &NetworkScreenHandler::HandleOnExit);
   AddCallback(kJsApiNetworkOnLanguageChanged,
-              &NetworkScreenHandler::HandleOnLanguageChanged);
+              &NetworkScreenHandler::SetApplicationLocale);
   AddCallback(kJsApiNetworkOnInputMethodChanged,
-              &NetworkScreenHandler::HandleOnInputMethodChanged);
+              &NetworkScreenHandler::SetInputMethod);
   AddCallback(kJsApiNetworkOnTimezoneChanged,
-              &NetworkScreenHandler::HandleOnTimezoneChanged);
+              &NetworkScreenHandler::SetTimezone);
 }
 
 
@@ -227,10 +228,10 @@ void NetworkScreenHandler::HandleOnExit() {
 
 struct NetworkScreenHandlerOnLanguageChangedCallbackData {
   explicit NetworkScreenHandlerOnLanguageChangedCallbackData(
-      base::WeakPtr<NetworkScreenHandler>& handler)
-      : handler_(handler) {}
+      const base::WeakPtr<NetworkScreenHandler>& handler)
+      : handler(handler) {}
 
-  base::WeakPtr<NetworkScreenHandler> handler_;
+  base::WeakPtr<NetworkScreenHandler> handler;
 
   // Block UI while resource bundle is being reloaded.
   chromeos::InputEventsBlocker input_events_blocker;
@@ -242,10 +243,10 @@ void NetworkScreenHandler::OnLanguageChangedCallback(
     const std::string& requested_locale,
     const std::string& loaded_locale,
     const bool success) {
-  if (!context or !context->handler_)
+  if (!context || !context->handler)
     return;
 
-  NetworkScreenHandler* const self = context->handler_.get();
+  NetworkScreenHandler* const self = context->handler.get();
 
   if (success) {
     if (requested_locale == loaded_locale) {
@@ -269,11 +270,24 @@ void NetworkScreenHandler::OnLanguageChangedCallback(
   AccessibilityManager::Get()->OnLocaleChanged();
 }
 
-void NetworkScreenHandler::HandleOnLanguageChanged(const std::string& locale) {
+std::string NetworkScreenHandler::GetApplicationLocale() const {
+  return locale_;
+}
+
+std::string NetworkScreenHandler::GetInputMethod() const {
+  return input_method_;
+}
+
+std::string NetworkScreenHandler::GetTimezone() const {
+  return timezone_;
+}
+
+void NetworkScreenHandler::SetApplicationLocale(const std::string& locale) {
   const std::string app_locale = g_browser_process->GetApplicationLocale();
   if (app_locale == locale)
     return;
 
+  locale_ = locale;
   base::WeakPtr<NetworkScreenHandler> weak_self =
       weak_ptr_factory_.GetWeakPtr();
   scoped_ptr<NetworkScreenHandlerOnLanguageChangedCallbackData> callback_data(
@@ -288,17 +302,21 @@ void NetworkScreenHandler::HandleOnLanguageChanged(const std::string& locale) {
                               callback.Pass());
 }
 
-void NetworkScreenHandler::HandleOnInputMethodChanged(const std::string& id) {
-  input_method::InputMethodManager::Get()->ChangeInputMethod(id);
+void NetworkScreenHandler::SetInputMethod(const std::string& input_method) {
+  input_method_ = input_method;
+  input_method::InputMethodManager::Get()
+      ->GetActiveIMEState()
+      ->ChangeInputMethod(input_method, false /* show_message */);
 }
 
-void NetworkScreenHandler::HandleOnTimezoneChanged(
+void NetworkScreenHandler::SetTimezone(
     const std::string& timezone_id) {
   std::string current_timezone_id;
   CrosSettings::Get()->GetString(kSystemTimezone, &current_timezone_id);
   if (current_timezone_id == timezone_id)
     return;
 
+  timezone_ = timezone_id;
   CrosSettings::Get()->SetString(kSystemTimezone, timezone_id);
 }
 
@@ -310,7 +328,8 @@ void NetworkScreenHandler::OnSystemTimezoneChanged() {
 
 void NetworkScreenHandler::InputMethodChanged(
     input_method::InputMethodManager* manager, bool show_message) {
-  CallJS("setInputMethod", manager->GetCurrentInputMethod().id());
+  CallJS("setInputMethod",
+         manager->GetActiveIMEState()->GetCurrentInputMethod().id());
 }
 
 void NetworkScreenHandler::ReloadLocalizedContent() {

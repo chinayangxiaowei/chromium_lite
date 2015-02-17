@@ -15,24 +15,20 @@
 #include "base/strings/string_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
-#include "chrome/browser/extensions/blacklist.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/declarative_user_script_master.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
 #include "chrome/browser/extensions/extension_error_reporter.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/extensions/extension_util.h"
-#include "chrome/browser/extensions/extension_warning_badge_service.h"
-#include "chrome/browser/extensions/extension_warning_set.h"
 #include "chrome/browser/extensions/install_verifier.h"
 #include "chrome/browser/extensions/navigation_observer.h"
 #include "chrome/browser/extensions/shared_module_service.h"
 #include "chrome/browser/extensions/shared_user_script_master.h"
-#include "chrome/browser/extensions/standard_management_policy_provider.h"
 #include "chrome/browser/extensions/state_store_notification_observer.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
-#include "chrome/browser/extensions/updater/manifest_fetch_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
@@ -41,7 +37,6 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/features/feature_channel.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/url_data_source.h"
 #include "extensions/browser/content_verifier.h"
@@ -55,13 +50,14 @@
 #include "extensions/browser/info_map.h"
 #include "extensions/browser/lazy_background_task_queue.h"
 #include "extensions/browser/management_policy.h"
-#include "extensions/browser/process_manager.h"
 #include "extensions/browser/quota_service.h"
 #include "extensions/browser/runtime_data.h"
 #include "extensions/browser/state_store.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/manifest_url_handlers.h"
 #include "net/base/escape.h"
 
 #if defined(ENABLE_NOTIFICATIONS)
@@ -121,11 +117,6 @@ void ExtensionSystemImpl::Shared::InitPrefs() {
       profile_->GetPath().AppendASCII(extensions::kRulesStoreName),
       false));
 
-  blacklist_.reset(new Blacklist(ExtensionPrefs::Get(profile_)));
-
-  standard_management_policy_provider_.reset(
-      new StandardManagementPolicyProvider(ExtensionPrefs::Get(profile_)));
-
 #if defined(OS_CHROMEOS)
   const user_manager::User* user =
       user_manager::UserManager::Get()->GetActiveUser();
@@ -140,9 +131,9 @@ void ExtensionSystemImpl::Shared::InitPrefs() {
 }
 
 void ExtensionSystemImpl::Shared::RegisterManagementPolicyProviders() {
-  DCHECK(standard_management_policy_provider_.get());
-  management_policy_->RegisterProvider(
-      standard_management_policy_provider_.get());
+  management_policy_->RegisterProviders(
+      ExtensionManagementFactory::GetForBrowserContext(profile_)
+          ->GetProviders());
 
 #if defined(OS_CHROMEOS)
   if (device_local_account_management_policy_provider_) {
@@ -161,9 +152,9 @@ class ContentVerifierDelegateImpl : public ContentVerifierDelegate {
   explicit ContentVerifierDelegateImpl(ExtensionService* service)
       : service_(service->AsWeakPtr()), default_mode_(GetDefaultMode()) {}
 
-  virtual ~ContentVerifierDelegateImpl() {}
+  ~ContentVerifierDelegateImpl() override {}
 
-  virtual Mode ShouldBeVerified(const Extension& extension) OVERRIDE {
+  Mode ShouldBeVerified(const Extension& extension) override {
 #if defined(OS_CHROMEOS)
     if (ExtensionAssetsManagerChromeOS::IsSharedInstall(&extension))
       return ContentVerifierDelegate::ENFORCE_STRICT;
@@ -186,15 +177,15 @@ class ContentVerifierDelegateImpl : public ContentVerifierDelegate {
     return default_mode_;
   }
 
-  virtual const ContentVerifierKey& PublicKey() OVERRIDE {
+  const ContentVerifierKey& PublicKey() override {
     static ContentVerifierKey key(
         extension_misc::kWebstoreSignaturesPublicKey,
         extension_misc::kWebstoreSignaturesPublicKeySize);
     return key;
   }
 
-  virtual GURL GetSignatureFetchUrl(const std::string& extension_id,
-                                    const base::Version& version) OVERRIDE {
+  GURL GetSignatureFetchUrl(const std::string& extension_id,
+                            const base::Version& version) override {
     // TODO(asargent) Factor out common code from the extension updater's
     // ManifestFetchData class that can be shared for use here.
     std::vector<std::string> parts;
@@ -212,12 +203,13 @@ class ContentVerifierDelegateImpl : public ContentVerifierDelegate {
     return base_url.ReplaceComponents(replacements);
   }
 
-  virtual std::set<base::FilePath> GetBrowserImagePaths(
-      const extensions::Extension* extension) OVERRIDE {
+  std::set<base::FilePath> GetBrowserImagePaths(
+      const extensions::Extension* extension) override {
     return extension_file_util::GetBrowserImagePaths(extension);
   }
 
-  virtual void VerifyFailed(const std::string& extension_id) OVERRIDE {
+  void VerifyFailed(const std::string& extension_id,
+                    ContentVerifyJob::FailureReason reason) override {
     if (!service_)
       return;
     ExtensionRegistry* registry = ExtensionRegistry::Get(service_->profile());
@@ -231,6 +223,8 @@ class ContentVerifierDelegateImpl : public ContentVerifierDelegate {
       ExtensionPrefs::Get(service_->profile())
           ->IncrementCorruptedDisableCount();
       UMA_HISTOGRAM_BOOLEAN("Extensions.CorruptExtensionBecameDisabled", true);
+      UMA_HISTOGRAM_ENUMERATION("Extensions.CorruptExtensionDisabledReason",
+          reason, ContentVerifyJob::FAILURE_REASON_MAX);
     } else if (!ContainsKey(would_be_disabled_ids_, extension_id)) {
       UMA_HISTOGRAM_BOOLEAN("Extensions.CorruptExtensionWouldBeDisabled", true);
       would_be_disabled_ids_.insert(extension_id);
@@ -322,7 +316,7 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
       CommandLine::ForCurrentProcess(),
       profile_->GetPath().AppendASCII(extensions::kInstallDirectoryName),
       ExtensionPrefs::Get(profile_),
-      blacklist_.get(),
+      Blacklist::Get(profile_),
       autoupdate_enabled,
       extensions_enabled,
       &ready_));
@@ -383,11 +377,6 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
   // Make the chrome://extension-icon/ resource available.
   content::URLDataSource::Add(profile_, new ExtensionIconSource(profile_));
 
-  extension_warning_service_.reset(new ExtensionWarningService(profile_));
-  extension_warning_badge_service_.reset(
-      new ExtensionWarningBadgeService(profile_));
-  extension_warning_service_->AddObserver(
-      extension_warning_badge_service_.get());
   error_console_.reset(new ErrorConsole(profile_));
   quota_service_.reset(new QuotaService);
 
@@ -411,11 +400,7 @@ void ExtensionSystemImpl::Shared::Init(bool extensions_enabled) {
 }
 
 void ExtensionSystemImpl::Shared::Shutdown() {
-  if (extension_warning_service_) {
-    extension_warning_service_->RemoveObserver(
-        extension_warning_badge_service_.get());
-  }
-  if (content_verifier_)
+  if (content_verifier_.get())
     content_verifier_->Shutdown();
   if (extension_service_)
     extension_service_->Shutdown();
@@ -459,14 +444,6 @@ LazyBackgroundTaskQueue*
 
 EventRouter* ExtensionSystemImpl::Shared::event_router() {
   return event_router_.get();
-}
-
-ExtensionWarningService* ExtensionSystemImpl::Shared::warning_service() {
-  return extension_warning_service_.get();
-}
-
-Blacklist* ExtensionSystemImpl::Shared::blacklist() {
-  return blacklist_.get();
 }
 
 ErrorConsole* ExtensionSystemImpl::Shared::error_console() {
@@ -514,9 +491,7 @@ ExtensionSystemImpl::ExtensionSystemImpl(Profile* profile)
     : profile_(profile) {
   shared_ = ExtensionSystemSharedFactory::GetForBrowserContext(profile);
 
-  if (profile->IsOffTheRecord()) {
-    process_manager_.reset(ProcessManager::Create(profile));
-  } else {
+  if (!profile->IsOffTheRecord()) {
     shared_->InitPrefs();
   }
 }
@@ -525,7 +500,6 @@ ExtensionSystemImpl::~ExtensionSystemImpl() {
 }
 
 void ExtensionSystemImpl::Shutdown() {
-  process_manager_.reset();
 }
 
 void ExtensionSystemImpl::InitForRegularProfile(bool extensions_enabled) {
@@ -535,9 +509,6 @@ void ExtensionSystemImpl::InitForRegularProfile(bool extensions_enabled) {
 
   // The InfoMap needs to be created before the ProcessManager.
   shared_->info_map();
-
-  process_manager_.reset(ProcessManager::Create(profile_));
-
   shared_->Init(extensions_enabled);
 }
 
@@ -557,10 +528,6 @@ SharedUserScriptMaster* ExtensionSystemImpl::shared_user_script_master() {
   return shared_->shared_user_script_master();
 }
 
-ProcessManager* ExtensionSystemImpl::process_manager() {
-  return process_manager_.get();
-}
-
 StateStore* ExtensionSystemImpl::state_store() {
   return shared_->state_store();
 }
@@ -577,14 +544,6 @@ LazyBackgroundTaskQueue* ExtensionSystemImpl::lazy_background_task_queue() {
 
 EventRouter* ExtensionSystemImpl::event_router() {
   return shared_->event_router();
-}
-
-ExtensionWarningService* ExtensionSystemImpl::warning_service() {
-  return shared_->warning_service();
-}
-
-Blacklist* ExtensionSystemImpl::blacklist() {
-  return shared_->blacklist();
 }
 
 const OneShotEvent& ExtensionSystemImpl::ready() const {

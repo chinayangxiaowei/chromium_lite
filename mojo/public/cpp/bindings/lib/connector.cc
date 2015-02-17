@@ -4,8 +4,6 @@
 
 #include "mojo/public/cpp/bindings/lib/connector.h"
 
-#include <stddef.h>
-
 #include "mojo/public/cpp/bindings/error_handler.h"
 #include "mojo/public/cpp/environment/logging.h"
 
@@ -16,15 +14,15 @@ namespace internal {
 
 Connector::Connector(ScopedMessagePipeHandle message_pipe,
                      const MojoAsyncWaiter* waiter)
-    : error_handler_(NULL),
+    : error_handler_(nullptr),
       waiter_(waiter),
       message_pipe_(message_pipe.Pass()),
-      incoming_receiver_(NULL),
+      incoming_receiver_(nullptr),
       async_wait_id_(0),
       error_(false),
       drop_writes_(false),
       enforce_errors_from_incoming_receiver_(true),
-      destroyed_flag_(NULL) {
+      destroyed_flag_(nullptr) {
   // Even though we don't have an incoming receiver, we still want to monitor
   // the message pipe to know if is closed or encounters an error.
   WaitToReadMore();
@@ -63,7 +61,7 @@ bool Connector::WaitForIncomingMessage() {
 }
 
 bool Connector::Accept(Message* message) {
-  MOJO_DCHECK(message_pipe_.is_valid());
+  MOJO_CHECK(message_pipe_.is_valid());
 
   if (error_)
     return false;
@@ -71,15 +69,16 @@ bool Connector::Accept(Message* message) {
   if (drop_writes_)
     return true;
 
-  MojoResult rv = WriteMessageRaw(
-      message_pipe_.get(),
-      message->data(),
-      message->data_num_bytes(),
-      message->mutable_handles()->empty() ? NULL :
-          reinterpret_cast<const MojoHandle*>(
-              &message->mutable_handles()->front()),
-      static_cast<uint32_t>(message->mutable_handles()->size()),
-      MOJO_WRITE_MESSAGE_FLAG_NONE);
+  MojoResult rv =
+      WriteMessageRaw(message_pipe_.get(),
+                      message->data(),
+                      message->data_num_bytes(),
+                      message->mutable_handles()->empty()
+                          ? nullptr
+                          : reinterpret_cast<const MojoHandle*>(
+                                &message->mutable_handles()->front()),
+                      static_cast<uint32_t>(message->mutable_handles()->size()),
+                      MOJO_WRITE_MESSAGE_FLAG_NONE);
 
   switch (rv) {
     case MOJO_RESULT_OK:
@@ -122,7 +121,7 @@ void Connector::CallOnHandleReady(void* closure, MojoResult result) {
 }
 
 void Connector::OnHandleReady(MojoResult result) {
-  MOJO_DCHECK(async_wait_id_ != 0);
+  MOJO_CHECK(async_wait_id_ != 0);
   async_wait_id_ = 0;
   if (result != MOJO_RESULT_OK) {
     NotifyError();
@@ -133,7 +132,7 @@ void Connector::OnHandleReady(MojoResult result) {
 }
 
 void Connector::WaitToReadMore() {
-  MOJO_DCHECK(!async_wait_id_);
+  MOJO_CHECK(!async_wait_id_);
   async_wait_id_ = waiter_->AsyncWait(message_pipe_.get().value(),
                                       MOJO_HANDLE_SIGNAL_READABLE,
                                       MOJO_DEADLINE_INDEFINITE,
@@ -198,11 +197,7 @@ void Connector::CancelWait() {
 
 void Connector::NotifyError() {
   error_ = true;
-  // The error handler might destroyed |this|. Also, after an error, all method
-  // should end early.
-  if (destroyed_flag_) {
-    *destroyed_flag_ = true;  // Propagate flag.
-  }
+  CancelWait();
   if (error_handler_)
     error_handler_->OnConnectionError();
 }

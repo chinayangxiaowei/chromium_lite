@@ -11,16 +11,15 @@
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
-#include "grit/ui_resources.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/path.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/view_targeter.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
-#include "ui/wm/core/window_animations.h"
 
 // This is the number of pixels in the border image interior to the actual
 // border.
@@ -31,7 +30,7 @@ class OmniboxPopupContentsView::AutocompletePopupWidget
       public base::SupportsWeakPtr<AutocompletePopupWidget> {
  public:
   AutocompletePopupWidget() {}
-  virtual ~AutocompletePopupWidget() {}
+  ~AutocompletePopupWidget() override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AutocompletePopupWidget);
@@ -214,8 +213,7 @@ void OmniboxPopupContentsView::UpdatePopupAppearance() {
     // avoid a NULL dereference.
     if (!popup_.get())
       return;
-    wm::SetWindowVisibilityAnimationTransition(
-        popup_->GetNativeView(), wm::ANIMATE_NONE);
+    popup_->SetVisibilityAnimationTransition(views::Widget::ANIMATE_NONE);
     popup_->SetContentsView(this);
     popup_->StackAbove(omnibox_view_->GetRelativeWindowForPopup());
     if (!popup_.get()) {

@@ -107,11 +107,6 @@ class CannedBrowsingDataServiceWorkerHelper
   explicit CannedBrowsingDataServiceWorkerHelper(
       content::ServiceWorkerContext* context);
 
-  // Return a copy of the ServiceWorker helper. Only one consumer can use the
-  // StartFetching method at a time, so we need to create a copy of the helper
-  // every time we instantiate a cookies tree model for it.
-  CannedBrowsingDataServiceWorkerHelper* Clone();
-
   // Add a Service Worker to the set of canned Service Workers that is
   // returned by this helper.
   void AddServiceWorker(const GURL& origin, const std::vector<GURL>& scopes);
@@ -131,12 +126,12 @@ class CannedBrowsingDataServiceWorkerHelper
       GetServiceWorkerUsageInfo() const;
 
   // BrowsingDataServiceWorkerHelper methods.
-  virtual void StartFetching(const base::Callback<void(
-      const std::list<content::ServiceWorkerUsageInfo>&)>& callback) OVERRIDE;
-  virtual void DeleteServiceWorkers(const GURL& origin) OVERRIDE;
+  void StartFetching(const base::Callback<void(
+      const std::list<content::ServiceWorkerUsageInfo>&)>& callback) override;
+  void DeleteServiceWorkers(const GURL& origin) override;
 
  private:
-  virtual ~CannedBrowsingDataServiceWorkerHelper();
+  ~CannedBrowsingDataServiceWorkerHelper() override;
 
   std::set<PendingServiceWorkerUsageInfo> pending_service_worker_info_;
 

@@ -60,10 +60,10 @@ class WEBKIT_GPU_EXPORT WebGraphicsContext3DInProcessCommandBufferImpl
 
   size_t GetMappedMemoryLimit();
 
+  bool InitializeOnCurrentThread();
+
   //----------------------------------------------------------------------
   // WebGraphicsContext3D methods
-  virtual bool makeContextCurrent();
-
   virtual bool isContextLost();
 
   virtual WGC3Denum getGraphicsResetStatusARB();

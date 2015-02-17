@@ -6,7 +6,7 @@
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/rand_util.h"
@@ -99,20 +99,20 @@ class AutofillManagerTestDelegateImpl
     : public autofill::AutofillManagerTestDelegate {
  public:
   AutofillManagerTestDelegateImpl() {}
-  virtual ~AutofillManagerTestDelegateImpl() {}
+  ~AutofillManagerTestDelegateImpl() override {}
 
   // autofill::AutofillManagerTestDelegate:
-  virtual void DidPreviewFormData() OVERRIDE {
+  void DidPreviewFormData() override {
     ASSERT_TRUE(loop_runner_->loop_running());
     loop_runner_->Quit();
   }
 
-  virtual void DidFillFormData() OVERRIDE {
+  void DidFillFormData() override {
     ASSERT_TRUE(loop_runner_->loop_running());
     loop_runner_->Quit();
   }
 
-  virtual void DidShowSuggestions() OVERRIDE {
+  void DidShowSuggestions() override {
     ASSERT_TRUE(loop_runner_->loop_running());
     loop_runner_->Quit();
   }
@@ -149,7 +149,7 @@ class WindowedPersonalDataManagerObserver
     infobar_service_->AddObserver(this);
   }
 
-  virtual ~WindowedPersonalDataManagerObserver() {
+  ~WindowedPersonalDataManagerObserver() override {
     while (infobar_service_->infobar_count() > 0) {
       infobar_service_->RemoveInfoBar(infobar_service_->infobar_at(0));
     }
@@ -157,7 +157,7 @@ class WindowedPersonalDataManagerObserver
   }
 
   // PersonalDataManagerObserver:
-  virtual void OnPersonalDataChanged() OVERRIDE {
+  void OnPersonalDataChanged() override {
     if (has_run_message_loop_) {
       base::MessageLoopForUI::current()->Quit();
       has_run_message_loop_ = false;
@@ -165,9 +165,7 @@ class WindowedPersonalDataManagerObserver
     alerted_ = true;
   }
 
-  virtual void OnInsufficientFormData() OVERRIDE {
-    OnPersonalDataChanged();
-  }
+  void OnInsufficientFormData() override { OnPersonalDataChanged(); }
 
 
   void Wait() {
@@ -181,7 +179,7 @@ class WindowedPersonalDataManagerObserver
 
  private:
   // infobars::InfoBarManager::Observer:
-  virtual void OnInfoBarAdded(infobars::InfoBar* infobar) OVERRIDE {
+  void OnInfoBarAdded(infobars::InfoBar* infobar) override {
     infobar_service_->infobar_at(0)->delegate()->AsConfirmInfoBarDelegate()->
         Accept();
   }
@@ -202,10 +200,10 @@ class AutofillInteractiveTest : public InProcessBrowserTest {
       key_press_event_sink_(
           base::Bind(&AutofillInteractiveTest::HandleKeyPressEvent,
                      base::Unretained(this))) {}
-  virtual ~AutofillInteractiveTest() {}
+  ~AutofillInteractiveTest() override {}
 
   // InProcessBrowserTest:
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     // Don't want Keychain coming up on Mac.
     test::DisableSystemServices(browser()->profile()->GetPrefs());
 
@@ -224,7 +222,7 @@ class AutofillInteractiveTest : public InProcessBrowserTest {
     ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(reset_mouse));
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     // Make sure to close any showing popups prior to tearing down the UI.
     content::WebContents* web_contents = GetWebContents();
     AutofillManager* autofill_manager = ContentAutofillDriver::FromWebContents(
@@ -292,6 +290,16 @@ class AutofillInteractiveTest : public InProcessBrowserTest {
         "    document.getElementById('" + field_name + "').value);",
         &value));
     EXPECT_EQ(expected_value, value);
+  }
+
+  void GetFieldBackgroundColor(const std::string& field_name,
+                               std::string* color) {
+    ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+        GetWebContents(),
+        "window.domAutomationController.send("
+        "    document.defaultView.getComputedStyle(document.getElementById('" +
+        field_name + "')).backgroundColor);",
+        color));
   }
 
   void SimulateURLFetch(bool success) {
@@ -420,6 +428,20 @@ class AutofillInteractiveTest : public InProcessBrowserTest {
     GetRenderViewHost()->AddKeyPressEventCallback(key_press_event_sink_);
     GetRenderViewHost()->ForwardKeyboardEvent(event);
     test_delegate_.Wait();
+    GetRenderViewHost()->RemoveKeyPressEventCallback(key_press_event_sink_);
+  }
+
+  // Datalist does not support autofill preview. There is no need to start
+  // message loop for Datalist.
+  void SendKeyToDataListPopup(ui::KeyboardCode key) {
+    // Route popup-targeted key presses via the render view host.
+    content::NativeWebKeyboardEvent event;
+    event.windowsKeyCode = key;
+    event.type = blink::WebKeyboardEvent::RawKeyDown;
+    // Install the key press event sink to ensure that any events that are not
+    // handled by the installed callbacks do not end up crashing the test.
+    GetRenderViewHost()->AddKeyPressEventCallback(key_press_event_sink_);
+    GetRenderViewHost()->ForwardKeyboardEvent(event);
     GetRenderViewHost()->RemoveKeyPressEventCallback(key_press_event_sink_);
   }
 
@@ -632,6 +654,43 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, OnDeleteValueAfterAutofill) {
   SendKeyToPopupAndWait(ui::VKEY_DOWN);
   SendKeyToPopupAndWait(ui::VKEY_RETURN);
   ExpectFieldValue("firstname", "Milton");
+}
+
+// Test that an input field is not rendered with the yellow autofilled
+// background color when choosing an option from the datalist suggestion list.
+#if defined(OS_MACOSX)
+// Flakily triggers and assert on Mac.
+// http://crbug.com/419868
+#define MAYBE_OnSelectOptionFromDatalist DISABLED_OnSelectOptionFromDatalist
+#else
+#define MAYBE_OnSelectOptionFromDatalist OnSelectOptionFromDatalist
+#endif
+IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
+                       MAYBE_OnSelectOptionFromDatalist) {
+  // Load the test page.
+  ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL(std::string(kDataURIPrefix) +
+           "<form action=\"http://www.example.com/\" method=\"POST\">"
+           "  <input list=\"dl\" type=\"search\" id=\"firstname\""
+           "         onfocus=\"domAutomationController.send(true)\"><br>"
+           "  <datalist id=\"dl\">"
+           "  <option value=\"Adam\"></option>"
+           "  <option value=\"Bob\"></option>"
+           "  <option value=\"Carl\"></option>"
+           "  </datalist>"
+           "</form>")));
+  std::string orginalcolor;
+  GetFieldBackgroundColor("firstname", &orginalcolor);
+
+  FocusFirstNameField();
+  SendKeyToPageAndWait(ui::VKEY_DOWN);
+  SendKeyToDataListPopup(ui::VKEY_DOWN);
+  SendKeyToDataListPopup(ui::VKEY_RETURN);
+  ExpectFieldValue("firstname", "Adam");
+  std::string color;
+  GetFieldBackgroundColor("firstname", &color);
+  EXPECT_EQ(color, orginalcolor);
 }
 
 // Test that a JavaScript oninput event is fired after auto-filling a form.

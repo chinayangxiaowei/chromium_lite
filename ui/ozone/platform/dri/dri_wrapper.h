@@ -30,6 +30,9 @@ class DriWrapper {
   DriWrapper(const char* device_path);
   virtual ~DriWrapper();
 
+  // Open device.
+  virtual void Initialize();
+
   // Get the CRTC state. This is generally used to save state before using the
   // CRTC. When the user finishes using the CRTC, the user should restore the
   // CRTC to it's initial state. Use |SetCrtc| to restore the state.
@@ -50,6 +53,9 @@ class DriWrapper {
   virtual bool SetCrtc(drmModeCrtc* crtc, std::vector<uint32_t> connectors);
 
   virtual bool DisableCrtc(uint32_t crtc_id);
+
+  // Returns the connector properties for |connector_id|.
+  virtual ScopedDrmConnectorPtr GetConnector(uint32_t connector_id);
 
   // Register a buffer with the CRTC. On successful registration, the CRTC will
   // assign a framebuffer ID to |framebuffer|.
@@ -95,6 +101,10 @@ class DriWrapper {
                            uint32_t property_id,
                            uint64_t value);
 
+  // Can be used to query device/driver |capability|. Sets the value of
+  // |capability to |value|. Returns true in case of a succesful query.
+  virtual bool GetCapability(uint64_t capability, uint64_t* value);
+
   // Return a binary blob associated with |connector|. The binary blob is
   // associated with the property with name |name|. Return NULL if the property
   // could not be found or if the property does not have a binary blob. If valid
@@ -124,6 +134,10 @@ class DriWrapper {
                                  uint32_t stride,
                                  void* pixels);
 
+  // Drm master related
+  virtual bool SetMaster();
+  virtual bool DropMaster();
+
   int get_fd() const { return fd_; }
 
  protected:
@@ -132,6 +146,9 @@ class DriWrapper {
   int fd_;
 
  private:
+  // Path to DRM device.
+  const char* device_path_;
+
   DISALLOW_COPY_AND_ASSIGN(DriWrapper);
 };
 

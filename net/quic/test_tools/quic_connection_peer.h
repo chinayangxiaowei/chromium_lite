@@ -73,10 +73,9 @@ class QuicConnectionPeer {
       QuicConnection* connection,
       QuicPacketSequenceNumber sequence_number);
 
-  static bool IsValidEntropy(QuicConnection* connection,
-                             QuicPacketSequenceNumber largest_observed,
-                             const SequenceNumberSet& missing_packets,
-                             QuicPacketEntropyHash entropy_hash);
+  static QuicPacketEntropyHash PacketEntropy(
+      QuicConnection* connection,
+      QuicPacketSequenceNumber sequence_number);
 
   static QuicPacketEntropyHash ReceivedEntropyHash(
       QuicConnection* connection,
@@ -119,6 +118,11 @@ class QuicConnectionPeer {
 
   static void SetSupportedVersions(QuicConnection* connection,
                                    QuicVersionVector versions);
+
+  static QuicPacketHeader* GetLastHeader(QuicConnection* connection);
+
+  static void SetSequenceNumberOfLastSentPacket(
+      QuicConnection* connection, QuicPacketSequenceNumber number);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuicConnectionPeer);

@@ -5,20 +5,61 @@
 #include "tools/gn/ninja_copy_target_writer.h"
 
 #include "base/strings/string_util.h"
+#include "tools/gn/ninja_utils.h"
+#include "tools/gn/output_file.h"
+#include "tools/gn/scheduler.h"
 #include "tools/gn/string_utils.h"
 #include "tools/gn/substitution_list.h"
 #include "tools/gn/substitution_writer.h"
+#include "tools/gn/target.h"
+#include "tools/gn/toolchain.h"
 
 NinjaCopyTargetWriter::NinjaCopyTargetWriter(const Target* target,
-                                             const Toolchain* toolchain,
                                              std::ostream& out)
-    : NinjaTargetWriter(target, toolchain, out) {
+    : NinjaTargetWriter(target, out) {
 }
 
 NinjaCopyTargetWriter::~NinjaCopyTargetWriter() {
 }
 
 void NinjaCopyTargetWriter::Run() {
+  const Tool* copy_tool = target_->toolchain()->GetTool(Toolchain::TYPE_COPY);
+  if (!copy_tool) {
+    g_scheduler->FailWithError(Err(NULL,
+        "Copy tool not defined",
+        "The toolchain " +
+        target_->toolchain()->label().GetUserVisibleName(false) +
+        "\n used by target " + target_->label().GetUserVisibleName(false) +
+        "\n doesn't define a \"copy\" tool."));
+    return;
+  }
+
+  const Tool* stamp_tool = target_->toolchain()->GetTool(Toolchain::TYPE_STAMP);
+  if (!stamp_tool) {
+    g_scheduler->FailWithError(Err(NULL,
+        "Copy tool not defined",
+        "The toolchain " +
+        target_->toolchain()->label().GetUserVisibleName(false) +
+        "\n used by target " + target_->label().GetUserVisibleName(false) +
+        "\n doesn't define a \"stamp\" tool."));
+    return;
+  }
+
+  // Figure out the substitutions used by the copy and stamp tools.
+  SubstitutionBits required_bits = copy_tool->substitution_bits();
+  required_bits.MergeFrom(stamp_tool->substitution_bits());
+
+  // General target-related substitutions needed by both tools.
+  WriteSharedVars(required_bits);
+
+  std::vector<OutputFile> output_files;
+  WriteCopyRules(&output_files);
+  out_ << std::endl;
+  WriteStampForTarget(output_files, std::vector<OutputFile>());
+}
+
+void NinjaCopyTargetWriter::WriteCopyRules(
+    std::vector<OutputFile>* output_files) {
   CHECK(target_->action_values().outputs().list().size() == 1);
   const SubstitutionList& output_subst_list =
       target_->action_values().outputs();
@@ -26,9 +67,12 @@ void NinjaCopyTargetWriter::Run() {
       << "Should have one entry exactly.";
   const SubstitutionPattern& output_subst = output_subst_list.list()[0];
 
-  std::vector<OutputFile> output_files;
+  std::string tool_name =
+      GetNinjaRulePrefixForToolchain(settings_) +
+      Toolchain::ToolTypeToName(Toolchain::TYPE_COPY);
 
-  std::string rule_prefix = helper_.GetRulePrefix(target_->settings());
+  OutputFile input_dep =
+      WriteInputDepsStampAndGetDep(std::vector<const Target*>());
 
   // Note that we don't write implicit deps for copy steps. "copy" only
   // depends on the output files themselves, rather than having includes
@@ -51,28 +95,27 @@ void NinjaCopyTargetWriter::Run() {
   //
   // Moreover, doing this assumes that the copy step is always a simple
   // locally run command, so there is no need for a toolchain dependency.
+  //
+  // Note that there is the need in some cases for order-only dependencies
+  // where a command might need to make sure something else runs before it runs
+  // to avoid conflicts. Such cases should be avoided where possible, but
+  // sometimes that's not possible.
   for (size_t i = 0; i < target_->sources().size(); i++) {
     const SourceFile& input_file = target_->sources()[i];
 
     OutputFile output_file =
         SubstitutionWriter::ApplyPatternToSourceAsOutputFile(
             target_->settings(), output_subst, input_file);
-    output_files.push_back(output_file);
+    output_files->push_back(output_file);
 
     out_ << "build ";
     path_output_.WriteFile(out_, output_file);
-    out_ << ": " << rule_prefix << "copy ";
+    out_ << ": " << tool_name << " ";
     path_output_.WriteFile(out_, input_file);
+    if (!input_dep.value().empty()) {
+      out_ << " || ";
+      path_output_.WriteFile(out_, input_dep);
+    }
     out_ << std::endl;
   }
-
-  // Write out the rule for the target to copy all of them.
-  out_ << std::endl << "build ";
-  path_output_.WriteFile(out_, helper_.GetTargetOutputFile(target_));
-  out_ << ": " << rule_prefix << "stamp";
-  for (size_t i = 0; i < output_files.size(); i++) {
-    out_ << " ";
-    path_output_.WriteFile(out_, output_files[i]);
-  }
-  out_ << std::endl;
 }

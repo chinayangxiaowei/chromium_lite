@@ -8,11 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "apps/app_window_registry.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 
 namespace extensions {
 class Extension;
@@ -26,15 +26,17 @@ namespace apps {
 // events.
 class AppLifetimeMonitor : public KeyedService,
                            public content::NotificationObserver,
-                           public AppWindowRegistry::Observer {
+                           public extensions::AppWindowRegistry::Observer {
  public:
   class Observer {
    public:
     // Called when the app starts running.
     virtual void OnAppStart(Profile* profile, const std::string& app_id) {}
-    // Called when the app becomes active to the user, i.e. it opens a window.
+    // Called when the app becomes active to the user, i.e. the first window
+    // becomes visible.
     virtual void OnAppActivated(Profile* profile, const std::string& app_id) {}
-    // Called when the app becomes inactive to the user.
+    // Called when the app becomes inactive to the user, i.e. the last window is
+    // hidden or closed.
     virtual void OnAppDeactivated(Profile* profile, const std::string& app_id) {
     }
     // Called when the app stops running.
@@ -49,26 +51,27 @@ class AppLifetimeMonitor : public KeyedService,
   };
 
   explicit AppLifetimeMonitor(Profile* profile);
-  virtual ~AppLifetimeMonitor();
+  ~AppLifetimeMonitor() override;
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
  private:
   // content::NotificationObserver overrides:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
-  // AppWindowRegistry::Observer overrides:
-  virtual void OnAppWindowRemoved(AppWindow* app_window) OVERRIDE;
-  virtual void OnAppWindowHidden(apps::AppWindow* app_window) OVERRIDE;
-  virtual void OnAppWindowShown(apps::AppWindow* app_window) OVERRIDE;
+  // extensions::AppWindowRegistry::Observer overrides:
+  void OnAppWindowRemoved(extensions::AppWindow* app_window) override;
+  void OnAppWindowHidden(extensions::AppWindow* app_window) override;
+  void OnAppWindowShown(extensions::AppWindow* app_window,
+                        bool was_hidden) override;
 
   // KeyedService overrides:
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
-  bool HasVisibleAppWindows(apps::AppWindow* app_window) const;
+  bool HasOtherVisibleAppWindows(extensions::AppWindow* app_window) const;
 
   void NotifyAppStart(const std::string& app_id);
   void NotifyAppActivated(const std::string& app_id);

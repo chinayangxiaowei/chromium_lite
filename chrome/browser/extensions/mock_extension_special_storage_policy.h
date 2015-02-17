@@ -13,25 +13,25 @@
 
 // This class is the same as MockSpecialStoragePolicy (in
 // content/public/test/mock_special_storage_policy.h), but it inherits
-// ExtensionSpecialStoragePolicy instead of quota::SpecialStoragePolicy.
+// ExtensionSpecialStoragePolicy instead of storage::SpecialStoragePolicy.
 class MockExtensionSpecialStoragePolicy : public ExtensionSpecialStoragePolicy {
  public:
   MockExtensionSpecialStoragePolicy();
 
-  // quota::SpecialStoragePolicy:
-  virtual bool IsStorageProtected(const GURL& origin) OVERRIDE;
-  virtual bool IsStorageUnlimited(const GURL& origin) OVERRIDE;
-  virtual bool IsStorageSessionOnly(const GURL& origin) OVERRIDE;
-  virtual bool CanQueryDiskSize(const GURL& origin) OVERRIDE;
-  virtual bool IsFileHandler(const std::string& extension_id) OVERRIDE;
-  virtual bool HasSessionOnlyOrigins() OVERRIDE;
+  // storage::SpecialStoragePolicy:
+  bool IsStorageProtected(const GURL& origin) override;
+  bool IsStorageUnlimited(const GURL& origin) override;
+  bool IsStorageSessionOnly(const GURL& origin) override;
+  bool CanQueryDiskSize(const GURL& origin) override;
+  bool IsFileHandler(const std::string& extension_id) override;
+  bool HasSessionOnlyOrigins() override;
 
   void AddProtected(const GURL& origin) {
     protected_.insert(origin);
   }
 
  private:
-  virtual ~MockExtensionSpecialStoragePolicy();
+  ~MockExtensionSpecialStoragePolicy() override;
 
   std::set<GURL> protected_;
 

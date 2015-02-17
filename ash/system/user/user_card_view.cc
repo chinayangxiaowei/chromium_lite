@@ -80,7 +80,7 @@ class MediaIndicator : public views::View, public MediaCaptureObserver {
   }
 
   // MediaCaptureObserver:
-  virtual void OnMediaCaptureChanged() OVERRIDE {
+  virtual void OnMediaCaptureChanged() override {
     Shell* shell = Shell::GetInstance();
     content::BrowserContext* context =
         shell->session_state_delegate()->GetBrowserContextByIndex(index_);
@@ -126,16 +126,16 @@ class PublicAccountUserDetails : public views::View,
                                  public views::LinkListener {
  public:
   PublicAccountUserDetails(int max_width);
-  virtual ~PublicAccountUserDetails();
+  ~PublicAccountUserDetails() override;
 
  private:
   // Overridden from views::View.
-  virtual void Layout() OVERRIDE;
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  void Layout() override;
+  gfx::Size GetPreferredSize() const override;
+  void OnPaint(gfx::Canvas* canvas) override;
 
   // Overridden from views::LinkListener.
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void LinkClicked(views::Link* source, int event_flags) override;
 
   // Calculate a preferred size that ensures the label text and the following
   // link do not wrap over more than three lines in total for aesthetic reasons
@@ -394,8 +394,10 @@ void UserCardView::AddUserContent(user::LoginStatus login_status,
   views::Label* user_email = NULL;
   if (login_status != user::LOGGED_IN_GUEST &&
       (multiprofile_index || !IsMultiAccountSupportedAndUserActive())) {
+    SystemTrayDelegate* tray_delegate =
+        Shell::GetInstance()->system_tray_delegate();
     base::string16 user_email_string =
-        login_status == user::LOGGED_IN_SUPERVISED
+        tray_delegate->IsUserSupervised()
             ? l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_SUPERVISED_LABEL)
             : base::UTF8ToUTF16(
                   delegate->GetUserInfo(multiprofile_index)->GetEmail());

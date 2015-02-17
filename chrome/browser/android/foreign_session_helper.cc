@@ -20,6 +20,8 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
 #include "jni/ForeignSessionHelper_jni.h"
@@ -40,7 +42,7 @@ OpenTabsUIDelegate* GetOpenTabsUIDelegate(Profile* profile) {
       GetForProfile(profile);
 
   // Only return the delegate if it exists and it is done syncing sessions.
-  if (!service || !service->ShouldPushChanges())
+  if (!service || !service->SyncActive())
     return NULL;
 
   return service->GetOpenTabsUIDelegate();
@@ -50,11 +52,7 @@ bool ShouldSkipTab(const SessionTab& session_tab) {
     if (session_tab.navigations.empty())
       return true;
 
-    int selected_index = session_tab.current_navigation_index;
-    if (selected_index < 0 ||
-        selected_index >= static_cast<int>(session_tab.navigations.size()))
-      return true;
-
+    int selected_index = session_tab.normalized_navigation_index();
     const ::sessions::SerializedNavigationEntry& current_navigation =
         session_tab.navigations.at(selected_index);
 
@@ -95,7 +93,7 @@ void CopyTabsToJava(
     if (ShouldSkipTab(session_tab))
       continue;
 
-    int selected_index = session_tab.current_navigation_index;
+    int selected_index = session_tab.normalized_navigation_index();
     DCHECK(selected_index >= 0);
     DCHECK(selected_index < static_cast<int>(session_tab.navigations.size()));
 
@@ -166,6 +164,14 @@ jboolean ForeignSessionHelper::IsTabSyncEnabled(JNIEnv* env, jobject obj) {
   ProfileSyncService* service = ProfileSyncServiceFactory::GetInstance()->
       GetForProfile(profile_);
   return service && service->GetActiveDataTypes().Has(syncer::PROXY_TABS);
+}
+
+void ForeignSessionHelper::TriggerSessionSync(JNIEnv* env, jobject obj) {
+  const syncer::ModelTypeSet types(syncer::SESSIONS);
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_SYNC_REFRESH_LOCAL,
+      content::Source<Profile>(profile_),
+      content::Details<const syncer::ModelTypeSet>(&types));
 }
 
 void ForeignSessionHelper::SetOnForeignSessionCallback(JNIEnv* env,

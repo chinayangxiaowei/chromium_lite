@@ -25,7 +25,9 @@ class RttStats;
 
 class NET_EXPORT_PRIVATE SendAlgorithmInterface {
  public:
-  typedef std::map<QuicPacketSequenceNumber, TransmissionInfo> CongestionMap;
+  // A sorted vector of packets.
+  typedef std::vector<std::pair<QuicPacketSequenceNumber, TransmissionInfo>>
+      CongestionVector;
 
   static SendAlgorithmInterface* Create(const QuicClock* clock,
                                         const RttStats* rtt_stats,
@@ -36,10 +38,9 @@ class NET_EXPORT_PRIVATE SendAlgorithmInterface {
 
   virtual void SetFromConfig(const QuicConfig& config, bool is_server) = 0;
 
-  // Called when we receive congestion feedback from remote peer.
-  virtual void OnIncomingQuicCongestionFeedbackFrame(
-      const QuicCongestionFeedbackFrame& feedback,
-      QuicTime feedback_receive_time) = 0;
+  // Sets the number of connections to emulate when doing congestion control,
+  // particularly for congestion avoidance.  Can be set any time.
+  virtual void SetNumEmulatedConnections(int num_connections) = 0;
 
   // Indicates an update to the congestion state, caused either by an incoming
   // ack or loss event timeout.  |rtt_updated| indicates whether a new
@@ -48,8 +49,8 @@ class NET_EXPORT_PRIVATE SendAlgorithmInterface {
   // any packets considered acked or lost as a result of the congestion event.
   virtual void OnCongestionEvent(bool rtt_updated,
                                  QuicByteCount bytes_in_flight,
-                                 const CongestionMap& acked_packets,
-                                 const CongestionMap& lost_packets) = 0;
+                                 const CongestionVector& acked_packets,
+                                 const CongestionVector& lost_packets) = 0;
 
   // Inform that we sent |bytes| to the wire, and if the packet is
   // retransmittable. Returns true if the packet should be tracked by the
@@ -76,6 +77,9 @@ class NET_EXPORT_PRIVATE SendAlgorithmInterface {
       QuicByteCount bytes_in_flight,
       HasRetransmittableData has_retransmittable_data) const = 0;
 
+  // The pacing rate of the send algorithm.  May be zero if the rate is unknown.
+  virtual QuicBandwidth PacingRate() const = 0;
+
   // What's the current estimated bandwidth in bytes per second.
   // Returns 0 when it does not have an estimate.
   virtual QuicBandwidth BandwidthEstimate() const = 0;
@@ -96,6 +100,9 @@ class NET_EXPORT_PRIVATE SendAlgorithmInterface {
   // Whether the send algorithm is currently in slow start.  When true, the
   // BandwidthEstimate is expected to be too low.
   virtual bool InSlowStart() const = 0;
+
+  // Whether the send algorithm is currently in recovery.
+  virtual bool InRecovery() const = 0;
 
   // Returns the size of the slow start congestion window in bytes,
   // aka ssthresh.  Some send algorithms do not define a slow start

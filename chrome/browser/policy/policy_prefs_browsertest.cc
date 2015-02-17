@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -178,7 +178,7 @@ class PolicyTestCase {
   void AddSupportedOs(const std::string& os) { supported_os_.push_back(os); }
 
   bool IsSupported() const {
-#if !defined(OFFICIAL_BUILD)
+#if !defined(GOOGLE_CHROME_BUILD)
     if (is_official_only())
       return false;
 #endif
@@ -490,20 +490,18 @@ IN_PROC_BROWSER_TEST_F(PolicyPrefsTestCoverageTest, AllPoliciesHaveATestCase) {
 // Base class for tests that change policy.
 class PolicyPrefsTest : public InProcessBrowserTest {
  protected:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     EXPECT_CALL(provider_, IsInitializationComplete(_))
         .WillRepeatedly(Return(true));
     BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     ui_test_utils::WaitForTemplateURLServiceToLoad(
         TemplateURLServiceFactory::GetForProfile(browser()->profile()));
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
-    ClearProviderPolicy();
-  }
+  void TearDownOnMainThread() override { ClearProviderPolicy(); }
 
   void ClearProviderPolicy() {
     provider_.UpdateChromePolicy(PolicyMap());
@@ -601,13 +599,7 @@ class PolicyPrefIndicatorTest
 
 // Verifies that controlled setting indicators correctly show whether a pref's
 // value is recommended or enforced by a corresponding policy.
-#if defined(OS_WIN) && !defined(NDEBUG)
-// TODO(zea): Fix failure on Windows.  See crbug.com/402233 for details.
-#define MAYBE_CheckPolicyIndicators DISABLED_CheckPolicyIndicators
-#else
-#define MAYBE_CheckPolicyIndicators CheckPolicyIndicators
-#endif
-IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, MAYBE_CheckPolicyIndicators) {
+IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, CheckPolicyIndicators) {
   const PolicyTestCases test_cases;
   PrefService* local_state = g_browser_process->local_state();
   PrefService* user_prefs = browser()->profile()->GetPrefs();
@@ -666,6 +658,15 @@ IN_PROC_BROWSER_TEST_P(PolicyPrefIndicatorTest, MAYBE_CheckPolicyIndicators) {
             policy_test_case->indicator_selector(),
             std::string(),
             "policy",
+            false);
+        // Check that no controlled setting indicator is visible when previously
+        // enforced value is removed.
+        ClearProviderPolicy();
+        VerifyControlledSettingIndicators(
+            browser(),
+            policy_test_case->indicator_selector(),
+            std::string(),
+            std::string(),
             false);
       }
 

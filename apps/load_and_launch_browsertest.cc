@@ -11,10 +11,10 @@
 #include "base/test/test_timeouts.h"
 #include "chrome/browser/apps/app_browsertest_util.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/test/test_launcher.h"
+#include "extensions/test/extension_test_message_listener.h"
 
 using extensions::PlatformAppBrowserTest;
 
@@ -34,8 +34,8 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
                        MAYBE_LoadAndLaunchAppChromeRunning) {
   ExtensionTestMessageListener launched_listener("Launched", false);
 
-  const CommandLine& cmdline = *CommandLine::ForCurrentProcess();
-  CommandLine new_cmdline(cmdline.GetProgram());
+  const base::CommandLine& cmdline = *base::CommandLine::ForCurrentProcess();
+  base::CommandLine new_cmdline(cmdline.GetProgram());
 
   const char* kSwitchNames[] = {
     switches::kUserDataDir,
@@ -71,8 +71,8 @@ IN_PROC_BROWSER_TEST_F(PlatformAppBrowserTest,
                        MAYBE_LoadAndLaunchAppWithFile) {
   ExtensionTestMessageListener launched_listener("Launched", false);
 
-  const CommandLine& cmdline = *CommandLine::ForCurrentProcess();
-  CommandLine new_cmdline(cmdline.GetProgram());
+  const base::CommandLine& cmdline = *base::CommandLine::ForCurrentProcess();
+  base::CommandLine new_cmdline(cmdline.GetProgram());
 
   const char* kSwitchNames[] = {
     switches::kUserDataDir,
@@ -109,7 +109,7 @@ class PlatformAppLoadAndLaunchBrowserTest : public PlatformAppBrowserTest {
  protected:
   PlatformAppLoadAndLaunchBrowserTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(base::CommandLine* command_line) override {
     PlatformAppBrowserTest::SetUpCommandLine(command_line);
     app_path_ = test_data_dir_
         .AppendASCII("platform_apps")

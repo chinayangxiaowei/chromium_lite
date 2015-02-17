@@ -142,10 +142,10 @@ class ToolbarModelTest : public BrowserWithTestWindowTest {
   ToolbarModelTest(Browser::Type browser_type,
                    chrome::HostDesktopType host_desktop_type,
                    bool hosted_app);
-  virtual ~ToolbarModelTest();
+  ~ToolbarModelTest() override;
 
   // BrowserWithTestWindowTest:
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
  protected:
   void EnableOriginChipFieldTrial();
@@ -199,7 +199,7 @@ void ToolbarModelTest::NavigateAndCheckText(
   // Check while loading.
   content::NavigationController* controller =
       &browser()->tab_strip_model()->GetWebContentsAt(0)->GetController();
-  controller->LoadURL(url, content::Referrer(), content::PAGE_TRANSITION_LINK,
+  controller->LoadURL(url, content::Referrer(), ui::PAGE_TRANSITION_LINK,
                       std::string());
   ToolbarModel* toolbar_model = browser()->toolbar_model();
   EXPECT_EQ(expected_text, toolbar_model->GetText());
@@ -234,7 +234,7 @@ void ToolbarModelTest::NavigateAndCheckText(
 class PopupToolbarModelTest : public ToolbarModelTest {
  public:
   PopupToolbarModelTest();
-  virtual ~PopupToolbarModelTest();
+  ~PopupToolbarModelTest() override;
 
   DISALLOW_COPY_AND_ASSIGN(PopupToolbarModelTest);
 };
@@ -331,7 +331,7 @@ TEST_F(ToolbarModelTest, SearchTermsWhileLoading) {
   content::NavigationController* controller =
       &browser()->tab_strip_model()->GetWebContentsAt(0)->GetController();
   controller->LoadURL(GURL("https://google.com/search?q=tractor+supply&espv=1"),
-                      content::Referrer(), content::PAGE_TRANSITION_LINK,
+                      content::Referrer(), ui::PAGE_TRANSITION_LINK,
                       std::string());
   ToolbarModel* toolbar_model = browser()->toolbar_model();
   controller->GetVisibleEntry()->GetSSL().security_style =

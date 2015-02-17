@@ -131,6 +131,46 @@ class PDFiumEngine : public PDFEngine,
     pp::Point previous_origin_;
   };
 
+  // Used to store mouse down state to handle it in other mouse event handlers.
+  class MouseDownState {
+   public:
+    MouseDownState(const PDFiumPage::Area& area,
+                   const PDFiumPage::LinkTarget& target);
+    ~MouseDownState();
+
+    void Set(const PDFiumPage::Area& area,
+             const PDFiumPage::LinkTarget& target);
+    void Reset();
+    bool Matches(const PDFiumPage::Area& area,
+                 const PDFiumPage::LinkTarget& target) const;
+
+   private:
+    PDFiumPage::Area area_;
+    PDFiumPage::LinkTarget target_;
+
+    DISALLOW_COPY_AND_ASSIGN(MouseDownState);
+  };
+
+  // Used to store the state of a text search.
+  class FindTextIndex {
+   public:
+    FindTextIndex();
+    ~FindTextIndex();
+
+    bool valid() const { return valid_; }
+    void Invalidate();
+
+    size_t GetIndex() const;
+    void SetIndex(size_t index);
+    size_t IncrementIndex();
+
+   private:
+    bool valid_;  // Whether |index_| is valid or not.
+    size_t index_;  // The current search result, 0-based.
+
+    DISALLOW_COPY_AND_ASSIGN(FindTextIndex);
+  };
+
   friend class SelectionChangeInvalidator;
 
   struct FileAvail : public FX_FILEAVAIL {
@@ -236,13 +276,21 @@ class PDFiumEngine : public PDFEngine,
   bool OnKeyUp(const pp::KeyboardInputEvent& event);
   bool OnChar(const pp::KeyboardInputEvent& event);
 
+  FPDF_DOCUMENT CreateSinglePageRasterPdf(
+      double source_page_width,
+      double source_page_height,
+      const PP_PrintSettings_Dev& print_settings,
+      PDFiumPage* page_to_print);
+
   pp::Buffer_Dev PrintPagesAsRasterPDF(
       const PP_PrintPageNumberRange_Dev* page_ranges,
       uint32_t page_range_count,
       const PP_PrintSettings_Dev& print_settings);
+
   pp::Buffer_Dev PrintPagesAsPDF(const PP_PrintPageNumberRange_Dev* page_ranges,
                                  uint32_t page_range_count,
                                  const PP_PrintSettings_Dev& print_settings);
+
   pp::Buffer_Dev GetFlattenedPrintData(const FPDF_DOCUMENT& doc);
   void FitContentsToPrintableAreaIfRequired(
       const FPDF_DOCUMENT& doc,
@@ -362,6 +410,9 @@ class PDFiumEngine : public PDFEngine,
 
   // Called when the selection changes.
   void OnSelectionChanged();
+
+  // Common code shared by RotateClockwise() and RotateCounterclockwise().
+  void RotateInternal();
 
   // FPDF_FORMFILLINFO callbacks.
   static void Form_Invalidate(FPDF_FORMFILLINFO* param,
@@ -501,6 +552,8 @@ class PDFiumEngine : public PDFEngine,
   // True if we're in the middle of selection.
   bool selecting_;
 
+  MouseDownState mouse_down_state_;
+
   // Used for searching.
   typedef std::vector<PDFiumRange> FindResults;
   FindResults find_results_;
@@ -510,7 +563,9 @@ class PDFiumEngine : public PDFEngine,
   int last_page_to_search_;
   int last_character_index_to_search_;  // -1 if search until end of page.
   // Which result the user has currently selected.
-  int current_find_index_;
+  FindTextIndex current_find_index_;
+  // Where to resume searching.
+  FindTextIndex resume_find_index_;
 
   // Permissions bitfield.
   unsigned long permissions_;

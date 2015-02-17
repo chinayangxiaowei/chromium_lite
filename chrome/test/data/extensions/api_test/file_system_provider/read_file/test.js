@@ -43,6 +43,19 @@ var TESTING_BROKEN_TIRAMISU_FILE = Object.freeze({
 });
 
 /**
+ * Metadata of a broken file used to read contents from, but it simulates
+ * a very long read, in order to verify the aborting mechanism.
+ * @type {Object}
+ * @const
+ */
+var TESTING_VANILLA_FOR_ABORT_FILE = Object.freeze({
+  isDirectory: false,
+  name: 'vanilla.txt',
+  size: TESTING_TEXT.length,
+  modificationTime: new Date(2014, 1, 25, 7, 36, 12)
+});
+
+/**
  * Requests reading contents of a file, previously opened with <code>
  * openRequestId</code>.
  *
@@ -77,6 +90,11 @@ function onReadFileRequested(options, onSuccess, onError) {
     return;
   }
 
+  if (filePath == '/' + TESTING_VANILLA_FOR_ABORT_FILE.name) {
+    // Do nothing. This simulates a very slow read.
+    return;
+  }
+
   if (filePath == '/' + TESTING_BROKEN_TIRAMISU_FILE.name) {
     onError('ACCESS_DENIED');  // enum ProviderError.
     return;
@@ -103,6 +121,8 @@ function setUp(callback) {
       TESTING_TIRAMISU_FILE;
   test_util.defaultMetadata['/' + TESTING_BROKEN_TIRAMISU_FILE.name] =
       TESTING_BROKEN_TIRAMISU_FILE;
+  test_util.defaultMetadata['/' + TESTING_VANILLA_FOR_ABORT_FILE.name] =
+      TESTING_VANILLA_FOR_ABORT_FILE;
 
   chrome.fileSystemProvider.onReadFileRequested.addListener(
       onReadFileRequested);
@@ -143,29 +163,73 @@ function runTests() {
             chrome.test.fail(error.name);
           });
     },
-    // Read contents of a file file, but with an error on the way. This should
+
+    // Read contents of a file,  but with an error on the way. This should
     // result in an error.
     function readEntriesError() {
-      var onTestSuccess = chrome.test.callbackPass();
       test_util.fileSystem.root.getFile(
           TESTING_BROKEN_TIRAMISU_FILE.name,
           {create: false},
-          function(fileEntry) {
-            fileEntry.file(function(file) {
+          chrome.test.callbackPass(function(fileEntry) {
+            fileEntry.file(chrome.test.callbackPass(function(file) {
               var fileReader = new FileReader();
               fileReader.onload = function(e) {
                 chrome.test.fail();
               };
-              fileReader.onerror = function(e) {
+              fileReader.onerror = chrome.test.callbackPass(function(e) {
                 chrome.test.assertEq('NotReadableError', fileReader.error.name);
-                onTestSuccess();
-              };
+              });
               fileReader.readAsText(file);
-            },
+            }),
             function(error) {
-              chrome.test.fail();
+              chrome.test.fail(error.name);
             });
-          },
+          }),
+          function(error) {
+            chrome.test.fail(error.name);
+          });
+    },
+
+    // Abort reading a file with a registered abort handler. Should result in a
+    // gracefully terminated reading operation.
+    function abortReadingSuccess() {
+      var onAbortRequested = chrome.test.callbackPass(
+          function(options, onSuccess, onError) {
+            chrome.fileSystemProvider.onAbortRequested.removeListener(
+                onAbortRequested);
+          });
+
+      chrome.fileSystemProvider.onAbortRequested.addListener(
+          onAbortRequested);
+
+      test_util.fileSystem.root.getFile(
+          TESTING_VANILLA_FOR_ABORT_FILE.name,
+          {create: false, exclusive: false},
+          chrome.test.callbackPass(function(fileEntry) {
+            fileEntry.file(chrome.test.callbackPass(function(file) {
+              var hadAbort = false;
+              var fileReader = new FileReader();
+              fileReader.onload = function(e) {
+                if (!hadAbort) {
+                  chrome.test.fail(
+                      'Unexpectedly finished writing, despite aborting.');
+                  return;
+                }
+              };
+              fileReader.onerror = chrome.test.callbackPass(function(e) {
+                chrome.test.assertEq(
+                    'AbortError', fileReader.error.name);
+              });
+              fileReader.readAsText(file);
+              setTimeout(chrome.test.callbackPass(function() {
+                // Abort the operation after it's started.
+                fileReader.abort();
+              }), 0);
+            }),
+            function(error) {
+              chrome.test.fail(error.name);
+            });
+          }),
           function(error) {
             chrome.test.fail(error.name);
           });

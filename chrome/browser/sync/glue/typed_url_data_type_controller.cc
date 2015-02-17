@@ -38,8 +38,8 @@ class RunTaskOnHistoryThread : public history::HistoryDBTask {
         dtc_(dtc) {
   }
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     // Set the backend, then release our reference before executing the task.
     dtc_->SetBackend(backend);
     dtc_ = NULL;
@@ -53,10 +53,10 @@ class RunTaskOnHistoryThread : public history::HistoryDBTask {
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  protected:
-  virtual ~RunTaskOnHistoryThread() {}
+  ~RunTaskOnHistoryThread() override {}
 
   scoped_ptr<base::Closure> task_;
   scoped_refptr<TypedUrlDataTypeController> dtc_;
@@ -90,12 +90,6 @@ syncer::ModelType TypedUrlDataTypeController::type() const {
 syncer::ModelSafeGroup TypedUrlDataTypeController::model_safe_group()
     const {
   return syncer::GROUP_HISTORY;
-}
-
-void TypedUrlDataTypeController::LoadModels(
-    const ModelLoadCallback& model_load_callback) {
-  set_state(MODEL_LOADED);
-  model_load_callback.Run(type(), syncer::SyncError());
 }
 
 bool TypedUrlDataTypeController::ReadyForStart() const {

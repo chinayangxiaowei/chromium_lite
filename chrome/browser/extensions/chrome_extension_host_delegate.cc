@@ -8,8 +8,8 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/media/media_capture_devices_dispatcher.h"
-#include "chrome/browser/ui/app_modal_dialogs/javascript_dialog_manager.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
+#include "components/app_modal_dialogs/javascript_dialog_manager.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_system.h"
 
@@ -54,6 +54,16 @@ void ChromeExtensionHostDelegate::ProcessMediaAccessRequest(
     const Extension* extension) {
   MediaCaptureDevicesDispatcher::GetInstance()->ProcessMediaAccessRequest(
       web_contents, request, callback, extension);
+}
+
+bool ChromeExtensionHostDelegate::CheckMediaAccessPermission(
+    content::WebContents* web_contents,
+    const GURL& security_origin,
+    content::MediaStreamType type,
+    const Extension* extension) {
+  return MediaCaptureDevicesDispatcher::GetInstance()
+      ->CheckMediaAccessPermission(
+          web_contents, security_origin, type, extension);
 }
 
 }  // namespace extensions

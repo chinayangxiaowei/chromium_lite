@@ -28,7 +28,7 @@ namespace autofill {
 class PasswordAutofillAgent : public content::RenderViewObserver {
  public:
   explicit PasswordAutofillAgent(content::RenderView* render_view);
-  virtual ~PasswordAutofillAgent();
+  ~PasswordAutofillAgent() override;
 
   // WebViewClient editor related calls forwarded by the RenderView.
   // If they return true, it indicates the event was consumed and should not
@@ -73,8 +73,6 @@ class PasswordAutofillAgent : public content::RenderViewObserver {
       const blink::WebSecurityOrigin& origin);
 
  private:
-  friend class PasswordAutofillAgentTest;
-
   enum OtherPossibleUsernamesUsage {
     NOTHING_TO_AUTOFILL,
     OTHER_POSSIBLE_USERNAMES_ABSENT,
@@ -94,15 +92,20 @@ class PasswordAutofillAgent : public content::RenderViewObserver {
     blink::WebInputElement password_field;
     PasswordFormFillData fill_data;
     bool backspace_pressed_last;
-    PasswordInfo() : backspace_pressed_last(false) {}
+    // The user manually edited the password more recently than the username was
+    // changed.
+    bool password_was_edited_last;
+    PasswordInfo();
   };
   typedef std::map<blink::WebElement, PasswordInfo> LoginToPasswordInfoMap;
+  typedef std::map<blink::WebElement, int> LoginToPasswordInfoKeyMap;
+  typedef std::map<blink::WebElement, blink::WebElement> PasswordToLoginMap;
   typedef std::map<blink::WebFrame*,
                    linked_ptr<PasswordForm> > FrameToPasswordFormMap;
 
-  // This class holds a vector of autofilled password input elements and makes
-  // sure the autofilled password value is not accessible to JavaScript code
-  // until the user interacts with the page.
+  // This class keeps track of autofilled password input elements and makes sure
+  // the autofilled password value is not accessible to JavaScript code until
+  // the user interacts with the page.
   class PasswordValueGatekeeper {
    public:
     PasswordValueGatekeeper();
@@ -130,51 +133,30 @@ class PasswordAutofillAgent : public content::RenderViewObserver {
   };
 
   // RenderViewObserver:
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void DidStartProvisionalLoad(blink::WebLocalFrame* frame) OVERRIDE;
-  virtual void DidStartLoading() OVERRIDE;
-  virtual void DidFinishDocumentLoad(blink::WebLocalFrame* frame) OVERRIDE;
-  virtual void DidFinishLoad(blink::WebLocalFrame* frame) OVERRIDE;
-  virtual void DidStopLoading() OVERRIDE;
-  virtual void FrameDetached(blink::WebFrame* frame) OVERRIDE;
-  virtual void FrameWillClose(blink::WebFrame* frame) OVERRIDE;
-  virtual void WillSendSubmitEvent(blink::WebLocalFrame* frame,
-                                   const blink::WebFormElement& form) OVERRIDE;
-  virtual void WillSubmitForm(blink::WebLocalFrame* frame,
-                              const blink::WebFormElement& form) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void DidStartProvisionalLoad(blink::WebLocalFrame* frame) override;
+  void DidStartLoading() override;
+  void DidFinishDocumentLoad(blink::WebLocalFrame* frame) override;
+  void DidFinishLoad(blink::WebLocalFrame* frame) override;
+  void DidStopLoading() override;
+  void FrameDetached(blink::WebFrame* frame) override;
+  void FrameWillClose(blink::WebFrame* frame) override;
+  void WillSendSubmitEvent(blink::WebLocalFrame* frame,
+                           const blink::WebFormElement& form) override;
+  void WillSubmitForm(blink::WebLocalFrame* frame,
+                      const blink::WebFormElement& form) override;
 
   // RenderView IPC handlers:
-  void OnFillPasswordForm(const PasswordFormFillData& form_data);
+  void OnFillPasswordForm(int key, const PasswordFormFillData& form_data);
   void OnSetLoggingState(bool active);
 
   // Scans the given frame for password forms and sends them up to the browser.
   // If |only_visible| is true, only forms visible in the layout are sent.
   void SendPasswordForms(blink::WebFrame* frame, bool only_visible);
 
-  void GetSuggestions(const PasswordFormFillData& fill_data,
-                      const base::string16& input,
-                      std::vector<base::string16>* suggestions,
-                      std::vector<base::string16>* realms,
-                      bool show_all);
-
   bool ShowSuggestionPopup(const PasswordFormFillData& fill_data,
                            const blink::WebInputElement& user_input,
                            bool show_all);
-
-  // Attempts to fill |username_element| and |password_element| with the
-  // |fill_data|.  Will use the data corresponding to the preferred username,
-  // unless the |username_element| already has a value set.  In that case,
-  // attempts to fill the password matching the already filled username, if
-  // such a password exists.
-  void FillFormOnPasswordRecieved(const PasswordFormFillData& fill_data,
-                                  blink::WebInputElement username_element,
-                                  blink::WebInputElement password_element);
-
-  bool FillUserNameAndPassword(blink::WebInputElement* username_element,
-                               blink::WebInputElement* password_element,
-                               const PasswordFormFillData& fill_data,
-                               bool exact_username_match,
-                               bool set_selection);
 
   // Fills |login_input| and |password| with the most relevant suggestion from
   // |fill_data| and shows a popup with other suggestions.
@@ -190,7 +172,7 @@ class PasswordAutofillAgent : public content::RenderViewObserver {
   // Finds login information for a |node| that was previously filled.
   bool FindLoginInfo(const blink::WebNode& node,
                      blink::WebInputElement* found_input,
-                     PasswordInfo* found_password);
+                     PasswordInfo** found_password);
 
   // Clears the preview for the username and password fields, restoring both to
   // their previous filled state.
@@ -210,6 +192,10 @@ class PasswordAutofillAgent : public content::RenderViewObserver {
 
   // The logins we have filled so far with their associated info.
   LoginToPasswordInfoMap login_to_password_info_;
+  // And the keys under which PasswordAutofillManager can find the same info.
+  LoginToPasswordInfoKeyMap login_to_password_info_key_;
+  // A (sort-of) reverse map to |login_to_password_info_|.
+  PasswordToLoginMap password_to_username_;
 
   // Used for UMA stats.
   OtherPossibleUsernamesUsage usernames_usage_;

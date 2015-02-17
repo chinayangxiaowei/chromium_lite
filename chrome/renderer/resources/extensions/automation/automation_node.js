@@ -40,18 +40,16 @@ AutomationNodeImpl.prototype = {
   },
 
   parent: function() {
-    return this.rootImpl.get(this.parentID);
+    return this.hostTree || this.rootImpl.get(this.parentID);
   },
 
   firstChild: function() {
-    var node = this.rootImpl.get(this.childIds[0]);
-    return node;
+    return this.childTree || this.rootImpl.get(this.childIds[0]);
   },
 
   lastChild: function() {
     var childIds = this.childIds;
-    var node = this.rootImpl.get(childIds[childIds.length - 1]);
-    return node;
+    return this.childTree || this.rootImpl.get(childIds[childIds.length - 1]);
   },
 
   children: function() {
@@ -95,6 +93,14 @@ AutomationNodeImpl.prototype = {
                           endIndex: endIndex });
   },
 
+  querySelector: function(selector, callback) {
+    automationInternal.querySelector(
+      { treeID: this.rootImpl.treeID,
+        automationNodeID: this.id,
+        selector: selector },
+      this.querySelectorCallback_.bind(this, callback));
+  },
+
   addEventListener: function(eventType, callback, capture) {
     this.removeEventListener(eventType, callback);
     if (!this.listeners[eventType])
@@ -113,12 +119,18 @@ AutomationNodeImpl.prototype = {
     }
   },
 
+  toJSON: function() {
+    return { treeID: this.treeID,
+             id: this.id,
+             role: this.role,
+             attributes: this.attributes };
+  },
+
   dispatchEvent: function(eventType) {
     var path = [];
     var parent = this.parent();
     while (parent) {
       path.push(parent);
-      // TODO(aboxhall/dtseng): handle unloaded parent node
       parent = parent.parent();
     }
     var event = new AutomationEvent(eventType, this.wrapper);
@@ -136,11 +148,14 @@ AutomationNodeImpl.prototype = {
   },
 
   toString: function() {
-    return 'node id=' + this.id +
+    var impl = privates(this).impl;
+    if (!impl)
+      impl = this;
+    return 'node id=' + impl.id +
         ' role=' + this.role +
         ' state=' + $JSON.stringify(this.state) +
-        ' parentID=' + this.parentID +
-        ' childIds=' + $JSON.stringify(this.childIds) +
+        ' parentID=' + impl.parentID +
+        ' childIds=' + $JSON.stringify(impl.childIds) +
         ' attributes=' + $JSON.stringify(this.attributes);
   },
 
@@ -194,9 +209,8 @@ AutomationNodeImpl.prototype = {
 
   performAction_: function(actionType, opt_args) {
     // Not yet initialized.
-    if (this.rootImpl.processID === undefined ||
-        this.rootImpl.routingID === undefined ||
-        this.wrapper.id === undefined) {
+    if (this.rootImpl.treeID === undefined ||
+        this.id === undefined) {
       return;
     }
 
@@ -206,11 +220,27 @@ AutomationNodeImpl.prototype = {
           ' {"interact": true} in the "automation" manifest key.');
     }
 
-    automationInternal.performAction({ processID: this.rootImpl.processID,
-                                       routingID: this.rootImpl.routingID,
-                                       automationNodeID: this.wrapper.id,
+    automationInternal.performAction({ treeID: this.rootImpl.treeID,
+                                       automationNodeID: this.id,
                                        actionType: actionType },
                                      opt_args || {});
+  },
+
+  querySelectorCallback_: function(userCallback, resultAutomationNodeID) {
+    // resultAutomationNodeID could be zero or undefined or (unlikely) null;
+    // they all amount to the same thing here, which is that no node was
+    // returned.
+    if (!resultAutomationNodeID) {
+      userCallback(null);
+      return;
+    }
+    var resultNode = this.rootImpl.get(resultAutomationNodeID);
+    if (!resultNode) {
+      logging.WARNING('Query selector result not in tree: ' +
+                      resultAutomationNodeID);
+      userCallback(null);
+    }
+    userCallback(resultNode);
   }
 };
 
@@ -255,6 +285,7 @@ var ATTRIBUTE_NAME_TO_ATTRIBUTE_ID = {
  * @const
  */
 var ATTRIBUTE_BLACKLIST = {'activedescendantId': true,
+                           'childTreeId': true,
                            'controlsIds': true,
                            'describedbyIds': true,
                            'flowtoIds': true,
@@ -276,14 +307,13 @@ var ATTRIBUTE_BLACKLIST = {'activedescendantId': true,
  * AutomationNode object.
  * Thus, tree traversals amount to a lookup in our hash.
  *
- * The tree itself is identified by the process id and routing id of the
+ * The tree itself is identified by the accessibility tree id of the
  * renderer widget host.
  * @constructor
  */
-function AutomationRootNodeImpl(processID, routingID) {
+function AutomationRootNodeImpl(treeID) {
   AutomationNodeImpl.call(this, this);
-  this.processID = processID;
-  this.routingID = routingID;
+  this.treeID = treeID;
   this.axNodeDataCache_ = {};
 }
 
@@ -327,8 +357,9 @@ AutomationRootNodeImpl.prototype = {
         var children = nodeToClear.children();
         for (var i = 0; i < children.length; i++)
           this.invalidate_(children[i]);
-        privates(nodeToClear).impl.childIds = []
-        updateState.pendingNodes[nodeToClear.id] = nodeToClear;
+        var nodeToClearImpl = privates(nodeToClear).impl;
+        nodeToClearImpl.childIds = []
+        updateState.pendingNodes[nodeToClearImpl.id] = nodeToClear;
       }
     }
 
@@ -350,6 +381,10 @@ AutomationRootNodeImpl.prototype = {
   },
 
   destroy: function() {
+    if (this.hostTree)
+      this.hostTree.childTree = undefined;
+    this.hostTree = undefined;
+
     this.dispatchEvent(schema.EventType.destroyed);
     this.invalidate_(this.wrapper);
   },
@@ -367,7 +402,7 @@ AutomationRootNodeImpl.prototype = {
     } else {
       logging.WARNING('Got ' + eventParams.eventType +
                       ' event on unknown node: ' + eventParams.targetID +
-                      '; this: ' + this.toString());
+                      '; this: ' + this.id);
     }
     return true;
   },
@@ -400,22 +435,13 @@ AutomationRootNodeImpl.prototype = {
     // This object is not accessible outside of bindings code, but we can access
     // it here.
     var nodeImpl = privates(node).impl;
-    var id = node.id;
+    var id = nodeImpl.id;
     for (var key in AutomationAttributeDefaults) {
       nodeImpl[key] = AutomationAttributeDefaults[key];
     }
     nodeImpl.childIds = [];
-    nodeImpl.loaded = false;
     nodeImpl.id = id;
     delete this.axNodeDataCache_[id];
-  },
-
-  load: function(callback) {
-    // TODO(dtseng/aboxhall): Implement.
-    if (!this.loaded)
-      throw 'Unsupported state: root node is not loaded.';
-
-    setTimeout(callback, 0);
   },
 
   deleteOldChildren_: function(node, newChildIds) {
@@ -425,8 +451,8 @@ AutomationRootNodeImpl.prototype = {
     for (var i = 0; i < newChildIds.length; i++) {
       var childId = newChildIds[i];
       if (newChildIdSet[childId]) {
-        logging.WARNING('Node ' + node.id + ' has duplicate child id ' +
-                        childId);
+        logging.WARNING('Node ' + privates(node).impl.id +
+                        ' has duplicate child id ' + childId);
         lastError.set('automation',
                       'Bad update received on automation tree',
                       null,
@@ -456,18 +482,22 @@ AutomationRootNodeImpl.prototype = {
   createNewChildren_: function(node, newChildIds, updateState) {
     logging.CHECK(node);
     var success = true;
+
     for (var i = 0; i < newChildIds.length; i++) {
       var childId = newChildIds[i];
       var childNode = this.axNodeDataCache_[childId];
       if (childNode) {
         if (childNode.parent() != node) {
-          var parentId = 0;
-          if (childNode.parent()) parentId = childNode.parent().id;
+          var parentId = -1;
+          if (childNode.parent()) {
+            var parentImpl = privates(childNode.parent()).impl;
+            parentId = parentImpl.id;
+          }
           // This is a serious error - nodes should never be reparented.
           // If this case occurs, continue so this node isn't left in an
           // inconsistent state, but return failure at the end.
           logging.WARNING('Node ' + childId + ' reparented from ' +
-                          parentId + ' to ' + node.id);
+                          parentId + ' to ' + privates(node).impl.id);
           lastError.set('automation',
                         'Bad update received on automation tree',
                         null,
@@ -479,11 +509,11 @@ AutomationRootNodeImpl.prototype = {
         childNode = new AutomationNode(this);
         this.axNodeDataCache_[childId] = childNode;
         privates(childNode).impl.id = childId;
-        updateState.pendingNodes[childNode.id] = childNode;
-        updateState.newNodes[childNode.id] = childNode;
+        updateState.pendingNodes[childId] = childNode;
+        updateState.newNodes[childId] = childNode;
       }
       privates(childNode).impl.indexInParent = i;
-      privates(childNode).impl.parentID = node.id;
+      privates(childNode).impl.parentID = privates(node).impl.id;
     }
 
     return success;
@@ -491,6 +521,23 @@ AutomationRootNodeImpl.prototype = {
 
   setData_: function(node, nodeData) {
     var nodeImpl = privates(node).impl;
+
+    // TODO(dtseng): Make into set listing all hosting node roles.
+    if (nodeData.role == schema.RoleType.webView) {
+      if (nodeImpl.pendingChildFrame === undefined)
+        nodeImpl.pendingChildFrame = true;
+
+      if (nodeImpl.pendingChildFrame) {
+        nodeImpl.childTreeID = nodeData.intAttributes.childTreeId;
+        automationInternal.enableFrame(nodeImpl.childTreeID);
+        automationUtil.storeTreeCallback(nodeImpl.childTreeID, function(root) {
+          nodeImpl.pendingChildFrame = false;
+          nodeImpl.childTree = root;
+          privates(root).impl.hostTree = node;
+          nodeImpl.dispatchEvent(schema.EventType.childrenChanged);
+        });
+      }
+    }
     for (var key in AutomationAttributeDefaults) {
       if (key in nodeData)
         nodeImpl[key] = nodeData[key];
@@ -541,7 +588,7 @@ AutomationRootNodeImpl.prototype = {
     var node = this.axNodeDataCache_[nodeData.id];
     var didUpdateRoot = false;
     if (node) {
-      delete updateState.pendingNodes[node.id];
+      delete updateState.pendingNodes[privates(node).impl.id];
     } else {
       if (nodeData.role != schema.RoleType.rootWebArea &&
           nodeData.role != schema.RoleType.desktop) {
@@ -575,7 +622,7 @@ AutomationRootNodeImpl.prototype = {
                                           nodeData.childIds,
                                           updateState);
     nodeImpl.childIds = nodeData.childIds;
-    this.axNodeDataCache_[node.id] = node;
+    this.axNodeDataCache_[nodeImpl.id] = node;
 
     return success;
   }
@@ -596,21 +643,19 @@ var AutomationNode = utils.expose('AutomationNode',
                                                 'setSelection',
                                                 'addEventListener',
                                                 'removeEventListener',
-                                                'toString'],
+                                                'querySelector',
+                                                'toJSON'],
                                     readonly: ['isRootNode',
-                                               'id',
                                                'role',
                                                'state',
                                                'location',
                                                'attributes',
-                                               'root',
-                                               'toString'] });
+                                               'indexInParent',
+                                               'root'] });
 
 var AutomationRootNode = utils.expose('AutomationRootNode',
                                       AutomationRootNodeImpl,
-                                      { superclass: AutomationNode,
-                                        functions: ['load'],
-                                        readonly: ['loaded'] });
+                                      { superclass: AutomationNode });
 
 exports.AutomationNode = AutomationNode;
 exports.AutomationRootNode = AutomationRootNode;

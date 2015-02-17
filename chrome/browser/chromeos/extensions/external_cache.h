@@ -15,10 +15,10 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequenced_task_runner.h"
-#include "chrome/browser/extensions/updater/extension_downloader_delegate.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "extensions/browser/updater/extension_downloader_delegate.h"
 
 namespace base {
 class DictionaryValue;
@@ -38,6 +38,9 @@ namespace chromeos {
 class ExternalCache : public content::NotificationObserver,
                       public extensions::ExtensionDownloaderDelegate {
  public:
+  typedef base::Callback<void(const std::string& id, bool success)>
+      PutExternalExtensionCallback;
+
   class Delegate {
    public:
     virtual ~Delegate() {}
@@ -80,14 +83,14 @@ class ExternalCache : public content::NotificationObserver,
   // Implementation of content::NotificationObserver:
   virtual void Observe(int type,
                        const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+                       const content::NotificationDetails& details) override;
 
   // Implementation of ExtensionDownloaderDelegate:
   virtual void OnExtensionDownloadFailed(
       const std::string& id,
       Error error,
       const PingResult& ping_result,
-      const std::set<int>& request_ids) OVERRIDE;
+      const std::set<int>& request_ids) override;
 
   virtual void OnExtensionDownloadFinished(
       const std::string& id,
@@ -96,12 +99,12 @@ class ExternalCache : public content::NotificationObserver,
       const GURL& download_url,
       const std::string& version,
       const PingResult& ping_result,
-      const std::set<int>& request_ids) OVERRIDE;
+      const std::set<int>& request_ids) override;
 
-  virtual bool IsExtensionPending(const std::string& id) OVERRIDE;
+  virtual bool IsExtensionPending(const std::string& id) override;
 
   virtual bool GetExtensionExistingVersion(const std::string& id,
-                                           std::string* version) OVERRIDE;
+                                           std::string* version) override;
 
   // Shut down the cache. The |callback| will be invoked when the cache has shut
   // down completely and there are no more pending file I/O operations.
@@ -127,6 +130,13 @@ class ExternalCache : public content::NotificationObserver,
                     base::FilePath* file_path,
                     std::string* version);
 
+  // Puts the external |crx_file_path| into |local_cache_| for extension with
+  // |id|.
+  void PutExternalExtension(const std::string& id,
+                            const base::FilePath& crx_file_path,
+                            const std::string& version,
+                            const PutExternalExtensionCallback& callback);
+
  private:
   // Notifies the that the cache has been updated, providing
   // extensions loader with an updated list of extensions.
@@ -139,6 +149,13 @@ class ExternalCache : public content::NotificationObserver,
   void OnPutExtension(const std::string& id,
                       const base::FilePath& file_path,
                       bool file_ownership_passed);
+
+  // Invoked on the UI thread when the external extension has been installed
+  // in the local cache by calling PutExternalExtension.
+  void OnPutExternalExtension(const std::string& id,
+                              const PutExternalExtensionCallback& callback,
+                              const base::FilePath& file_path,
+                              bool file_ownership_passed);
 
   extensions::LocalExtensionCache local_cache_;
 

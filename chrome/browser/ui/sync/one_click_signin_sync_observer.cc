@@ -78,7 +78,7 @@ void OneClickSigninSyncObserver::OnStateChanged() {
       return;
     }
 
-    if (sync_service->sync_initialized() &&
+    if (sync_service->SyncActive() &&
         signin::GetSourceForPromoURL(continue_url_)
             != signin::SOURCE_SETTINGS) {
       // TODO(isherman): Having multiple settings pages open can cause issues
@@ -95,7 +95,7 @@ void OneClickSigninSyncObserver::LoadContinueUrl() {
   web_contents()->GetController().LoadURL(
       continue_url_,
       content::Referrer(),
-      content::PAGE_TRANSITION_AUTO_TOPLEVEL,
+      ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
       std::string());
 }
 

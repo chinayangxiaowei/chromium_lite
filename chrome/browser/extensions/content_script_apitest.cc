@@ -15,6 +15,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/extension.h"
+#include "extensions/test/result_catcher.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
@@ -109,7 +110,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ContentScriptExtensionProcess) {
 
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ContentScriptFragmentNavigation) {
   ASSERT_TRUE(StartEmbeddedTestServer());
-  const char* extension_name = "content_scripts/fragment";
+  const char extension_name[] = "content_scripts/fragment";
   ASSERT_TRUE(RunExtensionTest(extension_name)) << message_;
 }
 
@@ -161,7 +162,7 @@ class ContentScriptCssInjectionTest : public ExtensionApiTest {
  protected:
   // TODO(rdevlin.cronin): Make a testing switch that looks like FeatureSwitch,
   // but takes in an optional value so that we don't have to do this.
-  virtual void SetUpCommandLine(base::CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     // We change the Webstore URL to be http://cws.com. We need to do this so
     // we can check that css injection is not allowed on the webstore (which

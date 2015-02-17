@@ -53,10 +53,7 @@ conformance_harness_script = r"""
   window.parent.webglTestHarness = testHarness;
   window.console.log = testHarness.log;
   window.onerror = function(message, url, line) {
-    testHarness._failures++;
-    if (message) {
-      testHarness.log(message);
-    }
+    testHarness.reportResults(null, false, message);
     testHarness.notifyFinished(null);
   };
 """
@@ -69,7 +66,7 @@ def _WebGLTestMessages(tab):
 
 class WebglConformanceValidator(page_test.PageTest):
   def __init__(self):
-    super(WebglConformanceValidator, self).__init__(attempts=1, max_failures=10)
+    super(WebglConformanceValidator, self).__init__(max_failures=10)
 
   def ValidateAndMeasurePage(self, page, tab, results):
     if not _DidWebGLTestSucceed(tab):
@@ -95,7 +92,7 @@ class WebglConformancePage(page_module.Page):
   def RunNavigateSteps(self, action_runner):
     action_runner.NavigateToPage(self)
     action_runner.WaitForJavaScriptCondition(
-        'webglTestHarness._finished', timeout_in_seconds=120)
+        'webglTestHarness._finished', timeout_in_seconds=180)
 
 
 class WebglConformance(benchmark_module.Benchmark):
@@ -122,7 +119,7 @@ class WebglConformance(benchmark_module.Benchmark):
 
     return ps
 
-  def CreateExpectations(self, page_set):
+  def CreateExpectations(self):
     return webgl_conformance_expectations.WebGLConformanceExpectations()
 
   @staticmethod

@@ -12,7 +12,7 @@
 #include "chrome/browser/sync_file_system/drive_backend/sync_task_token.h"
 #include "chrome/browser/sync_file_system/sync_file_metadata.h"
 
-using fileapi::FileSystemURL;
+using storage::FileSystemURL;
 
 namespace sync_file_system {
 namespace drive_backend {
@@ -22,9 +22,9 @@ namespace {
 class SyncTaskAdapter : public ExclusiveTask {
  public:
   explicit SyncTaskAdapter(const SyncTaskManager::Task& task) : task_(task) {}
-  virtual ~SyncTaskAdapter() {}
+  ~SyncTaskAdapter() override {}
 
-  virtual void RunExclusive(const SyncStatusCallback& callback) OVERRIDE {
+  void RunExclusive(const SyncStatusCallback& callback) override {
     task_.Run(callback);
   }
 
@@ -55,15 +55,18 @@ bool SyncTaskManager::PendingTaskComparator::operator()(
 SyncTaskManager::SyncTaskManager(
     base::WeakPtr<Client> client,
     size_t maximum_background_task,
-    base::SequencedTaskRunner* task_runner)
+    const scoped_refptr<base::SequencedTaskRunner>& task_runner)
     : client_(client),
       maximum_background_task_(maximum_background_task),
       pending_task_seq_(0),
       task_token_seq_(SyncTaskToken::kMinimumBackgroundTaskTokenID),
-      task_runner_(task_runner) {
+      task_runner_(task_runner),
+      weak_ptr_factory_(this) {
 }
 
 SyncTaskManager::~SyncTaskManager() {
+  weak_ptr_factory_.InvalidateWeakPtrs();
+
   client_.reset();
   token_.reset();
 }
@@ -72,7 +75,8 @@ void SyncTaskManager::Initialize(SyncStatusCode status) {
   DCHECK(sequence_checker_.CalledOnValidSequencedThread());
   DCHECK(!token_);
   NotifyTaskDone(
-      SyncTaskToken::CreateForForegroundTask(AsWeakPtr(), task_runner_),
+      SyncTaskToken::CreateForForegroundTask(
+          weak_ptr_factory_.GetWeakPtr(), task_runner_.get()),
       status);
 }
 
@@ -99,7 +103,8 @@ void SyncTaskManager::ScheduleSyncTask(
   scoped_ptr<SyncTaskToken> token(GetToken(from_here, callback));
   if (!token) {
     PushPendingTask(
-        base::Bind(&SyncTaskManager::ScheduleSyncTask, AsWeakPtr(), from_here,
+        base::Bind(&SyncTaskManager::ScheduleSyncTask,
+                   weak_ptr_factory_.GetWeakPtr(), from_here,
                    base::Passed(&task), priority, callback),
         priority);
     return;
@@ -151,9 +156,9 @@ void SyncTaskManager::NotifyTaskDone(scoped_ptr<SyncTaskToken> token,
 }
 
 // static
-void SyncTaskManager::UpdateBlockingFactor(
+void SyncTaskManager::UpdateTaskBlocker(
     scoped_ptr<SyncTaskToken> current_task_token,
-    scoped_ptr<BlockingFactor> blocking_factor,
+    scoped_ptr<TaskBlocker> task_blocker,
     const Continuation& continuation) {
   DCHECK(current_task_token);
 
@@ -175,11 +180,11 @@ void SyncTaskManager::UpdateBlockingFactor(
   else
     background_task_token = current_task_token.Pass();
 
-  manager->UpdateBlockingFactorBody(foreground_task_token.Pass(),
-                                    background_task_token.Pass(),
-                                    task_log.Pass(),
-                                    blocking_factor.Pass(),
-                                    continuation);
+  manager->UpdateTaskBlockerBody(foreground_task_token.Pass(),
+                                 background_task_token.Pass(),
+                                 task_log.Pass(),
+                                 task_blocker.Pass(),
+                                 continuation);
 }
 
 bool SyncTaskManager::IsRunningTask(int64 token_id) const {
@@ -206,11 +211,11 @@ void SyncTaskManager::NotifyTaskDoneBody(scoped_ptr<SyncTaskToken> token,
 
   DVLOG(3) << "NotifyTaskDone: " << "finished with status=" << status
            << " (" << SyncStatusCodeToString(status) << ")"
-           << " " << token_->location().ToString();
+           << " " << token->location().ToString();
 
-  if (token->blocking_factor()) {
-    dependency_manager_.Erase(token->blocking_factor());
-    token->clear_blocking_factor();
+  if (token->task_blocker()) {
+    dependency_manager_.Erase(token->task_blocker());
+    token->clear_task_blocker();
   }
 
   if (client_) {
@@ -248,14 +253,14 @@ void SyncTaskManager::NotifyTaskDoneBody(scoped_ptr<SyncTaskToken> token,
   task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&SyncTaskManager::MaybeStartNextForegroundTask,
-                 AsWeakPtr(), base::Passed(&token)));
+                 weak_ptr_factory_.GetWeakPtr(), base::Passed(&token)));
 }
 
-void SyncTaskManager::UpdateBlockingFactorBody(
+void SyncTaskManager::UpdateTaskBlockerBody(
     scoped_ptr<SyncTaskToken> foreground_task_token,
     scoped_ptr<SyncTaskToken> background_task_token,
     scoped_ptr<TaskLogger::TaskLog> task_log,
-    scoped_ptr<BlockingFactor> blocking_factor,
+    scoped_ptr<TaskBlocker> task_blocker,
     const Continuation& continuation) {
   DCHECK(sequence_checker_.CalledOnValidSequencedThread());
 
@@ -268,11 +273,11 @@ void SyncTaskManager::UpdateBlockingFactorBody(
     return;
   }
 
-  // Clear existing |blocking_factor| from |dependency_manager_| before
+  // Clear existing |task_blocker| from |dependency_manager_| before
   // getting |foreground_task_token|, so that we can avoid dead lock.
-  if (background_task_token && background_task_token->blocking_factor()) {
-    dependency_manager_.Erase(background_task_token->blocking_factor());
-    background_task_token->clear_blocking_factor();
+  if (background_task_token && background_task_token->task_blocker()) {
+    dependency_manager_.Erase(background_task_token->task_blocker());
+    background_task_token->clear_task_blocker();
   }
 
   // Try to get |foreground_task_token|.  If it's not available, wait for
@@ -283,15 +288,15 @@ void SyncTaskManager::UpdateBlockingFactorBody(
                                      SyncStatusCallback());
     if (!foreground_task_token) {
       PushPendingTask(
-          base::Bind(&SyncTaskManager::UpdateBlockingFactorBody,
-                     AsWeakPtr(),
+          base::Bind(&SyncTaskManager::UpdateTaskBlockerBody,
+                     weak_ptr_factory_.GetWeakPtr(),
                      base::Passed(&foreground_task_token),
                      base::Passed(&background_task_token),
                      base::Passed(&task_log),
-                     base::Passed(&blocking_factor),
+                     base::Passed(&task_blocker),
                      continuation),
           PRIORITY_HIGH);
-      MaybeStartNextForegroundTask(scoped_ptr<SyncTaskToken>());
+      MaybeStartNextForegroundTask(nullptr);
       return;
     }
   }
@@ -303,42 +308,41 @@ void SyncTaskManager::UpdateBlockingFactorBody(
       !background_task_token &&
       running_background_tasks_.size() >= maximum_background_task_;
   if (task_number_limit_exceeded ||
-      !dependency_manager_.Insert(blocking_factor.get())) {
+      !dependency_manager_.Insert(task_blocker.get())) {
     DCHECK(!running_background_tasks_.empty());
     DCHECK(pending_backgrounding_task_.is_null());
 
-    // Wait for NotifyTaskDone to release a |blocking_factor|.
+    // Wait for NotifyTaskDone to release a |task_blocker|.
     pending_backgrounding_task_ =
-        base::Bind(&SyncTaskManager::UpdateBlockingFactorBody,
-                   AsWeakPtr(),
+        base::Bind(&SyncTaskManager::UpdateTaskBlockerBody,
+                   weak_ptr_factory_.GetWeakPtr(),
                    base::Passed(&foreground_task_token),
                    base::Passed(&background_task_token),
                    base::Passed(&task_log),
-                   base::Passed(&blocking_factor),
+                   base::Passed(&task_blocker),
                    continuation);
     return;
   }
 
   if (background_task_token) {
-    background_task_token->set_blocking_factor(blocking_factor.Pass());
+    background_task_token->set_task_blocker(task_blocker.Pass());
   } else {
     tracked_objects::Location from_here = foreground_task_token->location();
     SyncStatusCallback callback = foreground_task_token->callback();
     foreground_task_token->clear_callback();
 
     background_task_token =
-        SyncTaskToken::CreateForBackgroundTask(
-            AsWeakPtr(),
-            task_runner_,
-            task_token_seq_++,
-            blocking_factor.Pass());
+        SyncTaskToken::CreateForBackgroundTask(weak_ptr_factory_.GetWeakPtr(),
+                                               task_runner_.get(),
+                                               task_token_seq_++,
+                                               task_blocker.Pass());
     background_task_token->UpdateTask(from_here, callback);
     running_background_tasks_.set(background_task_token->token_id(),
                                   running_foreground_task_.Pass());
   }
 
   token_ = foreground_task_token.Pass();
-  MaybeStartNextForegroundTask(scoped_ptr<SyncTaskToken>());
+  MaybeStartNextForegroundTask(nullptr);
   background_task_token->SetTaskLog(task_log.Pass());
   continuation.Run(background_task_token.Pass());
 }
@@ -349,7 +353,7 @@ scoped_ptr<SyncTaskToken> SyncTaskManager::GetToken(
   DCHECK(sequence_checker_.CalledOnValidSequencedThread());
 
   if (!token_)
-    return scoped_ptr<SyncTaskToken>();
+    return nullptr;
   token_->UpdateTask(from_here, callback);
   return token_.Pass();
 }

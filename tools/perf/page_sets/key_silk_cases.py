@@ -8,8 +8,8 @@ from telemetry.page import page_set as page_set_module
 class KeySilkCasesPage(page_module.Page):
 
   def __init__(self, url, page_set):
-    super(KeySilkCasesPage, self).__init__(url=url, page_set=page_set)
-    self.credentials_path = 'data/credentials.json'
+    super(KeySilkCasesPage, self).__init__(
+        url=url, page_set=page_set, credentials_path = 'data/credentials.json')
     self.user_agent_type = 'mobile'
     self.archive_data_file = 'data/key_silk_cases.json'
 
@@ -406,22 +406,12 @@ class Page20(KeySilkCasesPage):
     interaction.End()
 
 
-class Page21(KeySilkCasesPage):
+class GwsExpansionPage(KeySilkCasesPage):
+  """Abstract base class for pages that expand Google knowledge panels."""
 
-  def __init__(self, page_set):
-    super(Page21, self).__init__(
-      url='http://www.google.com/#q=google',
-      page_set=page_set)
-
-  def ScrollKnowledgeCardToTop(self, action_runner):
-    # scroll until the knowledge card is at the top
-    action_runner.ScrollPage(
-      distance_expr='''
-          (function() {
-            var el = document.getElementById('kno-result');
-            var bound = el.getBoundingClientRect();
-            return bound.top - document.body.scrollTop;
-          })()''')
+  def NavigateWait(self, action_runner):
+    action_runner.NavigateToPage(self)
+    action_runner.Wait(3)
 
   def ExpandKnowledgeCard(self, action_runner):
     # expand card
@@ -432,14 +422,41 @@ class Page21(KeySilkCasesPage):
     action_runner.Wait(2)
     interaction.End()
 
-
-  def RunNavigateSteps(self, action_runner):
-    action_runner.NavigateToPage(self)
-    action_runner.Wait(3)
-    self.ScrollKnowledgeCardToTop(action_runner)
+  def ScrollKnowledgeCardToTop(self, action_runner, card_id):
+    # scroll until the knowledge card is at the top
+    action_runner.ExecuteJavaScript(
+        "document.getElementById('%s').scrollIntoView()" % card_id)
 
   def RunSmoothness(self, action_runner):
     self.ExpandKnowledgeCard(action_runner)
+
+
+class GwsGoogleExpansion(GwsExpansionPage):
+
+  """ Why: Animating height of a complex content card is common. """
+
+  def __init__(self, page_set):
+    super(GwsGoogleExpansion, self).__init__(
+      url='http://www.google.com/#q=google',
+      page_set=page_set)
+
+  def RunNavigateSteps(self, action_runner):
+    self.NavigateWait(action_runner)
+    self.ScrollKnowledgeCardToTop(action_runner, 'kno-result')
+
+
+class GwsBoogieExpansion(GwsExpansionPage):
+
+  """ Why: Same case as Google expansion but text-heavy rather than image. """
+
+  def __init__(self, page_set):
+    super(GwsBoogieExpansion, self).__init__(
+      url='https://www.google.com/search?hl=en&q=define%3Aboogie',
+      page_set=page_set)
+
+  def RunNavigateSteps(self, action_runner):
+    self.NavigateWait(action_runner)
+    self.ScrollKnowledgeCardToTop(action_runner, 'rso')
 
 
 class Page22(KeySilkCasesPage):
@@ -449,7 +466,6 @@ class Page22(KeySilkCasesPage):
       url='http://plus.google.com/app/basic/stream',
       page_set=page_set)
 
-    self.disabled = 'Times out on Windows; crbug.com/338838'
     self.credentials = 'google'
 
   def RunNavigateSteps(self, action_runner):
@@ -616,13 +632,43 @@ class UpdateHistoryState(KeySilkCasesPage):
     interaction.End()
 
 
+class TextSizeAnimation(KeySilkCasesPage):
+
+  """ Why: Scale animation with text. """
+
+  def __init__(self, page_set):
+    super(TextSizeAnimation, self).__init__(
+      url='http://jsbin.com/gikex/2/quiet',
+      page_set=page_set)
+
+    self.gpu_raster = True
+
+  def RunSmoothness(self, action_runner):
+    action_runner.Wait(4)
+
+
+class SilkFinance(KeySilkCasesPage):
+
+  """ Why: Some effects repaint the page, possibly including plenty of text. """
+
+  def __init__(self, page_set):
+    super(SilkFinance, self).__init__(
+      url='file://key_silk_cases/silk_finance.html',
+      page_set=page_set)
+
+  def RunSmoothness(self, action_runner):
+    interaction = action_runner.BeginInteraction('animation_interaction',
+        is_smooth=True)
+    action_runner.Wait(10) # animation runs automatically
+    interaction.End()
+
+
 class KeySilkCasesPageSet(page_set_module.PageSet):
 
   """ Pages hand-picked for project Silk. """
 
   def __init__(self):
     super(KeySilkCasesPageSet, self).__init__(
-      credentials_path='data/credentials.json',
       user_agent_type='mobile',
       archive_data_file='data/key_silk_cases.json',
       bucket=page_set_module.PARTNER_BUCKET)
@@ -645,13 +691,18 @@ class KeySilkCasesPageSet(page_set_module.PageSet):
     self.AddPage(Page16(self))
     self.AddPage(Page17(self))
     self.AddPage(Page18(self))
-    self.AddPage(Page19(self))
+    # crbug.com/404317
+    # self.AddPage(Page19(self))
     self.AddPage(Page20(self))
-    self.AddPage(Page21(self))
-    self.AddPage(Page22(self))
+    self.AddPage(GwsGoogleExpansion(self))
+    self.AddPage(GwsBoogieExpansion(self))
+    # Times out on Windows; crbug.com/338838
+    # self.AddPage(Page22(self))
     self.AddPage(Page23(self))
     self.AddPage(Page24(self))
     self.AddPage(Page25(self))
     self.AddPage(Page26(self))
     self.AddPage(SVGIconRaster(self))
     self.AddPage(UpdateHistoryState(self))
+    self.AddPage(TextSizeAnimation(self))
+    self.AddPage(SilkFinance(self))

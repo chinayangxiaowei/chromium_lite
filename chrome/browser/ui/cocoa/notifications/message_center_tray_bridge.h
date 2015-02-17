@@ -32,17 +32,17 @@ class MessageCenterTrayBridge :
  public:
   explicit MessageCenterTrayBridge(
       message_center::MessageCenter* message_center);
-  virtual ~MessageCenterTrayBridge();
+  ~MessageCenterTrayBridge() override;
 
   // message_center::MessageCenterTrayDelegate:
-  virtual void OnMessageCenterTrayChanged() OVERRIDE;
-  virtual bool ShowPopups() OVERRIDE;
-  virtual void HidePopups() OVERRIDE;
-  virtual bool ShowMessageCenter() OVERRIDE;
-  virtual void HideMessageCenter() OVERRIDE;
-  virtual bool ShowNotifierSettings() OVERRIDE;
-  virtual bool IsContextMenuEnabled() const OVERRIDE;
-  virtual message_center::MessageCenterTray* GetMessageCenterTray() OVERRIDE;
+  void OnMessageCenterTrayChanged() override;
+  bool ShowPopups() override;
+  void HidePopups() override;
+  bool ShowMessageCenter() override;
+  void HideMessageCenter() override;
+  bool ShowNotifierSettings() override;
+  bool IsContextMenuEnabled() const override;
+  message_center::MessageCenterTray* GetMessageCenterTray() override;
 
   message_center::MessageCenter* message_center() { return message_center_; }
 
@@ -77,12 +77,12 @@ class MessageCenterTrayBridge :
   // Obj-C controller for the on-screen popup notifications.
   base::scoped_nsobject<MCPopupCollection> popup_collection_;
 
-  // Weak pointer factory to posts tasks to self.
-  base::WeakPtrFactory<MessageCenterTrayBridge> weak_ptr_factory_;
-
   // A PrefMember that calls OnShowStatusItemChanged when the pref is updated
   // by the user's selection in the main menu.
   BooleanPrefMember show_status_item_;
+
+  // Weak pointer factory to posts tasks to self.
+  base::WeakPtrFactory<MessageCenterTrayBridge> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(MessageCenterTrayBridge);
 };

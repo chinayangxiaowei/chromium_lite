@@ -9,17 +9,14 @@
 #include "base/callback.h"
 #include "base/memory/scoped_vector.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/services/public/cpp/geometry/geometry_type_converters.h"
 #include "mojo/services/public/cpp/view_manager/types.h"
 #include "mojo/services/public/cpp/view_manager/view.h"
 #include "mojo/services/public/cpp/view_manager/view_manager.h"
 #include "mojo/services/public/interfaces/view_manager/view_manager.mojom.h"
 #include "mojo/services/public/interfaces/window_manager/window_manager.mojom.h"
 
-class SkBitmap;
-
 namespace mojo {
-class ApplicationConnection;
+class Shell;
 class ViewManager;
 class ViewManagerDelegate;
 class ViewManagerTransaction;
@@ -29,9 +26,8 @@ class ViewManagerClientImpl : public ViewManager,
                               public InterfaceImpl<ViewManagerClient>,
                               public WindowManagerClient {
  public:
-  ViewManagerClientImpl(ViewManagerDelegate* delegate,
-                        ApplicationConnection* app_connection);
-  virtual ~ViewManagerClientImpl();
+  ViewManagerClientImpl(ViewManagerDelegate* delegate, Shell* shell);
+  ~ViewManagerClientImpl() override;
 
   bool connected() const { return connected_; }
   ConnectionSpecificId connection_id() const { return connection_id_; }
@@ -52,10 +48,13 @@ class ViewManagerClientImpl : public ViewManager,
   // Returns true if the specified view was created by this connection.
   bool OwnsView(Id id) const;
 
-  void SetBounds(Id view_id, const gfx::Rect& bounds);
-  void SetViewContents(Id view_id, const SkBitmap& contents);
+  void SetBounds(Id view_id, const Rect& bounds);
+  void SetSurfaceId(Id view_id, SurfaceIdPtr surface_id);
   void SetFocus(Id view_id);
   void SetVisible(Id view_id, bool visible);
+  void SetProperty(Id view_id,
+                   const std::string& name,
+                   const std::vector<uint8_t>& data);
 
   void Embed(const String& url, Id view_id);
   void Embed(const String& url,
@@ -80,48 +79,46 @@ class ViewManagerClientImpl : public ViewManager,
   typedef std::map<Id, View*> IdToViewMap;
 
   // Overridden from ViewManager:
-  virtual void SetWindowManagerDelegate(
-      WindowManagerDelegate* delegate) OVERRIDE;
-  virtual void DispatchEvent(View* target, EventPtr event) OVERRIDE;
-  virtual const std::string& GetEmbedderURL() const OVERRIDE;
-  virtual const std::vector<View*>& GetRoots() const OVERRIDE;
-  virtual View* GetViewById(Id id) OVERRIDE;
+  const std::string& GetEmbedderURL() const override;
+  const std::vector<View*>& GetRoots() const override;
+  View* GetViewById(Id id) override;
 
   // Overridden from InterfaceImpl:
-  virtual void OnConnectionEstablished() OVERRIDE;
+  void OnConnectionEstablished() override;
 
   // Overridden from ViewManagerClient:
-  virtual void OnEmbed(ConnectionSpecificId connection_id,
-                       const String& creator_url,
-                       ViewDataPtr root,
-                       InterfaceRequest<ServiceProvider> services) OVERRIDE;
-  virtual void OnViewBoundsChanged(Id view_id,
-                                   RectPtr old_bounds,
-                                   RectPtr new_bounds) OVERRIDE;
-  virtual void OnViewHierarchyChanged(Id view_id,
-                                      Id new_parent_id,
-                                      Id old_parent_id,
-                                      Array<ViewDataPtr> views) OVERRIDE;
-  virtual void OnViewReordered(Id view_id,
-                               Id relative_view_id,
-                               OrderDirection direction) OVERRIDE;
-  virtual void OnViewDeleted(Id view_id) OVERRIDE;
-  virtual void OnViewInputEvent(Id view,
-                                EventPtr event,
-                                const Callback<void()>& callback) OVERRIDE;
-  virtual void Embed(
-      const String& url,
-      InterfaceRequest<ServiceProvider> service_provider) OVERRIDE;
-  virtual void DispatchOnViewInputEvent(EventPtr event) OVERRIDE;
+  void OnEmbed(ConnectionSpecificId connection_id,
+               const String& creator_url,
+               ViewDataPtr root,
+               InterfaceRequest<ServiceProvider> parent_services,
+               ScopedMessagePipeHandle window_manager_pipe) override;
+  void OnEmbeddedAppDisconnected(Id view_id) override;
+  void OnViewBoundsChanged(Id view_id,
+                           RectPtr old_bounds,
+                           RectPtr new_bounds) override;
+  void OnViewHierarchyChanged(Id view_id,
+                              Id new_parent_id,
+                              Id old_parent_id,
+                              Array<ViewDataPtr> views) override;
+  void OnViewReordered(Id view_id,
+                       Id relative_view_id,
+                       OrderDirection direction) override;
+  void OnViewDeleted(Id view_id) override;
+  void OnViewVisibilityChanged(Id view_id, bool visible) override;
+  void OnViewDrawnStateChanged(Id view_id, bool drawn) override;
+  void OnViewPropertyChanged(Id view_id,
+                             const String& name,
+                             Array<uint8_t> new_data) override;
+  void OnViewInputEvent(Id view_id,
+                        EventPtr event,
+                        const Callback<void()>& callback) override;
 
-    // Overridden from WindowManagerClient:
-  virtual void OnWindowManagerReady() OVERRIDE;
-  virtual void OnCaptureChanged(Id old_capture_view_id,
-                                Id new_capture_view_id) OVERRIDE;
-  virtual void OnFocusChanged(Id old_focused_view_id,
-                              Id new_focused_view_id) OVERRIDE;
-  virtual void OnActiveWindowChanged(Id old_focused_window,
-                                     Id new_focused_window) OVERRIDE;
+  // Overridden from WindowManagerClient:
+  void OnCaptureChanged(Id old_capture_view_id,
+                        Id new_capture_view_id) override;
+  void OnFocusChanged(Id old_focused_view_id, Id new_focused_view_id) override;
+  void OnActiveWindowChanged(Id old_focused_window,
+                             Id new_focused_window) override;
 
   void RemoveRoot(View* root);
 
@@ -140,7 +137,6 @@ class ViewManagerClientImpl : public ViewManager,
   base::Callback<void(void)> change_acked_callback_;
 
   ViewManagerDelegate* delegate_;
-  WindowManagerDelegate* window_manager_delegate_;
 
   std::vector<View*> roots_;
 
@@ -148,7 +144,7 @@ class ViewManagerClientImpl : public ViewManager,
 
   ViewManagerService* service_;
 
-  WindowManagerServicePtr window_manager_;
+  WindowManagerPtr window_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(ViewManagerClientImpl);
 };

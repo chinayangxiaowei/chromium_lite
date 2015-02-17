@@ -2,21 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/test/ppapi/ppapi_test.h"
-
+#include "base/path_service.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/extensions/app_launch_params.h"
+#include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/nacl/nacl_browsertest_util.h"
+#include "chrome/test/ppapi/ppapi_test.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/javascript_test_observer.h"
 #include "content/public/test/test_renderer_host.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "ppapi/shared_impl/test_harness_utils.h"
 
 using content::RenderViewHost;
@@ -62,21 +67,11 @@ using content::RenderViewHost;
 #if defined(DISABLE_NACL)
 
 #define TEST_PPAPI_NACL(test_name)
-#define TEST_PPAPI_NACL_NO_PNACL(test_name)
 #define TEST_PPAPI_NACL_DISALLOWED_SOCKETS(test_name)
 #define TEST_PPAPI_NACL_WITH_SSL_SERVER(test_name)
 #define TEST_PPAPI_NACL_SUBTESTS(test_name, run_statement)
 
 #else
-
-// TODO(dmichael): Remove this macro, crbug.com/384539
-#define TEST_PPAPI_NACL_NO_PNACL(test_name) \
-    IN_PROC_BROWSER_TEST_F(PPAPINaClNewlibTest, test_name) { \
-      RunTestViaHTTP(STRIP_PREFIXES(test_name)); \
-    } \
-    IN_PROC_BROWSER_TEST_F(PPAPINaClGLibcTest, MAYBE_GLIBC(test_name)) { \
-      RunTestViaHTTP(STRIP_PREFIXES(test_name)); \
-    } \
 
 // NaCl based PPAPI tests
 #define TEST_PPAPI_NACL(test_name) \
@@ -448,11 +443,14 @@ TEST_PPAPI_NACL(HostResolverPrivate_ResolveIPv4)
   )
 
 // Note: we do not support Trusted APIs in NaCl, so these will be skipped.
+// XRequestedWithHeader isn't trusted per-se, but the header isn't provided
+// for NaCl and thus must be skipped.
 #define RUN_URLLOADER_TRUSTED_SUBTESTS \
   RunTestViaHTTP( \
       LIST_TEST(URLLoader_TrustedSameOriginRestriction) \
       LIST_TEST(URLLoader_TrustedCrossOriginRequest) \
       LIST_TEST(URLLoader_TrustedHttpRequests) \
+      LIST_TEST(URLLoader_XRequestedWithHeader) \
   )
 
 IN_PROC_BROWSER_TEST_F(PPAPITest, URLLoader0) {
@@ -673,7 +671,9 @@ IN_PROC_BROWSER_TEST_F(PPAPITest, MAYBE_FileIO) {
 IN_PROC_BROWSER_TEST_F(PPAPIPrivateTest, MAYBE_FileIO_Private) {
   RUN_FILEIO_PRIVATE_SUBTESTS;
 }
-IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPITest, MAYBE_FileIO) {
+
+// See: crbug.com/421284
+IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPITest, DISABLED_FileIO) {
   RUN_FILEIO_SUBTESTS;
 }
 IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPIPrivateTest, MAYBE_FileIO_Private) {
@@ -975,6 +975,7 @@ IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPITest, Flash) {
       LIST_TEST(WebSocket_AbortSendMessageCall) \
       LIST_TEST(WebSocket_AbortCloseCall) \
       LIST_TEST(WebSocket_AbortReceiveMessageCall) \
+      LIST_TEST(WebSocket_ClosedFromServerWhileSending) \
       LIST_TEST(WebSocket_CcInterfaces) \
       LIST_TEST(WebSocket_UtilityInvalidConnect) \
       LIST_TEST(WebSocket_UtilityProtocols) \
@@ -1121,7 +1122,7 @@ TEST_PPAPI_NACL(View_CreatedVisible);
 IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPITest, View_CreateInvisible) {
   // Make a second tab in the foreground.
   GURL url = GetTestFileUrl("View_CreatedInvisible");
-  chrome::NavigateParams params(browser(), url, content::PAGE_TRANSITION_LINK);
+  chrome::NavigateParams params(browser(), url, ui::PAGE_TRANSITION_LINK);
   params.disposition = NEW_BACKGROUND_TAB;
   ui_test_utils::NavigateToURL(&params);
 }
@@ -1144,7 +1145,7 @@ IN_PROC_BROWSER_TEST_F(OutOfProcessPPAPITest, DISABLED_View_PageHideShow) {
   // Make a new tab to cause the original one to hide, this should trigger the
   // next phase of the test.
   chrome::NavigateParams params(
-      browser(), GURL(url::kAboutBlankURL), content::PAGE_TRANSITION_LINK);
+      browser(), GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK);
   params.disposition = NEW_FOREGROUND_TAB;
   ui_test_utils::NavigateToURL(&params);
 
@@ -1284,9 +1285,7 @@ TEST_PPAPI_NACL(VideoSource)
 // Printing doesn't work in content_browsertests.
 TEST_PPAPI_OUT_OF_PROCESS(Printing)
 
-// TODO(dmichael): Make this work on PNaCl and remove the macro.
-//                 crbug.com/384539
-TEST_PPAPI_NACL_NO_PNACL(MessageHandler)
+TEST_PPAPI_NACL(MessageHandler)
 
 TEST_PPAPI_NACL(MessageLoop_Basics)
 TEST_PPAPI_NACL(MessageLoop_Post)
@@ -1336,3 +1335,37 @@ TEST_PPAPI_OUT_OF_PROCESS(TalkPrivate)
 #if defined(OS_CHROMEOS)
 TEST_PPAPI_OUT_OF_PROCESS(OutputProtectionPrivate)
 #endif
+
+class PackagedAppTest : public ExtensionBrowserTest {
+ public:
+  virtual void SetUpOnMainThread() override {
+  }
+
+  void LaunchTestingApp() {
+    base::FilePath data_dir;
+    ASSERT_TRUE(PathService::Get(chrome::DIR_GEN_TEST_DATA, &data_dir));
+    base::FilePath app_dir = data_dir.AppendASCII("ppapi")
+                                     .AppendASCII("tests")
+                                     .AppendASCII("extensions")
+                                     .AppendASCII("packaged_app")
+                                     .AppendASCII("newlib");
+
+    const extensions::Extension* extension = LoadExtension(app_dir);
+    ASSERT_TRUE(extension);
+
+    AppLaunchParams params(browser()->profile(),
+                           extension,
+                           extensions::LAUNCH_CONTAINER_NONE,
+                           NEW_WINDOW);
+    params.command_line = *CommandLine::ForCurrentProcess();
+    OpenApplication(params);
+  }
+};
+
+// Load a packaged app, and wait for it to successfully post a "hello" message
+// back.
+IN_PROC_BROWSER_TEST_F(PackagedAppTest, SuccessfulLoad) {
+  ExtensionTestMessageListener listener("hello", true);
+  LaunchTestingApp();
+  EXPECT_TRUE(listener.WaitUntilSatisfied());
+}

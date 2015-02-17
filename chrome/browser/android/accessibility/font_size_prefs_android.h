@@ -26,7 +26,6 @@ class FontSizePrefsAndroid {
 
   FontSizePrefsAndroid(JNIEnv* env, jobject obj);
   ~FontSizePrefsAndroid();
-  void Destroy(JNIEnv* env, jobject obj);
 
   void SetFontScaleFactor(JNIEnv* env, jobject obj, jfloat font);
   float GetFontScaleFactor(JNIEnv* env, jobject obj);
@@ -65,8 +64,8 @@ class FontSizePrefsObserverAndroid : public FontSizePrefsAndroid::Observer {
   static bool Register(JNIEnv* env);
 
   // FontSizePrefs::Observer implementation.
-  virtual void OnChangeFontSize(float font) OVERRIDE;
-  virtual void OnChangeForceEnableZoom(bool enabled) OVERRIDE;
+  virtual void OnChangeFontSize(float font) override;
+  virtual void OnChangeForceEnableZoom(bool enabled) override;
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;

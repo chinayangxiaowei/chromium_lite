@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/drive/fake_file_system.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/run_loop.h"
 #include "chrome/browser/chromeos/drive/file_system_util.h"
 #include "chrome/browser/drive/fake_drive_service.h"
@@ -18,7 +18,7 @@ namespace test_util {
 
 class FakeFileSystemTest : public ::testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Initialize FakeDriveService.
     fake_drive_service_.reset(new FakeDriveService);
     ASSERT_TRUE(SetUpTestEntries(fake_drive_service_.get()));

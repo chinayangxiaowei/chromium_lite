@@ -6,8 +6,8 @@
 
 #include "base/command_line.h"
 #include "base/debug/leak_annotations.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
 #include "base/process/process_metrics.h"
@@ -41,7 +41,7 @@
 #endif
 
 #if defined(OS_LINUX) || defined(OS_ANDROID)
-#include "chrome/app/chrome_breakpad_client.h"
+#include "chrome/app/chrome_crash_reporter_client.h"
 #endif
 
 namespace {
@@ -50,14 +50,15 @@ class ChromeTestLauncherDelegate : public content::TestLauncherDelegate {
  public:
   explicit ChromeTestLauncherDelegate(ChromeTestSuiteRunner* runner)
       : runner_(runner) {}
-  virtual ~ChromeTestLauncherDelegate() {}
+  ~ChromeTestLauncherDelegate() override {}
 
-  virtual int RunTestSuite(int argc, char** argv) OVERRIDE {
+  int RunTestSuite(int argc, char** argv) override {
     return runner_->RunTestSuite(argc, argv);
   }
 
-  virtual bool AdjustChildProcessCommandLine(
-      CommandLine* command_line, const base::FilePath& temp_data_dir) OVERRIDE {
+  bool AdjustChildProcessCommandLine(
+      CommandLine* command_line,
+      const base::FilePath& temp_data_dir) override {
     CommandLine new_command_line(command_line->GetProgram());
     CommandLine::SwitchMap switches = command_line->GetSwitches();
 
@@ -79,11 +80,11 @@ class ChromeTestLauncherDelegate : public content::TestLauncherDelegate {
   }
 
  protected:
-  virtual content::ContentMainDelegate* CreateContentMainDelegate() OVERRIDE {
+  content::ContentMainDelegate* CreateContentMainDelegate() override {
     return new ChromeMainDelegate();
   }
 
-  virtual void AdjustDefaultParallelJobs(int* default_jobs) OVERRIDE {
+  void AdjustDefaultParallelJobs(int* default_jobs) override {
 #if defined(OS_WIN)
     if (CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kAshBrowserTests)) {
@@ -114,10 +115,10 @@ int LaunchChromeTests(int default_jobs,
 #if defined(OS_LINUX) || defined(OS_ANDROID)
   // We leak this pointer intentionally. The breakpad client needs to outlive
   // all other code.
-  chrome::ChromeBreakpadClient* breakpad_client =
-      new chrome::ChromeBreakpadClient();
-  ANNOTATE_LEAKING_OBJECT_PTR(breakpad_client);
-  breakpad::SetBreakpadClient(breakpad_client);
+  chrome::ChromeCrashReporterClient* crash_client =
+      new chrome::ChromeCrashReporterClient();
+  ANNOTATE_LEAKING_OBJECT_PTR(crash_client);
+  crash_reporter::SetCrashReporterClient(crash_client);
 #endif
 
   ChromeTestLauncherDelegate launcher_delegate(runner);

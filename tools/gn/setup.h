@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "tools/gn/build_settings.h"
@@ -90,7 +89,7 @@ class CommonSetup {
 class Setup : public CommonSetup {
  public:
   Setup();
-  virtual ~Setup();
+  ~Setup() override;
 
   // Configures the build for the current command line. On success returns
   // true. On failure, prints the error and returns false.
@@ -98,7 +97,14 @@ class Setup : public CommonSetup {
   // The parameter is the string the user specified for the build directory. We
   // will try to interpret this as a SourceDir if possible, and will fail if is
   // is malformed.
-  bool DoSetup(const std::string& build_dir);
+  //
+  // With force_create = false, setup will fail if the build directory doesn't
+  // alreay exist with an args file in it. With force_create set to true, the
+  // directory will be created if necessary. Commands explicitly doing
+  // generation should set this to true to create it, but querying commands
+  // should set it to false to prevent creating oddly-named directories in case
+  // the user omits the build directory argument (which is easy to do).
+  bool DoSetup(const std::string& build_dir, bool force_create);
 
   // Runs the load, returning true on success. On failure, prints the error
   // and returns false. This includes both RunPreMessageLoop() and
@@ -107,7 +113,7 @@ class Setup : public CommonSetup {
 
   Scheduler& scheduler() { return scheduler_; }
 
-  virtual Scheduler* GetScheduler() OVERRIDE;
+  Scheduler* GetScheduler() override;
 
   // Returns the file used to store the build arguments. Note that the path
   // might not exist.
@@ -139,8 +145,8 @@ class Setup : public CommonSetup {
 
   // Fills the build directory given the value the user has specified.
   // Must happen after FillSourceDir so we can resolve source-relative
-  // paths.
-  bool FillBuildDir(const std::string& build_dir);
+  // paths. If require_exists is false, it will fail if the dir doesn't exist.
+  bool FillBuildDir(const std::string& build_dir, bool require_exists);
 
   // Fills the python path portion of the command line. On failure, sets
   // it to just "python".
@@ -195,14 +201,14 @@ class DependentSetup : public CommonSetup {
   // default copy constructor.
   DependentSetup(Setup* derive_from);
   DependentSetup(DependentSetup* derive_from);
-  virtual ~DependentSetup();
+  ~DependentSetup() override;
 
   // These are the two parts of Run() in the regular setup, not including the
   // call to actually run the message loop.
   void RunPreMessageLoop();
   bool RunPostMessageLoop();
 
-  virtual Scheduler* GetScheduler() OVERRIDE;
+  Scheduler* GetScheduler() override;
 
  private:
   Scheduler* scheduler_;

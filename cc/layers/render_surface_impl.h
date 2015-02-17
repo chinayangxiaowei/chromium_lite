@@ -14,8 +14,8 @@
 #include "cc/layers/layer_lists.h"
 #include "cc/quads/render_pass.h"
 #include "cc/quads/shared_quad_state.h"
-#include "ui/gfx/rect.h"
-#include "ui/gfx/rect_f.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/transform.h"
 
 namespace cc {
@@ -24,6 +24,7 @@ class DamageTracker;
 class DelegatedRendererLayerImpl;
 template <typename LayerType>
 class OcclusionTracker;
+class RenderPassId;
 class RenderPassSink;
 class LayerImpl;
 template <typename LayerType>
@@ -131,14 +132,14 @@ class CC_EXPORT RenderSurfaceImpl {
 
   DamageTracker* damage_tracker() const { return damage_tracker_.get(); }
 
-  RenderPass::Id RenderPassId();
+  RenderPassId GetRenderPassId();
 
   void AppendRenderPasses(RenderPassSink* pass_sink);
   void AppendQuads(RenderPass* render_pass,
                    const OcclusionTracker<LayerImpl>& occlusion_tracker,
                    AppendQuadsData* append_quads_data,
                    bool for_replica,
-                   RenderPass::Id render_pass_id);
+                   RenderPassId render_pass_id);
 
  private:
   LayerImpl* owning_layer_;

@@ -38,7 +38,9 @@
 
 
 import os
+import os.path
 import subprocess
+import sys
 
 
 # Flags from YCM's default config.
@@ -76,40 +78,6 @@ def FindChromeSrcFromFilename(filename):
   return os.path.join(curdir, 'src')
 
 
-# Largely copied from ninja-build.vim (guess_configuration)
-def GetNinjaOutputDirectory(chrome_root):
-  """Returns <chrome_root>/<output_dir>/(Release|Debug).
-
-  The configuration chosen is the one most recently generated/built. Detects
-  a custom output_dir specified by GYP_GENERATOR_FLAGS."""
-
-  output_dir = 'out'
-  generator_flags = os.getenv('GYP_GENERATOR_FLAGS', '').split(' ')
-  for flag in generator_flags:
-    name_value = flag.split('=', 1)
-    if len(name_value) == 2 and name_value[0] == 'output_dir':
-      output_dir = name_value[1]
-
-  root = os.path.join(chrome_root, output_dir)
-  debug_path = os.path.join(root, 'Debug')
-  release_path = os.path.join(root, 'Release')
-
-  def is_release_15s_newer(test_path):
-    try:
-      debug_mtime = os.path.getmtime(os.path.join(debug_path, test_path))
-    except os.error:
-      debug_mtime = 0
-    try:
-      rel_mtime = os.path.getmtime(os.path.join(release_path, test_path))
-    except os.error:
-      rel_mtime = 0
-    return rel_mtime - debug_mtime >= 15
-
-  if is_release_15s_newer('build.ninja') or is_release_15s_newer('protoc'):
-    return release_path
-  return debug_path
-
-
 def GetClangCommandFromNinjaForFilename(chrome_root, filename):
   """Returns the command line to build |filename|.
 
@@ -129,6 +97,12 @@ def GetClangCommandFromNinjaForFilename(chrome_root, filename):
   # Generally, everyone benefits from including Chromium's src/, because all of
   # Chromium's includes are relative to that.
   chrome_flags = ['-I' + os.path.join(chrome_root)]
+
+  # Version of Clang used to compile Chromium can be newer then version of
+  # libclang that YCM uses for completion. So it's possible that YCM's libclang
+  # doesn't know about some used warning options, which causes compilation
+  # warnings (and errors, because of '-Werror');
+  chrome_flags.append('-Wno-unknown-warning-option')
 
   # Default file to get a reasonable approximation of the flags for a Blink
   # file.
@@ -159,12 +133,13 @@ def GetClangCommandFromNinjaForFilename(chrome_root, filename):
         # try to use the default flags.
         return chrome_flags
 
-  # Ninja needs the path to the source file from the output build directory.
-  # Cut off the common part and /.
-  subdir_filename = filename[len(chrome_root)+1:]
-  rel_filename = os.path.join('..', '..', subdir_filename)
+  sys.path.append(os.path.join(chrome_root, 'tools', 'vim'))
+  from ninja_output import GetNinjaOutputDirectory
+  out_dir = os.path.realpath(GetNinjaOutputDirectory(chrome_root))
 
-  out_dir = GetNinjaOutputDirectory(chrome_root)
+  # Ninja needs the path to the source file relative to the output build
+  # directory.
+  rel_filename = os.path.relpath(os.path.realpath(filename), out_dir)
 
   # Ask ninja how it would build our source file.
   p = subprocess.Popen(['ninja', '-v', '-C', out_dir, '-t',

@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * Java mirror of base/command_line.h.
  * Android applications don't have command line arguments. Instead, they're "simulated" by reading a
  * file at a specific location early during startup. Applications each define their own files, e.g.,
- * ContentShellActivity.COMMAND_LINE_FILE or ChromeShellApplication.COMMAND_LINE_FILE.
+ * ContentShellApplication.COMMAND_LINE_FILE or ChromeShellApplication.COMMAND_LINE_FILE.
 **/
 public abstract class CommandLine {
     // Public abstract interface, implemented in derived classes.
@@ -126,6 +126,7 @@ public abstract class CommandLine {
      * Resets both the java proxy and the native command lines. This allows the entire
      * command line initialization to be re-run including the call to onJniLoaded.
      */
+    @VisibleForTesting
     public static void reset() {
         setInstance(null);
     }

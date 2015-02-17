@@ -8,31 +8,24 @@
 #include <map>
 
 #include "base/containers/hash_tables.h"
-#include "base/lazy_instance.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/scoped_observer.h"
 #include "base/threading/non_thread_safe.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
-#include "content/public/browser/notification_service.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
-#include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "extensions/browser/notification_types.h"
+#include "extensions/browser/process_manager.h"
+#include "extensions/browser/process_manager_observer.h"
 #include "extensions/common/extension.h"
 
 namespace extensions {
 
-namespace api {
+namespace core_api {
 class BluetoothSocketApiFunction;
 class BluetoothSocketEventDispatcher;
-}
-
-namespace core_api {
 class SerialEventDispatcher;
 class TCPServerSocketEventDispatcher;
 class TCPSocketEventDispatcher;
@@ -112,18 +105,18 @@ content::BrowserThread::ID TestThreadTraits<T>::thread_id_ =
 // ApiResourceManager<Resource>::GetFactoryInstance() {
 //   return g_factory.Pointer();
 // }
-template <class T, typename ThreadingTraits = NamedThreadTraits<T> >
+template <class T, typename ThreadingTraits = NamedThreadTraits<T>>
 class ApiResourceManager : public BrowserContextKeyedAPI,
                            public base::NonThreadSafe,
-                           public content::NotificationObserver,
-                           public ExtensionRegistryObserver {
+                           public ExtensionRegistryObserver,
+                           public ProcessManagerObserver {
  public:
   explicit ApiResourceManager(content::BrowserContext* context)
-      : data_(new ApiResourceData()), extension_registry_observer_(this) {
+      : data_(new ApiResourceData()),
+        extension_registry_observer_(this),
+        process_manager_observer_(this) {
     extension_registry_observer_.Add(ExtensionRegistry::Get(context));
-    registrar_.Add(this,
-                   extensions::NOTIFICATION_EXTENSION_HOST_DESTROYED,
-                   content::NotificationService::AllSources());
+    process_manager_observer_.Add(ProcessManager::Get(context));
   }
   // For Testing.
   static ApiResourceManager<T, TestThreadTraits<T> >*
@@ -183,20 +176,15 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
   }
 
  protected:
-  // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
-    DCHECK_EQ(extensions::NOTIFICATION_EXTENSION_HOST_DESTROYED, type);
-    ExtensionHost* host = content::Details<ExtensionHost>(details).ptr();
-    data_->InitiateExtensionSuspendedCleanup(host->extension_id());
+  // ProcessManagerObserver:
+  void OnBackgroundHostClose(const std::string& extension_id) override {
+    data_->InitiateExtensionSuspendedCleanup(extension_id);
   }
 
   // ExtensionRegistryObserver:
-  virtual void OnExtensionUnloaded(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      UnloadedExtensionInfo::Reason reason) OVERRIDE {
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionInfo::Reason reason) override {
     data_->InitiateExtensionUnloadedCleanup(extension->id());
   }
 
@@ -204,8 +192,8 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
   // TODO(rockot): ApiResourceData could be moved out of ApiResourceManager and
   // we could avoid maintaining a friends list here.
   friend class BluetoothAPI;
-  friend class api::BluetoothSocketApiFunction;
-  friend class api::BluetoothSocketEventDispatcher;
+  friend class core_api::BluetoothSocketApiFunction;
+  friend class core_api::BluetoothSocketEventDispatcher;
   friend class core_api::SerialEventDispatcher;
   friend class core_api::TCPServerSocketEventDispatcher;
   friend class core_api::TCPSocketEventDispatcher;
@@ -233,12 +221,13 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
         api_resource_map_[id] = resource_ptr;
 
         const std::string& extension_id = api_resource->owner_extension_id();
-        if (extension_resource_map_.find(extension_id) ==
-            extension_resource_map_.end()) {
-          extension_resource_map_[extension_id] = base::hash_set<int>();
+        ExtensionToResourceMap::iterator it =
+            extension_resource_map_.find(extension_id);
+        if (it == extension_resource_map_.end()) {
+          it = extension_resource_map_.insert(
+              std::make_pair(extension_id, base::hash_set<int>())).first;
         }
-        extension_resource_map_[extension_id].insert(id);
-
+        it->second.insert(id);
         return id;
       }
       return 0;
@@ -246,10 +235,10 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
 
     void Remove(const std::string& extension_id, int api_resource_id) {
       DCHECK(ThreadingTraits::IsCalledOnValidThread());
-      if (GetOwnedResource(extension_id, api_resource_id) != NULL) {
-        DCHECK(extension_resource_map_.find(extension_id) !=
-               extension_resource_map_.end());
-        extension_resource_map_[extension_id].erase(api_resource_id);
+      if (GetOwnedResource(extension_id, api_resource_id)) {
+        ExtensionToResourceMap::iterator it =
+            extension_resource_map_.find(extension_id);
+        it->second.erase(api_resource_id);
         api_resource_map_.erase(api_resource_id);
       }
     }
@@ -328,11 +317,11 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
 
     base::hash_set<int>* GetOwnedResourceIds(const std::string& extension_id) {
       DCHECK(ThreadingTraits::IsCalledOnValidThread());
-      if (extension_resource_map_.find(extension_id) ==
-          extension_resource_map_.end())
+      ExtensionToResourceMap::iterator it =
+          extension_resource_map_.find(extension_id);
+      if (it == extension_resource_map_.end())
         return NULL;
-
-      return &extension_resource_map_[extension_id];
+      return &(it->second);
     }
 
     void CleanupResourcesFromUnloadedExtension(
@@ -349,14 +338,14 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
                                        bool remove_all) {
       DCHECK(ThreadingTraits::IsCalledOnValidThread());
 
-      if (extension_resource_map_.find(extension_id) ==
-          extension_resource_map_.end()) {
+      ExtensionToResourceMap::iterator it =
+          extension_resource_map_.find(extension_id);
+      if (it == extension_resource_map_.end())
         return;
-      }
 
       // Remove all resources, or the non persistent ones only if |remove_all|
       // is false.
-      base::hash_set<int>& resource_ids = extension_resource_map_[extension_id];
+      base::hash_set<int>& resource_ids = it->second;
       for (base::hash_set<int>::iterator it = resource_ids.begin();
            it != resource_ids.end();) {
         bool erase = false;
@@ -401,6 +390,8 @@ class ApiResourceManager : public BrowserContextKeyedAPI,
 
   ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observer_;
+  ScopedObserver<ProcessManager, ProcessManagerObserver>
+      process_manager_observer_;
 };
 
 // With WorkerPoolThreadTraits, ApiResourceManager can be used to manage the

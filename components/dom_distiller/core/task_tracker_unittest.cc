@@ -57,7 +57,7 @@ class MockSaveCallback {
 
 class DomDistillerTaskTrackerTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     message_loop_.reset(new base::MessageLoop());
     entry_id_ = "id0";
     page_0_url_ = GURL("http://www.example.com/1");
@@ -154,6 +154,31 @@ TEST_F(DomDistillerTaskTrackerTest, TestViewerNotifiedOnDistillationComplete) {
 
   task_tracker.StartDistiller(&distiller_factory,
                               scoped_ptr<DistillerPage>().Pass());
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(cancel_callback.Cancelled());
+}
+
+TEST_F(DomDistillerTaskTrackerTest, TestDistillerFails) {
+  MockDistillerFactory distiller_factory;
+  FakeDistiller* distiller = new FakeDistiller(false);
+  EXPECT_CALL(distiller_factory, CreateDistillerImpl())
+      .WillOnce(Return(distiller));
+
+  TestCancelCallback cancel_callback;
+  TaskTracker task_tracker(
+      GetDefaultEntry(), cancel_callback.GetCallback(), NULL);
+
+  FakeViewRequestDelegate viewer_delegate;
+  scoped_ptr<ViewerHandle> handle(task_tracker.AddViewer(&viewer_delegate));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_CALL(viewer_delegate, OnArticleReady(_));
+
+  task_tracker.StartDistiller(&distiller_factory,
+                              scoped_ptr<DistillerPage>().Pass());
+  distiller->RunDistillerCallback(
+      scoped_ptr<DistilledArticleProto>(new DistilledArticleProto));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_FALSE(cancel_callback.Cancelled());

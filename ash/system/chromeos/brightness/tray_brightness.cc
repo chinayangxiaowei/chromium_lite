@@ -61,22 +61,22 @@ class BrightnessView : public ShellObserver,
   void SetBrightnessPercent(double percent);
 
   // ShellObserver:
-  virtual void OnMaximizeModeStarted() OVERRIDE;
-  virtual void OnMaximizeModeEnded() OVERRIDE;
+  virtual void OnMaximizeModeStarted() override;
+  virtual void OnMaximizeModeEnded() override;
 
  private:
   // views::View:
-  virtual void OnBoundsChanged(const gfx::Rect& old_bounds) OVERRIDE;
+  virtual void OnBoundsChanged(const gfx::Rect& old_bounds) override;
 
   // views:SliderListener:
   virtual void SliderValueChanged(views::Slider* sender,
                                   float value,
                                   float old_value,
-                                  views::SliderChangeReason reason) OVERRIDE;
+                                  views::SliderChangeReason reason) override;
 
   // views:SliderListener:
-  virtual void SliderDragStarted(views::Slider* slider) OVERRIDE;
-  virtual void SliderDragEnded(views::Slider* slider) OVERRIDE;
+  virtual void SliderDragStarted(views::Slider* slider) override;
+  virtual void SliderDragEnded(views::Slider* slider) override;
 
   views::Slider* slider_;
 
@@ -174,10 +174,10 @@ void BrightnessView::SliderDragEnded(views::Slider* slider) {
 
 TrayBrightness::TrayBrightness(SystemTray* system_tray)
     : SystemTrayItem(system_tray),
-      weak_ptr_factory_(this),
       brightness_view_(NULL),
       current_percent_(100.0),
-      got_current_percent_(false) {
+      got_current_percent_(false),
+      weak_ptr_factory_(this) {
   // Post a task to get the initial brightness; the BrightnessControlDelegate
   // isn't created yet.
   base::MessageLoopForUI::current()->PostTask(

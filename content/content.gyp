@@ -25,7 +25,28 @@
     ['OS != "ios"', {
       'includes': [
         'content_common_mojo_bindings.gypi',
+        'content_resources.gypi',
         '../build/win_precompile.gypi',
+      ],
+    }],
+    ['OS == "win"', {
+      'targets': [
+        {
+          'target_name': 'content_startup_helper_win',
+          'type': 'static_library',
+          'include_dirs': [
+            '..',
+          ],
+          'dependencies': [
+            '../base/base.gyp:base',
+            '../base/base.gyp:base_i18n',
+            '../sandbox/sandbox.gyp:sandbox',
+          ],
+          'sources': [
+            'app/startup_helper_win.cc',
+            'public/app/startup_helper_win.h',
+          ],
+        }
       ],
     }],
     # In component mode, we build all of content as a single DLL.
@@ -129,10 +150,12 @@
           'variables': { 'enable_wexit_time_destructors': 1, },
           'includes': [
             'content_browser.gypi',
+            # Disable LTO due to ELF section name out of range
+            # crbug.com/422251
+            '../build/android/disable_lto.gypi',
           ],
           'dependencies': [
             'content_common',
-            'content_resources.gyp:content_resources',
           ],
           'export_dependent_settings': [
             'content_common',
@@ -149,6 +172,11 @@
                 'content_utility',
               ],
             }],
+            ['OS != "ios"', {
+              'dependencies': [
+                'content_resources',
+              ],
+            }],
           ],
         },
         {
@@ -162,7 +190,7 @@
           'conditions': [
             ['OS != "ios"', {
               'dependencies': [
-                'content_resources.gyp:content_resources',
+                'content_resources',
               ],
             }],
           ],
@@ -182,7 +210,7 @@
                 'content_child.gypi',
               ],
               'dependencies': [
-                'content_resources.gyp:content_resources',
+                'content_resources',
               ],
               # Disable c4267 warnings until we fix size_t to int truncations.
               'msvs_disabled_warnings': [ 4267, ],
@@ -235,7 +263,7 @@
               'dependencies': [
                 'content_child',
                 'content_common',
-                'content_resources.gyp:content_resources',
+                'content_resources',
               ],
               'conditions': [
                 ['chromium_enable_vtune_jit_for_v8==1', {
@@ -270,7 +298,7 @@
           'type': 'shared_library',
           'variables': { 'enable_wexit_time_destructors': 1, },
           'dependencies': [
-           'content_resources.gyp:content_resources',
+            'content_resources',
           ],
           'conditions': [
             ['chromium_enable_vtune_jit_for_v8==1', {
@@ -330,7 +358,7 @@
           # GN version: //content/common and //content/public/common
           'target_name': 'content_common',
           'type': 'none',
-          'dependencies': ['content', 'content_resources.gyp:content_resources'],
+          'dependencies': ['content', 'content_resources'],
           # Disable c4267 warnings until we fix size_t to int truncations.
           'msvs_disabled_warnings': [ 4267, ],
           'export_dependent_settings': ['content'],
@@ -396,7 +424,10 @@
           'type': 'none',
           'dependencies': [
             '../base/base.gyp:base',
+            '../device/battery/battery.gyp:device_battery_java',
             '../media/media.gyp:media_java',
+            '../mojo/mojo_base.gyp:mojo_system_java',
+            '../mojo/public/mojo_public.gyp:mojo_bindings_java',
             '../net/net.gyp:net',
             '../ui/android/ui_android.gyp:ui_java',
             'common_aidl',
@@ -404,7 +435,6 @@
             'content_strings_grd',
             'content_gamepad_mapping',
             'gesture_event_type_java',
-            'page_transition_types_java',
             'popup_item_type_java',
             'result_codes_java',
             'selection_event_type_java',
@@ -422,7 +452,6 @@
             ['android_webview_build == 0', {
               'dependencies': [
                 '../third_party/eyesfree/eyesfree.gyp:eyesfree_java',
-                '../third_party/guava/guava.gyp:guava_javalib',
               ],
             }],
           ],
@@ -441,100 +470,68 @@
           ],
         },
         {
-          'target_name': 'gesture_event_type_java',
+          'target_name': 'content_gamepad_mapping',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/GestureEventType.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/browser',
-            'template_deps': ['browser/android/gesture_event_type_list.h'],
+            'source_file': 'browser/gamepad/gamepad_standard_mappings.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
-          'target_name': 'page_transition_types_java',
+          'target_name': 'gesture_event_type_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/PageTransitionTypes.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/browser',
-            'template_deps': ['public/common/page_transition_types_list.h'],
+            'source_file': 'browser/android/gesture_event_type.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'popup_item_type_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/input/PopupItemType.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/browser/input',
-            'template_deps': ['browser/android/popup_item_type_list.h'],
+            'source_file': 'browser/android/content_view_core_impl.cc',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'result_codes_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/common/ResultCodes.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/common',
-            'template_deps': ['public/common/result_codes_list.h'],
+            'source_file': 'public/common/result_codes.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'selection_event_type_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/input/SelectionEventType.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/browser/input',
-            'template_deps': ['browser/renderer_host/input/selection_event_type_list.h'],
+            'source_file': 'browser/renderer_host/input/selection_event_type.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'speech_recognition_error_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/SpeechRecognitionError.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/browser',
-            'template_deps': ['public/common/speech_recognition_error_list.h'],
+            'source_file': 'public/common/speech_recognition_error.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'top_controls_state_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/common/TopControlsState.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/common',
-            'template_deps': ['public/common/top_controls_state_list.h'],
+            'source_file': 'public/common/top_controls_state.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'screen_orientation_values_java',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/common/ScreenOrientationValues.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/content/common',
-            'template_deps': ['public/common/screen_orientation_values_list.h'],
+            'source_file': 'public/common/screen_orientation_values.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'java_set_jni_headers',
@@ -580,20 +577,21 @@
           ],
         },
         {
-          'target_name': 'content_gamepad_mapping',
+          'target_name': 'content_v8_external_data',
           'type': 'none',
-          'sources': [
-            'public/android/java/src/org/chromium/content/browser/input/CanonicalButtonIndex.template',
-            'public/android/java/src/org/chromium/content/browser/input/CanonicalAxisIndex.template',
+          'conditions': [
+            ['v8_use_external_startup_data==1', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/content_shell/assets',
+                  'files': [
+                    '<(PRODUCT_DIR)/natives_blob.bin',
+                    '<(PRODUCT_DIR)/snapshot_blob.bin',
+                  ],
+                },
+              ],
+            }],
           ],
-          'variables': {
-            'package_name': 'org/chromium/content/browser/input',
-            'template_deps': [
-              'browser/gamepad/canonical_axis_index_list.h',
-              'browser/gamepad/canonical_button_index_list.h',
-            ],
-          },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
         },
       ],
     }],  # OS == "android"

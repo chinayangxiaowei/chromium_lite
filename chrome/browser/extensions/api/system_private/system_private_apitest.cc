@@ -9,7 +9,7 @@
 #include "chrome/common/pref_names.h"
 
 #if defined(OS_CHROMEOS)
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_update_engine_client.h"
 
 using chromeos::UpdateEngineClient;
@@ -29,19 +29,14 @@ class GetUpdateStatusApiTest : public ExtensionApiTest {
  public:
   GetUpdateStatusApiTest() : fake_update_engine_client_(NULL) {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
-    chromeos::FakeDBusThreadManager* fake_dbus_thread_manager =
-        new chromeos::FakeDBusThreadManager;
-    fake_dbus_thread_manager->SetFakeClients();
     fake_update_engine_client_ = new chromeos::FakeUpdateEngineClient;
-    fake_dbus_thread_manager->SetUpdateEngineClient(
+    chromeos::DBusThreadManager::GetSetterForTesting()->SetUpdateEngineClient(
         scoped_ptr<UpdateEngineClient>(fake_update_engine_client_));
-    chromeos::DBusThreadManager::SetInstanceForTesting(
-        fake_dbus_thread_manager);
   }
 
-  virtual void TearDownInProcessBrowserTestFixture() OVERRIDE {
+  virtual void TearDownInProcessBrowserTestFixture() override {
     ExtensionApiTest::TearDownInProcessBrowserTestFixture();
   }
 

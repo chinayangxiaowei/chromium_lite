@@ -55,7 +55,7 @@ class ExtensionKeybindingRegistry : public content::NotificationObserver,
                               ExtensionFilter extension_filter,
                               Delegate* delegate);
 
-  virtual ~ExtensionKeybindingRegistry();
+  ~ExtensionKeybindingRegistry() override;
 
   // Enables/Disables general shortcut handling in Chrome. Implemented in
   // platform-specific ExtensionKeybindingsRegistry* files.
@@ -65,6 +65,9 @@ class ExtensionKeybindingRegistry : public content::NotificationObserver,
   // with |extension_id|, if it exists.
   void ExecuteCommand(const std::string& extension_id,
                       const ui::Accelerator& accelerator);
+
+  // Check whether the specified |accelerator| has been registered.
+  bool IsAcceleratorRegistered(const ui::Accelerator& accelerator) const;
 
  protected:
   // Add extension keybinding for the events defined by the |extension|.
@@ -99,9 +102,6 @@ class ExtensionKeybindingRegistry : public content::NotificationObserver,
   void CommandExecuted(const std::string& extension_id,
                        const std::string& command);
 
-  // Check whether the specified |accelerator| has been registered.
-  bool IsAcceleratorRegistered(const ui::Accelerator& accelerator) const;
-
   // Add event target (extension_id, command name) to the target list of
   // |accelerator|. Note that only media keys can have more than one event
   // target.
@@ -126,17 +126,16 @@ class ExtensionKeybindingRegistry : public content::NotificationObserver,
 
  private:
   // Overridden from content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // ExtensionRegistryObserver implementation.
-  virtual void OnExtensionLoaded(content::BrowserContext* browser_context,
-                                 const Extension* extension) OVERRIDE;
-  virtual void OnExtensionUnloaded(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      UnloadedExtensionInfo::Reason reason) OVERRIDE;
+  void OnExtensionLoaded(content::BrowserContext* browser_context,
+                         const Extension* extension) override;
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionInfo::Reason reason) override;
 
   // Returns true if the |extension| matches our extension filter.
   bool ExtensionMatchesFilter(const extensions::Extension* extension);

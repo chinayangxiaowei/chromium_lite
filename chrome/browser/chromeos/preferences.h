@@ -13,6 +13,7 @@
 #include "base/prefs/pref_member.h"
 #include "chrome/browser/chromeos/language_preferences.h"
 #include "chrome/browser/prefs/pref_service_syncable_observer.h"
+#include "chromeos/ime/input_method_manager.h"
 #include "components/user_manager/user_manager.h"
 
 class PrefRegistrySimple;
@@ -52,10 +53,12 @@ class Preferences : public PrefServiceSyncableObserver,
 
   // This method will initialize Chrome OS settings to values in user prefs.
   // |user| is the user owning this preferences.
-  void Init(PrefServiceSyncable* prefs, const user_manager::User* user);
+  void Init(Profile* profile, const user_manager::User* user);
 
-  void InitUserPrefsForTesting(PrefServiceSyncable* prefs,
-                               const user_manager::User* user);
+  void InitUserPrefsForTesting(
+      PrefServiceSyncable* prefs,
+      const user_manager::User* user,
+      scoped_refptr<input_method::InputMethodManager::State> ime_state);
   void SetInputMethodListForTesting();
 
  private:
@@ -98,14 +101,16 @@ class Preferences : public PrefServiceSyncableObserver,
   void ForceNaturalScrollDefault();
 
   // PrefServiceSyncableObserver implementation.
-  virtual void OnIsSyncingChanged() OVERRIDE;
+  virtual void OnIsSyncingChanged() override;
 
   // Overriden from ash::ShellObserver.
-  virtual void OnTouchHudProjectionToggled(bool enabled) OVERRIDE;
+  virtual void OnTouchHudProjectionToggled(bool enabled) override;
 
   // Overriden form user_manager::UserManager::UserSessionStateObserver.
   virtual void ActiveUserChanged(
-      const user_manager::User* active_user) OVERRIDE;
+      const user_manager::User* active_user) override;
+
+  void ActivateInputMethods(const user_manager::User* active_user);
 
   PrefServiceSyncable* prefs_;
 
@@ -140,6 +145,9 @@ class Preferences : public PrefServiceSyncableObserver,
 
   // Whether user is a primary user.
   bool user_is_primary_;
+
+  // Input Methods state for this user.
+  scoped_refptr<input_method::InputMethodManager::State> ime_state_;
 
   DISALLOW_COPY_AND_ASSIGN(Preferences);
 };

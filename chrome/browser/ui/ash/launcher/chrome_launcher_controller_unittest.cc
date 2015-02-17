@@ -47,11 +47,9 @@
 #include "ui/base/models/menu_model.h"
 
 #if defined(OS_CHROMEOS)
-#include "apps/app_window_contents.h"
-#include "apps/app_window_registry.h"
-#include "apps/ui/native_app_window.h"
 #include "ash/test/test_session_state_delegate.h"
 #include "ash/test/test_shell_delegate.h"
+#include "chrome/browser/apps/scoped_keep_alive.h"
 #include "chrome/browser/chromeos/login/users/fake_user_manager.h"
 #include "chrome/browser/chromeos/login/users/scoped_user_manager_enabler.h"
 #include "chrome/browser/ui/apps/chrome_app_delegate.h"
@@ -66,6 +64,9 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/app_window/app_window_contents.h"
+#include "extensions/browser/app_window/app_window_registry.h"
+#include "extensions/browser/app_window/native_app_window.h"
 #include "ui/aura/window.h"
 #endif
 
@@ -80,9 +81,6 @@ const char* gmail_url = "https://mail.google.com/mail/u";
 const char* kGmailLaunchURL = "https://mail.google.com/mail/ca";
 
 #if defined(OS_CHROMEOS)
-// As defined in /chromeos/dbus/cryptohome_client.cc.
-const char kUserIdHashSuffix[] = "-hash";
-
 // An extension prefix.
 const char kCrxAppPrefix[] = "_crx_";
 #endif
@@ -96,32 +94,29 @@ class TestShelfModelObserver : public ash::ShelfModelObserver {
       changed_(0) {
   }
 
-  virtual ~TestShelfModelObserver() {
-  }
+  ~TestShelfModelObserver() override {}
 
   // Overridden from ash::ShelfModelObserver:
-  virtual void ShelfItemAdded(int index) OVERRIDE {
+  void ShelfItemAdded(int index) override {
     ++added_;
     last_index_ = index;
   }
 
-  virtual void ShelfItemRemoved(int index, ash::ShelfID id) OVERRIDE {
+  void ShelfItemRemoved(int index, ash::ShelfID id) override {
     ++removed_;
     last_index_ = index;
   }
 
-  virtual void ShelfItemChanged(int index,
-                                const ash::ShelfItem& old_item) OVERRIDE {
+  void ShelfItemChanged(int index, const ash::ShelfItem& old_item) override {
     ++changed_;
     last_index_ = index;
   }
 
-  virtual void ShelfItemMoved(int start_index, int target_index) OVERRIDE {
+  void ShelfItemMoved(int start_index, int target_index) override {
     last_index_ = target_index;
   }
 
-  virtual void ShelfStatusChanged() OVERRIDE {
-  }
+  void ShelfStatusChanged() override {}
 
   void clear_counts() {
     added_ = 0;
@@ -150,19 +145,14 @@ class TestAppIconLoaderImpl : public extensions::AppIconLoader {
   TestAppIconLoaderImpl() : fetch_count_(0) {
   }
 
-  virtual ~TestAppIconLoaderImpl() {
-  }
+  ~TestAppIconLoaderImpl() override {}
 
   // AppIconLoader implementation:
-  virtual void FetchImage(const std::string& id) OVERRIDE {
-    ++fetch_count_;
-  }
+  void FetchImage(const std::string& id) override { ++fetch_count_; }
 
-  virtual void ClearImage(const std::string& id) OVERRIDE {
-  }
+  void ClearImage(const std::string& id) override {}
 
-  virtual void UpdateImage(const std::string& id) OVERRIDE {
-  }
+  void UpdateImage(const std::string& id) override {}
 
   int fetch_count() const { return fetch_count_; }
 
@@ -176,7 +166,7 @@ class TestAppIconLoaderImpl : public extensions::AppIconLoader {
 class TestAppTabHelperImpl : public ChromeLauncherController::AppTabHelper {
  public:
   TestAppTabHelperImpl() {}
-  virtual ~TestAppTabHelperImpl() {}
+  ~TestAppTabHelperImpl() override {}
 
   // Sets the id for the specified tab. The id is removed if Remove() is
   // invoked.
@@ -190,12 +180,12 @@ class TestAppTabHelperImpl : public ChromeLauncherController::AppTabHelper {
   }
 
   // AppTabHelper implementation:
-  virtual std::string GetAppID(content::WebContents* tab) OVERRIDE {
+  std::string GetAppID(content::WebContents* tab) override {
     return tab_id_map_.find(tab) != tab_id_map_.end() ? tab_id_map_[tab] :
         std::string();
   }
 
-  virtual bool IsValidIDForCurrentUser(const std::string& id) OVERRIDE {
+  bool IsValidIDForCurrentUser(const std::string& id) override {
     for (TabToStringMap::const_iterator i = tab_id_map_.begin();
          i != tab_id_map_.end(); ++i) {
       if (i->second == id)
@@ -204,7 +194,7 @@ class TestAppTabHelperImpl : public ChromeLauncherController::AppTabHelper {
     return false;
   }
 
-  virtual void SetCurrentUser(Profile* profile) OVERRIDE {
+  void SetCurrentUser(Profile* profile) override {
     // We can ignore this for now.
   }
 
@@ -226,18 +216,17 @@ class TestV2AppLauncherItemController : public LauncherItemController {
                                controller) {
   }
 
-  virtual ~TestV2AppLauncherItemController() {}
+  ~TestV2AppLauncherItemController() override {}
 
   // Override for LauncherItemController:
-  virtual bool IsOpen() const OVERRIDE { return true; }
-  virtual bool IsVisible() const OVERRIDE { return true; }
-  virtual void Launch(ash::LaunchSource source, int event_flags) OVERRIDE {}
-  virtual bool Activate(ash::LaunchSource source) OVERRIDE { return false; }
-  virtual void Close() OVERRIDE {}
-  virtual bool ItemSelected(const ui::Event& event) OVERRIDE { return false; }
-  virtual base::string16 GetTitle() OVERRIDE { return base::string16(); }
-  virtual ChromeLauncherAppMenuItems GetApplicationList(
-      int event_flags) OVERRIDE {
+  bool IsOpen() const override { return true; }
+  bool IsVisible() const override { return true; }
+  void Launch(ash::LaunchSource source, int event_flags) override {}
+  bool Activate(ash::LaunchSource source) override { return false; }
+  void Close() override {}
+  bool ItemSelected(const ui::Event& event) override { return false; }
+  base::string16 GetTitle() override { return base::string16(); }
+  ChromeLauncherAppMenuItems GetApplicationList(int event_flags) override {
     ChromeLauncherAppMenuItems items;
     items.push_back(
         new ChromeLauncherAppMenuItem(base::string16(), NULL, false));
@@ -245,14 +234,14 @@ class TestV2AppLauncherItemController : public LauncherItemController {
         new ChromeLauncherAppMenuItem(base::string16(), NULL, false));
     return items.Pass();
   }
-  virtual ui::MenuModel* CreateContextMenu(aura::Window* root_window) OVERRIDE {
+  ui::MenuModel* CreateContextMenu(aura::Window* root_window) override {
     return NULL;
   }
-  virtual ash::ShelfMenuModel* CreateApplicationMenu(int event_flags) OVERRIDE {
+  ash::ShelfMenuModel* CreateApplicationMenu(int event_flags) override {
     return NULL;
   }
-  virtual bool IsDraggable() OVERRIDE { return false; }
-  virtual bool ShouldShowTooltip() OVERRIDE { return false; }
+  bool IsDraggable() override { return false; }
+  bool ShouldShowTooltip() override { return false; }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestV2AppLauncherItemController);
@@ -271,10 +260,9 @@ class ChromeLauncherControllerTest : public BrowserWithTestWindowTest {
         extension_service_(NULL) {
   }
 
-  virtual ~ChromeLauncherControllerTest() {
-  }
+  ~ChromeLauncherControllerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
 
     model_.reset(new ash::ShelfModel);
@@ -413,7 +401,7 @@ class ChromeLauncherControllerTest : public BrowserWithTestWindowTest {
     InsertPrefValue(user_b, 1, extension8_->id());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     if (!ash::Shell::HasInstance())
       delete item_delegate_manager_;
     model_->RemoveObserver(model_observer_.get());
@@ -632,7 +620,7 @@ class TestBrowserWindowAura : public TestBrowserWindow {
   }
   virtual ~TestBrowserWindowAura() {}
 
-  virtual gfx::NativeWindow GetNativeWindow() OVERRIDE {
+  virtual gfx::NativeWindow GetNativeWindow() const override {
     return native_window_.get();
   }
 
@@ -685,7 +673,7 @@ class WebContentsDestroyedWatcher : public content::WebContentsObserver {
 
  private:
   // Overridden WebContentsObserver methods.
-  virtual void WebContentsDestroyed() OVERRIDE {
+  virtual void WebContentsDestroyed() override {
     message_loop_runner_->Quit();
   }
 
@@ -726,7 +714,7 @@ class V1App : public TestBrowserWindow {
   Browser* browser() { return browser_.get(); }
 
   // TestBrowserWindow override:
-  virtual gfx::NativeWindow GetNativeWindow() OVERRIDE {
+  virtual gfx::NativeWindow GetNativeWindow() const override {
     return native_window_.get();
   }
 
@@ -745,10 +733,14 @@ class V1App : public TestBrowserWindow {
 class V2App {
  public:
   V2App(Profile* profile, const extensions::Extension* extension) {
-    window_ = new apps::AppWindow(profile, new ChromeAppDelegate(), extension);
-    apps::AppWindow::CreateParams params = apps::AppWindow::CreateParams();
-    window_->Init(
-        GURL(std::string()), new apps::AppWindowContentsImpl(window_), params);
+    window_ = new extensions::AppWindow(
+        profile,
+        new ChromeAppDelegate(make_scoped_ptr(new ScopedKeepAlive)),
+        extension);
+    extensions::AppWindow::CreateParams params =
+        extensions::AppWindow::CreateParams();
+    window_->Init(GURL(std::string()),
+                  new extensions::AppWindowContentsImpl(window_), params);
   }
 
   virtual ~V2App() {
@@ -757,13 +749,13 @@ class V2App {
     destroyed_watcher.Wait();
   }
 
-  apps::AppWindow* window() { return window_; }
+  extensions::AppWindow* window() { return window_; }
 
  private:
   // The app window which represents the application. Note that the window
   // deletes itself asynchronously after window_->GetBaseWindow()->Close() gets
   // called.
-  apps::AppWindow* window_;
+  extensions::AppWindow* window_;
 
   DISALLOW_COPY_AND_ASSIGN(V2App);
 };
@@ -779,7 +771,7 @@ class MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest
   }
 
   // Overwrite the Setup function to enable multi profile and needed objects.
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     profile_manager_.reset(
         new TestingProfileManager(TestingBrowserProcess::GetGlobal()));
 
@@ -827,22 +819,14 @@ class MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest
     session_delegate()->AddUser(email_string);
     GetFakeUserManager()->AddUser(email_string);
 
-    GetFakeUserManager()->UserLoggedIn(
-        email_string,
-        email_string + kUserIdHashSuffix,
-        false);
+    GetFakeUserManager()->LoginUser(email_string);
 
-    std::string profile_name =
-        chrome::kProfileDirPrefix + email_string + kUserIdHashSuffix;
-    TestingProfile* profile = profile_manager()->CreateTestingProfile(
-        profile_name,
-        scoped_ptr<PrefServiceSyncable>(),
-        ASCIIToUTF16(email_string), 0, std::string(),
-        TestingProfile::TestingFactories());
-    profile->set_profile_name(email_string);
+    TestingProfile* profile =
+        profile_manager()->CreateTestingProfile(email_string);
     EXPECT_TRUE(profile);
+
     // Remember the profile name so that we can destroy it upon destruction.
-    created_profiles_[profile] = profile_name;
+    created_profiles_[profile] = email_string;
     if (chrome::MultiUserWindowManager::GetInstance())
       chrome::MultiUserWindowManager::GetInstance()->AddUser(profile);
     if (launcher_controller_)
@@ -909,10 +893,10 @@ class MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest
   ash::test::TestShellDelegate* shell_delegate() { return shell_delegate_; }
 
   // Override BrowserWithTestWindowTest:
-  virtual TestingProfile* CreateProfile() OVERRIDE {
+  virtual TestingProfile* CreateProfile() override {
     return CreateMultiUserProfile("user1");
   }
-  virtual void DestroyProfile(TestingProfile* profile) OVERRIDE {
+  virtual void DestroyProfile(TestingProfile* profile) override {
     // Delete the profile through our profile manager.
     ProfileToNameMap::iterator it = created_profiles_.find(profile);
     DCHECK(it != created_profiles_.end());
@@ -2189,7 +2173,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   EXPECT_EQ(2, model_->item_count());
 
   // Add a v2 app.
-  V2App v2_app(profile(), extension1_);
+  V2App v2_app(profile(), extension1_.get());
   EXPECT_EQ(3, model_->item_count());
 
   // After switching users the item should go away.
@@ -2219,7 +2203,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   // Add the v2 app to the inactive user and check that no item was added to
   // the launcher.
   {
-    V2App v2_app(profile(), extension1_);
+    V2App v2_app(profile(), extension1_.get());
     EXPECT_EQ(2, model_->item_count());
 
     // Switch to the primary user and check that the item is shown.
@@ -2257,13 +2241,13 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
 
   // A v2 app for user #1 should be shown first and get hidden when switching to
   // desktop #2.
-  V2App v2_app_1(profile1, extension1_);
+  V2App v2_app_1(profile1, extension1_.get());
   EXPECT_TRUE(v2_app_1.window()->GetNativeWindow()->IsVisible());
   SwitchActiveUser(profile2->GetProfileName());
   EXPECT_FALSE(v2_app_1.window()->GetNativeWindow()->IsVisible());
 
   // Add a v2 app for user #1 while on desktop #2 should not be shown.
-  V2App v2_app_2(profile1, extension1_);
+  V2App v2_app_2(profile1, extension1_.get());
   EXPECT_FALSE(v2_app_1.window()->GetNativeWindow()->IsVisible());
   EXPECT_FALSE(v2_app_2.window()->GetNativeWindow()->IsVisible());
 
@@ -2275,7 +2259,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
 
   // Creating a new application for user #1 on desktop #2 should teleport it
   // there automatically.
-  V2App v2_app_3(profile1, extension1_);
+  V2App v2_app_3(profile1, extension1_.get());
   EXPECT_TRUE(v2_app_1.window()->GetNativeWindow()->IsVisible());
   EXPECT_FALSE(v2_app_2.window()->GetNativeWindow()->IsVisible());
   EXPECT_TRUE(v2_app_3.window()->GetNativeWindow()->IsVisible());
@@ -2283,7 +2267,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   // Switching back to desktop#1 and creating an app for user #1 should move
   // the app on desktop #1.
   SwitchActiveUser(profile1->GetProfileName());
-  V2App v2_app_4(profile1, extension1_);
+  V2App v2_app_4(profile1, extension1_.get());
   EXPECT_FALSE(v2_app_1.window()->GetNativeWindow()->IsVisible());
   EXPECT_TRUE(v2_app_2.window()->GetNativeWindow()->IsVisible());
   EXPECT_FALSE(v2_app_3.window()->GetNativeWindow()->IsVisible());
@@ -2292,7 +2276,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   // Switching to desktop #3 and create an app for user #1 there should land on
   // his own desktop (#1).
   SwitchActiveUser(profile3->GetProfileName());
-  V2App v2_app_5(profile1, extension1_);
+  V2App v2_app_5(profile1, extension1_.get());
   EXPECT_FALSE(v2_app_5.window()->GetNativeWindow()->IsVisible());
   SwitchActiveUser(profile1->GetProfileName());
   EXPECT_TRUE(v2_app_5.window()->GetNativeWindow()->IsVisible());
@@ -2301,7 +2285,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   // teleport there automatically.
   SwitchActiveUser(profile2->GetProfileName());
   v2_app_1.window()->Hide();
-  V2App v2_app_6(profile1, extension1_);
+  V2App v2_app_6(profile1, extension1_.get());
   EXPECT_FALSE(v2_app_1.window()->GetNativeWindow()->IsVisible());
   EXPECT_FALSE(v2_app_2.window()->GetNativeWindow()->IsVisible());
   EXPECT_TRUE(v2_app_6.window()->GetNativeWindow()->IsVisible());
@@ -2317,14 +2301,14 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
   SwitchActiveUser(profile()->GetProfileName());
   EXPECT_EQ(2, model_->item_count());
 
-  V2App v2_app_1(profile(), extension1_);
+  V2App v2_app_1(profile(), extension1_.get());
   EXPECT_EQ(3, model_->item_count());
   {
     // Hide and show the app.
     v2_app_1.window()->Hide();
     EXPECT_EQ(2, model_->item_count());
 
-    v2_app_1.window()->Show(apps::AppWindow::SHOW_ACTIVE);
+    v2_app_1.window()->Show(extensions::AppWindow::SHOW_ACTIVE);
     EXPECT_EQ(3, model_->item_count());
   }
   {
@@ -2335,7 +2319,7 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
     v2_app_1.window()->Hide();
     EXPECT_EQ(2, model_->item_count());
 
-    v2_app_1.window()->Show(apps::AppWindow::SHOW_ACTIVE);
+    v2_app_1.window()->Show(extensions::AppWindow::SHOW_ACTIVE);
     EXPECT_EQ(2, model_->item_count());
 
     SwitchActiveUser(profile()->GetProfileName());
@@ -2352,18 +2336,18 @@ TEST_F(MultiProfileMultiBrowserShelfLayoutChromeLauncherControllerTest,
     SwitchActiveUser(profile()->GetProfileName());
     EXPECT_EQ(2, model_->item_count());
 
-    v2_app_1.window()->Show(apps::AppWindow::SHOW_ACTIVE);
+    v2_app_1.window()->Show(extensions::AppWindow::SHOW_ACTIVE);
     EXPECT_EQ(3, model_->item_count());
   }
   {
     // Create a second app, hide and show it and then hide both apps.
-    V2App v2_app_2(profile(), extension1_);
+    V2App v2_app_2(profile(), extension1_.get());
     EXPECT_EQ(3, model_->item_count());
 
     v2_app_2.window()->Hide();
     EXPECT_EQ(3, model_->item_count());
 
-    v2_app_2.window()->Show(apps::AppWindow::SHOW_ACTIVE);
+    v2_app_2.window()->Show(extensions::AppWindow::SHOW_ACTIVE);
     EXPECT_EQ(3, model_->item_count());
 
     v2_app_1.window()->Hide();

@@ -9,13 +9,16 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_stats.h"
+#include "chrome/browser/extensions/api/experience_sampling_private/experience_sampling.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/download_danger_type.h"
 #include "content/public/browser/download_item.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+
+using extensions::ExperienceSamplingEvent;
 
 namespace {
 
@@ -32,29 +35,31 @@ class DownloadDangerPromptImpl : public DownloadDangerPrompt,
                            content::WebContents* web_contents,
                            bool show_context,
                            const OnDone& done);
-  virtual ~DownloadDangerPromptImpl();
+  ~DownloadDangerPromptImpl() override;
 
   // DownloadDangerPrompt:
-  virtual void InvokeActionForTesting(Action action) OVERRIDE;
+  void InvokeActionForTesting(Action action) override;
 
  private:
   // content::DownloadItem::Observer:
-  virtual void OnDownloadUpdated(content::DownloadItem* download) OVERRIDE;
+  void OnDownloadUpdated(content::DownloadItem* download) override;
 
   // TabModalConfirmDialogDelegate:
-  virtual base::string16 GetTitle() OVERRIDE;
-  virtual base::string16 GetDialogMessage() OVERRIDE;
-  virtual base::string16 GetAcceptButtonTitle() OVERRIDE;
-  virtual base::string16 GetCancelButtonTitle() OVERRIDE;
-  virtual void OnAccepted() OVERRIDE;
-  virtual void OnCanceled() OVERRIDE;
-  virtual void OnClosed() OVERRIDE;
+  base::string16 GetTitle() override;
+  base::string16 GetDialogMessage() override;
+  base::string16 GetAcceptButtonTitle() override;
+  base::string16 GetCancelButtonTitle() override;
+  void OnAccepted() override;
+  void OnCanceled() override;
+  void OnClosed() override;
 
   void RunDone(Action action);
 
   content::DownloadItem* download_;
   bool show_context_;
   OnDone done_;
+
+  scoped_ptr<ExperienceSamplingEvent> sampling_event_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadDangerPromptImpl);
 };
@@ -71,6 +76,14 @@ DownloadDangerPromptImpl::DownloadDangerPromptImpl(
   DCHECK(!done_.is_null());
   download_->AddObserver(this);
   RecordOpenedDangerousConfirmDialog(download_->GetDangerType());
+
+  // ExperienceSampling: A malicious download warning is being shown to the
+  // user, so we start a new SamplingEvent and track it.
+  sampling_event_.reset(new ExperienceSamplingEvent(
+      ExperienceSamplingEvent::kDownloadDangerPrompt,
+      download->GetURL(),
+      download->GetReferrerUrl(),
+      download->GetBrowserContext()));
 }
 
 DownloadDangerPromptImpl::~DownloadDangerPromptImpl() {
@@ -203,14 +216,20 @@ base::string16 DownloadDangerPromptImpl::GetCancelButtonTitle() {
 }
 
 void DownloadDangerPromptImpl::OnAccepted() {
+  // ExperienceSampling: User proceeded through the warning.
+  sampling_event_->CreateUserDecisionEvent(ExperienceSamplingEvent::kProceed);
   RunDone(ACCEPT);
 }
 
 void DownloadDangerPromptImpl::OnCanceled() {
+  // ExperienceSampling: User canceled the warning.
+  sampling_event_->CreateUserDecisionEvent(ExperienceSamplingEvent::kDeny);
   RunDone(CANCEL);
 }
 
 void DownloadDangerPromptImpl::OnClosed() {
+  // ExperienceSampling: User canceled the warning.
+  sampling_event_->CreateUserDecisionEvent(ExperienceSamplingEvent::kDeny);
   RunDone(DISMISS);
 }
 

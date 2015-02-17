@@ -5,20 +5,24 @@
 #ifndef TOOLS_GN_NINJA_COPY_TARGET_WRITER_H_
 #define TOOLS_GN_NINJA_COPY_TARGET_WRITER_H_
 
-#include "base/compiler_specific.h"
+#include "base/macros.h"
 #include "tools/gn/ninja_target_writer.h"
+
+class Tool;
 
 // Writes a .ninja file for a copy target type.
 class NinjaCopyTargetWriter : public NinjaTargetWriter {
  public:
-  NinjaCopyTargetWriter(const Target* target,
-                        const Toolchain* toolchain,
-                        std::ostream& out);
-  virtual ~NinjaCopyTargetWriter();
+  NinjaCopyTargetWriter(const Target* target, std::ostream& out);
+  ~NinjaCopyTargetWriter() override;
 
-  virtual void Run() OVERRIDE;
+  void Run() override;
 
  private:
+  // Writes the rules top copy the file(s), putting the computed output file
+  // name(s) into the given vector.
+  void WriteCopyRules(std::vector<OutputFile>* output_files);
+
   DISALLOW_COPY_AND_ASSIGN(NinjaCopyTargetWriter);
 };
 

@@ -4,36 +4,21 @@
 
 #include "cc/output/output_surface.h"
 
-#include <algorithm>
-#include <set>
-#include <string>
-#include <vector>
-
 #include "base/bind.h"
 #include "base/debug/trace_event.h"
-#include "base/logging.h"
 #include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
-#include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
-#include "cc/output/compositor_frame.h"
-#include "cc/output/compositor_frame_ack.h"
 #include "cc/output/managed_memory_policy.h"
 #include "cc/output/output_surface_client.h"
-#include "cc/scheduler/delay_based_time_source.h"
-#include "gpu/command_buffer/client/context_support.h"
+#include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
-#include "ui/gfx/frame_time.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
-using std::set;
-using std::string;
-using std::vector;
 
 namespace cc {
 
-OutputSurface::OutputSurface(scoped_refptr<ContextProvider> context_provider)
+OutputSurface::OutputSurface(
+    const scoped_refptr<ContextProvider>& context_provider)
     : client_(NULL),
       context_provider_(context_provider),
       device_scale_factor_(-1),
@@ -49,8 +34,9 @@ OutputSurface::OutputSurface(scoped_ptr<SoftwareOutputDevice> software_device)
       weak_ptr_factory_(this) {
 }
 
-OutputSurface::OutputSurface(scoped_refptr<ContextProvider> context_provider,
-                             scoped_ptr<SoftwareOutputDevice> software_device)
+OutputSurface::OutputSurface(
+    const scoped_refptr<ContextProvider>& context_provider,
+    scoped_ptr<SoftwareOutputDevice> software_device)
     : client_(NULL),
       context_provider_(context_provider),
       software_device_(software_device.Pass()),
@@ -117,7 +103,7 @@ bool OutputSurface::BindToClient(OutputSurfaceClient* client) {
   client_ = client;
   bool success = true;
 
-  if (context_provider_) {
+  if (context_provider_.get()) {
     success = context_provider_->BindToCurrentThread();
     if (success)
       SetUpContext3d();
@@ -131,8 +117,8 @@ bool OutputSurface::BindToClient(OutputSurfaceClient* client) {
 
 bool OutputSurface::InitializeAndSetContext3d(
     scoped_refptr<ContextProvider> context_provider) {
-  DCHECK(!context_provider_);
-  DCHECK(context_provider);
+  DCHECK(!context_provider_.get());
+  DCHECK(context_provider.get());
   DCHECK(client_);
 
   bool success = false;
@@ -151,20 +137,17 @@ bool OutputSurface::InitializeAndSetContext3d(
 
 void OutputSurface::ReleaseGL() {
   DCHECK(client_);
-  DCHECK(context_provider_);
+  DCHECK(context_provider_.get());
   client_->ReleaseGL();
-  DCHECK(!context_provider_);
+  DCHECK(!context_provider_.get());
 }
 
 void OutputSurface::SetUpContext3d() {
-  DCHECK(context_provider_);
+  DCHECK(context_provider_.get());
   DCHECK(client_);
 
   context_provider_->SetLostContextCallback(
       base::Bind(&OutputSurface::DidLoseOutputSurface,
-                 base::Unretained(this)));
-  context_provider_->ContextSupport()->SetSwapBuffersCompleteCallback(
-      base::Bind(&OutputSurface::OnSwapBuffersComplete,
                  base::Unretained(this)));
   context_provider_->SetMemoryPolicyChangedCallback(
       base::Bind(&OutputSurface::SetMemoryPolicy,
@@ -173,7 +156,7 @@ void OutputSurface::SetUpContext3d() {
 
 void OutputSurface::ReleaseContextProvider() {
   DCHECK(client_);
-  DCHECK(context_provider_);
+  DCHECK(context_provider_.get());
   ResetContext3d();
 }
 
@@ -183,8 +166,6 @@ void OutputSurface::ResetContext3d() {
         ContextProvider::LostContextCallback());
     context_provider_->SetMemoryPolicyChangedCallback(
         ContextProvider::MemoryPolicyChangedCallback());
-    if (gpu::ContextSupport* support = context_provider_->ContextSupport())
-      support->SetSwapBuffersCompleteCallback(base::Closure());
   }
   context_provider_ = NULL;
 }
@@ -195,7 +176,7 @@ void OutputSurface::EnsureBackbuffer() {
 }
 
 void OutputSurface::DiscardBackbuffer() {
-  if (context_provider_)
+  if (context_provider_.get())
     context_provider_->ContextGL()->DiscardBackbufferCHROMIUM();
   if (software_device_)
     software_device_->DiscardBackbuffer();
@@ -207,7 +188,7 @@ void OutputSurface::Reshape(const gfx::Size& size, float scale_factor) {
 
   surface_size_ = size;
   device_scale_factor_ = scale_factor;
-  if (context_provider_) {
+  if (context_provider_.get()) {
     context_provider_->ContextGL()->ResizeCHROMIUM(
         size.width(), size.height(), scale_factor);
   }
@@ -220,29 +201,8 @@ gfx::Size OutputSurface::SurfaceSize() const {
 }
 
 void OutputSurface::BindFramebuffer() {
-  DCHECK(context_provider_);
+  DCHECK(context_provider_.get());
   context_provider_->ContextGL()->BindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void OutputSurface::SwapBuffers(CompositorFrame* frame) {
-  if (frame->software_frame_data) {
-    PostSwapBuffersComplete();
-    client_->DidSwapBuffers();
-    return;
-  }
-
-  DCHECK(context_provider_);
-  DCHECK(frame->gl_frame_data);
-
-  if (frame->gl_frame_data->sub_buffer_rect ==
-      gfx::Rect(frame->gl_frame_data->size)) {
-    context_provider_->ContextSupport()->Swap();
-  } else {
-    context_provider_->ContextSupport()->PartialSwapBuffers(
-        frame->gl_frame_data->sub_buffer_rect);
-  }
-
-  client_->DidSwapBuffers();
 }
 
 void OutputSurface::PostSwapBuffersComplete() {

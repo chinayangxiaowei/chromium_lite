@@ -2,43 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Namespace for utility functions.
  */
 var util = {};
-
-/**
- * Returns a function that console.log's its arguments, prefixed by |msg|.
- *
- * @param {string} msg The message prefix to use in the log.
- * @param {function(...string)=} opt_callback A function to invoke after
- *     logging.
- * @return {function(...string)} Function that logs.
- */
-util.flog = function(msg, opt_callback) {
-  return function() {
-    var ary = Array.apply(null, arguments);
-    console.log(msg + ': ' + ary.join(', '));
-    if (opt_callback)
-      opt_callback.apply(null, arguments);
-  };
-};
-
-/**
- * Returns a function that throws an exception that includes its arguments
- * prefixed by |msg|.
- *
- * @param {string} msg The message prefix to use in the exception.
- * @return {function(...string)} Function that throws.
- */
-util.ferr = function(msg) {
-  return function() {
-    var ary = Array.apply(null, arguments);
-    throw new Error(msg + ': ' + ary.join(', '));
-  };
-};
 
 /**
  * @param {string} name File error name.
@@ -83,7 +50,7 @@ util.getFileErrorString = function(name) {
  * @enum {string}
  * @const
  */
-util.FileError = Object.freeze({
+util.FileError = {
   ABORT_ERR: 'AbortError',
   INVALID_MODIFICATION_ERR: 'InvalidModificationError',
   INVALID_STATE_ERR: 'InvalidStateError',
@@ -94,7 +61,8 @@ util.FileError = Object.freeze({
   QUOTA_EXCEEDED_ERR: 'QuotaExceededError',
   TYPE_MISMATCH_ERR: 'TypeMismatchError',
   ENCODING_ERR: 'EncodingError',
-});
+};
+Object.freeze(util.FileError);
 
 /**
  * @param {string} str String to escape.
@@ -125,174 +93,18 @@ util.htmlUnescape = function(str) {
 };
 
 /**
- * Iterates the entries contained by dirEntry, and invokes callback once for
- * each entry. On completion, successCallback will be invoked.
- *
- * @param {DirectoryEntry} dirEntry The entry of the directory.
- * @param {function(Entry, function())} callback Invoked for each entry.
- * @param {function()} successCallback Invoked on completion.
- * @param {function(FileError)} errorCallback Invoked if an error is found on
- *     directory entry reading.
- */
-util.forEachDirEntry = function(
-    dirEntry, callback, successCallback, errorCallback) {
-  var reader = dirEntry.createReader();
-  var iterate = function() {
-    reader.readEntries(function(entries) {
-      if (entries.length == 0) {
-        successCallback();
-        return;
-      }
-
-      AsyncUtil.forEach(
-          entries,
-          function(forEachCallback, entry) {
-            // Do not pass index nor entries.
-            callback(entry, forEachCallback);
-          },
-          iterate);
-    }, errorCallback);
-  };
-  iterate();
-};
-
-/**
- * Reads contents of directory.
- * @param {DirectoryEntry} root Root entry.
- * @param {string} path Directory path.
- * @param {function(Array.<Entry>)} callback List of entries passed to callback.
- */
-util.readDirectory = function(root, path, callback) {
-  var onError = function(e) {
-    callback([], e);
-  };
-  root.getDirectory(path, {create: false}, function(entry) {
-    var reader = entry.createReader();
-    var r = [];
-    var readNext = function() {
-      reader.readEntries(function(results) {
-        if (results.length == 0) {
-          callback(r, null);
-          return;
-        }
-        r.push.apply(r, results);
-        readNext();
-      }, onError);
-    };
-    readNext();
-  }, onError);
-};
-
-/**
- * Utility function to resolve multiple directories with a single call.
- *
- * The successCallback will be invoked once for each directory object
- * found.  The errorCallback will be invoked once for each
- * path that could not be resolved.
- *
- * The successCallback is invoked with a null entry when all paths have
- * been processed.
- *
- * @param {DirEntry} dirEntry The base directory.
- * @param {Object} params The parameters to pass to the underlying
- *     getDirectory calls.
- * @param {Array.<string>} paths The list of directories to resolve.
- * @param {function(!DirEntry)} successCallback The function to invoke for
- *     each DirEntry found.  Also invoked once with null at the end of the
- *     process.
- * @param {function(FileError)} errorCallback The function to invoke
- *     for each path that cannot be resolved.
- */
-util.getDirectories = function(dirEntry, params, paths, successCallback,
-                               errorCallback) {
-
-  // Copy the params array, since we're going to destroy it.
-  params = [].slice.call(params);
-
-  var onComplete = function() {
-    successCallback(null);
-  };
-
-  var getNextDirectory = function() {
-    var path = paths.shift();
-    if (!path)
-      return onComplete();
-
-    dirEntry.getDirectory(
-      path, params,
-      function(entry) {
-        successCallback(entry);
-        getNextDirectory();
-      },
-      function(err) {
-        errorCallback(err);
-        getNextDirectory();
-      });
-  };
-
-  getNextDirectory();
-};
-
-/**
- * Utility function to resolve multiple files with a single call.
- *
- * The successCallback will be invoked once for each directory object
- * found.  The errorCallback will be invoked once for each
- * path that could not be resolved.
- *
- * The successCallback is invoked with a null entry when all paths have
- * been processed.
- *
- * @param {DirEntry} dirEntry The base directory.
- * @param {Object} params The parameters to pass to the underlying
- *     getFile calls.
- * @param {Array.<string>} paths The list of files to resolve.
- * @param {function(!FileEntry)} successCallback The function to invoke for
- *     each FileEntry found.  Also invoked once with null at the end of the
- *     process.
- * @param {function(FileError)} errorCallback The function to invoke
- *     for each path that cannot be resolved.
- */
-util.getFiles = function(dirEntry, params, paths, successCallback,
-                         errorCallback) {
-  // Copy the params array, since we're going to destroy it.
-  params = [].slice.call(params);
-
-  var onComplete = function() {
-    successCallback(null);
-  };
-
-  var getNextFile = function() {
-    var path = paths.shift();
-    if (!path)
-      return onComplete();
-
-    dirEntry.getFile(
-      path, params,
-      function(entry) {
-        successCallback(entry);
-        getNextFile();
-      },
-      function(err) {
-        errorCallback(err);
-        getNextFile();
-      });
-  };
-
-  getNextFile();
-};
-
-/**
  * Renames the entry to newName.
  * @param {Entry} entry The entry to be renamed.
  * @param {string} newName The new name.
  * @param {function(Entry)} successCallback Callback invoked when the rename
  *     is successfully done.
- * @param {function(FileError)} errorCallback Callback invoked when an error
+ * @param {function(DOMError)} errorCallback Callback invoked when an error
  *     is found.
  */
 util.rename = function(entry, newName, successCallback, errorCallback) {
-  entry.getParent(function(parent) {
+  entry.getParent(function(parentEntry) {
+    var parent = /** @type {!DirectoryEntry} */ (parentEntry);
+
     // Before moving, we need to check if there is an existing entry at
     // parent/newName, since moveTo will overwrite it.
     // Note that this way has some timing issue. After existing check,
@@ -322,7 +134,7 @@ util.rename = function(entry, newName, successCallback, errorCallback) {
  * Remove a file or a directory.
  * @param {Entry} entry The entry to remove.
  * @param {function()} onSuccess The success callback.
- * @param {function(FileError)} onError The error callback.
+ * @param {function(DOMError)} onError The error callback.
  */
 util.removeFileOrDirectory = function(entry, onSuccess, onError) {
   if (entry.isDirectory)
@@ -356,8 +168,6 @@ util.bytesToString = function(bytes) {
                Math.pow(2, 50)];
 
   var str = function(n, u) {
-    // TODO(rginda): Switch to v8Locale's number formatter when it's
-    // available.
     return strf(u, n.toLocaleString());
   };
 
@@ -394,40 +204,19 @@ util.bytesToString = function(bytes) {
  * @param {File} file The file to read.
  * @param {number} begin Starting byte(included).
  * @param {number} end Last byte(excluded).
- * @param {function(File, Uint8Array)} callback Callback to invoke.
- * @param {function(FileError)} onError Error handler.
+ * @param {function(File, ByteReader)} callback Callback to invoke.
+ * @param {function(string)} onError Error handler.
  */
 util.readFileBytes = function(file, begin, end, callback, onError) {
   var fileReader = new FileReader();
-  fileReader.onerror = onError;
+  fileReader.onerror = function(event) {
+    onError(event.type);
+  };
   fileReader.onloadend = function() {
-    callback(file, new ByteReader(fileReader.result));
+    callback(file, new ByteReader(
+        /** @type {ArrayBuffer} */ (fileReader.result)));
   };
   fileReader.readAsArrayBuffer(file.slice(begin, end));
-};
-
-/**
- * Write a blob to a file.
- * Truncates the file first, so the previous content is fully overwritten.
- * @param {FileEntry} entry File entry.
- * @param {Blob} blob The blob to write.
- * @param {function(Event)} onSuccess Completion callback. The first argument is
- *     a 'writeend' event.
- * @param {function(FileError)} onError Error handler.
- */
-util.writeBlobToFile = function(entry, blob, onSuccess, onError) {
-  var truncate = function(writer) {
-    writer.onerror = onError;
-    writer.onwriteend = write.bind(null, writer);
-    writer.truncate(0);
-  };
-
-  var write = function(writer) {
-    writer.onwriteend = onSuccess;
-    writer.write(blob);
-  };
-
-  entry.createWriter(truncate, onError);
 };
 
 /**
@@ -445,8 +234,17 @@ util.getKeyModifiers = function(event) {
 };
 
 /**
- * @param {HTMLElement} element Element to transform.
- * @param {Object} transform Transform object,
+ * @typedef {?{
+ *   scaleX: number,
+ *   scaleY: number,
+ *   rotate90: number
+ * }}
+ */
+util.Transform;
+
+/**
+ * @param {Element} element Element to transform.
+ * @param {util.Transform} transform Transform object,
  *                           contains scaleX, scaleY and rotate90 properties.
  */
 util.applyTransform = function(element, transform) {
@@ -458,20 +256,9 @@ util.applyTransform = function(element, transform) {
 };
 
 /**
- * Makes filesystem: URL from the path.
- * @param {string} path File or directory path.
- * @return {string} URL.
- */
-util.makeFilesystemUrl = function(path) {
-  path = path.split('/').map(encodeURIComponent).join('/');
-  var prefix = 'external';
-  return 'filesystem:' + chrome.runtime.getURL(prefix + path);
-};
-
-/**
  * Extracts path from filesystem: URL.
  * @param {string} url Filesystem URL.
- * @return {string} The path.
+ * @return {?string} The path.
  */
 util.extractFilePath = function(url) {
   var match =
@@ -483,36 +270,9 @@ util.extractFilePath = function(url) {
 };
 
 /**
- * Traverses a directory tree whose root is the given entry, and invokes
- * callback for each entry. Upon completion, successCallback will be called.
- * On error, errorCallback will be called.
- *
- * @param {Entry} entry The root entry.
- * @param {function(Entry):boolean} callback Callback invoked for each entry.
- *     If this returns false, entries under it won't be traversed. Note that
- *     its siblings (and their children) will be still traversed.
- * @param {function()} successCallback Called upon successful completion.
- * @param {function(error)} errorCallback Called upon error.
- */
-util.traverseTree = function(entry, callback, successCallback, errorCallback) {
-  if (!callback(entry)) {
-    successCallback();
-    return;
-  }
-
-  util.forEachDirEntry(
-      entry,
-      function(child, iterationCallback) {
-        util.traverseTree(child, callback, iterationCallback, errorCallback);
-      },
-      successCallback,
-      errorCallback);
-};
-
-/**
  * A shortcut function to create a child element with given tag and class.
  *
- * @param {HTMLElement} parent Parent element.
+ * @param {Element} parent Parent element.
  * @param {string=} opt_className Class name.
  * @param {string=} opt_tag Element tag, DIV is omitted.
  * @return {Element} Newly created element.
@@ -566,7 +326,7 @@ function str(id) {
  * Equivalent to loadTimeData.getStringF(id, ...).
  *
  * @param {string} id The id of the string to return.
- * @param {...string} var_args The values to replace into the string.
+ * @param {...*} var_args The values to replace into the string.
  * @return {string} The translated string with replaced values.
  */
 function strf(id, var_args) {
@@ -574,49 +334,11 @@ function strf(id, var_args) {
 }
 
 /**
- * Adapter object that abstracts away the the difference between Chrome app APIs
- * v1 and v2. Is only necessary while the migration to v2 APIs is in progress.
- * TODO(mtomasz): Clean up this. crbug.com/240606.
+ * @return {boolean} True if Files.app is running as an open files or a select
+ *     folder dialog. False otherwise.
  */
-util.platform = {
-  /**
-   * @return {boolean} True if Files.app is running as an open files or a select
-   *     folder dialog. False otherwise.
-   */
-  runningInBrowser: function() {
-    return !window.appID;
-  },
-
-  /**
-   * @param {function(Object)} callback Function accepting a preference map.
-   */
-  getPreferences: function(callback) {
-    chrome.storage.local.get(callback);
-  },
-
-  /**
-   * @param {string} key Preference name.
-   * @param {function(string)} callback Function accepting the preference value.
-   */
-  getPreference: function(key, callback) {
-    chrome.storage.local.get(key, function(items) {
-      callback(items[key]);
-    });
-  },
-
-  /**
-   * @param {string} key Preference name.
-   * @param {string|Object} value Preference value.
-   * @param {function()=} opt_callback Completion callback.
-   */
-  setPreference: function(key, value, opt_callback) {
-    if (typeof value != 'string')
-      value = JSON.stringify(value);
-
-    var items = {};
-    items[key] = value;
-    chrome.storage.local.set(items, opt_callback);
-  }
+util.runningInBrowser = function() {
+  return !window.appID;
 };
 
 /**
@@ -633,8 +355,12 @@ util.addPageLoadHandler = function(handler) {
  * Save app launch data to the local storage.
  */
 util.saveAppState = function() {
-  if (window.appState)
-    util.platform.setPreference(window.appID, window.appState);
+  if (!window.appState)
+    return;
+  var items = {};
+
+  items[window.appID] = JSON.stringify(window.appState);
+  chrome.storage.local.set(items);
 };
 
 /**
@@ -705,10 +431,11 @@ util.AppCache.update = function(key, value, opt_lifetime) {
  * @private
  */
 util.AppCache.read_ = function(callback) {
-  util.platform.getPreference(util.AppCache.KEY, function(json) {
+  chrome.storage.local.get(util.AppCache.KEY, function(values) {
+    var json = values[util.AppCache.KEY];
     if (json) {
       try {
-        callback(JSON.parse(json));
+        callback(/** @type {Object} */ (JSON.parse(json)));
       } catch (e) {
         // The local storage item somehow got messed up, start fresh.
       }
@@ -722,7 +449,9 @@ util.AppCache.read_ = function(callback) {
  * @private
  */
 util.AppCache.write_ = function(map) {
-  util.platform.setPreference(util.AppCache.KEY, JSON.stringify(map));
+  var items = {};
+  items[util.AppCache.KEY] = JSON.stringify(map);
+  chrome.storage.local.set(items);
 };
 
 /**
@@ -738,7 +467,7 @@ util.AppCache.cleanup_ = function(map) {
     if (map.hasOwnProperty(key))
       keys.push(key);
   }
-  keys.sort(function(a, b) { return map[a].expire > map[b].expire; });
+  keys.sort(function(a, b) { return map[a].expire - map[b].expire; });
 
   var cutoff = Date.now();
 
@@ -759,7 +488,7 @@ util.AppCache.cleanup_ = function(map) {
 /**
  * Load an image.
  *
- * @param {Image} image Image element.
+ * @param {HTMLImageElement} image Image element.
  * @param {string} url Source url.
  * @param {Object=} opt_options Hash array of options, eg. width, height,
  *     maxWidth, maxHeight, scale, cache.
@@ -770,11 +499,13 @@ util.AppCache.cleanup_ = function(map) {
  */
 util.loadImage = function(image, url, opt_options, opt_isValid) {
   return ImageLoaderClient.loadToImage(url,
-                                      image,
-                                      opt_options || {},
-                                      function() {},
-                                      function() { image.onerror(); },
-                                      opt_isValid);
+                                       image,
+                                       opt_options || {},
+                                       function() {},
+                                       function() {
+                                         image.onerror(new Event('load-error'));
+                                       },
+                                       opt_isValid);
 };
 
 /**
@@ -783,34 +514,6 @@ util.loadImage = function(image, url, opt_options, opt_isValid) {
  */
 util.cancelLoadImage = function(taskId) {
   ImageLoaderClient.getInstance().cancel(taskId);
-};
-
-/**
- * Finds proerty descriptor in the object prototype chain.
- * @param {Object} object The object.
- * @param {string} propertyName The property name.
- * @return {Object} Property descriptor.
- */
-util.findPropertyDescriptor = function(object, propertyName) {
-  for (var p = object; p; p = Object.getPrototypeOf(p)) {
-    var d = Object.getOwnPropertyDescriptor(p, propertyName);
-    if (d)
-      return d;
-  }
-  return null;
-};
-
-/**
- * Calls inherited property setter (useful when property is
- * overridden).
- * @param {Object} object The object.
- * @param {string} propertyName The property name.
- * @param {*} value Value to set.
- */
-util.callInheritedSetter = function(object, propertyName, value) {
-  var d = util.findPropertyDescriptor(Object.getPrototypeOf(object),
-                                      propertyName);
-  d.set.call(object, value);
 };
 
 /**
@@ -851,21 +554,9 @@ util.addIsFocusedMethod = function() {
 };
 
 /**
- * Makes a redirect to the specified Files.app's window from another window.
- * @param {number} id Window id.
- * @param {string} url Target url.
- * @return {boolean} True if the window has been found. False otherwise.
- */
-util.redirectMainWindow = function(id, url) {
-  // TODO(mtomasz): Implement this for Apps V2, once the photo importer is
-  // restored.
-  return false;
-};
-
-/**
  * Checks, if the Files.app's window is in a full screen mode.
  *
- * @param {AppWindow} appWindow App window to be maximized.
+ * @param {chrome.app.window.AppWindow} appWindow App window to be maximized.
  * @return {boolean} True if the full screen mode is enabled.
  */
 util.isFullScreen = function(appWindow) {
@@ -881,7 +572,7 @@ util.isFullScreen = function(appWindow) {
 /**
  * Toggles the full screen mode.
  *
- * @param {AppWindow} appWindow App window to be maximized.
+ * @param {chrome.app.window.AppWindow} appWindow App window to be maximized.
  * @param {boolean} enabled True for enabling, false for disabling.
  */
 util.toggleFullScreen = function(appWindow, enabled) {
@@ -902,36 +593,39 @@ util.toggleFullScreen = function(appWindow, enabled) {
  * @enum {string}
  * @const
  */
-util.FileOperationType = Object.freeze({
+util.FileOperationType = {
   COPY: 'COPY',
   MOVE: 'MOVE',
   ZIP: 'ZIP',
-});
+};
+Object.freeze(util.FileOperationType);
 
 /**
  * The type of a file operation error.
  * @enum {number}
  * @const
  */
-util.FileOperationErrorType = Object.freeze({
+util.FileOperationErrorType = {
   UNEXPECTED_SOURCE_FILE: 0,
   TARGET_EXISTS: 1,
   FILESYSTEM_ERROR: 2,
-});
+};
+Object.freeze(util.FileOperationErrorType);
 
 /**
  * The kind of an entry changed event.
  * @enum {number}
  * @const
  */
-util.EntryChangedKind = Object.freeze({
+util.EntryChangedKind = {
   CREATED: 0,
   DELETED: 1,
-});
+};
+Object.freeze(util.EntryChangedKind);
 
 /**
  * Obtains whether an entry is fake or not.
- * @param {!Entry|!Object} entry Entry or a fake entry.
+ * @param {(Entry|Object)} entry Entry or a fake entry.
  * @return {boolean} True if the given entry is fake.
  */
 util.isFakeEntry = function(entry) {
@@ -942,10 +636,8 @@ util.isFakeEntry = function(entry) {
  * Creates an instance of UserDOMError with given error name that looks like a
  * FileError except that it does not have the deprecated FileError.code member.
  *
- * TODO(uekawa): remove reference to FileError.
- *
  * @param {string} name Error name for the file error.
- * @return {UserDOMError} FileError instance
+ * @return {DOMError} DOMError instance
  */
 util.createDOMError = function(name) {
   return new util.UserDOMError(name);
@@ -955,6 +647,7 @@ util.createDOMError = function(name) {
  * Creates a DOMError-like object to be used in place of returning file errors.
  *
  * @param {string} name Error name for the file error.
+ * @extends {DOMError}
  * @constructor
  */
 util.UserDOMError = function(name) {
@@ -970,8 +663,7 @@ util.UserDOMError.prototype = {
   /**
    * @return {string} File error name.
    */
-  get name() {
-    return this.name_;
+  get name() { return this.name_;
   }
 };
 
@@ -992,8 +684,8 @@ util.isSameEntry = function(entry1, entry2) {
 
 /**
  * Compares two file systems.
- * @param {DOMFileSystem} fileSystem1 The file system to be compared.
- * @param {DOMFileSystem} fileSystem2 The file system to be compared.
+ * @param {FileSystem} fileSystem1 The file system to be compared.
+ * @param {FileSystem} fileSystem2 The file system to be compared.
  * @return {boolean} True if the both file systems are equal. Also, returns true
  *     if both file systems are null.
  */
@@ -1009,9 +701,8 @@ util.isSameFileSystem = function(fileSystem1, fileSystem2) {
  * Collator for sorting.
  * @type {Intl.Collator}
  */
-util.collator = new Intl.Collator([], {usage: 'sort',
-                                       numeric: true,
-                                       sensitivity: 'base'});
+util.collator = new Intl.Collator(
+    [], {usage: 'sort', numeric: true, sensitivity: 'base'});
 
 /**
  * Compare by name. The 2 entries must be in same directory.
@@ -1037,9 +728,9 @@ util.comparePath = function(entry1, entry2) {
  * Checks if the child entry is a descendant of another entry. If the entries
  * point to the same file or directory, then returns false.
  *
- * @param {DirectoryEntry|Object} ancestorEntry The ancestor directory entry.
+ * @param {!DirectoryEntry|!Object} ancestorEntry The ancestor directory entry.
  *     Can be a fake.
- * @param {Entry|Object} childEntry The child entry. Can be a fake.
+ * @param {!Entry|!Object} childEntry The child entry. Can be a fake.
  * @return {boolean} True if the child entry is contained in the ancestor path.
  */
 util.isDescendantEntry = function(ancestorEntry, childEntry) {
@@ -1088,11 +779,8 @@ util.getCurrentLocaleOrDefault = function() {
  * @return {Array.<string>} Output array of URLs.
  */
 util.entriesToURLs = function(entries) {
-  // TODO(mtomasz): Make all callers use entries instead of URLs, and then
-  // remove this utility function.
-  console.warn('Converting entries to URLs is deprecated.');
   return entries.map(function(entry) {
-     return entry.toURL();
+    return entry.toURL();
   });
 };
 
@@ -1107,7 +795,7 @@ util.entriesToURLs = function(entries) {
  */
 util.URLsToEntries = function(urls, opt_callback) {
   var promises = urls.map(function(url) {
-    return new Promise(webkitResolveLocalFileSystemURL.bind(null, url)).
+    return new Promise(window.webkitResolveLocalFileSystemURL.bind(null, url)).
         then(function(entry) {
           return {entry: entry};
         }, function(failureUrl) {
@@ -1137,8 +825,7 @@ util.URLsToEntries = function(urls, opt_callback) {
   if (opt_callback) {
     resultPromise.then(function(result) {
       opt_callback(result.entries, result.failureUrls);
-    }).
-    catch(function(error) {
+    }).catch(function(error) {
       console.error(
           'util.URLsToEntries is failed.',
           error.stack ? error.stack : error);
@@ -1150,16 +837,15 @@ util.URLsToEntries = function(urls, opt_callback) {
 
 /**
  * Returns whether the window is teleported or not.
- * @param {DOMWindow} window Window.
+ * @param {Window} window Window.
  * @return {Promise.<boolean>} Whether the window is teleported or not.
  */
 util.isTeleported = function(window) {
   return new Promise(function(onFulfilled) {
-    window.chrome.fileBrowserPrivate.getProfiles(function(profiles,
-                                                          currentId,
-                                                          displayedId) {
-      onFulfilled(currentId !== displayedId);
-    });
+    window.chrome.fileManagerPrivate.getProfiles(
+        function(profiles, currentId, displayedId) {
+          onFulfilled(currentId !== displayedId);
+        });
   });
 };
 
@@ -1168,39 +854,38 @@ util.isTeleported = function(window) {
  * desktop of the running profile.
  *
  * TODO(hirono): Move the function from the util namespace.
- * @param {cr.ui.AlertDialog} alertDialog Alert dialog to be shown.
+ * @param {cr.ui.dialogs.AlertDialog} alertDialog Alert dialog to be shown.
  * @param {Array.<Entry>} entries List of opened entries.
  */
 util.showOpenInOtherDesktopAlert = function(alertDialog, entries) {
   if (!entries.length)
     return;
-  chrome.fileBrowserPrivate.getProfiles(function(profiles,
-                                                 currentId,
-                                                 displayedId) {
-    // Find strings.
-    var displayName;
-    for (var i = 0; i < profiles.length; i++) {
-      if (profiles[i].profileId === currentId) {
-        displayName = profiles[i].displayName;
-        break;
-      }
-    }
-    if (!displayName) {
-      console.warn('Display name is not found.');
-      return;
-    }
+  chrome.fileManagerPrivate.getProfiles(
+      function(profiles, currentId, displayedId) {
+        // Find strings.
+        var displayName;
+        for (var i = 0; i < profiles.length; i++) {
+          if (profiles[i].profileId === currentId) {
+            displayName = profiles[i].displayName;
+            break;
+          }
+        }
+        if (!displayName) {
+          console.warn('Display name is not found.');
+          return;
+        }
 
-    var title = entries.size > 1 ?
-        entries[0].name + '\u2026' /* ellipsis */ : entries[0].name;
-    var message = strf(entries.size > 1 ?
-                       'OPEN_IN_OTHER_DESKTOP_MESSAGE_PLURAL' :
-                       'OPEN_IN_OTHER_DESKTOP_MESSAGE',
-                       displayName,
-                       currentId);
+        var title = entries.length > 1 ?
+            entries[0].name + '\u2026' /* ellipsis */ : entries[0].name;
+        var message = strf(entries.length > 1 ?
+                           'OPEN_IN_OTHER_DESKTOP_MESSAGE_PLURAL' :
+                           'OPEN_IN_OTHER_DESKTOP_MESSAGE',
+                           displayName,
+                           currentId);
 
-    // Show the dialog.
-    alertDialog.showWithTitle(title, message);
-  }.bind(this));
+        // Show the dialog.
+        alertDialog.showWithTitle(title, message, null, null, null);
+      }.bind(this));
 };
 
 /**
@@ -1213,35 +898,6 @@ util.testSendMessage = function(message) {
   var test = chrome.test || window.top.chrome.test;
   if (test)
     test.sendMessage(message);
-};
-
-/**
- * Returns the localized name for the root type. If not available, then returns
- * null.
- *
- * @param {VolumeManagerCommon.RootType} rootType The root type.
- * @return {?string} The localized name, or null if not available.
- */
-util.getRootTypeLabel = function(rootType) {
-  var str = function(id) {
-    return loadTimeData.getString(id);
-  };
-
-  switch (rootType) {
-    case VolumeManagerCommon.RootType.DOWNLOADS:
-      return str('DOWNLOADS_DIRECTORY_LABEL');
-    case VolumeManagerCommon.RootType.DRIVE:
-      return str('DRIVE_MY_DRIVE_LABEL');
-    case VolumeManagerCommon.RootType.DRIVE_OFFLINE:
-      return str('DRIVE_OFFLINE_COLLECTION_LABEL');
-    case VolumeManagerCommon.RootType.DRIVE_SHARED_WITH_ME:
-      return str('DRIVE_SHARED_WITH_ME_COLLECTION_LABEL');
-    case VolumeManagerCommon.RootType.DRIVE_RECENT:
-      return str('DRIVE_RECENT_COLLECTION_LABEL');
-  }
-
-  // Translation not found.
-  return null;
 };
 
 /**
@@ -1270,8 +926,9 @@ util.splitExtension = function(path) {
 /**
  * Returns the localized name of the entry.
  *
- * @param {VolumeManager} volumeManager The volume manager.
- * @param {Entry} entry The entry to be retrieve the name of.
+ * @param {{getLocationInfo: (function(!Entry): EntryLocation)}}
+ *     volumeManager The volume manager.
+ * @param {!Entry} entry The entry to be retrieve the name of.
  * @return {?string} The localized name.
  */
 util.getEntryLabel = function(volumeManager, entry) {
@@ -1344,16 +1001,18 @@ util.validateFileName = function(parentEntry, name, filterHiddenOn) {
     return Promise.reject(str('ERROR_WHITESPACE_NAME'));
   else if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(name))
     return Promise.reject(str('ERROR_RESERVED_NAME'));
+  else if (filterHiddenOn && /\.crdownload$/i.test(name))
+    return Promise.reject(str('ERROR_RESERVED_NAME'));
   else if (filterHiddenOn && name[0] == '.')
     return Promise.reject(str('ERROR_HIDDEN_NAME'));
 
   return new Promise(function(fulfill, reject) {
-    chrome.fileBrowserPrivate.validatePathNameLength(
+    chrome.fileManagerPrivate.validatePathNameLength(
         parentEntry.toURL(),
         name,
         function(valid) {
           if (valid)
-            fulfill();
+            fulfill(null);
           else
             reject(str('ERROR_LONG_NAME'));
         });

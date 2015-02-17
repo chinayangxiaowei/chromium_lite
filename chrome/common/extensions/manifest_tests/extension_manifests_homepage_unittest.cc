@@ -3,15 +3,15 @@
 // found in the LICENSE file.
 
 #include "base/strings/string_util.h"
-#include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_url_handlers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace errors = extensions::manifest_errors;
 
-class HomepageURLManifestTest : public ExtensionManifestTest {
+class HomepageURLManifestTest : public ChromeManifestTest {
 };
 
 TEST_F(HomepageURLManifestTest, ParseHomepageURLs) {

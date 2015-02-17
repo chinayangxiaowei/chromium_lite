@@ -25,7 +25,6 @@
 #include "extensions/browser/process_map.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_set.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -54,13 +53,13 @@ bool IsContentsPrerendering(WebContents* web_contents) {
 class TabContentsResource : public RendererResource {
  public:
   explicit TabContentsResource(content::WebContents* web_contents);
-  virtual ~TabContentsResource();
+  ~TabContentsResource() override;
 
   // Resource methods:
-  virtual Type GetType() const OVERRIDE;
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE;
-  virtual content::WebContents* GetWebContents() const OVERRIDE;
+  Type GetType() const override;
+  base::string16 GetTitle() const override;
+  gfx::ImageSkia GetIcon() const override;
+  content::WebContents* GetWebContents() const override;
 
  private:
   // Returns true if contains content rendered by an extension.

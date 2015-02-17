@@ -14,9 +14,9 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
@@ -253,9 +253,9 @@ class WallpaperManager::CustomizedWallpaperRescaledFiles {
     return path_rescaled_large_;
   }
 
-  const bool downloaded_exists() const { return downloaded_exists_; }
-  const bool rescaled_small_exists() const { return rescaled_small_exists_; }
-  const bool rescaled_large_exists() const { return rescaled_large_exists_; }
+  bool downloaded_exists() const { return downloaded_exists_; }
+  bool rescaled_small_exists() const { return rescaled_small_exists_; }
+  bool rescaled_large_exists() const { return rescaled_large_exists_; }
 
  private:
   // Must be called on BlockingPool.
@@ -471,8 +471,8 @@ WallpaperManager::WallpaperManager()
     : loaded_wallpapers_(0),
       command_line_for_testing_(NULL),
       should_cache_wallpaper_(false),
-      weak_factory_(this),
-      pending_inactive_(NULL) {
+      pending_inactive_(NULL),
+      weak_factory_(this) {
   SetDefaultWallpaperPathsFromCommandLine(
       base::CommandLine::ForCurrentProcess());
   registrar_.Add(this,
@@ -1301,6 +1301,7 @@ bool WallpaperManager::GetWallpaperFromCache(const std::string& user_id,
 }
 
 void WallpaperManager::CacheUsersWallpapers() {
+  // TODO(dpolukhin): crbug.com/408734.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   user_manager::UserList users = user_manager::UserManager::Get()->GetUsers();
 
@@ -1788,7 +1789,7 @@ WallpaperManager::PendingWallpaper* WallpaperManager::GetPendingWallpaper(
         (delayed ? GetWallpaperLoadDelay()
                  : base::TimeDelta::FromMilliseconds(0)),
         user_id));
-    pending_inactive_ = loading_.back();
+    pending_inactive_ = loading_.back().get();
   }
   return pending_inactive_;
 }

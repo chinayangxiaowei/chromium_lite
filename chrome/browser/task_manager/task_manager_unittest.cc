@@ -9,8 +9,7 @@
 #include "base/message_loop/message_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/task_manager/resource_provider.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
@@ -32,25 +31,25 @@ class TestResource : public task_manager::Resource {
  public:
   TestResource() : refresh_called_(false) {}
 
-  virtual base::string16 GetTitle() const OVERRIDE {
+  base::string16 GetTitle() const override {
     return ASCIIToUTF16("test title");
   }
-  virtual base::string16 GetProfileName() const OVERRIDE {
+  base::string16 GetProfileName() const override {
     return ASCIIToUTF16("test profile");
   }
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE { return gfx::ImageSkia(); }
-  virtual base::ProcessHandle GetProcess() const OVERRIDE {
+  gfx::ImageSkia GetIcon() const override { return gfx::ImageSkia(); }
+  base::ProcessHandle GetProcess() const override {
     return base::GetCurrentProcessHandle();
   }
-  virtual int GetUniqueChildProcessId() const OVERRIDE {
+  int GetUniqueChildProcessId() const override {
     // In reality the unique child process ID is not the actual process ID,
     // but for testing purposes it shouldn't make difference.
     return static_cast<int>(base::GetCurrentProcId());
   }
-  virtual Type GetType() const OVERRIDE { return RENDERER; }
-  virtual bool SupportNetworkUsage() const OVERRIDE { return false; }
-  virtual void SetSupportNetworkUsage() OVERRIDE { NOTREACHED(); }
-  virtual void Refresh() OVERRIDE { refresh_called_ = true; }
+  Type GetType() const override { return RENDERER; }
+  bool SupportNetworkUsage() const override { return false; }
+  void SetSupportNetworkUsage() override { NOTREACHED(); }
+  void Refresh() override { refresh_called_ = true; }
   bool refresh_called() const { return refresh_called_; }
   void set_refresh_called(bool refresh_called) {
     refresh_called_ = refresh_called;

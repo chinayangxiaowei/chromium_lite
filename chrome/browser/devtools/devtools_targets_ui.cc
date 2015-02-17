@@ -30,9 +30,8 @@ using content::BrowserThread;
 namespace {
 
 const char kTargetSourceField[]  = "source";
-const char kTargetSourceRenderer[]  = "renderers";
-const char kTargetSourceWorker[]  = "workers";
-const char kTargetSourceAdb[]  = "adb";
+const char kTargetSourceLocal[]  = "local";
+const char kTargetSourceRemote[]  = "remote";
 
 const char kTargetIdField[]  = "id";
 const char kTargetTypeField[]  = "type";
@@ -60,6 +59,19 @@ const char kAdbScreenWidthField[] = "adbScreenWidth";
 const char kAdbScreenHeightField[] = "adbScreenHeight";
 const char kAdbAttachedForeignField[]  = "adbAttachedForeign";
 
+const char kPortForwardingPorts[] = "ports";
+const char kPortForwardingBrowserId[] = "browserId";
+
+std::string SerializeBrowserId(
+    scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> browser) {
+  return base::StringPrintf(
+      "browser:%s:%s:%s:%s",
+      browser->serial().c_str(), // Ensure uniqueness across devices.
+      browser->display_name().c_str(),  // Sort by display name.
+      browser->version().c_str(),  // Then by version.
+      browser->socket().c_str());  // Ensure uniqueness on the device.
+}
+
 // CancelableTimer ------------------------------------------------------------
 
 class CancelableTimer {
@@ -80,30 +92,106 @@ class CancelableTimer {
   base::WeakPtrFactory<CancelableTimer> weak_factory_;
 };
 
-// RenderViewHostTargetsUIHandler ---------------------------------------------
+// WorkerObserver -------------------------------------------------------------
 
-class RenderViewHostTargetsUIHandler
+class WorkerObserver
+    : public content::WorkerServiceObserver,
+      public base::RefCountedThreadSafe<WorkerObserver> {
+ public:
+  WorkerObserver() {}
+
+  void Start(base::Closure callback) {
+    DCHECK(callback_.is_null());
+    DCHECK(!callback.is_null());
+    callback_ = callback;
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        base::Bind(&WorkerObserver::StartOnIOThread, this));
+  }
+
+  void Stop() {
+    DCHECK(!callback_.is_null());
+    callback_ = base::Closure();
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        base::Bind(&WorkerObserver::StopOnIOThread, this));
+  }
+
+ private:
+  friend class base::RefCountedThreadSafe<WorkerObserver>;
+  ~WorkerObserver() override {}
+
+  // content::WorkerServiceObserver overrides:
+  void WorkerCreated(const GURL& url,
+                     const base::string16& name,
+                     int process_id,
+                     int route_id) override {
+    NotifyOnIOThread();
+  }
+
+  void WorkerDestroyed(int process_id, int route_id) override {
+    NotifyOnIOThread();
+  }
+
+  void StartOnIOThread() {
+    content::WorkerService::GetInstance()->AddObserver(this);
+  }
+
+  void StopOnIOThread() {
+    content::WorkerService::GetInstance()->RemoveObserver(this);
+  }
+
+  void NotifyOnIOThread() {
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
+        base::Bind(&WorkerObserver::NotifyOnUIThread, this));
+  }
+
+  void NotifyOnUIThread() {
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+    if (callback_.is_null())
+      return;
+    callback_.Run();
+  }
+
+  // Accessed on UI thread.
+  base::Closure callback_;
+};
+
+// LocalTargetsUIHandler ---------------------------------------------
+
+class LocalTargetsUIHandler
     : public DevToolsTargetsUIHandler,
       public content::NotificationObserver {
  public:
-  explicit RenderViewHostTargetsUIHandler(const Callback& callback);
-  virtual ~RenderViewHostTargetsUIHandler();
+  explicit LocalTargetsUIHandler(const Callback& callback);
+  ~LocalTargetsUIHandler() override;
 
- private:
+  // DevToolsTargetsUIHandler overrides.
+  void ForceUpdate() override;
+
+private:
   // content::NotificationObserver overrides.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+ void Observe(int type,
+              const content::NotificationSource& source,
+              const content::NotificationDetails& details) override;
 
+  void ScheduleUpdate();
   void UpdateTargets();
+  void SendTargets(const DevToolsTargetImpl::List& targets);
 
   content::NotificationRegistrar notification_registrar_;
   scoped_ptr<CancelableTimer> timer_;
+  scoped_refptr<WorkerObserver> observer_;
+  base::WeakPtrFactory<LocalTargetsUIHandler> weak_factory_;
 };
 
-RenderViewHostTargetsUIHandler::RenderViewHostTargetsUIHandler(
+LocalTargetsUIHandler::LocalTargetsUIHandler(
     const Callback& callback)
-    : DevToolsTargetsUIHandler(kTargetSourceRenderer, callback) {
+    : DevToolsTargetsUIHandler(kTargetSourceLocal, callback),
+      observer_(new WorkerObserver()),
+      weak_factory_(this) {
   notification_registrar_.Add(this,
                               content::NOTIFICATION_WEB_CONTENTS_CONNECTED,
                               content::NotificationService::AllSources());
@@ -113,35 +201,49 @@ RenderViewHostTargetsUIHandler::RenderViewHostTargetsUIHandler(
   notification_registrar_.Add(this,
                               content::NOTIFICATION_WEB_CONTENTS_DESTROYED,
                               content::NotificationService::AllSources());
+  observer_->Start(base::Bind(&LocalTargetsUIHandler::ScheduleUpdate,
+                              base::Unretained(this)));
   UpdateTargets();
 }
 
-RenderViewHostTargetsUIHandler::~RenderViewHostTargetsUIHandler() {
+LocalTargetsUIHandler::~LocalTargetsUIHandler() {
   notification_registrar_.RemoveAll();
+  observer_->Stop();
 }
 
-void RenderViewHostTargetsUIHandler::Observe(
+void LocalTargetsUIHandler::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
+  ScheduleUpdate();
+}
+
+void LocalTargetsUIHandler::ForceUpdate() {
+  ScheduleUpdate();
+}
+
+void LocalTargetsUIHandler::ScheduleUpdate() {
   const int kUpdateDelay = 100;
   timer_.reset(
       new CancelableTimer(
-          base::Bind(&RenderViewHostTargetsUIHandler::UpdateTargets,
+          base::Bind(&LocalTargetsUIHandler::UpdateTargets,
                      base::Unretained(this)),
           base::TimeDelta::FromMilliseconds(kUpdateDelay)));
 }
 
-void RenderViewHostTargetsUIHandler::UpdateTargets() {
-  base::ListValue list_value;
+void LocalTargetsUIHandler::UpdateTargets() {
+  DevToolsTargetImpl::EnumerateAllTargets(base::Bind(
+      &LocalTargetsUIHandler::SendTargets,
+      weak_factory_.GetWeakPtr()));
+}
 
+void LocalTargetsUIHandler::SendTargets(
+    const DevToolsTargetImpl::List& targets) {
+  base::ListValue list_value;
   std::map<std::string, base::DictionaryValue*> id_to_descriptor;
 
-  DevToolsTargetImpl::List targets =
-      DevToolsTargetImpl::EnumerateWebContentsTargets();
-
   STLDeleteValues(&targets_);
-  for (DevToolsTargetImpl::List::iterator it = targets.begin();
+  for (DevToolsTargetImpl::List::const_iterator it = targets.begin();
       it != targets.end(); ++it) {
     DevToolsTargetImpl* target = *it;
     targets_[target->GetId()] = target;
@@ -151,7 +253,6 @@ void RenderViewHostTargetsUIHandler::UpdateTargets() {
   for (TargetMap::iterator it(targets_.begin()); it != targets_.end(); ++it) {
     DevToolsTargetImpl* target = it->second;
     base::DictionaryValue* descriptor = id_to_descriptor[target->GetId()];
-
     std::string parent_id = target->GetParentId();
     if (parent_id.empty() || id_to_descriptor.count(parent_id) == 0) {
       list_value.Append(descriptor);
@@ -169,119 +270,6 @@ void RenderViewHostTargetsUIHandler::UpdateTargets() {
   SendSerializedTargets(list_value);
 }
 
-// WorkerObserver -------------------------------------------------------------
-
-class WorkerObserver
-    : public content::WorkerServiceObserver,
-      public base::RefCountedThreadSafe<WorkerObserver> {
- public:
-  WorkerObserver() {}
-
-  void Start(DevToolsTargetImpl::Callback callback) {
-    DCHECK(callback_.is_null());
-    DCHECK(!callback.is_null());
-    callback_ = callback;
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::Bind(&WorkerObserver::StartOnIOThread, this));
-  }
-
-  void Stop() {
-    DCHECK(!callback_.is_null());
-    callback_ = DevToolsTargetImpl::Callback();
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::Bind(&WorkerObserver::StopOnIOThread, this));
-  }
-
-  void Enumerate() {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::Bind(&WorkerObserver::EnumerateOnIOThread,
-                   this));
-  }
-
- private:
-  friend class base::RefCountedThreadSafe<WorkerObserver>;
-  virtual ~WorkerObserver() {}
-
-  // content::WorkerServiceObserver overrides:
-  virtual void WorkerCreated(
-      const GURL& url,
-      const base::string16& name,
-      int process_id,
-      int route_id) OVERRIDE {
-    EnumerateOnIOThread();
-  }
-
-  virtual void WorkerDestroyed(int process_id, int route_id) OVERRIDE {
-    EnumerateOnIOThread();
-  }
-
-  void StartOnIOThread() {
-    content::WorkerService::GetInstance()->AddObserver(this);
-    EnumerateOnIOThread();
-  }
-
-  void StopOnIOThread() {
-    content::WorkerService::GetInstance()->RemoveObserver(this);
-  }
-
-  void EnumerateOnIOThread() {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-    DevToolsTargetImpl::EnumerateWorkerTargets(
-        base::Bind(&WorkerObserver::RespondOnUIThread, this));
-  }
-
-  void RespondOnUIThread(const DevToolsTargetImpl::List& targets) {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    if (callback_.is_null())
-      return;
-    callback_.Run(targets);
-  }
-
-  DevToolsTargetImpl::Callback callback_;
-};
-
-// WorkerTargetsUIHandler -----------------------------------------------------
-
-class WorkerTargetsUIHandler
-    : public DevToolsTargetsUIHandler {
- public:
-  explicit WorkerTargetsUIHandler(const Callback& callback);
-  virtual ~WorkerTargetsUIHandler();
-
- private:
-  void UpdateTargets(const DevToolsTargetImpl::List& targets);
-
-  scoped_refptr<WorkerObserver> observer_;
-};
-
-WorkerTargetsUIHandler::WorkerTargetsUIHandler(const Callback& callback)
-    : DevToolsTargetsUIHandler(kTargetSourceWorker, callback),
-      observer_(new WorkerObserver()) {
-  observer_->Start(base::Bind(&WorkerTargetsUIHandler::UpdateTargets,
-                              base::Unretained(this)));
-}
-
-WorkerTargetsUIHandler::~WorkerTargetsUIHandler() {
-  observer_->Stop();
-}
-
-void WorkerTargetsUIHandler::UpdateTargets(
-    const DevToolsTargetImpl::List& targets) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  base::ListValue list_value;
-  STLDeleteValues(&targets_);
-  for (DevToolsTargetImpl::List::const_iterator it = targets.begin();
-      it != targets.end(); ++it) {
-    DevToolsTargetImpl* target = *it;
-    list_value.Append(Serialize(*target));
-    targets_[target->GetId()] = target;
-  }
-  SendSerializedTargets(list_value);
-}
-
 // AdbTargetsUIHandler --------------------------------------------------------
 
 class AdbTargetsUIHandler
@@ -289,21 +277,24 @@ class AdbTargetsUIHandler
       public DevToolsAndroidBridge::DeviceListListener {
  public:
   AdbTargetsUIHandler(const Callback& callback, Profile* profile);
-  virtual ~AdbTargetsUIHandler();
+  ~AdbTargetsUIHandler() override;
 
-  virtual void Open(const std::string& browser_id,
-                    const std::string& url,
-                    const DevToolsTargetsUIHandler::TargetCallback&) OVERRIDE;
+  void Open(const std::string& browser_id,
+            const std::string& url,
+            const DevToolsTargetsUIHandler::TargetCallback&) override;
 
-  virtual scoped_refptr<content::DevToolsAgentHost> GetBrowserAgentHost(
-      const std::string& browser_id) OVERRIDE;
+  scoped_refptr<content::DevToolsAgentHost> GetBrowserAgentHost(
+      const std::string& browser_id) override;
 
  private:
   // DevToolsAndroidBridge::Listener overrides.
-  virtual void DeviceListChanged(
-      const DevToolsAndroidBridge::RemoteDevices& devices) OVERRIDE;
+  void DeviceListChanged(
+      const DevToolsAndroidBridge::RemoteDevices& devices) override;
+
+  DevToolsAndroidBridge* GetAndroidBridge();
 
   Profile* profile_;
+  scoped_refptr<DevToolsAndroidBridge> android_bridge_;
 
   typedef std::map<std::string,
       scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> > RemoteBrowsers;
@@ -312,26 +303,23 @@ class AdbTargetsUIHandler
 
 AdbTargetsUIHandler::AdbTargetsUIHandler(const Callback& callback,
                                          Profile* profile)
-    : DevToolsTargetsUIHandler(kTargetSourceAdb, callback),
-      profile_(profile) {
-  DevToolsAndroidBridge* android_bridge =
-      DevToolsAndroidBridge::Factory::GetForProfile(profile_);
-  if (android_bridge)
-    android_bridge->AddDeviceListListener(this);
+    : DevToolsTargetsUIHandler(kTargetSourceRemote, callback),
+      profile_(profile),
+      android_bridge_(
+          DevToolsAndroidBridge::Factory::GetForProfile(profile_)) {
+  DCHECK(android_bridge_.get());
+  android_bridge_->AddDeviceListListener(this);
 }
 
 AdbTargetsUIHandler::~AdbTargetsUIHandler() {
-  DevToolsAndroidBridge* android_bridge =
-      DevToolsAndroidBridge::Factory::GetForProfile(profile_);
-  if (android_bridge)
-    android_bridge->RemoveDeviceListListener(this);
+  android_bridge_->RemoveDeviceListListener(this);
 }
 
 static void CallOnTarget(
     const DevToolsTargetsUIHandler::TargetCallback& callback,
-    DevToolsAndroidBridge::RemotePage* page) {
-  scoped_ptr<DevToolsAndroidBridge::RemotePage> my_page(page);
-  callback.Run(my_page ? my_page->GetTarget() : NULL);
+    scoped_refptr<DevToolsAndroidBridge> bridge,
+    scoped_refptr<DevToolsAndroidBridge::RemotePage> page) {
+  callback.Run(page.get() ? bridge->CreatePageTarget(page) : nullptr);
 }
 
 void AdbTargetsUIHandler::Open(
@@ -339,15 +327,23 @@ void AdbTargetsUIHandler::Open(
     const std::string& url,
     const DevToolsTargetsUIHandler::TargetCallback& callback) {
   RemoteBrowsers::iterator it = remote_browsers_.find(browser_id);
-  if (it !=  remote_browsers_.end())
-    it->second->Open(url, base::Bind(&CallOnTarget, callback));
+  if (it == remote_browsers_.end())
+    return;
+
+  android_bridge_->OpenRemotePage(
+      it->second,
+      url,
+      base::Bind(&CallOnTarget, callback, android_bridge_));
 }
 
 scoped_refptr<content::DevToolsAgentHost>
 AdbTargetsUIHandler::GetBrowserAgentHost(
     const std::string& browser_id) {
   RemoteBrowsers::iterator it = remote_browsers_.find(browser_id);
-  return it != remote_browsers_.end() ? it->second->GetAgentHost() : NULL;
+  if (it == remote_browsers_.end())
+    return NULL;
+
+  return android_bridge_->GetBrowserAgentHost(it->second);
 }
 
 void AdbTargetsUIHandler::DeviceListChanged(
@@ -382,12 +378,7 @@ void AdbTargetsUIHandler::DeviceListChanged(
       browser_data->SetInteger(
           kAdbBrowserChromeVersionField,
           browser->IsChrome() && !parsed.empty() ? parsed[0] : 0);
-      std::string browser_id = base::StringPrintf(
-          "browser:%s:%s:%s:%s",
-          device->serial().c_str(), // Ensure uniqueness across devices.
-          browser->display_name().c_str(),  // Sort by display name.
-          browser->version().c_str(),  // Then by version.
-          browser->socket().c_str());  // Ensure uniqueness on the device.
+      std::string browser_id = SerializeBrowserId(browser);
       browser_data->SetString(kTargetIdField, browser_id);
       browser_data->SetString(kTargetSourceField, source_id());
 
@@ -404,17 +395,13 @@ void AdbTargetsUIHandler::DeviceListChanged(
       base::ListValue* page_list = new base::ListValue();
       remote_browsers_[browser_id] = browser;
             browser_data->Set(kAdbPagesList, page_list);
-      std::vector<DevToolsAndroidBridge::RemotePage*> pages =
-          browser->CreatePages();
-      for (std::vector<DevToolsAndroidBridge::RemotePage*>::iterator it =
-          pages.begin(); it != pages.end(); ++it) {
-        DevToolsAndroidBridge::RemotePage* page =  *it;
-        DevToolsTargetImpl* target = page->GetTarget();
+      for (const auto& page : browser->pages()) {
+        DevToolsTargetImpl* target = android_bridge_->CreatePageTarget(page);
         base::DictionaryValue* target_data = Serialize(*target);
         target_data->SetBoolean(
             kAdbAttachedForeignField,
             target->IsAttached() &&
-                !DevToolsAndroidBridge::HasDevToolsWindow(target->GetId()));
+                !android_bridge_->HasDevToolsWindow(target->GetId()));
         // Pass the screen size in the target object to make sure that
         // the caching logic does not prevent the target item from updating
         // when the screen size changes.
@@ -449,18 +436,10 @@ DevToolsTargetsUIHandler::~DevToolsTargetsUIHandler() {
 
 // static
 scoped_ptr<DevToolsTargetsUIHandler>
-DevToolsTargetsUIHandler::CreateForRenderers(
+DevToolsTargetsUIHandler::CreateForLocal(
     const DevToolsTargetsUIHandler::Callback& callback) {
   return scoped_ptr<DevToolsTargetsUIHandler>(
-      new RenderViewHostTargetsUIHandler(callback));
-}
-
-// static
-scoped_ptr<DevToolsTargetsUIHandler>
-DevToolsTargetsUIHandler::CreateForWorkers(
-    const DevToolsTargetsUIHandler::Callback& callback) {
-  return scoped_ptr<DevToolsTargetsUIHandler>(
-      new WorkerTargetsUIHandler(callback));
+      new LocalTargetsUIHandler(callback));
 }
 
 // static
@@ -509,41 +488,49 @@ void DevToolsTargetsUIHandler::SendSerializedTargets(
   callback_.Run(source_id_, list);
 }
 
+void DevToolsTargetsUIHandler::ForceUpdate() {
+}
+
 // PortForwardingStatusSerializer ---------------------------------------------
 
 PortForwardingStatusSerializer::PortForwardingStatusSerializer(
     const Callback& callback, Profile* profile)
       : callback_(callback),
         profile_(profile) {
-  PortForwardingController* port_forwarding_controller =
-      PortForwardingController::Factory::GetForProfile(profile_);
-  if (port_forwarding_controller)
-    port_forwarding_controller->AddListener(this);
+  DevToolsAndroidBridge* android_bridge =
+      DevToolsAndroidBridge::Factory::GetForProfile(profile_);
+  if (android_bridge)
+    android_bridge->AddPortForwardingListener(this);
 }
 
 PortForwardingStatusSerializer::~PortForwardingStatusSerializer() {
-  PortForwardingController* port_forwarding_controller =
-      PortForwardingController::Factory::GetForProfile(profile_);
-  if (port_forwarding_controller)
-    port_forwarding_controller->RemoveListener(this);
+  DevToolsAndroidBridge* android_bridge =
+      DevToolsAndroidBridge::Factory::GetForProfile(profile_);
+  if (android_bridge)
+    android_bridge->RemovePortForwardingListener(this);
 }
 
 void PortForwardingStatusSerializer::PortStatusChanged(
-    const DevicesStatus& status) {
+    const ForwardingStatus& status) {
   base::DictionaryValue result;
-  for (DevicesStatus::const_iterator sit = status.begin();
+  for (ForwardingStatus::const_iterator sit = status.begin();
       sit != status.end(); ++sit) {
-    base::DictionaryValue* device_status_dict = new base::DictionaryValue();
-    const PortStatusMap& device_status_map = sit->second;
-    for (PortStatusMap::const_iterator it = device_status_map.begin();
-         it != device_status_map.end(); ++it) {
-      device_status_dict->SetInteger(
+    base::DictionaryValue* port_status_dict = new base::DictionaryValue();
+    const PortStatusMap& port_status_map = sit->second;
+    for (PortStatusMap::const_iterator it = port_status_map.begin();
+         it != port_status_map.end(); ++it) {
+      port_status_dict->SetInteger(
           base::StringPrintf("%d", it->first), it->second);
     }
 
+    base::DictionaryValue* device_status_dict = new base::DictionaryValue();
+    device_status_dict->Set(kPortForwardingPorts, port_status_dict);
+    device_status_dict->SetString(kPortForwardingBrowserId,
+                                  SerializeBrowserId(sit->first));
+
     std::string device_id = base::StringPrintf(
         kAdbDeviceIdFormat,
-        sit->first.c_str());
+        sit->first->serial().c_str());
     result.Set(device_id, device_status_dict);
   }
   callback_.Run(result);

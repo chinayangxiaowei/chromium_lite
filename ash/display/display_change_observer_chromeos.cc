@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "ash/ash_switches.h"
@@ -14,15 +16,19 @@
 #include "ash/display/display_layout_store.h"
 #include "ash/display/display_manager.h"
 #include "ash/shell.h"
+#include "ash/touch/touchscreen_util.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "grit/ash_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/dip_util.h"
-#include "ui/display/types/chromeos/display_mode.h"
-#include "ui/display/types/chromeos/display_snapshot.h"
+#include "ui/display/types/display_mode.h"
+#include "ui/display/types/display_snapshot.h"
 #include "ui/display/util/display_util.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/events/devices/touchscreen_device.h"
 #include "ui/gfx/display.h"
+#include "ui/wm/core/user_activity_detector.h"
 
 namespace ash {
 
@@ -81,10 +87,12 @@ std::vector<DisplayMode> DisplayChangeObserver::GetInternalDisplayModeList(
   native_mode.device_scale_factor = display_info.device_scale_factor();
   std::vector<float> ui_scales =
       DisplayManager::GetScalesForDisplay(display_info);
+  float native_ui_scale = (display_info.device_scale_factor() == 1.25f) ?
+      1.0f : display_info.device_scale_factor();
   for (size_t i = 0; i < ui_scales.size(); ++i) {
     DisplayMode mode = native_mode;
     mode.ui_scale = ui_scales[i];
-    mode.native = (ui_scales[i] == 1.0f);
+    mode.native = (ui_scales[i] == native_ui_scale);
     display_mode_list.push_back(mode);
   }
 
@@ -130,6 +138,18 @@ std::vector<DisplayMode> DisplayChangeObserver::GetExternalDisplayModeList(
     display_mode_list.push_back(iter->second);
   }
 
+  if (output.display->native_mode()) {
+    const std::pair<int, int> size(native_mode.size.width(),
+                                   native_mode.size.height());
+    DisplayModeMap::iterator it = display_mode_map.find(size);
+    DCHECK(it != display_mode_map.end())
+        << "Native mode must be part of the mode list.";
+
+    // If the native mode was replaced re-add it.
+    if (!it->second.native)
+      display_mode_list.push_back(native_mode);
+  }
+
   if (native_mode.size.width() >= kMinimumWidthFor4K) {
     for (size_t i = 0; i < arraysize(kAdditionalDeviceScaleFactorsFor4k);
          ++i) {
@@ -147,9 +167,11 @@ std::vector<DisplayMode> DisplayChangeObserver::GetExternalDisplayModeList(
 
 DisplayChangeObserver::DisplayChangeObserver() {
   Shell::GetInstance()->AddShellObserver(this);
+  ui::DeviceDataManager::GetInstance()->AddObserver(this);
 }
 
 DisplayChangeObserver::~DisplayChangeObserver() {
+  ui::DeviceDataManager::GetInstance()->RemoveObserver(this);
   Shell::GetInstance()->RemoveShellObserver(this);
 }
 
@@ -222,10 +244,6 @@ void DisplayChangeObserver::OnDisplayModeChanged(
     new_info.set_device_scale_factor(device_scale_factor);
     new_info.SetBounds(display_bounds);
     new_info.set_native(true);
-    new_info.set_touch_support(state.touch_device_id == 0 ?
-        gfx::Display::TOUCH_SUPPORT_UNAVAILABLE :
-        gfx::Display::TOUCH_SUPPORT_AVAILABLE);
-    new_info.set_touch_device_id(state.touch_device_id);
     new_info.set_is_aspect_preserving_scaling(
         state.display->is_aspect_preserving_scaling());
 
@@ -241,8 +259,17 @@ void DisplayChangeObserver::OnDisplayModeChanged(
             ->GetAvailableColorCalibrationProfiles(id));
   }
 
+  AssociateTouchscreens(
+      &displays, ui::DeviceDataManager::GetInstance()->touchscreen_devices());
   // DisplayManager can be null during the boot.
   Shell::GetInstance()->display_manager()->OnNativeDisplaysChanged(displays);
+
+  // For the purposes of user activity detection, ignore synthetic mouse events
+  // that are triggered by screen resizes: http://crbug.com/360634
+  ::wm::UserActivityDetector* user_activity_detector =
+      ::wm::UserActivityDetector::Get();
+  if (user_activity_detector)
+    user_activity_detector->OnDisplayPowerChanging();
 }
 
 void DisplayChangeObserver::OnAppTerminating() {
@@ -260,6 +287,14 @@ float DisplayChangeObserver::FindDeviceScaleFactor(float dpi) {
       return kThresholdTable[i].device_scale_factor;
   }
   return 1.0f;
+}
+
+void DisplayChangeObserver::OnTouchscreenDeviceConfigurationChanged() {
+  OnDisplayModeChanged(
+      Shell::GetInstance()->display_configurator()->cached_displays());
+}
+
+void DisplayChangeObserver::OnKeyboardDeviceConfigurationChanged() {
 }
 
 }  // namespace ash

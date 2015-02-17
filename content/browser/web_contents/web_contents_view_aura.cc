@@ -6,7 +6,7 @@
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
@@ -19,6 +19,7 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
+#include "content/browser/renderer_host/web_input_event_aura.h"
 #include "content/browser/web_contents/aura/gesture_nav_simple.h"
 #include "content/browser/web_contents/aura/image_window_delegate.h"
 #include "content/browser/web_contents/aura/overscroll_navigation_overlay.h"
@@ -143,19 +144,19 @@ class OverscrollWindowDelegate : public ImageWindowDelegate {
   void stop_forwarding_events() { forward_events_ = false; }
 
  private:
-  virtual ~OverscrollWindowDelegate() {}
+  ~OverscrollWindowDelegate() override {}
 
   aura::Window* web_contents_window() {
     return web_contents_->GetView()->GetContentNativeView();
   }
 
   // Overridden from ui::EventHandler.
-  virtual void OnScrollEvent(ui::ScrollEvent* event) OVERRIDE {
+  void OnScrollEvent(ui::ScrollEvent* event) override {
     if (forward_events_ && web_contents_window())
       web_contents_window()->delegate()->OnScrollEvent(event);
   }
 
-  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE {
+  void OnGestureEvent(ui::GestureEvent* event) override {
     if (forward_events_ && web_contents_window())
       web_contents_window()->delegate()->OnGestureEvent(event);
   }
@@ -185,13 +186,12 @@ class WebDragSourceAura : public NotificationObserver {
                    Source<WebContents>(contents));
   }
 
-  virtual ~WebDragSourceAura() {
-  }
+  ~WebDragSourceAura() override {}
 
   // NotificationObserver:
-  virtual void Observe(int type,
-      const NotificationSource& source,
-      const NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const NotificationSource& source,
+               const NotificationDetails& details) override {
     if (type != NOTIFICATION_WEB_CONTENTS_DISCONNECTED)
       return;
 
@@ -308,7 +308,7 @@ const ui::OSExchangeData::CustomFormat& GetFileSystemFileCustomFormat() {
 void WriteFileSystemFilesToPickle(
     const std::vector<DropData::FileSystemFileInfo>& file_system_files,
     Pickle* pickle) {
-  pickle->WriteUInt64(file_system_files.size());
+  pickle->WriteSizeT(file_system_files.size());
   for (size_t i = 0; i < file_system_files.size(); ++i) {
     pickle->WriteString(file_system_files[i].url.spec());
     pickle->WriteInt64(file_system_files[i].size);
@@ -321,12 +321,12 @@ bool ReadFileSystemFilesFromPickle(
     std::vector<DropData::FileSystemFileInfo>* file_system_files) {
   PickleIterator iter(pickle);
 
-  uint64 num_files = 0;
-  if (!pickle.ReadUInt64(&iter, &num_files))
+  size_t num_files = 0;
+  if (!pickle.ReadSizeT(&iter, &num_files))
     return false;
   file_system_files->resize(num_files);
 
-  for (uint64 i = 0; i < num_files; ++i) {
+  for (size_t i = 0; i < num_files; ++i) {
     std::string url_string;
     int64 size = 0;
     if (!pickle.ReadString(&iter, &url_string) ||
@@ -478,7 +478,7 @@ class WebContentsViewAura::WindowObserver
 #endif
   }
 
-  virtual ~WindowObserver() {
+  ~WindowObserver() override {
     view_->window_->RemoveObserver(this);
     if (view_->window_->GetHost())
       view_->window_->GetHost()->RemoveObserver(this);
@@ -502,8 +502,8 @@ class WebContentsViewAura::WindowObserver
   }
 
   // Overridden from aura::WindowObserver:
-  virtual void OnWindowHierarchyChanged(
-      const aura::WindowObserver::HierarchyChangeParams& params) OVERRIDE {
+  void OnWindowHierarchyChanged(
+      const aura::WindowObserver::HierarchyChangeParams& params) override {
     if (params.receiver != view_->window_.get() ||
         !params.target->Contains(view_->window_.get())) {
       return;
@@ -523,7 +523,7 @@ class WebContentsViewAura::WindowObserver
   // Note: this is hard coding how Chrome layer adds its dialogs. Since NPAPI is
   // going to be deprecated in a year, this is ok for now. The test for this is
   // PrintPreviewTest.WindowedNPAPIPluginHidden.
-  virtual void OnWindowAdded(aura::Window* new_window) OVERRIDE {
+  virtual void OnWindowAdded(aura::Window* new_window) override {
     if (!new_window->Contains(view_->window_.get())) {
       // Skip the case when the parent moves to the root window.
       if (new_window != host_window_) {
@@ -541,7 +541,7 @@ class WebContentsViewAura::WindowObserver
     }
   }
 
-  virtual void OnWillRemoveWindow(aura::Window* window) OVERRIDE {
+  virtual void OnWillRemoveWindow(aura::Window* window) override {
     if (window == view_->window_)
       return;
 
@@ -550,7 +550,7 @@ class WebContentsViewAura::WindowObserver
   }
 
   virtual void OnWindowVisibilityChanged(aura::Window* window,
-                                         bool visible) OVERRIDE {
+                                         bool visible) override {
     if (window == view_->window_ ||
         window->parent() == host_window_ ||
         window->parent() == view_->window_->GetRootWindow()) {
@@ -559,8 +559,8 @@ class WebContentsViewAura::WindowObserver
   }
 #endif
 
-  virtual void OnWindowParentChanged(aura::Window* window,
-                                     aura::Window* parent) OVERRIDE {
+  void OnWindowParentChanged(aura::Window* window,
+                             aura::Window* parent) override {
     if (window != view_->window_)
       return;
 
@@ -614,9 +614,9 @@ class WebContentsViewAura::WindowObserver
     }
   }
 
-  virtual void OnWindowBoundsChanged(aura::Window* window,
-                                     const gfx::Rect& old_bounds,
-                                     const gfx::Rect& new_bounds) OVERRIDE {
+  void OnWindowBoundsChanged(aura::Window* window,
+                             const gfx::Rect& old_bounds,
+                             const gfx::Rect& new_bounds) override {
     if (window == host_window_ || window == view_->window_) {
       SendScreenRects();
       if (view_->touch_editable_)
@@ -628,14 +628,14 @@ class WebContentsViewAura::WindowObserver
     }
   }
 
-  virtual void OnWindowDestroying(aura::Window* window) OVERRIDE {
+  void OnWindowDestroying(aura::Window* window) override {
     if (window == host_window_) {
       host_window_->RemoveObserver(this);
       host_window_ = NULL;
     }
   }
 
-  virtual void OnWindowAddedToRootWindow(aura::Window* window) OVERRIDE {
+  void OnWindowAddedToRootWindow(aura::Window* window) override {
     if (window == view_->window_) {
       window->GetHost()->AddObserver(this);
 #if defined(OS_WIN)
@@ -645,8 +645,8 @@ class WebContentsViewAura::WindowObserver
     }
   }
 
-  virtual void OnWindowRemovingFromRootWindow(aura::Window* window,
-                                              aura::Window* new_root) OVERRIDE {
+  void OnWindowRemovingFromRootWindow(aura::Window* window,
+                                      aura::Window* new_root) override {
     if (window == view_->window_) {
       window->GetHost()->RemoveObserver(this);
 #if defined(OS_WIN)
@@ -665,8 +665,8 @@ class WebContentsViewAura::WindowObserver
   }
 
   // Overridden WindowTreeHostObserver:
-  virtual void OnHostMoved(const aura::WindowTreeHost* host,
-                           const gfx::Point& new_origin) OVERRIDE {
+  void OnHostMoved(const aura::WindowTreeHost* host,
+                   const gfx::Point& new_origin) override {
     TRACE_EVENT1("ui",
                  "WebContentsViewAura::WindowObserver::OnHostMoved",
                  "new_origin", new_origin.ToString());
@@ -810,7 +810,7 @@ void WebContentsViewAura::InstallOverscrollControllerDelegate(
 void WebContentsViewAura::PrepareOverscrollWindow() {
   // If there is an existing |overscroll_window_| which is in the middle of an
   // animation, then destroying the window here causes the animation to be
-  // completed immidiately, which triggers |OnImplicitAnimationsCompleted()|
+  // completed immediately, which triggers |OnImplicitAnimationsCompleted()|
   // callback, and that tries to reset |overscroll_window_| again, causing a
   // double-free. So use a temporary variable here.
   if (overscroll_window_) {
@@ -911,7 +911,8 @@ void WebContentsViewAura::CompleteOverscrollNavigation(OverscrollMode mode) {
   gfx::Transform transform;
   int content_width =
       web_contents_->GetRenderWidgetHostView()->GetViewBounds().width();
-  int translate_x = mode == OVERSCROLL_WEST ? -content_width : content_width;
+  float translate_x = static_cast<float>(mode == OVERSCROLL_WEST ?
+      -content_width : content_width);
   transform.Translate(translate_x, 0);
   target->SetTransform(transform);
   UpdateOverscrollWindowBrightness(translate_x);
@@ -926,21 +927,22 @@ aura::Window* WebContentsViewAura::GetWindowToAnimateForOverscroll() {
       overscroll_window_.get() : GetContentNativeView();
 }
 
-gfx::Vector2d WebContentsViewAura::GetTranslationForOverscroll(int delta_x,
-                                                               int delta_y) {
+gfx::Vector2dF WebContentsViewAura::GetTranslationForOverscroll(float delta_x,
+                                                                float delta_y) {
   if (current_overscroll_gesture_ == OVERSCROLL_NORTH ||
       current_overscroll_gesture_ == OVERSCROLL_SOUTH) {
-    return gfx::Vector2d(0, delta_y);
+    return gfx::Vector2dF(0, delta_y);
   }
   // For horizontal overscroll, scroll freely if a navigation is possible. Do a
   // resistive scroll otherwise.
   const NavigationControllerImpl& controller = web_contents_->GetController();
   const gfx::Rect& bounds = GetViewBounds();
+  const float bounds_width = static_cast<float>(bounds.width());
   if (ShouldNavigateForward(controller, current_overscroll_gesture_))
-    return gfx::Vector2d(std::max(-bounds.width(), delta_x), 0);
+    return gfx::Vector2dF(std::max(-bounds_width, delta_x), 0);
   else if (ShouldNavigateBack(controller, current_overscroll_gesture_))
-    return gfx::Vector2d(std::min(bounds.width(), delta_x), 0);
-  return gfx::Vector2d();
+    return gfx::Vector2dF(std::min(bounds_width, delta_x), 0);
+  return gfx::Vector2dF();
 }
 
 void WebContentsViewAura::PrepareOverscrollNavigationOverlay() {
@@ -983,7 +985,8 @@ void WebContentsViewAura::AttachTouchEditableToRenderView() {
   touch_editable_->AttachToView(rwhva);
 }
 
-void WebContentsViewAura::OverscrollUpdateForWebContentsDelegate(int delta_y) {
+void WebContentsViewAura::OverscrollUpdateForWebContentsDelegate(
+    float delta_y) {
   if (web_contents_->GetDelegate() && IsScrollEndEffectEnabled())
     web_contents_->GetDelegate()->OverscrollUpdate(delta_y);
 }
@@ -1029,7 +1032,10 @@ void WebContentsViewAura::Focus() {
   if (delegate_.get() && delegate_->Focus())
     return;
 
-  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  RenderWidgetHostView* rwhv =
+      web_contents_->GetFullscreenRenderWidgetHostView();
+  if (!rwhv)
+    rwhv = web_contents_->GetRenderWidgetHostView();
   if (rwhv)
     rwhv->Focus();
 }
@@ -1109,7 +1115,7 @@ void WebContentsViewAura::CreateView(
 }
 
 RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
-    RenderWidgetHost* render_widget_host) {
+    RenderWidgetHost* render_widget_host, bool is_guest_view_hack) {
   if (render_widget_host->GetView()) {
     // During testing, the view will already be set up in most cases to the
     // test view, so we don't want to clobber it with a real one. To verify that
@@ -1122,7 +1128,7 @@ RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
   }
 
   RenderWidgetHostViewAura* view =
-      new RenderWidgetHostViewAura(render_widget_host);
+      new RenderWidgetHostViewAura(render_widget_host, is_guest_view_hack);
   view->InitAsChild(NULL);
   GetNativeView()->AddChild(view->GetNativeView());
 
@@ -1151,7 +1157,7 @@ RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
 
 RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForPopupWidget(
     RenderWidgetHost* render_widget_host) {
-  return new RenderWidgetHostViewAura(render_widget_host);
+  return new RenderWidgetHostViewAura(render_widget_host, false);
 }
 
 void WebContentsViewAura::SetPageTitle(const base::string16& title) {
@@ -1269,6 +1275,22 @@ void WebContentsViewAura::TakeFocus(bool reverse) {
   }
 }
 
+void WebContentsViewAura::ShowDisambiguationPopup(
+    const gfx::Rect& target_rect,
+    const SkBitmap& zoomed_bitmap,
+    const base::Callback<void(ui::GestureEvent*)>& gesture_cb,
+    const base::Callback<void(ui::MouseEvent*)>& mouse_cb) {
+  if (delegate_) {
+    delegate_->ShowDisambiguationPopup(target_rect, zoomed_bitmap,
+        window_.get(), gesture_cb, mouse_cb);
+  }
+}
+
+void WebContentsViewAura::HideDisambiguationPopup() {
+  if (delegate_)
+    delegate_->HideDisambiguationPopup();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, OverscrollControllerDelegate implementation:
 
@@ -1285,24 +1307,29 @@ bool WebContentsViewAura::OnOverscrollUpdate(float delta_x, float delta_y) {
     return false;
 
   aura::Window* target = GetWindowToAnimateForOverscroll();
-  gfx::Vector2d translate = GetTranslationForOverscroll(delta_x, delta_y);
+  gfx::Vector2dF translate = GetTranslationForOverscroll(delta_x, delta_y);
   gfx::Transform transform;
 
-  // Vertical overscrolls don't participate in the navigation gesture.
-  if (current_overscroll_gesture_ != OVERSCROLL_NORTH &&
-      current_overscroll_gesture_ != OVERSCROLL_SOUTH) {
+  if (current_overscroll_gesture_ == OVERSCROLL_NORTH ||
+      current_overscroll_gesture_ == OVERSCROLL_SOUTH) {
+    OverscrollUpdateForWebContentsDelegate(translate.y());
+  } else {
+    // Only horizontal overscrolls participate in the navigation gesture.
     transform.Translate(translate.x(), translate.y());
     target->SetTransform(transform);
     UpdateOverscrollWindowBrightness(delta_x);
   }
 
-  OverscrollUpdateForWebContentsDelegate(translate.y());
   return !translate.IsZero();
 }
 
 void WebContentsViewAura::OnOverscrollComplete(OverscrollMode mode) {
   UMA_HISTOGRAM_ENUMERATION("Overscroll.Completed", mode, OVERSCROLL_COUNT);
-  OverscrollUpdateForWebContentsDelegate(0);
+  if (web_contents_->GetDelegate() &&
+      IsScrollEndEffectEnabled() &&
+      (mode == OVERSCROLL_NORTH || mode == OVERSCROLL_SOUTH)) {
+    web_contents_->GetDelegate()->OverscrollComplete();
+  }
   NavigationControllerImpl& controller = web_contents_->GetController();
   if (ShouldNavigateForward(controller, mode) ||
       ShouldNavigateBack(controller, mode)) {
@@ -1318,6 +1345,9 @@ void WebContentsViewAura::OnOverscrollModeChange(OverscrollMode old_mode,
   // Reset any in-progress overscroll animation first.
   ResetOverscrollTransform();
 
+  if (old_mode == OVERSCROLL_NORTH || old_mode == OVERSCROLL_SOUTH)
+    OverscrollUpdateForWebContentsDelegate(0);
+
   if (new_mode != OVERSCROLL_NONE && touch_editable_)
     touch_editable_->OverscrollStarted();
 
@@ -1326,7 +1356,6 @@ void WebContentsViewAura::OnOverscrollModeChange(OverscrollMode old_mode,
       ((new_mode == OVERSCROLL_EAST || new_mode == OVERSCROLL_WEST) &&
        navigation_overlay_.get() && navigation_overlay_->has_window())) {
     current_overscroll_gesture_ = OVERSCROLL_NONE;
-    OverscrollUpdateForWebContentsDelegate(0);
   } else {
     aura::Window* target = GetWindowToAnimateForOverscroll();
     if (target) {
@@ -1576,19 +1605,6 @@ int WebContentsViewAura::OnPerformDrop(const ui::DropTargetEvent& event) {
     drag_dest_delegate_->OnDrop();
   current_drop_data_.reset();
   return ConvertFromWeb(current_drag_op_);
-}
-
-void WebContentsViewAura::OnWindowParentChanged(aura::Window* window,
-                                                aura::Window* parent) {
-  // Ignore any visibility changes in the hierarchy below.
-  if (window != window_.get() && window_->Contains(window))
-    return;
-
-  // On Windows we will get called with a parent of NULL as part of the shut
-  // down process. As such we do only change the visibility when a parent gets
-  // set.
-  if (parent)
-    UpdateWebContentsVisibility(window->IsVisible());
 }
 
 void WebContentsViewAura::OnWindowVisibilityChanged(aura::Window* window,

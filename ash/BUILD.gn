@@ -16,9 +16,11 @@ component("ash") {
 
   defines = [ "ASH_IMPLEMENTATION" ]
 
-  deps = [
+  public_deps = [
     "//ash/resources",
     "//ash/strings",
+  ]
+  deps = [
     "//base",
     "//base:i18n",
     "//base/third_party/dynamic_annotations",
@@ -29,6 +31,7 @@ component("ash") {
     "//net",
     "//skia",
     "//third_party/icu",
+    "//ui/accelerometer",
     "//ui/accessibility",
     "//ui/app_list",
     "//ui/aura",
@@ -36,6 +39,7 @@ component("ash") {
     "//ui/compositor",
     "//ui/events",
     "//ui/events:events_base",
+    "//ui/events/devices",
     "//ui/gfx",
     "//ui/gfx/geometry",
     "//ui/keyboard",
@@ -47,11 +51,6 @@ component("ash") {
     "//ui/web_dialogs",
     "//ui/wm",
     "//url",
-  ]
-
-  forward_dependent_configs_from = [
-    "//ash/resources",
-    "//ash/strings",
   ]
 
   if (is_win) {
@@ -75,6 +74,10 @@ component("ash") {
       "accelerators/magnifier_key_scroller.h",
       "accelerators/spoken_feedback_toggler.cc",
       "accelerators/spoken_feedback_toggler.h",
+      "host/ash_window_tree_host_x11.cc",
+      "host/ash_window_tree_host_x11.h",
+      "wm/maximize_mode/scoped_disable_internal_mouse_and_keyboard_x11.cc",
+      "wm/maximize_mode/scoped_disable_internal_mouse_and_keyboard_x11.h",
     ]
   }
 
@@ -83,12 +86,11 @@ component("ash") {
       "//device/bluetooth",
       "//ui/display",
       "//ui/display/util",
-      #'../chromeos/chromeos.gyp:chromeos',  TODO(GYP)
-      # Ash #includes power_supply_properties.pb.h directly.
-      #'../chromeos/chromeos.gyp:power_manager_proto',  TODO(GYP)
-      #'../ui/chromeos/ui_chromeos.gyp:ui_chromeos_resources',  TODO(GYP)
-      #'../ui/chromeos/ui_chromeos.gyp:ui_chromeos_strings',  TODO(GYP)
-      #'../ui/chromeos/ui_chromeos.gyp:ui_chromeos',  TODO(GYP)
+      "//chromeos",
+      "//chromeos:power_manager_proto",
+      "//ui/chromeos/resources",
+      "//ui/chromeos/strings",
+      "//ui/chromeos:ui_chromeos",
     ]
   } else {
     sources -= [
@@ -99,19 +101,12 @@ component("ash") {
       "system/tray/media_security/media_capture_observer.h",
       "system/tray/media_security/multi_profile_media_tray_item.cc",
       "system/tray/media_security/multi_profile_media_tray_item.h",
-    ]
-  }
-
-  if (!use_x11 || !is_chromeos) {
-    sources -= [
       "touch/touch_transformer_controller.cc",
       "touch/touch_transformer_controller.h",
-    ]
-  }
-
-  if (!use_ozone) {
-    sources -= [
-      "display/mouse_cursor_event_filter_ozone.cc",
+      "touch/touchscreen_util.cc",
+      "touch/touchscreen_util.h",
+      "virtual_keyboard_controller.cc",
+      "virtual_keyboard_controller.h",
     ]
   }
 
@@ -137,8 +132,10 @@ component("ash_with_content") {
 
   defines = [ "ASH_WITH_CONTENT_IMPLEMENTATION" ]
 
-  deps = [
+  public_deps = [
     ":ash",
+  ]
+  deps = [
     "//base",
     "//base/third_party/dynamic_annotations",
     "//content/public/browser",
@@ -157,17 +154,16 @@ component("ash_with_content") {
     "//ui/web_dialogs",
     "//url",
   ]
-
-  forward_dependent_configs_from = [
-    ":ash",
-  ]
 }
 
 static_library("test_support") {
+  testonly = true
   sources = gypi_values.ash_test_support_sources
 
-  deps = [
+  public_deps = [
     ":ash",
+  ]
+  deps = [
     "//ash/resources",
     "//content/test:test_support",
     "//skia",
@@ -176,6 +172,7 @@ static_library("test_support") {
     "//ui/app_list",
     "//ui/app_list:test_support",
     "//ui/events:events_base",
+    "//ui/events/devices",
     "//ui/gl",
     "//ui/views",
     "//ui/views:test_support",
@@ -197,6 +194,7 @@ static_library("test_support") {
 }
 
 static_library("ash_shell_lib") {
+  testonly = true
   sources = gypi_values.ash_shell_lib_sources
 
   deps = [
@@ -226,12 +224,10 @@ static_library("ash_shell_lib") {
     "//ui/resources",
     "//ui/views",
     "//ui/views:test_support",
-    #'../ui/views/examples/examples.gyp:views_examples_lib',  TODO(GYP)
-    #'../ui/views/examples/examples.gyp:views_examples_with_content_lib',  TODO(GYP)
+    "//ui/views/examples:views_examples_lib",
+    "//ui/views/examples:views_examples_with_content_lib",
   ]
 }
-
-if (false) {  # TODO(GYP) enable ash shell and unit tests when they link.
 
 test("ash_unittests") {
   sources = gypi_values.ash_unittests_sources
@@ -251,6 +247,7 @@ test("ash_unittests") {
     "//skia",
     "//testing/gtest",
     "//third_party/icu",
+    "//ui/accelerometer",
     "//ui/accessibility",
     "//ui/aura",
     "//ui/aura:test_support",
@@ -259,6 +256,7 @@ test("ash_unittests") {
     "//ui/compositor",
     "//ui/compositor:test_support",
     "//ui/events",
+    "//ui/events/devices",
     "//ui/events:test_support",
     "//ui/events:gesture_detection",
     "//ui/gfx",
@@ -270,7 +268,7 @@ test("ash_unittests") {
     "//ui/views",
     "//ui/views:test_support",
     "//ui/views/controls/webview:test_support",
-    "//ui/web_dialogs",
+    "//ui/web_dialogs:test_support",
     "//ui/wm",
     "//url",
   ]
@@ -280,16 +278,14 @@ test("ash_unittests") {
       # TODO(zork): fix this test to build on Windows. See: crosbug.com/26906
       "focus_cycler_unittest.cc",
       # All tests for multiple displays: not supported on Windows Ash.
-      "accelerators/nested_dispatcher_controller_unittest.cc",
       "wm/drag_window_resizer_unittest.cc",
       # Can't resize on Windows Ash. http://crbug.com/165962
-      "ash_root_window_transformer_unittest.cc",
       "magnifier/magnification_controller_unittest.cc",
       "wm/workspace/workspace_window_resizer_unittest.cc",
       "sticky_keys/sticky_keys_overlay_unittest.cc",
-      "sticky_keys/sticky_keys_unittest.cc",
       "system/tray/media_security/multi_profile_media_tray_item_unittest.cc",
       "autoclick/autoclick_unittest.cc",
+      "virtual_keyboard_controller_unittest.cc",
     ]
     sources += [
       #'<(SHARED_INTERMEDIATE_DIR)/ui/resources/ui_unscaled_resources.rc',  TODO(GYP)
@@ -304,7 +300,7 @@ test("ash_unittests") {
     sources -= [
       "accelerators/magnifier_key_scroller_unittest.cc",
       "accelerators/spoken_feedback_toggler_unittest.cc",
-      "touch/touch_transformer_controller_unittest.cc",
+      "host/ash_window_tree_host_x11_unittest.cc",
     ]
   }
   if (is_chromeos) {
@@ -314,21 +310,25 @@ test("ash_unittests") {
       "//ui/display",
       "//ui/display:test_util",
       "//ui/display/types",
-      #'../chromeos/chromeos.gyp:chromeos_test_support_without_gmock',  TODO(GYP)
-      #'../chromeos/chromeos.gyp:power_manager_proto',  TODO(GYP)
+      "//chromeos:power_manager_proto",
+      "//chromeos:test_support_without_gmock",
     ]
   } else {
     sources -= [
       "display/resolution_notification_controller_unittest.cc",
-      "touch/touch_transformer_controller_unittest.cc",
+      "touch/touchscreen_util_unittest.cc",
     ]
+  }
+
+  if (!use_x11 || !is_chromeos) {
+    sources -= [ "touch/touch_transformer_controller_unittest.cc", ]
   }
 
   # TODO(GYP) is this necessary?
   #['OS=="linux" and component=="shared_library" and use_allocator!="none"', {
   # ldflags = "-rdynamic"
 
-  if (use_ozone) {
+  if (!is_chromeos || use_ozone) {
     sources -= [
       "sticky_keys/sticky_keys_unittest.cc",  # crbug.com/354035
     ]
@@ -336,6 +336,7 @@ test("ash_unittests") {
 }
 
 executable("ash_shell") {
+  testonly = true
   sources = [
     "shell/shell_main.cc",
   ]
@@ -355,7 +356,7 @@ executable("ash_shell") {
 
   if (is_chromeos) {
     deps += [
-      "../device/bluetooth/bluetooth.gyp:device_bluetooth",
+      "//device/bluetooth",
     ]
   }
 }
@@ -367,17 +368,17 @@ test("ash_shell_unittests") {
   ]
 
   deps = [
+    ":ash_shell_lib",
+    ":test_support",
     "//base/test:test_support",
     "//components/user_manager",
     "//content/test:test_support",
     "//skia",
     "//testing/gtest",
-    "//ui/aaccessibility",
+    "//ui/accessibility",
   ]
 
   if (is_chromeos) {
     deps += [ "//ui/display" ]
   }
 }
-
-}  # if false

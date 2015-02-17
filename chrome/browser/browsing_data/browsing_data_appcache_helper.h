@@ -13,10 +13,8 @@
 #include "net/base/completion_callback.h"
 #include "url/gurl.h"
 
-class Profile;
-
 namespace content {
-class AppCacheService;
+class BrowserContext;
 }
 
 // This class fetches appcache information on behalf of a caller
@@ -26,7 +24,7 @@ class BrowsingDataAppCacheHelper
  public:
   typedef std::map<GURL, content::AppCacheInfoVector> OriginAppCacheInfoMap;
 
-  explicit BrowsingDataAppCacheHelper(Profile* profile);
+  explicit BrowsingDataAppCacheHelper(content::BrowserContext* browser_context);
 
   virtual void StartFetching(const base::Closure& completion_callback);
   virtual void DeleteAppCacheGroup(const GURL& manifest_url);
@@ -58,12 +56,8 @@ class BrowsingDataAppCacheHelper
 // a parameter during construction.
 class CannedBrowsingDataAppCacheHelper : public BrowsingDataAppCacheHelper {
  public:
-  explicit CannedBrowsingDataAppCacheHelper(Profile* profile);
-
-  // Return a copy of the appcache helper. Only one consumer can use the
-  // StartFetching method at a time, so we need to create a copy of the helper
-  // every time we instantiate a cookies tree model for it.
-  CannedBrowsingDataAppCacheHelper* Clone();
+  explicit CannedBrowsingDataAppCacheHelper(
+      content::BrowserContext* browser_context);
 
   // Add an appcache to the set of canned caches that is returned by this
   // helper.
@@ -82,13 +76,11 @@ class CannedBrowsingDataAppCacheHelper : public BrowsingDataAppCacheHelper {
   const OriginAppCacheInfoMap& GetOriginAppCacheInfoMap() const;
 
   // BrowsingDataAppCacheHelper methods.
-  virtual void StartFetching(const base::Closure& completion_callback) OVERRIDE;
-  virtual void DeleteAppCacheGroup(const GURL& manifest_url) OVERRIDE;
+  void StartFetching(const base::Closure& completion_callback) override;
+  void DeleteAppCacheGroup(const GURL& manifest_url) override;
 
  private:
-  virtual ~CannedBrowsingDataAppCacheHelper();
-
-  Profile* profile_;
+  ~CannedBrowsingDataAppCacheHelper() override;
 
   DISALLOW_COPY_AND_ASSIGN(CannedBrowsingDataAppCacheHelper);
 };

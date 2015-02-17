@@ -48,6 +48,10 @@ class APP_LIST_EXPORT AppListItemList {
   // invalid, move the item to the end of the list.
   void SetItemPosition(AppListItem* item, syncer::StringOrdinal new_position);
 
+  // Highlights the given item in the app list. If not present and it is later
+  // added, the item will be highlighted after being added.
+  void HighlightItemInstalledFromUI(const std::string& id);
+
   AppListItem* item_at(size_t index) {
     DCHECK_LT(index, app_list_items_.size());
     return app_list_items_[index];
@@ -102,7 +106,8 @@ class APP_LIST_EXPORT AppListItemList {
   void FixItemPosition(size_t index);
 
   ScopedVector<AppListItem> app_list_items_;
-  ObserverList<AppListItemListObserver> observers_;
+  ObserverList<AppListItemListObserver, true> observers_;
+  std::string highlighted_id_;
 
   DISALLOW_COPY_AND_ASSIGN(AppListItemList);
 };

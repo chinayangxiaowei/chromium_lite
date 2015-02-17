@@ -61,7 +61,7 @@ class TestSigninManagerObserver : public SigninManagerBase::Observer {
                                 num_signouts_(0) {
   }
 
-  virtual ~TestSigninManagerObserver() {}
+  ~TestSigninManagerObserver() override {}
 
   int num_failed_signins_;
   int num_successful_signins_;
@@ -69,17 +69,18 @@ class TestSigninManagerObserver : public SigninManagerBase::Observer {
 
  private:
   // SigninManagerBase::Observer:
-  virtual void GoogleSigninFailed(
-      const GoogleServiceAuthError& error) OVERRIDE {
+  void GoogleSigninFailed(const GoogleServiceAuthError& error) override {
     num_failed_signins_++;
   }
 
-  virtual void GoogleSigninSucceeded(
-      const std::string& username, const std::string& password) OVERRIDE {
+  void GoogleSigninSucceeded(const std::string& account_id,
+                             const std::string& username,
+                             const std::string& password) override {
     num_successful_signins_++;
   }
 
-  virtual void GoogleSignedOut(const std::string& username) OVERRIDE {
+  void GoogleSignedOut(const std::string& account_id,
+                       const std::string& username) override {
     num_signouts_++;
   }
 };
@@ -90,9 +91,9 @@ class TestSigninManagerObserver : public SigninManagerBase::Observer {
 class SigninManagerTest : public testing::Test {
  public:
   SigninManagerTest() : manager_(NULL) {}
-  virtual ~SigninManagerTest() {}
+  ~SigninManagerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     manager_ = NULL;
     prefs_.reset(new TestingPrefServiceSimple);
     chrome::RegisterLocalState(prefs_->registry());
@@ -112,7 +113,7 @@ class SigninManagerTest : public testing::Test {
             SetURLRequestContext(profile_->GetRequestContext());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     if (manager_)
       manager_->RemoveObserver(&test_observer_);
 
@@ -165,7 +166,7 @@ class SigninManagerTest : public testing::Test {
   }
 
   void ExpectSignInWithRefreshTokenSuccess() {
-    EXPECT_FALSE(manager_->GetAuthenticatedUsername().empty());
+    EXPECT_TRUE(manager_->IsAuthenticated());
 
     ProfileOAuth2TokenService* token_service =
         ProfileOAuth2TokenServiceFactory::GetForProfile(profile());
@@ -195,7 +196,7 @@ class SigninManagerTest : public testing::Test {
 
 TEST_F(SigninManagerTest, SignInWithRefreshToken) {
   SetUpSigninManagerAsService();
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
 
   manager_->StartSignInWithRefreshToken(
       "rt1",
@@ -214,7 +215,7 @@ TEST_F(SigninManagerTest, SignInWithRefreshToken) {
 
 TEST_F(SigninManagerTest, SignInWithRefreshTokenCallbackComplete) {
   SetUpSigninManagerAsService();
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
 
   // Since the password is empty, must verify the gaia cookies first.
   SigninManager::OAuthTokenFetchedCallback callback =
@@ -239,25 +240,25 @@ TEST_F(SigninManagerTest, SignOut) {
       "password",
       SigninManager::OAuthTokenFetchedCallback());
   manager_->SignOut(signin_metrics::SIGNOUT_TEST);
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
   // Should not be persisted anymore
   ShutDownManager();
   CreateNakedSigninManager();
   manager_->Initialize(NULL);
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
 }
 
 TEST_F(SigninManagerTest, SignOutWhileProhibited) {
   SetUpSigninManagerAsService();
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
 
   manager_->SetAuthenticatedUsername("user@gmail.com");
   manager_->ProhibitSignout(true);
   manager_->SignOut(signin_metrics::SIGNOUT_TEST);
-  EXPECT_FALSE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_TRUE(manager_->IsAuthenticated());
   manager_->ProhibitSignout(false);
   manager_->SignOut(signin_metrics::SIGNOUT_TEST);
-  EXPECT_TRUE(manager_->GetAuthenticatedUsername().empty());
+  EXPECT_FALSE(manager_->IsAuthenticated());
 }
 
 TEST_F(SigninManagerTest, TestIsWebBasedSigninFlowURL) {

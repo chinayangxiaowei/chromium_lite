@@ -9,14 +9,16 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
+#include "base/metrics/field_trial.h"
 #include "base/prefs/pref_change_registrar.h"
 #include "base/prefs/pref_member.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/content_settings/content_settings_utils.h"
-#include "chrome/common/content_settings.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
 #include "net/ssl/ssl_config_service.h"
@@ -62,35 +64,17 @@ std::vector<uint16> ParseCipherSuites(
   return cipher_suites;
 }
 
-// Returns the string representation of an SSL protocol version. Returns an
-// empty string on error.
-std::string SSLProtocolVersionToString(uint16 version) {
-  switch (version) {
-    case net::SSL_PROTOCOL_VERSION_SSL3:
-      return "ssl3";
-    case net::SSL_PROTOCOL_VERSION_TLS1:
-      return "tls1";
-    case net::SSL_PROTOCOL_VERSION_TLS1_1:
-      return "tls1.1";
-    case net::SSL_PROTOCOL_VERSION_TLS1_2:
-      return "tls1.2";
-    default:
-      NOTREACHED();
-      return std::string();
-  }
-}
-
 // Returns the SSL protocol version (as a uint16) represented by a string.
 // Returns 0 if the string is invalid.
 uint16 SSLProtocolVersionFromString(const std::string& version_str) {
   uint16 version = 0;  // Invalid.
-  if (version_str == "ssl3") {
+  if (version_str == switches::kSSLVersionSSLv3) {
     version = net::SSL_PROTOCOL_VERSION_SSL3;
-  } else if (version_str == "tls1") {
+  } else if (version_str == switches::kSSLVersionTLSv1) {
     version = net::SSL_PROTOCOL_VERSION_TLS1;
-  } else if (version_str == "tls1.1") {
+  } else if (version_str == switches::kSSLVersionTLSv11) {
     version = net::SSL_PROTOCOL_VERSION_TLS1_1;
-  } else if (version_str == "tls1.2") {
+  } else if (version_str == switches::kSSLVersionTLSv12) {
     version = net::SSL_PROTOCOL_VERSION_TLS1_2;
   }
   return version;
@@ -109,13 +93,13 @@ class SSLConfigServicePref : public net::SSLConfigService {
   SSLConfigServicePref() {}
 
   // Store SSL config settings in |config|. Must only be called from IO thread.
-  virtual void GetSSLConfig(net::SSLConfig* config) OVERRIDE;
+  void GetSSLConfig(net::SSLConfig* config) override;
 
  private:
   // Allow the pref watcher to update our internal state.
   friend class SSLConfigServiceManagerPref;
 
-  virtual ~SSLConfigServicePref() {}
+  ~SSLConfigServicePref() override {}
 
   // This method is posted to the IO thread from the browser thread to carry the
   // new config information.
@@ -146,12 +130,12 @@ class SSLConfigServiceManagerPref
     : public SSLConfigServiceManager {
  public:
   explicit SSLConfigServiceManagerPref(PrefService* local_state);
-  virtual ~SSLConfigServiceManagerPref() {}
+  ~SSLConfigServiceManagerPref() override {}
 
   // Register local_state SSL preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
-  virtual net::SSLConfigService* Get() OVERRIDE;
+  net::SSLConfigService* Get() override;
 
  private:
   // Callback for preference changes.  This will post the changes to the IO
@@ -174,6 +158,7 @@ class SSLConfigServiceManagerPref
   BooleanPrefMember rev_checking_required_local_anchors_;
   StringPrefMember ssl_version_min_;
   StringPrefMember ssl_version_max_;
+  StringPrefMember ssl_version_fallback_min_;
   BooleanPrefMember ssl_record_splitting_disabled_;
 
   // The cached list of disabled SSL cipher suites.
@@ -204,6 +189,8 @@ SSLConfigServiceManagerPref::SSLConfigServiceManagerPref(
       prefs::kSSLVersionMin, local_state, local_state_callback);
   ssl_version_max_.Init(
       prefs::kSSLVersionMax, local_state, local_state_callback);
+  ssl_version_fallback_min_.Init(
+      prefs::kSSLVersionFallbackMin, local_state, local_state_callback);
   ssl_record_splitting_disabled_.Init(
       prefs::kDisableSSLRecordSplitting, local_state, local_state_callback);
 
@@ -226,12 +213,9 @@ void SSLConfigServiceManagerPref::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(
       prefs::kCertRevocationCheckingRequiredLocalAnchors,
       default_config.rev_checking_required_local_anchors);
-  std::string version_min_str =
-      SSLProtocolVersionToString(default_config.version_min);
-  std::string version_max_str =
-      SSLProtocolVersionToString(default_config.version_max);
-  registry->RegisterStringPref(prefs::kSSLVersionMin, version_min_str);
-  registry->RegisterStringPref(prefs::kSSLVersionMax, version_max_str);
+  registry->RegisterStringPref(prefs::kSSLVersionMin, "");
+  registry->RegisterStringPref(prefs::kSSLVersionMax, "");
+  registry->RegisterStringPref(prefs::kSSLVersionFallbackMin, "");
   registry->RegisterBooleanPref(prefs::kDisableSSLRecordSplitting,
                                 !default_config.false_start_enabled);
   registry->RegisterListPref(prefs::kCipherSuiteBlacklist);
@@ -275,23 +259,30 @@ void SSLConfigServiceManagerPref::GetSSLConfigFromPrefs(
       rev_checking_required_local_anchors_.GetValue();
   std::string version_min_str = ssl_version_min_.GetValue();
   std::string version_max_str = ssl_version_max_.GetValue();
+  std::string version_fallback_min_str = ssl_version_fallback_min_.GetValue();
   config->version_min = net::kDefaultSSLVersionMin;
   config->version_max = net::kDefaultSSLVersionMax;
+  config->version_fallback_min = net::kDefaultSSLVersionFallbackMin;
   uint16 version_min = SSLProtocolVersionFromString(version_min_str);
   uint16 version_max = SSLProtocolVersionFromString(version_max_str);
+  uint16 version_fallback_min =
+      SSLProtocolVersionFromString(version_fallback_min_str);
   if (version_min) {
-    // TODO(wtc): get the minimum SSL protocol version supported by the
-    // SSLClientSocket class. Right now it happens to be the same as the
-    // default minimum SSL protocol version because we enable all supported
-    // versions by default.
-    uint16 supported_version_min = config->version_min;
-    config->version_min = std::max(supported_version_min, version_min);
+    config->version_min = version_min;
+  } else {
+    const std::string group = base::FieldTrialList::FindFullName("SSLv3");
+    if (group == "Enabled") {
+      config->version_min = net::SSL_PROTOCOL_VERSION_SSL3;
+    }
   }
   if (version_max) {
     // TODO(wtc): get the maximum SSL protocol version supported by the
     // SSLClientSocket class.
     uint16 supported_version_max = config->version_max;
     config->version_max = std::min(supported_version_max, version_max);
+  }
+  if (version_fallback_min) {
+    config->version_fallback_min = version_fallback_min;
   }
   config->disabled_cipher_suites = disabled_cipher_suites_;
   // disabling False Start also happens to disable record splitting.

@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/macros.h"
 #include "base/observer_list.h"
 #include "chromeos/dbus/power_manager/policy.pb.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
@@ -24,63 +25,67 @@ class FakePowerManagerClient : public PowerManagerClient {
   virtual ~FakePowerManagerClient();
 
   power_manager::PowerManagementPolicy& policy() { return policy_; }
-  int num_request_restart_calls() const {
-    return num_request_restart_calls_;
-  }
-  int num_set_policy_calls() const {
-    return num_set_policy_calls_;
-  }
+  int num_request_restart_calls() const { return num_request_restart_calls_; }
+  int num_request_shutdown_calls() const { return num_request_shutdown_calls_; }
+  int num_set_policy_calls() const { return num_set_policy_calls_; }
   int num_set_is_projecting_calls() const {
     return num_set_is_projecting_calls_;
   }
-  bool is_projecting() const {
-    return is_projecting_;
-  }
+  bool is_projecting() const { return is_projecting_; }
 
   // PowerManagerClient overrides
-  virtual void Init(dbus::Bus* bus) OVERRIDE;
-  virtual void AddObserver(Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(Observer* observer) OVERRIDE;
-  virtual bool HasObserver(Observer* observer) OVERRIDE;
-  virtual void DecreaseScreenBrightness(bool allow_off) OVERRIDE;
-  virtual void IncreaseScreenBrightness() OVERRIDE;
+  virtual void Init(dbus::Bus* bus) override;
+  virtual void AddObserver(Observer* observer) override;
+  virtual void RemoveObserver(Observer* observer) override;
+  virtual bool HasObserver(Observer* observer) override;
+  virtual void DecreaseScreenBrightness(bool allow_off) override;
+  virtual void IncreaseScreenBrightness() override;
   virtual void SetScreenBrightnessPercent(
-      double percent, bool gradual) OVERRIDE;
+      double percent, bool gradual) override;
   virtual void GetScreenBrightnessPercent(
-      const GetScreenBrightnessPercentCallback& callback) OVERRIDE;
-  virtual void DecreaseKeyboardBrightness() OVERRIDE;
-  virtual void IncreaseKeyboardBrightness() OVERRIDE;
-  virtual void RequestStatusUpdate() OVERRIDE;
-  virtual void RequestRestart() OVERRIDE;
-  virtual void RequestShutdown() OVERRIDE;
+      const GetScreenBrightnessPercentCallback& callback) override;
+  virtual void DecreaseKeyboardBrightness() override;
+  virtual void IncreaseKeyboardBrightness() override;
+  virtual void RequestStatusUpdate() override;
+  virtual void RequestSuspend() override;
+  virtual void RequestRestart() override;
+  virtual void RequestShutdown() override;
   virtual void NotifyUserActivity(
-      power_manager::UserActivityType type) OVERRIDE;
-  virtual void NotifyVideoActivity(bool is_fullscreen) OVERRIDE;
+      power_manager::UserActivityType type) override;
+  virtual void NotifyVideoActivity(bool is_fullscreen) override;
   virtual void SetPolicy(
-      const power_manager::PowerManagementPolicy& policy) OVERRIDE;
-  virtual void SetIsProjecting(bool is_projecting) OVERRIDE;
-  virtual base::Closure GetSuspendReadinessCallback() OVERRIDE;
-  virtual int GetNumPendingSuspendReadinessCallbacks() OVERRIDE;
+      const power_manager::PowerManagementPolicy& policy) override;
+  virtual void SetIsProjecting(bool is_projecting) override;
+  virtual base::Closure GetSuspendReadinessCallback() override;
+  virtual int GetNumPendingSuspendReadinessCallbacks() override;
 
   // Emulates the power manager announcing that the system is starting or
   // completing a suspend attempt.
   void SendSuspendImminent();
   void SendSuspendDone();
+  void SendDarkSuspendImminent();
+
+  // Notifies observers that the power button has been pressed or released.
+  void SendPowerButtonEvent(bool down, const base::TimeTicks& timestamp);
 
  private:
+  // Callback that will be run by asynchronous suspend delays to report
+  // readiness.
+  void HandleSuspendReadiness();
+
   ObserverList<Observer> observers_;
 
   // Last policy passed to SetPolicy().
   power_manager::PowerManagementPolicy policy_;
 
-  // Number of times that RequestRestart() has been called.
+  // Number of times that various methods have been called.
   int num_request_restart_calls_;
-
-  // Number of times that SetPolicy() has been called.
+  int num_request_shutdown_calls_;
   int num_set_policy_calls_;
-
-  // Count the number of times SetIsProjecting() has been called.
   int num_set_is_projecting_calls_;
+
+  // Number of pending suspend readiness callbacks.
+  int num_pending_suspend_readiness_callbacks_;
 
   // Last projecting state set in SetIsProjecting().
   bool is_projecting_;

@@ -11,9 +11,9 @@
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/dns_probe_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/net/net_error_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
+#include "components/error_page/common/net_error_info.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "net/base/net_errors.h"
@@ -22,7 +22,7 @@ using chrome_common_net::DnsProbeStatus;
 using chrome_common_net::DnsProbeStatusToString;
 using content::BrowserContext;
 using content::BrowserThread;
-using content::PageTransition;
+using ui::PageTransition;
 using content::RenderViewHost;
 using content::WebContents;
 using content::WebContentsObserver;
@@ -146,11 +146,11 @@ void NetErrorTabHelper::DidFailProvisionalLoad(
 
 NetErrorTabHelper::NetErrorTabHelper(WebContents* contents)
     : WebContentsObserver(contents),
-      weak_factory_(this),
       is_error_page_(false),
       dns_error_active_(false),
       dns_error_page_committed_(false),
-      dns_probe_status_(chrome_common_net::DNS_PROBE_POSSIBLE) {
+      dns_probe_status_(chrome_common_net::DNS_PROBE_POSSIBLE),
+      weak_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // If this helper is under test, it won't have a WebContents.

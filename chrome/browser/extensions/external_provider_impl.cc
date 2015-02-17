@@ -12,12 +12,12 @@
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
 #include "base/metrics/field_trial.h"
-#include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/external_component_loader.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
@@ -25,7 +25,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/external_provider_interface.h"
@@ -66,6 +66,7 @@ const char ExternalProviderImpl::kIsFromWebstore[] = "is_from_webstore";
 const char ExternalProviderImpl::kKeepIfPresent[] = "keep_if_present";
 const char ExternalProviderImpl::kWasInstalledByOem[] = "was_installed_by_oem";
 const char ExternalProviderImpl::kSupportedLocales[] = "supported_locales";
+const char ExternalProviderImpl::kMayBeUntrusted[] = "may_be_untrusted";
 
 ExternalProviderImpl::ExternalProviderImpl(
     VisitorInterface* service,
@@ -113,7 +114,7 @@ void ExternalProviderImpl::SetPrefs(base::DictionaryValue* prefs) {
     const std::string& extension_id = i.key();
     const base::DictionaryValue* extension = NULL;
 
-    if (!Extension::IdIsValid(extension_id)) {
+    if (!crx_file::id_util::IdIsValid(extension_id)) {
       LOG(WARNING) << "Malformed extension dictionary: key "
                    << extension_id.c_str() << " is not a valid id.";
       continue;
@@ -204,12 +205,12 @@ void ExternalProviderImpl::SetPrefs(base::DictionaryValue* prefs) {
         is_bookmark_app) {
       creation_flags |= Extension::FROM_BOOKMARK;
     }
-    bool is_from_webstore;
+    bool is_from_webstore = false;
     if (extension->GetBoolean(kIsFromWebstore, &is_from_webstore) &&
         is_from_webstore) {
       creation_flags |= Extension::FROM_WEBSTORE;
     }
-    bool keep_if_present;
+    bool keep_if_present = false;
     if (extension->GetBoolean(kKeepIfPresent, &keep_if_present) &&
         keep_if_present && profile_) {
       ExtensionServiceInterface* extension_service =
@@ -223,10 +224,15 @@ void ExternalProviderImpl::SetPrefs(base::DictionaryValue* prefs) {
         continue;
       }
     }
-    bool was_installed_by_oem;
+    bool was_installed_by_oem = false;
     if (extension->GetBoolean(kWasInstalledByOem, &was_installed_by_oem) &&
         was_installed_by_oem) {
       creation_flags |= Extension::WAS_INSTALLED_BY_OEM;
+    }
+    bool may_be_untrusted = false;
+    if (extension->GetBoolean(kMayBeUntrusted, &may_be_untrusted) &&
+        may_be_untrusted) {
+      creation_flags |= Extension::MAY_BE_UNTRUSTED;
     }
 
     std::string install_parameter;
@@ -359,6 +365,7 @@ void ExternalProviderImpl::CreateExternalProviders(
     Profile* profile,
     ProviderCollection* provider_list) {
   scoped_refptr<ExternalLoader> external_loader;
+  scoped_refptr<ExternalLoader> external_recommended_loader;
   extensions::Manifest::Location crx_location = Manifest::INVALID_LOCATION;
 #if defined(OS_CHROMEOS)
   policy::BrowserPolicyConnectorChromeOS* connector =
@@ -367,7 +374,9 @@ void ExternalProviderImpl::CreateExternalProviders(
   const user_manager::User* user =
       chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
   policy::DeviceLocalAccount::Type account_type;
-  if (user && policy::IsDeviceLocalAccountUser(user->email(), &account_type)) {
+  if (user &&
+      connector->IsEnterpriseManaged() &&
+      policy::IsDeviceLocalAccountUser(user->email(), &account_type)) {
     if (account_type == policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION)
       is_chrome_os_public_session = true;
     policy::DeviceLocalAccountPolicyBroker* broker =
@@ -380,14 +389,24 @@ void ExternalProviderImpl::CreateExternalProviders(
       NOTREACHED();
     }
   } else {
-    external_loader = new ExternalPolicyLoader(profile);
+    external_loader = new ExternalPolicyLoader(
+        ExtensionManagementFactory::GetForBrowserContext(profile),
+        ExternalPolicyLoader::FORCED);
+    external_recommended_loader = new ExternalPolicyLoader(
+        ExtensionManagementFactory::GetForBrowserContext(profile),
+        ExternalPolicyLoader::RECOMMENDED);
   }
 #else
-  external_loader = new ExternalPolicyLoader(profile);
+  external_loader = new ExternalPolicyLoader(
+      ExtensionManagementFactory::GetForBrowserContext(profile),
+      ExternalPolicyLoader::FORCED);
+  external_recommended_loader = new ExternalPolicyLoader(
+      ExtensionManagementFactory::GetForBrowserContext(profile),
+      ExternalPolicyLoader::RECOMMENDED);
 #endif
 
   // Policies are mandatory so they can't be skipped with command line flag.
-  if (external_loader) {
+  if (external_loader.get()) {
     provider_list->push_back(
         linked_ptr<ExternalProviderInterface>(
             new ExternalProviderImpl(
@@ -416,6 +435,17 @@ void ExternalProviderImpl::CreateExternalProviders(
     }
 #endif
     return;
+  }
+
+  // Extensions provided by recommended policies.
+  if (external_recommended_loader.get()) {
+    provider_list->push_back(linked_ptr<ExternalProviderInterface>(
+        new ExternalProviderImpl(service,
+                                 external_recommended_loader,
+                                 profile,
+                                 crx_location,
+                                 Manifest::EXTERNAL_PREF_DOWNLOAD,
+                                 Extension::NO_FLAGS)));
   }
 
   // In tests don't install extensions from default external sources.
@@ -453,7 +483,8 @@ void ExternalProviderImpl::CreateExternalProviders(
                 service,
                 new ExternalPrefLoader(
                     chrome::DIR_STANDALONE_EXTERNAL_EXTENSIONS,
-                    ExternalPrefLoader::NONE),
+                    ExternalPrefLoader::NONE,
+                    NULL),
                 profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
@@ -466,11 +497,15 @@ void ExternalProviderImpl::CreateExternalProviders(
     int external_apps_path_id = profile->IsSupervised() ?
         chrome::DIR_SUPERVISED_USERS_DEFAULT_APPS :
         chrome::DIR_STANDALONE_EXTERNAL_EXTENSIONS;
+    ExternalPrefLoader::Options pref_load_flags = profile->IsNewProfile() ?
+        ExternalPrefLoader::DELAY_LOAD_UNTIL_PRIORITY_SYNC :
+        ExternalPrefLoader::NONE;
     provider_list->push_back(
         linked_ptr<ExternalProviderInterface>(new ExternalProviderImpl(
             service,
             new ExternalPrefLoader(external_apps_path_id,
-                                   ExternalPrefLoader::NONE),
+                                   pref_load_flags,
+                                   profile),
             profile,
             Manifest::EXTERNAL_PREF,
             Manifest::EXTERNAL_PREF_DOWNLOAD,
@@ -512,7 +547,8 @@ void ExternalProviderImpl::CreateExternalProviders(
             new ExternalProviderImpl(
                 service,
                 new ExternalPrefLoader(chrome::DIR_EXTERNAL_EXTENSIONS,
-                                       check_admin_permissions_on_mac),
+                                       check_admin_permissions_on_mac,
+                                       NULL),
                 profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
@@ -526,7 +562,8 @@ void ExternalProviderImpl::CreateExternalProviders(
             new ExternalProviderImpl(
                 service,
                 new ExternalPrefLoader(chrome::DIR_USER_EXTERNAL_EXTENSIONS,
-                                       ExternalPrefLoader::NONE),
+                                       ExternalPrefLoader::NONE,
+                                       NULL),
                 profile,
                 Manifest::EXTERNAL_PREF,
                 Manifest::EXTERNAL_PREF_DOWNLOAD,
@@ -554,7 +591,8 @@ void ExternalProviderImpl::CreateExternalProviders(
                 profile,
                 service,
                 new ExternalPrefLoader(chrome::DIR_DEFAULT_APPS,
-                                       ExternalPrefLoader::NONE),
+                                       ExternalPrefLoader::NONE,
+                                       NULL),
                 Manifest::INTERNAL,
                 Manifest::INTERNAL,
                 Extension::FROM_WEBSTORE |

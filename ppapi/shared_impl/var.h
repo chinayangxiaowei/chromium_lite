@@ -19,7 +19,6 @@ namespace ppapi {
 class ArrayBufferVar;
 class ArrayVar;
 class DictionaryVar;
-class NPObjectVar;
 class ProxyObjectVar;
 class ResourceVar;
 class StringVar;
@@ -36,7 +35,6 @@ class PPAPI_SHARED_EXPORT Var : public base::RefCounted<Var> {
 
   virtual StringVar* AsStringVar();
   virtual ArrayBufferVar* AsArrayBufferVar();
-  virtual NPObjectVar* AsNPObjectVar();
   virtual V8ObjectVar* AsV8ObjectVar();
   virtual ProxyObjectVar* AsProxyObjectVar();
   virtual ArrayVar* AsArrayVar();
@@ -114,8 +112,8 @@ class PPAPI_SHARED_EXPORT StringVar : public Var {
   const std::string* ptr() const { return &value_; }
 
   // Var override.
-  virtual StringVar* AsStringVar() OVERRIDE;
-  virtual PP_VarType GetType() const OVERRIDE;
+  virtual StringVar* AsStringVar() override;
+  virtual PP_VarType GetType() const override;
 
   // Helper function to create a PP_Var of type string that contains a copy of
   // the given string. The input data must be valid UTF-8 encoded text, if it
@@ -178,8 +176,8 @@ class PPAPI_SHARED_EXPORT ArrayBufferVar : public Var {
                               base::SharedMemoryHandle* plugin_shm_handle) = 0;
 
   // Var override.
-  virtual ArrayBufferVar* AsArrayBufferVar() OVERRIDE;
-  virtual PP_VarType GetType() const OVERRIDE;
+  virtual ArrayBufferVar* AsArrayBufferVar() override;
+  virtual PP_VarType GetType() const override;
 
   // Helper function that converts a PP_Var to an ArrayBufferVar. This will
   // return NULL if the PP_Var is not of ArrayBuffer type.

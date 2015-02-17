@@ -54,7 +54,10 @@ void OverviewButtonTray::UpdateAfterLoginStatusChange(
 }
 
 bool OverviewButtonTray::PerformAction(const ui::Event& event) {
-  Shell::GetInstance()->window_selector_controller()->ToggleOverview();
+  WindowSelectorController* controller =
+      Shell::GetInstance()->window_selector_controller();
+  controller->ToggleOverview();
+  SetDrawBackgroundAsActive(controller->IsSelecting());
   return true;
 }
 
@@ -64,6 +67,10 @@ void OverviewButtonTray::OnMaximizeModeStarted() {
 
 void OverviewButtonTray::OnMaximizeModeEnded() {
   UpdateIconVisibility();
+}
+
+void OverviewButtonTray::OnOverviewModeEnding() {
+  SetDrawBackgroundAsActive(false);
 }
 
 bool OverviewButtonTray::ClickedOutsideBubble() {

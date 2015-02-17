@@ -12,7 +12,7 @@
 
 class GURL;
 
-namespace fileapi {
+namespace storage {
 class FileSystemURL;
 }
 
@@ -31,7 +31,8 @@ class SyncEventObserver {
 
   // Reports the file |url| was updated and resulted in |result|
   // by the sync file system backend.
-  virtual void OnFileSynced(const fileapi::FileSystemURL& url,
+  virtual void OnFileSynced(const storage::FileSystemURL& url,
+                            SyncFileType file_type,
                             SyncFileStatus status,
                             SyncAction action,
                             SyncDirection direction) = 0;

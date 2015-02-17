@@ -13,6 +13,7 @@
 #include "cc/debug/debug_colors.h"
 #include "cc/debug/frame_rate_counter.h"
 #include "cc/debug/paint_time_counter.h"
+#include "cc/output/begin_frame_args.h"
 #include "cc/output/renderer.h"
 #include "cc/quads/texture_draw_quad.h"
 #include "cc/resources/memory_history.h"
@@ -24,8 +25,8 @@
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 #include "third_party/skia/include/effects/SkColorMatrixFilter.h"
-#include "ui/gfx/point.h"
-#include "ui/gfx/size.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace cc {
 
@@ -77,7 +78,45 @@ HeadsUpDisplayLayerImpl::~HeadsUpDisplayLayerImpl() {}
 
 scoped_ptr<LayerImpl> HeadsUpDisplayLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) {
-  return HeadsUpDisplayLayerImpl::Create(tree_impl, id()).PassAs<LayerImpl>();
+  return HeadsUpDisplayLayerImpl::Create(tree_impl, id());
+}
+
+void HeadsUpDisplayLayerImpl::AcquireResource(
+    ResourceProvider* resource_provider) {
+  for (ScopedPtrVector<ScopedResource>::iterator it = resources_.begin();
+       it != resources_.end();
+       ++it) {
+    if (!resource_provider->InUseByConsumer((*it)->id())) {
+      resources_.swap(it, resources_.end() - 1);
+      return;
+    }
+  }
+
+  scoped_ptr<ScopedResource> resource =
+      ScopedResource::Create(resource_provider);
+  resource->Allocate(
+      content_bounds(), ResourceProvider::TextureHintImmutable, RGBA_8888);
+  resources_.push_back(resource.Pass());
+}
+
+class ResourceSizeIsEqualTo {
+ public:
+  explicit ResourceSizeIsEqualTo(const gfx::Size& size_)
+      : compare_size_(size_) {}
+
+  bool operator()(const ScopedResource* resource) {
+    return resource->size() == compare_size_;
+  }
+
+ private:
+  const gfx::Size compare_size_;
+};
+
+void HeadsUpDisplayLayerImpl::ReleaseUnmatchedSizeResources(
+    ResourceProvider* resource_provider) {
+  ScopedPtrVector<ScopedResource>::iterator it_erase =
+      resources_.partition(ResourceSizeIsEqualTo(content_bounds()));
+  resources_.erase(it_erase, resources_.end());
 }
 
 bool HeadsUpDisplayLayerImpl::WillDraw(DrawMode draw_mode,
@@ -85,31 +124,16 @@ bool HeadsUpDisplayLayerImpl::WillDraw(DrawMode draw_mode,
   if (draw_mode == DRAW_MODE_RESOURCELESS_SOFTWARE)
     return false;
 
-  if (!hud_resource_)
-    hud_resource_ = ScopedResource::Create(resource_provider);
-
-  // TODO(danakj): The HUD could swap between two textures instead of creating a
-  // texture every frame in ubercompositor.
-  if (hud_resource_->size() != content_bounds() ||
-      (hud_resource_->id() &&
-       resource_provider->InUseByConsumer(hud_resource_->id()))) {
-    hud_resource_->Free();
-  }
-
-  if (!hud_resource_->id()) {
-    hud_resource_->Allocate(content_bounds(),
-                            ResourceProvider::TextureUsageAny,
-                            RGBA_8888);
-  }
-
+  ReleaseUnmatchedSizeResources(resource_provider);
+  AcquireResource(resource_provider);
   return LayerImpl::WillDraw(draw_mode, resource_provider);
 }
 
 void HeadsUpDisplayLayerImpl::AppendQuads(
     RenderPass* render_pass,
-    const OcclusionTracker<LayerImpl>& occlusion_tracker,
+    const Occlusion& occlusion_in_content_space,
     AppendQuadsData* append_quads_data) {
-  if (!hud_resource_->id())
+  if (!resources_.back()->id())
     return;
 
   SharedQuadState* shared_quad_state =
@@ -130,7 +154,7 @@ void HeadsUpDisplayLayerImpl::AppendQuads(
                quad_rect,
                opaque_rect,
                visible_quad_rect,
-               hud_resource_->id(),
+               resources_.back()->id(),
                premultiplied_alpha,
                uv_top_left,
                uv_bottom_right,
@@ -142,7 +166,7 @@ void HeadsUpDisplayLayerImpl::AppendQuads(
 void HeadsUpDisplayLayerImpl::UpdateHudTexture(
     DrawMode draw_mode,
     ResourceProvider* resource_provider) {
-  if (draw_mode == DRAW_MODE_RESOURCELESS_SOFTWARE || !hud_resource_->id())
+  if (draw_mode == DRAW_MODE_RESOURCELESS_SOFTWARE || !resources_.back()->id())
     return;
 
   SkISize canvas_size;
@@ -179,20 +203,22 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
   DCHECK(pixels);
   gfx::Rect content_rect(content_bounds());
   DCHECK(info.colorType() == kN32_SkColorType);
-  resource_provider->SetPixels(hud_resource_->id(),
+  resource_provider->SetPixels(resources_.back()->id(),
                                static_cast<const uint8_t*>(pixels),
                                content_rect,
                                content_rect,
                                gfx::Vector2d());
 }
 
-void HeadsUpDisplayLayerImpl::ReleaseResources() { hud_resource_.reset(); }
+void HeadsUpDisplayLayerImpl::ReleaseResources() {
+  resources_.clear();
+}
 
 void HeadsUpDisplayLayerImpl::UpdateHudContents() {
   const LayerTreeDebugState& debug_state = layer_tree_impl()->debug_state();
 
   // Don't update numbers every frame so text is readable.
-  base::TimeTicks now = layer_tree_impl()->CurrentFrameTimeTicks();
+  base::TimeTicks now = layer_tree_impl()->CurrentBeginFrameArgs().frame_time;
   if (base::TimeDelta(now - time_of_last_graph_update_).InSecondsF() > 0.25f) {
     time_of_last_graph_update_ = now;
 
@@ -314,7 +340,7 @@ void HeadsUpDisplayLayerImpl::DrawGraphLines(SkCanvas* canvas,
                    bounds.right(),
                    bounds.top() + indicator_top,
                    *paint);
-  paint->setXfermode(NULL);
+  paint->setXfermode(nullptr);
 }
 
 SkRect HeadsUpDisplayLayerImpl::DrawFPSDisplay(
@@ -358,6 +384,8 @@ SkRect HeadsUpDisplayLayerImpl::DrawFPSDisplay(
       base::StringPrintf("FPS:%5.1f", fps_graph_.value);
   const std::string min_max_text =
       base::StringPrintf("%.0f-%.0f", fps_graph_.min, fps_graph_.max);
+
+  VLOG(1) << value_text;
 
   paint.setColor(DebugColors::FPSDisplayTextAndGraphColor());
   DrawText(canvas,
@@ -459,7 +487,7 @@ SkRect HeadsUpDisplayLayerImpl::DrawMemoryDisplay(SkCanvas* canvas,
                                                   int right,
                                                   int top,
                                                   int width) const {
-  if (!memory_entry_.bytes_total())
+  if (!memory_entry_.total_bytes_used)
     return SkRect::MakeEmpty();
 
   const int kPadding = 4;
@@ -469,7 +497,7 @@ SkRect HeadsUpDisplayLayerImpl::DrawMemoryDisplay(SkCanvas* canvas,
   const int left = bounds().width() - width - right;
   const SkRect area = SkRect::MakeXYWH(left, top, width, height);
 
-  const double megabyte = 1024.0 * 1024.0;
+  const double kMegabyte = 1024.0 * 1024.0;
 
   SkPaint paint = CreatePaint();
   DrawGraphBackground(canvas, &paint, area);
@@ -488,20 +516,14 @@ SkRect HeadsUpDisplayLayerImpl::DrawMemoryDisplay(SkCanvas* canvas,
            kFontHeight,
            title_pos);
 
-  std::string text =
-      base::StringPrintf("%6.1f MB used",
-                         (memory_entry_.bytes_unreleasable +
-                          memory_entry_.bytes_allocated) / megabyte);
+  std::string text = base::StringPrintf(
+      "%6.1f MB used", memory_entry_.total_bytes_used / kMegabyte);
   DrawText(canvas, &paint, text, SkPaint::kRight_Align, kFontHeight, stat1_pos);
 
-  if (memory_entry_.bytes_over) {
+  if (!memory_entry_.had_enough_memory)
     paint.setColor(SK_ColorRED);
-    text = base::StringPrintf("%6.1f MB over",
-                              memory_entry_.bytes_over / megabyte);
-  } else {
-    text = base::StringPrintf("%6.1f MB max ",
-                              memory_entry_.total_budget_in_bytes / megabyte);
-  }
+  text = base::StringPrintf("%6.1f MB max ",
+                            memory_entry_.total_budget_in_bytes / kMegabyte);
   DrawText(canvas, &paint, text, SkPaint::kRight_Align, kFontHeight, stat2_pos);
 
   return area;
@@ -545,13 +567,8 @@ SkRect HeadsUpDisplayLayerImpl::DrawPaintTimeDisplay(
       "%.1f-%.1f", paint_time_graph_.min, paint_time_graph_.max);
 
   paint.setColor(DebugColors::PaintTimeDisplayTextAndGraphColor());
-  DrawText(canvas,
-           &paint,
-           "Page paint time (ms)",
-           SkPaint::kLeft_Align,
-           kFontHeight,
-           text_bounds.left(),
-           text_bounds.bottom());
+  DrawText(canvas, &paint, "Compositor frame time (ms)", SkPaint::kLeft_Align,
+           kFontHeight, text_bounds.left(), text_bounds.bottom());
   DrawText(canvas,
            &paint,
            value_text,

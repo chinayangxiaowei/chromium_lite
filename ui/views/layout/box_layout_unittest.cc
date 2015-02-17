@@ -14,9 +14,7 @@ namespace {
 
 class BoxLayoutTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
-    host_.reset(new View);
-  }
+  void SetUp() override { host_.reset(new View); }
 
   scoped_ptr<View> host_;
 };
@@ -588,6 +586,26 @@ TEST_F(BoxLayoutTest, FlexShrinkVerticalWithRemainder) {
     EXPECT_EQ(gfx::Rect(0, 3, 20, 14).ToString(), v2->bounds().ToString());
     EXPECT_EQ(gfx::Rect(0, 17, 20, 3).ToString(), v3->bounds().ToString());
   }
+}
+
+TEST_F(BoxLayoutTest, MinimumCrossAxisVertical) {
+  BoxLayout* layout = new BoxLayout(BoxLayout::kVertical, 0, 0, 0);
+  host_->SetLayoutManager(layout);
+  View* v1 = new StaticSizedView(gfx::Size(20, 10));
+  host_->AddChildView(v1);
+  layout->set_minimum_cross_axis_size(30);
+
+  EXPECT_EQ(gfx::Size(30, 10), layout->GetPreferredSize(host_.get()));
+}
+
+TEST_F(BoxLayoutTest, MinimumCrossAxisHorizontal) {
+  BoxLayout* layout = new BoxLayout(BoxLayout::kHorizontal, 0, 0, 0);
+  host_->SetLayoutManager(layout);
+  View* v1 = new StaticSizedView(gfx::Size(20, 10));
+  host_->AddChildView(v1);
+  layout->set_minimum_cross_axis_size(30);
+
+  EXPECT_EQ(gfx::Size(20, 30), layout->GetPreferredSize(host_.get()));
 }
 
 }  // namespace views

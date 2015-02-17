@@ -7,7 +7,7 @@
 
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/extensions/chrome_extension_function.h"
-#include "chrome/browser/history/history_types.h"
+#include "components/history/core/browser/history_types.h"
 
 namespace extensions {
 
@@ -18,10 +18,10 @@ class TopSitesGetFunction : public ChromeAsyncExtensionFunction {
   TopSitesGetFunction();
 
  protected:
-  virtual ~TopSitesGetFunction();
+  ~TopSitesGetFunction() override;
 
   // ExtensionFunction:
-  virtual bool RunAsync() OVERRIDE;
+  bool RunAsync() override;
 
  private:
   void OnMostVisitedURLsAvailable(const history::MostVisitedURLList& data);

@@ -4,9 +4,6 @@
 
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
 
-#include "apps/app_window.h"
-#include "apps/app_window_registry.h"
-#include "apps/ui/native_app_window.h"
 #include "ash/ash_switches.h"
 #include "ash/display/display_controller.h"
 #include "ash/shelf/shelf.h"
@@ -30,7 +27,6 @@
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/ash/launcher/browser_shortcut_launcher_item_controller.h"
@@ -52,17 +48,22 @@
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/app_window/app_window.h"
+#include "extensions/browser/app_window/app_window_registry.h"
+#include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/switches.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/app_list/views/app_list_item_view.h"
 #include "ui/app_list/views/apps_grid_view.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/events/event.h"
 #include "ui/events/test/event_generator.h"
 
-using apps::AppWindow;
+using extensions::AppWindow;
 using extensions::Extension;
 using content::WebContents;
 
@@ -80,19 +81,20 @@ class TestEvent : public ui::Event {
   DISALLOW_COPY_AND_ASSIGN(TestEvent);
 };
 
-class TestAppWindowRegistryObserver : public apps::AppWindowRegistry::Observer {
+class TestAppWindowRegistryObserver
+    : public extensions::AppWindowRegistry::Observer {
  public:
   explicit TestAppWindowRegistryObserver(Profile* profile)
       : profile_(profile), icon_updates_(0) {
-    apps::AppWindowRegistry::Get(profile_)->AddObserver(this);
+    extensions::AppWindowRegistry::Get(profile_)->AddObserver(this);
   }
 
   virtual ~TestAppWindowRegistryObserver() {
-    apps::AppWindowRegistry::Get(profile_)->RemoveObserver(this);
+    extensions::AppWindowRegistry::Get(profile_)->RemoveObserver(this);
   }
 
   // Overridden from AppWindowRegistry::Observer:
-  virtual void OnAppWindowIconChanged(AppWindow* app_window) OVERRIDE {
+  virtual void OnAppWindowIconChanged(AppWindow* app_window) override {
     ++icon_updates_;
   }
 
@@ -115,7 +117,7 @@ class LauncherPlatformAppBrowserTest
 
   virtual ~LauncherPlatformAppBrowserTest() {}
 
-  virtual void RunTestOnMainThreadLoop() OVERRIDE {
+  virtual void RunTestOnMainThreadLoop() override {
     shelf_ = ash::Shelf::ForPrimaryDisplay();
     controller_ = ChromeLauncherController::instance();
     return extensions::PlatformAppBrowserTest::RunTestOnMainThreadLoop();
@@ -190,7 +192,7 @@ class ShelfAppBrowserTest : public ExtensionBrowserTest {
 
   virtual ~ShelfAppBrowserTest() {}
 
-  virtual void RunTestOnMainThreadLoop() OVERRIDE {
+  virtual void RunTestOnMainThreadLoop() override {
     shelf_ = ash::Shelf::ForPrimaryDisplay();
     model_ = ash::test::ShellTestApi(ash::Shell::GetInstance()).shelf_model();
     controller_ = ChromeLauncherController::instance();
@@ -310,7 +312,7 @@ class ShelfAppBrowserTestNoDefaultBrowser : public ShelfAppBrowserTest {
   ShelfAppBrowserTestNoDefaultBrowser() {}
   virtual ~ShelfAppBrowserTestNoDefaultBrowser() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     ShelfAppBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kNoStartupWindow);
   }
@@ -327,7 +329,7 @@ class ShelfAppBrowserNoMinimizeOnClick : public LauncherPlatformAppBrowserTest {
   ShelfAppBrowserNoMinimizeOnClick() {}
   virtual ~ShelfAppBrowserNoMinimizeOnClick() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     LauncherPlatformAppBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(
         switches::kDisableMinimizeOnSecondLauncherItemClick);
@@ -1632,7 +1634,8 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, DISABLED_DragAndDrop) {
   ASSERT_TRUE(grid_view->has_drag_and_drop_host_for_test());
 
   // There should be 2 items in our application list.
-  const views::ViewModel* vm_grid = grid_view->view_model_for_test();
+  const views::ViewModelT<app_list::AppListItemView>* vm_grid =
+      grid_view->view_model_for_test();
   EXPECT_EQ(2, vm_grid->view_size());
 
   // Test #1: Drag an app list which does not exist yet item into the
@@ -1732,7 +1735,7 @@ class ShelfAppBrowserTestWithMultiMonitor
   ShelfAppBrowserTestWithMultiMonitor() {}
   virtual ~ShelfAppBrowserTestWithMultiMonitor() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     ShelfAppBrowserTestNoDefaultBrowser::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII("ash-host-window-bounds",
                                     "800x600,801+0-800x600");
@@ -1782,7 +1785,8 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestWithMultiMonitor,
   ASSERT_TRUE(grid_view->has_drag_and_drop_host_for_test());
 
   // There should be 2 items in our application list.
-  const views::ViewModel* vm_grid = grid_view->view_model_for_test();
+  const views::ViewModelT<app_list::AppListItemView>* vm_grid =
+      grid_view->view_model_for_test();
   EXPECT_EQ(2, vm_grid->view_size());
 
   // Drag an app list item which does not exist yet in the shelf.
@@ -1956,7 +1960,8 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, ClickItem) {
       ash::test::AppListControllerTestApi(ash::Shell::GetInstance()).
           GetRootGridView();
   ASSERT_TRUE(grid_view);
-  const views::ViewModel* vm_grid = grid_view->view_model_for_test();
+  const views::ViewModelT<app_list::AppListItemView>* vm_grid =
+      grid_view->view_model_for_test();
   EXPECT_EQ(2, vm_grid->view_size());
   gfx::Rect bounds_grid_1 = vm_grid->view_at(1)->GetBoundsInScreen();
   // Test now that a click does create a new application tab.
@@ -2065,16 +2070,16 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, OverflowBubble) {
 // still gets detected properly.
 IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, V1AppNavigation) {
   // We assume that the web store is always there (which it apparently is).
-  controller_->PinAppWithID(extension_misc::kWebStoreAppId);
+  controller_->PinAppWithID(extensions::kWebStoreAppId);
   ash::ShelfID id = controller_->GetShelfIDForAppID(
-      extension_misc::kWebStoreAppId);
+      extensions::kWebStoreAppId);
   ASSERT_NE(0, id);
   EXPECT_EQ(ash::STATUS_CLOSED, model_->ItemByID(id)->status);
 
   // Create a windowed application.
   AppLaunchParams params(
       profile(),
-      controller_->GetExtensionForAppID(extension_misc::kWebStoreAppId),
+      controller_->GetExtensionForAppID(extensions::kWebStoreAppId),
       0,
       chrome::HOST_DESKTOP_TYPE_ASH);
   params.container = extensions::LAUNCH_CONTAINER_WINDOW;

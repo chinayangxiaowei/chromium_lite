@@ -9,9 +9,9 @@
 #include "base/message_loop/message_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
-#include "grit/generated_resources.h"
 #import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -53,20 +53,18 @@ class ToolkitDelegateMac : public RenderViewContextMenuBase::ToolkitDelegate {
  public:
   explicit ToolkitDelegateMac(RenderViewContextMenuMac* context_menu)
       : context_menu_(context_menu) {}
-  virtual ~ToolkitDelegateMac() {}
+  ~ToolkitDelegateMac() override {}
 
  private:
   // ToolkitDelegate:
-  virtual void Init(ui::SimpleMenuModel* menu_model) OVERRIDE {
+  void Init(ui::SimpleMenuModel* menu_model) override {
     context_menu_->InitToolkitMenu();
   }
-  virtual void Cancel() OVERRIDE{
-    context_menu_->CancelToolkitMenu();
-  }
-  virtual void UpdateMenuItem(int command_id,
-                              bool enabled,
-                              bool hidden,
-                              const base::string16& title) OVERRIDE {
+  void Cancel() override { context_menu_->CancelToolkitMenu(); }
+  void UpdateMenuItem(int command_id,
+                      bool enabled,
+                      bool hidden,
+                      const base::string16& title) override {
     context_menu_->UpdateToolkitMenuItem(
         command_id, enabled, hidden, title);
   }

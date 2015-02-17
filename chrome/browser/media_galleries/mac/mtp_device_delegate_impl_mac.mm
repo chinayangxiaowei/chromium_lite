@@ -11,7 +11,7 @@
 #include "components/storage_monitor/image_capture_device.h"
 #include "components/storage_monitor/image_capture_device_manager.h"
 #include "content/public/browser/browser_thread.h"
-#include "webkit/browser/fileapi/async_file_util.h"
+#include "storage/browser/fileapi/async_file_util.h"
 
 namespace {
 
@@ -38,7 +38,7 @@ class MTPDeviceDelegateImplMac::DeviceListener
  public:
   DeviceListener(MTPDeviceDelegateImplMac* delegate)
       : delegate_(delegate) {}
-  virtual ~DeviceListener() {}
+  ~DeviceListener() override {}
 
   void OpenCameraSession(const std::string& device_id);
   void CloseCameraSessionAndDelete();
@@ -46,12 +46,12 @@ class MTPDeviceDelegateImplMac::DeviceListener
   void DownloadFile(const std::string& name, const base::FilePath& local_path);
 
   // ImageCaptureDeviceListener
-  virtual void ItemAdded(const std::string& name,
-                         const base::File::Info& info) OVERRIDE;
-  virtual void NoMoreItems() OVERRIDE;
-  virtual void DownloadedFile(const std::string& name,
-                              base::File::Error error) OVERRIDE;
-  virtual void DeviceRemoved() OVERRIDE;
+  void ItemAdded(const std::string& name,
+                 const base::File::Info& info) override;
+  void NoMoreItems() override;
+  void DownloadedFile(const std::string& name,
+                      base::File::Error error) override;
+  void DeviceRemoved() override;
 
   // Used during delegate destruction to ensure there are no more calls
   // to the delegate by the listener.
@@ -201,7 +201,9 @@ bool MTPDeviceDelegateImplMac::IsStreaming() {
 
 void MTPDeviceDelegateImplMac::ReadBytes(
     const base::FilePath& device_file_path,
-    net::IOBuffer* buf, int64 offset, int buf_len,
+    const scoped_refptr<net::IOBuffer>& buf,
+    int64 offset,
+    int buf_len,
     const ReadBytesSuccessCallback& success_callback,
     const ErrorCallback& error_callback) {
   NOTREACHED();
@@ -370,7 +372,7 @@ void MTPDeviceDelegateImplMac::NotifyReadDir() {
     // where we find the entry for the directory, then read out all first-level
     // children. We then break when the DirName is greater than the read_path,
     // as that means we've passed the subdir we're reading.
-    fileapi::AsyncFileUtil::EntryList entry_list;
+    storage::AsyncFileUtil::EntryList entry_list;
     bool found_path = false;
     for (size_t i = 0; i < file_paths_.size(); ++i) {
       if (file_paths_[i] == read_path) {
@@ -388,7 +390,7 @@ void MTPDeviceDelegateImplMac::NotifyReadDir() {
       base::FilePath relative_path;
       read_path.AppendRelativePath(file_paths_[i], &relative_path);
       base::File::Info info = file_info_[file_paths_[i].value()];
-      fileapi::DirectoryEntry entry;
+      storage::DirectoryEntry entry;
       entry.name = relative_path.value();
       entry.is_directory = info.is_directory;
       entry.size = info.size;

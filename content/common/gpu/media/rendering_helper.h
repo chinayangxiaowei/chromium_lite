@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/cancelable_callback.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gl/gl_bindings.h"
@@ -50,6 +50,10 @@ struct RenderingHelperParams {
 
   // The rendering FPS.
   int rendering_fps;
+
+  // The number of empty frames rendered when the rendering helper is
+  // initialized.
+  int warm_up_iterations;
 
   // The desired size of each window. We play each stream in its own window
   // on the screen.
@@ -100,8 +104,9 @@ class RenderingHelper {
   void QueueVideoFrame(size_t window_id,
                        scoped_refptr<VideoFrameTexture> video_frame);
 
-  // Drops all the pending video frames of the specified window.
-  void DropPendingFrames(size_t window_id);
+  // Flushes the pending frames. Notify the rendering_helper there won't be
+  // more video frames.
+  void Flush(size_t window_id);
 
   // Delete |texture_id|.
   void DeleteTexture(uint32 texture_id);
@@ -123,12 +128,15 @@ class RenderingHelper {
     // The rect on the screen where the video will be rendered.
     gfx::Rect render_area;
 
-    // True if the last (and the only one) frame in pending_frames has
-    // been rendered. We keep the last remaining frame in pending_frames even
-    // after it has been rendered, so that we have something to display if the
-    // client is falling behind on providing us with new frames during
-    // timer-driven playback.
-    bool last_frame_rendered;
+    // True if there won't be any new video frames comming.
+    bool is_flushing;
+
+    // The number of frames need to be dropped to catch up the rendering. We
+    // always keep the last remaining frame in pending_frames even after it
+    // has been rendered, so that we have something to display if the client
+    // is falling behind on providing us with new frames during timer-driven
+    // playback.
+    int frames_to_drop;
 
     // The video frames pending for rendering.
     std::queue<scoped_refptr<VideoFrameTexture> > pending_frames;
@@ -141,14 +149,21 @@ class RenderingHelper {
 
   void RenderContent();
 
+  void WarmUpRendering(int warm_up_iterations);
+
   void LayoutRenderingAreas(const std::vector<gfx::Size>& window_sizes);
+
+  void UpdateVSyncParameters(base::WaitableEvent* done,
+                             const base::TimeTicks timebase,
+                             const base::TimeDelta interval);
+
+  void DropOneFrameForAllVideos();
+  void ScheduleNextRenderContent();
 
   // Render |texture_id| to the current view port of the screen using target
   // |texture_target|.
   void RenderTexture(uint32 texture_target, uint32 texture_id);
 
-  // Timer to trigger the RenderContent() repeatly.
-  scoped_ptr<base::RepeatingTimer<RenderingHelper> > render_timer_;
   base::MessageLoop* message_loop_;
 
   scoped_refptr<gfx::GLContext> gl_context_;
@@ -168,6 +183,10 @@ class RenderingHelper {
   gfx::Size thumbnail_size_;
   GLuint program_;
   base::TimeDelta frame_duration_;
+  base::TimeTicks scheduled_render_time_;
+  base::CancelableClosure render_task_;
+  base::TimeTicks vsync_timebase_;
+  base::TimeDelta vsync_interval_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderingHelper);
 };

@@ -48,7 +48,7 @@ class FullFeedFetcher : public ChangeListLoader::FeedFetcher {
   virtual ~FullFeedFetcher() {
   }
 
-  virtual void Run(const FeedFetcherCallback& callback) OVERRIDE {
+  virtual void Run(const FeedFetcherCallback& callback) override {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     DCHECK(!callback.is_null());
 
@@ -114,7 +114,7 @@ class DeltaFeedFetcher : public ChangeListLoader::FeedFetcher {
   virtual ~DeltaFeedFetcher() {
   }
 
-  virtual void Run(const FeedFetcherCallback& callback) OVERRIDE {
+  virtual void Run(const FeedFetcherCallback& callback) override {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     DCHECK(!callback.is_null());
 
@@ -377,7 +377,7 @@ void ChangeListLoader::Load(const FileOperationCallback& callback) {
   // Check the current status of local metadata, and start loading if needed.
   int64* local_changestamp = new int64(0);
   base::PostTaskAndReplyWithResult(
-      blocking_task_runner_,
+      blocking_task_runner_.get(),
       FROM_HERE,
       base::Bind(&ResourceMetadata::GetLargestChangestamp,
                  base::Unretained(resource_metadata_),

@@ -6,8 +6,6 @@
 
 #include <string>
 
-#include "ash/session/session_state_delegate.h"
-#include "ash/shell.h"
 #include "base/bind.h"
 #include "base/prefs/pref_change_registrar.h"
 #include "base/strings/string_number_conversions.h"
@@ -16,22 +14,27 @@
 #include "base/sys_info.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
+#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos_factory.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/proxy_cros_settings_parser.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chromeos/ui_account_tweaks.h"
-#include "chrome/browser/ui/webui/help/help_handler.h"
 #include "chrome/browser/ui/webui/options/chromeos/accounts_options_handler.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_ui.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+
+#if !defined(USE_ATHENA)
+#include "ash/session/session_state_delegate.h"
+#include "ash/shell.h"
+#endif
 
 namespace chromeos {
 namespace options {
@@ -225,7 +228,14 @@ void CoreChromeOSOptionsHandler::SetPref(const std::string& pref_name,
   }
   if (!CrosSettings::IsCrosSettings(pref_name))
     return ::options::CoreOptionsHandler::SetPref(pref_name, value, metric);
-  CrosSettings::Get()->Set(pref_name, *value);
+  Profile* profile = Profile::FromWebUI(web_ui());
+  OwnerSettingsServiceChromeOS* service =
+      profile ? OwnerSettingsServiceChromeOSFactory::GetForProfile(profile)
+              : nullptr;
+  if (service && service->HandlesSetting(pref_name))
+    service->Set(pref_name, *value);
+  else
+    CrosSettings::Get()->Set(pref_name, *value);
 
   ProcessUserMetric(value, metric);
 }
@@ -243,6 +253,11 @@ void CoreChromeOSOptionsHandler::StopObservingPref(const std::string& path) {
 base::Value* CoreChromeOSOptionsHandler::CreateValueForPref(
     const std::string& pref_name,
     const std::string& controlling_pref_name) {
+  // Athena doesn't have ash::Shell and its session_state_delegate, so the
+  // following code will cause crash.
+  // TODO(mukai|antrim): re-enable this after having session_state_delegate.
+  // http://crbug.com/370175
+#if !defined(USE_ATHENA)
   // The screen lock setting is shared if multiple users are logged in and at
   // least one has chosen to require passwords.
   if (pref_name == prefs::kEnableAutoScreenLock &&
@@ -270,6 +285,7 @@ base::Value* CoreChromeOSOptionsHandler::CreateValueForPref(
       }
     }
   }
+#endif
 
   return CoreOptionsHandler::CreateValueForPref(pref_name,
                                                 controlling_pref_name);
@@ -328,13 +344,6 @@ void CoreChromeOSOptionsHandler::GetLocalizedValues(
             IDS_OPTIONS_CONTROLLED_SETTING_OWNER,
             base::ASCIIToUTF16(user_manager->GetOwnerEmail())));
   }
-
-  localized_strings->SetString(
-      "browserVersion",
-      l10n_util::GetStringFUTF16(IDS_ABOUT_PRODUCT_VERSION,
-                                 ::HelpHandler::BuildBrowserVersionString()));
-  localized_strings->SetBoolean("showVersion",
-                                ::switches::AboutInSettingsEnabled());
 }
 
 void CoreChromeOSOptionsHandler::SelectNetworkCallback(

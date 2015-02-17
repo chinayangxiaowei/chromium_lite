@@ -8,7 +8,6 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/browser.h"
@@ -19,10 +18,10 @@
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/common/extension.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_MACOSX)
@@ -33,7 +32,7 @@ using extensions::Extension;
 
 class PanelExtensionBrowserTest : public ExtensionBrowserTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kEnablePanels);
     PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir_);
@@ -123,11 +122,12 @@ class PanelContextMenu : public RenderViewContextMenu {
     return menu_model_.GetIndexOfCommandId(command_id) != -1;
   }
 
+  void Show() override {}
+
  protected:
   // RenderViewContextMenu implementation.
-  virtual bool GetAcceleratorForCommandId(
-      int command_id,
-      ui::Accelerator* accelerator) OVERRIDE {
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* accelerator) override {
     return false;
   }
 };

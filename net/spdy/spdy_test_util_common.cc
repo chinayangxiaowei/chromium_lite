@@ -53,9 +53,12 @@ void ParseUrl(base::StringPiece url, std::string* scheme, std::string* host,
 
 NextProtoVector SpdyNextProtos() {
   NextProtoVector next_protos;
-  for (int i = kProtoMinimumVersion; i <= kProtoMaximumVersion; ++i) {
-    next_protos.push_back(static_cast<NextProto>(i));
-  }
+  next_protos.push_back(kProtoHTTP11);
+  next_protos.push_back(kProtoDeprecatedSPDY2);
+  next_protos.push_back(kProtoSPDY3);
+  next_protos.push_back(kProtoSPDY31);
+  next_protos.push_back(kProtoSPDY4);
+  next_protos.push_back(kProtoQUIC1SPDY3);
   return next_protos;
 }
 
@@ -205,49 +208,57 @@ namespace {
 class PriorityGetter : public BufferedSpdyFramerVisitorInterface {
  public:
   PriorityGetter() : priority_(0) {}
-  virtual ~PriorityGetter() {}
+  ~PriorityGetter() override {}
 
   SpdyPriority priority() const {
     return priority_;
   }
 
-  virtual void OnError(SpdyFramer::SpdyError error_code) OVERRIDE {}
-  virtual void OnStreamError(SpdyStreamId stream_id,
-                             const std::string& description) OVERRIDE {}
-  virtual void OnSynStream(SpdyStreamId stream_id,
-                           SpdyStreamId associated_stream_id,
-                           SpdyPriority priority,
-                           bool fin,
-                           bool unidirectional,
-                           const SpdyHeaderBlock& headers) OVERRIDE {
+  void OnError(SpdyFramer::SpdyError error_code) override {}
+  void OnStreamError(SpdyStreamId stream_id,
+                     const std::string& description) override {}
+  void OnSynStream(SpdyStreamId stream_id,
+                   SpdyStreamId associated_stream_id,
+                   SpdyPriority priority,
+                   bool fin,
+                   bool unidirectional,
+                   const SpdyHeaderBlock& headers) override {
     priority_ = priority;
   }
-  virtual void OnSynReply(SpdyStreamId stream_id,
-                          bool fin,
-                          const SpdyHeaderBlock& headers) OVERRIDE {}
-  virtual void OnHeaders(SpdyStreamId stream_id,
-                         bool fin,
-                         const SpdyHeaderBlock& headers) OVERRIDE {}
-  virtual void OnDataFrameHeader(SpdyStreamId stream_id,
-                                 size_t length,
-                                 bool fin) OVERRIDE {}
-  virtual void OnStreamFrameData(SpdyStreamId stream_id,
-                                 const char* data,
-                                 size_t len,
-                                 bool fin) OVERRIDE {}
-  virtual void OnSettings(bool clear_persisted) OVERRIDE {}
-  virtual void OnSetting(
-      SpdySettingsIds id, uint8 flags, uint32 value) OVERRIDE {}
-  virtual void OnPing(SpdyPingId unique_id, bool is_ack) OVERRIDE {}
-  virtual void OnRstStream(SpdyStreamId stream_id,
-                           SpdyRstStreamStatus status) OVERRIDE {}
-  virtual void OnGoAway(SpdyStreamId last_accepted_stream_id,
-                        SpdyGoAwayStatus status) OVERRIDE {}
-  virtual void OnWindowUpdate(SpdyStreamId stream_id,
-                              uint32 delta_window_size) OVERRIDE {}
-  virtual void OnPushPromise(SpdyStreamId stream_id,
-                             SpdyStreamId promised_stream_id,
-                             const SpdyHeaderBlock& headers) OVERRIDE {}
+  void OnSynReply(SpdyStreamId stream_id,
+                  bool fin,
+                  const SpdyHeaderBlock& headers) override {}
+  void OnHeaders(SpdyStreamId stream_id,
+                 bool has_priority,
+                 SpdyPriority priority,
+                 bool fin,
+                 const SpdyHeaderBlock& headers) override {
+    if (has_priority) {
+      priority_ = priority;
+    }
+  }
+  void OnDataFrameHeader(SpdyStreamId stream_id,
+                         size_t length,
+                         bool fin) override {}
+  void OnStreamFrameData(SpdyStreamId stream_id,
+                         const char* data,
+                         size_t len,
+                         bool fin) override {}
+  void OnSettings(bool clear_persisted) override {}
+  void OnSetting(SpdySettingsIds id, uint8 flags, uint32 value) override {}
+  void OnPing(SpdyPingId unique_id, bool is_ack) override {}
+  void OnRstStream(SpdyStreamId stream_id,
+                   SpdyRstStreamStatus status) override {}
+  void OnGoAway(SpdyStreamId last_accepted_stream_id,
+                SpdyGoAwayStatus status) override {}
+  void OnWindowUpdate(SpdyStreamId stream_id,
+                      uint32 delta_window_size) override {}
+  void OnPushPromise(SpdyStreamId stream_id,
+                     SpdyStreamId promised_stream_id,
+                     const SpdyHeaderBlock& headers) override {}
+  bool OnUnknownFrame(SpdyStreamId stream_id, int frame_type) override {
+    return false;
+  }
 
  private:
   SpdyPriority priority_;
@@ -520,8 +531,8 @@ base::WeakPtr<SpdySession> CreateSpdySessionHelper(
 
   scoped_refptr<TransportSocketParams> transport_params(
       new TransportSocketParams(
-          key.host_port_pair(), false, false,
-          OnHostResolutionCallback()));
+          key.host_port_pair(), false, false, OnHostResolutionCallback(),
+          TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT));
 
   scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
   TestCompletionCallback callback;
@@ -607,46 +618,46 @@ class FakeSpdySessionClientSocket : public MockClientSocket {
       : MockClientSocket(BoundNetLog()),
         read_result_(read_result) {}
 
-  virtual ~FakeSpdySessionClientSocket() {}
+  ~FakeSpdySessionClientSocket() override {}
 
-  virtual int Read(IOBuffer* buf, int buf_len,
-                   const CompletionCallback& callback) OVERRIDE {
+  int Read(IOBuffer* buf,
+           int buf_len,
+           const CompletionCallback& callback) override {
     return read_result_;
   }
 
-  virtual int Write(IOBuffer* buf, int buf_len,
-                    const CompletionCallback& callback) OVERRIDE {
+  int Write(IOBuffer* buf,
+            int buf_len,
+            const CompletionCallback& callback) override {
     return ERR_IO_PENDING;
   }
 
   // Return kProtoUnknown to use the pool's default protocol.
-  virtual NextProto GetNegotiatedProtocol() const OVERRIDE {
-    return kProtoUnknown;
-  }
+  NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
 
   // The functions below are not expected to be called.
 
-  virtual int Connect(const CompletionCallback& callback) OVERRIDE {
+  int Connect(const CompletionCallback& callback) override {
     ADD_FAILURE();
     return ERR_UNEXPECTED;
   }
 
-  virtual bool WasEverUsed() const OVERRIDE {
+  bool WasEverUsed() const override {
     ADD_FAILURE();
     return false;
   }
 
-  virtual bool UsingTCPFastOpen() const OVERRIDE {
+  bool UsingTCPFastOpen() const override {
     ADD_FAILURE();
     return false;
   }
 
-  virtual bool WasNpnNegotiated() const OVERRIDE {
+  bool WasNpnNegotiated() const override {
     ADD_FAILURE();
     return false;
   }
 
-  virtual bool GetSSLInfo(SSLInfo* ssl_info) OVERRIDE {
+  bool GetSSLInfo(SSLInfo* ssl_info) override {
     ADD_FAILURE();
     return false;
   }
@@ -781,6 +792,7 @@ SpdyFrame* SpdyTestUtil::ConstructSpdyFrame(
       break;
     case HEADERS:
       frame = framer.CreateHeaders(header_info.id, header_info.control_flags,
+                                   header_info.priority,
                                    headers.get());
       break;
     default:

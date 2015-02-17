@@ -37,7 +37,6 @@ class NetworkChangeNotifier;
 }  // namespace net
 
 namespace content {
-class AudioMirroringManager;
 class BrowserMainParts;
 class BrowserOnlineStateObserver;
 class BrowserShutdownImpl;
@@ -49,7 +48,9 @@ class StartupTaskRunner;
 class TimeZoneMonitor;
 struct MainFunctionParams;
 
-#if defined(OS_LINUX)
+#if defined(OS_ANDROID)
+class ScreenOrientationDelegate;
+#elif defined(OS_LINUX)
 class DeviceMonitorLinux;
 #elif defined(OS_MACOSX)
 class DeviceMonitorMac;
@@ -92,9 +93,6 @@ class CONTENT_EXPORT BrowserMainLoop {
   int GetResultCode() const { return result_code_; }
 
   media::AudioManager* audio_manager() const { return audio_manager_.get(); }
-  AudioMirroringManager* audio_mirroring_manager() const {
-    return audio_mirroring_manager_.get();
-  }
   MediaStreamManager* media_stream_manager() const {
     return media_stream_manager_.get();
   }
@@ -160,7 +158,6 @@ class CONTENT_EXPORT BrowserMainLoop {
   scoped_ptr<media::UserInputMonitor> user_input_monitor_;
   scoped_ptr<media::AudioManager> audio_manager_;
   scoped_ptr<media::MidiManager> midi_manager_;
-  scoped_ptr<AudioMirroringManager> audio_mirroring_manager_;
   scoped_ptr<MediaStreamManager> media_stream_manager_;
   // Per-process listener for online state changes.
   scoped_ptr<BrowserOnlineStateObserver> online_state_observer_;
@@ -170,6 +167,10 @@ class CONTENT_EXPORT BrowserMainLoop {
   scoped_ptr<DeviceMonitorLinux> device_monitor_linux_;
 #elif defined(OS_MACOSX) && !defined(OS_IOS)
   scoped_ptr<DeviceMonitorMac> device_monitor_mac_;
+#endif
+#if defined(OS_ANDROID)
+  // Android implementation of ScreenOrientationDelegate
+  scoped_ptr<ScreenOrientationDelegate> screen_orientation_delegate_;
 #endif
   // The startup task runner is created by CreateStartupTasks()
   scoped_ptr<StartupTaskRunner> startup_task_runner_;

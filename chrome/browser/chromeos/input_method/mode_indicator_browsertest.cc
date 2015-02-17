@@ -59,7 +59,7 @@ class ScopedModeIndicatorObserverForTesting :
   }
 
   // ModeIndicatorObserverInterface override:
-  virtual void AddModeIndicatorWidget(views::Widget* widget) OVERRIDE {
+  virtual void AddModeIndicatorWidget(views::Widget* widget) override {
     widget_list_.push_back(widget);
     max_widget_list_size_ =
         std::max(max_widget_list_size_, widget_list_.size());
@@ -67,7 +67,7 @@ class ScopedModeIndicatorObserverForTesting :
   }
 
   // views::WidgetObserver override:
-  virtual void OnWidgetDestroying(views::Widget* widget) OVERRIDE {
+  virtual void OnWidgetDestroying(views::Widget* widget) override {
     std::vector<views::Widget*>::iterator it =
       std::find(widget_list_.begin(), widget_list_.end(), widget);
     if (it != widget_list_.end())
@@ -76,7 +76,7 @@ class ScopedModeIndicatorObserverForTesting :
 
   // views::WidgetObserver override:
   virtual void OnWidgetVisibilityChanged(views::Widget* widget,
-                                         bool visible) OVERRIDE {
+                                         bool visible) override {
     last_bounds_ = widget->GetWindowBoundsInScreen();
     is_displayed_ |= visible;
   }
@@ -94,7 +94,7 @@ class ModeIndicatorBrowserTest : public InProcessBrowserTest {
       : InProcessBrowserTest() {}
   virtual ~ModeIndicatorBrowserTest() {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     ui::SetUpInputMethodFactoryForTesting();
   }
 
@@ -126,8 +126,8 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, Bounds) {
       extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"));
 
   // Add keyboard layouts to enable the mode indicator.
-  imm->EnableLoginLayouts("fr", keyboard_layouts);
-  ASSERT_LT(1UL, imm->GetNumActiveInputMethods());
+  imm->GetActiveIMEState()->EnableLoginLayouts("fr", keyboard_layouts);
+  ASSERT_LT(1UL, imm->GetActiveIMEState()->GetNumActiveInputMethods());
 
   chromeos::IMECandidateWindowHandlerInterface* candidate_window =
       chromeos::IMEBridge::Get()->GetCandidateWindowHandler();
@@ -139,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, Bounds) {
   {
     ScopedModeIndicatorObserverForTesting observer;
     candidate_window->SetCursorBounds(cursor1_bounds, cursor1_bounds);
-    EXPECT_TRUE(imm->SwitchToNextInputMethod());
+    EXPECT_TRUE(imm->GetActiveIMEState()->SwitchToNextInputMethod());
     mi1_bounds = observer.last_bounds();
     // The bounds should be bigger than the inner size.
     EXPECT_LE(kInnerSize, mi1_bounds.width());
@@ -154,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, Bounds) {
   {
     ScopedModeIndicatorObserverForTesting observer;
     candidate_window->SetCursorBounds(cursor2_bounds, cursor2_bounds);
-    EXPECT_TRUE(imm->SwitchToNextInputMethod());
+    EXPECT_TRUE(imm->GetActiveIMEState()->SwitchToNextInputMethod());
     mi2_bounds = observer.last_bounds();
     EXPECT_TRUE(observer.is_displayed());
   }
@@ -176,7 +176,7 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, Bounds) {
   {
     ScopedModeIndicatorObserverForTesting observer;
     candidate_window->SetCursorBounds(cursor3_bounds, cursor3_bounds);
-    EXPECT_TRUE(imm->SwitchToNextInputMethod());
+    EXPECT_TRUE(imm->GetActiveIMEState()->SwitchToNextInputMethod());
     mi3_bounds = observer.last_bounds();
     EXPECT_TRUE(observer.is_displayed());
     EXPECT_LT(mi3_bounds.bottom(), screen_bounds.bottom());
@@ -194,8 +194,8 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, NumOfWidgets) {
       extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"));
 
   // Add keyboard layouts to enable the mode indicator.
-  imm->EnableLoginLayouts("fr", keyboard_layouts);
-  ASSERT_LT(1UL, imm->GetNumActiveInputMethods());
+  imm->GetActiveIMEState()->EnableLoginLayouts("fr", keyboard_layouts);
+  ASSERT_LT(1UL, imm->GetActiveIMEState()->GetNumActiveInputMethods());
 
   chromeos::IMECandidateWindowHandlerInterface* candidate_window =
       chromeos::IMEBridge::Get()->GetCandidateWindowHandler();
@@ -204,11 +204,11 @@ IN_PROC_BROWSER_TEST_F(ModeIndicatorBrowserTest, NumOfWidgets) {
   {
     ScopedModeIndicatorObserverForTesting observer;
 
-    EXPECT_TRUE(imm->SwitchToNextInputMethod());
+    EXPECT_TRUE(imm->GetActiveIMEState()->SwitchToNextInputMethod());
     EXPECT_EQ(1UL, observer.max_widget_list_size());
     const views::Widget* widget1 = observer.widget_list()[0];
 
-    EXPECT_TRUE(imm->SwitchToNextInputMethod());
+    EXPECT_TRUE(imm->GetActiveIMEState()->SwitchToNextInputMethod());
     EXPECT_EQ(2UL, observer.max_widget_list_size());
 
     // When a new mode indicator is displayed, the previous one should be

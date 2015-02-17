@@ -18,22 +18,13 @@ AppListItem::AppListItem(const std::string& id)
 }
 
 AppListItem::~AppListItem() {
+  FOR_EACH_OBSERVER(AppListItemObserver, observers_, ItemBeingDestroyed());
 }
 
 void AppListItem::SetIcon(const gfx::ImageSkia& icon, bool has_shadow) {
   icon_ = icon;
   has_shadow_ = has_shadow;
   FOR_EACH_OBSERVER(AppListItemObserver, observers_, ItemIconChanged());
-}
-
-void AppListItem::SetHighlighted(bool highlighted) {
-  if (highlighted_ == highlighted)
-    return;
-
-  highlighted_ = highlighted;
-  FOR_EACH_OBSERVER(AppListItemObserver,
-                    observers_,
-                    ItemHighlightedChanged());
 }
 
 void AppListItem::SetIsInstalling(bool is_installing) {

@@ -12,6 +12,8 @@
 #include "cc/layers/texture_layer.h"
 #include "third_party/WebKit/public/platform/WebScreenOrientationType.h"
 
+class GURL;
+
 namespace blink {
 class WebBatteryStatus;
 class WebDeviceMotionData;
@@ -20,6 +22,8 @@ class WebGamepad;
 class WebGamepads;
 class WebLayer;
 struct WebSize;
+class WebView;
+class WebURLResponse;
 }
 
 namespace content {
@@ -45,19 +49,24 @@ void EnableRendererLayoutTestMode();
 void EnableWebTestProxyCreation(
     const base::Callback<void(RenderView*, WebTestProxyBase*)>& callback);
 
+typedef base::Callback<void(const blink::WebURLResponse& response,
+                            const std::string& data)> FetchManifestCallback;
+void FetchManifest(blink::WebView* view, const GURL& url,
+                   const FetchManifestCallback&);
+
 // Sets gamepad provider to be used for layout tests.
-void SetMockGamepadProvider(RendererGamepadProvider* provider);
+void SetMockGamepadProvider(scoped_ptr<RendererGamepadProvider> provider);
 
 // Sets a double that should be used when registering
-// a listener through WebKitPlatformSupport::setDeviceLightListener().
+// a listener through BlinkPlatformImpl::setDeviceLightListener().
 void SetMockDeviceLightData(const double data);
 
 // Sets WebDeviceMotionData that should be used when registering
-// a listener through WebKitPlatformSupport::setDeviceMotionListener().
+// a listener through BlinkPlatformImpl::setDeviceMotionListener().
 void SetMockDeviceMotionData(const blink::WebDeviceMotionData& data);
 
 // Sets WebDeviceOrientationData that should be used when registering
-// a listener through WebKitPlatformSupport::setDeviceOrientationListener().
+// a listener through BlinkPlatformImpl::setDeviceOrientationListener().
 void SetMockDeviceOrientationData(const blink::WebDeviceOrientationData& data);
 
 // Notifies blink that battery status has changed.
@@ -83,6 +92,9 @@ void SetDeviceScaleFactor(RenderView* render_view, float factor);
 
 // Set the device color profile associated with the profile |name|.
 void SetDeviceColorProfile(RenderView* render_view, const std::string& name);
+
+// Change the bluetooth test data while running a layout test.
+void SetBluetoothMockDataSetForTesting(const std::string& name);
 
 // Enables or disables synchronous resize mode. When enabled, all window-sizing
 // machinery is short-circuited inside the renderer. This mode is necessary for

@@ -4,8 +4,9 @@
 
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 
+#include "base/bind.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -15,11 +16,13 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/bookmarks/chrome_bookmark_client.h"
+#include "chrome/browser/bookmarks/chrome_bookmark_client_factory.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_db_task.h"
+#include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/bookmark_change_processor.h"
 #include "chrome/browser/sync/test/integration/multi_client_status_change_checker.h"
@@ -27,11 +30,13 @@
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "components/bookmarks/browser/bookmark_client.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/favicon_base/favicon_util.h"
+#include "components/history/core/browser/history_types.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/tree_node_iterator.h"
@@ -45,17 +50,17 @@ class HistoryEmptyTask : public history::HistoryDBTask {
  public:
   explicit HistoryEmptyTask(base::WaitableEvent* done) : done_(done) {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     content::RunAllPendingInMessageLoop();
     done_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~HistoryEmptyTask() {}
+  ~HistoryEmptyTask() override {}
 
   base::WaitableEvent* done_;
 };
@@ -70,9 +75,7 @@ class FaviconChangeObserver : public BookmarkModelObserver {
         wait_for_load_(false) {
     model->AddObserver(this);
   }
-  virtual ~FaviconChangeObserver() {
-    model_->RemoveObserver(this);
-  }
+  ~FaviconChangeObserver() override { model_->RemoveObserver(this); }
   void WaitForGetFavicon() {
     wait_for_load_ = true;
     content::RunMessageLoop();
@@ -83,37 +86,34 @@ class FaviconChangeObserver : public BookmarkModelObserver {
     wait_for_load_ = false;
     content::RunMessageLoop();
   }
-  virtual void BookmarkModelLoaded(BookmarkModel* model,
-                                   bool ids_reassigned) OVERRIDE {}
-  virtual void BookmarkNodeMoved(BookmarkModel* model,
-                                 const BookmarkNode* old_parent,
-                                 int old_index,
-                                 const BookmarkNode* new_parent,
-                                 int new_index) OVERRIDE {}
-  virtual void BookmarkNodeAdded(BookmarkModel* model,
-                                 const BookmarkNode* parent,
-                                 int index) OVERRIDE {}
-  virtual void BookmarkNodeRemoved(
+  void BookmarkModelLoaded(BookmarkModel* model, bool ids_reassigned) override {
+  }
+  void BookmarkNodeMoved(BookmarkModel* model,
+                         const BookmarkNode* old_parent,
+                         int old_index,
+                         const BookmarkNode* new_parent,
+                         int new_index) override {}
+  void BookmarkNodeAdded(BookmarkModel* model,
+                         const BookmarkNode* parent,
+                         int index) override {}
+  void BookmarkNodeRemoved(BookmarkModel* model,
+                           const BookmarkNode* parent,
+                           int old_index,
+                           const BookmarkNode* node,
+                           const std::set<GURL>& removed_urls) override {}
+  void BookmarkAllUserNodesRemoved(
       BookmarkModel* model,
-      const BookmarkNode* parent,
-      int old_index,
-      const BookmarkNode* node,
-      const std::set<GURL>& removed_urls) OVERRIDE {}
-  virtual void BookmarkAllUserNodesRemoved(
-      BookmarkModel* model,
-      const std::set<GURL>& removed_urls) OVERRIDE {}
+      const std::set<GURL>& removed_urls) override {}
 
-  virtual void BookmarkNodeChanged(BookmarkModel* model,
-                                   const BookmarkNode* node) OVERRIDE {
+  void BookmarkNodeChanged(BookmarkModel* model,
+                           const BookmarkNode* node) override {
     if (model == model_ && node == node_)
       model->GetFavicon(node);
   }
-  virtual void BookmarkNodeChildrenReordered(
-      BookmarkModel* model,
-      const BookmarkNode* node) OVERRIDE {}
-  virtual void BookmarkNodeFaviconChanged(
-      BookmarkModel* model,
-      const BookmarkNode* node) OVERRIDE {
+  void BookmarkNodeChildrenReordered(BookmarkModel* model,
+                                     const BookmarkNode* node) override {}
+  void BookmarkNodeFaviconChanged(BookmarkModel* model,
+                                  const BookmarkNode* node) override {
     if (model == model_ && node == node_) {
       if (!wait_for_load_ || (wait_for_load_ && node->is_favicon_loaded()))
         base::MessageLoopForUI::current()->Quit();
@@ -337,13 +337,22 @@ bool NodesMatch(const BookmarkNode* node_a, const BookmarkNode* node_b) {
   return true;
 }
 
+// Helper for BookmarkModelsMatch.
+bool NodeCantBeSynced(bookmarks::BookmarkClient* client,
+                      const BookmarkNode* node) {
+  // Return true to skip a node.
+  return !client->CanSyncNode(node);
+}
+
 // Checks if the hierarchies in |model_a| and |model_b| are equivalent in
 // terms of the data model and favicon. Returns true if they both match.
 // Note: Some peripheral fields like creation times are allowed to mismatch.
 bool BookmarkModelsMatch(BookmarkModel* model_a, BookmarkModel* model_b) {
   bool ret_val = true;
-  ui::TreeNodeIterator<const BookmarkNode> iterator_a(model_a->root_node());
-  ui::TreeNodeIterator<const BookmarkNode> iterator_b(model_b->root_node());
+  ui::TreeNodeIterator<const BookmarkNode> iterator_a(
+      model_a->root_node(), base::Bind(&NodeCantBeSynced, model_a->client()));
+  ui::TreeNodeIterator<const BookmarkNode> iterator_b(
+      model_b->root_node(), base::Bind(&NodeCantBeSynced, model_b->client()));
   while (iterator_a.has_next()) {
     const BookmarkNode* node_a = iterator_a.Next();
     if (!iterator_b.has_next()) {
@@ -408,6 +417,11 @@ const BookmarkNode* GetOtherNode(int index) {
 
 const BookmarkNode* GetSyncedBookmarksNode(int index) {
   return GetBookmarkModel(index)->mobile_node();
+}
+
+const BookmarkNode* GetManagedNode(int index) {
+  return ChromeBookmarkClientFactory::GetForProfile(
+      sync_datatype_helper::test()->GetProfile(index))->managed_node();
 }
 
 BookmarkModel* GetVerifierBookmarkModel() {
@@ -691,10 +705,10 @@ namespace {
 class AllModelsMatchChecker : public MultiClientStatusChangeChecker {
  public:
   AllModelsMatchChecker();
-  virtual ~AllModelsMatchChecker();
+  ~AllModelsMatchChecker() override;
 
-  virtual bool IsExitConditionSatisfied() OVERRIDE;
-  virtual std::string GetDebugMessage() const OVERRIDE;
+  bool IsExitConditionSatisfied() override;
+  std::string GetDebugMessage() const override;
 };
 
 AllModelsMatchChecker::AllModelsMatchChecker()

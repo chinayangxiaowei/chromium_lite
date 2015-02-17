@@ -8,16 +8,18 @@
 #include <map>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "tools/gn/build_settings.h"
+#include "tools/gn/err.h"
 #include "tools/gn/escape.h"
 #include "tools/gn/filesystem_utils.h"
 #include "tools/gn/input_file_manager.h"
+#include "tools/gn/ninja_utils.h"
 #include "tools/gn/scheduler.h"
 #include "tools/gn/target.h"
 #include "tools/gn/trace.h"
@@ -74,32 +76,36 @@ std::string GetSelfInvocationCommand(const BuildSettings* build_settings) {
 NinjaBuildWriter::NinjaBuildWriter(
     const BuildSettings* build_settings,
     const std::vector<const Settings*>& all_settings,
+    const Toolchain* default_toolchain,
     const std::vector<const Target*>& default_toolchain_targets,
     std::ostream& out,
     std::ostream& dep_out)
     : build_settings_(build_settings),
       all_settings_(all_settings),
+      default_toolchain_(default_toolchain),
       default_toolchain_targets_(default_toolchain_targets),
       out_(out),
       dep_out_(dep_out),
-      path_output_(build_settings->build_dir(), ESCAPE_NINJA),
-      helper_(build_settings) {
+      path_output_(build_settings->build_dir(), ESCAPE_NINJA) {
 }
 
 NinjaBuildWriter::~NinjaBuildWriter() {
 }
 
-void NinjaBuildWriter::Run() {
+bool NinjaBuildWriter::Run(Err* err) {
   WriteNinjaRules();
+  WriteLinkPool();
   WriteSubninjas();
-  WritePhonyAndAllRules();
+  return WritePhonyAndAllRules(err);
 }
 
 // static
 bool NinjaBuildWriter::RunAndWriteFile(
     const BuildSettings* build_settings,
     const std::vector<const Settings*>& all_settings,
-    const std::vector<const Target*>& default_toolchain_targets) {
+    const Toolchain* default_toolchain,
+    const std::vector<const Target*>& default_toolchain_targets,
+    Err* err) {
   ScopedTrace trace(TraceItem::TRACE_FILE_WRITE, "build.ninja");
 
   base::FilePath ninja_file(build_settings->GetFullPath(
@@ -109,19 +115,22 @@ bool NinjaBuildWriter::RunAndWriteFile(
   std::ofstream file;
   file.open(FilePathToUTF8(ninja_file).c_str(),
             std::ios_base::out | std::ios_base::binary);
-  if (file.fail())
+  if (file.fail()) {
+    *err = Err(Location(), "Couldn't open build.ninja for writing");
     return false;
+  }
 
   std::ofstream depfile;
   depfile.open((FilePathToUTF8(ninja_file) + ".d").c_str(),
                std::ios_base::out | std::ios_base::binary);
-  if (depfile.fail())
+  if (depfile.fail()) {
+    *err = Err(Location(), "Couldn't open depfile for writing");
     return false;
+  }
 
-  NinjaBuildWriter gen(build_settings, all_settings,
+  NinjaBuildWriter gen(build_settings, all_settings, default_toolchain,
                        default_toolchain_targets, file, depfile);
-  gen.Run();
-  return true;
+  return gen.Run(err);
 }
 
 void NinjaBuildWriter::WriteNinjaRules() {
@@ -152,17 +161,22 @@ void NinjaBuildWriter::WriteNinjaRules() {
   out_ << std::endl;
 }
 
+void NinjaBuildWriter::WriteLinkPool() {
+  out_ << "pool link_pool\n"
+       << "  depth = " << default_toolchain_->concurrent_links() << std::endl
+       << std::endl;
+}
+
 void NinjaBuildWriter::WriteSubninjas() {
   for (size_t i = 0; i < all_settings_.size(); i++) {
     out_ << "subninja ";
-    path_output_.WriteFile(out_,
-                           helper_.GetNinjaFileForToolchain(all_settings_[i]));
+    path_output_.WriteFile(out_, GetNinjaFileForToolchain(all_settings_[i]));
     out_ << std::endl;
   }
   out_ << std::endl;
 }
 
-void NinjaBuildWriter::WritePhonyAndAllRules() {
+bool NinjaBuildWriter::WritePhonyAndAllRules(Err* err) {
   std::string all_rules;
 
   // Write phony rules for all uniquely-named targets in the default toolchain.
@@ -171,6 +185,7 @@ void NinjaBuildWriter::WritePhonyAndAllRules() {
   // which we also find.
   std::map<std::string, int> small_name_count;
   std::vector<const Target*> toplevel_targets;
+  base::hash_set<std::string> target_files;
   for (size_t i = 0; i < default_toolchain_targets_.size(); i++) {
     const Target* target = default_toolchain_targets_[i];
     const Label& label = target->label();
@@ -192,7 +207,13 @@ void NinjaBuildWriter::WritePhonyAndAllRules() {
   for (size_t i = 0; i < default_toolchain_targets_.size(); i++) {
     const Target* target = default_toolchain_targets_[i];
     const Label& label = target->label();
-    OutputFile target_file = helper_.GetTargetOutputFile(target);
+    OutputFile target_file(target->dependency_output_file());
+    // The output files may have leading "./" so normalize those away.
+    NormalizePath(&target_file.value());
+    if (!target_files.insert(target_file.value()).second) {
+      *err = Err(Location(), "Duplicate rules for " + target_file.value());
+      return false;
+    }
 
     // Write the long name "foo/bar:baz" for the target "//foo/bar:baz".
     std::string long_name = label.GetUserVisibleName(false);
@@ -224,7 +245,7 @@ void NinjaBuildWriter::WritePhonyAndAllRules() {
   for (size_t i = 0; i < toplevel_targets.size(); i++) {
     if (small_name_count[toplevel_targets[i]->label().name()] > 1) {
       const Target* target = toplevel_targets[i];
-      WritePhonyRule(target, helper_.GetTargetOutputFile(target),
+      WritePhonyRule(target, target->dependency_output_file(),
                      target->label().name());
     }
   }
@@ -233,6 +254,7 @@ void NinjaBuildWriter::WritePhonyAndAllRules() {
     out_ << "\nbuild all: phony " << all_rules << std::endl;
     out_ << "default all" << std::endl;
   }
+  return true;
 }
 
 void NinjaBuildWriter::WritePhonyRule(const Target* target,

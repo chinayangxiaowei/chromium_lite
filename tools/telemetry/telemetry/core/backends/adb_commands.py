@@ -70,22 +70,6 @@ class AdbCommands(object):
         'forward %s %s' % (local, remote))
     assert ret == ''
 
-  def Install(self, apk_path):
-    """Installs specified package if necessary.
-
-    Args:
-      apk_path: Path to .apk file to install.
-    """
-
-    if (os.path.exists(os.path.join(
-        constants.GetOutDirectory('Release'), 'md5sum_bin_host'))):
-      constants.SetBuildType('Release')
-    elif (os.path.exists(os.path.join(
-        constants.GetOutDirectory('Debug'), 'md5sum_bin_host'))):
-      constants.SetBuildType('Debug')
-
-    self._device.Install(apk_path)
-
   def IsUserBuild(self):
     return self._device.GetProp('ro.build.type') == 'user'
 
@@ -121,8 +105,8 @@ def SetupPrebuiltTools(adb):
   if platform.GetHostPlatform().GetOSName() == 'linux':
     host_tools.append('host_forwarder')
 
-  has_device_prebuilt = adb.device().GetProp('ro.product.cpu.abi').startswith(
-      'armeabi')
+  arch_name = adb.device().GetABI()
+  has_device_prebuilt = arch_name.startswith('armeabi')
   if not has_device_prebuilt:
     return all([support_binaries.FindLocallyBuiltPath(t) for t in device_tools])
 
@@ -140,7 +124,10 @@ def SetupPrebuiltTools(adb):
         os.makedirs(os.path.dirname(dest))
       platform_name = ('android' if t in device_tools else
                        platform.GetHostPlatform().GetOSName())
-      prebuilt_path = support_binaries.FindPath(executable, platform_name)
+      bin_arch_name = (arch_name if t in device_tools else
+                       platform.GetHostPlatform().GetArchName())
+      prebuilt_path = support_binaries.FindPath(
+          executable, bin_arch_name, platform_name)
       if not prebuilt_path or not os.path.exists(prebuilt_path):
         raise NotImplementedError("""
 %s must be checked into cloud storage.

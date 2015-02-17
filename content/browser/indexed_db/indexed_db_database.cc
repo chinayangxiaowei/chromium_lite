@@ -26,9 +26,9 @@
 #include "content/browser/indexed_db/indexed_db_value.h"
 #include "content/common/indexed_db/indexed_db_key_path.h"
 #include "content/common/indexed_db/indexed_db_key_range.h"
+#include "storage/browser/blob/blob_data_handle.h"
 #include "third_party/WebKit/public/platform/WebIDBDatabaseException.h"
 #include "third_party/leveldatabase/env_chromium.h"
-#include "webkit/browser/blob/blob_data_handle.h"
 
 using base::ASCIIToUTF16;
 using base::Int64ToString16;
@@ -718,7 +718,7 @@ struct IndexedDBDatabase::PutOperationParams {
   PutOperationParams() {}
   int64 object_store_id;
   IndexedDBValue value;
-  ScopedVector<webkit_blob::BlobDataHandle> handles;
+  ScopedVector<storage::BlobDataHandle> handles;
   scoped_ptr<IndexedDBKey> key;
   blink::WebIDBPutMode put_mode;
   scoped_refptr<IndexedDBCallbacks> callbacks;
@@ -731,7 +731,7 @@ struct IndexedDBDatabase::PutOperationParams {
 void IndexedDBDatabase::Put(int64 transaction_id,
                             int64 object_store_id,
                             IndexedDBValue* value,
-                            ScopedVector<webkit_blob::BlobDataHandle>* handles,
+                            ScopedVector<storage::BlobDataHandle>* handles,
                             scoped_ptr<IndexedDBKey> key,
                             blink::WebIDBPutMode put_mode,
                             scoped_refptr<IndexedDBCallbacks> callbacks,
@@ -940,7 +940,7 @@ void IndexedDBDatabase::SetIndexKeys(int64 transaction_id,
   const IndexedDBObjectStoreMetadata& object_store_metadata =
       metadata_.object_stores[object_store_id];
   bool backing_store_success = MakeIndexWriters(transaction,
-                                                backing_store_,
+                                                backing_store_.get(),
                                                 id(),
                                                 object_store_metadata,
                                                 *primary_key,
@@ -964,7 +964,7 @@ void IndexedDBDatabase::SetIndexKeys(int64 transaction_id,
   for (size_t i = 0; i < index_writers.size(); ++i) {
     IndexWriter* index_writer = index_writers[i];
     index_writer->WriteIndexKeys(record_identifier,
-                                 backing_store_,
+                                 backing_store_.get(),
                                  transaction->BackingStoreTransaction(),
                                  id(),
                                  object_store_id);
@@ -1474,7 +1474,7 @@ void IndexedDBDatabase::CreateTransaction(
       std::set<int64>(object_store_ids.begin(), object_store_ids.end()),
       mode,
       this,
-      new IndexedDBBackingStore::Transaction(backing_store_)));
+      new IndexedDBBackingStore::Transaction(backing_store_.get())));
 }
 
 void IndexedDBDatabase::TransactionCreated(IndexedDBTransaction* transaction) {
@@ -1489,7 +1489,7 @@ bool IndexedDBDatabase::IsOpenConnectionBlocked() const {
 
 void IndexedDBDatabase::OpenConnection(
     const IndexedDBPendingConnection& connection) {
-  DCHECK(backing_store_);
+  DCHECK(backing_store_.get());
 
   // TODO(jsbell): Should have a priority queue so that higher version
   // requests are processed first. http://crbug.com/225850
@@ -1586,19 +1586,16 @@ void IndexedDBDatabase::RunVersionChangeTransaction(
     scoped_ptr<IndexedDBConnection> connection,
     int64 transaction_id,
     int64 requested_version) {
-
-  DCHECK(callbacks);
+  DCHECK(callbacks.get());
   DCHECK(connections_.count(connection.get()));
   if (ConnectionCount() > 1) {
     DCHECK_NE(blink::WebIDBDataLossTotal, callbacks->data_loss());
     // Front end ensures the event is not fired at connections that have
     // close_pending set.
-    for (ConnectionSet::const_iterator it = connections_.begin();
-         it != connections_.end();
-         ++it) {
-      if (*it != connection.get()) {
-        (*it)->callbacks()->OnVersionChange(metadata_.int_version,
-                                            requested_version);
+    for (const auto* iter : connections_) {
+      if (iter != connection.get()) {
+        iter->callbacks()->OnVersionChange(metadata_.int_version,
+                                           requested_version);
       }
     }
     // OnBlocked will be fired at the request when one of the other
@@ -1638,12 +1635,10 @@ void IndexedDBDatabase::DeleteDatabase(
     scoped_refptr<IndexedDBCallbacks> callbacks) {
 
   if (IsDeleteDatabaseBlocked()) {
-    for (ConnectionSet::const_iterator it = connections_.begin();
-         it != connections_.end();
-         ++it) {
+    for (const auto* connection : connections_) {
       // Front end ensures the event is not fired at connections that have
       // close_pending set.
-      (*it)->callbacks()->OnVersionChange(
+      connection->callbacks()->OnVersionChange(
           metadata_.int_version, IndexedDBDatabaseMetadata::NO_INT_VERSION);
     }
     // OnBlocked will be fired at the request when one of the other
@@ -1662,7 +1657,7 @@ bool IndexedDBDatabase::IsDeleteDatabaseBlocked() const {
 void IndexedDBDatabase::DeleteDatabaseFinal(
     scoped_refptr<IndexedDBCallbacks> callbacks) {
   DCHECK(!IsDeleteDatabaseBlocked());
-  DCHECK(backing_store_);
+  DCHECK(backing_store_.get());
   leveldb::Status s = backing_store_->DeleteDatabase(metadata_.name);
   if (!s.ok()) {
     IndexedDBDatabaseError error(blink::WebIDBDatabaseExceptionUnknownError,
@@ -1700,11 +1695,8 @@ void IndexedDBDatabase::VersionChangeIgnored() {
     pending_run_version_change_transaction_call_->callbacks()->OnBlocked(
         metadata_.int_version);
 
-  for (PendingDeleteCallList::iterator it = pending_delete_calls_.begin();
-       it != pending_delete_calls_.end();
-       ++it) {
-    (*it)->callbacks()->OnBlocked(metadata_.int_version);
-  }
+  for (const auto& pending_delete_call : pending_delete_calls_)
+    pending_delete_call->callbacks()->OnBlocked(metadata_.int_version);
 }
 
 
@@ -1714,24 +1706,23 @@ void IndexedDBDatabase::Close(IndexedDBConnection* connection, bool forced) {
   DCHECK(connection->database() == this);
 
   IDB_TRACE("IndexedDBDatabase::Close");
+
+  connections_.erase(connection);
+
   // Abort outstanding transactions from the closing connection. This
   // can not happen if the close is requested by the connection itself
   // as the front-end defers the close until all transactions are
   // complete, but can occur on process termination or forced close.
   {
     TransactionMap transactions(transactions_);
-    for (TransactionMap::const_iterator it = transactions.begin(),
-                                        end = transactions.end();
-         it != end;
-         ++it) {
-      if (it->second->connection() == connection->callbacks())
-        it->second->Abort(
+    for (const auto& it : transactions) {
+      if (it.second->connection() == connection->callbacks())
+        it.second->Abort(
             IndexedDBDatabaseError(blink::WebIDBDatabaseExceptionUnknownError,
                                    "Connection is closing."));
     }
   }
 
-  connections_.erase(connection);
   if (pending_second_half_open_ &&
       pending_second_half_open_->connection() == connection) {
     pending_second_half_open_->callbacks()->OnError(

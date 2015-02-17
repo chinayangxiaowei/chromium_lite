@@ -7,8 +7,8 @@
 
 #include "base/memory/ref_counted.h"
 #include "ipc/ipc_channel_handle.h"
-#include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
+#include "ipc/ipc_sync_channel.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -18,21 +18,22 @@ class NaClTrustedListener : public base::RefCounted<NaClTrustedListener>,
                             public IPC::Listener {
  public:
   NaClTrustedListener(const IPC::ChannelHandle& handle,
-                      base::SingleThreadTaskRunner* ipc_task_runner);
+                      base::SingleThreadTaskRunner* ipc_task_runner,
+                      base::WaitableEvent* shutdown_event);
 
   IPC::ChannelHandle TakeClientChannelHandle();
 
   // Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelError() override;
 
   bool Send(IPC::Message* msg);
 
  private:
   friend class base::RefCounted<NaClTrustedListener>;
-  virtual ~NaClTrustedListener();
+  ~NaClTrustedListener() override;
   IPC::ChannelHandle channel_handle_;
-  scoped_ptr<IPC::ChannelProxy> channel_proxy_;
+  scoped_ptr<IPC::SyncChannel> channel_;
 
   DISALLOW_COPY_AND_ASSIGN(NaClTrustedListener);
 };

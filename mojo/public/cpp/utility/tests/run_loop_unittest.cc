@@ -21,7 +21,7 @@ class TestRunLoopHandler : public RunLoopHandler {
         error_count_(0),
         last_error_result_(MOJO_RESULT_OK) {
   }
-  virtual ~TestRunLoopHandler() {}
+  ~TestRunLoopHandler() override {}
 
   void clear_ready_count() { ready_count_ = 0; }
   int ready_count() const { return ready_count_; }
@@ -32,11 +32,8 @@ class TestRunLoopHandler : public RunLoopHandler {
   MojoResult last_error_result() const { return last_error_result_; }
 
   // RunLoopHandler:
-  virtual void OnHandleReady(const Handle& handle) MOJO_OVERRIDE {
-    ready_count_++;
-  }
-  virtual void OnHandleError(const Handle& handle, MojoResult result)
-      MOJO_OVERRIDE {
+  void OnHandleReady(const Handle& handle) override { ready_count_++; }
+  void OnHandleError(const Handle& handle, MojoResult result) override {
     error_count_++;
     last_error_result_ = result;
   }
@@ -53,11 +50,11 @@ class RunLoopTest : public testing::Test {
  public:
   RunLoopTest() {}
 
-  virtual void SetUp() MOJO_OVERRIDE {
+  void SetUp() override {
     Test::SetUp();
     RunLoop::SetUp();
   }
-  virtual void TearDown() MOJO_OVERRIDE {
+  void TearDown() override {
     RunLoop::TearDown();
     Test::TearDown();
   }
@@ -76,12 +73,12 @@ class RemoveOnReadyRunLoopHandler : public TestRunLoopHandler {
  public:
   RemoveOnReadyRunLoopHandler() : run_loop_(NULL) {
   }
-  virtual ~RemoveOnReadyRunLoopHandler() {}
+  ~RemoveOnReadyRunLoopHandler() override {}
 
   void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
 
   // RunLoopHandler:
-  virtual void OnHandleReady(const Handle& handle) MOJO_OVERRIDE {
+  void OnHandleReady(const Handle& handle) override {
     run_loop_->RemoveHandler(handle);
     TestRunLoopHandler::OnHandleReady(handle);
   }
@@ -112,12 +109,12 @@ class QuitOnReadyRunLoopHandler : public TestRunLoopHandler {
  public:
   QuitOnReadyRunLoopHandler() : run_loop_(NULL) {
   }
-  virtual ~QuitOnReadyRunLoopHandler() {}
+  ~QuitOnReadyRunLoopHandler() override {}
 
   void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
 
   // RunLoopHandler:
-  virtual void OnHandleReady(const Handle& handle) MOJO_OVERRIDE {
+  void OnHandleReady(const Handle& handle) override {
     run_loop_->Quit();
     TestRunLoopHandler::OnHandleReady(handle);
   }
@@ -148,13 +145,12 @@ class QuitOnErrorRunLoopHandler : public TestRunLoopHandler {
  public:
   QuitOnErrorRunLoopHandler() : run_loop_(NULL) {
   }
-  virtual ~QuitOnErrorRunLoopHandler() {}
+  ~QuitOnErrorRunLoopHandler() override {}
 
   void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
 
   // RunLoopHandler:
-  virtual void OnHandleError(const Handle& handle, MojoResult result)
-      MOJO_OVERRIDE {
+  void OnHandleError(const Handle& handle, MojoResult result) override {
     run_loop_->Quit();
     TestRunLoopHandler::OnHandleError(handle, result);
   }
@@ -181,6 +177,110 @@ TEST_F(RunLoopTest, QuitWhenDeadlineExpired) {
   EXPECT_FALSE(run_loop.HasHandler(test_pipe.handle0.get()));
 }
 
+// Test that handlers are notified of loop destruction.
+TEST_F(RunLoopTest, Destruction) {
+  TestRunLoopHandler handler;
+  MessagePipe test_pipe;
+  {
+    RunLoop run_loop;
+    run_loop.AddHandler(&handler,
+                        test_pipe.handle0.get(),
+                        MOJO_HANDLE_SIGNAL_READABLE,
+                        MOJO_DEADLINE_INDEFINITE);
+  }
+  EXPECT_EQ(1, handler.error_count());
+  EXPECT_EQ(MOJO_RESULT_ABORTED, handler.last_error_result());
+}
+
+class RemoveManyRunLoopHandler : public TestRunLoopHandler {
+ public:
+  RemoveManyRunLoopHandler() : run_loop_(NULL) {
+  }
+  ~RemoveManyRunLoopHandler() override {}
+
+  void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
+  void add_handle(const Handle& handle) { handles_.push_back(handle); }
+
+  // RunLoopHandler:
+  void OnHandleError(const Handle& handle, MojoResult result) override {
+    for (size_t i = 0; i < handles_.size(); i++)
+      run_loop_->RemoveHandler(handles_[i]);
+    TestRunLoopHandler::OnHandleError(handle, result);
+  }
+
+ private:
+  std::vector<Handle> handles_;
+  RunLoop* run_loop_;
+
+  MOJO_DISALLOW_COPY_AND_ASSIGN(RemoveManyRunLoopHandler);
+};
+
+// Test that handlers are notified of loop destruction.
+TEST_F(RunLoopTest, MultipleHandleDestruction) {
+  RemoveManyRunLoopHandler odd_handler;
+  TestRunLoopHandler even_handler;
+  MessagePipe test_pipe1, test_pipe2, test_pipe3;
+  {
+    RunLoop run_loop;
+    odd_handler.set_run_loop(&run_loop);
+    odd_handler.add_handle(test_pipe1.handle0.get());
+    odd_handler.add_handle(test_pipe3.handle0.get());
+    run_loop.AddHandler(&odd_handler,
+                        test_pipe1.handle0.get(),
+                        MOJO_HANDLE_SIGNAL_READABLE,
+                        MOJO_DEADLINE_INDEFINITE);
+    run_loop.AddHandler(&even_handler,
+                        test_pipe2.handle0.get(),
+                        MOJO_HANDLE_SIGNAL_READABLE,
+                        MOJO_DEADLINE_INDEFINITE);
+    run_loop.AddHandler(&odd_handler,
+                        test_pipe3.handle0.get(),
+                        MOJO_HANDLE_SIGNAL_READABLE,
+                        MOJO_DEADLINE_INDEFINITE);
+  }
+  EXPECT_EQ(1, odd_handler.error_count());
+  EXPECT_EQ(1, even_handler.error_count());
+  EXPECT_EQ(MOJO_RESULT_ABORTED, odd_handler.last_error_result());
+  EXPECT_EQ(MOJO_RESULT_ABORTED, even_handler.last_error_result());
+}
+
+class AddHandlerOnErrorHandler : public TestRunLoopHandler {
+ public:
+  AddHandlerOnErrorHandler() : run_loop_(NULL) {
+  }
+  ~AddHandlerOnErrorHandler() override {}
+
+  void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
+
+  // RunLoopHandler:
+  void OnHandleError(const Handle& handle, MojoResult result) override {
+    run_loop_->AddHandler(this, handle,
+                          MOJO_HANDLE_SIGNAL_READABLE,
+                          MOJO_DEADLINE_INDEFINITE);
+    TestRunLoopHandler::OnHandleError(handle, result);
+  }
+
+ private:
+  RunLoop* run_loop_;
+
+  MOJO_DISALLOW_COPY_AND_ASSIGN(AddHandlerOnErrorHandler);
+};
+
+TEST_F(RunLoopTest, AddHandlerOnError) {
+  AddHandlerOnErrorHandler handler;
+  MessagePipe test_pipe;
+  {
+    RunLoop run_loop;
+    handler.set_run_loop(&run_loop);
+    run_loop.AddHandler(&handler,
+                        test_pipe.handle0.get(),
+                        MOJO_HANDLE_SIGNAL_READABLE,
+                        MOJO_DEADLINE_INDEFINITE);
+  }
+  EXPECT_EQ(1, handler.error_count());
+  EXPECT_EQ(MOJO_RESULT_ABORTED, handler.last_error_result());
+}
+
 TEST_F(RunLoopTest, Current) {
   EXPECT_TRUE(RunLoop::current() == NULL);
   {
@@ -201,14 +301,14 @@ class NestingRunLoopHandler : public TestRunLoopHandler {
         depth_(0),
         reached_depth_limit_(false) {}
 
-  virtual ~NestingRunLoopHandler() {}
+  ~NestingRunLoopHandler() override {}
 
   void set_run_loop(RunLoop* run_loop) { run_loop_ = run_loop; }
   void set_pipe(MessagePipe* pipe) { pipe_ = pipe; }
   bool reached_depth_limit() const { return reached_depth_limit_; }
 
   // RunLoopHandler:
-  virtual void OnHandleReady(const Handle& handle) MOJO_OVERRIDE {
+  void OnHandleReady(const Handle& handle) override {
     TestRunLoopHandler::OnHandleReady(handle);
     EXPECT_EQ(handle.value(), pipe_->handle0.get().value());
 
@@ -305,6 +405,26 @@ TEST_F(RunLoopTest, DelayedTaskOrder) {
   EXPECT_EQ(1, sequence[0]);
   EXPECT_EQ(2, sequence[1]);
   EXPECT_EQ(3, sequence[2]);
+}
+
+struct QuittingTask {
+  explicit QuittingTask(RunLoop* run_loop) : run_loop(run_loop) {}
+
+  void Run() const { run_loop->Quit(); }
+
+  RunLoop* run_loop;
+};
+
+TEST_F(RunLoopTest, QuitFromDelayedTask) {
+  TestRunLoopHandler handler;
+  MessagePipe test_pipe;
+  RunLoop run_loop;
+  run_loop.AddHandler(&handler,
+                      test_pipe.handle0.get(),
+                      MOJO_HANDLE_SIGNAL_READABLE,
+                      MOJO_DEADLINE_INDEFINITE);
+  run_loop.PostDelayedTask(Closure(QuittingTask(&run_loop)), 0);
+  run_loop.Run();
 }
 
 }  // namespace

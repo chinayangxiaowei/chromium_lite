@@ -57,7 +57,7 @@ class AppApiTest : public ExtensionApiTest {
   }
 
   // Pass flags to make testing apps easier.
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kDisablePopupBlocking);
@@ -134,7 +134,7 @@ class AppApiTest : public ExtensionApiTest {
 // Omits the disable-popup-blocking flag so we can cover that case.
 class BlockedAppApiTest : public AppApiTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     CommandLine::ForCurrentProcess()->AppendSwitch(
         extensions::switches::kAllowHTTPBackgroundPage);
@@ -376,13 +376,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_BookmarkAppGetsNormalProcess) {
 // 3. page2 redirects back to a page in the app
 // The final navigation should end up in the app process.
 // See http://crbug.com/61757
-// Flaky on Linux.  http://crbug.com/341898
-#if defined(OS_LINUX)
-#define MAYBE_AppProcessRedirectBack DISABLED_AppProcessRedirectBack
-#else
-#define MAYBE_AppProcessRedirectBack AppProcessRedirectBack
-#endif
-IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_AppProcessRedirectBack) {
+// Flaky.  http://crbug.com/341898
+IN_PROC_BROWSER_TEST_F(AppApiTest, DISABLED_AppProcessRedirectBack) {
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
 

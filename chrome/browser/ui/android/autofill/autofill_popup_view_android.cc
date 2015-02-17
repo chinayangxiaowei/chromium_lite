@@ -6,12 +6,15 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/ui/android/window_android_helper.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
 #include "content/public/browser/android/content_view_core.h"
 #include "jni/AutofillPopupBridge_jni.h"
 #include "ui/base/android/view_android.h"
 #include "ui/base/android/window_android.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/rect.h"
 
 namespace autofill {
@@ -38,9 +41,9 @@ void AutofillPopupViewAndroid::Show() {
 }
 
 void AutofillPopupViewAndroid::Hide() {
+  controller_ = NULL;
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_AutofillPopupBridge_hide(env, java_object_.obj());
-  delete this;
 }
 
 void AutofillPopupViewAndroid::UpdateBoundsAndRedrawPopup() {
@@ -65,12 +68,19 @@ void AutofillPopupViewAndroid::UpdateBoundsAndRedrawPopup() {
     ScopedJavaLocalRef<jstring> subtext =
         base::android::ConvertUTF16ToJavaString(env,
                                                 controller_->subtexts()[i]);
+    int android_icon_id = 0;
+    if (!controller_->icons()[i].empty()) {
+      android_icon_id = ResourceMapper::MapFromChromiumId(
+          controller_->GetIconResourceID(controller_->icons()[i]));
+    }
+
     Java_AutofillPopupBridge_addToAutofillSuggestionArray(
         env,
         data_array.obj(),
         i,
         name.obj(),
         subtext.obj(),
+        android_icon_id,
         controller_->identifiers()[i]);
   }
 
@@ -81,11 +91,16 @@ void AutofillPopupViewAndroid::UpdateBoundsAndRedrawPopup() {
 void AutofillPopupViewAndroid::SuggestionSelected(JNIEnv* env,
                                                   jobject obj,
                                                   jint list_index) {
-  controller_->AcceptSuggestion(list_index);
+  // Race: Hide() may have already run.
+  if (controller_)
+    controller_->AcceptSuggestion(list_index);
 }
 
-void AutofillPopupViewAndroid::RequestHide(JNIEnv* env, jobject obj) {
-  controller_->Hide();
+void AutofillPopupViewAndroid::PopupDismissed(JNIEnv* env, jobject obj) {
+  if (controller_)
+    controller_->ViewDestroyed();
+
+  delete this;
 }
 
 void AutofillPopupViewAndroid::InvalidateRow(size_t) {}

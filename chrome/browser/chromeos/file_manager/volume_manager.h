@@ -19,7 +19,6 @@
 #include "chrome/browser/chromeos/drive/drive_integration_service.h"
 #include "chrome/browser/chromeos/file_system_provider/observer.h"
 #include "chrome/browser/chromeos/file_system_provider/service.h"
-#include "chrome/browser/local_discovery/storage/privet_volume_lister.h"
 #include "chromeos/dbus/cros_disks_client.h"
 #include "chromeos/disks/disk_mount_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -108,6 +107,9 @@ struct VolumeInfo {
 
   // True if the volume is read only.
   bool is_read_only;
+
+  // True if the volume contains media.
+  bool has_media;
 };
 
 // Manages "Volume"s for file manager. Here are "Volume"s.
@@ -137,7 +139,7 @@ class VolumeManager : public KeyedService,
   void Initialize();
 
   // Disposes this instance.
-  virtual void Shutdown() OVERRIDE;
+  virtual void Shutdown() override;
 
   // Adds an observer.
   void AddObserver(VolumeManagerObserver* observer);
@@ -164,65 +166,60 @@ class VolumeManager : public KeyedService,
                                chromeos::DeviceType device_type);
 
   // drive::DriveIntegrationServiceObserver overrides.
-  virtual void OnFileSystemMounted() OVERRIDE;
-  virtual void OnFileSystemBeingUnmounted() OVERRIDE;
+  virtual void OnFileSystemMounted() override;
+  virtual void OnFileSystemBeingUnmounted() override;
 
   // chromeos::disks::DiskMountManager::Observer overrides.
   virtual void OnDiskEvent(
       chromeos::disks::DiskMountManager::DiskEvent event,
-      const chromeos::disks::DiskMountManager::Disk* disk) OVERRIDE;
+      const chromeos::disks::DiskMountManager::Disk* disk) override;
   virtual void OnDeviceEvent(
       chromeos::disks::DiskMountManager::DeviceEvent event,
-      const std::string& device_path) OVERRIDE;
+      const std::string& device_path) override;
   virtual void OnMountEvent(
       chromeos::disks::DiskMountManager::MountEvent event,
       chromeos::MountError error_code,
       const chromeos::disks::DiskMountManager::MountPointInfo& mount_info)
-      OVERRIDE;
+      override;
   virtual void OnFormatEvent(
       chromeos::disks::DiskMountManager::FormatEvent event,
       chromeos::FormatError error_code,
-      const std::string& device_path) OVERRIDE;
+      const std::string& device_path) override;
 
   // chromeos::file_system_provider::Observer overrides.
   virtual void OnProvidedFileSystemMount(
       const chromeos::file_system_provider::ProvidedFileSystemInfo&
           file_system_info,
-      base::File::Error error) OVERRIDE;
+      base::File::Error error) override;
   virtual void OnProvidedFileSystemUnmount(
       const chromeos::file_system_provider::ProvidedFileSystemInfo&
           file_system_info,
-      base::File::Error error) OVERRIDE;
+      base::File::Error error) override;
 
   // Called on change to kExternalStorageDisabled pref.
   void OnExternalStorageDisabledChanged();
 
   // RemovableStorageObserver overrides.
   virtual void OnRemovableStorageAttached(
-      const storage_monitor::StorageInfo& info) OVERRIDE;
+      const storage_monitor::StorageInfo& info) override;
   virtual void OnRemovableStorageDetached(
-      const storage_monitor::StorageInfo& info) OVERRIDE;
+      const storage_monitor::StorageInfo& info) override;
 
   SnapshotManager* snapshot_manager() { return snapshot_manager_.get(); }
 
  private:
   void OnDiskMountManagerRefreshed(bool success);
   void OnStorageMonitorInitialized();
-  void OnPrivetVolumesAvailable(
-      const local_discovery::PrivetVolumeLister::VolumeList& volumes);
   void DoMountEvent(chromeos::MountError error_code,
-                    const VolumeInfo& volume_info,
-                    bool is_remounting);
+                    const VolumeInfo& volume_info);
   void DoUnmountEvent(chromeos::MountError error_code,
                       const VolumeInfo& volume_info);
 
   Profile* profile_;
   drive::DriveIntegrationService* drive_integration_service_;  // Not owned.
   chromeos::disks::DiskMountManager* disk_mount_manager_;      // Not owned.
-  scoped_ptr<MountedDiskMonitor> mounted_disk_monitor_;
   PrefChangeRegistrar pref_change_registrar_;
   ObserverList<VolumeManagerObserver> observers_;
-  scoped_ptr<local_discovery::PrivetVolumeLister> privet_volume_lister_;
   chromeos::file_system_provider::Service*
       file_system_provider_service_;  // Not owned by this class.
   std::map<std::string, VolumeInfo> mounted_volumes_;

@@ -18,33 +18,30 @@ class HidConnectionLinux : public HidConnection,
  public:
   HidConnectionLinux(HidDeviceInfo device_info, std::string dev_node);
 
-  // HidConnection implementation.
-  virtual void PlatformRead(scoped_refptr<net::IOBufferWithSize> buffer,
-                            const IOCallback& callback) OVERRIDE;
-  virtual void PlatformWrite(uint8_t report_id,
-                             scoped_refptr<net::IOBufferWithSize> buffer,
-                             const IOCallback& callback) OVERRIDE;
-  virtual void PlatformGetFeatureReport(
-      uint8_t report_id,
-      scoped_refptr<net::IOBufferWithSize> buffer,
-      const IOCallback& callback) OVERRIDE;
-  virtual void PlatformSendFeatureReport(
-      uint8_t report_id,
-      scoped_refptr<net::IOBufferWithSize> buffer,
-      const IOCallback& callback) OVERRIDE;
-
-  // base::MessagePumpLibevent::Watcher implementation.
-  virtual void OnFileCanReadWithoutBlocking(int fd) OVERRIDE;
-  virtual void OnFileCanWriteWithoutBlocking(int fd) OVERRIDE;
-
  private:
   friend class base::RefCountedThreadSafe<HidConnectionLinux>;
-  virtual ~HidConnectionLinux();
+  ~HidConnectionLinux() override;
+
+  // HidConnection implementation.
+  void PlatformClose() override;
+  void PlatformRead(const ReadCallback& callback) override;
+  void PlatformWrite(scoped_refptr<net::IOBuffer> buffer,
+                     size_t size,
+                     const WriteCallback& callback) override;
+  void PlatformGetFeatureReport(uint8_t report_id,
+                                const ReadCallback& callback) override;
+  void PlatformSendFeatureReport(scoped_refptr<net::IOBuffer> buffer,
+                                 size_t size,
+                                 const WriteCallback& callback) override;
+
+  // base::MessagePumpLibevent::Watcher implementation.
+  void OnFileCanReadWithoutBlocking(int fd) override;
+  void OnFileCanWriteWithoutBlocking(int fd) override;
 
   void Disconnect();
 
   void Flush();
-  void ProcessInputReport(scoped_refptr<net::IOBufferWithSize> buffer);
+  void ProcessInputReport(scoped_refptr<net::IOBuffer> buffer, size_t size);
   void ProcessReadQueue();
 
   base::File device_file_;

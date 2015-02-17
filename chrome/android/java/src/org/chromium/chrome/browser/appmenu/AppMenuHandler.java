@@ -15,8 +15,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.PopupMenu;
 
-import com.google.common.annotations.VisibleForTesting;
-
+import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.browser.UmaBridge;
 
 import java.util.ArrayList;
@@ -106,7 +105,16 @@ public class AppMenuHandler {
         int rotation = mActivity.getWindowManager().getDefaultDisplay().getRotation();
         Point pt = new Point();
         mActivity.getWindowManager().getDefaultDisplay().getSize(pt);
-        mAppMenu.show(wrapper, anchorView, isByHardwareButton, rotation, appRect, pt.y);
+
+        int menuStartPadding = 0;
+        if (mDelegate.getMenuButtonStartPaddingDimenId() != 0) {
+            menuStartPadding = mActivity.getResources().getDimensionPixelSize(
+                    mDelegate.getMenuButtonStartPaddingDimenId());
+        }
+
+        mAppMenu.show(
+                wrapper, anchorView, isByHardwareButton, rotation,
+                appRect, pt.y, menuStartPadding);
         mAppMenuDragHelper.onShow(startDragging);
         UmaBridge.menuShow();
         return true;

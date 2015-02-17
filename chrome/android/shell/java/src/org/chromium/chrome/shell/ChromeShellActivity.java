@@ -13,31 +13,34 @@ import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Toast;
-
-import com.google.common.annotations.VisibleForTesting;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.BaseSwitches;
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContentUriUtils;
 import org.chromium.base.MemoryPressureListener;
+import org.chromium.base.VisibleForTesting;
 import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.chrome.browser.DevToolsServer;
 import org.chromium.chrome.browser.FileProviderHelper;
 import org.chromium.chrome.browser.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.appmenu.AppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.dom_distiller.DomDistillerTabUtils;
+import org.chromium.chrome.browser.nfc.BeamController;
+import org.chromium.chrome.browser.nfc.BeamProvider;
 import org.chromium.chrome.browser.printing.PrintingControllerFactory;
 import org.chromium.chrome.browser.printing.TabPrinter;
 import org.chromium.chrome.browser.share.ShareHelper;
+import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.chrome.shell.sync.SyncController;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
+import org.chromium.content.app.ContentApplication;
 import org.chromium.content.browser.ActivityContentVideoViewClient;
 import org.chromium.content.browser.BrowserStartupController;
 import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content.browser.DeviceUtils;
-import org.chromium.content.common.ContentSwitches;
 import org.chromium.printing.PrintManagerDelegateImpl;
 import org.chromium.printing.PrintingController;
 import org.chromium.sync.signin.AccountManagerHelper;
@@ -101,7 +104,7 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        ChromeShellApplication.initCommandLine();
+        ContentApplication.initCommandLine(this);
         waitForDebuggerIfNeeded();
 
         DeviceUtils.addDeviceSpecificUserAgentSwitch(this);
@@ -138,21 +141,17 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
         mWindow.restoreInstanceState(savedInstanceState);
         mTabManager.initialize(mWindow, new ActivityContentVideoViewClient(this) {
             @Override
-            public boolean onShowCustomView(View view) {
-                if (mTabManager == null) return false;
-                boolean success = super.onShowCustomView(view);
-                if (!CommandLine.getInstance().hasSwitch(
-                        ContentSwitches.DISABLE_OVERLAY_FULLSCREEN_VIDEO_SUBTITLE)) {
+            public void enterFullscreenVideo(View view) {
+                super.enterFullscreenVideo(view);
+                if (mTabManager != null) {
                     mTabManager.setOverlayVideoMode(true);
                 }
-                return success;
             }
 
             @Override
-            public void onDestroyContentVideoView() {
-                super.onDestroyContentVideoView();
-                if (mTabManager != null && !CommandLine.getInstance().hasSwitch(
-                        ContentSwitches.DISABLE_OVERLAY_FULLSCREEN_VIDEO_SUBTITLE)) {
+            public void exitFullscreenVideo() {
+                super.exitFullscreenVideo();
+                if (mTabManager != null) {
                     mTabManager.setOverlayVideoMode(false);
                 }
             }
@@ -167,7 +166,8 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
         mToolbar.setMenuHandler(mAppMenuHandler);
 
         mDevToolsServer = new DevToolsServer("chrome_shell");
-        mDevToolsServer.setRemoteDebuggingEnabled(true);
+        mDevToolsServer.setRemoteDebuggingEnabled(
+                true, DevToolsServer.Security.ALLOW_DEBUG_PERMISSION);
 
         mPrintingController = PrintingControllerFactory.create(this);
 
@@ -176,6 +176,15 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
         // SyncController that we have started.
         mSyncController.onStart();
         ContentUriUtils.setFileProviderUtil(new FileProviderHelper());
+
+        BeamController.registerForBeam(this, new BeamProvider() {
+            @Override
+            public String getTabUrlForBeam() {
+                ChromeShellTab tab = getActiveTab();
+                if (tab == null) return null;
+                return tab.getUrl();
+            }
+        });
     }
 
     @Override
@@ -195,13 +204,16 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (mTabManager.isTabSwitcherVisible()) {
+                mTabManager.hideTabSwitcher();
+                return true;
+            }
             ChromeShellTab tab = getActiveTab();
             if (tab != null && tab.canGoBack()) {
                 tab.goBack();
                 return true;
             }
         }
-
         return super.onKeyUp(keyCode, event);
     }
 
@@ -272,7 +284,14 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
      */
     @VisibleForTesting
     public void createTab(String url) {
-        mTabManager.createTab(url);
+        mTabManager.createTab(url, TabLaunchType.FROM_EXTERNAL_APP);
+    }
+
+    /**
+     * Closes all current tabs.
+     */
+    public void closeAllTabs() {
+        mTabManager.closeAllTabs();
     }
 
     /**
@@ -281,6 +300,7 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU && event.getRepeatCount() == 0) {
+            if (mToolbar != null) mToolbar.hideSuggestions();
             mAppMenuHandler.showAppMenu(findViewById(R.id.menu_button), true, false);
             return true;
         }
@@ -291,46 +311,54 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         ChromeShellTab activeTab = getActiveTab();
-        switch (item.getItemId()) {
-            case R.id.signin:
-                if (ChromeSigninController.get(this).isSignedIn()) {
-                    SyncController.openSignOutDialog(getFragmentManager());
-                } else if (AccountManagerHelper.get(this).hasGoogleAccounts()) {
-                    SyncController.openSigninDialog(getFragmentManager());
-                } else {
-                    Toast.makeText(this, R.string.signin_no_account, Toast.LENGTH_SHORT).show();
-                }
-                return true;
-            case R.id.print:
-                if (activeTab != null) {
-                    mPrintingController.startPrint(new TabPrinter(activeTab),
-                            new PrintManagerDelegateImpl(this));
-                }
-                return true;
-            case R.id.distill_page:
-                if (activeTab != null) {
-                    DomDistillerTabUtils.distillCurrentPageAndView(
-                            activeTab.getContentViewCore().getWebContents());
-                }
-                return true;
-            case R.id.back_menu_id:
-                if (activeTab != null && activeTab.canGoBack()) {
-                    activeTab.goBack();
-                }
-                return true;
-            case R.id.forward_menu_id:
-                if (activeTab != null && activeTab.canGoForward()) {
-                    activeTab.goForward();
-                }
-                return true;
-            case R.id.share_menu_id:
-            case R.id.direct_share_menu_id:
-                ShareHelper.share(item.getItemId() == R.id.direct_share_menu_id, this,
-                        activeTab.getTitle(), activeTab.getUrl(), null,
-                        Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
-                return true;
-            default:
-                return super.onOptionsItemSelected(item);
+        if (activeTab != null) {
+            ViewGroup containerView = activeTab.getContentViewCore().getContainerView();
+            if (containerView.isFocusable() && containerView.isFocusableInTouchMode()) {
+                containerView.requestFocus();
+            }
+        }
+        int id = item.getItemId();
+        if (id == R.id.signin) {
+            if (ChromeSigninController.get(this).isSignedIn()) {
+                SyncController.openSignOutDialog(getFragmentManager());
+            } else if (AccountManagerHelper.get(this).hasGoogleAccounts()) {
+                SyncController.openSigninDialog(getFragmentManager());
+            } else {
+                Toast.makeText(this, R.string.signin_no_account, Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        } else if (id == R.id.print) {
+            if (activeTab != null) {
+                mPrintingController.startPrint(new TabPrinter(activeTab),
+                        new PrintManagerDelegateImpl(this));
+            }
+            return true;
+        } else if (id == R.id.distill_page) {
+            if (activeTab != null) {
+                DomDistillerTabUtils.distillCurrentPageAndView(
+                        activeTab.getContentViewCore().getWebContents());
+            }
+            return true;
+        } else if (id == R.id.back_menu_id) {
+            if (activeTab != null && activeTab.canGoBack()) {
+                activeTab.goBack();
+            }
+            return true;
+        } else if (id == R.id.forward_menu_id) {
+            if (activeTab != null && activeTab.canGoForward()) {
+                activeTab.goForward();
+            }
+            return true;
+        } else if (id == R.id.new_tab_menu_id) {
+            mTabManager.createNewTab();
+            return true;
+        } else if (id == R.id.share_menu_id || id == R.id.direct_share_menu_id) {
+            ShareHelper.share(item.getItemId() == R.id.direct_share_menu_id, this,
+                    activeTab.getTitle(), activeTab.getUrl(), null,
+                    Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
+            return true;
+        } else {
+            return super.onOptionsItemSelected(item);
         }
     }
 
@@ -395,6 +423,11 @@ public class ChromeShellActivity extends Activity implements AppMenuPropertiesDe
     @Override
     public int getMenuThemeResourceId() {
         return R.style.OverflowMenuTheme;
+    }
+
+    @Override
+    public int getMenuButtonStartPaddingDimenId() {
+        return 0;
     }
 
     @VisibleForTesting

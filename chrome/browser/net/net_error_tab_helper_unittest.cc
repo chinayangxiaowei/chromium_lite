@@ -4,12 +4,12 @@
 
 #include "chrome/browser/net/net_error_tab_helper.h"
 
-#include "chrome/common/net/net_error_info.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/error_page/common/net_error_info.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/page_transition_types.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 
 using chrome_browser_net::NetErrorTabHelper;
 using chrome_common_net::DnsProbeStatus;
@@ -33,12 +33,12 @@ class TestNetErrorTabHelper : public NetErrorTabHelper {
   int mock_sent_count() const { return mock_sent_count_; }
 
  private:
-  virtual void StartDnsProbe() OVERRIDE {
+  void StartDnsProbe() override {
     EXPECT_FALSE(mock_probe_running_);
     mock_probe_running_ = true;
   }
 
-  virtual void SendInfo() OVERRIDE {
+  void SendInfo() override {
     last_status_sent_ = dns_probe_status();
     mock_sent_count_++;
   }
@@ -54,7 +54,7 @@ class NetErrorTabHelperTest : public ChromeRenderViewHostTestHarness {
   enum ErrorPage { NORMAL_PAGE, ERROR_PAGE };
   enum ErrorType { DNS_ERROR, OTHER_ERROR };
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     subframe_ = content::RenderFrameHostTester::For(main_rfh())
                     ->AppendChild("subframe");
@@ -76,7 +76,7 @@ class NetErrorTabHelperTest : public ChromeRenderViewHostTestHarness {
     tab_helper_->DidCommitProvisionalLoadForFrame(
         (main_frame == MAIN_FRAME) ? main_rfh() : subframe_,
         bogus_url_,  // url
-        content::PAGE_TRANSITION_TYPED);
+        ui::PAGE_TRANSITION_TYPED);
   }
 
   void FailProvisionalLoad(MainFrame main_frame, ErrorType error_type) {

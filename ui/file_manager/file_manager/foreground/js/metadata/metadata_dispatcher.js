@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Protocol + host parts of extension URL.
  * @type {string}
@@ -92,7 +90,7 @@ MetadataDispatcher.prototype.init_ = function() {
 MetadataDispatcher.prototype.request_ = function(fileURL) {
   try {
     this.processOneFile(fileURL, function callback(metadata) {
-        this.postMessage('result', [fileURL, metadata]);
+      this.postMessage('result', [fileURL, metadata]);
     }.bind(this));
   } catch (ex) {
     this.error(fileURL, ex);
@@ -173,8 +171,8 @@ MetadataDispatcher.prototype.processOneFile = function(fileURL, callback) {
         metadata);
   }
 
-  var steps =
-  [ // Step one, find the parser matching the url.
+  var steps = [
+    // Step one, find the parser matching the url.
     function detectFormat() {
       for (var i = 0; i != self.parserInstances_.length; i++) {
         var parser = self.parserInstances_[i];

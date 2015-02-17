@@ -31,7 +31,6 @@ static const int kNoSuchResponseId = 123;
 
 class AppCacheResponseTest : public testing::Test {
  public:
-
   // Test Harness -------------------------------------------------------------
 
   // Helper class used to verify test results
@@ -41,8 +40,8 @@ class AppCacheResponseTest : public testing::Test {
         : loaded_info_id_(0), test_(test) {
     }
 
-    virtual void OnResponseInfoLoaded(AppCacheResponseInfo* info,
-                                      int64 response_id) OVERRIDE {
+    void OnResponseInfoLoaded(AppCacheResponseInfo* info,
+                              int64 response_id) override {
       loaded_info_ = info;
       loaded_info_id_ = response_id;
       test_->ScheduleNextTask();
@@ -155,7 +154,7 @@ class AppCacheResponseTest : public testing::Test {
   void WriteBasicResponse() {
     static const char kHttpHeaders[] =
         "HTTP/1.0 200 OK\0Content-Length: 5\0\0";
-    static const char* kHttpBody = "Hello";
+    static const char kHttpBody[] = "Hello";
     scoped_refptr<IOBuffer> body(new WrappedIOBuffer(kHttpBody));
     std::string raw_headers(kHttpHeaders, arraysize(kHttpHeaders));
     WriteResponse(
@@ -377,8 +376,7 @@ class AppCacheResponseTest : public testing::Test {
   // AmountWritten ----------------------------------------------------
 
   void AmountWritten() {
-    static const char kHttpHeaders[] =
-        "HTTP/1.0 200 OK\0\0";
+    static const char kHttpHeaders[] = "HTTP/1.0 200 OK\0\0";
     std::string raw_headers(kHttpHeaders, arraysize(kHttpHeaders));
     net::HttpResponseInfo* head = MakeHttpResponseInfo(raw_headers);
     int expected_amount_written =

@@ -10,17 +10,17 @@
 
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/component_updater/component_updater_service.h"
-#include "chrome/browser/component_updater/crx_update_item.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/component_updater/component_updater_service.h"
+#include "components/component_updater/crx_update_item.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -36,7 +36,6 @@ namespace {
 content::WebUIDataSource* CreateComponentsUIHTMLSource(Profile* profile) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIComponentsHost);
-  source->SetUseJsonJSFormatV2();
 
   source->AddLocalizedString("componentsTitle", IDS_COMPONENTS_TITLE);
   source->AddLocalizedString("componentsNoneInstalled",
@@ -66,10 +65,10 @@ content::WebUIDataSource* CreateComponentsUIHTMLSource(Profile* profile) {
 class ComponentsDOMHandler : public WebUIMessageHandler {
  public:
   ComponentsDOMHandler();
-  virtual ~ComponentsDOMHandler() {}
+  ~ComponentsDOMHandler() override {}
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // Callback for the "requestComponentsData" message.
   void HandleRequestComponentsData(const base::ListValue* args);

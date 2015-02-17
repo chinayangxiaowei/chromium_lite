@@ -24,7 +24,7 @@ SessionDataTypeController::SessionDataTypeController(
     sync_driver::SyncApiComponentFactory* sync_factory,
     Profile* profile,
     SyncedWindowDelegatesGetter* synced_window_getter,
-    LocalDeviceInfoProvider* local_device)
+    sync_driver::LocalDeviceInfoProvider* local_device)
     : UIDataTypeController(
           BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI),
           base::Bind(&ChromeReportUnrecoverableError),
@@ -72,6 +72,7 @@ bool SessionDataTypeController::StartModels() {
 }
 
 void SessionDataTypeController::StopModels() {
+  subscription_.reset();
   notification_registrar_.RemoveAll();
 }
 

@@ -38,6 +38,7 @@ class BookmarkIndex;
 class BookmarkLoadDetails;
 class BookmarkStorage;
 class ScopedGroupBookmarkActions;
+class TestBookmarkClient;
 struct BookmarkMatch;
 }
 
@@ -45,8 +46,8 @@ namespace favicon_base {
 struct FaviconImageResult;
 }
 
-namespace test {
-class TestBookmarkClient;
+namespace query_parser {
+enum class MatchingAlgorithm;
 }
 
 // BookmarkModel --------------------------------------------------------------
@@ -66,13 +67,11 @@ class BookmarkModel : public KeyedService {
     base::string16 title;
   };
 
-  // |index_urls| says whether URLs should be stored in the BookmarkIndex
-  // in addition to bookmark titles.
-  BookmarkModel(bookmarks::BookmarkClient* client, bool index_urls);
-  virtual ~BookmarkModel();
+  explicit BookmarkModel(bookmarks::BookmarkClient* client);
+  ~BookmarkModel() override;
 
   // KeyedService:
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // Loads the bookmarks. This is called upon creation of the
   // BookmarkModel. You need not invoke this directly.
@@ -240,10 +239,18 @@ class BookmarkModel : public KeyedService {
   void ResetDateFolderModified(const BookmarkNode* node);
 
   // Returns up to |max_count| of bookmarks containing each term from |text|
-  // in either the title or the URL.
+  // in either the title or the URL. It uses default matching algorithm.
   void GetBookmarksMatching(const base::string16& text,
                             size_t max_count,
                             std::vector<bookmarks::BookmarkMatch>* matches);
+
+  // Returns up to |max_count| of bookmarks containing each term from |text|
+  // in either the title or the URL.
+  void GetBookmarksMatching(
+      const base::string16& text,
+      size_t max_count,
+      query_parser::MatchingAlgorithm matching_algorithm,
+      std::vector<bookmarks::BookmarkMatch>* matches);
 
   // Sets the store to NULL, making it so the BookmarkModel does not persist
   // any changes to disk. This is only useful during testing to speed up
@@ -291,7 +298,7 @@ class BookmarkModel : public KeyedService {
   friend class bookmarks::BookmarkCodecTest;
   friend class bookmarks::BookmarkStorage;
   friend class bookmarks::ScopedGroupBookmarkActions;
-  friend class test::TestBookmarkClient;
+  friend class bookmarks::TestBookmarkClient;
 
   // Used to order BookmarkNodes by URL.
   class NodeURLComparator {
@@ -329,14 +336,17 @@ class BookmarkModel : public KeyedService {
   // type specifies how the node should be removed.
   void RemoveAndDeleteNode(BookmarkNode* delete_me);
 
-  // Remove |node| from |nodes_ordered_by_url_set_|.
-  void RemoveNodeFromURLSet(BookmarkNode* node);
+  // Remove |node| from |nodes_ordered_by_url_set_| and |index_|.
+  void RemoveNodeFromInternalMaps(BookmarkNode* node);
 
   // Adds the |node| at |parent| in the specified |index| and notifies its
   // observers.
   BookmarkNode* AddNode(BookmarkNode* parent,
                         int index,
                         BookmarkNode* node);
+
+  // Adds the |node| to |nodes_ordered_by_url_set_| and |index_|.
+  void AddNodeToInternalMaps(BookmarkNode* node);
 
   // Returns true if the parent and index are valid.
   bool IsValidIndex(const BookmarkNode* parent, int index, bool allow_end);
@@ -414,10 +424,6 @@ class BookmarkModel : public KeyedService {
   scoped_ptr<bookmarks::BookmarkStorage> store_;
 
   scoped_ptr<bookmarks::BookmarkIndex> index_;
-
-  // True if URLs are stored in the BookmarkIndex in addition to bookmark
-  // titles.
-  const bool index_urls_;
 
   base::WaitableEvent loaded_signal_;
 

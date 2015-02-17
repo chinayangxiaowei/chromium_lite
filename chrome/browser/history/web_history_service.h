@@ -8,8 +8,8 @@
 #include <set>
 
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 namespace base {
@@ -51,7 +51,7 @@ class WebHistoryService : public KeyedService {
   typedef base::Callback<void(bool success)> ExpireWebHistoryCallback;
 
   explicit WebHistoryService(Profile* profile);
-  virtual ~WebHistoryService();
+  ~WebHistoryService() override;
 
   // Searches synced history for visits matching |text_query|. The timeframe to
   // search, along with other options, is specified in |options|. If

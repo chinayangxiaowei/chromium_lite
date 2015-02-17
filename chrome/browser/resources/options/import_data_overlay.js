@@ -20,6 +20,14 @@ cr.define('options', function() {
 
   cr.addSingletonGetter(ImportDataOverlay);
 
+  /**
+  * @param {string} type The type of data to import. Used in the element's ID.
+  */
+  function importable(type) {
+    var id = 'import-' + type;
+    return $(id).checked && !$(id + '-with-label').hidden;
+  }
+
   ImportDataOverlay.prototype = {
     // Inherit from Page.
     __proto__: Page.prototype,
@@ -32,8 +40,10 @@ cr.define('options', function() {
       var checkboxes =
           document.querySelectorAll('#import-checkboxes input[type=checkbox]');
       for (var i = 0; i < checkboxes.length; i++) {
-        checkboxes[i].onchange = function() {
+        checkboxes[i].customPrefChangeHandler = function(e) {
+          options.PrefCheckbox.prototype.defaultPrefChangeHandler.call(this, e);
           self.validateCommitButton_();
+          return true;
         };
       }
 
@@ -49,7 +59,8 @@ cr.define('options', function() {
             String($('import-history').checked),
             String($('import-favorites').checked),
             String($('import-passwords').checked),
-            String($('import-search').checked)]);
+            String($('import-search').checked),
+            String($('import-autofill-form-data').checked)]);
       };
 
       $('import-data-cancel').onclick = function() {
@@ -74,8 +85,9 @@ cr.define('options', function() {
      */
     validateCommitButton_: function() {
       var somethingToImport =
-          $('import-history').checked || $('import-favorites').checked ||
-          $('import-passwords').checked || $('import-search').checked;
+          importable('history') || importable('favorites') ||
+          importable('passwords') || importable('search') ||
+          importable('autofill-form-data');
       $('import-data-commit').disabled = !somethingToImport;
       $('import-choose-file').disabled = !$('import-favorites').checked;
     },
@@ -120,13 +132,16 @@ cr.define('options', function() {
       var browserProfile;
       if (this.browserProfiles.length > index)
         browserProfile = this.browserProfiles[index];
-      var importOptions = ['history', 'favorites', 'passwords', 'search'];
+      var importOptions = ['history',
+                           'favorites',
+                           'passwords',
+                           'search',
+                           'autofill-form-data'];
       for (var i = 0; i < importOptions.length; i++) {
-        var checkbox = $('import-' + importOptions[i]);
+        var id = 'import-' + importOptions[i];
         var enable = browserProfile && browserProfile[importOptions[i]];
-        this.setUpCheckboxState_(checkbox, enable);
-        var checkboxWithLabel = $('import-' + importOptions[i] + '-with-label');
-        checkboxWithLabel.style.display = enable ? '' : 'none';
+        this.setUpCheckboxState_($(id), enable);
+        $(id + '-with-label').hidden = !enable;
       }
     },
 
@@ -147,7 +162,7 @@ cr.define('options', function() {
 
     /**
      * Update the supported browsers popup with given entries.
-     * @param {array} browsers List of supported browsers name.
+     * @param {Array} browsers List of supported browsers name.
      * @private
      */
     updateSupportedBrowsers_: function(browsers) {
@@ -186,7 +201,8 @@ cr.define('options', function() {
       var importPrefs = ['import_history',
                          'import_bookmarks',
                          'import_saved_passwords',
-                         'import_search_engine'];
+                         'import_search_engine',
+                         'import_autofill_form_data'];
       for (var i = 0; i < importPrefs.length; i++)
         Preferences.clearPref(importPrefs[i], true);
     },
@@ -213,7 +229,7 @@ cr.define('options', function() {
 
   /**
    * Update the supported browsers popup with given entries.
-   * @param {array} list of supported browsers name.
+   * @param {Array} browsers List of supported browsers name.
    */
   ImportDataOverlay.updateSupportedBrowsers = function(browsers) {
     ImportDataOverlay.getInstance().updateSupportedBrowsers_(browsers);

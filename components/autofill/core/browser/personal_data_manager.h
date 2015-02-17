@@ -53,7 +53,7 @@ class PersonalDataManager : public KeyedService,
   typedef std::pair<std::string, size_t> GUIDPair;
 
   explicit PersonalDataManager(const std::string& app_locale);
-  virtual ~PersonalDataManager();
+  ~PersonalDataManager() override;
 
   // Kicks off asynchronous loading of profiles and credit cards.
   // |pref_service| must outlive this instance.  |is_off_the_record| informs
@@ -64,12 +64,11 @@ class PersonalDataManager : public KeyedService,
             bool is_off_the_record);
 
   // WebDataServiceConsumer:
-  virtual void OnWebDataServiceRequestDone(
-      WebDataServiceBase::Handle h,
-      const WDTypedResult* result) OVERRIDE;
+  void OnWebDataServiceRequestDone(WebDataServiceBase::Handle h,
+                                   const WDTypedResult* result) override;
 
   // AutofillWebDataServiceObserverOnUIThread:
-  virtual void AutofillMultipleChanged() OVERRIDE;
+  void AutofillMultipleChanged() override;
 
   // Adds a listener to be notified of PersonalDataManager events.
   virtual void AddObserver(PersonalDataManagerObserver* observer);
@@ -211,6 +210,12 @@ class PersonalDataManager : public KeyedService,
   // grant Chrome access to the user's address book.
   bool ShouldShowAccessAddressBookSuggestion(AutofillType type);
 
+  // The access Address Book prompt was shown for a form.
+  void ShowedAccessAddressBookPrompt();
+
+  // The number of times that the access address book prompt was shown.
+  int AccessAddressBookPromptCount();
+
   // The Chrome binary is in the process of being changed, or has been changed.
   // Future attempts to access the Address Book might incorrectly present a
   // blocking dialog.
@@ -230,7 +235,6 @@ class PersonalDataManager : public KeyedService,
   friend class PersonalDataManagerTest;
   friend class ProfileSyncServiceAutofillTest;
   friend class ::RemoveAutofillTester;
-  friend class TestingAutomationProvider;
   friend struct base::DefaultDeleter<PersonalDataManager>;
   friend void autofill_helper::SetProfiles(
       int, std::vector<autofill::AutofillProfile>*);

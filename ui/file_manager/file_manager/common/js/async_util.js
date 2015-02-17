@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Namespace for async utility functions.
  */
@@ -17,7 +15,7 @@ var AsyncUtil = {};
  * sequentially done.
  *
  * @param {Array.<T>} array The array to be iterated.
- * @param {function(function(), T, number, Array.<T>} callback The iteration
+ * @param {function(function(), T, number, Array.<T>)} callback The iteration
  *     callback. The first argument is a callback to notify the completion of
  *     the iteration.
  * @param {function()} completionCallback Called when all iterations are
@@ -75,7 +73,7 @@ AsyncUtil.ConcurrentQueue.prototype.getWaitingTasksCount = function() {
 };
 
 /**
- * @return {boolean} Number of running tasks.
+ * @return {number} Number of running tasks.
  */
 AsyncUtil.ConcurrentQueue.prototype.getRunningTasksCount = function() {
   return this.pendingTasks_.length;
@@ -151,6 +149,17 @@ AsyncUtil.ConcurrentQueue.prototype.onTaskFinished_ = function(closure) {
 };
 
 /**
+ * Returns string representation of current AsyncUtil.ConcurrentQueue instance.
+ * @return {string} String representation of the instance.
+ */
+AsyncUtil.ConcurrentQueue.prototype.toString = function() {
+  return 'AsyncUtil.ConcurrentQueue\n' +
+      '- WaitingTasksCount: ' + this.getWaitingTasksCount() + '\n' +
+      '- RunningTasksCount: ' + this.getRunningTasksCount() + '\n' +
+      '- isCancelled: ' + this.isCancelled();
+};
+
+/**
  * Creates a class for executing several asynchronous closures in a fifo queue.
  * Added tasks will be executed sequentially in order they were added.
  *
@@ -161,7 +170,35 @@ AsyncUtil.Queue = function() {
   AsyncUtil.ConcurrentQueue.call(this, 1);
 };
 
-AsyncUtil.Queue.prototype.__proto__ = AsyncUtil.ConcurrentQueue.prototype;
+AsyncUtil.Queue.prototype = {
+  __proto__: AsyncUtil.ConcurrentQueue.prototype
+};
+
+/**
+ * A task which is executed by AsyncUtil.Group.
+ *
+ * @param {!function(function())} closure Closure with a completion callback to
+ *     be executed.
+ * @param {!Array.<string>} dependencies Array of dependencies.
+ * @param {!string} name Task identifier. Specify to use in dependencies.
+ *
+ * @constructor
+ */
+AsyncUtil.GroupTask = function(closure, dependencies, name) {
+  this.closure = closure;
+  this.dependencies = dependencies;
+  this.name = name;
+};
+
+/**
+ * Returns string representation of AsyncUti.GroupTask instance.
+ * @return {string} String representation of the instance.
+ */
+AsyncUtil.GroupTask.prototype.toString = function() {
+  return 'AsyncUtil.GroupTask\n' +
+      '- name: ' + this.name + '\n' +
+      '- dependencies: ' + this.dependencies.join();
+};
 
 /**
  * Creates a class for executing several asynchronous closures in a group in
@@ -174,6 +211,15 @@ AsyncUtil.Group = function() {
   this.pendingTasks_ = {};
   this.finishedTasks_ = {};
   this.completionCallbacks_ = [];
+};
+
+AsyncUtil.Group.prototype = {
+  /**
+   * @return {Object.<string, AsyncUtil.GroupTask>} Pending tasks
+   */
+  get pendingTasks() {
+    return this.pendingTasks_;
+  }
 };
 
 /**
@@ -189,11 +235,7 @@ AsyncUtil.Group.prototype.add = function(closure, opt_dependencies, opt_name) {
   var length = Object.keys(this.addedTasks_).length;
   var name = opt_name || ('(unnamed#' + (length + 1) + ')');
 
-  var task = {
-    closure: closure,
-    dependencies: opt_dependencies || [],
-    name: name
-  };
+  var task = new AsyncUtil.GroupTask(closure, opt_dependencies || [], name);
 
   this.addedTasks_[name] = task;
   this.pendingTasks_[name] = task;
@@ -252,6 +294,82 @@ AsyncUtil.Group.prototype.continue_ = function() {
 AsyncUtil.Group.prototype.finish_ = function(task) {
   this.finishedTasks_[task.name] = task;
   this.continue_();
+};
+
+/**
+ * Aggregates consecutive calls and executes the closure only once instead of
+ * several times. The first call is always called immediately, and the next
+ * consecutive ones are aggregated and the closure is called only once once
+ * |delay| amount of time passes after the last call to run().
+ *
+ * @param {function()} closure Closure to be aggregated.
+ * @param {number=} opt_delay Minimum aggregation time in milliseconds. Default
+ *     is 50 milliseconds.
+ * @constructor
+ */
+AsyncUtil.Aggregator = function(closure, opt_delay) {
+  /**
+   * @type {number}
+   * @private
+   */
+  this.delay_ = opt_delay || 50;
+
+  /**
+   * @type {function()}
+   * @private
+   */
+  this.closure_ = closure;
+
+  /**
+   * @type {number?}
+   * @private
+   */
+  this.scheduledRunsTimer_ = null;
+
+  /**
+   * @type {number}
+   * @private
+   */
+  this.lastRunTime_ = 0;
+};
+
+/**
+ * Runs a closure. Skips consecutive calls. The first call is called
+ * immediately.
+ */
+AsyncUtil.Aggregator.prototype.run = function() {
+  // If recently called, then schedule the consecutive call with a delay.
+  if (Date.now() - this.lastRunTime_ < this.delay_) {
+    this.cancelScheduledRuns_();
+    this.scheduledRunsTimer_ = setTimeout(this.runImmediately_.bind(this),
+                                          this.delay_ + 1);
+    this.lastRunTime_ = Date.now();
+    return;
+  }
+
+  // Otherwise, run immediately.
+  this.runImmediately_();
+};
+
+/**
+ * Calls the schedule immediately and cancels any scheduled calls.
+ * @private
+ */
+AsyncUtil.Aggregator.prototype.runImmediately_ = function() {
+  this.cancelScheduledRuns_();
+  this.closure_();
+  this.lastRunTime_ = Date.now();
+};
+
+/**
+ * Cancels all scheduled runs (if any).
+ * @private
+ */
+AsyncUtil.Aggregator.prototype.cancelScheduledRuns_ = function() {
+  if (this.scheduledRunsTimer_) {
+    clearTimeout(this.scheduledRunsTimer_);
+    this.scheduledRunsTimer_ = null;
+  }
 };
 
 /**

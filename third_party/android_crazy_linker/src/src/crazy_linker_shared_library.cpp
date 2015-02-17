@@ -63,12 +63,12 @@
 #endif
 
 // Extension dynamic tags for packed relocations.
-#ifdef __arm__
+#if defined(__arm__) || defined(__aarch64__)
 
 #define DT_ANDROID_REL_OFFSET (DT_LOOS)
 #define DT_ANDROID_REL_SIZE (DT_LOOS + 1)
 
-#endif  // __arm__
+#endif  // __arm__ || __aarch64__
 
 namespace crazy {
 
@@ -160,7 +160,7 @@ class SharedLibraryResolver : public ElfRelocations::SymbolResolver {
   Vector<LibraryView*>* dependencies_;
 };
 
-#ifdef __arm__
+#if defined(__arm__) || defined(__aarch64__)
 
 // Helper class to provide a simple scoped buffer.  ScopedPtr is not
 // usable here because it calls delete, not delete [].
@@ -181,12 +181,12 @@ class ScopedBuffer {
   uint8_t* buffer_;
 };
 
-// Read an .android.rel.dyn ARM packed relocations section.
+// Read an .android.rel.dyn packed relocations section.
 // Returns an allocated buffer holding the data, or NULL on error.
-uint8_t* ReadArmPackedRelocs(const char* full_path,
-                             off_t offset,
-                             size_t bytes,
-                             Error* error) {
+uint8_t* ReadPackedRelocations(const char* full_path,
+                               off_t offset,
+                               size_t bytes,
+                               Error* error) {
   FileDescriptor fd;
   if (!fd.OpenReadOnly(full_path)) {
     error->Format("Error opening file '%s'", full_path);
@@ -209,7 +209,7 @@ uint8_t* ReadArmPackedRelocs(const char* full_path,
   return packed_data;
 }
 
-#endif  // __arm__
+#endif  // __arm__ || __aarch64__
 
 }  // namespace
 
@@ -220,14 +220,15 @@ SharedLibrary::~SharedLibrary() {
   if (view_.load_address())
     munmap(reinterpret_cast<void*>(view_.load_address()), view_.load_size());
 
-#ifdef __arm__
-  delete [] arm_packed_relocs_;
+#if defined(__arm__) || defined(__aarch64__)
+  delete [] packed_relocations_;
 #endif
 }
 
 bool SharedLibrary::Load(const char* full_path,
                          size_t load_address,
                          size_t file_offset,
+                         bool no_map_exec_support_fallback_enabled,
                          Error* error) {
   // First, record the path.
   LOG("%s: full path '%s'\n", __FUNCTION__, full_path);
@@ -245,7 +246,7 @@ bool SharedLibrary::Load(const char* full_path,
   LOG("%s: Loading ELF segments for %s\n", __FUNCTION__, base_name_);
 
   {
-    ElfLoader loader;
+    ElfLoader loader(no_map_exec_support_fallback_enabled);
     if (!loader.LoadAt(full_path_, file_offset, load_address, error)) {
       return false;
     }
@@ -276,9 +277,11 @@ bool SharedLibrary::Load(const char* full_path,
   LOG("%s: Extracting ARM.exidx table for %s\n", __FUNCTION__, base_name_);
   (void)phdr_table_get_arm_exidx(
       phdr(), phdr_count(), load_bias(), &arm_exidx_, &arm_exidx_count_);
+#endif
 
-  off_t arm_packed_relocs_offset = 0;
-  size_t arm_packed_relocs_size = 0;
+#if defined(__arm__) || defined(__aarch64__)
+  off_t packed_relocations_offset = 0;
+  size_t packed_relocations_size = 0;
 #endif
 
   LOG("%s: Parsing dynamic table for %s\n", __FUNCTION__, base_name_);
@@ -339,14 +342,14 @@ bool SharedLibrary::Load(const char* full_path,
         if (dyn_value & DF_SYMBOLIC)
           has_DT_SYMBOLIC_ = true;
         break;
-#if defined(__arm__)
+#if defined(__arm__) || defined(__aarch64__)
       case DT_ANDROID_REL_OFFSET:
-        arm_packed_relocs_offset = dyn.GetOffset();
-        LOG("  DT_ANDROID_REL_OFFSET addr=%p\n", arm_packed_relocs_offset);
+        packed_relocations_offset = dyn.GetOffset();
+        LOG("  DT_ANDROID_REL_OFFSET addr=%p\n", packed_relocations_offset);
         break;
       case DT_ANDROID_REL_SIZE:
-        arm_packed_relocs_size = dyn.GetValue();
-        LOG("  DT_ANDROID_REL_SIZE=%d\n", arm_packed_relocs_size);
+        packed_relocations_size = dyn.GetValue();
+        LOG("  DT_ANDROID_REL_SIZE=%d\n", packed_relocations_size);
         break;
 #endif
 #if defined(__mips__)
@@ -360,26 +363,26 @@ bool SharedLibrary::Load(const char* full_path,
     }
   }
 
-#ifdef __arm__
-  // If ARM packed relocations are present in the target library, read the
-  // section data and save it in arm_packed_relocs_.
-  if (arm_packed_relocs_offset && arm_packed_relocs_size) {
-    LOG("%s: ARM packed relocations found at offset %d, %d bytes\n",
+#if defined(__arm__) || defined(__aarch64__)
+  // If packed relocations are present in the target library, read the
+  // section data and save it in packed_relocations_.
+  if (packed_relocations_offset && packed_relocations_size) {
+    LOG("%s: Packed relocations found at offset %d, %d bytes\n",
         __FUNCTION__,
-        arm_packed_relocs_offset,
-        arm_packed_relocs_size);
+        packed_relocations_offset,
+        packed_relocations_size);
 
-    arm_packed_relocs_ =
-        ReadArmPackedRelocs(full_path,
-                            arm_packed_relocs_offset + file_offset,
-                            arm_packed_relocs_size,
-                            error);
-    if (!arm_packed_relocs_)
+    packed_relocations_ =
+        ReadPackedRelocations(full_path,
+                              packed_relocations_offset + file_offset,
+                              packed_relocations_size,
+                              error);
+    if (!packed_relocations_)
       return false;
 
-    LOG("%s: ARM packed relocations stored at %p\n",
+    LOG("%s: Packed relocations stored at %p\n",
         __FUNCTION__,
-        arm_packed_relocs_);
+        packed_relocations_);
   }
 #endif
 
@@ -398,8 +401,8 @@ bool SharedLibrary::Relocate(LibraryList* lib_list,
   if (!relocations.Init(&view_, error))
     return false;
 
-#ifdef __arm__
-  relocations.RegisterArmPackedRelocs(arm_packed_relocs_);
+#if defined(__arm__) || defined(__aarch64__)
+  relocations.RegisterPackedRelocations(packed_relocations_);
 #endif
 
   SharedLibraryResolver resolver(this, lib_list, dependencies);

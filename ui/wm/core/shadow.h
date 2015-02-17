@@ -34,7 +34,7 @@ class WM_EXPORT Shadow : public ui::ImplicitAnimationObserver {
   };
 
   Shadow();
-  virtual ~Shadow();
+  ~Shadow() override;
 
   void Init(Style style);
 
@@ -54,7 +54,7 @@ class WM_EXPORT Shadow : public ui::ImplicitAnimationObserver {
   void SetStyle(Style style);
 
   // ui::ImplicitAnimationObserver overrides:
-  virtual void OnImplicitAnimationsCompleted() OVERRIDE;
+  void OnImplicitAnimationsCompleted() override;
 
  private:
   // Updates the shadow images to the current |style_|.
@@ -73,6 +73,9 @@ class WM_EXPORT Shadow : public ui::ImplicitAnimationObserver {
 
   // The actual shadow layer corresponding to a cc::NinePatchLayer.
   scoped_ptr<ui::Layer> shadow_layer_;
+
+  // Size of the current shadow image.
+  gfx::Size image_size_;
 
   // Bounds of the content that the shadow encloses.
   gfx::Rect content_bounds_;

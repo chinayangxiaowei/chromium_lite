@@ -5,12 +5,11 @@
 #include "chrome/test/ppapi/ppapi_test.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -19,6 +18,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "components/nacl/common/nacl_switches.h"
@@ -175,8 +175,6 @@ void PPAPITestBase::RunTest(const std::string& test_case) {
 void PPAPITestBase::RunTestViaHTTP(const std::string& test_case) {
   base::FilePath document_root;
   ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&document_root));
-  base::FilePath http_document_root;
-  ASSERT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&http_document_root));
   net::SpawnedTestServer http_server(net::SpawnedTestServer::TYPE_HTTP,
                                      net::SpawnedTestServer::kLocalhost,
                                      document_root);
@@ -285,20 +283,26 @@ PPAPITest::PPAPITest() : in_process_(true) {
 void PPAPITest::SetUpCommandLine(base::CommandLine* command_line) {
   PPAPITestBase::SetUpCommandLine(command_line);
 
-  // Append the switch to register the pepper plugin.
-  // library name = <out dir>/<test_name>.<library_extension>
-  // MIME type = application/x-ppapi-<test_name>
   base::FilePath plugin_dir;
   EXPECT_TRUE(PathService::Get(base::DIR_MODULE, &plugin_dir));
 
   base::FilePath plugin_lib = plugin_dir.Append(ppapi::GetTestLibraryName());
   EXPECT_TRUE(base::PathExists(plugin_lib));
+
+  // Append the switch to register the pepper plugin.
+  // library path = <out dir>/<test_name>.<library_extension>
+  // library name = "PPAPI Tests"
+  // version = "1.2.3"
+  // MIME type = application/x-ppapi-<test_name>
   base::FilePath::StringType pepper_plugin = plugin_lib.value();
+  pepper_plugin.append(FILE_PATH_LITERAL("#PPAPI Tests"));
+  pepper_plugin.append(FILE_PATH_LITERAL("#"));  // No description.
+  pepper_plugin.append(FILE_PATH_LITERAL("#1.2.3"));
   pepper_plugin.append(FILE_PATH_LITERAL(";application/x-ppapi-tests"));
   command_line->AppendSwitchNative(switches::kRegisterPepperPlugins,
                                    pepper_plugin);
-  command_line->AppendSwitchASCII(switches::kAllowNaClSocketAPI, "127.0.0.1");
 
+  command_line->AppendSwitchASCII(switches::kAllowNaClSocketAPI, "127.0.0.1");
   if (in_process_)
     command_line->AppendSwitch(switches::kPpapiInProcess);
 }

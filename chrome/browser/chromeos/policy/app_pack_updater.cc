@@ -44,7 +44,7 @@ class AppPackExternalLoader
   }
 
   // Implementation of extensions::ExternalLoader:
-  virtual void StartLoading() OVERRIDE {
+  virtual void StartLoading() override {
     prefs_.reset(app_pack_prefs_.DeepCopy());
     VLOG(1) << "AppPack extension loader publishing "
             << app_pack_prefs_.size() << " crx files.";
@@ -62,8 +62,7 @@ class AppPackExternalLoader
 
 AppPackUpdater::AppPackUpdater(net::URLRequestContextGetter* request_context,
                                EnterpriseInstallAttributes* install_attributes)
-    : weak_ptr_factory_(this),
-      created_extension_loader_(false),
+    : created_extension_loader_(false),
       install_attributes_(install_attributes),
       external_cache_(base::FilePath(kAppPackCacheDir),
                       request_context,
@@ -74,7 +73,8 @@ AppPackUpdater::AppPackUpdater(net::URLRequestContextGetter* request_context,
                               base::SequencedWorkerPool::SKIP_ON_SHUTDOWN),
                       this,
                       false,
-                      false) {
+                      false),
+      weak_ptr_factory_(this) {
   app_pack_subscription_ = chromeos::CrosSettings::Get()->AddSettingsObserver(
       chromeos::kAppPack,
       base::Bind(&AppPackUpdater::AppPackChanged, base::Unretained(this)));

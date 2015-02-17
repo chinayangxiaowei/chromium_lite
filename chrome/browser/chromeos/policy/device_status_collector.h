@@ -63,10 +63,10 @@ class DeviceStatusCollector : public CloudPolicyClient::StatusProvider {
 
   // CloudPolicyClient::StatusProvider:
   virtual bool GetDeviceStatus(
-      enterprise_management::DeviceStatusReportRequest* status) OVERRIDE;
+      enterprise_management::DeviceStatusReportRequest* status) override;
   virtual bool GetSessionStatus(
-      enterprise_management::SessionStatusReportRequest* status) OVERRIDE;
-  virtual void OnSubmittedSuccessfully() OVERRIDE;
+      enterprise_management::SessionStatusReportRequest* status) override;
+  virtual void OnSubmittedSuccessfully() override;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -165,8 +165,6 @@ class DeviceStatusCollector : public CloudPolicyClient::StatusProvider {
 
   chromeos::CrosSettings* cros_settings_;
 
-  base::WeakPtrFactory<DeviceStatusCollector> weak_factory_;
-
   // TODO(bartfab): Remove this once crbug.com/125931 is addressed and a proper
   // way to mock geolocation exists.
   LocationUpdateRequester location_update_requester_;
@@ -194,6 +192,8 @@ class DeviceStatusCollector : public CloudPolicyClient::StatusProvider {
       network_interfaces_subscription_;
   scoped_ptr<chromeos::CrosSettings::ObserverSubscription>
       users_subscription_;
+
+  base::WeakPtrFactory<DeviceStatusCollector> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(DeviceStatusCollector);
 };

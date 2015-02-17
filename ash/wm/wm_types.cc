@@ -28,8 +28,10 @@ ui::WindowShowState ToWindowShowState(WindowStateType type) {
     case WINDOW_STATE_TYPE_RIGHT_SNAPPED:
     case WINDOW_STATE_TYPE_LEFT_SNAPPED:
     case WINDOW_STATE_TYPE_AUTO_POSITIONED:
+    case WINDOW_STATE_TYPE_DOCKED:
       return ui::SHOW_STATE_NORMAL;
     case WINDOW_STATE_TYPE_MINIMIZED:
+    case WINDOW_STATE_TYPE_DOCKED_MINIMIZED:
       return ui::SHOW_STATE_MINIMIZED;
     case WINDOW_STATE_TYPE_MAXIMIZED:
       return ui::SHOW_STATE_MAXIMIZED;
@@ -37,8 +39,6 @@ ui::WindowShowState ToWindowShowState(WindowStateType type) {
       return ui::SHOW_STATE_INACTIVE;
     case WINDOW_STATE_TYPE_FULLSCREEN:
       return ui::SHOW_STATE_FULLSCREEN;
-    case WINDOW_STATE_TYPE_DETACHED:
-      return ui::SHOW_STATE_DETACHED;
     case WINDOW_STATE_TYPE_END:
       NOTREACHED();
   }

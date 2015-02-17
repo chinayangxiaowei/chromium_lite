@@ -6,15 +6,14 @@
 
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
-#include "ui/gfx/rect.h"
-#include "ui/gfx/rect_f.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace cc {
 
 void SolidColorContentLayerClient::PaintContents(
     SkCanvas* canvas,
     const gfx::Rect& rect,
-    gfx::RectF* opaque_rect,
     ContentLayerClient::GraphicsContextStatus gc_status) {
   SkPaint paint;
   paint.setStyle(SkPaint::kFill_Style);
@@ -24,9 +23,6 @@ void SolidColorContentLayerClient::PaintContents(
   canvas->drawRect(
       SkRect::MakeXYWH(rect.x(), rect.y(), rect.width(), rect.height()),
       paint);
-
-  if (SkColorGetA(color_) == 255)
-    *opaque_rect = rect;
 }
 
 bool SolidColorContentLayerClient::FillsBoundsCompletely() const {

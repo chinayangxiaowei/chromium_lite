@@ -28,6 +28,14 @@ static const char kMissing[] = "Missing";
 static const char kCommandKeyNotSupported[] =
     "Command key is not supported. Note: Ctrl means Command on Mac";
 
+#if defined(OS_CHROMEOS)
+// ChromeOS supports an additional modifier 'Search', which can result in longer
+// sequences.
+static const int kMaxTokenSize = 4;
+#else
+static const int kMaxTokenSize = 3;
+#endif  // OS_CHROMEOS
+
 bool IsNamedCommand(const std::string& command_name) {
   return command_name != values::kPageActionCommandEvent &&
          command_name != values::kBrowserActionCommandEvent;
@@ -40,6 +48,14 @@ bool DoesRequireModifier(const std::string& accelerator) {
          accelerator != values::kKeyMediaStop;
 }
 
+// Parse an |accelerator| for a given platform (specified by |platform_key|) and
+// return the result as a ui::Accelerator if successful, or VKEY_UNKNOWN if not.
+// |index| is used when constructing an |error| messages to show which command
+// in the manifest is failing and |should_parse_media_keys| specifies whether
+// media keys are to be considered for parsing.
+// Note: If the parsing rules here are changed, make sure to update the
+// corresponding extension_command_list.js validation, which validates the user
+// input for chrome://extensions/configureCommands.
 ui::Accelerator ParseImpl(const std::string& accelerator,
                           const std::string& platform_key,
                           int index,
@@ -62,7 +78,7 @@ ui::Accelerator ParseImpl(const std::string& accelerator,
   base::SplitString(accelerator, '+', &tokens);
   if (tokens.size() == 0 ||
       (tokens.size() == 1 && DoesRequireModifier(accelerator)) ||
-      tokens.size() > 3) {
+      tokens.size() > kMaxTokenSize) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
         errors::kInvalidKeyBinding,
         base::IntToString(index),
@@ -94,6 +110,15 @@ ui::Accelerator ParseImpl(const std::string& accelerator,
 #endif
       } else {
         // No other platform supports Command.
+        key = ui::VKEY_UNKNOWN;
+        break;
+      }
+    } else if (tokens[i] == values::kKeySearch) {
+      // Search is a special modifier only on ChromeOS and maps to 'Command'.
+      if (platform_key == values::kKeybindingPlatformChromeOs) {
+        modifiers |= ui::EF_COMMAND_DOWN;
+      } else {
+        // No other platform supports Search.
         key = ui::VKEY_UNKNOWN;
         break;
       }
@@ -303,7 +328,12 @@ std::string Command::AcceleratorToString(const ui::Accelerator& accelerator) {
     shortcut += values::kKeySeparator;
 
   if (accelerator.IsCmdDown()) {
+#if defined(OS_CHROMEOS)
+    // Chrome OS treats the Search key like the Command key.
+    shortcut += values::kKeySearch;
+#else
     shortcut += values::kKeyCommand;
+#endif
     shortcut += values::kKeySeparator;
   }
 

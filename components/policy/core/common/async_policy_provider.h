@@ -34,12 +34,12 @@ class POLICY_EXPORT AsyncPolicyProvider : public ConfigurationPolicyProvider,
   // should be passed later to Init().
   AsyncPolicyProvider(SchemaRegistry* registry,
                       scoped_ptr<AsyncPolicyLoader> loader);
-  virtual ~AsyncPolicyProvider();
+  ~AsyncPolicyProvider() override;
 
   // ConfigurationPolicyProvider implementation.
-  virtual void Init(SchemaRegistry* registry) OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
-  virtual void RefreshPolicies() OVERRIDE;
+  void Init(SchemaRegistry* registry) override;
+  void Shutdown() override;
+  void RefreshPolicies() override;
 
  private:
   // Helper for RefreshPolicies().
@@ -60,13 +60,13 @@ class POLICY_EXPORT AsyncPolicyProvider : public ConfigurationPolicyProvider,
   // on the background thread but is owned by |this|.
   AsyncPolicyLoader* loader_;
 
-  // Used to get a WeakPtr to |this| for the update callback given to the
-  // loader.
-  base::WeakPtrFactory<AsyncPolicyProvider> weak_factory_;
-
   // Callback used to synchronize RefreshPolicies() calls with the background
   // thread. See the implementation for the details.
   base::CancelableClosure refresh_callback_;
+
+  // Used to get a WeakPtr to |this| for the update callback given to the
+  // loader.
+  base::WeakPtrFactory<AsyncPolicyProvider> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AsyncPolicyProvider);
 };

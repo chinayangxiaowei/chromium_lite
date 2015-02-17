@@ -14,6 +14,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/prefs/pref_member.h"
+#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/ssl_config_service_manager.h"
@@ -37,12 +38,11 @@ namespace chrome_browser_net {
 class DnsProbeService;
 }
 
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
 namespace data_reduction_proxy {
 class DataReductionProxyAuthRequestHandler;
+class DataReductionProxyDelegate;
 class DataReductionProxyParams;
 }
-#endif  // defined(SPDY_PROXY_AUTH_ORIGIN)
 
 namespace extensions {
 class EventRouterForwarder;
@@ -167,8 +167,10 @@ class IOThread : public content::BrowserThreadDelegate {
     scoped_ptr<net::HttpUserAgentSettings> http_user_agent_settings;
     bool enable_ssl_connect_job_waiting;
     bool ignore_certificate_errors;
+    bool use_stale_while_revalidate;
     uint16 testing_fixed_http_port;
     uint16 testing_fixed_https_port;
+    Optional<bool> enable_tcp_fast_open_for_ssl;
 
     Optional<size_t> initial_max_spdy_concurrent_streams;
     Optional<bool> force_spdy_single_domain;
@@ -185,9 +187,10 @@ class IOThread : public content::BrowserThreadDelegate {
     Optional<bool> enable_websocket_over_spdy;
 
     Optional<bool> enable_quic;
-    Optional<bool> enable_quic_time_based_loss_detection;
     Optional<bool> enable_quic_port_selection;
     Optional<bool> quic_always_require_handshake_confirmation;
+    Optional<bool> quic_disable_connection_pooling;
+    Optional<int> quic_load_server_info_timeout_ms;
     Optional<size_t> quic_max_packet_length;
     net::QuicTagVector quic_connection_options;
     Optional<std::string> quic_user_agent_id;
@@ -198,12 +201,12 @@ class IOThread : public content::BrowserThreadDelegate {
     // main frame load fails with a DNS error in order to provide more useful
     // information to the renderer so it can show a more specific error page.
     scoped_ptr<chrome_browser_net::DnsProbeService> dns_probe_service;
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
-      data_reduction_proxy_params;
-  scoped_ptr<data_reduction_proxy::DataReductionProxyAuthRequestHandler>
-      data_reduction_proxy_auth_request_handler;
-#endif
+    scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
+        data_reduction_proxy_params;
+    scoped_ptr<data_reduction_proxy::DataReductionProxyAuthRequestHandler>
+        data_reduction_proxy_auth_request_handler;
+    scoped_ptr<data_reduction_proxy::DataReductionProxyDelegate>
+        data_reduction_proxy_delegate;
   };
 
   // |net_log| must either outlive the IOThread or be NULL.
@@ -212,7 +215,7 @@ class IOThread : public content::BrowserThreadDelegate {
            ChromeNetLog* net_log,
            extensions::EventRouterForwarder* extension_event_router_forwarder);
 
-  virtual ~IOThread();
+  ~IOThread() override;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -254,9 +257,9 @@ class IOThread : public content::BrowserThreadDelegate {
   // BrowserThreadDelegate implementation, runs on the IO thread.
   // This handles initialization and destruction of state that must
   // live on the IO thread.
-  virtual void Init() OVERRIDE;
-  virtual void InitAsync() OVERRIDE;
-  virtual void CleanUp() OVERRIDE;
+  void Init() override;
+  void InitAsync() override;
+  void CleanUp() override;
 
   // Initializes |params| based on the settings in |globals|.
   static void InitializeNetworkSessionParamsFromGlobals(
@@ -264,6 +267,9 @@ class IOThread : public content::BrowserThreadDelegate {
       net::HttpNetworkSession::Params* params);
 
   void InitializeNetworkOptions(const base::CommandLine& parsed_command_line);
+
+  // Sets up TCP FastOpen if enabled via field trials or via the command line.
+  void ConfigureTCPFastOpen(const base::CommandLine& command_line);
 
   // Enable SPDY with the given mode, which may contain the following:
   //
@@ -284,7 +290,7 @@ class IOThread : public content::BrowserThreadDelegate {
 
   // Configures available SPDY protocol versions from the given trial.
   // Used only if no command-line configuration was present.
-  static void ConfigureSpdyFromTrial(const std::string& spdy_trial_group,
+  static void ConfigureSpdyFromTrial(base::StringPiece spdy_trial_group,
                                      Globals* globals);
 
   // Global state must be initialized on the IO thread, then this
@@ -310,6 +316,9 @@ class IOThread : public content::BrowserThreadDelegate {
   // Configures QUIC options based on the flags in |command_line| as
   // well as the QUIC field trial group.
   void ConfigureQuic(const base::CommandLine& command_line);
+
+  // Set up data reduction proxy related objects on IO thread globals.
+  void SetupDataReductionProxy(ChromeNetworkDelegate* network_delegate);
 
   extensions::EventRouterForwarder* extension_event_router_forwarder() {
 #if defined(ENABLE_EXTENSIONS)
@@ -346,16 +355,19 @@ class IOThread : public content::BrowserThreadDelegate {
       base::StringPiece quic_trial_group,
       const VariationParameters& quic_trial_params);
 
-  // Returns true if QUIC time-base loss detection should be negotiated during
-  // the QUIC handshake.
-  static bool ShouldEnableQuicTimeBasedLossDetection(
-      const base::CommandLine& command_line,
-      base::StringPiece quic_trial_group,
-      const VariationParameters& quic_trial_params);
-
   // Returns true if QUIC should always require handshake confirmation during
   // the QUIC handshake.
   static bool ShouldQuicAlwaysRequireHandshakeConfirmation(
+      const VariationParameters& quic_trial_params);
+
+  // Returns true if QUIC should disable connection pooling.
+  static bool ShouldQuicDisableConnectionPooling(
+      const VariationParameters& quic_trial_params);
+
+  // Returns the timeout value for loading of QUIC sever information from disk
+  // cache base on field trial. Returns 0 if there is an error parsing the
+  // field trial params, or if the default value should be used.
+  static int GetQuicLoadServerInfoTimeout(
       const VariationParameters& quic_trial_params);
 
   // Returns the maximum length for QUIC packets, based on any flags in
@@ -447,9 +459,9 @@ class IOThread : public content::BrowserThreadDelegate {
   // True if SPDY is disabled by policy.
   bool is_spdy_disabled_by_policy_;
 
-  base::WeakPtrFactory<IOThread> weak_factory_;
-
   const base::TimeTicks creation_time_;
+
+  base::WeakPtrFactory<IOThread> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(IOThread);
 };

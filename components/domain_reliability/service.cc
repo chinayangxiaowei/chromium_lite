@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/message_loop/message_loop_proxy.h"
 #include "base/single_thread_task_runner.h"
 #include "base/task_runner_util.h"
 #include "components/domain_reliability/monitor.h"
@@ -34,16 +35,19 @@ class DomainReliabilityServiceImpl : public DomainReliabilityService {
       const std::string& upload_reporter_string)
       : upload_reporter_string_(upload_reporter_string) {}
 
-  virtual ~DomainReliabilityServiceImpl() {}
+  ~DomainReliabilityServiceImpl() override {}
 
   // DomainReliabilityService implementation:
 
-  virtual scoped_ptr<DomainReliabilityMonitor> CreateMonitor(
-      scoped_refptr<base::SequencedTaskRunner> network_task_runner) OVERRIDE {
-    DCHECK(!network_task_runner_);
+  scoped_ptr<DomainReliabilityMonitor> CreateMonitor(
+      scoped_refptr<base::SingleThreadTaskRunner> network_task_runner)
+      override {
+    DCHECK(!network_task_runner_.get());
 
     scoped_ptr<DomainReliabilityMonitor> monitor(
-        new DomainReliabilityMonitor(upload_reporter_string_));
+        new DomainReliabilityMonitor(upload_reporter_string_,
+                                     base::MessageLoopProxy::current(),
+                                     network_task_runner));
 
     monitor_ = monitor->MakeWeakPtr();
     network_task_runner_ = network_task_runner;
@@ -51,9 +55,9 @@ class DomainReliabilityServiceImpl : public DomainReliabilityService {
     return monitor.Pass();
   }
 
-  virtual void ClearBrowsingData(DomainReliabilityClearMode clear_mode,
-                                 const base::Closure& callback) OVERRIDE {
-    DCHECK(network_task_runner_);
+  void ClearBrowsingData(DomainReliabilityClearMode clear_mode,
+                         const base::Closure& callback) override {
+    DCHECK(network_task_runner_.get());
 
     network_task_runner_->PostTaskAndReply(
         FROM_HERE,
@@ -63,13 +67,12 @@ class DomainReliabilityServiceImpl : public DomainReliabilityService {
         callback);
   }
 
-  virtual void GetWebUIData(
-      const base::Callback<void(scoped_ptr<base::Value>)>& callback)
-      const OVERRIDE {
-    DCHECK(network_task_runner_);
+  void GetWebUIData(const base::Callback<void(scoped_ptr<base::Value>)>&
+                        callback) const override {
+    DCHECK(network_task_runner_.get());
 
     PostTaskAndReplyWithResult(
-        network_task_runner_,
+        network_task_runner_.get(),
         FROM_HERE,
         base::Bind(&GetWebUIDataOnNetworkTaskRunner, monitor_),
         callback);
@@ -78,7 +81,7 @@ class DomainReliabilityServiceImpl : public DomainReliabilityService {
  private:
   std::string upload_reporter_string_;
   base::WeakPtr<DomainReliabilityMonitor> monitor_;
-  scoped_refptr<base::SequencedTaskRunner> network_task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
 };
 
 // static

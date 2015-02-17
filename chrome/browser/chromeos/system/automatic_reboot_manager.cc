@@ -11,12 +11,11 @@
 #include <algorithm>
 #include <string>
 
-#include "ash/shell.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -33,7 +32,6 @@
 #include "base/time/tick_clock.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/system/automatic_reboot_manager_observer.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/chromeos_paths.h"
 #include "chromeos/chromeos_switches.h"
@@ -152,6 +150,7 @@ AutomaticRebootManager::AutomaticRebootManager(
     : clock_(clock.Pass()),
       have_boot_time_(false),
       have_update_reboot_needed_time_(false),
+      reboot_reason_(AutomaticRebootManagerObserver::REBOOT_REASON_UNKNOWN),
       reboot_requested_(false),
       weak_ptr_factory_(this) {
   local_state_registrar_.Init(g_browser_process->local_state());
@@ -172,8 +171,8 @@ AutomaticRebootManager::AutomaticRebootManager(
   // idle. Start listening for user activity to determine whether the user is
   // idle or not.
   if (!user_manager::UserManager::Get()->IsUserLoggedIn()) {
-    if (ash::Shell::HasInstance())
-      ash::Shell::GetInstance()->user_activity_detector()->AddObserver(this);
+    if (wm::UserActivityDetector::Get())
+      wm::UserActivityDetector::Get()->AddObserver(this);
     notification_registrar_.Add(this, chrome::NOTIFICATION_LOGIN_USER_CHANGED,
         content::NotificationService::AllSources());
     login_screen_idle_timer_.reset(
@@ -202,8 +201,8 @@ AutomaticRebootManager::~AutomaticRebootManager() {
   DBusThreadManager* dbus_thread_manager = DBusThreadManager::Get();
   dbus_thread_manager->GetPowerManagerClient()->RemoveObserver(this);
   dbus_thread_manager->GetUpdateEngineClient()->RemoveObserver(this);
-  if (ash::Shell::HasInstance())
-    ash::Shell::GetInstance()->user_activity_detector()->RemoveObserver(this);
+  if (wm::UserActivityDetector::Get())
+    wm::UserActivityDetector::Get()->RemoveObserver(this);
 }
 
 void AutomaticRebootManager::AddObserver(
@@ -227,7 +226,7 @@ void AutomaticRebootManager::UpdateStatusChanged(
   // so that only the time of the first notification is taken into account and
   // repeated notifications do not postpone the reboot request and grace period.
   if (status.status != UpdateEngineClient::UPDATE_STATUS_UPDATED_NEED_REBOOT ||
-      !have_boot_time_ || have_update_reboot_needed_time_) {
+      have_update_reboot_needed_time_) {
     return;
   }
 
@@ -270,8 +269,8 @@ void AutomaticRebootManager::Observe(
   } else if (type == chrome::NOTIFICATION_LOGIN_USER_CHANGED) {
     // A session is starting. Stop listening for user activity as it no longer
     // is a relevant criterion.
-    if (ash::Shell::HasInstance())
-      ash::Shell::GetInstance()->user_activity_detector()->RemoveObserver(this);
+    if (wm::UserActivityDetector::Get())
+      wm::UserActivityDetector::Get()->RemoveObserver(this);
     notification_registrar_.Remove(
         this, chrome::NOTIFICATION_LOGIN_USER_CHANGED,
         content::NotificationService::AllSources());
@@ -318,8 +317,6 @@ void AutomaticRebootManager::Reschedule() {
   reboot_requested_ = false;
 
   const base::TimeDelta kZeroTimeDelta;
-  AutomaticRebootManagerObserver::Reason reboot_reason =
-      AutomaticRebootManagerObserver::REBOOT_REASON_UNKNOWN;
 
   // If an uptime limit is set, calculate the time at which it should cause a
   // reboot to be requested.
@@ -328,7 +325,7 @@ void AutomaticRebootManager::Reschedule() {
   base::TimeTicks reboot_request_time = boot_time_ + uptime_limit;
   bool have_reboot_request_time = uptime_limit != kZeroTimeDelta;
   if (have_reboot_request_time)
-    reboot_reason = AutomaticRebootManagerObserver::REBOOT_REASON_PERIODIC;
+    reboot_reason_ = AutomaticRebootManagerObserver::REBOOT_REASON_PERIODIC;
 
   // If the policy to automatically reboot after an update is enabled and an
   // update has been applied, set the time at which a reboot should be
@@ -340,7 +337,7 @@ void AutomaticRebootManager::Reschedule() {
        update_reboot_needed_time_ < reboot_request_time)) {
     reboot_request_time = update_reboot_needed_time_;
     have_reboot_request_time = true;
-    reboot_reason = AutomaticRebootManagerObserver::REBOOT_REASON_OS_UPDATE;
+    reboot_reason_ = AutomaticRebootManagerObserver::REBOOT_REASON_OS_UPDATE;
   }
 
   // If no reboot should be requested, remove any grace period.
@@ -376,15 +373,15 @@ void AutomaticRebootManager::Reschedule() {
                           base::Bind(&AutomaticRebootManager::Reboot,
                                      base::Unretained(this)));
 
-  DCHECK_NE(AutomaticRebootManagerObserver::REBOOT_REASON_UNKNOWN,
-            reboot_reason);
-  FOR_EACH_OBSERVER(AutomaticRebootManagerObserver,
-                    observers_,
-                    OnRebootScheduled(reboot_reason));
 }
 
 void AutomaticRebootManager::RequestReboot() {
   reboot_requested_ = true;
+  DCHECK_NE(AutomaticRebootManagerObserver::REBOOT_REASON_UNKNOWN,
+            reboot_reason_);
+  FOR_EACH_OBSERVER(AutomaticRebootManagerObserver,
+                    observers_,
+                    OnRebootRequested(reboot_reason_));
   MaybeReboot(false);
 }
 

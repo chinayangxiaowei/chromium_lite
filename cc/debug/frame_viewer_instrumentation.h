@@ -18,7 +18,6 @@ const char kLayerId[] = "layerId";
 const char kTileId[] = "tileId";
 const char kTileResolution[] = "tileResolution";
 const char kSourceFrameNumber[] = "sourceFrameNumber";
-const char kRasterMode[] = "rasterMode";
 
 const char kAnalyzeTask[] = "AnalyzeTask";
 const char kRasterTask[] = "RasterTask";
@@ -29,7 +28,7 @@ scoped_refptr<base::debug::ConvertableToTraceFormat> TileDataAsValue(
     int source_frame_number,
     int layer_id) {
   scoped_refptr<base::debug::TracedValue> res(new base::debug::TracedValue());
-  TracedValue::SetIDRef(tile_id, res, internal::kTileId);
+  TracedValue::SetIDRef(tile_id, res.get(), internal::kTileId);
   res->SetString(internal::kTileResolution,
                  TileResolutionToString(tile_resolution));
   res->SetInteger(internal::kSourceFrameNumber, source_frame_number);
@@ -65,16 +64,13 @@ class ScopedRasterTask {
   ScopedRasterTask(const void* tile_id,
                    TileResolution tile_resolution,
                    int source_frame_number,
-                   int layer_id,
-                   RasterMode raster_mode) {
-    TRACE_EVENT_BEGIN2(
+                   int layer_id) {
+    TRACE_EVENT_BEGIN1(
         internal::kCategory,
         internal::kRasterTask,
         internal::kTileData,
         internal::TileDataAsValue(
-            tile_id, tile_resolution, source_frame_number, layer_id),
-        internal::kRasterMode,
-        RasterModeToString(raster_mode));
+            tile_id, tile_resolution, source_frame_number, layer_id));
   }
   ~ScopedRasterTask() {
     TRACE_EVENT_END0(internal::kCategory, internal::kRasterTask);

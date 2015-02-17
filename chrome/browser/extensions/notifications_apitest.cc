@@ -10,17 +10,14 @@
 #include "chrome/browser/ui/browser.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/switches.h"
 
 class NotificationIdleTest : public ExtensionApiTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    ExtensionApiTest::SetUpCommandLine(command_line);
+  void SetUpOnMainThread() override {
+    ExtensionApiTest::SetUpOnMainThread();
 
-    command_line->AppendSwitchASCII(
-        extensions::switches::kEventPageIdleTime, "1000");
-    command_line->AppendSwitchASCII(
-        extensions::switches::kEventPageSuspendingTime, "1000");
+    extensions::ProcessManager::SetEventPageIdleTimeForTesting(1);
+    extensions::ProcessManager::SetEventPageSuspendingTimeForTesting(1);
   }
 
   const extensions::Extension* LoadExtensionAndWait(
@@ -59,7 +56,6 @@ IN_PROC_BROWSER_TEST_F(NotificationIdleTest, MAYBE_NotificationsAllowUnload) {
   ASSERT_TRUE(extension) << message_;
 
   // Lazy Background Page has been shut down.
-  extensions::ProcessManager* pm =
-      extensions::ExtensionSystem::Get(profile())->process_manager();
+  extensions::ProcessManager* pm = extensions::ProcessManager::Get(profile());
   EXPECT_FALSE(pm->GetBackgroundHostForExtension(last_loaded_extension_id()));
 }

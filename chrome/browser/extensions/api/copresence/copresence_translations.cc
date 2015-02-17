@@ -9,6 +9,8 @@
 #include "components/copresence/proto/enums.pb.h"
 #include "components/copresence/proto/rpcs.pb.h"
 
+using copresence::AUDIO_CONFIGURATION_AUDIBLE;
+using copresence::AUDIO_CONFIGURATION_UNKNOWN;
 using copresence::BROADCAST_AND_SCAN;
 using copresence::BROADCAST_ONLY;
 using copresence::BROADCAST_SCAN_CONFIGURATION_UNKNOWN;
@@ -50,13 +52,22 @@ void SetTokenExchangeStrategy(const Strategy* strategy,
                               BroadcastScanConfiguration default_config,
                               TokenExchangeStrategy* strategy_proto) {
   if (strategy) {
-    BroadcastScanConfiguration config = TranslateStrategy(*strategy);
-    strategy_proto->set_broadcast_scan_configuration(
-        config == BROADCAST_SCAN_CONFIGURATION_UNKNOWN ?
-        default_config : config);
-    strategy_proto->set_use_audible(strategy->audible && *strategy->audible);
+    BroadcastScanConfiguration config;
+    if (strategy->low_power && *(strategy->low_power)) {
+      config = BROADCAST_SCAN_CONFIGURATION_UNKNOWN;
+    } else {
+      config = TranslateStrategy(*strategy);
+      if (config == BROADCAST_SCAN_CONFIGURATION_UNKNOWN)
+        config = default_config;
+    }
+
+    strategy_proto->set_broadcast_scan_configuration(config);
+    strategy_proto->set_audio_configuration(
+        strategy->audible && *strategy->audible ? AUDIO_CONFIGURATION_AUDIBLE
+                                                : AUDIO_CONFIGURATION_UNKNOWN);
   } else {
     strategy_proto->set_broadcast_scan_configuration(default_config);
+    strategy_proto->set_audio_configuration(AUDIO_CONFIGURATION_UNKNOWN);
   }
 }
 
@@ -130,7 +141,7 @@ bool AddSubscribeToRequest(
     return false;
   }
 
-  // Convert from client to server subscription format.
+  // Convert from IDL to server subscription format.
   copresence::Subscription* subscription_proto =
       request->mutable_manage_subscriptions_request()->add_subscription();
   subscription_proto->set_id(subscription.id);
@@ -185,7 +196,7 @@ bool AddUnsubscribeToRequest(const std::string& app_id,
 }
 
 bool PrepareReportRequestProto(
-    const std::vector<linked_ptr<Operation> >& operations,
+    const std::vector<linked_ptr<Operation>>& operations,
     const std::string& app_id,
     SubscriptionToAppMap* apps_by_subscription_id,
     ReportRequest* request) {

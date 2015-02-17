@@ -25,7 +25,7 @@ class KioskModeScreensaver : public wm::UserActivityObserver {
   friend class KioskModeScreensaverTest;
 
   // wm::UserActivityObserver overrides:
-  virtual void OnUserActivity(const ui::Event* event) OVERRIDE;
+  virtual void OnUserActivity(const ui::Event* event) override;
 
   // Initialization functions, in order
   // Get the screensaver path once KioskModeHelper is initialized.
@@ -40,9 +40,9 @@ class KioskModeScreensaver : public wm::UserActivityObserver {
   void SetupScreensaver(scoped_refptr<extensions::Extension> extension,
                         const base::FilePath& extension_base_path);
 
-  base::WeakPtrFactory<KioskModeScreensaver> weak_ptr_factory_;
-
   base::FilePath extension_base_path_;
+
+  base::WeakPtrFactory<KioskModeScreensaver> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(KioskModeScreensaver);
 };

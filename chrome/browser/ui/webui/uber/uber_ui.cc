@@ -12,8 +12,10 @@
 #include "chrome/browser/ui/webui/extensions/extensions_ui.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/extensions/chrome_manifest_url_handlers.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_source.h"
@@ -23,8 +25,6 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension_set.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 
 using content::NavigationController;
 using content::NavigationEntry;
@@ -37,7 +37,6 @@ content::WebUIDataSource* CreateUberHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIUberHost);
 
-  source->SetUseJsonJSFormatV2();
   source->SetJsonPath("strings.js");
   source->AddResourcePath("uber.js", IDR_UBER_JS);
   source->AddResourcePath("uber_utils.js", IDR_UBER_UTILS_JS);
@@ -78,7 +77,6 @@ content::WebUIDataSource* CreateUberFrameHTMLSource(Profile* profile) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIUberFrameHost);
 
-  source->SetUseJsonJSFormatV2();
   source->SetJsonPath("strings.js");
   source->AddResourcePath("uber_frame.js", IDR_UBER_FRAME_JS);
   source->SetDefaultResource(IDR_UBER_FRAME_HTML);

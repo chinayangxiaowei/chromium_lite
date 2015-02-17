@@ -43,8 +43,8 @@ enum LatencyComponentType {
   INPUT_EVENT_LATENCY_RENDERING_SCHEDULED_COMPONENT,
   // Timestamp when a scroll update is forwarded to the main thread.
   INPUT_EVENT_LATENCY_FORWARD_SCROLL_UPDATE_TO_MAIN_COMPONENT,
-  // Timestamp when the touch event is acked.
-  INPUT_EVENT_LATENCY_ACKED_TOUCH_COMPONENT,
+  // Timestamp when the event's ack is received by the RWH.
+  INPUT_EVENT_LATENCY_ACK_RWH_COMPONENT,
   // Frame number when a window snapshot was requested. The snapshot
   // is taken when the rendering results actually reach the screen.
   WINDOW_SNAPSHOT_FRAME_NUMBER_COMPONENT,
@@ -95,8 +95,18 @@ struct EVENTS_BASE_EXPORT LatencyInfo {
     uint32 event_count;
   };
 
+  struct EVENTS_BASE_EXPORT InputCoordinate {
+    InputCoordinate();
+    InputCoordinate(float x, float y);
+
+    float x;
+    float y;
+  };
+
   // Empirically determined constant based on a typical scroll sequence.
   enum { kTypicalMaxComponentsPerLatencyInfo = 6 };
+
+  enum { kMaxInputCoordinates = 2 };
 
   // Map a Latency Component (with a component-specific int64 id) to a
   // component info.
@@ -153,6 +163,11 @@ struct EVENTS_BASE_EXPORT LatencyInfo {
   void TraceEventType(const char* event_type);
 
   LatencyMap latency_components;
+
+  // These coordinates represent window coordinates of the original input event.
+  uint32 input_coordinates_size;
+  InputCoordinate input_coordinates[kMaxInputCoordinates];
+
   // The unique id for matching the ASYNC_BEGIN/END trace event.
   int64 trace_id;
   // Whether a terminal component has been added.

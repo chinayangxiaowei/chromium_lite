@@ -47,11 +47,10 @@ class VolumeButton : public views::ToggleImageButton {
     SetImageAlignment(ALIGN_CENTER, ALIGN_MIDDLE);
     image_ = ui::ResourceBundle::GetSharedInstance().GetImageNamed(
         IDR_AURA_UBER_TRAY_VOLUME_LEVELS);
-    SetPreferredSize(gfx::Size(kTrayPopupItemHeight, kTrayPopupItemHeight));
     Update();
   }
 
-  virtual ~VolumeButton() {}
+  ~VolumeButton() override {}
 
   void Update() {
     float level =
@@ -73,7 +72,7 @@ class VolumeButton : public views::ToggleImageButton {
 
  private:
   // Overridden from views::View.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
+  gfx::Size GetPreferredSize() const override {
     gfx::Size size = views::ToggleImageButton::GetPreferredSize();
     size.set_height(kTrayPopupItemHeight);
     return size;
@@ -100,7 +99,7 @@ class VolumeSlider : public views::Slider {
                 IDS_ASH_STATUS_TRAY_VOLUME));
     Update();
   }
-  virtual ~VolumeSlider() {}
+  ~VolumeSlider() override {}
 
   void Update() {
     UpdateState(!audio_delegate_->IsOutputAudioMuted());
@@ -116,15 +115,15 @@ class VolumeSlider : public views::Slider {
 class BarSeparator : public views::View {
  public:
   BarSeparator() {}
-  virtual ~BarSeparator() {}
+  ~BarSeparator() override {}
 
   // Overriden from views::View.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
+  gfx::Size GetPreferredSize() const override {
     return gfx::Size(kBarSeparatorWidth, kBarSeparatorHeight);
   }
 
  private:
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaint(gfx::Canvas* canvas) override {
     canvas->FillRect(gfx::Rect(width() / 2, 0, 1, height()),
                      kButtonStrokeColor);
   }

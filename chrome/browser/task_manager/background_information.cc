@@ -17,6 +17,7 @@
 #include "chrome/browser/task_manager/renderer_resource.h"
 #include "chrome/browser/task_manager/resource_provider.h"
 #include "chrome/browser/task_manager/task_manager.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -25,7 +26,6 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/common/extension.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -42,11 +42,11 @@ class BackgroundContentsResource : public RendererResource {
  public:
   BackgroundContentsResource(BackgroundContents* background_contents,
                              const base::string16& application_name);
-  virtual ~BackgroundContentsResource();
+  ~BackgroundContentsResource() override;
 
   // Resource methods:
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE;
+  base::string16 GetTitle() const override;
+  gfx::ImageSkia GetIcon() const override;
 
   const base::string16& application_name() const { return application_name_; }
 

@@ -27,10 +27,11 @@ class LoopBackTransport : public PacketSender {
  public:
   explicit LoopBackTransport(
       scoped_refptr<CastEnvironment> cast_environment);
-  virtual ~LoopBackTransport();
+  ~LoopBackTransport() override;
 
-  virtual bool SendPacket(PacketRef packet,
-                          const base::Closure& cb) OVERRIDE;
+  bool SendPacket(PacketRef packet, const base::Closure& cb) override;
+
+  int64 GetBytesSent() override;
 
   // Initiailize this loopback transport.
   // Establish a flow of packets from |pipe| to |packet_receiver|.
@@ -45,6 +46,7 @@ class LoopBackTransport : public PacketSender {
  private:
   const scoped_refptr<CastEnvironment> cast_environment_;
   scoped_ptr<test::PacketPipe> packet_pipe_;
+  int64 bytes_sent_;
 
   DISALLOW_COPY_AND_ASSIGN(LoopBackTransport);
 };

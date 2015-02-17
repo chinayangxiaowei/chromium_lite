@@ -4,7 +4,6 @@
 
 #include "chrome/browser/chromeos/options/wimax_config_view.h"
 
-#include "ash/system/chromeos/network/network_connect.h"
 #include "base/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -13,9 +12,7 @@
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/net/onc_utils.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/locale_settings.h"
 #include "chrome/grit/theme_resources.h"
 #include "chromeos/login/login_state.h"
 #include "chromeos/network/network_configuration_handler.h"
@@ -28,6 +25,7 @@
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/network/network_connect.h"
 #include "ui/events/event.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
@@ -103,7 +101,7 @@ void WimaxConfigView::UpdateErrorLabel() {
     const NetworkState* wimax = NetworkHandler::Get()->network_state_handler()->
         GetNetworkState(service_path_);
     if (wimax && wimax->connection_state() == shill::kStateFailure)
-      error_msg = ash::network_connect::ErrorString(
+      error_msg = ui::NetworkConnect::Get()->GetErrorString(
           wimax->last_error(), wimax->path());
   }
   if (!error_msg.empty()) {
@@ -170,7 +168,7 @@ bool WimaxConfigView::Login() {
                                               false);
   }
 
-  ash::network_connect::ConfigureNetworkAndConnect(
+  ui::NetworkConnect::Get()->ConfigureNetworkAndConnect(
       service_path_, properties, share_network);
   return true;  // dialog will be closed
 }

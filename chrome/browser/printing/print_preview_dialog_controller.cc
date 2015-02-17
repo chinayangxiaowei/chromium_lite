@@ -69,19 +69,18 @@ void EnableInternalPDFPluginForContents(WebContents* preview_dialog) {
 class PrintPreviewDialogDelegate : public ui::WebDialogDelegate {
  public:
   explicit PrintPreviewDialogDelegate(WebContents* initiator);
-  virtual ~PrintPreviewDialogDelegate();
+  ~PrintPreviewDialogDelegate() override;
 
-  virtual ui::ModalType GetDialogModalType() const OVERRIDE;
-  virtual base::string16 GetDialogTitle() const OVERRIDE;
-  virtual GURL GetDialogContentURL() const OVERRIDE;
-  virtual void GetWebUIMessageHandlers(
-      std::vector<WebUIMessageHandler*>* handlers) const OVERRIDE;
-  virtual void GetDialogSize(gfx::Size* size) const OVERRIDE;
-  virtual std::string GetDialogArgs() const OVERRIDE;
-  virtual void OnDialogClosed(const std::string& json_retval) OVERRIDE;
-  virtual void OnCloseContents(WebContents* source,
-                               bool* out_close_dialog) OVERRIDE;
-  virtual bool ShouldShowDialogTitle() const OVERRIDE;
+  ui::ModalType GetDialogModalType() const override;
+  base::string16 GetDialogTitle() const override;
+  GURL GetDialogContentURL() const override;
+  void GetWebUIMessageHandlers(
+      std::vector<WebUIMessageHandler*>* handlers) const override;
+  void GetDialogSize(gfx::Size* size) const override;
+  std::string GetDialogArgs() const override;
+  void OnDialogClosed(const std::string& json_retval) override;
+  void OnCloseContents(WebContents* source, bool* out_close_dialog) override;
+  bool ShouldShowDialogTitle() const override;
 
  private:
   WebContents* initiator_;
@@ -337,13 +336,13 @@ void PrintPreviewDialogController::OnNavEntryCommitted(
   if (contents == preview_dialog) {
     // Preview dialog navigated.
     if (details) {
-      content::PageTransition transition_type =
+      ui::PageTransition transition_type =
           details->entry->GetTransitionType();
       content::NavigationType nav_type = details->type;
 
       // New |preview_dialog| is created. Don't update/erase map entry.
       if (waiting_for_new_preview_page_ &&
-          transition_type == content::PAGE_TRANSITION_AUTO_TOPLEVEL &&
+          transition_type == ui::PAGE_TRANSITION_AUTO_TOPLEVEL &&
           nav_type == content::NAVIGATION_TYPE_NEW_PAGE) {
         waiting_for_new_preview_page_ = false;
         SaveInitiatorTitle(preview_dialog);
@@ -352,7 +351,7 @@ void PrintPreviewDialogController::OnNavEntryCommitted(
 
       // Cloud print sign-in causes a reload.
       if (!waiting_for_new_preview_page_ &&
-          transition_type == content::PAGE_TRANSITION_RELOAD &&
+          transition_type == ui::PAGE_TRANSITION_RELOAD &&
           nav_type == content::NAVIGATION_TYPE_EXISTING_PAGE &&
           IsPrintPreviewURL(details->previous_url)) {
         return;

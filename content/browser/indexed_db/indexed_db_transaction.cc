@@ -212,12 +212,12 @@ class BlobWriteCallbackImpl : public IndexedDBBackingStore::BlobWriteCallback {
   explicit BlobWriteCallbackImpl(
       scoped_refptr<IndexedDBTransaction> transaction)
       : transaction_(transaction) {}
-  virtual void Run(bool succeeded) OVERRIDE {
+  void Run(bool succeeded) override {
     transaction_->BlobWriteComplete(succeeded);
   }
 
  protected:
-  virtual ~BlobWriteCallbackImpl() {}
+  ~BlobWriteCallbackImpl() override {}
 
  private:
   scoped_refptr<IndexedDBTransaction> transaction_;
@@ -237,6 +237,8 @@ void IndexedDBTransaction::BlobWriteComplete(bool success) {
 
 leveldb::Status IndexedDBTransaction::Commit() {
   IDB_TRACE1("IndexedDBTransaction::Commit", "txn.id", id());
+
+  timeout_timer_.Stop();
 
   // In multiprocess ports, front-end may have requested a commit but
   // an abort has already been initiated asynchronously by the
@@ -284,8 +286,6 @@ leveldb::Status IndexedDBTransaction::CommitPhaseTwo() {
   // commit steps below. We therefore take a self reference to keep ourselves
   // alive while executing this method.
   scoped_refptr<IndexedDBTransaction> protect(this);
-
-  timeout_timer_.Stop();
 
   state_ = FINISHED;
 
@@ -397,10 +397,8 @@ void IndexedDBTransaction::Timeout() {
 }
 
 void IndexedDBTransaction::CloseOpenCursors() {
-  for (std::set<IndexedDBCursor*>::iterator i = open_cursors_.begin();
-       i != open_cursors_.end();
-       ++i)
-    (*i)->Close();
+  for (auto* cursor : open_cursors_)
+    cursor->Close();
   open_cursors_.clear();
 }
 

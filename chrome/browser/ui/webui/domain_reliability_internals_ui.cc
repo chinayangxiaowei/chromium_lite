@@ -11,7 +11,6 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 
 using domain_reliability::DomainReliabilityService;
 using domain_reliability::DomainReliabilityServiceFactory;
@@ -21,7 +20,6 @@ DomainReliabilityInternalsUI::DomainReliabilityInternalsUI(
     : content::WebUIController(web_ui) {
   content::WebUIDataSource* html_source = content::WebUIDataSource::Create(
       chrome::kChromeUIDomainReliabilityInternalsHost);
-  html_source->SetUseJsonJSFormatV2();
   html_source->SetJsonPath("strings.js");
   html_source->AddResourcePath("domain_reliability_internals.css",
       IDR_DOMAIN_RELIABILITY_INTERNALS_CSS);

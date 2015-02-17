@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util_proxy.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/shared_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/process/process.h"
@@ -52,17 +53,9 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // permissions: PPAPI permissions, to control access to private APIs.
   // render_view_id: RenderView routing id, to control access to private APIs.
   // permission_bits: controls which interfaces the NaCl plugin can use.
-  // uses_irt: whether the launched process should use the IRT.
   // uses_nonsfi_mode: whether the program should be loaded under non-SFI mode.
-  // enable_dyncode_syscalls: whether the launched process should allow dyncode
-  //                          and mmap with PROT_EXEC.
-  // enable_exception_handling: whether the launched process should allow
-  //                            hardware exception handling.
-  // enable_crash_throttling: whether a crash of this process contributes
-  //                          to the crash throttling statistics, and also
-  //                          whether this process should not start when too
-  //                          many crashes have been observed.
   // off_the_record: was the process launched from an incognito renderer?
+  // process_type: the type of NaCl process.
   // profile_directory: is the path of current profile directory.
   NaClProcessHost(const GURL& manifest_url,
                   base::File nexe_file,
@@ -70,16 +63,13 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
                   ppapi::PpapiPermissions permissions,
                   int render_view_id,
                   uint32 permission_bits,
-                  bool uses_irt,
                   bool uses_nonsfi_mode,
-                  bool enable_dyncode_syscalls,
-                  bool enable_exception_handling,
-                  bool enable_crash_throttling,
                   bool off_the_record,
+                  NaClAppProcessType process_type,
                   const base::FilePath& profile_directory);
-  virtual ~NaClProcessHost();
+  ~NaClProcessHost() override;
 
-  virtual void OnProcessCrashed(int exit_status) OVERRIDE;
+  void OnProcessCrashed(int exit_status) override;
 
   // Do any minimal work that must be done at browser startup.
   static void EarlyStartup();
@@ -93,7 +83,7 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
               IPC::Message* reply_msg,
               const base::FilePath& manifest_path);
 
-  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
+  void OnChannelConnected(int32 peer_pid) override;
 
 #if defined(OS_WIN)
   void OnProcessLaunchedByBroker(base::ProcessHandle handle);
@@ -106,12 +96,6 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   content::BrowserPpapiHost* browser_ppapi_host() { return ppapi_host_.get(); }
 
  private:
-  // Internal class that holds the NaClHandle objecs so that
-  // nacl_process_host.h doesn't include NaCl headers.  Needed since it's
-  // included by src\content, which can't depend on the NaCl gyp file because it
-  // depends on chrome.gyp (circular dependency).
-  struct NaClInternal;
-
   bool LaunchNaClGdb();
 
   // Mark the process as using a particular GDB debug stub port and notify
@@ -133,8 +117,8 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   bool LaunchSelLdr();
 
   // BrowserChildProcessHostDelegate implementation:
-  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
-  virtual void OnProcessLaunched() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& msg) override;
+  void OnProcessLaunched() override;
 
   void OnResourcesReady();
 
@@ -171,10 +155,14 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   void OnSetKnownToValidate(const std::string& signature);
   void OnResolveFileToken(uint64 file_token_lo, uint64 file_token_hi,
                           IPC::Message* reply_msg);
+  void OnResolveFileTokenAsync(uint64 file_token_lo, uint64 file_token_hi);
   void FileResolved(const base::FilePath& file_path,
                     IPC::Message* reply_msg,
                     base::File file);
-
+  void FileResolvedAsync(uint64_t file_token_lo,
+                         uint64_t file_token_hi,
+                         const base::FilePath& file_path,
+                         base::File file);
 #if defined(OS_WIN)
   // Message handler for Windows hardware exception handling.
   void OnAttachDebugExceptionHandler(const std::string& info,
@@ -219,22 +207,14 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
   // debug the NaCl loader.
   base::FilePath manifest_path_;
 
-  // Socket pairs for the NaCl process and renderer.
-  scoped_ptr<NaClInternal> internal_;
-
-  base::WeakPtrFactory<NaClProcessHost> weak_factory_;
-
   scoped_ptr<content::BrowserChildProcessHost> process_;
 
-  bool uses_irt_;
   bool uses_nonsfi_mode_;
 
   bool enable_debug_stub_;
-  bool enable_dyncode_syscalls_;
-  bool enable_exception_handling_;
   bool enable_crash_throttling_;
-
   bool off_the_record_;
+  NaClAppProcessType process_type_;
 
   const base::FilePath profile_directory_;
 
@@ -247,6 +227,15 @@ class NaClProcessHost : public content::BrowserChildProcessHostDelegate {
 
   // Throttling time in milliseconds for PpapiHostMsg_Keepalive IPCs.
   static unsigned keepalive_throttle_interval_milliseconds_;
+
+  // Shared memory provided to the plugin and renderer for
+  // reporting crash information.
+  base::SharedMemory crash_info_shmem_;
+
+  base::File socket_for_renderer_;
+  base::File socket_for_sel_ldr_;
+
+  base::WeakPtrFactory<NaClProcessHost> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(NaClProcessHost);
 };

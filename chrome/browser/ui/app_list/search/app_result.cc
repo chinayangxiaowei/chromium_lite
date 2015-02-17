@@ -10,8 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/app_context_menu.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
-#include "chrome/browser/ui/app_list/search/tokenized_string.h"
-#include "chrome/browser/ui/app_list/search/tokenized_string_match.h"
+#include "chrome/browser/ui/app_list/search/search_util.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "content/public/browser/user_metrics.h"
@@ -24,6 +23,8 @@
 #include "extensions/common/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "ui/app_list/app_list_switches.h"
+#include "ui/app_list/search/tokenized_string.h"
+#include "ui/app_list/search/tokenized_string_match.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image_skia_operations.h"
 
@@ -89,6 +90,7 @@ void AppResult::UpdateFromLastLaunched(const base::Time& current_time,
 }
 
 void AppResult::Open(int event_flags) {
+  RecordHistogram(APP_SEARCH_RESULT);
   const extensions::Extension* extension =
       extensions::ExtensionSystem::Get(profile_)->extension_service()
           ->GetInstalledExtension(app_id_);
@@ -114,19 +116,12 @@ void AppResult::Open(int event_flags) {
       event_flags);
 }
 
-void AppResult::InvokeAction(int action_index, int event_flags) {}
-
-scoped_ptr<ChromeSearchResult> AppResult::Duplicate() {
-  scoped_ptr<ChromeSearchResult> copy(
-      new AppResult(profile_, app_id_, controller_));
+scoped_ptr<SearchResult> AppResult::Duplicate() {
+  scoped_ptr<SearchResult> copy(new AppResult(profile_, app_id_, controller_));
   copy->set_title(title());
   copy->set_title_tags(title_tags());
 
   return copy.Pass();
-}
-
-ChromeSearchResultType AppResult::GetType() {
-  return APP_SEARCH_RESULT;
 }
 
 ui::MenuModel* AppResult::GetContextMenuModel() {

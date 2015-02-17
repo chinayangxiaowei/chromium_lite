@@ -22,11 +22,11 @@
 #include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/history.h"
 #include "chrome/common/pref_names.h"
+#include "components/history/core/browser/history_types.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "extensions/browser/event_router.h"
@@ -86,38 +86,38 @@ scoped_ptr<VisitItem> GetVisitItem(const history::VisitRow& row) {
   visit_item->referring_visit_id = base::Int64ToString(row.referring_visit);
 
   VisitItem::Transition transition = VisitItem::TRANSITION_LINK;
-  switch (row.transition & content::PAGE_TRANSITION_CORE_MASK) {
-    case content::PAGE_TRANSITION_LINK:
+  switch (row.transition & ui::PAGE_TRANSITION_CORE_MASK) {
+    case ui::PAGE_TRANSITION_LINK:
       transition = VisitItem::TRANSITION_LINK;
       break;
-    case content::PAGE_TRANSITION_TYPED:
+    case ui::PAGE_TRANSITION_TYPED:
       transition = VisitItem::TRANSITION_TYPED;
       break;
-    case content::PAGE_TRANSITION_AUTO_BOOKMARK:
+    case ui::PAGE_TRANSITION_AUTO_BOOKMARK:
       transition = VisitItem::TRANSITION_AUTO_BOOKMARK;
       break;
-    case content::PAGE_TRANSITION_AUTO_SUBFRAME:
+    case ui::PAGE_TRANSITION_AUTO_SUBFRAME:
       transition = VisitItem::TRANSITION_AUTO_SUBFRAME;
       break;
-    case content::PAGE_TRANSITION_MANUAL_SUBFRAME:
+    case ui::PAGE_TRANSITION_MANUAL_SUBFRAME:
       transition = VisitItem::TRANSITION_MANUAL_SUBFRAME;
       break;
-    case content::PAGE_TRANSITION_GENERATED:
+    case ui::PAGE_TRANSITION_GENERATED:
       transition = VisitItem::TRANSITION_GENERATED;
       break;
-    case content::PAGE_TRANSITION_AUTO_TOPLEVEL:
+    case ui::PAGE_TRANSITION_AUTO_TOPLEVEL:
       transition = VisitItem::TRANSITION_AUTO_TOPLEVEL;
       break;
-    case content::PAGE_TRANSITION_FORM_SUBMIT:
+    case ui::PAGE_TRANSITION_FORM_SUBMIT:
       transition = VisitItem::TRANSITION_FORM_SUBMIT;
       break;
-    case content::PAGE_TRANSITION_RELOAD:
+    case ui::PAGE_TRANSITION_RELOAD:
       transition = VisitItem::TRANSITION_RELOAD;
       break;
-    case content::PAGE_TRANSITION_KEYWORD:
+    case ui::PAGE_TRANSITION_KEYWORD:
       transition = VisitItem::TRANSITION_KEYWORD;
       break;
-    case content::PAGE_TRANSITION_KEYWORD_GENERATED:
+    case ui::PAGE_TRANSITION_KEYWORD_GENERATED:
       transition = VisitItem::TRANSITION_KEYWORD_GENERATED;
       break;
     default:
@@ -131,44 +131,36 @@ scoped_ptr<VisitItem> GetVisitItem(const history::VisitRow& row) {
 
 }  // namespace
 
-HistoryEventRouter::HistoryEventRouter(Profile* profile) {
-  const content::Source<Profile> source = content::Source<Profile>(profile);
-  registrar_.Add(this,
-                 chrome::NOTIFICATION_HISTORY_URL_VISITED,
-                 source);
+HistoryEventRouter::HistoryEventRouter(Profile* profile,
+                                       HistoryService* history_service)
+    : profile_(profile), history_service_observer_(this) {
+  DCHECK(profile);
   registrar_.Add(this,
                  chrome::NOTIFICATION_HISTORY_URLS_DELETED,
-                 source);
+                 content::Source<Profile>(profile));
+  history_service_observer_.Add(history_service);
 }
 
-HistoryEventRouter::~HistoryEventRouter() {}
+HistoryEventRouter::~HistoryEventRouter() {
+}
 
 void HistoryEventRouter::Observe(int type,
                                  const content::NotificationSource& source,
                                  const content::NotificationDetails& details) {
-  switch (type) {
-    case chrome::NOTIFICATION_HISTORY_URL_VISITED:
-      HistoryUrlVisited(
-          content::Source<Profile>(source).ptr(),
-          content::Details<const history::URLVisitedDetails>(details).ptr());
-      break;
-    case chrome::NOTIFICATION_HISTORY_URLS_DELETED:
-      HistoryUrlsRemoved(
-          content::Source<Profile>(source).ptr(),
-          content::Details<const history::URLsDeletedDetails>(details).ptr());
-      break;
-    default:
-      NOTREACHED();
-  }
+  DCHECK_EQ(type, chrome::NOTIFICATION_HISTORY_URLS_DELETED);
+  HistoryUrlsRemoved(
+      content::Source<Profile>(source).ptr(),
+      content::Details<const history::URLsDeletedDetails>(details).ptr());
 }
 
-void HistoryEventRouter::HistoryUrlVisited(
-    Profile* profile,
-    const history::URLVisitedDetails* details) {
-  scoped_ptr<HistoryItem> history_item = GetHistoryItem(details->row);
+void HistoryEventRouter::OnURLVisited(HistoryService* history_service,
+                                      ui::PageTransition transition,
+                                      const history::URLRow& row,
+                                      const history::RedirectList& redirects,
+                                      base::Time visit_time) {
+  scoped_ptr<HistoryItem> history_item = GetHistoryItem(row);
   scoped_ptr<base::ListValue> args = OnVisited::Create(*history_item);
-
-  DispatchEvent(profile, api::history::OnVisited::kEventName, args.Pass());
+  DispatchEvent(profile_, api::history::OnVisited::kEventName, args.Pass());
 }
 
 void HistoryEventRouter::HistoryUrlsRemoved(
@@ -230,8 +222,10 @@ void BrowserContextKeyedAPIFactory<HistoryAPI>::DeclareFactoryDependencies() {
 }
 
 void HistoryAPI::OnListenerAdded(const EventListenerInfo& details) {
-  history_event_router_.reset(
-      new HistoryEventRouter(Profile::FromBrowserContext(browser_context_)));
+  Profile* profile = Profile::FromBrowserContext(browser_context_);
+  history_event_router_.reset(new HistoryEventRouter(
+      profile,
+      HistoryServiceFactory::GetForProfile(profile, Profile::EXPLICIT_ACCESS)));
   EventRouter::Get(browser_context_)->UnregisterObserver(this);
 }
 

@@ -14,6 +14,7 @@
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/safe_browsing/malware_details.h"
+#include "chrome/browser/safe_browsing/metadata.pb.h"
 #include "chrome/browser/safe_browsing/ping_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_blocking_page.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
@@ -69,7 +70,7 @@ void SafeBrowsingUIManager::LogPauseDelay(base::TimeDelta time) {
 // Only report SafeBrowsing related stats when UMA is enabled. User must also
 // ensure that safe browsing is enabled from the calling profile.
 bool SafeBrowsingUIManager::CanReportStats() const {
-  const MetricsService* metrics = g_browser_process->metrics_service();
+  const metrics::MetricsService* metrics = g_browser_process->metrics_service();
   return metrics && metrics->reporting_active();
 }
 
@@ -95,11 +96,33 @@ void SafeBrowsingUIManager::OnBlockingPageDone(
 void SafeBrowsingUIManager::DisplayBlockingPage(
     const UnsafeResource& resource) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  if (resource.is_subresource && !resource.is_subframe) {
+    // Sites tagged as serving Unwanted Software should only show a warning for
+    // main-frame or sub-frame resource. Similar warning restrictions should be
+    // applied to malware sites tagged as "landing sites" (see "Types of
+    // Malware sites" under
+    // https://developers.google.com/safe-browsing/developers_guide_v3#UserWarnings).
+    safe_browsing::MalwarePatternType proto;
+    if (resource.threat_type == SB_THREAT_TYPE_URL_UNWANTED ||
+        (resource.threat_type == SB_THREAT_TYPE_URL_MALWARE &&
+         !resource.threat_metadata.empty() &&
+         proto.ParseFromString(resource.threat_metadata) &&
+         proto.pattern_type() == safe_browsing::MalwarePatternType::LANDING)) {
+      if (!resource.callback.is_null()) {
+        BrowserThread::PostTask(
+            BrowserThread::IO, FROM_HERE, base::Bind(resource.callback, true));
+      }
+      return;
+    }
+  }
+
+  // For M40, the UwS warning may be gated to not show any UI.
+  const bool ping_only = resource.threat_type == SB_THREAT_TYPE_URL_UNWANTED
+    && safe_browsing_util::GetUnwantedTrialGroup() < safe_browsing_util::UWS_ON;
 
   // Indicate to interested observers that the resource in question matched the
-  // SB filters. If the resource is already whitelisted, OnSafeBrowsingHit
-  // won't be called.
-  if (resource.threat_type != SB_THREAT_TYPE_SAFE) {
+  // SB filters, unless the UwS interstitial is in ping-only mode.
+  if (resource.threat_type != SB_THREAT_TYPE_SAFE && !ping_only) {
     FOR_EACH_OBSERVER(Observer, observer_list_, OnSafeBrowsingMatch(resource));
   }
 
@@ -154,6 +177,16 @@ void SafeBrowsingUIManager::DisplayBlockingPage(
                           resource.is_subresource, resource.threat_type,
                           std::string() /* post_data */);
   }
+
+  // If UwS interstitials are turned off, return here before showing UI.
+  if (ping_only) {
+    if (!resource.callback.is_null()) {
+      BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE, base::Bind(resource.callback, true));
+    }
+    return;
+  }
+
   if (resource.threat_type != SB_THREAT_TYPE_SAFE) {
     FOR_EACH_OBSERVER(Observer, observer_list_, OnSafeBrowsingHit(resource));
   }

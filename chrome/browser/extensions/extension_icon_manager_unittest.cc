@@ -9,9 +9,9 @@
 #include "chrome/browser/extensions/extension_icon_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/test/test_browser_thread.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/id_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/skia_util.h"
 
@@ -30,7 +30,7 @@ class ExtensionIconManagerTest : public testing::Test {
       file_thread_(BrowserThread::FILE),
       io_thread_(BrowserThread::IO) {}
 
-  virtual ~ExtensionIconManagerTest() {}
+  ~ExtensionIconManagerTest() override {}
 
   void ImageLoadObserved() {
     unwaited_image_loads_++;
@@ -50,7 +50,7 @@ class ExtensionIconManagerTest : public testing::Test {
   }
 
  private:
-  virtual void SetUp() {
+  void SetUp() override {
     file_thread_.Start();
     io_thread_.Start();
   }
@@ -74,12 +74,12 @@ class ExtensionIconManagerTest : public testing::Test {
 class TestIconManager : public ExtensionIconManager {
  public:
   explicit TestIconManager(ExtensionIconManagerTest* test) : test_(test) {}
-  virtual ~TestIconManager() {}
+  ~TestIconManager() override {}
 
   // Overrides the ImageLoader callback, and calls through to the base class'
   // implementation. Then it lets the test know that an image load was observed.
-  virtual void OnImageLoaded(const std::string& extension_id,
-                             const gfx::Image& image) OVERRIDE {
+  void OnImageLoaded(const std::string& extension_id,
+                     const gfx::Image& image) override {
     ExtensionIconManager::OnImageLoaded(extension_id, image);
     test_->ImageLoadObserved();
   }
@@ -93,7 +93,7 @@ class TestIconManager : public ExtensionIconManager {
 // Returns the default icon that ExtensionIconManager gives when an extension
 // doesn't have an icon.
 SkBitmap GetDefaultIcon() {
-  std::string dummy_id = extensions::id_util::GenerateId("whatever");
+  std::string dummy_id = crx_file::id_util::GenerateId("whatever");
   ExtensionIconManager manager;
   return manager.GetIcon(dummy_id);
 }

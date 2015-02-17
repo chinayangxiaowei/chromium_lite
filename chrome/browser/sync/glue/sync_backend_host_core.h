@@ -40,8 +40,7 @@ struct DoInitializeOptions {
       scoped_ptr<syncer::InternalComponentsFactory> internal_components_factory,
       scoped_ptr<syncer::UnrecoverableErrorHandler> unrecoverable_error_handler,
       syncer::ReportUnrecoverableErrorFunction
-          report_unrecoverable_error_function,
-      const std::string& signin_scoped_device_id);
+          report_unrecoverable_error_function);
   ~DoInitializeOptions();
 
   base::MessageLoop* sync_loop;
@@ -64,7 +63,6 @@ struct DoInitializeOptions {
   scoped_ptr<syncer::UnrecoverableErrorHandler> unrecoverable_error_handler;
   syncer::ReportUnrecoverableErrorFunction
       report_unrecoverable_error_function;
-  std::string signin_scoped_device_id;
 };
 
 // Helper struct to handle currying params to
@@ -92,48 +90,41 @@ class SyncBackendHostCore
   // SyncManager::Observer implementation.  The Core just acts like an air
   // traffic controller here, forwarding incoming messages to appropriate
   // landing threads.
-  virtual void OnSyncCycleCompleted(
-      const syncer::sessions::SyncSessionSnapshot& snapshot) OVERRIDE;
-  virtual void OnInitializationComplete(
+  void OnSyncCycleCompleted(
+      const syncer::sessions::SyncSessionSnapshot& snapshot) override;
+  void OnInitializationComplete(
       const syncer::WeakHandle<syncer::JsBackend>& js_backend,
       const syncer::WeakHandle<syncer::DataTypeDebugInfoListener>&
           debug_info_listener,
       bool success,
-      syncer::ModelTypeSet restored_types) OVERRIDE;
-  virtual void OnConnectionStatusChange(
-      syncer::ConnectionStatus status) OVERRIDE;
-  virtual void OnActionableError(
-      const syncer::SyncProtocolError& sync_error) OVERRIDE;
-  virtual void OnMigrationRequested(syncer::ModelTypeSet types) OVERRIDE;
-  virtual void OnProtocolEvent(const syncer::ProtocolEvent& event) OVERRIDE;
+      syncer::ModelTypeSet restored_types) override;
+  void OnConnectionStatusChange(syncer::ConnectionStatus status) override;
+  void OnActionableError(const syncer::SyncProtocolError& sync_error) override;
+  void OnMigrationRequested(syncer::ModelTypeSet types) override;
+  void OnProtocolEvent(const syncer::ProtocolEvent& event) override;
 
   // SyncEncryptionHandler::Observer implementation.
-  virtual void OnPassphraseRequired(
+  void OnPassphraseRequired(
       syncer::PassphraseRequiredReason reason,
-      const sync_pb::EncryptedData& pending_keys) OVERRIDE;
-  virtual void OnPassphraseAccepted() OVERRIDE;
-  virtual void OnBootstrapTokenUpdated(
-      const std::string& bootstrap_token,
-      syncer::BootstrapTokenType type) OVERRIDE;
-  virtual void OnEncryptedTypesChanged(
-      syncer::ModelTypeSet encrypted_types,
-      bool encrypt_everything) OVERRIDE;
-  virtual void OnEncryptionComplete() OVERRIDE;
-  virtual void OnCryptographerStateChanged(
-      syncer::Cryptographer* cryptographer) OVERRIDE;
-  virtual void OnPassphraseTypeChanged(syncer::PassphraseType type,
-                                       base::Time passphrase_time) OVERRIDE;
+      const sync_pb::EncryptedData& pending_keys) override;
+  void OnPassphraseAccepted() override;
+  void OnBootstrapTokenUpdated(const std::string& bootstrap_token,
+                               syncer::BootstrapTokenType type) override;
+  void OnEncryptedTypesChanged(syncer::ModelTypeSet encrypted_types,
+                               bool encrypt_everything) override;
+  void OnEncryptionComplete() override;
+  void OnCryptographerStateChanged(
+      syncer::Cryptographer* cryptographer) override;
+  void OnPassphraseTypeChanged(syncer::PassphraseType type,
+                               base::Time passphrase_time) override;
 
   // TypeDebugInfoObserver implementation
-  virtual void OnCommitCountersUpdated(
-      syncer::ModelType type,
-      const syncer::CommitCounters& counters) OVERRIDE;
-  virtual void OnUpdateCountersUpdated(
-      syncer::ModelType type,
-      const syncer::UpdateCounters& counters) OVERRIDE;
-  virtual void OnStatusCountersUpdated(
-      syncer::ModelType type,
-      const syncer::StatusCounters& counters) OVERRIDE;
+  void OnCommitCountersUpdated(syncer::ModelType type,
+                               const syncer::CommitCounters& counters) override;
+  void OnUpdateCountersUpdated(syncer::ModelType type,
+                               const syncer::UpdateCounters& counters) override;
+  void OnStatusCountersUpdated(syncer::ModelType type,
+                               const syncer::StatusCounters& counters) override;
 
   // Forwards an invalidation state change to the sync manager.
   void DoOnInvalidatorStateChange(syncer::InvalidatorState state);
@@ -180,14 +171,8 @@ class SyncBackendHostCore
   void OnControlTypesDownloadRetry();
 
   // Called to perform tasks which require the control data to be downloaded.
-  // This includes refreshing encryption, setting up the device info change
-  // processor, etc.
+  // This includes refreshing encryption, etc.
   void DoInitialProcessControlTypes();
-
-  // Some parts of DoInitialProcessControlTypes() may be executed on a different
-  // thread.  This function asynchronously continues the work started in
-  // DoInitialProcessControlTypes() once that other thread gets back to us.
-  void DoFinishInitialProcessControlTypes();
 
   // The shutdown order is a bit complicated:
   // 1) Call ShutdownOnUIThread() from |frontend_loop_| to request sync manager
@@ -219,10 +204,6 @@ class SyncBackendHostCore
 
   syncer::SyncManager* sync_manager() { return sync_manager_.get(); }
 
-  SyncedDeviceTracker* synced_device_tracker() {
-    return synced_device_tracker_.get();
-  }
-
   void SendBufferedProtocolEventsAndEnableForwarding();
   void DisableProtocolEventForwarding();
 
@@ -251,24 +232,22 @@ class SyncBackendHostCore
       base::Callback<void(const std::vector<syncer::ModelType>& type,
                           ScopedVector<base::ListValue>) > callback);
 
+  // Tell the sync manager to persist its state by writing to disk.
+  // Called on the sync thread, both by a timer and, on Android, when the
+  // application is backgrounded.
+  void SaveChanges();
+
  private:
   friend class base::RefCountedThreadSafe<SyncBackendHostCore>;
   friend class SyncBackendHostForProfileSyncTest;
 
-  virtual ~SyncBackendHostCore();
+  ~SyncBackendHostCore() override;
 
   // Invoked when initialization of syncapi is complete and we can start
   // our timer.
   // This must be called from the thread on which SaveChanges is intended to
   // be run on; the host's |registrar_->sync_thread()|.
   void StartSavingChanges();
-
-  // Invoked periodically to tell the syncapi to persist its state
-  // by writing to disk.
-  // This is called from the thread we were created on (which is sync thread),
-  // using a repeating timer that is kicked off as soon as the SyncManager
-  // tells us it completed initialization.
-  void SaveChanges();
 
   // Name used for debugging.
   const std::string name_;
@@ -292,9 +271,6 @@ class SyncBackendHostCore
 
   // Our encryptor, which uses Chrome's encryption functions.
   sync_driver::SystemEncryptor encryptor_;
-
-  // A special ChangeProcessor that tracks the DEVICE_INFO type for us.
-  scoped_ptr<SyncedDeviceTracker> synced_device_tracker_;
 
   // The top-level syncapi entry point.  Lives on the sync thread.
   scoped_ptr<syncer::SyncManager> sync_manager_;
@@ -322,10 +298,6 @@ class SyncBackendHostCore
 
   // Set when the forwarding of per-type debug counters is enabled.
   bool forward_type_info_;
-
-  // Obtained from SigninClient::GetSigninScopedDeviceId(). Stored here just to
-  // pass from SyncBackendHostImpl to SyncedDeviceTracker.
-  std::string signin_scoped_device_id_;
 
   base::WeakPtrFactory<SyncBackendHostCore> weak_ptr_factory_;
 

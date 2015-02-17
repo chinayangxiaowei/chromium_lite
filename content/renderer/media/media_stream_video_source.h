@@ -84,7 +84,7 @@ class CONTENT_EXPORT MediaStreamVideoSource
   static const int kUnknownFrameRate;
 
  protected:
-  virtual void DoStopSource() OVERRIDE;
+  void DoStopSource() override;
 
   // Sets ready state and notifies the ready state to all registered tracks.
   virtual void SetReadyState(blink::WebMediaStreamSource::ReadyState state);
@@ -107,11 +107,9 @@ class CONTENT_EXPORT MediaStreamVideoSource
   // An implementation must start capture frames using the resolution in
   // |params|. When the source has started or the source failed to start
   // OnStartDone must be called. An implementation must call
-  // invoke |frame_callback| on the IO thread with the captured frames.
-  // TODO(perkj): pass a VideoCaptureFormats instead of VideoCaptureParams for
-  // subclasses to customize.
+  // |frame_callback| on the IO thread with the captured frames.
   virtual void StartSourceImpl(
-      const media::VideoCaptureParams& params,
+      const media::VideoCaptureFormat& format,
       const VideoCaptureDeliverFrameCB& frame_callback) = 0;
   void OnStartDone(MediaStreamRequestResult result);
 
@@ -149,7 +147,6 @@ class CONTENT_EXPORT MediaStreamVideoSource
   void FinalizeAddTrack();
 
   State state_;
-  bool muted_state_;
 
   media::VideoCaptureFormat current_format_;
 

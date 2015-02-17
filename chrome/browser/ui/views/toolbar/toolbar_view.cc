@@ -14,8 +14,8 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/command_updater.h"
-#include "chrome/browser/extensions/extension_action.h"
-#include "chrome/browser/extensions/extension_action_manager.h"
+#include "chrome/browser/extensions/extension_commands_global_registry.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
@@ -48,13 +48,13 @@
 #include "chrome/browser/ui/views/toolbar/wrench_toolbar_button.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/accessibility/ax_view_state.h"
 #include "ui/aura/window.h"
@@ -103,11 +103,6 @@ const int kContentShadowHeightAsh = 2;
 // Non-ash uses a rounded content area with no shadow in the assets.
 const int kContentShadowHeight = 0;
 
-bool IsStreamlinedHostedAppsEnabled() {
-  return CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableStreamlinedHostedApps);
-}
-
 #if !defined(OS_CHROMEOS)
 bool HasAshShell() {
 #if defined(USE_ASH)
@@ -152,11 +147,9 @@ ToolbarView::ToolbarView(Browser* browser)
 
   display_mode_ = DISPLAYMODE_LOCATION;
   if (browser->SupportsWindowFeature(Browser::FEATURE_TABSTRIP) ||
-      (browser->is_app() && IsStreamlinedHostedAppsEnabled()))
+      (browser->is_app() && extensions::util::IsStreamlinedHostedAppsEnabled()))
     display_mode_ = DISPLAYMODE_NORMAL;
 
-  registrar_.Add(this, chrome::NOTIFICATION_UPGRADE_RECOMMENDED,
-                 content::NotificationService::AllSources());
   if (OutdatedUpgradeBubbleView::IsAvailable()) {
     registrar_.Add(this, chrome::NOTIFICATION_OUTDATED_INSTALL,
                    content::NotificationService::AllSources());
@@ -222,7 +215,6 @@ void ToolbarView::Init() {
 
   browser_actions_ = new BrowserActionsContainer(
       browser_,
-      this,   // Owner.
       NULL);  // No master container for this one (it is master).
 
   app_menu_ = new WrenchToolbarButton(this);
@@ -278,16 +270,32 @@ void ToolbarView::Init() {
 
 void ToolbarView::OnWidgetVisibilityChanged(views::Widget* widget,
                                             bool visible) {
-  // Safe to call multiple times; the bubble will only appear once.
-  if (visible)
+  if (visible) {
+    // Safe to call multiple times; the bubble will only appear once.
     extension_message_bubble_factory_->MaybeShow(app_menu_);
+  }
+}
+
+void ToolbarView::OnWidgetActivationChanged(views::Widget* widget,
+                                            bool active) {
+  extensions::ExtensionCommandsGlobalRegistry* registry =
+      extensions::ExtensionCommandsGlobalRegistry::Get(browser_->profile());
+  if (registry) {
+    if (active) {
+      registry->set_registry_for_active_window(
+          browser_actions_->extension_keybinding_registry());
+    } else if (registry->registry_for_active_window() ==
+               browser_actions_->extension_keybinding_registry()) {
+      registry->set_registry_for_active_window(NULL);
+    }
+  }
 }
 
 void ToolbarView::Update(WebContents* tab) {
   if (location_bar_)
     location_bar_->Update(tab);
   if (browser_actions_)
-    browser_actions_->RefreshBrowserActionViews();
+    browser_actions_->RefreshToolbarActionViews();
   if (reload_)
     reload_->set_menu_enabled(chrome::IsDebuggerAttachedToCurrentTab(browser_));
 }
@@ -323,22 +331,6 @@ void ToolbarView::ExecuteExtensionCommand(
     const extensions::Extension* extension,
     const extensions::Command& command) {
   browser_actions_->ExecuteExtensionCommand(extension, command);
-}
-
-void ToolbarView::ShowPageActionPopup(const extensions::Extension* extension) {
-  extensions::ExtensionActionManager* extension_manager =
-      extensions::ExtensionActionManager::Get(browser_->profile());
-  ExtensionAction* extension_action =
-      extension_manager->GetPageAction(*extension);
-  if (extension_action) {
-    location_bar_->GetPageActionView(extension_action)->image_view()->
-        view_controller()->ExecuteAction(ExtensionPopup::SHOW, false);
-  }
-}
-
-void ToolbarView::ShowBrowserActionPopup(
-    const extensions::Extension* extension) {
-  browser_actions_->ShowPopupForExtension(extension, true, false);
 }
 
 void ToolbarView::ShowAppMenu(bool for_drop) {
@@ -577,7 +569,8 @@ void ToolbarView::Layout() {
   next_element_x = reload_->bounds().right();
 
   if (show_home_button_.GetValue() ||
-      (browser_->is_app() && IsStreamlinedHostedAppsEnabled())) {
+      (browser_->is_app() &&
+       extensions::util::IsStreamlinedHostedAppsEnabled())) {
     home_->SetVisible(true);
     home_->SetBounds(next_element_x, child_y,
                      home_->GetPreferredSize().width(), child_height);

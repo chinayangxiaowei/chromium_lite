@@ -17,7 +17,7 @@ class FileSystemProviderMountFunction : public ChromeSyncExtensionFunction {
 
  protected:
   virtual ~FileSystemProviderMountFunction() {}
-  virtual bool RunSync() OVERRIDE;
+  virtual bool RunSync() override;
 };
 
 class FileSystemProviderUnmountFunction : public ChromeSyncExtensionFunction {
@@ -27,7 +27,27 @@ class FileSystemProviderUnmountFunction : public ChromeSyncExtensionFunction {
 
  protected:
   virtual ~FileSystemProviderUnmountFunction() {}
-  virtual bool RunSync() OVERRIDE;
+  virtual bool RunSync() override;
+};
+
+class FileSystemProviderGetAllFunction : public ChromeSyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystemProvider.getAll",
+                             FILESYSTEMPROVIDER_GETALL)
+
+ protected:
+  virtual ~FileSystemProviderGetAllFunction() {}
+  virtual bool RunSync() override;
+};
+
+class FileSystemProviderNotifyFunction : public ChromeSyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystemProvider.notify",
+                             FILESYSTEMPROVIDER_NOTIFY)
+
+ protected:
+  virtual ~FileSystemProviderNotifyFunction() {}
+  virtual bool RunSync() override;
 };
 
 class FileSystemProviderInternalUnmountRequestedSuccessFunction
@@ -39,7 +59,7 @@ class FileSystemProviderInternalUnmountRequestedSuccessFunction
 
  protected:
   virtual ~FileSystemProviderInternalUnmountRequestedSuccessFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 class FileSystemProviderInternalGetMetadataRequestedSuccessFunction
@@ -51,7 +71,7 @@ class FileSystemProviderInternalGetMetadataRequestedSuccessFunction
 
  protected:
   virtual ~FileSystemProviderInternalGetMetadataRequestedSuccessFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 class FileSystemProviderInternalReadDirectoryRequestedSuccessFunction
@@ -63,7 +83,7 @@ class FileSystemProviderInternalReadDirectoryRequestedSuccessFunction
 
  protected:
   virtual ~FileSystemProviderInternalReadDirectoryRequestedSuccessFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 class FileSystemProviderInternalReadFileRequestedSuccessFunction
@@ -75,7 +95,7 @@ class FileSystemProviderInternalReadFileRequestedSuccessFunction
 
  protected:
   virtual ~FileSystemProviderInternalReadFileRequestedSuccessFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 class FileSystemProviderInternalOperationRequestedSuccessFunction
@@ -87,7 +107,7 @@ class FileSystemProviderInternalOperationRequestedSuccessFunction
 
  protected:
   virtual ~FileSystemProviderInternalOperationRequestedSuccessFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 class FileSystemProviderInternalOperationRequestedErrorFunction
@@ -99,7 +119,7 @@ class FileSystemProviderInternalOperationRequestedErrorFunction
 
  protected:
   virtual ~FileSystemProviderInternalOperationRequestedErrorFunction() {}
-  virtual bool RunWhenValid() OVERRIDE;
+  virtual bool RunWhenValid() override;
 };
 
 }  // namespace extensions

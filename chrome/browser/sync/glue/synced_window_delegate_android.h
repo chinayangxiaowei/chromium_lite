@@ -6,8 +6,8 @@
 #define CHROME_BROWSER_SYNC_GLUE_SYNCED_WINDOW_DELEGATE_ANDROID_H_
 
 #include "base/compiler_specific.h"
-#include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sync/glue/synced_window_delegate.h"
+#include "components/sessions/session_id.h"
 
 class TabModel;
 
@@ -22,17 +22,17 @@ class SyncedWindowDelegateAndroid : public browser_sync::SyncedWindowDelegate {
 
   // browser_sync::SyncedWindowDelegate implementation.
 
-  virtual bool HasWindow() const OVERRIDE;
-  virtual SessionID::id_type GetSessionId() const OVERRIDE;
-  virtual int GetTabCount() const OVERRIDE;
-  virtual int GetActiveIndex() const OVERRIDE;
-  virtual bool IsApp() const OVERRIDE;
-  virtual bool IsTypeTabbed() const OVERRIDE;
-  virtual bool IsTypePopup() const OVERRIDE;
-  virtual bool IsTabPinned(const SyncedTabDelegate* tab) const OVERRIDE;
-  virtual SyncedTabDelegate* GetTabAt(int index) const OVERRIDE;
-  virtual SessionID::id_type GetTabIdAt(int index) const OVERRIDE;
-  virtual bool IsSessionRestoreInProgress() const OVERRIDE;
+  virtual bool HasWindow() const override;
+  virtual SessionID::id_type GetSessionId() const override;
+  virtual int GetTabCount() const override;
+  virtual int GetActiveIndex() const override;
+  virtual bool IsApp() const override;
+  virtual bool IsTypeTabbed() const override;
+  virtual bool IsTypePopup() const override;
+  virtual bool IsTabPinned(const SyncedTabDelegate* tab) const override;
+  virtual SyncedTabDelegate* GetTabAt(int index) const override;
+  virtual SessionID::id_type GetTabIdAt(int index) const override;
+  virtual bool IsSessionRestoreInProgress() const override;
 
  private:
   TabModel* tab_model_;

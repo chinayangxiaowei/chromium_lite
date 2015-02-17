@@ -63,7 +63,7 @@ class VIEWS_EXPORT BoxLayout : public LayoutManager {
             int inside_border_horizontal_spacing,
             int inside_border_vertical_spacing,
             int between_child_spacing);
-  virtual ~BoxLayout();
+  ~BoxLayout() override;
 
   void set_main_axis_alignment(MainAxisAlignment main_axis_alignment) {
     main_axis_alignment_ = main_axis_alignment;
@@ -75,6 +75,10 @@ class VIEWS_EXPORT BoxLayout : public LayoutManager {
 
   void set_inside_border_insets(const gfx::Insets& insets) {
     inside_border_insets_ = insets;
+  }
+
+  void set_minimum_cross_axis_size(int size) {
+    minimum_cross_axis_size_ = size;
   }
 
   // Sets the flex weight for the given |view|. Using the preferred size as
@@ -94,13 +98,12 @@ class VIEWS_EXPORT BoxLayout : public LayoutManager {
   void SetDefaultFlex(int default_flex);
 
   // Overridden from views::LayoutManager:
-  virtual void Installed(View* host) OVERRIDE;
-  virtual void Uninstalled(View* host) OVERRIDE;
-  virtual void ViewRemoved(View* host, View* view) OVERRIDE;
-  virtual void Layout(View* host) OVERRIDE;
-  virtual gfx::Size GetPreferredSize(const View* host) const OVERRIDE;
-  virtual int GetPreferredHeightForWidth(const View* host,
-                                         int width) const OVERRIDE;
+  void Installed(View* host) override;
+  void Uninstalled(View* host) override;
+  void ViewRemoved(View* host, View* view) override;
+  void Layout(View* host) override;
+  gfx::Size GetPreferredSize(const View* host) const override;
+  int GetPreferredHeightForWidth(const View* host, int width) const override;
 
  private:
   // Returns the flex for the specified |view|.
@@ -158,6 +161,9 @@ class VIEWS_EXPORT BoxLayout : public LayoutManager {
 
   // The flex weight for views if none is set. Defaults to 0.
   int default_flex_;
+
+  // The minimum cross axis size for the layout.
+  int minimum_cross_axis_size_;
 
   // The view that this BoxLayout is managing the layout for.
   views::View* host_;

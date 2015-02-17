@@ -42,16 +42,17 @@ class SSLClientCertificateSelectorTest : public InProcessBrowserTest {
         selector_(NULL) {
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     base::FilePath certs_dir = net::GetTestCertsDirectory();
 
     mit_davidben_cert_ = net::ImportCertFromFile(certs_dir, "mit.davidben.der");
-    ASSERT_NE(static_cast<net::X509Certificate*>(NULL), mit_davidben_cert_);
+    ASSERT_NE(static_cast<net::X509Certificate*>(NULL),
+              mit_davidben_cert_.get());
 
     foaf_me_chromium_test_cert_ = net::ImportCertFromFile(
         certs_dir, "foaf.me.chromium-test-cert.der");
     ASSERT_NE(static_cast<net::X509Certificate*>(NULL),
-              foaf_me_chromium_test_cert_);
+              foaf_me_chromium_test_cert_.get());
 
     cert_request_info_ = new net::SSLCertRequestInfo;
     cert_request_info_->host_and_port = net::HostPortPair("foo", 123);
@@ -59,7 +60,7 @@ class SSLClientCertificateSelectorTest : public InProcessBrowserTest {
     cert_request_info_->client_certs.push_back(foaf_me_chromium_test_cert_);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     url_request_context_getter_ = browser()->profile()->GetRequestContext();
 
     BrowserThread::PostTask(
@@ -82,7 +83,7 @@ class SSLClientCertificateSelectorTest : public InProcessBrowserTest {
   }
 
   virtual void SetUpOnIOThread() {
-    url_request_ = MakeURLRequest(url_request_context_getter_).release();
+    url_request_ = MakeURLRequest(url_request_context_getter_.get()).release();
 
     auth_requestor_ = new StrictMock<SSLClientAuthRequestorMock>(
         url_request_,
@@ -93,7 +94,7 @@ class SSLClientCertificateSelectorTest : public InProcessBrowserTest {
 
   // Have to release our reference to the auth handler during the test to allow
   // it to be destroyed while the Browser and its IO thread still exist.
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
         base::Bind(&SSLClientCertificateSelectorTest::CleanUpOnIOThread, this));
@@ -132,7 +133,7 @@ class SSLClientCertificateSelectorTest : public InProcessBrowserTest {
 class SSLClientCertificateSelectorMultiTabTest
     : public SSLClientCertificateSelectorTest {
  public:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     SSLClientCertificateSelectorTest::SetUpInProcessBrowserTestFixture();
 
     cert_request_info_1_ = new net::SSLCertRequestInfo;
@@ -146,12 +147,12 @@ class SSLClientCertificateSelectorMultiTabTest
     cert_request_info_2_->client_certs.push_back(foaf_me_chromium_test_cert_);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     // Also calls SetUpOnIOThread.
     SSLClientCertificateSelectorTest::SetUpOnMainThread();
 
-    AddTabAtIndex(1, GURL("about:blank"), content::PAGE_TRANSITION_LINK);
-    AddTabAtIndex(2, GURL("about:blank"), content::PAGE_TRANSITION_LINK);
+    AddTabAtIndex(1, GURL("about:blank"), ui::PAGE_TRANSITION_LINK);
+    AddTabAtIndex(2, GURL("about:blank"), ui::PAGE_TRANSITION_LINK);
     ASSERT_TRUE(NULL != browser()->tab_strip_model()->GetWebContentsAt(0));
     ASSERT_TRUE(NULL != browser()->tab_strip_model()->GetWebContentsAt(1));
     ASSERT_TRUE(NULL != browser()->tab_strip_model()->GetWebContentsAt(2));
@@ -178,9 +179,11 @@ class SSLClientCertificateSelectorMultiTabTest
     EXPECT_EQ(mit_davidben_cert_.get(), selector_2_->GetSelectedCert());
   }
 
-  virtual void SetUpOnIOThread() OVERRIDE {
-    url_request_1_ = MakeURLRequest(url_request_context_getter_).release();
-    url_request_2_ = MakeURLRequest(url_request_context_getter_).release();
+  void SetUpOnIOThread() override {
+    url_request_1_ =
+        MakeURLRequest(url_request_context_getter_.get()).release();
+    url_request_2_ =
+        MakeURLRequest(url_request_context_getter_.get()).release();
 
     auth_requestor_1_ = new StrictMock<SSLClientAuthRequestorMock>(
         url_request_1_,
@@ -192,13 +195,13 @@ class SSLClientCertificateSelectorMultiTabTest
     SSLClientCertificateSelectorTest::SetUpOnIOThread();
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     auth_requestor_2_ = NULL;
     auth_requestor_1_ = NULL;
     SSLClientCertificateSelectorTest::TearDownOnMainThread();
   }
 
-  virtual void CleanUpOnIOThread() OVERRIDE {
+  void CleanUpOnIOThread() override {
     delete url_request_1_;
     delete url_request_2_;
     SSLClientCertificateSelectorTest::CleanUpOnIOThread();
@@ -218,7 +221,7 @@ class SSLClientCertificateSelectorMultiTabTest
 class SSLClientCertificateSelectorMultiProfileTest
     : public SSLClientCertificateSelectorTest {
  public:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     SSLClientCertificateSelectorTest::SetUpInProcessBrowserTestFixture();
 
     cert_request_info_1_ = new net::SSLCertRequestInfo;
@@ -227,7 +230,7 @@ class SSLClientCertificateSelectorMultiProfileTest
     cert_request_info_1_->client_certs.push_back(foaf_me_chromium_test_cert_);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     browser_1_ = CreateIncognitoBrowser();
     url_request_context_getter_1_ = browser_1_->profile()->GetRequestContext();
 
@@ -245,8 +248,9 @@ class SSLClientCertificateSelectorMultiProfileTest
     EXPECT_EQ(mit_davidben_cert_.get(), selector_1_->GetSelectedCert());
   }
 
-  virtual void SetUpOnIOThread() OVERRIDE {
-    url_request_1_ = MakeURLRequest(url_request_context_getter_1_).release();
+  void SetUpOnIOThread() override {
+    url_request_1_ =
+        MakeURLRequest(url_request_context_getter_1_.get()).release();
 
     auth_requestor_1_ = new StrictMock<SSLClientAuthRequestorMock>(
         url_request_1_,
@@ -255,12 +259,12 @@ class SSLClientCertificateSelectorMultiProfileTest
     SSLClientCertificateSelectorTest::SetUpOnIOThread();
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     auth_requestor_1_ = NULL;
     SSLClientCertificateSelectorTest::TearDownOnMainThread();
   }
 
-  virtual void CleanUpOnIOThread() OVERRIDE {
+  void CleanUpOnIOThread() override {
     delete url_request_1_;
     SSLClientCertificateSelectorTest::CleanUpOnIOThread();
   }
@@ -283,14 +287,14 @@ class SSLClientCertificateSelectorMultiProfileTest
 
 
 IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorTest, MAYBE_SelectNone) {
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 
   // Let the mock get checked on destruction.
 }
 
 // http://crbug.com/121007
 IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorTest, DISABLED_Escape) {
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
       browser(), ui::VKEY_ESCAPE, false, false, false, false));
@@ -301,7 +305,8 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorTest, DISABLED_Escape) {
 // Flaky, http://crbug.com/103534 .
 IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorTest,
                        DISABLED_SelectDefault) {
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(mit_davidben_cert_.get()));
+  EXPECT_CALL(*auth_requestor_.get(),
+              CertificateSelected(mit_davidben_cert_.get()));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
       browser(), ui::VKEY_RETURN, false, false, false, false));
@@ -315,8 +320,8 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiTabTest,
   // auth_requestor_1_ should get selected automatically by the
   // SSLClientAuthObserver when selector_2_ is accepted, since both 1 & 2 have
   // the same host:port.
-  EXPECT_CALL(*auth_requestor_1_, CertificateSelected(NULL));
-  EXPECT_CALL(*auth_requestor_2_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_1_.get(), CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_2_.get(), CertificateSelected(NULL));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
       browser(), ui::VKEY_ESCAPE, false, false, false, false));
@@ -327,7 +332,7 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiTabTest,
 
   // Now let the default selection for auth_requestor_ mock get checked on
   // destruction.
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 }
 
 // http://crbug.com/121007
@@ -336,9 +341,9 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiTabTest,
   // auth_requestor_1_ should get selected automatically by the
   // SSLClientAuthObserver when selector_2_ is accepted, since both 1 & 2 have
   // the same host:port.
-  EXPECT_CALL(*auth_requestor_1_,
+  EXPECT_CALL(*auth_requestor_1_.get(),
               CertificateSelected(foaf_me_chromium_test_cert_.get()));
-  EXPECT_CALL(*auth_requestor_2_,
+  EXPECT_CALL(*auth_requestor_2_.get(),
               CertificateSelected(foaf_me_chromium_test_cert_.get()));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
@@ -357,13 +362,13 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiTabTest,
 
   // Now let the default selection for auth_requestor_ mock get checked on
   // destruction.
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 }
 
 // http://crbug.com/103529
 IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiProfileTest,
                        DISABLED_Escape) {
-  EXPECT_CALL(*auth_requestor_1_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_1_.get(), CertificateSelected(NULL));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
       browser_1_, ui::VKEY_ESCAPE, false, false, false, false));
@@ -373,13 +378,13 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiProfileTest,
 
   // Now let the default selection for auth_requestor_ mock get checked on
   // destruction.
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 }
 
 // http://crbug.com/103534
 IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiProfileTest,
                        DISABLED_SelectDefault) {
-  EXPECT_CALL(*auth_requestor_1_,
+  EXPECT_CALL(*auth_requestor_1_.get(),
               CertificateSelected(mit_davidben_cert_.get()));
 
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(
@@ -390,5 +395,5 @@ IN_PROC_BROWSER_TEST_F(SSLClientCertificateSelectorMultiProfileTest,
 
   // Now let the default selection for auth_requestor_ mock get checked on
   // destruction.
-  EXPECT_CALL(*auth_requestor_, CertificateSelected(NULL));
+  EXPECT_CALL(*auth_requestor_.get(), CertificateSelected(NULL));
 }

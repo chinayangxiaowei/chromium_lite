@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <limits>
+#include <list>
 #include <map>
 #include <ostream>
 #include <set>
@@ -59,8 +60,8 @@ const QuicByteCount kMaxPacketSize = 1452;
 const QuicByteCount kDefaultTCPMSS = 1460;
 
 // Maximum size of the initial congestion window in packets.
-const size_t kDefaultInitialWindow = 10;
-const uint32 kMaxInitialWindow = 100;
+const QuicPacketCount kDefaultInitialWindow = 10;
+const QuicPacketCount kMaxInitialWindow = 100;
 
 // Default size of initial flow control window, for both stream and session.
 const uint32 kDefaultFlowControlSendWindow = 16 * 1024;  // 16 KB
@@ -69,8 +70,14 @@ const uint32 kDefaultFlowControlSendWindow = 16 * 1024;  // 16 KB
 // algorithms.
 const size_t kMaxTcpCongestionWindow = 200;
 
-// Size of the socket receive buffer in bytes.
+// Default size of the socket receive buffer in bytes.
 const QuicByteCount kDefaultSocketReceiveBuffer = 256 * 1024;
+// Minimum size of the socket receive buffer in bytes.
+// Smaller values are ignored.
+const QuicByteCount kMinSocketReceiveBuffer = 16 * 1024;
+
+// Don't allow a client to suggest an RTT shorter than 10ms.
+const uint32 kMinInitialRoundTripTimeUs = 10 * kNumMicrosPerMilli;
 
 // Don't allow a client to suggest an RTT longer than 15 seconds.
 const uint32 kMaxInitialRoundTripTimeUs = 15 * kNumMicrosPerSecond;
@@ -105,16 +112,41 @@ const QuicStreamId kCryptoStreamId = 1;
 const QuicStreamId kHeadersStreamId = 3;
 
 // Maximum delayed ack time, in ms.
-const int kMaxDelayedAckTime = 25;
+const int64 kMaxDelayedAckTimeMs = 25;
 
-// This is the default network timeout a for connection till the crypto
-// handshake succeeds and the negotiated timeout from the handshake is received.
-const int64 kDefaultInitialTimeoutSecs = 120;  // 2 mins.
-const int64 kDefaultTimeoutSecs = 60 * 10;  // 10 minutes.
-const int64 kDefaultMaxTimeForCryptoHandshakeSecs = 5;  // 5 secs.
+// The timeout before the handshake succeeds.
+const int64 kInitialIdleTimeoutSecs = 5;
+// The default idle timeout.
+const int64 kDefaultIdleTimeoutSecs = 30;
+// The maximum idle timeout that can be negotiated.
+const int64 kMaximumIdleTimeoutSecs = 60 * 10;  // 10 minutes.
+// The default timeout for a connection until the crypto handshake succeeds.
+const int64 kMaxTimeForCryptoHandshakeSecs = 10;  // 10 secs.
+
+// Default limit on the number of undecryptable packets the connection buffers
+// before the CHLO/SHLO arrive.
+const size_t kDefaultMaxUndecryptablePackets = 10;
 
 // Default ping timeout.
 const int64 kPingTimeoutSecs = 15;  // 15 secs.
+
+// Minimum number of RTTs between Server Config Updates (SCUP) sent to client.
+const int kMinIntervalBetweenServerConfigUpdatesRTTs = 10;
+
+// Minimum time between Server Config Updates (SCUP) sent to client.
+const int kMinIntervalBetweenServerConfigUpdatesMs = 1000;
+
+// Minimum number of packets between Server Config Updates (SCUP).
+const int kMinPacketsBetweenServerConfigUpdates = 100;
+
+// The number of open streams that a server will accept is set to be slightly
+// larger than the negotiated limit. Immediately closing the connection if the
+// client opens slightly too many streams is not ideal: the client may have sent
+// a FIN that was lost, and simultaneously opened a new stream. The number of
+// streams a server accepts is a fixed increment over the negotiated limit, or a
+// percentage increase, whichever is larger.
+const float kMaxStreamsMultiplier = 1.1f;
+const int kMaxStreamsMinimumIncrement = 10;
 
 // We define an unsigned 16-bit floating point value, inspired by IEEE floats
 // (http://en.wikipedia.org/wiki/Half_precision_floating-point_format),
@@ -137,16 +169,12 @@ enum TransmissionType {
   NOT_RETRANSMISSION,
   FIRST_TRANSMISSION_TYPE = NOT_RETRANSMISSION,
   HANDSHAKE_RETRANSMISSION,  // Retransmits due to handshake timeouts.
-  ALL_UNACKED_RETRANSMISSION,  // Retransmits of all unacked packets.
+  ALL_UNACKED_RETRANSMISSION,  // Retransmits all unacked packets.
+  ALL_INITIAL_RETRANSMISSION,  // Retransmits all initially encrypted packets.
   LOSS_RETRANSMISSION,  // Retransmits due to loss detection.
   RTO_RETRANSMISSION,  // Retransmits due to retransmit time out.
   TLP_RETRANSMISSION,  // Tail loss probes.
   LAST_TRANSMISSION_TYPE = TLP_RETRANSMISSION,
-};
-
-enum RetransmissionType {
-  INITIAL_ENCRYPTION_ONLY,
-  ALL_PACKETS
 };
 
 enum HasRetransmittableData {
@@ -279,12 +307,10 @@ enum QuicVersion {
   // Special case to indicate unknown/unsupported QUIC version.
   QUIC_VERSION_UNSUPPORTED = 0,
 
-  QUIC_VERSION_16 = 16,  // STOP_WAITING frame.
-  QUIC_VERSION_18 = 18,  // PING frame.
   QUIC_VERSION_19 = 19,  // Connection level flow control.
-  QUIC_VERSION_20 = 20,  // Independent stream/connection flow control windows.
   QUIC_VERSION_21 = 21,  // Headers/crypto streams are flow controlled.
   QUIC_VERSION_22 = 22,  // Send Server Config Update messages on crypto stream.
+  QUIC_VERSION_23 = 23,  // Timestamp in the ack frame.
 };
 
 // This vector contains QUIC versions which we currently support.
@@ -294,12 +320,9 @@ enum QuicVersion {
 //
 // IMPORTANT: if you are adding to this list, follow the instructions at
 // http://sites/quic/adding-and-removing-versions
-static const QuicVersion kSupportedQuicVersions[] = {QUIC_VERSION_22,
-                                                     QUIC_VERSION_21,
-                                                     QUIC_VERSION_20,
-                                                     QUIC_VERSION_19,
-                                                     QUIC_VERSION_18,
-                                                     QUIC_VERSION_16};
+static const QuicVersion kSupportedQuicVersions[] = {QUIC_VERSION_23,
+                                                     QUIC_VERSION_22,
+                                                     QUIC_VERSION_19};
 
 typedef std::vector<QuicVersion> QuicVersionVector;
 
@@ -376,8 +399,9 @@ enum QuicRstStreamErrorCode {
   QUIC_STREAM_PEER_GOING_AWAY,
   // The stream has been cancelled.
   QUIC_STREAM_CANCELLED,
-  // Sending a RST to allow for proper flow control accounting.
-  QUIC_RST_FLOW_CONTROL_ACCOUNTING,
+  // Closing stream locally, sending a RST to allow for proper flow control
+  // accounting. Sent in response to a RST from the peer.
+  QUIC_RST_ACKNOWLEDGEMENT,
 
   // No error. Used as bound while iterating.
   QUIC_STREAM_LAST_ERROR,
@@ -465,6 +489,8 @@ enum QuicErrorCode {
   QUIC_DECOMPRESSION_FAILURE = 24,
   // We hit our prenegotiated (or default) timeout
   QUIC_CONNECTION_TIMED_OUT = 25,
+  // We hit our overall connection timeout
+  QUIC_CONNECTION_OVERALL_TIMED_OUT = 67,
   // There was an error encountered migrating addresses
   QUIC_ERROR_MIGRATING_ADDRESS = 26,
   // There was an error while writing to the socket.
@@ -483,6 +509,10 @@ enum QuicErrorCode {
   QUIC_FLOW_CONTROL_INVALID_WINDOW = 64,
   // The connection has been IP pooled into an existing connection.
   QUIC_CONNECTION_IP_POOLED = 62,
+  // The connection has too many outstanding sent packets.
+  QUIC_TOO_MANY_OUTSTANDING_SENT_PACKETS = 68,
+  // The connection has too many outstanding received packets.
+  QUIC_TOO_MANY_OUTSTANDING_RECEIVED_PACKETS = 69,
 
   // Crypto errors.
 
@@ -540,7 +570,7 @@ enum QuicErrorCode {
   QUIC_VERSION_NEGOTIATION_MISMATCH = 55,
 
   // No error. Used as bound while iterating.
-  QUIC_LAST_ERROR = 67,
+  QUIC_LAST_ERROR = 70,
 };
 
 struct NET_EXPORT_PRIVATE QuicPacketPublicHeader {
@@ -638,8 +668,10 @@ struct NET_EXPORT_PRIVATE QuicStreamFrame {
 // TODO(ianswett): Re-evaluate the trade-offs of hash_set vs set when framing
 // is finalized.
 typedef std::set<QuicPacketSequenceNumber> SequenceNumberSet;
-// TODO(pwestin): Add a way to enforce the max size of this map.
-typedef std::map<QuicPacketSequenceNumber, QuicTime> TimeMap;
+typedef std::list<QuicPacketSequenceNumber> SequenceNumberList;
+
+typedef std::list<
+    std::pair<QuicPacketSequenceNumber, QuicTime> > PacketTimeList;
 
 struct NET_EXPORT_PRIVATE QuicStopWaitingFrame {
   QuicStopWaitingFrame();
@@ -690,6 +722,9 @@ struct NET_EXPORT_PRIVATE QuicAckFrame {
   // Packets which have been revived via FEC.
   // All of these must also be in missing_packets.
   SequenceNumberSet revived_packets;
+
+  // List of <sequence_number, time> for when packets arrived.
+  PacketTimeList received_packet_times;
 };
 
 // True if the sequence number is greater than largest_observed or is listed
@@ -708,9 +743,9 @@ void NET_EXPORT_PRIVATE InsertMissingPacketsBetween(
 // Defines for all types of congestion feedback that will be negotiated in QUIC,
 // kTCP MUST be supported by all QUIC implementations to guarantee 100%
 // compatibility.
+// TODO(cyr): Remove this when removing QUIC_VERSION_22.
 enum CongestionFeedbackType {
   kTCP,  // Used to mimic TCP.
-  kTimestamp,  // Use additional inter arrival timestamp information.
 };
 
 // Defines for all types of congestion control algorithms that can be used in
@@ -728,21 +763,14 @@ enum LossDetectionType {
   kTime,  // Time based loss detection.
 };
 
+// TODO(cyr): Remove this when removing QUIC_VERSION_22.
 struct NET_EXPORT_PRIVATE CongestionFeedbackMessageTCP {
   CongestionFeedbackMessageTCP();
 
   QuicByteCount receive_window;
 };
 
-struct NET_EXPORT_PRIVATE CongestionFeedbackMessageTimestamp {
-  CongestionFeedbackMessageTimestamp();
-  ~CongestionFeedbackMessageTimestamp();
-
-  // The set of received packets since the last feedback was sent, along with
-  // their arrival times.
-  TimeMap received_packet_times;
-};
-
+// TODO(cyr): Remove this when removing QUIC_VERSION_22.
 struct NET_EXPORT_PRIVATE QuicCongestionFeedbackFrame {
   QuicCongestionFeedbackFrame();
   ~QuicCongestionFeedbackFrame();
@@ -754,7 +782,6 @@ struct NET_EXPORT_PRIVATE QuicCongestionFeedbackFrame {
   // This should really be a union, but since the timestamp struct
   // is non-trivial, C++ prohibits it.
   CongestionFeedbackMessageTCP tcp;
-  CongestionFeedbackMessageTimestamp timestamp;
 };
 
 struct NET_EXPORT_PRIVATE QuicRstStreamFrame {
@@ -855,7 +882,10 @@ struct NET_EXPORT_PRIVATE QuicFrame {
   explicit QuicFrame(QuicPaddingFrame* padding_frame);
   explicit QuicFrame(QuicStreamFrame* stream_frame);
   explicit QuicFrame(QuicAckFrame* frame);
+
+  // TODO(cyr): Remove this when removing QUIC_VERSION_22.
   explicit QuicFrame(QuicCongestionFeedbackFrame* frame);
+
   explicit QuicFrame(QuicRstStreamFrame* frame);
   explicit QuicFrame(QuicConnectionCloseFrame* frame);
   explicit QuicFrame(QuicStopWaitingFrame* frame);
@@ -872,8 +902,11 @@ struct NET_EXPORT_PRIVATE QuicFrame {
     QuicPaddingFrame* padding_frame;
     QuicStreamFrame* stream_frame;
     QuicAckFrame* ack_frame;
+
+    // TODO(cyr): Remove this when removing QUIC_VERSION_22.
     QuicCongestionFeedbackFrame* congestion_feedback_frame;
     QuicStopWaitingFrame* stop_waiting_frame;
+
     QuicPingFrame* ping_frame;
     QuicRstStreamFrame* rst_stream_frame;
     QuicConnectionCloseFrame* connection_close_frame;
@@ -999,7 +1032,9 @@ class NET_EXPORT_PRIVATE RetransmittableFrames {
   const QuicFrame& AddNonStreamFrame(const QuicFrame& frame);
   const QuicFrames& frames() const { return frames_; }
 
-  IsHandshake HasCryptoHandshake() const;
+  IsHandshake HasCryptoHandshake() const {
+    return has_crypto_handshake_;
+  }
 
   void set_encryption_level(EncryptionLevel level);
   EncryptionLevel encryption_level() const {
@@ -1009,6 +1044,7 @@ class NET_EXPORT_PRIVATE RetransmittableFrames {
  private:
   QuicFrames frames_;
   EncryptionLevel encryption_level_;
+  IsHandshake has_crypto_handshake_;
   // Data referenced by the StringPiece of a QuicStreamFrame.
   std::vector<std::string*> stream_data_;
 
@@ -1040,16 +1076,9 @@ struct NET_EXPORT_PRIVATE TransmissionInfo {
   // Constructs a Transmission with a new all_tranmissions set
   // containing |sequence_number|.
   TransmissionInfo(RetransmittableFrames* retransmittable_frames,
-                   QuicPacketSequenceNumber sequence_number,
-                   QuicSequenceNumberLength sequence_number_length);
-
-  // Constructs a Transmission with the specified |all_tranmissions| set
-  // and inserts |sequence_number| into it.
-  TransmissionInfo(RetransmittableFrames* retransmittable_frames,
-                   QuicPacketSequenceNumber sequence_number,
                    QuicSequenceNumberLength sequence_number_length,
                    TransmissionType transmission_type,
-                   SequenceNumberSet* all_transmissions);
+                   QuicTime sent_time);
 
   RetransmittableFrames* retransmittable_frames;
   QuicSequenceNumberLength sequence_number_length;
@@ -1061,10 +1090,12 @@ struct NET_EXPORT_PRIVATE TransmissionInfo {
   // Reason why this packet was transmitted.
   TransmissionType transmission_type;
   // Stores the sequence numbers of all transmissions of this packet.
-  // Can never be null.
-  SequenceNumberSet* all_transmissions;
+  // Must always be nullptr or have multiple elements.
+  SequenceNumberList* all_transmissions;
   // In flight packets have not been abandoned or lost.
   bool in_flight;
+  // True if the packet can never be acked, so it can be removed.
+  bool is_unackable;
 };
 
 }  // namespace net

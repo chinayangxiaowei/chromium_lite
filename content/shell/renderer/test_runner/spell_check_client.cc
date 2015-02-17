@@ -4,8 +4,8 @@
 
 #include "content/shell/renderer/test_runner/spell_check_client.h"
 
-#include "content/shell/renderer/test_runner/WebTestDelegate.h"
 #include "content/shell/renderer/test_runner/mock_grammar_check.h"
+#include "content/shell/renderer/test_runner/web_test_delegate.h"
 #include "content/shell/renderer/test_runner/web_test_proxy.h"
 #include "third_party/WebKit/public/web/WebTextCheckingCompletion.h"
 #include "third_party/WebKit/public/web/WebTextCheckingResult.h"
@@ -20,9 +20,9 @@ class HostMethodTask : public WebMethodTask<SpellCheckClient> {
   HostMethodTask(SpellCheckClient* object, CallbackMethodType callback)
       : WebMethodTask<SpellCheckClient>(object), callback_(callback) {}
 
-  virtual ~HostMethodTask() {}
+  ~HostMethodTask() override {}
 
-  virtual void runIfValid() OVERRIDE { (m_object->*callback_)(); }
+  void RunIfValid() override { (object_->*callback_)(); }
 
  private:
   CallbackMethodType callback_;
@@ -101,7 +101,7 @@ void SpellCheckClient::requestCheckingOfText(
   if (spell_check_.HasInCache(text))
     FinishLastTextCheck();
   else
-    delegate_->postDelayedTask(
+    delegate_->PostDelayedTask(
         new HostMethodTask(this, &SpellCheckClient::FinishLastTextCheck), 0);
 }
 

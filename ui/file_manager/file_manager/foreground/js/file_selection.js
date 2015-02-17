@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * The current selection object.
  *
@@ -29,7 +27,8 @@ function FileSelection(fileManager, indexes) {
 
   // Synchronously compute what we can.
   for (var i = 0; i < this.indexes.length; i++) {
-    var entry = fileManager.getFileList().item(this.indexes[i]);
+    var entry = /** @type {!Entry} */
+        (fileManager.getFileList().item(this.indexes[i]));
     if (!entry)
       continue;
 
@@ -59,7 +58,7 @@ function FileSelection(fileManager, indexes) {
 /**
  * Computes data required to get file tasks and requests the tasks.
  *
- * @param {function} callback The callback.
+ * @param {function()} callback The callback.
  */
 FileSelection.prototype.createTasks = function(callback) {
   if (!this.fileManager_.isOnDrive()) {
@@ -68,24 +67,27 @@ FileSelection.prototype.createTasks = function(callback) {
     return;
   }
 
-  this.fileManager_.metadataCache_.get(this.entries, 'drive', function(props) {
-    var present = props.filter(function(p) { return p && p.availableOffline });
-    this.allDriveFilesPresent = present.length == props.length;
+  this.fileManager_.metadataCache_.get(
+      this.entries, 'external', function(props) {
+        var present = props.filter(function(p) {
+          return p && p.availableOffline;
+        });
+        this.allDriveFilesPresent = present.length == props.length;
 
-    // Collect all of the mime types and push that info into the selection.
-    this.mimeTypes = props.map(function(value) {
-      return (value && value.contentMimeType) || '';
-    });
+        // Collect all of the mime types and push that info into the selection.
+        this.mimeTypes = props.map(function(value) {
+          return (value && value.contentMimeType) || '';
+        });
 
-    this.tasks.init(this.entries, this.mimeTypes);
-    callback();
-  }.bind(this));
+        this.tasks.init(this.entries, this.mimeTypes);
+        callback();
+      }.bind(this));
 };
 
 /**
  * Computes the total size of selected files.
  *
- * @param {function} callback Completion callback. Not called when cancelled,
+ * @param {function()} callback Completion callback. Not called when cancelled,
  *     or a new call has been invoked in the meantime.
  */
 FileSelection.prototype.computeBytes = function(callback) {
@@ -155,10 +157,11 @@ FileSelection.prototype.cancelComputing_ = function() {
 function FileSelectionHandler(fileManager) {
   this.fileManager_ = fileManager;
   // TODO(dgozman): create a shared object with most of UI elements.
-  this.okButton_ = fileManager.okButton_;
-  this.filenameInput_ = fileManager.filenameInput_;
-  this.previewPanel_ = fileManager.previewPanel_;
+  this.okButton_ = fileManager.ui.dialogFooter.okButton;
+  this.filenameInput_ = fileManager.ui.dialogFooter.filenameInput;
+  this.previewPanel_ = fileManager.ui.previewPanel;
   this.taskItems_ = fileManager.taskItems_;
+  this.selection = new FileSelection(this.fileManager_, []);
 }
 
 /**
@@ -208,10 +211,8 @@ FileSelectionHandler.IMAGE_HOVER_PREVIEW_SIZE = 200;
 
 /**
  * Update the UI when the selection model changes.
- *
- * @param {Event} event The change event.
  */
-FileSelectionHandler.prototype.onFileSelectionChanged = function(event) {
+FileSelectionHandler.prototype.onFileSelectionChanged = function() {
   var indexes =
       this.fileManager_.getCurrentList().selectionModel.selectedIndexes;
   if (this.selection) this.selection.cancelComputing_();

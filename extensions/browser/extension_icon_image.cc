@@ -40,8 +40,6 @@
 
 namespace {
 
-const int kMatchBiggerTreshold = 32;
-
 extensions::ExtensionResource GetExtensionIconResource(
     const extensions::Extension* extension,
     const ExtensionIconSet& icons,
@@ -57,11 +55,11 @@ class BlankImageSource : public gfx::CanvasImageSource {
   explicit BlankImageSource(const gfx::Size& size_in_dip)
       : CanvasImageSource(size_in_dip, /*is_opaque =*/ false) {
   }
-  virtual ~BlankImageSource() {}
+  ~BlankImageSource() override {}
 
  private:
   // gfx::CanvasImageSource overrides:
-  virtual void Draw(gfx::Canvas* canvas) OVERRIDE {
+  void Draw(gfx::Canvas* canvas) override {
     canvas->DrawColor(SkColorSetARGB(0, 0, 0, 0));
   }
 
@@ -78,13 +76,13 @@ namespace extensions {
 class IconImage::Source : public gfx::ImageSkiaSource {
  public:
   Source(IconImage* host, const gfx::Size& size_in_dip);
-  virtual ~Source();
+  ~Source() override;
 
   void ResetHost();
 
  private:
   // gfx::ImageSkiaSource overrides:
-  virtual gfx::ImageSkiaRep GetImageForScale(float scale) OVERRIDE;
+  gfx::ImageSkiaRep GetImageForScale(float scale) override;
 
   // Used to load images, possibly asynchronously. NULLed out when the IconImage
   // is destroyed.
@@ -169,11 +167,10 @@ gfx::ImageSkiaRep IconImage::LoadImageForScaleFactor(
   extensions::ExtensionResource resource;
 
   // Find extension resource for non bundled component extensions.
-  // We try loading bigger image only if resource size is >= 32.
-  if (resource_size_in_pixel >= kMatchBiggerTreshold) {
-    resource = GetExtensionIconResource(extension_, icon_set_,
-        resource_size_in_pixel, ExtensionIconSet::MATCH_BIGGER);
-  }
+  resource = GetExtensionIconResource(extension_,
+                                      icon_set_,
+                                      resource_size_in_pixel,
+                                      ExtensionIconSet::MATCH_BIGGER);
 
   // If resource is not found by now, try matching smaller one.
   if (resource.empty()) {

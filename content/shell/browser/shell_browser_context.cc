@@ -7,16 +7,14 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/environment.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/threading/thread.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
 #include "content/shell/browser/shell_download_manager_delegate.h"
-#include "content/shell/browser/shell_url_request_context_getter.h"
 #include "content/shell/common/shell_switches.h"
 
 #if defined(OS_WIN)
@@ -29,44 +27,32 @@
 
 namespace content {
 
-class ShellBrowserContext::ShellResourceContext : public ResourceContext {
- public:
-  ShellResourceContext() : getter_(NULL) {}
-  virtual ~ShellResourceContext() {}
+ShellBrowserContext::ShellResourceContext::ShellResourceContext()
+    : getter_(NULL) {
+}
 
-  // ResourceContext implementation:
-  virtual net::HostResolver* GetHostResolver() OVERRIDE {
-    CHECK(getter_);
-    return getter_->host_resolver();
-  }
-  virtual net::URLRequestContext* GetRequestContext() OVERRIDE {
-    CHECK(getter_);
-    return getter_->GetURLRequestContext();
-  }
-  virtual bool AllowMicAccess(const GURL& origin) OVERRIDE {
-    return false;
-  }
-  virtual bool AllowCameraAccess(const GURL& origin) OVERRIDE {
-    return false;
-  }
+ShellBrowserContext::ShellResourceContext::~ShellResourceContext() {
+}
 
-  void set_url_request_context_getter(ShellURLRequestContextGetter* getter) {
-    getter_ = getter;
-  }
+net::HostResolver*
+ShellBrowserContext::ShellResourceContext::GetHostResolver() {
+  CHECK(getter_);
+  return getter_->host_resolver();
+}
 
- private:
-  ShellURLRequestContextGetter* getter_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShellResourceContext);
-};
+net::URLRequestContext*
+ShellBrowserContext::ShellResourceContext::GetRequestContext() {
+  CHECK(getter_);
+  return getter_->GetURLRequestContext();
+}
 
 ShellBrowserContext::ShellBrowserContext(bool off_the_record,
                                          net::NetLog* net_log)
-    : off_the_record_(off_the_record),
-      net_log_(net_log),
+    : resource_context_(new ShellResourceContext),
       ignore_certificate_errors_(false),
-      guest_manager_(NULL),
-      resource_context_(new ShellResourceContext) {
+      off_the_record_(off_the_record),
+      net_log_(net_log),
+      guest_manager_(NULL) {
   InitWhileIOAllowed();
 }
 
@@ -79,10 +65,8 @@ ShellBrowserContext::~ShellBrowserContext() {
 
 void ShellBrowserContext::InitWhileIOAllowed() {
   CommandLine* cmd_line = CommandLine::ForCurrentProcess();
-  if (cmd_line->HasSwitch(switches::kIgnoreCertificateErrors) ||
-      cmd_line->HasSwitch(switches::kDumpRenderTree)) {
+  if (cmd_line->HasSwitch(switches::kIgnoreCertificateErrors))
     ignore_certificate_errors_ = true;
-  }
   if (cmd_line->HasSwitch(switches::kContentShellDataPath)) {
     path_ = cmd_line->GetSwitchValuePath(switches::kContentShellDataPath);
     return;
@@ -120,16 +104,10 @@ bool ShellBrowserContext::IsOffTheRecord() const {
 }
 
 DownloadManagerDelegate* ShellBrowserContext::GetDownloadManagerDelegate()  {
-  DownloadManager* manager = BrowserContext::GetDownloadManager(this);
-
   if (!download_manager_delegate_.get()) {
     download_manager_delegate_.reset(new ShellDownloadManagerDelegate());
-    download_manager_delegate_->SetDownloadManager(manager);
-    CommandLine* cmd_line = CommandLine::ForCurrentProcess();
-    if (cmd_line->HasSwitch(switches::kDumpRenderTree)) {
-      download_manager_delegate_->SetDownloadBehaviorForTesting(
-          path_.Append(FILE_PATH_LITERAL("downloads")));
-    }
+    download_manager_delegate_->SetDownloadManager(
+        BrowserContext::GetDownloadManager(this));
   }
 
   return download_manager_delegate_.get();
@@ -139,11 +117,11 @@ net::URLRequestContextGetter* ShellBrowserContext::GetRequestContext()  {
   return GetDefaultStoragePartition(this)->GetURLRequestContext();
 }
 
-net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
+ShellURLRequestContextGetter*
+ShellBrowserContext::CreateURLRequestContextGetter(
     ProtocolHandlerMap* protocol_handlers,
     URLRequestInterceptorScopedVector request_interceptors) {
-  DCHECK(!url_request_getter_.get());
-  url_request_getter_ = new ShellURLRequestContextGetter(
+  return new ShellURLRequestContextGetter(
       ignore_certificate_errors_,
       GetPath(),
       BrowserThread::UnsafeGetMessageLoopForThread(BrowserThread::IO),
@@ -151,6 +129,14 @@ net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
       protocol_handlers,
       request_interceptors.Pass(),
       net_log_);
+}
+
+net::URLRequestContextGetter* ShellBrowserContext::CreateRequestContext(
+    ProtocolHandlerMap* protocol_handlers,
+    URLRequestInterceptorScopedVector request_interceptors) {
+  DCHECK(!url_request_getter_.get());
+  url_request_getter_ = CreateURLRequestContextGetter(
+      protocol_handlers, request_interceptors.Pass());
   resource_context_->set_url_request_context_getter(url_request_getter_.get());
   return url_request_getter_.get();
 }
@@ -196,7 +182,7 @@ BrowserPluginGuestManager* ShellBrowserContext::GetGuestManager() {
   return guest_manager_;
 }
 
-quota::SpecialStoragePolicy* ShellBrowserContext::GetSpecialStoragePolicy() {
+storage::SpecialStoragePolicy* ShellBrowserContext::GetSpecialStoragePolicy() {
   return NULL;
 }
 

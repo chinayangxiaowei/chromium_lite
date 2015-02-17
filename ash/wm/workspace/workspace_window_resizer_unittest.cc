@@ -23,7 +23,7 @@
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/hit_test.h"
-#include "ui/events/gestures/gesture_configuration.h"
+#include "ui/events/gesture_detection/gesture_configuration.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/insets.h"
 #include "ui/gfx/screen.h"
@@ -51,11 +51,11 @@ class TestWindowDelegate : public aura::test::TestWindowDelegate {
 
  private:
   // Overridden from aura::Test::TestWindowDelegate:
-  virtual gfx::Size GetMinimumSize() const OVERRIDE {
+  virtual gfx::Size GetMinimumSize() const override {
     return min_size_;
   }
 
-  virtual gfx::Size GetMaximumSize() const OVERRIDE {
+  virtual gfx::Size GetMaximumSize() const override {
     return max_size_;
   }
 
@@ -72,11 +72,12 @@ class WorkspaceWindowResizerTest : public test::AshTestBase {
   WorkspaceWindowResizerTest() : workspace_resizer_(NULL) {}
   virtual ~WorkspaceWindowResizerTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     AshTestBase::SetUp();
     UpdateDisplay(base::StringPrintf("800x%d", kRootHeight));
     // Ignore the touch slop region.
-    ui::GestureConfiguration::set_max_touch_move_in_pixels_for_click(0);
+    ui::GestureConfiguration::GetInstance()
+        ->set_max_touch_move_in_pixels_for_click(0);
 
     aura::Window* root = Shell::GetPrimaryRootWindow();
     gfx::Rect root_bounds(root->bounds());
@@ -112,7 +113,7 @@ class WorkspaceWindowResizerTest : public test::AshTestBase {
     window4_->set_id(4);
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     window_.reset();
     window2_.reset();
     window3_.reset();
@@ -148,7 +149,7 @@ class WorkspaceWindowResizerTest : public test::AshTestBase {
         point_in_parent,
         window_component,
         aura::client::WINDOW_MOVE_SOURCE_MOUSE).release();
-    workspace_resizer_ = WorkspaceWindowResizer::instance_;
+    workspace_resizer_ = WorkspaceWindowResizer::GetInstanceForTest();
     return resizer;
   }
   WorkspaceWindowResizer* CreateWorkspaceResizerForTest(
@@ -556,6 +557,7 @@ TEST_F(WorkspaceWindowResizerTest, Edge) {
   // http://crbug.com/292238.
   // Window is wide enough not to get docked right away.
   window_->SetBounds(gfx::Rect(20, 30, 400, 60));
+  window_->SetProperty(aura::client::kCanMaximizeKey, true);
   wm::WindowState* window_state = wm::GetWindowState(window_.get());
 
   {
@@ -1181,6 +1183,22 @@ TEST_F(WorkspaceWindowResizerTest, CtrlDragResizeToExactPosition) {
   EXPECT_EQ("96,112 330x172", window_->bounds().ToString());
 }
 
+// Verifies that a dragged, non-snapped window will clear restore bounds.
+TEST_F(WorkspaceWindowResizerTest, RestoreClearedOnResize) {
+  window_->SetBounds(gfx::Rect(10, 10, 100, 100));
+  wm::WindowState* window_state = wm::GetWindowState(window_.get());
+  window_state->SetRestoreBoundsInScreen(gfx::Rect(50, 50, 50, 50));
+  scoped_ptr<WindowResizer> resizer(CreateResizerForTest(
+      window_.get(), gfx::Point(), HTBOTTOMRIGHT));
+  ASSERT_TRUE(resizer.get());
+  // Drag the window to new position by adding (20, 30) to original point,
+  // the original restore bound should be cleared.
+  resizer->Drag(CalculateDragPoint(*resizer, 20, 30), 0);
+  resizer->CompleteDrag();
+  EXPECT_EQ("10,10 120x130", window_->bounds().ToString());
+  EXPECT_FALSE(window_state->HasRestoreBounds());
+}
+
 // Verifies that a dragged window will restore to its pre-maximized size.
 TEST_F(WorkspaceWindowResizerTest, RestoreToPreMaximizeCoordinates) {
   window_->SetBounds(gfx::Rect(0, 0, 1000, 1000));
@@ -1399,6 +1417,7 @@ TEST_F(WorkspaceWindowResizerTest, MagneticallyResize_LEFT) {
 // Test that the user user moved window flag is getting properly set.
 TEST_F(WorkspaceWindowResizerTest, CheckUserWindowManagedFlags) {
   window_->SetBounds(gfx::Rect( 0,  50, 400, 200));
+  window_->SetProperty(aura::client::kCanMaximizeKey, true);
 
   std::vector<aura::Window*> no_attached_windows;
   // Check that an abort doesn't change anything.

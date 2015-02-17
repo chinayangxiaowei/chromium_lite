@@ -12,9 +12,10 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/omnibox/autocomplete_provider.h"
+#include "components/omnibox/suggestion_answer.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
-#include "grit/component_scaled_resources.h"
+#include "grit/components_scaled_resources.h"
 
 namespace {
 
@@ -42,7 +43,7 @@ AutocompleteMatch::AutocompleteMatch()
       typed_count(-1),
       deletable(false),
       allowed_to_be_default_match(false),
-      transition(content::PAGE_TRANSITION_GENERATED),
+      transition(ui::PAGE_TRANSITION_GENERATED),
       is_history_what_you_typed_match(false),
       type(AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED),
       from_previous(false) {
@@ -57,7 +58,7 @@ AutocompleteMatch::AutocompleteMatch(AutocompleteProvider* provider,
       typed_count(-1),
       deletable(deletable),
       allowed_to_be_default_match(false),
-      transition(content::PAGE_TRANSITION_TYPED),
+      transition(ui::PAGE_TRANSITION_TYPED),
       is_history_what_you_typed_match(false),
       type(type),
       from_previous(false) {
@@ -79,6 +80,7 @@ AutocompleteMatch::AutocompleteMatch(const AutocompleteMatch& match)
       description_class(match.description_class),
       answer_contents(match.answer_contents),
       answer_type(match.answer_type),
+      answer(SuggestionAnswer::copy(match.answer.get())),
       transition(match.transition),
       is_history_what_you_typed_match(match.is_history_what_you_typed_match),
       type(match.type),
@@ -116,6 +118,7 @@ AutocompleteMatch& AutocompleteMatch::operator=(
   description_class = match.description_class;
   answer_contents = match.answer_contents;
   answer_type = match.answer_type;
+  answer = SuggestionAnswer::copy(match.answer.get());
   transition = match.transition;
   is_history_what_you_typed_match = match.is_history_what_you_typed_match;
   type = match.type;
@@ -435,7 +438,7 @@ void AutocompleteMatch::GetKeywordUIState(
 
 base::string16 AutocompleteMatch::GetSubstitutingExplicitlyInvokedKeyword(
     TemplateURLService* template_url_service) const {
-  if (transition != content::PAGE_TRANSITION_KEYWORD ||
+  if (transition != ui::PAGE_TRANSITION_KEYWORD ||
       template_url_service == NULL) {
     return base::string16();
   }

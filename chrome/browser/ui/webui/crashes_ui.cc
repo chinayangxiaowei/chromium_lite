@@ -17,13 +17,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -40,7 +40,6 @@ namespace {
 content::WebUIDataSource* CreateCrashesUIHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUICrashesHost);
-  source->SetUseJsonJSFormatV2();
 
   source->AddLocalizedString("shortProductName", IDS_SHORT_PRODUCT_NAME);
   source->AddLocalizedString("crashesTitle", IDS_CRASHES_TITLE);
@@ -72,14 +71,14 @@ content::WebUIDataSource* CreateCrashesUIHTMLSource() {
 class CrashesDOMHandler : public WebUIMessageHandler,
                           public CrashUploadList::Delegate {
  public:
-  explicit CrashesDOMHandler();
-  virtual ~CrashesDOMHandler();
+  CrashesDOMHandler();
+  ~CrashesDOMHandler() override;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // CrashUploadList::Delegate implemenation.
-  virtual void OnUploadListAvailable() OVERRIDE;
+  void OnUploadListAvailable() override;
 
  private:
   // Asynchronously fetches the list of crashes. Called from JS.

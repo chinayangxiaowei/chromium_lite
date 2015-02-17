@@ -6,15 +6,14 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/policy/test/local_policy_test_server.h"
@@ -28,6 +27,7 @@
 #include "components/policy/core/common/policy_switches.h"
 #include "components/policy/core/common/policy_test_utils.h"
 #include "extensions/common/extension.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "policy/proto/chrome_extension_policy.pb.h"
 #include "policy/proto/cloud_policy.pb.h"
@@ -103,9 +103,9 @@ bool Base64UrlEncode(const std::string& value, std::string* encoded) {
 class ComponentCloudPolicyTest : public ExtensionBrowserTest {
  protected:
   ComponentCloudPolicyTest() {}
-  virtual ~ComponentCloudPolicyTest() {}
+  ~ComponentCloudPolicyTest() override {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionBrowserTest::SetUpCommandLine(command_line);
 #if defined(OS_CHROMEOS)
     // ExtensionBrowserTest sets the login users to a non-managed value;
@@ -116,7 +116,7 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
 #endif
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     test_server_.RegisterClient(kDMToken, kDeviceID);
     EXPECT_TRUE(test_server_.UpdatePolicyData(
         dm_protocol::kChromeExtensionPolicyType, kTestExtension, kTestPolicy));
@@ -129,7 +129,7 @@ class ComponentCloudPolicyTest : public ExtensionBrowserTest {
     ExtensionBrowserTest::SetUpInProcessBrowserTestFixture();
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     ASSERT_TRUE(PolicyServiceIsEmpty(g_browser_process->policy_service()))
         << "Pre-existing policies in this machine will make this test fail.";
 

@@ -52,6 +52,14 @@ function detectVideoStopped(videoElementName, callback) {
               callback);
 }
 
+function detectBlackVideo(videoElementName, callback) {
+  detectVideo(videoElementName,
+              function (pixels, previous_pixels) {
+                return isVideoBlack(pixels);
+              },
+              callback);
+}
+
 function detectVideo(videoElementName, predicate, callback) {
   console.log('Looking at video in element ' + videoElementName);
 
@@ -97,10 +105,16 @@ function waitForVideoToStop(videoElement) {
   detectVideoStopped(videoElement, function () { eventOccured(); });
 }
 
+function waitForBlackVideo(videoElement) {
+  addExpectedEvent();
+  detectBlackVideo(videoElement, function () { eventOccured(); });
+}
+
 // Calculates the current frame rate and compares to |expected_frame_rate|
 // |callback| is triggered with value |true| if the calculated frame rate
 // is +-1 the expected or |false| if five calculations fail to match
-// |expected_frame_rate|.
+// |expected_frame_rate|. Calls back with OK if the check passed, otherwise
+// an error message.
 function validateFrameRate(videoElementName, expected_frame_rate, callback) {
   var videoElement = $(videoElementName);
   var startTime = new Date().getTime();
@@ -127,10 +141,11 @@ function validateFrameRate(videoElementName, expected_frame_rate, callback) {
     console.log('FrameRate in ' + videoElementName + ' is ' + fps);
     if (fps < expected_frame_rate + 1  && fps > expected_frame_rate - 1) {
       clearInterval(waitVideo);
-      callback(true);
+      callback('OK');
     } else if (attempts == 5) {
       clearInterval(waitVideo);
-      callback(false);
+      callback('Expected frame rate ' + expected_frame_rate + ' for ' +
+               'element ' + videoElementName + ', but got ' + fps);
     }
   }, 1000);
 }
@@ -171,6 +186,18 @@ function isVideoPlaying(pixels, previousPixels) {
   return false;
 }
 
+function isVideoBlack(pixels) {
+  for (var i = 0; i < pixels.length; i++) {
+    // |pixels| is in RGBA. Ignore the alpha channel.
+    // We allow it to be off by 1, to account for rounding errors in YUV
+    // conversion.
+    if (pixels[i] != 0 && pixels[i] != 1 && (i + 1) % 4 != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // This function matches |left| and |right| and fails the test if the
 // values don't match using normal javascript equality (i.e. the hard
 // types of the operands aren't checked).
@@ -186,3 +213,19 @@ function assertNotEquals(expected, actual) {
   }
 }
 
+// Returns has-video-input-device to the test if there's a webcam available on
+// the system.
+function hasVideoInputDeviceOnSystem() {
+  MediaStreamTrack.getSources(function(devices) {
+    var hasVideoInputDevice = false;
+    devices.forEach(function(device) {
+      if (device.kind == 'video')
+        hasVideoInputDevice = true;
+    });
+
+    if (hasVideoInputDevice)
+      sendValueToTest('has-video-input-device');
+    else
+      sendValueToTest('no-video-input-devices');
+  });
+}

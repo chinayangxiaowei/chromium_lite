@@ -9,15 +9,16 @@
 #include "base/mac/sdk_forward_declarations.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/themes/theme_service.h"
-#import "chrome/browser/ui/cocoa/nsview_additions.h"
+#import "chrome/browser/ui/cocoa/tabs/media_indicator_button.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_window_controller.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #import "third_party/google_toolbox_for_mac/src/AppKit/GTMFadeTruncatingTextFieldCell.h"
 #import "ui/base/cocoa/nsgraphics_context_additions.h"
+#import "ui/base/cocoa/nsview_additions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/scoped_ns_graphics_context_save_gstate_mac.h"
@@ -155,12 +156,13 @@ const CGFloat kRapidCloseDist = 2.5;
 }
 
 // Determines which view a click in our frame actually hit. It's either this
-// view or our child close button.
+// view or one of the child buttons.
 - (NSView*)hitTest:(NSPoint)aPoint {
-  NSPoint viewPoint = [self convertPoint:aPoint fromView:[self superview]];
-  if (![closeButton_ isHidden])
-    if (NSPointInRect(viewPoint, [closeButton_ frame])) return closeButton_;
+  NSView* const defaultHitTestResult = [super hitTest:aPoint];
+  if ([defaultHitTestResult isKindOfClass:[NSButton class]])
+    return defaultHitTestResult;
 
+  NSPoint viewPoint = [self convertPoint:aPoint fromView:[self superview]];
   NSRect pointRect = NSMakeRect(viewPoint.x, viewPoint.y, 1, 1);
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();

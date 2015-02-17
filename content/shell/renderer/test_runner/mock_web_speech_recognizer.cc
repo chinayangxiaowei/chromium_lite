@@ -5,7 +5,7 @@
 #include "content/shell/renderer/test_runner/mock_web_speech_recognizer.h"
 
 #include "base/logging.h"
-#include "content/shell/renderer/test_runner/WebTestDelegate.h"
+#include "content/shell/renderer/test_runner/web_test_delegate.h"
 #include "third_party/WebKit/public/web/WebSpeechRecognitionResult.h"
 #include "third_party/WebKit/public/web/WebSpeechRecognizerClient.h"
 
@@ -21,9 +21,9 @@ class ClientCallTask : public MockWebSpeechRecognizer::Task {
   ClientCallTask(MockWebSpeechRecognizer* mock, ClientFunctionPointer function)
       : MockWebSpeechRecognizer::Task(mock), function_(function) {}
 
-  virtual ~ClientCallTask() {}
+  ~ClientCallTask() override {}
 
-  virtual void run() OVERRIDE {
+  void run() override {
     (recognizer_->Client()->*function_)(recognizer_->Handle());
   }
 
@@ -43,9 +43,9 @@ class ResultTask : public MockWebSpeechRecognizer::Task {
         transcript_(transcript),
         confidence_(confidence) {}
 
-  virtual ~ResultTask() {}
+  ~ResultTask() override {}
 
-  virtual void run() OVERRIDE {
+  void run() override {
     blink::WebVector<blink::WebString> transcripts(static_cast<size_t>(1));
     blink::WebVector<float> confidences(static_cast<size_t>(1));
     transcripts[0] = transcript_;
@@ -72,9 +72,9 @@ class NoMatchTask : public MockWebSpeechRecognizer::Task {
   NoMatchTask(MockWebSpeechRecognizer* mock)
       : MockWebSpeechRecognizer::Task(mock) {}
 
-  virtual ~NoMatchTask() {}
+  ~NoMatchTask() override {}
 
-  virtual void run() OVERRIDE {
+  void run() override {
     recognizer_->Client()->didReceiveNoMatch(
         recognizer_->Handle(), blink::WebSpeechRecognitionResult());
   }
@@ -91,9 +91,9 @@ class ErrorTask : public MockWebSpeechRecognizer::Task {
             const blink::WebString& message)
       : MockWebSpeechRecognizer::Task(mock), code_(code), message_(message) {}
 
-  virtual ~ErrorTask() {}
+  ~ErrorTask() override {}
 
-  virtual void run() OVERRIDE {
+  void run() override {
     recognizer_->Client()->didReceiveError(
         recognizer_->Handle(), message_, code_);
   }
@@ -219,7 +219,7 @@ void MockWebSpeechRecognizer::SetError(const blink::WebString& error,
 void MockWebSpeechRecognizer::StartTaskQueue() {
   if (task_queue_running_)
     return;
-  delegate_->postTask(new StepTask(this));
+  delegate_->PostTask(new StepTask(this));
   task_queue_running_ = true;
 }
 
@@ -231,23 +231,23 @@ void MockWebSpeechRecognizer::ClearTaskQueue() {
   task_queue_running_ = false;
 }
 
-void MockWebSpeechRecognizer::StepTask::runIfValid() {
-  if (m_object->task_queue_.empty()) {
-    m_object->task_queue_running_ = false;
+void MockWebSpeechRecognizer::StepTask::RunIfValid() {
+  if (object_->task_queue_.empty()) {
+    object_->task_queue_running_ = false;
     return;
   }
 
-  Task* task = m_object->task_queue_.front();
-  m_object->task_queue_.pop_front();
+  Task* task = object_->task_queue_.front();
+  object_->task_queue_.pop_front();
   task->run();
   delete task;
 
-  if (m_object->task_queue_.empty()) {
-    m_object->task_queue_running_ = false;
+  if (object_->task_queue_.empty()) {
+    object_->task_queue_running_ = false;
     return;
   }
 
-  m_object->delegate_->postTask(new StepTask(m_object));
+  object_->delegate_->PostTask(new StepTask(object_));
 }
 
 }  // namespace content

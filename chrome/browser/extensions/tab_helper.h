@@ -38,6 +38,7 @@ class Image;
 }
 
 namespace extensions {
+class ActiveScriptController;
 class BookmarkAppHelper;
 class Extension;
 class LocationBarController;
@@ -50,7 +51,7 @@ class TabHelper : public content::WebContentsObserver,
                   public content::NotificationObserver,
                   public content::WebContentsUserData<TabHelper> {
  public:
-  virtual ~TabHelper();
+  ~TabHelper() override;
 
   void CreateApplicationShortcuts();
   void CreateHostedAppFromWebContents();
@@ -97,16 +98,16 @@ class TabHelper : public content::WebContentsObserver,
   // extension_misc::EXTENSION_ICON_SMALLISH).
   SkBitmap* GetExtensionAppIcon();
 
-  content::WebContents* web_contents() const {
-    return content::WebContentsObserver::web_contents();
-  }
-
   ScriptExecutor* script_executor() {
     return script_executor_.get();
   }
 
   LocationBarController* location_bar_controller() {
     return location_bar_controller_.get();
+  }
+
+  ActiveScriptController* active_script_controller() {
+    return active_script_controller_.get();
   }
 
   ActiveTabPermissionGranter* active_tab_permission_granter() {
@@ -140,26 +141,23 @@ class TabHelper : public content::WebContentsObserver,
                                const WebApplicationInfo& web_app_info);
 
   // content::WebContentsObserver overrides.
-  virtual void RenderViewCreated(
-      content::RenderViewHost* render_view_host) OVERRIDE;
-  virtual void DidNavigateMainFrame(
+  void RenderViewCreated(content::RenderViewHost* render_view_host) override;
+  void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) OVERRIDE;
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual bool OnMessageReceived(
-      const IPC::Message& message,
-      content::RenderFrameHost* render_frame_host) OVERRIDE;
-  virtual void DidCloneToNewWebContents(
+      const content::FrameNavigateParams& params) override;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  bool OnMessageReceived(const IPC::Message& message,
+                         content::RenderFrameHost* render_frame_host) override;
+  void DidCloneToNewWebContents(
       content::WebContents* old_web_contents,
-      content::WebContents* new_web_contents) OVERRIDE;
+      content::WebContents* new_web_contents) override;
 
   // extensions::ExtensionFunctionDispatcher::Delegate overrides.
-  virtual extensions::WindowController* GetExtensionWindowController()
-      const OVERRIDE;
-  virtual content::WebContents* GetAssociatedWebContents() const OVERRIDE;
+  extensions::WindowController* GetExtensionWindowController() const override;
+  content::WebContents* GetAssociatedWebContents() const override;
 
   // Message handlers.
-  void OnDidGetApplicationInfo(const WebApplicationInfo& info);
+  void OnDidGetWebApplicationInfo(const WebApplicationInfo& info);
   void OnInlineWebstoreInstall(int install_id,
                                int return_route_id,
                                const std::string& webstore_item_id,
@@ -196,9 +194,9 @@ class TabHelper : public content::WebContentsObserver,
                                        webstore_install::Result result);
 
   // content::NotificationObserver.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Requests application info for the specified page. This is an asynchronous
   // request. The delegate is notified by way of OnDidGetApplicationInfo when
@@ -245,17 +243,19 @@ class TabHelper : public content::WebContentsObserver,
 
   scoped_ptr<LocationBarController> location_bar_controller_;
 
+  scoped_ptr<ActiveScriptController> active_script_controller_;
+
   scoped_ptr<ActiveTabPermissionGranter> active_tab_permission_granter_;
 
   scoped_ptr<BookmarkAppHelper> bookmark_app_helper_;
 
   Profile* profile_;
 
-  // Vend weak pointers that can be invalidated to stop in-progress loads.
-  base::WeakPtrFactory<TabHelper> image_loader_ptr_factory_;
-
   // Creates WebstoreInlineInstaller instances for inline install triggers.
   scoped_ptr<WebstoreInlineInstallerFactory> webstore_inline_installer_factory_;
+
+  // Vend weak pointers that can be invalidated to stop in-progress loads.
+  base::WeakPtrFactory<TabHelper> image_loader_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(TabHelper);
 };

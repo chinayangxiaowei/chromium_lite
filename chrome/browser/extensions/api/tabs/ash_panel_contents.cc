@@ -4,7 +4,6 @@
 
 #include "chrome/browser/extensions/api/tabs/ash_panel_contents.h"
 
-#include "apps/ui/native_app_window.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
@@ -17,12 +16,13 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_messages.h"
 #include "ui/gfx/image/image.h"
 
-using apps::AppWindow;
-using apps::NativeAppWindow;
+using extensions::AppWindow;
+using extensions::NativeAppWindow;
 
 // AshPanelWindowController ----------------------------------------------------
 
@@ -33,22 +33,22 @@ using apps::NativeAppWindow;
 class AshPanelWindowController : public extensions::WindowController {
  public:
   AshPanelWindowController(AppWindow* window, Profile* profile);
-  virtual ~AshPanelWindowController();
+  ~AshPanelWindowController() override;
 
   void NativeWindowChanged();
 
   // Overridden from extensions::WindowController.
-  virtual int GetWindowId() const OVERRIDE;
-  virtual std::string GetWindowTypeText() const OVERRIDE;
-  virtual base::DictionaryValue* CreateWindowValueWithTabs(
-      const extensions::Extension* extension) const OVERRIDE;
-  virtual base::DictionaryValue* CreateTabValue(
-      const extensions::Extension* extension, int tab_index) const OVERRIDE;
-  virtual bool CanClose(Reason* reason) const OVERRIDE;
-  virtual void SetFullscreenMode(bool is_fullscreen,
-                                 const GURL& extension_url) const OVERRIDE;
-  virtual bool IsVisibleToExtension(
-      const extensions::Extension* extension) const OVERRIDE;
+  int GetWindowId() const override;
+  std::string GetWindowTypeText() const override;
+  base::DictionaryValue* CreateWindowValueWithTabs(
+      const extensions::Extension* extension) const override;
+  base::DictionaryValue* CreateTabValue(const extensions::Extension* extension,
+                                        int tab_index) const override;
+  bool CanClose(Reason* reason) const override;
+  void SetFullscreenMode(bool is_fullscreen,
+                         const GURL& extension_url) const override;
+  bool IsVisibleToExtension(
+      const extensions::Extension* extension) const override;
 
  private:
   AppWindow* app_window_;  // Weak pointer; this is owned by app_window_
@@ -102,7 +102,7 @@ base::DictionaryValue* AshPanelWindowController::CreateTabValue(
 
   base::DictionaryValue* tab_value = new base::DictionaryValue();
   tab_value->SetInteger(extensions::tabs_constants::kIdKey,
-                        SessionID::IdForTab(web_contents));
+                        SessionTabHelper::IdForTab(web_contents));
   tab_value->SetInteger(extensions::tabs_constants::kIndexKey, 0);
   const int window_id = GetWindowId();
   tab_value->SetInteger(extensions::tabs_constants::kWindowIdKey, window_id);
@@ -197,7 +197,7 @@ void AshPanelContents::LoadContents(int32 creator_process_id) {
       host_, Profile::FromBrowserContext(host_->browser_context())));
 
   web_contents_->GetController().LoadURL(
-      url_, content::Referrer(), content::PAGE_TRANSITION_LINK,
+      url_, content::Referrer(), ui::PAGE_TRANSITION_LINK,
       std::string());
 }
 

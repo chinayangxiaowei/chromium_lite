@@ -13,43 +13,109 @@
 #include "chrome/common/pref_names.h"
 #include "chromeos/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/dbus/cryptohome_client.h"
+#include "policy/proto/device_management_backend.pb.h"
+
+namespace em = enterprise_management;
 
 namespace {
 
-const char* kAttributeOwnerId = "consumer_management.owner_id";
+// Boot atttributes ID.
+const char kAttributeOwnerId[] = "consumer_management.owner_id";
+
+// The string of Status enum.
+const char* const kStatusString[] = {
+  "StatusUnknown",
+  "StatusEnrolled",
+  "StatusEnrolling",
+  "StatusUnenrolled",
+  "StatusUnenrolling",
+};
+
+COMPILE_ASSERT(
+    arraysize(kStatusString) == policy::ConsumerManagementService::STATUS_LAST,
+    "invalid kStatusString array size.");
 
 }  // namespace
 
 namespace policy {
 
 ConsumerManagementService::ConsumerManagementService(
-    chromeos::CryptohomeClient* client) : client_(client),
-                                          weak_ptr_factory_(this) {
+    chromeos::CryptohomeClient* client,
+    chromeos::DeviceSettingsService* device_settings_service)
+    : client_(client),
+      device_settings_service_(device_settings_service),
+      weak_ptr_factory_(this) {
+  // A NULL value may be passed in tests.
+  if (device_settings_service_)
+    device_settings_service_->AddObserver(this);
 }
 
 ConsumerManagementService::~ConsumerManagementService() {
+  if (device_settings_service_)
+    device_settings_service_->RemoveObserver(this);
 }
 
 // static
 void ConsumerManagementService::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
-      prefs::kConsumerManagementEnrollmentState, ENROLLMENT_NONE);
+      prefs::kConsumerManagementEnrollmentStage, ENROLLMENT_STAGE_NONE);
 }
 
-ConsumerManagementService::EnrollmentState
-ConsumerManagementService::GetEnrollmentState() const {
-  const PrefService* prefs = g_browser_process->local_state();
-  int state = prefs->GetInteger(prefs::kConsumerManagementEnrollmentState);
-  if (state < 0 || state >= ENROLLMENT_LAST) {
-    LOG(ERROR) << "Unknown enrollment state: " << state;
-    state = 0;
+void ConsumerManagementService::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void ConsumerManagementService::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
+ConsumerManagementService::Status
+ConsumerManagementService::GetStatus() const {
+  if (!device_settings_service_)
+    return STATUS_UNKNOWN;
+
+  const em::PolicyData* policy_data = device_settings_service_->policy_data();
+  if (!policy_data)
+    return STATUS_UNKNOWN;
+
+  if (policy_data->management_mode() == em::PolicyData::CONSUMER_MANAGED) {
+    // TODO(davidyu): Check if unenrollment is in progress.
+    // http://crbug.com/353050.
+    return STATUS_ENROLLED;
   }
-  return static_cast<EnrollmentState>(state);
+
+  EnrollmentStage stage = GetEnrollmentStage();
+  if (stage > ENROLLMENT_STAGE_NONE && stage < ENROLLMENT_STAGE_SUCCESS)
+    return STATUS_ENROLLING;
+
+  return STATUS_UNENROLLED;
 }
 
-void ConsumerManagementService::SetEnrollmentState(EnrollmentState state) {
+std::string ConsumerManagementService::GetStatusString() const {
+  return kStatusString[GetStatus()];
+}
+
+bool ConsumerManagementService::HasPendingEnrollmentNotification() const {
+  EnrollmentStage stage = GetEnrollmentStage();
+  return stage >= ENROLLMENT_STAGE_SUCCESS && stage < ENROLLMENT_STAGE_LAST;
+}
+
+ConsumerManagementService::EnrollmentStage
+ConsumerManagementService::GetEnrollmentStage() const {
+  const PrefService* prefs = g_browser_process->local_state();
+  int stage = prefs->GetInteger(prefs::kConsumerManagementEnrollmentStage);
+  if (stage < 0 || stage >= ENROLLMENT_STAGE_LAST) {
+    LOG(ERROR) << "Unknown enrollment stage: " << stage;
+    stage = 0;
+  }
+  return static_cast<EnrollmentStage>(stage);
+}
+
+void ConsumerManagementService::SetEnrollmentStage(EnrollmentStage stage) {
   PrefService* prefs = g_browser_process->local_state();
-  prefs->SetInteger(prefs::kConsumerManagementEnrollmentState, state);
+  prefs->SetInteger(prefs::kConsumerManagementEnrollmentStage, stage);
+
+  NotifyStatusChanged();
 }
 
 void ConsumerManagementService::GetOwner(const GetOwnerCallback& callback) {
@@ -60,6 +126,29 @@ void ConsumerManagementService::GetOwner(const GetOwnerCallback& callback) {
       base::Bind(&ConsumerManagementService::OnGetBootAttributeDone,
                  weak_ptr_factory_.GetWeakPtr(),
                  callback));
+}
+
+void ConsumerManagementService::SetOwner(const std::string& user_id,
+                                         const SetOwnerCallback& callback) {
+  cryptohome::SetBootAttributeRequest request;
+  request.set_name(kAttributeOwnerId);
+  request.set_value(user_id.data(), user_id.size());
+  client_->SetBootAttribute(
+      request,
+      base::Bind(&ConsumerManagementService::OnSetBootAttributeDone,
+                 weak_ptr_factory_.GetWeakPtr(),
+                 callback));
+}
+
+void ConsumerManagementService::OwnershipStatusChanged() {
+}
+
+void ConsumerManagementService::DeviceSettingsUpdated() {
+  NotifyStatusChanged();
+}
+
+void ConsumerManagementService::OnDeviceSettingsServiceShutdown() {
+  device_settings_service_ = nullptr;
 }
 
 void ConsumerManagementService::OnGetBootAttributeDone(
@@ -75,18 +164,6 @@ void ConsumerManagementService::OnGetBootAttributeDone(
 
   callback.Run(
       reply.GetExtension(cryptohome::GetBootAttributeReply::reply).value());
-}
-
-void ConsumerManagementService::SetOwner(const std::string& user_id,
-                                         const SetOwnerCallback& callback) {
-  cryptohome::SetBootAttributeRequest request;
-  request.set_name(kAttributeOwnerId);
-  request.set_value(user_id.data(), user_id.size());
-  client_->SetBootAttribute(
-      request,
-      base::Bind(&ConsumerManagementService::OnSetBootAttributeDone,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 callback));
 }
 
 void ConsumerManagementService::OnSetBootAttributeDone(
@@ -120,6 +197,10 @@ void ConsumerManagementService::OnFlushAndSignBootAttributesDone(
   }
 
   callback.Run(true);
+}
+
+void ConsumerManagementService::NotifyStatusChanged() {
+  FOR_EACH_OBSERVER(Observer, observers_, OnConsumerManagementStatusChanged());
 }
 
 }  // namespace policy

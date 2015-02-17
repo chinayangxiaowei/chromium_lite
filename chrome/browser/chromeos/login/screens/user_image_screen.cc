@@ -19,7 +19,8 @@
 #include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 #include "chrome/browser/chromeos/camera_presence_notifier.h"
 #include "chrome/browser/chromeos/login/login_utils.h"
-#include "chrome/browser/chromeos/login/screens/screen_observer.h"
+#include "chrome/browser/chromeos/login/screen_manager.h"
+#include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
 #include "chrome/browser/chromeos/login/users/avatar/user_image_manager.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
@@ -57,9 +58,15 @@ const int kSyncTimeoutSeconds = 10;
 
 }  // namespace
 
-UserImageScreen::UserImageScreen(ScreenObserver* screen_observer,
+// static
+UserImageScreen* UserImageScreen::Get(ScreenManager* manager) {
+  return static_cast<UserImageScreen*>(
+      manager->GetScreen(WizardController::kUserImageScreenName));
+}
+
+UserImageScreen::UserImageScreen(BaseScreenDelegate* base_screen_delegate,
                                  UserImageScreenActor* actor)
-    : WizardScreen(screen_observer),
+    : BaseScreen(base_screen_delegate),
       actor_(actor),
       accept_photo_after_decoding_(false),
       selected_image_(user_manager::User::USER_IMAGE_INVALID),
@@ -351,7 +358,7 @@ void UserImageScreen::ExitScreen() {
   sync_timer_.reset();
   if (UserImageSyncObserver* sync_observer = GetSyncObserver())
     sync_observer->RemoveObserver(this);
-  get_screen_observer()->OnExit(ScreenObserver::USER_IMAGE_SELECTED);
+  get_base_screen_delegate()->OnExit(BaseScreenDelegate::USER_IMAGE_SELECTED);
 }
 
 }  // namespace chromeos

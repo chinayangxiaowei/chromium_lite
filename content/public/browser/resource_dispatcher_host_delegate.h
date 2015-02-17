@@ -30,18 +30,16 @@ class AppCacheService;
 class ResourceContext;
 class ResourceDispatcherHostLoginDelegate;
 class ResourceThrottle;
-class StreamHandle;
 struct Referrer;
 struct ResourceResponse;
+struct StreamInfo;
 
 // Interface that the embedder provides to ResourceDispatcherHost to allow
 // observing and modifying requests.
 class CONTENT_EXPORT ResourceDispatcherHostDelegate {
  public:
   // Called when a request begins. Return false to abort the request.
-  virtual bool ShouldBeginRequest(int child_id,
-                                  int route_id,
-                                  const std::string& method,
+  virtual bool ShouldBeginRequest(const std::string& method,
                                   const GURL& url,
                                   ResourceType resource_type,
                                   ResourceContext* resource_context);
@@ -52,8 +50,6 @@ class CONTENT_EXPORT ResourceDispatcherHostDelegate {
                                 ResourceContext* resource_context,
                                 AppCacheService* appcache_service,
                                 ResourceType resource_type,
-                                int child_id,
-                                int route_id,
                                 ScopedVector<ResourceThrottle>* throttles);
 
   // Allows an embedder to add additional resource handlers for a download.
@@ -104,7 +100,7 @@ class CONTENT_EXPORT ResourceDispatcherHostDelegate {
   // Informs the delegate that a Stream was created. The Stream can be read from
   // the blob URL of the Stream, but can only be read once.
   virtual void OnStreamCreated(net::URLRequest* request,
-                               scoped_ptr<content::StreamHandle> stream);
+                               scoped_ptr<content::StreamInfo> stream);
 
   // Informs the delegate that a response has started.
   virtual void OnResponseStarted(net::URLRequest* request,

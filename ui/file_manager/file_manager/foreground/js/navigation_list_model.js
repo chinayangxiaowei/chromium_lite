@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Base item of NavigationListModel. Should not be created directly.
  * @param {string} label Label.
@@ -14,7 +12,23 @@ function NavigationModelItem(label) {
 }
 
 NavigationModelItem.prototype = {
-  get label() { return this.label_; },
+  get label() { return this.label_; }
+};
+
+/**
+ * Check whether given two model items are same.
+ * @param {NavigationModelItem} item1 The first item to be compared.
+ * @param {NavigationModelItem} item2 The second item to be compared.
+ * @return {boolean} True if given two model items are same.
+ */
+NavigationModelItem.isSame = function(item1, item2) {
+  if (item1.isVolume != item2.isVolume)
+    return false;
+
+  if (item1.isVolume)
+    return item1.volumeInfo === item2.volumeInfo;
+  else
+    return util.isSameEntry(item1.entry, item2.entry);
 };
 
 /**
@@ -66,7 +80,8 @@ NavigationModelVolumeItem.prototype = {
 /**
  * A navigation list model. This model combines the 2 lists.
  * @param {VolumeManagerWrapper} volumeManager VolumeManagerWrapper instance.
- * @param {cr.ui.ArrayDataModel} shortcutListModel The list of folder shortcut.
+ * @param {(cr.ui.ArrayDataModel|FolderShortcutsDataModel)} shortcutListModel
+ *     The list of folder shortcut.
  * @constructor
  * @extends {cr.EventTarget}
  */
@@ -106,7 +121,7 @@ function NavigationListModel(volumeManager, shortcutListModel) {
 
   this.shortcutList_ = [];
   for (var i = 0; i < this.shortcutListModel_.length; i++) {
-    var shortcutEntry = this.shortcutListModel_.item(i);
+    var shortcutEntry = /** @type {Entry} */ (this.shortcutListModel_.item(i));
     var volumeInfo = this.volumeManager_.getVolumeInfo(shortcutEntry);
     this.shortcutList_.push(entryToModelItem(shortcutEntry));
   }

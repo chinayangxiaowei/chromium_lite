@@ -6,7 +6,6 @@
 
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/ozone/public/cursor_factory_ozone.h"
-#include "ui/ozone/public/event_factory_ozone.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/platform_window.h"
 
@@ -95,19 +94,12 @@ void WindowTreeHostOzone::ReleaseCapture() {
   platform_window_->ReleaseCapture();
 }
 
-void WindowTreeHostOzone::PostNativeEvent(
-    const base::NativeEvent& native_event) {
-  SendEventToProcessor(static_cast<ui::Event*>(native_event));
-}
-
 void WindowTreeHostOzone::SetCursorNative(gfx::NativeCursor cursor) {
-  ui::CursorFactoryOzone::GetInstance()->SetCursor(GetAcceleratedWidget(),
-                                                   cursor.platform());
+  platform_window_->SetCursor(cursor.platform());
 }
 
 void WindowTreeHostOzone::MoveCursorToNative(const gfx::Point& location) {
-  ui::EventFactoryOzone::GetInstance()->WarpCursorTo(GetAcceleratedWidget(),
-                                                     location);
+  platform_window_->MoveCursorTo(location);
 }
 
 void WindowTreeHostOzone::OnCursorVisibilityChangedNative(bool show) {

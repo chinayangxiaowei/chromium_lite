@@ -34,8 +34,8 @@ class GCM_EXPORT GCMStore {
   typedef std::map<std::string, linked_ptr<google::protobuf::MessageLite> >
       OutgoingMessageMap;
 
-  // Map of account id to account info for account mappings.
-  typedef std::map<std::string, AccountMapping> AccountMappingMap;
+  // List of account mappings.
+  typedef std::vector<AccountMapping> AccountMappings;
 
   // Container for Load(..) results.
   struct GCM_EXPORT LoadResult {
@@ -54,7 +54,8 @@ class GCM_EXPORT GCMStore {
     std::string gservices_digest;
     base::Time last_checkin_time;
     std::set<std::string> last_checkin_accounts;
-    AccountMappingMap account_mappings;
+    AccountMappings account_mappings;
+    base::Time last_token_fetch_time;
   };
 
   typedef std::vector<std::string> PersistentIdList;
@@ -127,6 +128,10 @@ class GCM_EXPORT GCMStore {
                                  const UpdateCallback& callback) = 0;
   virtual void RemoveAccountMapping(const std::string& account_id,
                                     const UpdateCallback& callback) = 0;
+
+  // Sets last token fetch time.
+  virtual void SetLastTokenFetchTime(const base::Time& time,
+                                     const UpdateCallback& callback) = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(GCMStore);

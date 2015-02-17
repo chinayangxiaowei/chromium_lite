@@ -15,20 +15,29 @@ class HostPairingController {
  public:
   enum Stage {
     STAGE_NONE,
+    STAGE_INITIALIZATION_ERROR,
     STAGE_WAITING_FOR_CONTROLLER,
     STAGE_WAITING_FOR_CODE_CONFIRMATION,
-    STAGE_UPDATING,
     STAGE_WAITING_FOR_CONTROLLER_AFTER_UPDATE,
     STAGE_WAITING_FOR_CREDENTIALS,
     STAGE_ENROLLING,
     STAGE_ENROLLMENT_ERROR,
-    STAGE_PAIRING_DONE,
+    STAGE_ENROLLMENT_SUCCESS,
     STAGE_FINISHED
   };
 
-  struct UpdateProgress {
-    // Number in [0, 1].
-    double progress;
+  enum UpdateStatus {
+    UPDATE_STATUS_UNKNOWN,
+    UPDATE_STATUS_UPDATING,
+    UPDATE_STATUS_REBOOTING,
+    UPDATE_STATUS_UPDATED,
+  };
+
+  enum EnrollmentStatus {
+    ENROLLMENT_STATUS_UNKNOWN,
+    ENROLLMENT_STATUS_ENROLLING,
+    ENROLLMENT_STATUS_FAILURE,
+    ENROLLMENT_STATUS_SUCCESS,
   };
 
   class Observer {
@@ -39,9 +48,15 @@ class HostPairingController {
     // Called when pairing has moved on from one stage to another.
     virtual void PairingStageChanged(Stage new_stage) = 0;
 
-    // Called periodically on |STAGE_UPDATING| stage. Current update progress
-    // is stored in |progress|.
-    virtual void UpdateAdvanced(const UpdateProgress& progress) = 0;
+    // Called when the controller has sent a configuration to apply.
+    virtual void ConfigureHost(bool accepted_eula,
+                               const std::string& lang,
+                               const std::string& timezone,
+                               bool send_reports,
+                               const std::string& keyboard_layout) = 0;
+
+    // Called when the controller has provided an |auth_token| for enrollment.
+    virtual void EnrollHost(const std::string& auth_token) = 0;
 
    private:
     DISALLOW_COPY_AND_ASSIGN(Observer);
@@ -49,9 +64,6 @@ class HostPairingController {
 
   HostPairingController();
   virtual ~HostPairingController();
-
-  virtual void AddObserver(Observer* observer) = 0;
-  virtual void RemoveObserver(Observer* observer) = 0;
 
   // Returns current stage of pairing process.
   virtual Stage GetCurrentStage() = 0;
@@ -69,6 +81,17 @@ class HostPairingController {
   // Returns an enrollment domain name. Can be called on stage
   // |STAGE_ENROLLMENT| and later.
   virtual std::string GetEnrollmentDomain() = 0;
+
+  // Notify that the update status has changed.
+  virtual void OnUpdateStatusChanged(UpdateStatus update_status) = 0;
+
+  // Notify that enrollment status has changed.
+  // Can be called on stage |STAGE_WAITING_FOR_CREDENTIALS|.
+  virtual void OnEnrollmentStatusChanged(
+      EnrollmentStatus enrollment_status) = 0;
+
+  virtual void AddObserver(Observer* observer) = 0;
+  virtual void RemoveObserver(Observer* observer) = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(HostPairingController);

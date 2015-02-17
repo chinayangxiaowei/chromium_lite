@@ -50,6 +50,10 @@
 #include "ui/base/ui_base_paths.h"
 #include "ui/base/ui_base_switches.h"
 
+#ifdef V8_USE_EXTERNAL_STARTUP_DATA
+#include "gin/public/isolate_holder.h"
+#endif
+
 #if defined(OS_ANDROID)
 #include "content/public/common/content_descriptors.h"
 #endif
@@ -78,7 +82,6 @@
 
 #include "base/strings/string_number_conversions.h"
 #include "ui/base/win/atl_module.h"
-#include "ui/base/win/dpi_setup.h"
 #include "ui/gfx/win/dpi.h"
 #elif defined(OS_MACOSX)
 #include "base/mac/scoped_nsautorelease_pool.h"
@@ -125,8 +128,11 @@ extern int UtilityMain(const MainFunctionParams&);
 
 namespace content {
 
+#if !defined(CHROME_MULTIPLE_DLL_CHILD)
 base::LazyInstance<ContentBrowserClient>
     g_empty_content_browser_client = LAZY_INSTANCE_INITIALIZER;
+#endif  //  !CHROME_MULTIPLE_DLL_CHILD
+
 #if !defined(OS_IOS) && !defined(CHROME_MULTIPLE_DLL_BROWSER)
 base::LazyInstance<ContentPluginClient>
     g_empty_content_plugin_client = LAZY_INSTANCE_INITIALIZER;
@@ -242,12 +248,14 @@ class ContentClientInitializer {
   static void Set(const std::string& process_type,
                   ContentMainDelegate* delegate) {
     ContentClient* content_client = GetContentClient();
+#if !defined(CHROME_MULTIPLE_DLL_CHILD)
     if (process_type.empty()) {
       if (delegate)
         content_client->browser_ = delegate->CreateContentBrowserClient();
       if (!content_client->browser_)
         content_client->browser_ = &g_empty_content_browser_client.Get();
     }
+#endif  // !CHROME_MULTIPLE_DLL_CHILD
 
 #if !defined(OS_IOS) && !defined(CHROME_MULTIPLE_DLL_BROWSER)
     if (process_type == switches::kPluginProcess ||
@@ -349,7 +357,7 @@ int RunZygote(const MainFunctionParams& main_function_params,
 
 #if !defined(OS_IOS)
 static void RegisterMainThreadFactories() {
-#if !defined(CHROME_MULTIPLE_DLL_BROWSER)
+#if !defined(CHROME_MULTIPLE_DLL_BROWSER) && !defined(CHROME_MULTIPLE_DLL_CHILD)
   UtilityProcessHostImpl::RegisterUtilityMainThreadFactory(
       CreateInProcessUtilityThread);
   RenderProcessHostImpl::RegisterRendererMainThreadFactory(
@@ -366,7 +374,7 @@ static void RegisterMainThreadFactories() {
     LOG(FATAL) <<
         "--in-process-gpu is not supported in chrome multiple dll browser.";
   }
-#endif
+#endif  // !CHROME_MULTIPLE_DLL_BROWSER && !CHROME_MULTIPLE_DLL_CHILD
 }
 
 // Run the FooMain() for a given process type.
@@ -445,7 +453,7 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 #endif
   }
 
-  virtual ~ContentMainRunnerImpl() {
+  ~ContentMainRunnerImpl() override {
     if (is_initialized_ && !is_shutdown_)
       Shutdown();
   }
@@ -475,7 +483,7 @@ class ContentMainRunnerImpl : public ContentMainRunner {
   }
 #endif
 
-  virtual int Initialize(const ContentMainParams& params) OVERRIDE {
+  int Initialize(const ContentMainParams& params) override {
     ui_task_ = params.ui_task;
 
 #if defined(OS_WIN)
@@ -617,6 +625,21 @@ class ContentMainRunnerImpl : public ContentMainRunner {
     InitializeMojo();
 #endif
 
+#if defined(OS_WIN)
+    bool init_device_scale_factor = true;
+    if (command_line.HasSwitch(switches::kDeviceScaleFactor)) {
+      std::string scale_factor_string = command_line.GetSwitchValueASCII(
+          switches::kDeviceScaleFactor);
+      double scale_factor = 0;
+      if (base::StringToDouble(scale_factor_string, &scale_factor)) {
+        init_device_scale_factor = false;
+        gfx::InitDeviceScaleFactor(scale_factor);
+      }
+    }
+    if (init_device_scale_factor)
+      gfx::InitDeviceScaleFactor(gfx::GetDPIScale());
+#endif
+
     if (!GetContentClient())
       SetContentClient(&empty_content_client_);
     ContentClientInitializer::Set(process_type, delegate_);
@@ -661,21 +684,6 @@ class ContentMainRunnerImpl : public ContentMainRunner {
       MachBroker::ChildSendTaskPortToParent();
     }
 #elif defined(OS_WIN)
-    base::TimeTicks::SetNowIsHighResNowIfSupported();
-
-    bool init_device_scale_factor = true;
-    if (command_line.HasSwitch(switches::kDeviceScaleFactor)) {
-      std::string scale_factor_string = command_line.GetSwitchValueASCII(
-          switches::kDeviceScaleFactor);
-      double scale_factor = 0;
-      if (base::StringToDouble(scale_factor_string, &scale_factor)) {
-        init_device_scale_factor = false;
-        gfx::InitDeviceScaleFactor(scale_factor);
-      }
-    }
-    if (init_device_scale_factor)
-      ui::win::InitDeviceScaleFactor();
-
     SetupCRT(command_line);
 #endif
 
@@ -712,9 +720,26 @@ class ContentMainRunnerImpl : public ContentMainRunner {
       CHECK(base::i18n::InitializeICUWithFileDescriptor(icudata_fd));
     else
       CHECK(base::i18n::InitializeICU());
+
+#ifdef V8_USE_EXTERNAL_STARTUP_DATA
+    int v8_natives_fd = base::GlobalDescriptors::GetInstance()->MaybeGet(
+        kV8NativesDataDescriptor);
+    int v8_snapshot_fd = base::GlobalDescriptors::GetInstance()->MaybeGet(
+        kV8SnapshotDataDescriptor);
+    if (v8_natives_fd != -1 && v8_snapshot_fd != -1) {
+      CHECK(gin::IsolateHolder::LoadV8SnapshotFD(v8_natives_fd,
+                                                 v8_snapshot_fd));
+    } else {
+      CHECK(gin::IsolateHolder::LoadV8Snapshot());
+    }
+#endif // V8_USE_EXTERNAL_STARTUP_DATA
+
 #else
     CHECK(base::i18n::InitializeICU());
-#endif
+#ifdef V8_USE_EXTERNAL_STARTUP_DATA
+    CHECK(gin::IsolateHolder::LoadV8Snapshot());
+#endif // V8_USE_EXTERNAL_STARTUP_DATA
+#endif // OS_ANDROID
 
     InitializeStatsTable(command_line);
 
@@ -744,7 +769,7 @@ class ContentMainRunnerImpl : public ContentMainRunner {
     return -1;
   }
 
-  virtual int Run() OVERRIDE {
+  int Run() override {
     DCHECK(is_initialized_);
     DCHECK(!is_shutdown_);
     const base::CommandLine& command_line =
@@ -767,7 +792,7 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 #endif
   }
 
-  virtual void Shutdown() OVERRIDE {
+  void Shutdown() override {
     DCHECK(is_initialized_);
     DCHECK(!is_shutdown_);
 

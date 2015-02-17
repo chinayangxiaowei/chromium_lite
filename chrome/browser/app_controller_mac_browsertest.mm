@@ -9,37 +9,67 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-#include "apps/app_window_registry.h"
 #include "base/command_line.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/prefs/pref_service.h"
+#include "base/run_loop.h"
 #include "chrome/app/chrome_command_ids.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/apps/app_browsertest_util.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#import "chrome/browser/ui/cocoa/profiles/user_manager_mac.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "components/signin/core/common/profile_management_switches.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/test_navigation_observer.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/common/extension.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
 namespace {
 
 GURL g_open_shortcut_url = GURL::EmptyGURL();
+
+// Returns an Apple Event that instructs the application to open |url|.
+NSAppleEventDescriptor* AppleEventToOpenUrl(const GURL& url) {
+  NSAppleEventDescriptor* shortcut_event = [[[NSAppleEventDescriptor alloc]
+      initWithEventClass:kASAppleScriptSuite
+                 eventID:kASSubroutineEvent
+        targetDescriptor:nil
+                returnID:kAutoGenerateReturnID
+           transactionID:kAnyTransactionID] autorelease];
+  NSString* url_string = [NSString stringWithUTF8String:url.spec().c_str()];
+  [shortcut_event setParamDescriptor:[NSAppleEventDescriptor
+                                         descriptorWithString:url_string]
+                          forKeyword:keyDirectObject];
+  return shortcut_event;
+}
+
+// Instructs the NSApp's delegate to open |url|.
+void SendAppleEventToOpenUrlToAppController(const GURL& url) {
+  AppController* controller =
+      base::mac::ObjCCast<AppController>([NSApp delegate]);
+  Method get_url =
+      class_getInstanceMethod([controller class], @selector(getUrl:withReply:));
+
+  ASSERT_TRUE(get_url);
+
+  NSAppleEventDescriptor* shortcut_event = AppleEventToOpenUrl(url);
+
+  method_invoke(controller, get_url, shortcut_event, NULL);
+}
 
 }  // namespace
 
@@ -53,28 +83,7 @@ GURL g_open_shortcut_url = GURL::EmptyGURL();
   if (!g_open_shortcut_url.is_valid())
     return;
 
-  AppController* controller =
-      base::mac::ObjCCast<AppController>([NSApp delegate]);
-  Method getUrl = class_getInstanceMethod([controller class],
-      @selector(getUrl:withReply:));
-
-  if (getUrl == nil)
-    return;
-
-  base::scoped_nsobject<NSAppleEventDescriptor> shortcutEvent(
-      [[NSAppleEventDescriptor alloc]
-          initWithEventClass:kASAppleScriptSuite
-                     eventID:kASSubroutineEvent
-            targetDescriptor:nil
-                    returnID:kAutoGenerateReturnID
-               transactionID:kAnyTransactionID]);
-  NSString* url =
-      [NSString stringWithUTF8String:g_open_shortcut_url.spec().c_str()];
-  [shortcutEvent setParamDescriptor:
-      [NSAppleEventDescriptor descriptorWithString:url]
-                         forKeyword:keyDirectObject];
-
-  method_invoke(controller, getUrl, shortcutEvent.get(), NULL);
+  SendAppleEventToOpenUrlToAppController(g_open_shortcut_url);
 }
 
 @end
@@ -89,7 +98,7 @@ class AppControllerPlatformAppBrowserTest
                                 chrome::GetActiveDesktop())) {
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     PlatformAppBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kAppId,
                                     "1234");
@@ -124,7 +133,7 @@ IN_PROC_BROWSER_TEST_F(AppControllerPlatformAppBrowserTest,
       InstallAndLaunchPlatformApp("minimal");
   ASSERT_TRUE(listener.WaitUntilSatisfied());
 
-  NSWindow* app_window = apps::AppWindowRegistry::Get(profile())
+  NSWindow* app_window = extensions::AppWindowRegistry::Get(profile())
                              ->GetAppWindowsForApp(app->id())
                              .front()
                              ->GetNativeWindow();
@@ -145,7 +154,7 @@ class AppControllerWebAppBrowserTest : public InProcessBrowserTest {
                                 chrome::GetActiveDesktop())) {
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kApp, GetAppURL());
   }
 
@@ -206,7 +215,7 @@ class AppControllerNewProfileManagementBrowserTest
                                 chrome::GetActiveDesktop())) {
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     switches::EnableNewProfileManagementForTesting(command_line);
   }
 
@@ -222,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(AppControllerNewProfileManagementBrowserTest,
 
   EXPECT_FALSE(result);
   EXPECT_EQ(2u, active_browser_list_->size());
-  EXPECT_FALSE(UserManagerMac::IsShowing());
+  EXPECT_FALSE(UserManager::IsShowing());
 }
 
 // Test that for a locked last profile, a reopen event opens the User Manager.
@@ -248,8 +257,8 @@ IN_PROC_BROWSER_TEST_F(AppControllerNewProfileManagementBrowserTest,
 
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1u, active_browser_list_->size());
-  EXPECT_TRUE(UserManagerMac::IsShowing());
-  UserManagerMac::Hide();
+  EXPECT_TRUE(UserManager::IsShowing());
+  UserManager::Hide();
 }
 
 // Test that for a guest last profile, a reopen event opens the User Manager.
@@ -274,8 +283,38 @@ IN_PROC_BROWSER_TEST_F(AppControllerNewProfileManagementBrowserTest,
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(1u, active_browser_list_->size());
-  EXPECT_TRUE(UserManagerMac::IsShowing());
-  UserManagerMac::Hide();
+  EXPECT_TRUE(UserManager::IsShowing());
+  UserManager::Hide();
+}
+
+IN_PROC_BROWSER_TEST_F(AppControllerNewProfileManagementBrowserTest,
+                       AboutChromeForcesUserManager) {
+  base::scoped_nsobject<AppController> ac([[AppController alloc] init]);
+
+  // Create the guest profile, and set it as the last used profile so the
+  // app controller can use it on init.
+  CreateAndWaitForGuestProfile();
+  PrefService* local_state = g_browser_process->local_state();
+  local_state->SetString(prefs::kProfileLastUsed, chrome::kGuestProfileDir);
+
+  // Prohibiting guest mode forces the user manager flow for About Chrome.
+  local_state->SetBoolean(prefs::kBrowserGuestModeEnabled, false);
+
+  Profile* guest_profile = [ac lastProfile];
+  EXPECT_EQ(ProfileManager::GetGuestProfilePath(), guest_profile->GetPath());
+  EXPECT_TRUE(guest_profile->IsGuestSession());
+
+  // Tell the browser to open About Chrome.
+  EXPECT_EQ(1u, active_browser_list_->size());
+  [ac orderFrontStandardAboutPanel:NSApp];
+
+  base::RunLoop().RunUntilIdle();
+
+  // No new browser is opened; the User Manager opens instead.
+  EXPECT_EQ(1u, active_browser_list_->size());
+  EXPECT_TRUE(UserManager::IsShowing());
+
+  UserManager::Hide();
 }
 
 class AppControllerOpenShortcutBrowserTest : public InProcessBrowserTest {
@@ -283,7 +322,7 @@ class AppControllerOpenShortcutBrowserTest : public InProcessBrowserTest {
   AppControllerOpenShortcutBrowserTest() {
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     // In order to mimic opening shortcut during browser startup, we need to
     // send the event before -applicationDidFinishLaunching is called, but
     // after AppController is loaded.
@@ -315,7 +354,7 @@ class AppControllerOpenShortcutBrowserTest : public InProcessBrowserTest {
     g_open_shortcut_url = embedded_test_server()->GetURL("/simple.html");
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     // If the arg is empty, PrepareTestCommandLine() after this function will
     // append about:blank as default url.
     command_line->AppendArg(chrome::kChromeUINewTabURL);
@@ -328,6 +367,49 @@ IN_PROC_BROWSER_TEST_F(AppControllerOpenShortcutBrowserTest,
   EXPECT_EQ(g_open_shortcut_url,
       browser()->tab_strip_model()->GetActiveWebContents()
           ->GetLastCommittedURL());
+}
+
+class AppControllerReplaceNTPBrowserTest : public InProcessBrowserTest {
+ protected:
+  AppControllerReplaceNTPBrowserTest() {}
+
+  void SetUpInProcessBrowserTestFixture() override {
+    ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
+  }
+
+  void SetUpCommandLine(CommandLine* command_line) override {
+    // If the arg is empty, PrepareTestCommandLine() after this function will
+    // append about:blank as default url.
+    command_line->AppendArg(chrome::kChromeUINewTabURL);
+  }
+};
+
+// Tests that when a GURL is opened after startup, it replaces the NTP.
+IN_PROC_BROWSER_TEST_F(AppControllerReplaceNTPBrowserTest,
+                       ReplaceNTPAfterStartup) {
+  // Ensure that there is exactly 1 tab showing, and the tab is the NTP.
+  GURL ntp(chrome::kChromeUINewTabURL);
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(ntp,
+            browser()
+                ->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetLastCommittedURL());
+
+  GURL simple(embedded_test_server()->GetURL("/simple.html"));
+  SendAppleEventToOpenUrlToAppController(simple);
+
+  // Wait for one navigation on the active web contents.
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  content::TestNavigationObserver obs(
+      browser()->tab_strip_model()->GetActiveWebContents(), 1);
+  obs.Wait();
+
+  EXPECT_EQ(simple,
+            browser()
+                ->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetLastCommittedURL());
 }
 
 }  // namespace

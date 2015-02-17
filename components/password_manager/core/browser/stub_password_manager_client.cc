@@ -12,6 +12,10 @@ StubPasswordManagerClient::StubPasswordManagerClient() {}
 
 StubPasswordManagerClient::~StubPasswordManagerClient() {}
 
+std::string StubPasswordManagerClient::GetSyncUsername() const {
+  return std::string();
+}
+
 bool StubPasswordManagerClient::IsSyncAccountCredential(
     const std::string& username, const std::string& origin) const {
   return false;
@@ -22,14 +26,13 @@ bool StubPasswordManagerClient::ShouldFilterAutofillResult(
   return false;
 }
 
-void StubPasswordManagerClient::PromptUserToSavePassword(
-    scoped_ptr<PasswordFormManager> form_to_save) {}
+bool StubPasswordManagerClient::PromptUserToSavePassword(
+    scoped_ptr<PasswordFormManager> form_to_save) {
+  return false;
+}
 
 void StubPasswordManagerClient::AutomaticPasswordSave(
     scoped_ptr<PasswordFormManager> saved_manager) {}
-
-void StubPasswordManagerClient::AuthenticateAutofillAndFillForm(
-    scoped_ptr<autofill::PasswordFormFillData> fill_data) {}
 
 PrefService* StubPasswordManagerClient::GetPrefs() { return NULL; }
 

@@ -56,19 +56,30 @@ IPC_MESSAGE_CONTROL1(EmbeddedWorkerMsg_StopWorker,
 IPC_MESSAGE_CONTROL1(EmbeddedWorkerHostMsg_DidPauseAfterDownload,
                      int /* embedded_worker_id */)
 
+// Renderer -> Browser message to indicate that the worker is ready for
+// inspection.
+IPC_MESSAGE_CONTROL1(EmbeddedWorkerHostMsg_WorkerReadyForInspection,
+                     int /* embedded_worker_id */)
+
 // Renderer -> Browser message to indicate that the worker has loadedd the
 // script.
-IPC_MESSAGE_CONTROL1(EmbeddedWorkerHostMsg_WorkerScriptLoaded,
-                     int /* embedded_worker_id */)
+IPC_MESSAGE_CONTROL2(EmbeddedWorkerHostMsg_WorkerScriptLoaded,
+                     int /* embedded_worker_id */,
+                     int /* thread_id */)
 
 // Renderer -> Browser message to indicate that the worker has failed to load
 // the script.
 IPC_MESSAGE_CONTROL1(EmbeddedWorkerHostMsg_WorkerScriptLoadFailed,
                      int /* embedded_worker_id */)
 
+// Renderer -> Browser message to indicate that the worker has evaluated the
+// script.
+IPC_MESSAGE_CONTROL2(EmbeddedWorkerHostMsg_WorkerScriptEvaluated,
+                     int /* embedded_worker_id */,
+                     bool /* success */)
+
 // Renderer -> Browser message to indicate that the worker is started.
-IPC_MESSAGE_CONTROL2(EmbeddedWorkerHostMsg_WorkerStarted,
-                     int /* thread_id */,
+IPC_MESSAGE_CONTROL1(EmbeddedWorkerHostMsg_WorkerStarted,
                      int /* embedded_worker_id */)
 
 // Renderer -> Browser message to indicate that the worker is stopped.

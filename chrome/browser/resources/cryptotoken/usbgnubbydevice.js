@@ -77,8 +77,20 @@ UsbGnubbyDevice.prototype.destroy = function() {
   this.dev = null;
 
   chrome.usb.releaseInterface(dev, 0, function() {
+    if (chrome.runtime.lastError) {
+      console.warn(UTIL_fmt('Device ' + dev.handle +
+          ' couldn\'t be released:'));
+      console.warn(UTIL_fmt(chrome.runtime.lastError.message));
+      return;
+    }
     console.log(UTIL_fmt('Device ' + dev.handle + ' released'));
     chrome.usb.closeDevice(dev, function() {
+      if (chrome.runtime.lastError) {
+        console.warn(UTIL_fmt('Device ' + dev.handle +
+            ' couldn\'t be closed:'));
+        console.warn(UTIL_fmt(chrome.runtime.lastError.message));
+        return;
+      }
       console.log(UTIL_fmt('Device ' + dev.handle + ' closed'));
     });
   });
@@ -135,8 +147,8 @@ UsbGnubbyDevice.prototype.readOneReply_ = function() {
     if (!self.readyToUse_()) return;  // No point in continuing.
 
     if (chrome.runtime.lastError) {
-      console.warn(UTIL_fmt('lastError: ' + chrome.runtime.lastError));
-      console.log(chrome.runtime.lastError);
+      console.warn(UTIL_fmt('in bulkTransfer got lastError: '));
+      console.warn(UTIL_fmt(chrome.runtime.lastError.message));
       window.setTimeout(function() { self.destroy(); }, 0);
       return;
     }
@@ -232,8 +244,8 @@ UsbGnubbyDevice.prototype.writeOneRequest_ = function() {
     if (!self.readyToUse_()) return;  // No point in continuing.
 
     if (chrome.runtime.lastError) {
-      console.warn(UTIL_fmt('lastError: ' + chrome.runtime.lastError));
-      console.log(chrome.runtime.lastError);
+      console.warn(UTIL_fmt('out bulkTransfer lastError: '));
+      console.warn(UTIL_fmt(chrome.runtime.lastError.message));
       window.setTimeout(function() { self.destroy(); }, 0);
       return;
     }
@@ -276,8 +288,9 @@ UsbGnubbyDevice.prototype.checkLock_ = function(cid, cmd) {
     if (this.lockCID != cid) {
       // Some other channel has active lock.
 
-      if (cmd != GnubbyDevice.CMD_SYNC) {
-        // Anything but SYNC gets an immediate busy.
+      if (cmd != GnubbyDevice.CMD_SYNC &&
+          cmd != GnubbyDevice.CMD_INIT) {
+        // Anything but SYNC|INIT gets an immediate busy.
         var busy = new Uint8Array(
             [(cid >> 24) & 255,
              (cid >> 16) & 255,
@@ -292,8 +305,9 @@ UsbGnubbyDevice.prototype.checkLock_ = function(cid, cmd) {
         return false;
       }
 
-      // SYNC gets to go to the device to flush OS tx/rx queues.
-      // The usb firmware always responds to SYNC, regardless of lock status.
+      // SYNC|INIT get to go to the device to flush OS tx/rx queues.
+      // The usb firmware is to always respond to SYNC|INIT,
+      // regardless of lock status.
     }
   }
   return true;
@@ -439,7 +453,9 @@ var InterfaceDescriptor;
 UsbGnubbyDevice.open = function(gnubbies, which, dev, cb) {
   /** @param {chrome.usb.ConnectionHandle=} handle Connection handle */
   function deviceOpened(handle) {
-    if (!handle) {
+    if (chrome.runtime.lastError) {
+      console.warn(UTIL_fmt('openDevice got lastError:'));
+      console.warn(UTIL_fmt(chrome.runtime.lastError.message));
       console.warn(UTIL_fmt('failed to open device. permissions issue?'));
       cb(-GnubbyDevice.NODEVICE);
       return;

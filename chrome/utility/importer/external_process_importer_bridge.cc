@@ -5,6 +5,7 @@
 #include "chrome/utility/importer/external_process_importer_bridge.h"
 
 #include "base/bind.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -25,8 +26,9 @@ namespace {
 const int kNumBookmarksToSend = 100;
 const int kNumHistoryRowsToSend = 100;
 const int kNumFaviconsToSend = 100;
+const int kNumAutofillFormDataToSend = 100;
 
-}
+} // namespace
 
 ExternalProcessImporterBridge::ExternalProcessImporterBridge(
     const base::DictionaryValue& localized_strings,
@@ -139,6 +141,33 @@ void ExternalProcessImporterBridge::SetFirefoxSearchEnginesXMLData(
 void ExternalProcessImporterBridge::SetPasswordForm(
     const autofill::PasswordForm& form) {
   Send(new ProfileImportProcessHostMsg_NotifyPasswordFormReady(form));
+}
+
+void ExternalProcessImporterBridge::SetAutofillFormData(
+    const std::vector<ImporterAutofillFormDataEntry>& entries) {
+  Send(new ProfileImportProcessHostMsg_AutofillFormDataImportStart(
+      entries.size()));
+
+  // |autofill_form_data_entries_left| is required for the checks below as
+  // Windows has a Debug bounds-check which prevents pushing an iterator beyond
+  // its end() (i.e., |it + 2 < s.end()| crashes in debug mode if |i + 1 ==
+  // s.end()|).
+  int autofill_form_data_entries_left = entries.end() - entries.begin();
+  for (std::vector<ImporterAutofillFormDataEntry>::const_iterator it =
+           entries.begin();
+       it < entries.end();) {
+    std::vector<ImporterAutofillFormDataEntry> autofill_form_data_entry_group;
+    std::vector<ImporterAutofillFormDataEntry>::const_iterator end_group =
+        it +
+        std::min(autofill_form_data_entries_left, kNumAutofillFormDataToSend);
+    autofill_form_data_entry_group.assign(it, end_group);
+
+    Send(new ProfileImportProcessHostMsg_AutofillFormDataImportGroup(
+        autofill_form_data_entry_group));
+    autofill_form_data_entries_left -= end_group - it;
+    it = end_group;
+  }
+  DCHECK_EQ(0, autofill_form_data_entries_left);
 }
 
 void ExternalProcessImporterBridge::NotifyStarted() {

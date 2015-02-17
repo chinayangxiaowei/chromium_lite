@@ -37,8 +37,8 @@ class AdbClientSocketTest : public InProcessBrowserTest,
     content::RunMessageLoop();
   }
 
-  virtual void DeviceListChanged(
-      const DevToolsAndroidBridge::RemoteDevices& devices) OVERRIDE {
+  void DeviceListChanged(
+      const DevToolsAndroidBridge::RemoteDevices& devices) override {
     devices_ = devices;
     android_bridge_->RemoveDeviceListListener(this);
     base::MessageLoop::current()->Quit();
@@ -71,51 +71,58 @@ class AdbClientSocketTest : public InProcessBrowserTest,
 
     scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> chrome =
         FindBrowserByDisplayName(browsers, "Chrome");
-    ASSERT_TRUE(chrome);
+    ASSERT_TRUE(chrome.get());
 
     scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> chrome_beta =
         FindBrowserByDisplayName(browsers, "Chrome Beta");
-    ASSERT_TRUE(chrome_beta);
+    ASSERT_TRUE(chrome_beta.get());
 
     scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> chromium =
         FindBrowserByDisplayName(browsers, "Chromium");
-    ASSERT_FALSE(chromium);
+    ASSERT_FALSE(chromium.get());
 
     scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> webview =
         FindBrowserByDisplayName(browsers, "WebView in com.sample.feed");
-    ASSERT_TRUE(webview);
+    ASSERT_TRUE(webview.get());
 
     scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> noprocess =
         FindBrowserByDisplayName(browsers, "Noprocess");
-    ASSERT_TRUE(noprocess);
+    ASSERT_TRUE(noprocess.get());
 
     ASSERT_EQ("32.0.1679.0", chrome->version());
     ASSERT_EQ("31.0.1599.0", chrome_beta->version());
     ASSERT_EQ("4.0", webview->version());
 
-    std::vector<DevToolsAndroidBridge::RemotePage*> chrome_pages =
-        chrome->CreatePages();
-    std::vector<DevToolsAndroidBridge::RemotePage*> chrome_beta_pages =
-        chrome_beta->CreatePages();
-    std::vector<DevToolsAndroidBridge::RemotePage*> webview_pages =
-        webview->CreatePages();
+    DevToolsAndroidBridge::RemotePages chrome_pages =
+        chrome->pages();
+    DevToolsAndroidBridge::RemotePages chrome_beta_pages =
+        chrome_beta->pages();
+    DevToolsAndroidBridge::RemotePages webview_pages =
+        webview->pages();
 
     ASSERT_EQ(1U, chrome_pages.size());
-    ASSERT_EQ(0U, chrome_beta_pages.size());
+    ASSERT_EQ(1U, chrome_beta_pages.size());
     ASSERT_EQ(2U, webview_pages.size());
 
+    scoped_ptr<DevToolsTargetImpl> chrome_target(
+        android_bridge_->CreatePageTarget(chrome_pages[0]));
+    scoped_ptr<DevToolsTargetImpl> chrome_beta_target(
+        android_bridge_->CreatePageTarget(chrome_beta_pages[0]));
+    scoped_ptr<DevToolsTargetImpl> webview_target_0(
+        android_bridge_->CreatePageTarget(webview_pages[0]));
+    scoped_ptr<DevToolsTargetImpl> webview_target_1(
+        android_bridge_->CreatePageTarget(webview_pages[1]));
+
     // Check that we have non-empty description for webview pages.
-    ASSERT_EQ(0U, chrome_pages[0]->GetTarget()->GetDescription().size());
-    ASSERT_NE(0U, webview_pages[0]->GetTarget()->GetDescription().size());
-    ASSERT_NE(0U, webview_pages[1]->GetTarget()->GetDescription().size());
+    ASSERT_EQ(0U, chrome_target->GetDescription().size());
+    ASSERT_EQ(0U, chrome_beta_target->GetDescription().size());
+    ASSERT_NE(0U, webview_target_0->GetDescription().size());
+    ASSERT_NE(0U, webview_target_1->GetDescription().size());
 
     ASSERT_EQ(GURL("http://www.chromium.org/"),
-                   chrome_pages[0]->GetTarget()->GetURL());
+                   chrome_target->GetURL());
     ASSERT_EQ("The Chromium Projects",
-              chrome_pages[0]->GetTarget()->GetTitle());
-
-    STLDeleteElements(&chrome_pages);
-    STLDeleteElements(&webview_pages);
+              chrome_target->GetTitle());
   }
 
  private:

@@ -17,7 +17,7 @@ class CommandLinePrefStore : public ValueMapPrefStore {
   explicit CommandLinePrefStore(const base::CommandLine* command_line);
 
  protected:
-  virtual ~CommandLinePrefStore();
+  ~CommandLinePrefStore() override;
 
   // Logs a message and returns false if the proxy switches are
   // self-contradictory. Protected so it can be used in unit testing.
@@ -27,6 +27,11 @@ class CommandLinePrefStore : public ValueMapPrefStore {
   friend class TestCommandLinePrefStore;
 
   struct StringSwitchToPreferenceMapEntry {
+    const char* switch_name;
+    const char* preference_path;
+  };
+
+  struct PathSwitchToPreferenceMapEntry {
     const char* switch_name;
     const char* preference_path;
   };
@@ -63,6 +68,7 @@ class CommandLinePrefStore : public ValueMapPrefStore {
   // Mappings of command line switches to prefs.
   static const BooleanSwitchToPreferenceMapEntry boolean_switch_map_[];
   static const StringSwitchToPreferenceMapEntry string_switch_map_[];
+  static const PathSwitchToPreferenceMapEntry path_switch_map_[];
   static const IntegerSwitchToPreferenceMapEntry integer_switch_map_[];
 
   DISALLOW_COPY_AND_ASSIGN(CommandLinePrefStore);

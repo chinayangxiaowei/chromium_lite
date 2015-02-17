@@ -18,6 +18,7 @@ import threading
 import time
 import unittest
 import urllib2
+import shutil
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(1, os.path.join(_THIS_DIR, os.pardir))
@@ -53,8 +54,20 @@ _NEGATIVE_FILTER = [
 
 _VERSION_SPECIFIC_FILTER = {}
 _VERSION_SPECIFIC_FILTER['HEAD'] = [
-    # https://code.google.com/p/chromedriver/issues/detail?id=815
-    'ChromeDriverTest.testShouldHandleNewWindowLoadingProperly',
+    # https://code.google.com/p/chromedriver/issues/detail?id=913
+    'ChromeDriverTest.testChromeDriverReceiveAndSendLargeData',
+]
+_VERSION_SPECIFIC_FILTER['37'] = [
+    # https://code.google.com/p/chromedriver/issues/detail?id=954
+    'MobileEmulationCapabilityTest.testClickElement',
+    'MobileEmulationCapabilityTest.testHoverOverElement',
+    'MobileEmulationCapabilityTest.testSingleTapElement',
+]
+_VERSION_SPECIFIC_FILTER['36'] = [
+    # https://code.google.com/p/chromedriver/issues/detail?id=954
+    'MobileEmulationCapabilityTest.testClickElement',
+    'MobileEmulationCapabilityTest.testHoverOverElement',
+    'MobileEmulationCapabilityTest.testSingleTapElement',
 ]
 
 _OS_SPECIFIC_FILTER = {}
@@ -104,6 +117,7 @@ _ANDROID_NEGATIVE_FILTER['chrome'] = (
         'ChromeSwitchesCapabilityTest.*',
         'ChromeExtensionsCapabilityTest.*',
         'MobileEmulationCapabilityTest.*',
+        'ChromeDownloadDirTest.*',
         # https://crbug.com/274650
         'ChromeDriverTest.testCloseWindow',
         # https://code.google.com/p/chromedriver/issues/detail?id=270
@@ -120,6 +134,8 @@ _ANDROID_NEGATIVE_FILTER['chrome'] = (
         'PerfTest.testColdExecuteScript',
         # https://code.google.com/p/chromedriver/issues/detail?id=459
         'ChromeDriverTest.testShouldHandleNewWindowLoadingProperly',
+        # https://code.google.com/p/chromedriver/issues/detail?id=913
+        'ChromeDriverTest.testChromeDriverReceiveAndSendLargeData',
     ]
 )
 _ANDROID_NEGATIVE_FILTER['chrome_stable'] = (
@@ -135,7 +151,12 @@ _ANDROID_NEGATIVE_FILTER['chrome_shell'] = (
     ]
 )
 _ANDROID_NEGATIVE_FILTER['chromedriver_webview_shell'] = (
-    _ANDROID_NEGATIVE_FILTER['chrome_shell'])
+    _ANDROID_NEGATIVE_FILTER['chrome_shell'] + [
+        # https://code.google.com/p/chromedriver/issues/detail?id=913
+        'ChromeDriverTest.testChromeDriverSendLargeData',
+        'PerformanceLoggerTest.testPerformanceLogger',
+    ]
+)
 
 
 class ChromeDriverBaseTest(unittest.TestCase):
@@ -152,7 +173,7 @@ class ChromeDriverBaseTest(unittest.TestCase):
       except:
         pass
 
-  def CreateDriver(self, server_url=None, **kwargs):
+  def CreateDriver(self, server_url=None, download_dir=None, **kwargs):
     if server_url is None:
       server_url = _CHROMEDRIVER_SERVER_URL
 
@@ -170,6 +191,7 @@ class ChromeDriverBaseTest(unittest.TestCase):
                                        android_package=android_package,
                                        android_activity=android_activity,
                                        android_process=android_process,
+                                       download_dir=download_dir,
                                        **kwargs)
     self._drivers += [driver]
     return driver
@@ -223,8 +245,8 @@ class ChromeDriverTest(ChromeDriverBaseTest):
     Returns:
       Handle to a new window. None if timeout.
     """
-    timeout = time.time() + 20
-    while time.time() < timeout:
+    deadline = time.time() + 20
+    while time.time() < deadline:
       new_handles = self._driver.GetWindowHandles()
       if len(new_handles) > len(old_handles):
         for index, old_handle in enumerate(old_handles):
@@ -715,6 +737,16 @@ class ChromeDriverTest(ChromeDriverBaseTest):
   def testMobileEmulationDisabledByDefault(self):
     self.assertFalse(self._driver.capabilities['mobileEmulationEnabled'])
 
+  def testChromeDriverSendLargeData(self):
+    script = 's = ""; for (i = 0; i < 10e6; i++) s += "0"; return s;'
+    lots_of_data = self._driver.ExecuteScript(script)
+    self.assertEquals('0'.zfill(int(10e6)), lots_of_data)
+
+  def testChromeDriverReceiveAndSendLargeData(self):
+    lots_of_data = '1'.zfill(int(10e6))
+    result = self._driver.ExecuteScript('return "%s"' % lots_of_data)
+    self.assertEquals(lots_of_data, result)
+
 
 class ChromeDriverAndroidTest(ChromeDriverBaseTest):
   """End to end tests for Android-specific tests."""
@@ -750,6 +782,66 @@ class ChromeDriverAndroidTest(ChromeDriverBaseTest):
     self._drivers[0].Quit()
     self._drivers[0] = self.CreateDriver()
 
+class ChromeDownloadDirTest(ChromeDriverBaseTest):
+
+  def __init__(self, *args, **kwargs):
+    super(ChromeDownloadDirTest, self).__init__(*args, **kwargs)
+    self._temp_dirs = []
+
+  def CreateTempDir(self):
+    temp_dir = tempfile.mkdtemp()
+    self._temp_dirs.append(temp_dir)
+    return temp_dir
+
+  def tearDown(self):
+    # Call the superclass tearDown() method before deleting temp dirs, so that
+    # Chrome has a chance to exit before its user data dir is blown away from
+    # underneath it.
+    super(ChromeDownloadDirTest, self).tearDown()
+    for temp_dir in self._temp_dirs:
+      shutil.rmtree(temp_dir)
+
+  def testFileDownload(self):
+    download_dir = self.CreateTempDir()
+    download_name = os.path.join(download_dir, 'a_red_dot.png')
+    driver = self.CreateDriver(download_dir=download_dir)
+    driver.Load(ChromeDriverTest.GetHttpUrlForFile(
+        '/chromedriver/download.html'))
+    driver.FindElement('id', 'red-dot').Click()
+    deadline = time.time() + 60
+    while True:
+      time.sleep(0.1)
+      if os.path.isfile(download_name) or time.time() > deadline:
+        break
+    self.assertTrue(os.path.isfile(download_name), "Failed to download file!")
+
+  def testDownloadDirectoryOverridesExistingPreferences(self):
+    user_data_dir = self.CreateTempDir()
+    download_dir = self.CreateTempDir()
+    sub_dir = os.path.join(user_data_dir, 'Default')
+    os.mkdir(sub_dir)
+    prefs_file_path = os.path.join(sub_dir, 'Preferences')
+
+    prefs = {
+      'test': 'this should not be changed',
+      'download': {
+        'default_directory': '/old/download/directory'
+      }
+    }
+
+    with open(prefs_file_path, 'w') as f:
+      json.dump(prefs, f)
+
+    driver = self.CreateDriver(
+        chrome_switches=['user-data-dir=' + user_data_dir],
+        download_dir=download_dir)
+
+    with open(prefs_file_path) as f:
+      prefs = json.load(f)
+
+    self.assertEqual('this should not be changed', prefs['test'])
+    download = prefs['download']
+    self.assertEqual(download['default_directory'], download_dir)
 
 class ChromeSwitchesCapabilityTest(ChromeDriverBaseTest):
   """Tests that chromedriver properly processes chromeOptions.args capabilities.
@@ -832,24 +924,57 @@ class MobileEmulationCapabilityTest(ChromeDriverBaseTest):
   @staticmethod
   def GlobalSetUp():
     def respondWithUserAgentString(request):
-      return request.GetHeader('User-Agent')
+      return """
+        <html>
+        <body>%s</body>
+        </html>""" % request.GetHeader('User-Agent')
+
+    def respondWithUserAgentStringUseDeviceWidth(request):
+      return """
+        <html>
+        <head>
+        <meta name="viewport" content="width=device-width,minimum-scale=1.0">
+        </head>
+        <body>%s</body>
+        </html>""" % request.GetHeader('User-Agent')
 
     MobileEmulationCapabilityTest._http_server = webserver.WebServer(
         chrome_paths.GetTestData())
     MobileEmulationCapabilityTest._http_server.SetCallbackForPath(
         '/userAgent', respondWithUserAgentString)
+    MobileEmulationCapabilityTest._http_server.SetCallbackForPath(
+        '/userAgentUseDeviceWidth', respondWithUserAgentStringUseDeviceWidth)
 
   @staticmethod
   def GlobalTearDown():
     MobileEmulationCapabilityTest._http_server.Shutdown()
 
-  def testDeviceMetrics(self):
+  def testDeviceMetricsWithStandardWidth(self):
     driver = self.CreateDriver(
         mobile_emulation = {
-            'deviceMetrics': {'width': 360, 'height': 640, 'pixelRatio': 3}})
+            'deviceMetrics': {'width': 360, 'height': 640, 'pixelRatio': 3},
+            'userAgent': 'Mozilla/5.0 (Linux; Android 4.2.1; en-us; Nexus 5 Bui'
+                         'ld/JOP40D) AppleWebKit/535.19 (KHTML, like Gecko) Chr'
+                         'ome/18.0.1025.166 Mobile Safari/535.19'
+            })
+    driver.SetWindowSize(600, 400)
+    driver.Load(self._http_server.GetUrl() + '/userAgent')
     self.assertTrue(driver.capabilities['mobileEmulationEnabled'])
-    self.assertEqual(360, driver.ExecuteScript('return window.innerWidth'))
-    self.assertEqual(640, driver.ExecuteScript('return window.innerHeight'))
+    self.assertEqual(360, driver.ExecuteScript('return window.screen.width'))
+    self.assertEqual(640, driver.ExecuteScript('return window.screen.height'))
+
+  def testDeviceMetricsWithDeviceWidth(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {
+            'deviceMetrics': {'width': 360, 'height': 640, 'pixelRatio': 3},
+            'userAgent': 'Mozilla/5.0 (Linux; Android 4.2.1; en-us; Nexus 5 Bui'
+                         'ld/JOP40D) AppleWebKit/535.19 (KHTML, like Gecko) Chr'
+                         'ome/18.0.1025.166 Mobile Safari/535.19'
+            })
+    driver.Load(self._http_server.GetUrl() + '/userAgentUseDeviceWidth')
+    self.assertTrue(driver.capabilities['mobileEmulationEnabled'])
+    self.assertEqual(360, driver.ExecuteScript('return window.screen.width'))
+    self.assertEqual(640, driver.ExecuteScript('return window.screen.height'))
 
   def testUserAgent(self):
     driver = self.CreateDriver(
@@ -861,15 +986,87 @@ class MobileEmulationCapabilityTest(ChromeDriverBaseTest):
   def testDeviceName(self):
     driver = self.CreateDriver(
         mobile_emulation = {'deviceName': 'Google Nexus 5'})
-    driver.Load(self._http_server.GetUrl() + '/userAgent')
-    self.assertEqual(360, driver.ExecuteScript('return window.innerWidth'))
-    self.assertEqual(640, driver.ExecuteScript('return window.innerHeight'))
+    driver.Load(self._http_server.GetUrl() + '/userAgentUseDeviceWidth')
+    self.assertEqual(360, driver.ExecuteScript('return window.screen.width'))
+    self.assertEqual(640, driver.ExecuteScript('return window.screen.height'))
     body_tag = driver.FindElement('tag name', 'body')
     self.assertEqual(
         'Mozilla/5.0 (Linux; Android 4.2.1; en-us; Nexus 5 Build/JOP40D) AppleW'
         'ebKit/535.19 (KHTML, like Gecko) Chrome/18.0.1025.166 Mobile Safari/53'
         '5.19',
         body_tag.GetText())
+
+  def testSendKeysToElement(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {'deviceName': 'Google Nexus 5'})
+    text = driver.ExecuteScript(
+        'document.body.innerHTML = \'<input type="text">\';'
+        'var input = document.getElementsByTagName("input")[0];'
+        'input.addEventListener("change", function() {'
+        '  document.body.appendChild(document.createElement("br"));'
+        '});'
+        'return input;')
+    text.SendKeys('0123456789+-*/ Hi')
+    text.SendKeys(', there!')
+    value = driver.ExecuteScript('return arguments[0].value;', text)
+    self.assertEquals('0123456789+-*/ Hi, there!', value)
+
+  def testHoverOverElement(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {'deviceName': 'Google Nexus 5'})
+    driver.Load('about:blank')
+    div = driver.ExecuteScript(
+        'document.body.innerHTML = "<div>old</div>";'
+        'var div = document.getElementsByTagName("div")[0];'
+        'div.addEventListener("mouseover", function() {'
+        '  document.body.appendChild(document.createElement("br"));'
+        '});'
+        'return div;')
+    div.HoverOver()
+    self.assertEquals(1, len(driver.FindElements('tag name', 'br')))
+
+  def testClickElement(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {'deviceName': 'Google Nexus 5'})
+    driver.Load('about:blank')
+    div = driver.ExecuteScript(
+        'document.body.innerHTML = "<div>old</div>";'
+        'var div = document.getElementsByTagName("div")[0];'
+        'div.addEventListener("click", function() {'
+        '  div.innerHTML="new<br>";'
+        '});'
+        'return div;')
+    div.Click()
+    self.assertEquals(1, len(driver.FindElements('tag name', 'br')))
+
+  def testSingleTapElement(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {'deviceName': 'Google Nexus 5'})
+    driver.Load('about:blank')
+    div = driver.ExecuteScript(
+        'document.body.innerHTML = "<div>old</div>";'
+        'var div = document.getElementsByTagName("div")[0];'
+        'div.addEventListener("touchend", function() {'
+        '  div.innerHTML="new<br>";'
+        '});'
+        'return div;')
+    div.SingleTap()
+    self.assertEquals(1, len(driver.FindElements('tag name', 'br')))
+
+  def testTouchDownUpElement(self):
+    driver = self.CreateDriver(
+        mobile_emulation = {'deviceName': 'Google Nexus 5'})
+    div = driver.ExecuteScript(
+        'document.body.innerHTML = "<div>old</div>";'
+        'var div = document.getElementsByTagName("div")[0];'
+        'div.addEventListener("touchend", function() {'
+        '  div.innerHTML="new<br>";'
+        '});'
+        'return div;')
+    loc = div.GetLocation()
+    driver.TouchDown(loc['x'], loc['y'])
+    driver.TouchUp(loc['x'], loc['y'])
+    self.assertEquals(1, len(driver.FindElements('tag name', 'br')))
 
 
 class ChromeDriverLogTest(unittest.TestCase):
@@ -893,6 +1090,45 @@ class ChromeDriverLogTest(unittest.TestCase):
       chromedriver_server.Kill()
     with open(tmp_log_path, 'r') as f:
       self.assertTrue(self.LOG_MESSAGE in f.read())
+
+
+class PerformanceLoggerTest(ChromeDriverBaseTest):
+  """Tests chromedriver tracing support and Inspector event collection."""
+
+  def testPerformanceLogger(self):
+    driver = self.CreateDriver(
+        experimental_options={'perfLoggingPrefs': {
+            'enableTimeline': True,
+            'traceCategories': 'webkit.console,blink.console'
+          }}, performance_log_level='ALL')
+    driver.Load(
+        ChromeDriverTest._http_server.GetUrl() + '/chromedriver/empty.html')
+    # Mark the timeline; later we will verify the marks appear in the trace.
+    driver.ExecuteScript('console.time("foobar")')
+    driver.ExecuteScript('console.timeEnd("foobar")')
+    logs = driver.GetLog('performance')
+    driver.Quit()
+
+    marked_timeline_events = []
+    seen_log_domains = {}
+    for entry in logs:
+      devtools_message = json.loads(entry['message'])['message']
+      method = devtools_message['method']
+      domain = method[:method.find('.')]
+      seen_log_domains[domain] = True
+      if method != 'Tracing.dataCollected':
+        continue
+      self.assertTrue('params' in devtools_message)
+      self.assertTrue(isinstance(devtools_message['params'], dict))
+      cat = devtools_message['params'].get('cat', '')
+      # Depending on Chrome version, the events may occur for the webkit.console
+      # or blink.console category. They will only occur for one of them.
+      if (cat == 'blink.console' or cat == 'webkit.console'):
+        self.assertTrue(devtools_message['params']['name'] == 'foobar')
+        marked_timeline_events.append(devtools_message)
+    self.assertEquals(2, len(marked_timeline_events))
+    self.assertEquals({'Network', 'Page', 'Timeline', 'Tracing'},
+                      set(seen_log_domains.keys()))
 
 
 class SessionHandlingTest(ChromeDriverBaseTest):

@@ -8,8 +8,6 @@
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "grit/ui_resources.h"
-#include "grit/ui_strings.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/layout.h"
 #include "ui/gfx/canvas.h"
@@ -27,6 +25,8 @@
 #include "ui/message_center/views/padded_button.h"
 #include "ui/message_center/views/proportional_image_view.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/resources/grit/ui_resources.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
@@ -112,10 +112,10 @@ bool HasAlpha(gfx::ImageSkia& image, views::Widget* widget) {
 class ItemView : public views::View {
  public:
   ItemView(const message_center::NotificationItem& item);
-  virtual ~ItemView();
+  ~ItemView() override;
 
   // Overridden from views::View:
-  virtual void SetVisible(bool visible) OVERRIDE;
+  void SetVisible(bool visible) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ItemView);
@@ -190,12 +190,12 @@ views::View* MakeNotificationImage(const gfx::Image& image, gfx::Size size) {
 class NotificationProgressBar : public views::ProgressBar {
  public:
   NotificationProgressBar();
-  virtual ~NotificationProgressBar();
+  ~NotificationProgressBar() override;
 
  private:
   // Overriden from View
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  gfx::Size GetPreferredSize() const override;
+  void OnPaint(gfx::Canvas* canvas) override;
 
   DISALLOW_COPY_AND_ASSIGN(NotificationProgressBar);
 };

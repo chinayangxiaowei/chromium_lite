@@ -11,6 +11,7 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/user_info_fetcher.h"
@@ -36,7 +37,7 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   CloudPolicyClientRegistrationHelper(
       CloudPolicyClient* client,
       enterprise_management::DeviceRegisterRequest::Type registration_type);
-  virtual ~CloudPolicyClientRegistrationHelper();
+  ~CloudPolicyClientRegistrationHelper() override;
 
   // Starts the client registration process. This version uses the
   // supplied OAuth2TokenService to mint the new token for the userinfo
@@ -73,15 +74,13 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   void OnTokenFetched(const std::string& oauth_access_token);
 
   // UserInfoFetcher::Delegate implementation:
-  virtual void OnGetUserInfoSuccess(
-      const base::DictionaryValue* response) OVERRIDE;
-  virtual void OnGetUserInfoFailure(
-      const GoogleServiceAuthError& error) OVERRIDE;
+  void OnGetUserInfoSuccess(const base::DictionaryValue* response) override;
+  void OnGetUserInfoFailure(const GoogleServiceAuthError& error) override;
 
   // CloudPolicyClient::Observer implementation:
-  virtual void OnPolicyFetched(CloudPolicyClient* client) OVERRIDE;
-  virtual void OnRegistrationStateChanged(CloudPolicyClient* client) OVERRIDE;
-  virtual void OnClientError(CloudPolicyClient* client) OVERRIDE;
+  void OnPolicyFetched(CloudPolicyClient* client) override;
+  void OnRegistrationStateChanged(CloudPolicyClient* client) override;
+  void OnClientError(CloudPolicyClient* client) override;
 
   // Invoked when the registration request has been completed.
   void RequestCompleted();
@@ -107,7 +106,7 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   // GAIA to get information about the signed in user.
   std::string oauth_access_token_;
 
-  net::URLRequestContextGetter* context_;
+  scoped_refptr<net::URLRequestContextGetter> context_;
   CloudPolicyClient* client_;
   enterprise_management::DeviceRegisterRequest::Type registration_type_;
   base::Closure callback_;

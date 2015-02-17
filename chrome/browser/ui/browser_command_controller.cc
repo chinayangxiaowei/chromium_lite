@@ -11,9 +11,11 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/shell_integration.h"
@@ -134,7 +136,7 @@ class SwitchToMetroUIHandler
 
  private:
   virtual void SetDefaultWebClientUIState(
-      ShellIntegration::DefaultWebClientUIState state) OVERRIDE {
+      ShellIntegration::DefaultWebClientUIState state) override {
     switch (state) {
       case ShellIntegration::STATE_PROCESSING:
         return;
@@ -155,7 +157,7 @@ class SwitchToMetroUIHandler
     delete this;
   }
 
-  virtual void OnSetAsDefaultConcluded(bool success)  OVERRIDE {
+  virtual void OnSetAsDefaultConcluded(bool success)  override {
     if (!success) {
       delete this;
       return;
@@ -164,7 +166,7 @@ class SwitchToMetroUIHandler
     default_browser_worker_->StartCheckIsDefault();
   }
 
-  virtual bool IsInteractiveSetDefaultPermitted() OVERRIDE {
+  virtual bool IsInteractiveSetDefaultPermitted() override {
     return true;
   }
 
@@ -205,11 +207,11 @@ BrowserCommandController::BrowserCommandController(Browser* browser)
       base::Bind(&BrowserCommandController::UpdateCommandsForDevTools,
                  base::Unretained(this)));
   profile_pref_registrar_.Add(
-      prefs::kEditBookmarksEnabled,
+      bookmarks::prefs::kEditBookmarksEnabled,
       base::Bind(&BrowserCommandController::UpdateCommandsForBookmarkEditing,
                  base::Unretained(this)));
   profile_pref_registrar_.Add(
-      prefs::kShowBookmarkBar,
+      bookmarks::prefs::kShowBookmarkBar,
       base::Bind(&BrowserCommandController::UpdateCommandsForBookmarkBar,
                  base::Unretained(this)));
   profile_pref_registrar_.Add(
@@ -460,12 +462,6 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
 #endif
       break;
 
-#if defined(USE_ASH)
-    case IDC_TOGGLE_ASH_DESKTOP:
-      chrome::ToggleAshDesktop();
-      break;
-#endif
-
 #if defined(OS_CHROMEOS)
     case IDC_VISIT_DESKTOP_OF_LRU_USER_2:
     case IDC_VISIT_DESKTOP_OF_LRU_USER_3:
@@ -490,20 +486,32 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_METRO_SNAP_DISABLE:
       browser_->SetMetroSnapMode(false);
       break;
-    case IDC_WIN8_DESKTOP_RESTART:
-      if (!VerifyMetroSwitchForApps(window()->GetNativeWindow(), id))
+    case IDC_WIN_DESKTOP_RESTART:
+      if (!VerifyASHSwitchForApps(window()->GetNativeWindow(), id))
         break;
 
       chrome::AttemptRestartToDesktopMode();
-      content::RecordAction(base::UserMetricsAction("Win8DesktopRestart"));
+      if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+        content::RecordAction(base::UserMetricsAction("Win8DesktopRestart"));
+      } else {
+        content::RecordAction(base::UserMetricsAction("Win7DesktopRestart"));
+      }
       break;
     case IDC_WIN8_METRO_RESTART:
-      if (!VerifyMetroSwitchForApps(window()->GetNativeWindow(), id))
+    case IDC_WIN_CHROMEOS_RESTART:
+      if (!VerifyASHSwitchForApps(window()->GetNativeWindow(), id))
         break;
-
-      // SwitchToMetroUIHandler deletes itself.
-      new SwitchToMetroUIHandler;
-      content::RecordAction(base::UserMetricsAction("Win8MetroRestart"));
+      if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+        // SwitchToMetroUIHandler deletes itself.
+        new SwitchToMetroUIHandler;
+        content::RecordAction(base::UserMetricsAction("Win8MetroRestart"));
+      } else {
+        content::RecordAction(base::UserMetricsAction("Win7ASHRestart"));
+        chrome::AttemptRestartToMetroMode();
+      }
+      break;
+    case IDC_PIN_TO_START_SCREEN:
+      TogglePagePinnedToStartScreen(browser_);
       break;
 #endif
 
@@ -523,9 +531,6 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_BOOKMARK_PAGE:
       BookmarkCurrentPage(browser_);
       break;
-    case IDC_PIN_TO_START_SCREEN:
-      TogglePagePinnedToStartScreen(browser_);
-      break;
     case IDC_BOOKMARK_ALL_TABS:
       BookmarkAllTabs(browser_);
       break;
@@ -538,13 +543,12 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_PRINT:
       Print(browser_);
       break;
-    case IDC_ADVANCED_PRINT:
+#if defined(ENABLE_BASIC_PRINTING)
+    case IDC_BASIC_PRINT:
       content::RecordAction(base::UserMetricsAction("Accel_Advanced_Print"));
-      AdvancedPrint(browser_);
+      BasicPrint(browser_);
       break;
-    case IDC_PRINT_TO_DESTINATION:
-      PrintToDestination(browser_);
-      break;
+#endif  // ENABLE_BASIC_PRINTING
     case IDC_TRANSLATE_PAGE:
       Translate(browser_);
       break;
@@ -558,7 +562,6 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
       break;
     case IDC_ENCODING_UTF8:
     case IDC_ENCODING_UTF16LE:
-    case IDC_ENCODING_ISO88591:
     case IDC_ENCODING_WINDOWS1252:
     case IDC_ENCODING_GBK:
     case IDC_ENCODING_GB18030:
@@ -766,6 +769,11 @@ void BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_DISTILL_PAGE:
       DistillCurrentPage(browser_);
       break;
+#if defined(OS_CHROMEOS)
+    case IDC_TOUCH_HUD_PROJECTION_TOGGLE:
+      ash::accelerators::ToggleTouchHudProjection();
+      break;
+#endif
 
     default:
       LOG(WARNING) << "Received Unimplemented Command: " << id;
@@ -841,13 +849,11 @@ class BrowserCommandController::InterstitialObserver
         controller_(controller) {
   }
 
-  using content::WebContentsObserver::web_contents;
-
-  virtual void DidAttachInterstitialPage() OVERRIDE {
+  void DidAttachInterstitialPage() override {
     controller_->UpdateCommandsForTabState();
   }
 
-  virtual void DidDetachInterstitialPage() OVERRIDE {
+  void DidDetachInterstitialPage() override {
     controller_->UpdateCommandsForTabState();
   }
 
@@ -885,11 +891,6 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_EXIT, true);
 #endif
   command_updater_.UpdateCommandEnabled(IDC_DEBUG_FRAME_TOGGLE, true);
-#if defined(OS_WIN) && defined(USE_ASH) && !defined(NDEBUG)
-  if (base::win::GetVersion() < base::win::VERSION_WIN8 &&
-      chrome::HOST_DESKTOP_TYPE_NATIVE != chrome::HOST_DESKTOP_TYPE_ASH)
-    command_updater_.UpdateCommandEnabled(IDC_TOGGLE_ASH_DESKTOP, true);
-#endif
 #if defined(USE_ASH)
   command_updater_.UpdateCommandEnabled(IDC_MINIMIZE_WINDOW, true);
 #endif
@@ -907,7 +908,6 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_AUTO_DETECT, true);
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_UTF8, true);
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_UTF16LE, true);
-  command_updater_.UpdateCommandEnabled(IDC_ENCODING_ISO88591, true);
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_WINDOWS1252, true);
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_GBK, true);
   command_updater_.UpdateCommandEnabled(IDC_ENCODING_GB18030, true);
@@ -968,6 +968,7 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_CLEAR_BROWSING_DATA, normal_window);
 #if defined(OS_CHROMEOS)
   command_updater_.UpdateCommandEnabled(IDC_TAKE_SCREENSHOT, true);
+  command_updater_.UpdateCommandEnabled(IDC_TOUCH_HUD_PROJECTION_TOGGLE, true);
 #else
   // Chrome OS uses the system tray menu to handle multi-profiles.
   if (normal_window && (guest_session || !profile()->IsOffTheRecord()))
@@ -979,8 +980,7 @@ void BrowserCommandController::InitCommandState() {
   // Navigation commands
   command_updater_.UpdateCommandEnabled(
       IDC_HOME,
-      normal_window || (CommandLine::ForCurrentProcess()->HasSwitch(
-                            switches::kEnableStreamlinedHostedApps) &&
+      normal_window || (extensions::util::IsStreamlinedHostedAppsEnabled() &&
                         browser_->is_app()));
 
   // Window management commands
@@ -1002,7 +1002,9 @@ void BrowserCommandController::InitCommandState() {
   bool metro = browser_->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH;
   command_updater_.UpdateCommandEnabled(IDC_METRO_SNAP_ENABLE, metro);
   command_updater_.UpdateCommandEnabled(IDC_METRO_SNAP_DISABLE, metro);
-  int restart_mode = metro ? IDC_WIN8_DESKTOP_RESTART : IDC_WIN8_METRO_RESTART;
+  int restart_mode = metro ? IDC_WIN_DESKTOP_RESTART :
+      (base::win::GetVersion() >= base::win::VERSION_WIN8 ?
+          IDC_WIN8_METRO_RESTART : IDC_WIN_CHROMEOS_RESTART);
   command_updater_.UpdateCommandEnabled(restart_mode, normal_window);
 #endif
 
@@ -1030,6 +1032,8 @@ void BrowserCommandController::InitCommandState() {
 void BrowserCommandController::UpdateSharedCommandsForIncognitoAvailability(
     CommandUpdater* command_updater,
     Profile* profile) {
+  const bool guest_session = profile->IsGuestSession();
+  // TODO(mlerman): Make GetAvailability account for profile->IsGuestSession().
   IncognitoModePrefs::Availability incognito_availability =
       IncognitoModePrefs::GetAvailability(profile->GetPrefs());
   command_updater->UpdateCommandEnabled(
@@ -1037,9 +1041,8 @@ void BrowserCommandController::UpdateSharedCommandsForIncognitoAvailability(
       incognito_availability != IncognitoModePrefs::FORCED);
   command_updater->UpdateCommandEnabled(
       IDC_NEW_INCOGNITO_WINDOW,
-      incognito_availability != IncognitoModePrefs::DISABLED);
+      incognito_availability != IncognitoModePrefs::DISABLED && !guest_session);
 
-  const bool guest_session = profile->IsGuestSession();
   const bool forced_incognito =
       incognito_availability == IncognitoModePrefs::FORCED ||
       guest_session;  // Guest always runs in Incognito mode.
@@ -1173,16 +1176,18 @@ void BrowserCommandController::UpdateCommandsForBookmarkEditing() {
                                         CanBookmarkCurrentPage(browser_));
   command_updater_.UpdateCommandEnabled(IDC_BOOKMARK_ALL_TABS,
                                         CanBookmarkAllTabs(browser_));
-  command_updater_.UpdateCommandEnabled(IDC_PIN_TO_START_SCREEN,
-                                        true);
+#if defined(OS_WIN)
+  command_updater_.UpdateCommandEnabled(IDC_PIN_TO_START_SCREEN, true);
+#endif
 }
 
 void BrowserCommandController::UpdateCommandsForBookmarkBar() {
-  command_updater_.UpdateCommandEnabled(IDC_SHOW_BOOKMARK_BAR,
-      browser_defaults::bookmarks_enabled &&
-      !profile()->IsGuestSession() &&
-      !profile()->GetPrefs()->IsManagedPreference(prefs::kShowBookmarkBar) &&
-      IsShowingMainUI());
+  command_updater_.UpdateCommandEnabled(
+      IDC_SHOW_BOOKMARK_BAR,
+      browser_defaults::bookmarks_enabled && !profile()->IsGuestSession() &&
+          !profile()->GetPrefs()->IsManagedPreference(
+              bookmarks::prefs::kShowBookmarkBar) &&
+          IsShowingMainUI());
 }
 
 void BrowserCommandController::UpdateCommandsForFileSelectionDialogs() {
@@ -1272,21 +1277,10 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
 void BrowserCommandController::UpdatePrintingState() {
   bool print_enabled = CanPrint(browser_);
   command_updater_.UpdateCommandEnabled(IDC_PRINT, print_enabled);
-  command_updater_.UpdateCommandEnabled(IDC_ADVANCED_PRINT,
-                                        CanAdvancedPrint(browser_));
-  command_updater_.UpdateCommandEnabled(IDC_PRINT_TO_DESTINATION,
-                                        print_enabled);
-#if defined(OS_WIN)
-  HMODULE metro_module = base::win::GetMetroModule();
-  if (metro_module != NULL) {
-    typedef void (*MetroEnablePrinting)(BOOL);
-    MetroEnablePrinting metro_enable_printing =
-        reinterpret_cast<MetroEnablePrinting>(
-            ::GetProcAddress(metro_module, "MetroEnablePrinting"));
-    if (metro_enable_printing)
-      metro_enable_printing(print_enabled);
-  }
-#endif
+#if defined(ENABLE_BASIC_PRINTING)
+  command_updater_.UpdateCommandEnabled(IDC_BASIC_PRINT,
+                                        CanBasicPrint(browser_));
+#endif  // ENABLE_BASIC_PRINTING
 }
 
 void BrowserCommandController::UpdateSaveAsState() {

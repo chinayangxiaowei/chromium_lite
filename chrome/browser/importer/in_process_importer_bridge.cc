@@ -5,13 +5,15 @@
 #include "chrome/browser/importer/in_process_importer_bridge.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/importer/external_process_importer_host.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
 #include "chrome/common/importer/imported_bookmark_entry.h"
 #include "chrome/common/importer/imported_favicon_usage.h"
+#include "chrome/common/importer/importer_autofill_form_data_entry.h"
+#include "components/autofill/core/browser/webdata/autofill_entry.h"
 #include "components/autofill/core/common/password_form.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_parser.h"
@@ -71,11 +73,11 @@ namespace {
 class FirefoxURLParameterFilter : public TemplateURLParser::ParameterFilter {
  public:
   FirefoxURLParameterFilter() {}
-  virtual ~FirefoxURLParameterFilter() {}
+  ~FirefoxURLParameterFilter() override {}
 
   // TemplateURLParser::ParameterFilter method.
-  virtual bool KeepParameter(const std::string& key,
-                             const std::string& value) OVERRIDE {
+  bool KeepParameter(const std::string& key,
+                     const std::string& value) override {
     std::string low_value = base::StringToLowerASCII(value);
     if (low_value.find("mozilla") != std::string::npos ||
         low_value.find("firefox") != std::string::npos ||
@@ -252,6 +254,23 @@ void InProcessImporterBridge::SetPasswordForm(
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&ProfileWriter::AddPasswordForm, writer_, form));
+}
+
+void InProcessImporterBridge::SetAutofillFormData(
+    const std::vector<ImporterAutofillFormDataEntry>& entries) {
+  std::vector<autofill::AutofillEntry> autofill_entries;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    autofill_entries.push_back(autofill::AutofillEntry(
+        autofill::AutofillKey(entries[i].name, entries[i].value),
+        entries[i].first_used,
+        entries[i].last_used));
+  }
+
+  BrowserThread::PostTask(BrowserThread::UI,
+                          FROM_HERE,
+                          base::Bind(&ProfileWriter::AddAutofillFormDataEntries,
+                                     writer_,
+                                     autofill_entries));
 }
 
 void InProcessImporterBridge::NotifyStarted() {

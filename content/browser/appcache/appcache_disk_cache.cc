@@ -8,6 +8,7 @@
 #include "base/bind_helpers.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "net/base/cache_type.h"
@@ -58,8 +59,11 @@ class AppCacheDiskCache::EntryImpl : public Entry {
   }
 
   // Entry implementation.
-  virtual int Read(int index, int64 offset, net::IOBuffer* buf, int buf_len,
-                   const net::CompletionCallback& callback) OVERRIDE {
+  int Read(int index,
+           int64 offset,
+           net::IOBuffer* buf,
+           int buf_len,
+           const net::CompletionCallback& callback) override {
     if (offset < 0 || offset > kint32max)
       return net::ERR_INVALID_ARGUMENT;
     if (!disk_cache_entry_)
@@ -68,8 +72,11 @@ class AppCacheDiskCache::EntryImpl : public Entry {
         index, static_cast<int>(offset), buf, buf_len, callback);
   }
 
-  virtual int Write(int index, int64 offset, net::IOBuffer* buf, int buf_len,
-                    const net::CompletionCallback& callback) OVERRIDE {
+  int Write(int index,
+            int64 offset,
+            net::IOBuffer* buf,
+            int buf_len,
+            const net::CompletionCallback& callback) override {
     if (offset < 0 || offset > kint32max)
       return net::ERR_INVALID_ARGUMENT;
     if (!disk_cache_entry_)
@@ -79,11 +86,11 @@ class AppCacheDiskCache::EntryImpl : public Entry {
         index, static_cast<int>(offset), buf, buf_len, callback, kTruncate);
   }
 
-  virtual int64 GetSize(int index) OVERRIDE {
+  int64 GetSize(int index) override {
     return disk_cache_entry_ ? disk_cache_entry_->GetDataSize(index) : 0L;
   }
 
-  virtual void Close() OVERRIDE {
+  void Close() override {
     if (disk_cache_entry_)
       disk_cache_entry_->Close();
     delete this;
@@ -96,7 +103,7 @@ class AppCacheDiskCache::EntryImpl : public Entry {
   }
 
  private:
-  virtual ~EntryImpl() {
+  ~EntryImpl() override {
     if (owner_)
       owner_->RemoveOpenEntry(this);
   }
@@ -178,11 +185,17 @@ AppCacheDiskCache::~AppCacheDiskCache() {
 }
 
 int AppCacheDiskCache::InitWithDiskBackend(
-    const base::FilePath& disk_cache_directory, int disk_cache_size, bool force,
-    base::MessageLoopProxy* cache_thread,
+    const base::FilePath& disk_cache_directory,
+    int disk_cache_size,
+    bool force,
+    const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread,
     const net::CompletionCallback& callback) {
-  return Init(net::APP_CACHE, disk_cache_directory,
-              disk_cache_size, force, cache_thread, callback);
+  return Init(net::APP_CACHE,
+              disk_cache_directory,
+              disk_cache_size,
+              force,
+              cache_thread,
+              callback);
 }
 
 int AppCacheDiskCache::InitWithMemBackend(
@@ -286,11 +299,13 @@ AppCacheDiskCache::PendingCall::PendingCall(PendingCallType call_type,
 
 AppCacheDiskCache::PendingCall::~PendingCall() {}
 
-int AppCacheDiskCache::Init(net::CacheType cache_type,
-                            const base::FilePath& cache_directory,
-                            int cache_size, bool force,
-                            base::MessageLoopProxy* cache_thread,
-                            const net::CompletionCallback& callback) {
+int AppCacheDiskCache::Init(
+    net::CacheType cache_type,
+    const base::FilePath& cache_directory,
+    int cache_size,
+    bool force,
+    const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread,
+    const net::CompletionCallback& callback) {
   DCHECK(!is_initializing() && !disk_cache_.get());
   is_disabled_ = false;
   create_backend_callback_ = new CreateBackendCallbackShim(this);
@@ -301,8 +316,14 @@ int AppCacheDiskCache::Init(net::CacheType cache_type,
   const net::BackendType backend_type = net::CACHE_BACKEND_DEFAULT;
 #endif
   int rv = disk_cache::CreateCacheBackend(
-      cache_type, backend_type, cache_directory, cache_size,
-      force, cache_thread, NULL, &(create_backend_callback_->backend_ptr_),
+      cache_type,
+      backend_type,
+      cache_directory,
+      cache_size,
+      force,
+      cache_thread,
+      NULL,
+      &(create_backend_callback_->backend_ptr_),
       base::Bind(&CreateBackendCallbackShim::Callback,
                  create_backend_callback_));
   if (rv == net::ERR_IO_PENDING)

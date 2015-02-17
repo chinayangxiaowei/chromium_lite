@@ -6,9 +6,9 @@
 
 #include "ash/system/tray/tray_constants.h"
 #include "base/memory/scoped_ptr.h"
-#include "grit/ui_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/painter.h"
 
@@ -37,10 +37,10 @@ class TrayBarButtonWithTitle::TrayBarButton : public views::View {
       bar_disabled_images_(bar_disabled_images),
       painter_(new views::HorizontalPainter(bar_active_images_)){
   }
-  virtual ~TrayBarButton() {}
+  ~TrayBarButton() override {}
 
   // Overriden from views::View:
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaint(gfx::Canvas* canvas) override {
     painter_->Paint(canvas, size());
   }
 

@@ -56,10 +56,10 @@ public class PastePopupMenu implements OnClickListener {
         mContainer.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
         mContainer.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
 
-        final int[] POPUP_LAYOUT_ATTRS = { android.R.attr.textEditPasteWindowLayout, };
+        final int[] popupLayoutAttrs = { android.R.attr.textEditPasteWindowLayout, };
 
         mPasteView = null;
-        TypedArray attrs = mContext.getTheme().obtainStyledAttributes(POPUP_LAYOUT_ATTRS);
+        TypedArray attrs = mContext.getTheme().obtainStyledAttributes(popupLayoutAttrs);
         mPasteViewLayout = attrs.getResourceId(attrs.getIndex(0), 0);
 
         attrs.recycle();
@@ -111,9 +111,9 @@ public class PastePopupMenu implements OnClickListener {
         mRawPositionX = x;
         mRawPositionY = y;
 
-        View contentView = mContainer.getContentView();
-        int width = contentView.getMeasuredWidth();
-        int height = contentView.getMeasuredHeight();
+        final View contentView = mContainer.getContentView();
+        final int width = contentView.getMeasuredWidth();
+        final int height = contentView.getMeasuredHeight();
 
         mPositionX = (int) (x - width / 2.0f);
         mPositionY = y - height - mLineOffsetY;
@@ -130,11 +130,6 @@ public class PastePopupMenu implements OnClickListener {
 
         final int screenWidth = mContext.getResources().getDisplayMetrics().widthPixels;
         if (coords[1] < minOffsetY) {
-            // Update dimensions from new view
-            contentView = mContainer.getContentView();
-            width = contentView.getMeasuredWidth();
-            height = contentView.getMeasuredHeight();
-
             // Vertical clipping, move under edited line and to the side of insertion cursor
             // TODO bottom clipping in case there is no system bar
             coords[1] += height;
@@ -164,8 +159,8 @@ public class PastePopupMenu implements OnClickListener {
     private void updateContent() {
         if (mPasteView == null) {
             final int layout = mPasteViewLayout;
-            LayoutInflater inflater = (LayoutInflater) mContext.
-                getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            LayoutInflater inflater = (LayoutInflater) mContext.getSystemService(
+                    Context.LAYOUT_INFLATER_SERVICE);
             if (inflater != null) {
                 mPasteView = inflater.inflate(layout, null);
             }

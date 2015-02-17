@@ -9,6 +9,7 @@
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_messages.h"
+#include "extensions/renderer/api/automation/automation_api_helper.h"
 #include "extensions/renderer/console.h"
 #include "extensions/renderer/dispatcher.h"
 #include "extensions/renderer/messaging_bindings.h"
@@ -47,7 +48,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
   std::vector<content::RenderView*> views() { return views_; }
 
   // Returns false to terminate the iteration.
-  virtual bool Visit(content::RenderView* render_view) OVERRIDE {
+  bool Visit(content::RenderView* render_view) override {
     ExtensionHelper* helper = ExtensionHelper::Get(render_view);
     if (!ViewTypeMatches(helper->view_type(), view_type_))
       return true;
@@ -122,6 +123,8 @@ ExtensionHelper::ExtensionHelper(content::RenderView* render_view,
       view_type_(VIEW_TYPE_INVALID),
       tab_id_(-1),
       browser_window_id_(-1) {
+  // Lifecycle managed by RenderViewObserver.
+  new AutomationApiHelper(render_view);
 }
 
 ExtensionHelper::~ExtensionHelper() {
@@ -137,6 +140,7 @@ bool ExtensionHelper::OnMessageReceived(const IPC::Message& message) {
     IPC_MESSAGE_HANDLER(ExtensionMsg_DeliverMessage, OnExtensionDeliverMessage)
     IPC_MESSAGE_HANDLER(ExtensionMsg_DispatchOnDisconnect,
                         OnExtensionDispatchOnDisconnect)
+    IPC_MESSAGE_HANDLER(ExtensionMsg_SetFrameName, OnSetFrameName)
     IPC_MESSAGE_HANDLER(ExtensionMsg_SetTabId, OnSetTabId)
     IPC_MESSAGE_HANDLER(ExtensionMsg_UpdateBrowserWindowId,
                         OnUpdateBrowserWindowId)
@@ -226,6 +230,12 @@ void ExtensionHelper::OnExtensionDispatchOnDisconnect(
 
 void ExtensionHelper::OnNotifyRendererViewType(ViewType type) {
   view_type_ = type;
+}
+
+void ExtensionHelper::OnSetFrameName(const std::string& name) {
+  blink::WebView* web_view = render_view()->GetWebView();
+  if (web_view)
+    web_view->mainFrame()->setName(blink::WebString::fromUTF8(name));
 }
 
 void ExtensionHelper::OnSetTabId(int init_tab_id) {

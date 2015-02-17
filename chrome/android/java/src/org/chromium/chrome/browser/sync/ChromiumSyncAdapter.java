@@ -14,11 +14,14 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.protos.ipc.invalidation.Types;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.VisibleForTesting;
 import org.chromium.base.library_loader.ProcessInitException;
+import org.chromium.chrome.browser.invalidation.InvalidationServiceFactory;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.content.app.ContentApplication;
 import org.chromium.content.browser.BrowserStartupController;
 
 import java.util.concurrent.Semaphore;
@@ -50,8 +53,6 @@ public abstract class ChromiumSyncAdapter extends AbstractThreadedSyncAdapter {
     }
 
     protected abstract boolean useAsyncStartup();
-
-    protected abstract void initCommandLine();
 
     @Override
     public void onPerformSync(Account account, Bundle extras, String authority,
@@ -85,13 +86,12 @@ public abstract class ChromiumSyncAdapter extends AbstractThreadedSyncAdapter {
             ThreadUtils.runOnUiThreadBlocking(new Runnable() {
                 @Override
                 public void run() {
-                    initCommandLine();
+                    ContentApplication.initCommandLine(getContext());
                     if (mAsyncStartup) {
                         try {
                             BrowserStartupController.get(mApplication)
                                     .startBrowserProcessesAsync(callback);
-                        }
-                        catch (ProcessInitException e) {
+                        } catch (ProcessInitException e) {
                             Log.e(TAG, "Unable to load native library.", e);
                             System.exit(-1);
                         }
@@ -147,7 +147,7 @@ public abstract class ChromiumSyncAdapter extends AbstractThreadedSyncAdapter {
                     // invalidations can be expected to have the objectSource.
                     int resolvedSource = objectSource;
                     if (resolvedSource == 0) {
-                        resolvedSource = Types.ObjectSource.Type.CHROME_SYNC.getNumber();
+                        resolvedSource = Types.ObjectSource.CHROME_SYNC;
                     }
                     Log.v(TAG, "Received sync tickle for " + resolvedSource + " " + objectId + ".");
                     requestSync(resolvedSource, objectId, version, payload);
@@ -168,12 +168,13 @@ public abstract class ChromiumSyncAdapter extends AbstractThreadedSyncAdapter {
 
     @VisibleForTesting
     public void requestSync(int objectSource, String objectId, long version, String payload) {
-        ProfileSyncService.get(mApplication)
+        InvalidationServiceFactory.getForProfile(Profile.getLastUsedProfile())
                 .requestSyncFromNativeChrome(objectSource, objectId, version, payload);
     }
 
     @VisibleForTesting
     public void requestSyncForAllTypes() {
-        ProfileSyncService.get(mApplication).requestSyncFromNativeChromeForAllTypes();
+        InvalidationServiceFactory.getForProfile(Profile.getLastUsedProfile())
+                .requestSyncFromNativeChromeForAllTypes();
     }
 }

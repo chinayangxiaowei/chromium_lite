@@ -127,6 +127,11 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
   int GetConfigId() const;
   void SetConfigId(int config_id);
 
+  // Returns the config ID of this buffer if it has no splice buffers or
+  // |index| is out of range.  Otherwise returns the config ID for the
+  // buffer in |splice_buffers_| at position |index|.
+  int GetSpliceBufferConfigId(size_t index) const;
+
   // Gets the parser's media type associated with this buffer. Value is
   // meaningless for EOS buffers.
   Type type() const { return type_; }
@@ -164,14 +169,14 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
     return preroll_buffer_;
   }
 
-  virtual void set_timestamp(base::TimeDelta timestamp) OVERRIDE;
+  void set_timestamp(base::TimeDelta timestamp) override;
 
  private:
   StreamParserBuffer(const uint8* data, int data_size,
                      const uint8* side_data, int side_data_size,
                      bool is_keyframe, Type type,
                      TrackId track_id);
-  virtual ~StreamParserBuffer();
+  ~StreamParserBuffer() override;
 
   bool is_keyframe_;
   DecodeTimestamp decode_timestamp_;

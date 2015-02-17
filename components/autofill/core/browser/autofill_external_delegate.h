@@ -35,15 +35,14 @@ class AutofillExternalDelegate
   virtual ~AutofillExternalDelegate();
 
   // AutofillPopupDelegate implementation.
-  virtual void OnPopupShown() OVERRIDE;
-  virtual void OnPopupHidden() OVERRIDE;
-  virtual void DidSelectSuggestion(const base::string16& value,
-                                   int identifier) OVERRIDE;
-  virtual void DidAcceptSuggestion(const base::string16& value,
-                                   int identifier) OVERRIDE;
-  virtual void RemoveSuggestion(const base::string16& value,
-                                int identifier) OVERRIDE;
-  virtual void ClearPreviewedForm() OVERRIDE;
+  void OnPopupShown() override;
+  void OnPopupHidden() override;
+  void DidSelectSuggestion(const base::string16& value,
+                           int identifier) override;
+  void DidAcceptSuggestion(const base::string16& value,
+                           int identifier) override;
+  void RemoveSuggestion(const base::string16& value, int identifier) override;
+  void ClearPreviewedForm() override;
 
   // Records and associates a query_id with web form data.  Called
   // when the renderer posts an Autofill query to the browser. |bounds|
@@ -149,6 +148,10 @@ class AutofillExternalDelegate
   // The current data list values.
   std::vector<base::string16> data_list_values_;
   std::vector<base::string16> data_list_labels_;
+
+  // Whether the access Address Book prompt has ever been shown for the current
+  // |query_form_|. This variable is only used on OSX.
+  bool has_shown_address_book_prompt;
 
   base::WeakPtrFactory<AutofillExternalDelegate> weak_ptr_factory_;
 

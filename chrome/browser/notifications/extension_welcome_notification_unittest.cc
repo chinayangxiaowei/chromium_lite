@@ -23,8 +23,6 @@
 #include "ui/message_center/fake_message_center.h"
 #include "ui/message_center/notification.h"
 
-const char kChromeNowExtensionID[] = "pafkbggdmjlpgkdkcbjmhmfcdpncadgh";
-
 class MockMessageCenter : public message_center::FakeMessageCenter {
  public:
   MockMessageCenter()
@@ -40,15 +38,15 @@ class MockMessageCenter : public message_center::FakeMessageCenter {
   }
 
   // message_center::FakeMessageCenter Overrides
-  virtual message_center::Notification* FindVisibleNotificationById(
-      const std::string& id) OVERRIDE {
+  message_center::Notification* FindVisibleNotificationById(
+      const std::string& id) override {
     if (last_notification.get() && last_notification->id() == id)
       return last_notification.get();
     return NULL;
   }
 
-  virtual void AddNotification(
-      scoped_ptr<message_center::Notification> notification) OVERRIDE {
+  void AddNotification(
+      scoped_ptr<message_center::Notification> notification) override {
     EXPECT_FALSE(last_notification.get());
     last_notification.swap(notification);
     add_notification_calls_++;
@@ -56,8 +54,7 @@ class MockMessageCenter : public message_center::FakeMessageCenter {
       notifications_with_shown_as_popup_++;
   }
 
-  virtual void RemoveNotification(const std::string& id,
-                                  bool by_user) OVERRIDE {
+  void RemoveNotification(const std::string& id, bool by_user) override {
     EXPECT_TRUE(last_notification.get());
     last_notification.reset();
     remove_notification_calls_++;
@@ -87,17 +84,14 @@ public:
   }
 
   // ExtensionWelcomeNotification::Delegate
-  virtual message_center::MessageCenter* GetMessageCenter() OVERRIDE {
+  message_center::MessageCenter* GetMessageCenter() override {
     return message_center_.get();
   }
 
-  virtual base::Time GetCurrentTime() OVERRIDE {
-    return start_time_ + elapsed_time_;
-  }
+  base::Time GetCurrentTime() override { return start_time_ + elapsed_time_; }
 
-  virtual void PostTask(
-      const tracked_objects::Location& from_here,
-      const base::Closure& task) OVERRIDE {
+  void PostTask(const tracked_objects::Location& from_here,
+                const base::Closure& task) override {
     EXPECT_TRUE(pending_task_.is_null());
     pending_task_ = task;
   }
@@ -134,17 +128,17 @@ class ExtensionWelcomeNotificationTest : public testing::Test {
     ExtensionWelcomeNotification::RegisterProfilePrefs(pref_registry.get());
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     task_runner_ = new base::TestSimpleTaskRunner();
     thread_task_runner_handle_.reset(
         new base::ThreadTaskRunnerHandle(task_runner_));
     profile_.reset(new TestingProfile());
     delegate_ = new WelcomeNotificationDelegate();
-    welcome_notification_ = ExtensionWelcomeNotification::Create(
-        kChromeNowExtensionID, profile_.get(), delegate_);
+    welcome_notification_.reset(
+        ExtensionWelcomeNotification::Create(profile_.get(), delegate_));
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     delegate_ = NULL;
     welcome_notification_.reset();
     profile_.reset();
@@ -166,8 +160,9 @@ class ExtensionWelcomeNotificationTest : public testing::Test {
   void ShowChromeNowNotification() const {
     ShowNotification(
         "ChromeNowNotification",
-        message_center::NotifierId(message_center::NotifierId::APPLICATION,
-                                   kChromeNowExtensionID));
+        message_center::NotifierId(
+            message_center::NotifierId::APPLICATION,
+            ExtensionWelcomeNotification::kChromeNowExtensionID));
   }
 
   void ShowRegularNotification() const {
@@ -210,20 +205,10 @@ class ExtensionWelcomeNotificationTest : public testing::Test {
     explicit TestNotificationDelegate(const std::string& id) : id_(id) {}
 
     // Overridden from NotificationDelegate:
-    virtual void Display() OVERRIDE {}
-    virtual void Error() OVERRIDE {}
-    virtual void Close(bool by_user) OVERRIDE {}
-    virtual void Click() OVERRIDE {}
-    virtual void ButtonClick(int index) OVERRIDE {}
-
-    virtual std::string id() const OVERRIDE { return id_; }
-
-    virtual content::WebContents* GetWebContents() const OVERRIDE {
-      return NULL;
-    }
+    std::string id() const override { return id_; }
 
    private:
-    virtual ~TestNotificationDelegate() {}
+    ~TestNotificationDelegate() override {}
 
     const std::string id_;
 

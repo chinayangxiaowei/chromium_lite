@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "base/callback_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/md5.h"
 #include "base/path_service.h"
@@ -33,7 +33,7 @@ const char kCacheFileDirectory[] = "files";
 // Tests FileCache methods working with the blocking task runner.
 class FileCacheTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     const base::FilePath metadata_dir = temp_dir_.path().AppendASCII("meta");
     cache_files_dir_ = temp_dir_.path().AppendASCII(kCacheFileDirectory);

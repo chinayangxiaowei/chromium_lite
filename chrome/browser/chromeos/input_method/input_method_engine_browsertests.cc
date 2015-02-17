@@ -8,7 +8,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chromeos/ime/component_extension_ime_manager.h"
 #include "chromeos/ime/composition_text.h"
 #include "chromeos/ime/input_method_descriptor.h"
@@ -17,9 +16,11 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/manifest_handlers/background_info.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "ui/base/ime/chromeos/ime_bridge.h"
 #include "ui/base/ime/chromeos/mock_ime_candidate_window_handler.h"
 #include "ui/base/ime/chromeos/mock_ime_input_context_handler.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/events/event.h"
 
 namespace chromeos {
@@ -50,11 +51,11 @@ class InputMethodEngineBrowserTest
       : ExtensionBrowserTest() {}
   virtual ~InputMethodEngineBrowserTest() {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     ExtensionBrowserTest::SetUpInProcessBrowserTestFixture();
   }
 
-  virtual void TearDownInProcessBrowserTestFixture() OVERRIDE {
+  virtual void TearDownInProcessBrowserTestFixture() override {
     extension_ = NULL;
   }
 
@@ -72,10 +73,12 @@ class InputMethodEngineBrowserTest
     extension_ime_ids.push_back(kIdentityIMEID);
     extension_ime_ids.push_back(kToUpperIMEID);
     extension_ime_ids.push_back(kAPIArgumentIMEID);
-    InputMethodManager::Get()->SetEnabledExtensionImes(&extension_ime_ids);
+    InputMethodManager::Get()->GetActiveIMEState()->SetEnabledExtensionImes(
+        &extension_ime_ids);
 
     InputMethodDescriptors extension_imes;
-    InputMethodManager::Get()->GetInputMethodExtensions(&extension_imes);
+    InputMethodManager::Get()->GetActiveIMEState()->GetInputMethodExtensions(
+        &extension_imes);
 
     // Test IME has two input methods, thus InputMethodManager should have two
     // extension IME.
@@ -146,7 +149,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
                        BasicScenarioTest) {
   LoadTestInputMethod();
 
-  InputMethodManager::Get()->ChangeInputMethod(kIdentityIMEID);
+  InputMethodManager::Get()->GetActiveIMEState()->ChangeInputMethod(
+      kIdentityIMEID, false /* show_message */);
 
   scoped_ptr<MockIMEInputContextHandler> mock_input_context(
       new MockIMEInputContextHandler());
@@ -169,7 +173,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
   // onFocus event should be fired if FocusIn function is called.
   ExtensionTestMessageListener focus_listener("onFocus:text", false);
   IMEEngineHandlerInterface::InputContext context(ui::TEXT_INPUT_TYPE_TEXT,
-                                                  ui::TEXT_INPUT_MODE_DEFAULT);
+                                                  ui::TEXT_INPUT_MODE_DEFAULT,
+                                                  ui::TEXT_INPUT_FLAG_NONE);
   engine_handler->FocusIn(context);
   ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
   ASSERT_TRUE(focus_listener.was_satisfied());
@@ -226,7 +231,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
                        APIArgumentTest) {
   LoadTestInputMethod();
 
-  InputMethodManager::Get()->ChangeInputMethod(kAPIArgumentIMEID);
+  InputMethodManager::Get()->GetActiveIMEState()->ChangeInputMethod(
+      kAPIArgumentIMEID, false /* show_message */);
 
   scoped_ptr<MockIMEInputContextHandler> mock_input_context(
       new MockIMEInputContextHandler());
@@ -241,14 +247,14 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
   ASSERT_TRUE(engine_handler);
 
   extensions::ExtensionHost* host =
-      extensions::ExtensionSystem::Get(profile())
-          ->process_manager()
+      extensions::ProcessManager::Get(profile())
           ->GetBackgroundHostForExtension(extension_->id());
   ASSERT_TRUE(host);
 
   engine_handler->Enable("APIArgumentIME");
   IMEEngineHandlerInterface::InputContext context(ui::TEXT_INPUT_TYPE_TEXT,
-                                                  ui::TEXT_INPUT_MODE_DEFAULT);
+                                                  ui::TEXT_INPUT_MODE_DEFAULT,
+                                                  ui::TEXT_INPUT_FLAG_NONE);
   engine_handler->FocusIn(context);
 
   {
@@ -925,7 +931,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:text", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_TEXT, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_TEXT, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());
@@ -933,7 +940,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:search", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_SEARCH, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_SEARCH, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());
@@ -941,7 +949,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:tel", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_TELEPHONE, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_TELEPHONE, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());
@@ -949,7 +958,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:url", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_URL, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_URL, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());
@@ -957,7 +967,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:email", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_EMAIL, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_EMAIL, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());
@@ -965,7 +976,8 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest,
     {
       ExtensionTestMessageListener focus_listener("onFocus:number", false);
       IMEEngineHandlerInterface::InputContext context(
-          ui::TEXT_INPUT_TYPE_NUMBER, ui::TEXT_INPUT_MODE_DEFAULT);
+          ui::TEXT_INPUT_TYPE_NUMBER, ui::TEXT_INPUT_MODE_DEFAULT,
+          ui::TEXT_INPUT_FLAG_NONE);
       engine_handler->FocusIn(context);
       ASSERT_TRUE(focus_listener.WaitUntilSatisfied());
       ASSERT_TRUE(focus_listener.was_satisfied());

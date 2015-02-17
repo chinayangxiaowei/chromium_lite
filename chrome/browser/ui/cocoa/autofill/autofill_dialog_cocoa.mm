@@ -22,8 +22,8 @@ AutofillDialogView* AutofillDialogView::Create(
 }
 
 AutofillDialogCocoa::AutofillDialogCocoa(AutofillDialogViewDelegate* delegate)
-    : close_weak_ptr_factory_(this),
-      delegate_(delegate) {
+    : delegate_(delegate),
+      close_weak_ptr_factory_(this) {
 }
 
 AutofillDialogCocoa::~AutofillDialogCocoa() {
@@ -112,8 +112,9 @@ bool AutofillDialogCocoa::SaveDetailsLocally() {
   return [sheet_delegate_ saveDetailsLocally];
 }
 
-const content::NavigationController* AutofillDialogCocoa::ShowSignIn() {
-  return [sheet_delegate_ showSignIn];
+const content::NavigationController* AutofillDialogCocoa::ShowSignIn(
+    const GURL& url) {
+  return [sheet_delegate_ showSignIn:url];
 }
 
 void AutofillDialogCocoa::HideSignIn() {

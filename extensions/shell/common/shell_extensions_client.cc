@@ -7,8 +7,8 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "extensions/common/api/generated_schemas.h"
-#include "extensions/common/api/sockets/sockets_manifest_handler.h"
 #include "extensions/common/common_manifest_handlers.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/features/api_feature.h"
 #include "extensions/common/features/base_feature_provider.h"
 #include "extensions/common/features/json_feature_provider_source.h"
@@ -38,31 +38,30 @@ SimpleFeature* CreateFeature() {
 class ShellPermissionMessageProvider : public PermissionMessageProvider {
  public:
   ShellPermissionMessageProvider() {}
-  virtual ~ShellPermissionMessageProvider() {}
+  ~ShellPermissionMessageProvider() override {}
 
   // PermissionMessageProvider implementation.
-  virtual PermissionMessages GetPermissionMessages(
+  PermissionMessages GetPermissionMessages(
       const PermissionSet* permissions,
-      Manifest::Type extension_type) const OVERRIDE {
+      Manifest::Type extension_type) const override {
     return PermissionMessages();
   }
 
-  virtual std::vector<base::string16> GetWarningMessages(
+  std::vector<base::string16> GetWarningMessages(
       const PermissionSet* permissions,
-      Manifest::Type extension_type) const OVERRIDE {
+      Manifest::Type extension_type) const override {
     return std::vector<base::string16>();
   }
 
-  virtual std::vector<base::string16> GetWarningMessagesDetails(
+  std::vector<base::string16> GetWarningMessagesDetails(
       const PermissionSet* permissions,
-      Manifest::Type extension_type) const OVERRIDE {
+      Manifest::Type extension_type) const override {
     return std::vector<base::string16>();
   }
 
-  virtual bool IsPrivilegeIncrease(
-      const PermissionSet* old_permissions,
-      const PermissionSet* new_permissions,
-      Manifest::Type extension_type) const OVERRIDE {
+  bool IsPrivilegeIncrease(const PermissionSet* old_permissions,
+                           const PermissionSet* new_permissions,
+                           Manifest::Type extension_type) const override {
     // Ensure we implement this before shipping.
     CHECK(false);
     return false;
@@ -86,12 +85,6 @@ ShellExtensionsClient::~ShellExtensionsClient() {
 
 void ShellExtensionsClient::Initialize() {
   RegisterCommonManifestHandlers();
-
-  // TODO(rockot): API manifest handlers which move out to src/extensions
-  // should either end up in RegisterCommonManifestHandlers or some new
-  // initialization step specifically for API manifest handlers.
-  (new SocketsManifestHandler)->Register();
-
   ManifestHandler::FinalizeRegistration();
   // TODO(jamescook): Do we need to whitelist any extensions?
 
@@ -102,6 +95,10 @@ const PermissionMessageProvider&
 ShellExtensionsClient::GetPermissionMessageProvider() const {
   NOTIMPLEMENTED();
   return g_permission_message_provider.Get();
+}
+
+const std::string ShellExtensionsClient::GetProductName() {
+  return "app_shell";
 }
 
 scoped_ptr<FeatureProvider> ShellExtensionsClient::CreateFeatureProvider(
@@ -176,20 +173,17 @@ bool ShellExtensionsClient::IsScriptableURL(const GURL& url,
 
 bool ShellExtensionsClient::IsAPISchemaGenerated(
     const std::string& name) const {
-  // TODO(rockot): Remove dependency on src/chrome once we have some core APIs
-  // moved out. See http://crbug.com/349042.
-  // Special-case our simplified app.runtime implementation because we don't
-  // have the Chrome app APIs available.
   return core_api::GeneratedSchemas::IsGenerated(name) ||
-         shell_api::GeneratedSchemas::IsGenerated(name);
+         shell::api::GeneratedSchemas::IsGenerated(name);
 }
 
 base::StringPiece ShellExtensionsClient::GetAPISchema(
     const std::string& name) const {
-  // Schema for chrome.shell APIs.
-  if (shell_api::GeneratedSchemas::IsGenerated(name))
-    return shell_api::GeneratedSchemas::Get(name);
+  // Schema for app_shell-only APIs.
+  if (shell::api::GeneratedSchemas::IsGenerated(name))
+    return shell::api::GeneratedSchemas::Get(name);
 
+  // Core extensions APIs.
   return core_api::GeneratedSchemas::Get(name);
 }
 
@@ -198,6 +192,20 @@ void ShellExtensionsClient::RegisterAPISchemaResources(
 }
 
 bool ShellExtensionsClient::ShouldSuppressFatalErrors() const {
+  return true;
+}
+
+std::string ShellExtensionsClient::GetWebstoreBaseURL() const {
+  return extension_urls::kChromeWebstoreBaseURL;
+}
+
+std::string ShellExtensionsClient::GetWebstoreUpdateURL() const {
+  return extension_urls::kChromeWebstoreUpdateURL;
+}
+
+bool ShellExtensionsClient::IsBlacklistUpdateURL(const GURL& url) const {
+  // TODO(rockot): Maybe we want to do something else here. For now we accept
+  // any URL as a blacklist URL because we don't really care.
   return true;
 }
 

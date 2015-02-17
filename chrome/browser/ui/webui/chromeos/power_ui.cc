@@ -13,11 +13,11 @@
 #include "chrome/browser/chromeos/power/power_data_collector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 
 namespace chromeos {
 
@@ -43,7 +43,7 @@ class PowerMessageHandler : public content::WebUIMessageHandler {
   virtual ~PowerMessageHandler();
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
  private:
   void OnGetBatteryChargeData(const base::ListValue* value);
@@ -187,7 +187,6 @@ PowerUI::PowerUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
 
   content::WebUIDataSource* html =
       content::WebUIDataSource::Create(chrome::kChromeUIPowerHost);
-  html->SetUseJsonJSFormatV2();
 
   html->AddLocalizedString("titleText", IDS_ABOUT_POWER_TITLE);
   html->AddLocalizedString("showButton", IDS_ABOUT_POWER_SHOW_BUTTON);

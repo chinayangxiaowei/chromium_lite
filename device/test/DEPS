@@ -1,6 +1,5 @@
 include_rules = [
-  "+components/usb_service",
-  "+mojo/embedder",
+  "+mojo/edk/embedder",
   "+net/proxy",
   "+net/url_request",
 ]

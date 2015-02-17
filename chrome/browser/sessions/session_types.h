@@ -12,9 +12,8 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/time/time.h"
-#include "chrome/browser/sessions/session_id.h"
 #include "components/sessions/serialized_navigation_entry.h"
-#include "content/public/common/page_transition_types.h"
+#include "components/sessions/session_id.h"
 #include "sync/protocol/session_specifics.pb.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/rect.h"
@@ -110,6 +109,13 @@ struct SessionWindow {
   SessionWindow();
   ~SessionWindow();
 
+  // Possible window types which can be stored here. Note that these values will
+  // be written out to disc via session commands.
+  enum WindowType {
+    TYPE_TABBED = 0,
+    TYPE_POPUP = 1
+  };
+
   // Convert this object into its sync protocol buffer equivalent. Note that
   // not all fields are synced here, because they don't all make sense or
   // translate when restoring a SessionWindow on another device.
@@ -130,10 +136,9 @@ struct SessionWindow {
   // tabs.
   int selected_tab_index;
 
-  // Type of the browser. Currently we only store browsers of type
-  // TYPE_TABBED and TYPE_POPUP.
-  // This would be Browser::Type, but that would cause a circular dependency.
-  int type;
+  // Type of the window. Note: This type is used to determine if the window gets
+  // saved or not.
+  WindowType type;
 
   // If true, the window is constrained.
   //

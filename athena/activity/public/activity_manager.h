@@ -5,11 +5,20 @@
 #ifndef ATHENA_ACTIVITY_PUBLIC_ACTIVITY_MANAGER_H_
 #define ATHENA_ACTIVITY_PUBLIC_ACTIVITY_MANAGER_H_
 
+#include <vector>
+
 #include "athena/athena_export.h"
+
+namespace aura {
+class Window;
+}
 
 namespace athena {
 
 class Activity;
+class ActivityManagerObserver;
+
+using ActivityList = std::vector<Activity*>;
 
 // Manages a set of activities.
 class ATHENA_EXPORT ActivityManager {
@@ -24,8 +33,16 @@ class ATHENA_EXPORT ActivityManager {
   virtual void AddActivity(Activity* activity) = 0;
   virtual void RemoveActivity(Activity* activity) = 0;
 
-  // Updates the UI when the task color/title changes.
-  virtual void UpdateActivity(Activity* activity) = 0;
+  // Returns a list of activities, sorted in their activation order (the most
+  // recently used activity is at the front of the returned list).
+  virtual const ActivityList& GetActivityList() = 0;
+
+  // Returns the activity that has a |window| as toplevel window, or
+  // nullptr if such activity does not exist.
+  virtual Activity* GetActivityForWindow(aura::Window* window) = 0;
+
+  virtual void AddObserver(ActivityManagerObserver* observer) = 0;
+  virtual void RemoveObserver(ActivityManagerObserver* observer) = 0;
 };
 
 }  // namespace athena

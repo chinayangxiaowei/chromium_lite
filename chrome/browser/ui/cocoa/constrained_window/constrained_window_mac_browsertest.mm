@@ -47,8 +47,8 @@ class ConstrainedWindowMacTest : public InProcessBrowserTest {
     [sheet_ hideSheet];
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
-    AddTabAtIndex(1, GURL("about:blank"), content::PAGE_TRANSITION_LINK);
+  void SetUpOnMainThread() override {
+    AddTabAtIndex(1, GURL("about:blank"), ui::PAGE_TRANSITION_LINK);
     tab0_ = browser()->tab_strip_model()->GetWebContentsAt(0);
     tab1_ = browser()->tab_strip_model()->GetWebContentsAt(1);
     EXPECT_EQ(tab1_, browser()->tab_strip_model()->GetActiveWebContents());

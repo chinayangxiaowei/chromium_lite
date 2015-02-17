@@ -16,6 +16,7 @@
 #include "ui/app_list/views/apps_container_view.h"
 #include "ui/app_list/views/apps_grid_view.h"
 #include "ui/app_list/views/contents_view.h"
+#include "ui/app_list/views/search_box_view.h"
 #include "ui/app_list/views/test/apps_grid_view_test_api.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view_model.h"
@@ -66,19 +67,21 @@ class AppListMainViewTest : public views::ViewsTestBase {
       : widget_(NULL),
         main_view_(NULL) {}
 
-  virtual ~AppListMainViewTest() {}
+  ~AppListMainViewTest() override {}
 
   // testing::Test overrides:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     views::ViewsTestBase::SetUp();
     delegate_.reset(new AppListTestViewDelegate);
 
     // In Ash, the third argument is a container aura::Window, but it is always
     // NULL on Windows, and not needed for tests. It is only used to determine
     // the scale factor for preloading icons.
-    main_view_ = new AppListMainView(delegate_.get(), 0, NULL);
+    main_view_ = new AppListMainView(delegate_.get());
     main_view_->SetPaintToLayer(true);
     main_view_->model()->SetFoldersEnabled(true);
+    search_box_view_.reset(new SearchBoxView(main_view_, delegate_.get()));
+    main_view_->Init(NULL, 0, search_box_view_.get());
 
     widget_ = new views::Widget;
     views::Widget::InitParams params =
@@ -89,16 +92,18 @@ class AppListMainViewTest : public views::ViewsTestBase {
     widget_->SetContentsView(main_view_);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     widget_->Close();
     views::ViewsTestBase::TearDown();
+    search_box_view_.reset();
     delegate_.reset();
   }
 
   // |point| is in |grid_view|'s coordinates.
   AppListItemView* GetItemViewAtPointInGrid(AppsGridView* grid_view,
                                             const gfx::Point& point) {
-    const views::ViewModel* view_model = grid_view->view_model_for_test();
+    const views::ViewModelT<AppListItemView>* view_model =
+        grid_view->view_model_for_test();
     for (int i = 0; i < view_model->view_size(); ++i) {
       views::View* view = view_model->view_at(i);
       if (view->bounds().Contains(point)) {
@@ -161,11 +166,11 @@ class AppListMainViewTest : public views::ViewsTestBase {
 
   AppsGridView* FolderGridView() { return FolderView()->items_grid_view(); }
 
-  const views::ViewModel* RootViewModel() {
+  const views::ViewModelT<AppListItemView>* RootViewModel() {
     return RootGridView()->view_model_for_test();
   }
 
-  const views::ViewModel* FolderViewModel() {
+  const views::ViewModelT<AppListItemView>* FolderViewModel() {
     return FolderGridView()->view_model_for_test();
   }
 
@@ -227,6 +232,7 @@ class AppListMainViewTest : public views::ViewsTestBase {
   views::Widget* widget_;  // Owned by native window.
   AppListMainView* main_view_;  // Owned by |widget_|.
   scoped_ptr<AppListTestViewDelegate> delegate_;
+  scoped_ptr<SearchBoxView> search_box_view_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AppListMainViewTest);
@@ -261,20 +267,18 @@ TEST_F(AppListMainViewTest, DragLastItemFromFolderAndDropAtLastSlot) {
 
   // Drop it to the slot on the right of first slot.
   gfx::Rect drop_target_tile(first_slot_tile);
-  drop_target_tile.Offset(first_slot_tile.width(), 0);
+  drop_target_tile.Offset(first_slot_tile.width() * 2, 0);
   gfx::Point point = drop_target_tile.CenterPoint();
   SimulateUpdateDrag(FolderGridView(), AppsGridView::MOUSE, dragged, point);
-  SimulateUpdateDrag(FolderGridView(), AppsGridView::MOUSE, dragged, point);
-  base::RunLoop().RunUntilIdle();
 
   // Drop it.
   FolderGridView()->EndDrag(false);
-  base::RunLoop().RunUntilIdle();
 
   // Folder icon view should be gone and there is only one item view.
   EXPECT_EQ(1, RootViewModel()->view_size());
-  EXPECT_EQ(AppListItemView::kViewClassName,
-            RootViewModel()->view_at(0)->GetClassName());
+  EXPECT_EQ(
+      AppListItemView::kViewClassName,
+      static_cast<views::View*>(RootViewModel()->view_at(0))->GetClassName());
 
   // The item view should be in slot 1 instead of slot 2 where it is dropped.
   AppsGridViewTestApi root_grid_view_test_api(RootGridView());
@@ -282,6 +286,35 @@ TEST_F(AppListMainViewTest, DragLastItemFromFolderAndDropAtLastSlot) {
   EXPECT_EQ(first_slot_tile, RootViewModel()->view_at(0)->bounds());
 
   // Single item folder should be auto removed.
+  EXPECT_EQ(NULL,
+            delegate_->GetTestModel()->FindFolderItem("single_item_folder"));
+}
+
+// Tests dragging an item out of a single item folder and dropping it onto the
+// page switcher. Regression test for http://crbug.com/415530/.
+TEST_F(AppListMainViewTest, DragReparentItemOntoPageSwitcher) {
+  AppListItemView* folder_item_view = CreateAndOpenSingleItemFolder();
+  const gfx::Rect first_slot_tile = folder_item_view->bounds();
+
+  delegate_->GetTestModel()->PopulateApps(20);
+
+  EXPECT_EQ(1, FolderViewModel()->view_size());
+  EXPECT_EQ(21, RootViewModel()->view_size());
+
+  AppListItemView* dragged = StartDragForReparent(0);
+
+  gfx::Rect main_view_bounds = main_view_->bounds();
+  // Drag the reparent item to the page switcher.
+  gfx::Point point =
+      gfx::Point(main_view_bounds.width() / 2,
+                 main_view_bounds.bottom() - first_slot_tile.height());
+  SimulateUpdateDrag(FolderGridView(), AppsGridView::MOUSE, dragged, point);
+
+  // Drop it.
+  FolderGridView()->EndDrag(false);
+
+  // The folder should be destroyed.
+  EXPECT_EQ(21, RootViewModel()->view_size());
   EXPECT_EQ(NULL,
             delegate_->GetTestModel()->FindFolderItem("single_item_folder"));
 }

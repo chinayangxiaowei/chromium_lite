@@ -526,14 +526,18 @@ NSRect GetFirstButtonFrameForHeight(CGFloat height) {
     newWindowTopLeft = NSMakePoint(
         buttonBottomLeftInScreen.x + bookmarks::kBookmarkBarButtonOffset,
         bookmarkBarBottomLeftInScreen.y + bookmarks::kBookmarkBarMenuOffset);
-    // Make sure the window is on-screen; if not, push left.  It is
-    // intentional that top level folders "push left" slightly
+    // Make sure the window is on-screen; if not, push left or right. It is
+    // intentional that top level folders "push left" or "push right" slightly
     // different than subfolders.
     NSRect screenFrame = [screen_ visibleFrame];
+    // Test if window goes off-screen on the right side.
     CGFloat spillOff = (newWindowTopLeft.x + windowWidth) - NSMaxX(screenFrame);
     if (spillOff > 0.0) {
       newWindowTopLeft.x = std::max(newWindowTopLeft.x - spillOff,
                                     NSMinX(screenFrame));
+    } else if (newWindowTopLeft.x < NSMinX(screenFrame)) {
+      // For left side.
+      newWindowTopLeft.x = NSMinX(screenFrame);
     }
     // The menu looks bad when it is squeezed up against the bottom of the
     // screen and ends up being only a few pixels tall. If it meets the
@@ -762,7 +766,7 @@ NSRect GetFirstButtonFrameForHeight(CGFloat height) {
 - (void)adjustWindowForButtonCount:(NSUInteger)buttonCount {
   NSRect folderFrame = [folderView_ frame];
   CGFloat newMenuHeight =
-      (CGFloat)[self menuHeightForButtonCount:[buttons_ count]];
+      (CGFloat)[self menuHeightForButtonCount:buttonCount];
   CGFloat deltaMenuHeight = newMenuHeight - NSHeight(folderFrame);
   // If the height has changed then also change the origin, and adjust the
   // scroll (if scrolling).
@@ -1334,10 +1338,15 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   if ([folderController_ parentButton] == sender)
     return;
 
-  [self performSelector:@selector(openBookmarkFolderFromButtonAndCloseOldOne:)
-             withObject:sender
-             afterDelay:bookmarks::kHoverOpenDelay
-                inModes:[NSArray arrayWithObject:NSRunLoopCommonModes]];
+  // If right click was done immediately on entering a button, then open the
+  // folder without delay so that context menu appears over the folder menu.
+  if ([event type] == NSRightMouseDown)
+    [self openBookmarkFolderFromButtonAndCloseOldOne:sender];
+  else
+    [self performSelector:@selector(openBookmarkFolderFromButtonAndCloseOldOne:)
+               withObject:sender
+               afterDelay:bookmarks::kHoverOpenDelay
+                  inModes:[NSArray arrayWithObject:NSRunLoopCommonModes]];
 }
 
 // Called from the BookmarkButton
@@ -1930,15 +1939,21 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
   NSInteger buttonCount = [buttons_ count];
   if (buttonCount) {
     BookmarkButton* subButton = [folderController_ parentButton];
+    NSInteger targetIndex = 0;
     for (NSButton* aButton in buttons_.get()) {
-      // If this button is showing its menu then we need to move the menu, too.
-      if (aButton == subButton)
-        [folderController_
-            offsetFolderMenuWindow:NSMakeSize(0.0, chrome::kBookmarkBarHeight)];
+      targetIndex++;
+      // If this button is showing its menu and is below the removed button,
+      // i.e its index is greater, then we need to move the menu too.
+      if (aButton == subButton && targetIndex > buttonIndex) {
+          [folderController_ offsetFolderMenuWindow:NSMakeSize(0.0,
+                                 bookmarks::kBookmarkFolderButtonHeight)];
+          break;
+      }
     }
-  } else {
+  } else if (parentButton_ != [barController_ otherBookmarksButton]) {
     // If all nodes have been removed from this folder then add in the
-    // 'empty' placeholder button.
+    // 'empty' placeholder button except for "Other bookmarks" folder
+    // as we are going to hide it.
     NSRect buttonFrame =
         GetFirstButtonFrameForHeight([self menuHeightForButtonCount:1]);
     BookmarkButton* button = [self makeButtonForNode:nil
@@ -1948,7 +1963,12 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
     buttonCount = 1;
   }
 
-  [self adjustWindowForButtonCount:buttonCount];
+  // buttonCount will be 0 if "Other bookmarks" folder is empty, so close
+  // the folder before hiding it.
+  if (buttonCount == 0)
+    [barController_ closeBookmarkFolder:nil];
+  else if (buttonCount > 0)
+    [self adjustWindowForButtonCount:buttonCount];
 
   if (animate && !ignoreAnimations_)
     NSShowAnimationEffect(NSAnimationEffectDisappearingItemDefault, poofPoint,

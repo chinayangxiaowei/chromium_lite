@@ -53,6 +53,7 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
                                         int world_id) {}
   virtual void DidClearWindowObject() {}
   virtual void DidChangeName(const base::string16& name) {}
+  virtual void DidChangeManifest() {}
 
   // Called when the frame will soon be closed. This is the last opportunity to
   // send messages to the host (e.g., for clean-up, shutdown, etc.).
@@ -74,17 +75,17 @@ class CONTENT_EXPORT RenderFrameObserver : public IPC::Listener,
   virtual void DidCommitCompositorFrame() {}
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   // IPC::Sender implementation.
-  virtual bool Send(IPC::Message* message) OVERRIDE;
+  bool Send(IPC::Message* message) override;
 
   RenderFrame* render_frame() const;
   int routing_id() const { return routing_id_; }
 
  protected:
   explicit RenderFrameObserver(RenderFrame* render_frame);
-  virtual ~RenderFrameObserver();
+  ~RenderFrameObserver() override;
 
  private:
   friend class RenderFrameImpl;

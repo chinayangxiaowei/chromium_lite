@@ -240,22 +240,8 @@ Error FsNode::VIoctl(int request, va_list args) {
 
 }  // namespace
 
-Error DevFs::Access(const Path& path, int a_mode) {
-  ScopedNode node;
-  int error = root_->FindChild(path.Join(), &node);
-  if (error)
-    return error;
-
-  // Don't allow execute access.
-  if (a_mode & X_OK) {
-    LOG_TRACE("Executing devfs nodes is not allowed.");
-    return EACCES;
-  }
-
-  return 0;
-}
-
-Error DevFs::Open(const Path& path, int open_flags, ScopedNode* out_node) {
+Error DevFs::OpenWithMode(const Path& path, int open_flags,
+                          mode_t mode, ScopedNode* out_node) {
   out_node->reset(NULL);
   int error;
   if (path.Part(1) == "fs") {
@@ -338,7 +324,7 @@ Error DevFs::Init(const FsInitArgs& args) {
   if (error)
     return error;
 
-  root_.reset(new DirNode(this));
+  root_.reset(new DirNode(this, S_IRALL | S_IXALL));
 
   ScopedNode new_node;
   INITIALIZE_DEV_NODE("/null", NullNode);
@@ -362,7 +348,7 @@ Error DevFs::Init(const FsInitArgs& args) {
   // Add a directory for "fs" nodes; they represent all currently-mounted
   // filesystems. We can ioctl these nodes to make changes or provide input to
   // a mounted filesystem.
-  INITIALIZE_DEV_NODE("/fs", DirNode);
+  INITIALIZE_DEV_NODE_1("/fs", DirNode, S_IRALL | S_IWALL | S_IXALL);
   fs_dir_ = new_node;
 
   return 0;

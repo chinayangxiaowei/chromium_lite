@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 #include "base/basictypes.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -206,7 +206,7 @@ NPError PluginGetURLTest::NewStream(NPMIMEType type, NPStream* stream,
 #if defined(OS_WIN)
         filename = filename.substr(8);  // remove "file:///"
         // Assume an ASCII path on Windows.
-        base::FilePath path = base::FilePath(base::ASCIIToWide(filename));
+        base::FilePath path = base::FilePath(base::ASCIIToUTF16(filename));
 #else
         filename = filename.substr(7);  // remove "file://"
         base::FilePath path = base::FilePath(filename);

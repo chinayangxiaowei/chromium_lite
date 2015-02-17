@@ -7,10 +7,10 @@
 #include "base/logging.h"
 #import "base/mac/scoped_nsobject.h"
 #include "base/strings/sys_string_conversions.h"
-#include "grit/ui_strings.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/gfx/canvas_paint_mac.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
@@ -30,6 +30,7 @@
 
 @synthesize hostedView = hostedView_;
 @synthesize textInputClient = textInputClient_;
+@synthesize willShow = willShow_;
 
 - (id)initWithView:(views::View*)viewToHost {
   DCHECK(viewToHost);
@@ -89,11 +90,13 @@
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
-  if (!hostedView_)
+  // Note that on a Show, Cocoa calls drawRect: before changing
+  // -[NSWindow isVisible], hence the extra check.
+  if (!hostedView_ || (!willShow_ && ![[self window] isVisible]))
     return;
 
   gfx::CanvasSkiaPaint canvas(dirtyRect, false /* opaque */);
-  hostedView_->Paint(&canvas, views::CullSet());
+  hostedView_->GetWidget()->OnNativeWidgetPaint(&canvas);
 }
 
 // NSResponder implementation.
@@ -149,7 +152,11 @@
 }
 
 - (void)scrollWheel:(NSEvent*)theEvent {
-  [self handleMouseEvent:theEvent];
+  if (!hostedView_)
+    return;
+
+  ui::MouseWheelEvent event(theEvent);
+  hostedView_->GetWidget()->OnMouseEvent(&event);
 }
 
 - (void)deleteBackward:(id)sender {

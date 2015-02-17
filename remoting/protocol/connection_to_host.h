@@ -12,7 +12,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/threading/non_thread_safe.h"
-#include "base/timer/timer.h"
 #include "remoting/proto/internal.pb.h"
 #include "remoting/protocol/clipboard_filter.h"
 #include "remoting/protocol/errors.h"
@@ -42,7 +41,7 @@ class HostStub;
 class InputStub;
 class SessionConfig;
 class TransportFactory;
-class VideoReader;
+class ClientVideoDispatcher;
 class VideoStub;
 
 class ConnectionToHost : public SignalStrategy::Listener,
@@ -82,7 +81,7 @@ class ConnectionToHost : public SignalStrategy::Listener,
   };
 
   ConnectionToHost();
-  virtual ~ConnectionToHost();
+  ~ConnectionToHost() override;
 
   // Allows to set a custom protocol configuration (e.g. for tests). Cannot be
   // called after Connect().
@@ -120,21 +119,19 @@ class ConnectionToHost : public SignalStrategy::Listener,
   virtual InputStub* input_stub();
 
   // SignalStrategy::StatusObserver interface.
-  virtual void OnSignalStrategyStateChange(
-      SignalStrategy::State state) OVERRIDE;
-  virtual bool OnSignalStrategyIncomingStanza(
-      const buzz::XmlElement* stanza) OVERRIDE;
+  void OnSignalStrategyStateChange(SignalStrategy::State state) override;
+  bool OnSignalStrategyIncomingStanza(const buzz::XmlElement* stanza) override;
 
   // SessionManager::Listener interface.
-  virtual void OnSessionManagerReady() OVERRIDE;
-  virtual void OnIncomingSession(
+  void OnSessionManagerReady() override;
+  void OnIncomingSession(
       Session* session,
-      SessionManager::IncomingSessionResponse* response) OVERRIDE;
+      SessionManager::IncomingSessionResponse* response) override;
 
   // Session::EventHandler interface.
-  virtual void OnSessionStateChange(Session::State state) OVERRIDE;
-  virtual void OnSessionRouteChange(const std::string& channel_name,
-                                    const TransportRoute& route) OVERRIDE;
+  void OnSessionStateChange(Session::State state) override;
+  void OnSessionRouteChange(const std::string& channel_name,
+                            const TransportRoute& route) override;
 
   // MonitoredVideoStub::EventHandler interface.
   virtual void OnVideoChannelStatus(bool active);
@@ -173,7 +170,7 @@ class ConnectionToHost : public SignalStrategy::Listener,
   scoped_ptr<Session> session_;
   scoped_ptr<MonitoredVideoStub> monitored_video_stub_;
 
-  scoped_ptr<VideoReader> video_reader_;
+  scoped_ptr<ClientVideoDispatcher> video_dispatcher_;
   scoped_ptr<AudioReader> audio_reader_;
   scoped_ptr<ClientControlDispatcher> control_dispatcher_;
   scoped_ptr<ClientEventDispatcher> event_dispatcher_;

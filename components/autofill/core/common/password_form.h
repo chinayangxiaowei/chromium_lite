@@ -193,18 +193,29 @@ struct PasswordForm {
   // When parsing an HTML form, this is not used.
   int times_used;
 
-  // True if additional system level authentication should be used
-  // (if available) before using this password for autofill.
-  //
-  // Default to false.
-  bool use_additional_authentication;
-
   // Autofill representation of this form. Used to communicate with the
   // Autofill servers if necessary. Currently this is only used to help
   // determine forms where we can trigger password generation.
   //
   // When parsing an HTML form, this is normally set.
   FormData form_data;
+
+  // These following fields are set by a website using the Credential Manager
+  // API. They will be empty and remain unused for sites which do not use that
+  // API.
+  //
+  // User friendly name to show in the UI.
+  base::string16 display_name;
+
+  // The URL of the user's avatar to display in the UI.
+  GURL avatar_url;
+
+  // The URL of identity provider used for federated login.
+  GURL federation_url;
+
+  // If true, Chrome will sign the user in automatically using the credentials.
+  // This field isn't synced deliberately.
+  bool is_zero_click;
 
   // Returns true if this match was found using public suffix matching.
   bool IsPublicSuffixMatch() const;

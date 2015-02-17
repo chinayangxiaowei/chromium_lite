@@ -46,6 +46,12 @@ std::string RequestTypeToString(RequestType type) {
       return "TRUNCATE";
     case WRITE_FILE:
       return "WRITE_FILE";
+    case ABORT:
+      return "ABORT";
+    case ADD_WATCHER:
+      return "ADD_WATCHER";
+    case REMOVE_WATCHER:
+      return "REMOVE_WATCHER";
     case TESTING:
       return "TESTING";
   }
@@ -159,8 +165,16 @@ void RequestManager::SetTimeoutForTesting(const base::TimeDelta& timeout) {
   timeout_ = timeout;
 }
 
-size_t RequestManager::GetActiveRequestsForLogging() const {
-  return requests_.size();
+std::vector<int> RequestManager::GetActiveRequestIds() const {
+  std::vector<int> result;
+
+  for (RequestMap::const_iterator request_it = requests_.begin();
+       request_it != requests_.end();
+       ++request_it) {
+    result.push_back(request_it->first);
+  }
+
+  return result;
 }
 
 void RequestManager::AddObserver(Observer* observer) {

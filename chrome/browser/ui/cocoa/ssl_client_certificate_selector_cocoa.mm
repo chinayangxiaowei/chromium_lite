@@ -13,9 +13,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ssl/ssl_client_auth_observer.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_mac.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util_mac.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -49,13 +49,12 @@ class SSLClientAuthObserverCocoaBridge : public SSLClientAuthObserver,
   }
 
   // SSLClientAuthObserver implementation:
-  virtual void OnCertSelectedByNotification() OVERRIDE {
+  void OnCertSelectedByNotification() override {
     [controller_ closeWebContentsModalDialog];
   }
 
   // ConstrainedWindowMacDelegate implementation:
-  virtual void OnConstrainedWindowClosed(
-      ConstrainedWindowMac* window) OVERRIDE {
+  void OnConstrainedWindowClosed(ConstrainedWindowMac* window) override {
     // |onConstrainedWindowClosed| will delete the sheet which might be still
     // in use higher up the call stack. Wait for the next cycle of the event
     // loop to call this function.

@@ -69,6 +69,7 @@ void EmbeddedWorkerDispatcher::WorkerContextDestroyed(
 void EmbeddedWorkerDispatcher::OnStartWorker(
     const EmbeddedWorkerMsg_StartWorker_Params& params) {
   DCHECK(!workers_.Lookup(params.embedded_worker_id));
+  TRACE_EVENT0("ServiceWorker", "EmbeddedWorkerDispatcher::OnStartWorker");
   RenderThread::Get()->EnsureWebKitInitialized();
   scoped_ptr<WorkerWrapper> wrapper(
       new WorkerWrapper(blink::WebEmbeddedWorker::create(
@@ -93,18 +94,12 @@ void EmbeddedWorkerDispatcher::OnStartWorker(
           blink::WebEmbeddedWorkerStartData::WaitForDebugger :
           blink::WebEmbeddedWorkerStartData::DontWaitForDebugger;
 
-  // TODO(michaeln): delete setting this deprecated member once blink
-  // stops reading it.
-  start_data.startMode =
-      params.wait_for_debugger ?
-          blink::WebEmbeddedWorkerStartModePauseOnStart :
-          blink::WebEmbeddedWorkerStartModeDontPauseOnStart;
-
   wrapper->worker()->startWorkerContext(start_data);
   workers_.AddWithID(wrapper.release(), params.embedded_worker_id);
 }
 
 void EmbeddedWorkerDispatcher::OnStopWorker(int embedded_worker_id) {
+  TRACE_EVENT0("ServiceWorker", "EmbeddedWorkerDispatcher::OnStopWorker");
   WorkerWrapper* wrapper = workers_.Lookup(embedded_worker_id);
   if (!wrapper) {
     LOG(WARNING) << "Got OnStopWorker for nonexistent worker";
@@ -118,6 +113,8 @@ void EmbeddedWorkerDispatcher::OnStopWorker(int embedded_worker_id) {
 }
 
 void EmbeddedWorkerDispatcher::OnResumeAfterDownload(int embedded_worker_id) {
+  TRACE_EVENT0("ServiceWorker",
+               "EmbeddedWorkerDispatcher::OnResumeAfterDownload");
   WorkerWrapper* wrapper = workers_.Lookup(embedded_worker_id);
   if (!wrapper) {
     LOG(WARNING) << "Got OnResumeAfterDownload for nonexistent worker";

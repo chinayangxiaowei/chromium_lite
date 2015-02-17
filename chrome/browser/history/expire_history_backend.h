@@ -14,7 +14,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/history/history_types.h"
+#include "components/history/core/browser/history_types.h"
 
 class GURL;
 class TestingProfile;
@@ -23,25 +23,20 @@ namespace history {
 
 class HistoryClient;
 class HistoryDatabase;
-struct HistoryDetails;
 class ThumbnailDatabase;
 
 // Delegate used to broadcast notifications to the main thread.
-class BroadcastNotificationDelegate {
+class ExpireHistoryBackendDelegate {
  public:
-  // Schedules a broadcast of the given notification on the application main
-  // thread.
-  virtual void BroadcastNotifications(int type,
-                                      scoped_ptr<HistoryDetails> details) = 0;
-
   // Tells typed url sync code to handle URL modifications or deletions.
-  virtual void NotifySyncURLsModified(URLRows* rows) = 0;
-  virtual void NotifySyncURLsDeleted(bool all_history,
-                                     bool expired,
-                                     URLRows* rows) = 0;
+  virtual void NotifyURLsModified(const URLRows& rows) = 0;
+  virtual void NotifyURLsDeleted(bool all_history,
+                                 bool expired,
+                                 const URLRows& rows,
+                                 const std::set<GURL>& favicon_urls) = 0;
 
  protected:
-  virtual ~BroadcastNotificationDelegate() {}
+  virtual ~ExpireHistoryBackendDelegate() {}
 };
 
 // Encapsulates visit expiration criteria and type of visits to expire.
@@ -67,7 +62,7 @@ class ExpireHistoryBackend {
   // HistoryClient may be NULL. The HistoryClient is used when expiring URLS so
   // that we don't remove any URLs or favicons that are bookmarked (visits are
   // removed though).
-  ExpireHistoryBackend(BroadcastNotificationDelegate* delegate,
+  ExpireHistoryBackend(ExpireHistoryBackendDelegate* delegate,
                        HistoryClient* history_client);
   ~ExpireHistoryBackend();
 
@@ -247,15 +242,11 @@ class ExpireHistoryBackend {
   const ExpiringVisitsReader* GetAutoSubframeVisitsReader();
 
   // Non-owning pointer to the notification delegate (guaranteed non-NULL).
-  BroadcastNotificationDelegate* delegate_;
+  ExpireHistoryBackendDelegate* delegate_;
 
   // Non-owning pointers to the databases we deal with (MAY BE NULL).
   HistoryDatabase* main_db_;       // Main history database.
   ThumbnailDatabase* thumb_db_;    // Thumbnails and favicons.
-
-  // Used to generate runnable methods to do timers on this class. They will be
-  // automatically canceled when this class is deleted.
-  base::WeakPtrFactory<ExpireHistoryBackend> weak_factory_;
 
   // The threshold for "old" history where we will automatically delete it.
   base::TimeDelta expiration_threshold_;
@@ -280,6 +271,10 @@ class ExpireHistoryBackend {
   // Use GetHistoryClient to access this, which makes sure the bookmarks are
   // loaded before returning.
   HistoryClient* history_client_;
+
+  // Used to generate runnable methods to do timers on this class. They will be
+  // automatically canceled when this class is deleted.
+  base::WeakPtrFactory<ExpireHistoryBackend> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ExpireHistoryBackend);
 };

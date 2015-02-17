@@ -127,7 +127,7 @@
       # TODO(scottmg): http://crbug.com/143877 These should be removed if
       # Mesa is ever rolled and the warnings are fixed.
       'msvs_disabled_warnings': [
-          4005, 4018, 4065, 4090, 4099, 4273, 4291, 4345, 4267,
+          4005, 4018, 4065, 4090, 4099, 4291, 4345, 4267,
       ],
       'variables': {
         'clang_warning_flags': [
@@ -265,7 +265,7 @@
       # TODO(scottmg): http://crbug.com/143877 These should be removed if
       # Mesa is ever rolled and the warnings are fixed.
       'msvs_disabled_warnings': [
-          4005, 4018, 4090, 4099, 4146, 4273, 4291, 4305, 4334, 4748, 4267,
+          4005, 4018, 4090, 4099, 4146, 4291, 4305, 4334, 4748, 4267,
       ],
       'variables': {
         'clang_warning_flags': [
@@ -283,8 +283,6 @@
         '<(generated_src_dir)/mesa/glapi_mapi_tmp_shared.h',
         'src/src/mapi/mapi/entry.c',
         'src/src/mapi/mapi/entry.h',
-        'src/src/mapi/mapi/mapi.c',
-        'src/src/mapi/mapi/mapi.h',
         'src/src/mapi/mapi/mapi_glapi.c',
         'src/src/mapi/mapi/stub.c',
         'src/src/mapi/mapi/stub.h',
@@ -300,7 +298,6 @@
         'src/src/mesa/main/api_arrayelt.h',
         'src/src/mesa/main/api_exec.c',
         'src/src/mesa/main/api_exec.h',
-        '<(generated_src_dir)/mesa/api_exec_es1.c',
         'src/src/mesa/main/api_loopback.c',
         'src/src/mesa/main/api_loopback.h',
         'src/src/mesa/main/api_validate.c',
@@ -349,8 +346,6 @@
         'src/src/mesa/main/enums.h',
         'src/src/mesa/main/errors.c',
         'src/src/mesa/main/errors.h',
-        'src/src/mesa/main/es1_conversion.c',
-        'src/src/mesa/main/es1_conversion.h',
         'src/src/mesa/main/eval.c',
         'src/src/mesa/main/eval.h',
         'src/src/mesa/main/execmem.c',
@@ -416,7 +411,6 @@
         'src/src/mesa/main/points.h',
         'src/src/mesa/main/polygon.c',
         'src/src/mesa/main/polygon.h',
-        'src/src/mesa/main/querymatrix.c',
         'src/src/mesa/main/queryobj.c',
         'src/src/mesa/main/queryobj.h',
         'src/src/mesa/main/rastpos.c',
@@ -663,6 +657,14 @@
             '_GLAPI_NO_EXPORTS',
           ],
         }],
+        ['ubsan==1', {
+          # Due to a bug in LLVM (http://llvm.org/bugs/show_bug.cgi?id=21349),
+          # compilation hangs for some Mesa source files. Disable -O2
+          # temporarily until http://crbug.com/426271 is fixed.
+          'cflags!': [
+            '-O2',
+          ],
+        }],
       ],
     },
     # Building this target will hide the native OpenGL shared library and
@@ -696,7 +698,7 @@
         '<(generated_src_dir)/mesa',
       ],
       'msvs_disabled_warnings': [
-          4005, 4018, 4065, 4090, 4099, 4273, 4291, 4345, 4267,
+          4005, 4018, 4065, 4090, 4099, 4291, 4345, 4267,
       ],
       'sources': [
         'src/src/mesa/drivers/common/driverfuncs.c',

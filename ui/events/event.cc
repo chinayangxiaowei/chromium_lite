@@ -7,6 +7,7 @@
 #if defined(USE_X11)
 #include <X11/extensions/XInput2.h>
 #include <X11/Xlib.h>
+#include <X11/keysym.h>
 #endif
 
 #include <cmath>
@@ -16,6 +17,7 @@
 #include "base/strings/stringprintf.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
+#include "ui/gfx/geometry/safe_integer_conversions.h"
 #include "ui/gfx/point3_f.h"
 #include "ui/gfx/point_conversions.h"
 #include "ui/gfx/transform.h"
@@ -111,6 +113,40 @@ namespace ui {
 ////////////////////////////////////////////////////////////////////////////////
 // Event
 
+// static
+scoped_ptr<Event> Event::Clone(const Event& event) {
+  if (event.IsKeyEvent()) {
+    return scoped_ptr<Event>(new KeyEvent(static_cast<const KeyEvent&>(event)));
+  }
+
+  if (event.IsMouseEvent()) {
+    if (event.IsMouseWheelEvent()) {
+      return scoped_ptr<Event>(
+          new MouseWheelEvent(static_cast<const MouseWheelEvent&>(event)));
+    }
+
+    return scoped_ptr<Event>(
+        new MouseEvent(static_cast<const MouseEvent&>(event)));
+  }
+
+  if (event.IsTouchEvent()) {
+    return scoped_ptr<Event>(
+        new TouchEvent(static_cast<const TouchEvent&>(event)));
+  }
+
+  if (event.IsGestureEvent()) {
+    return scoped_ptr<Event>(
+        new GestureEvent(static_cast<const GestureEvent&>(event)));
+  }
+
+  if (event.IsScrollEvent()) {
+    return scoped_ptr<Event>(
+        new ScrollEvent(static_cast<const ScrollEvent&>(event)));
+  }
+
+  return scoped_ptr<Event>(new Event(event));
+}
+
 Event::~Event() {
   if (delete_native_event_)
     ReleaseCopiedNativeEvent(native_event_);
@@ -179,8 +215,10 @@ Event::Event(const base::NativeEvent& native_event,
   base::TimeDelta delta = EventTimeForNow() - time_stamp_;
   if (type_ < ET_LAST)
     name_ = EventTypeName(type_);
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Event.Latency.Browser",
-                              delta.InMicroseconds(), 1, 1000000, 100);
+  base::HistogramBase::Sample delta_sample =
+      static_cast<base::HistogramBase::Sample>(delta.InMicroseconds());
+  UMA_HISTOGRAM_CUSTOM_COUNTS("Event.Latency.Browser", delta_sample, 1, 1000000,
+                              100);
   std::string name_for_event =
       base::StringPrintf("Event.Latency.Browser.%s", name_.c_str());
   base::HistogramBase* counter_for_type =
@@ -190,7 +228,7 @@ Event::Event(const base::NativeEvent& native_event,
           1000000,
           100,
           base::HistogramBase::kUmaTargetedHistogramFlag);
-  counter_for_type->Add(delta.InMicroseconds());
+  counter_for_type->Add(delta_sample);
 
 #if defined(USE_X11)
   if (native_event->type == GenericEvent) {
@@ -415,7 +453,8 @@ MouseWheelEvent::MouseWheelEvent(const base::NativeEvent& native_event)
 
 MouseWheelEvent::MouseWheelEvent(const ScrollEvent& scroll_event)
     : MouseEvent(scroll_event),
-      offset_(scroll_event.x_offset(), scroll_event.y_offset()){
+      offset_(gfx::ToRoundedInt(scroll_event.x_offset()),
+              gfx::ToRoundedInt(scroll_event.y_offset())) {
   SetType(ET_MOUSEWHEEL);
 }
 
@@ -457,10 +496,14 @@ void MouseWheelEvent::UpdateForRootTransform(
   gfx::DecomposedTransform decomp;
   bool success = gfx::DecomposeTransform(&decomp, inverted_root_transform);
   DCHECK(success);
-  if (decomp.scale[0])
-    offset_.set_x(offset_.x() * decomp.scale[0]);
-  if (decomp.scale[1])
-    offset_.set_y(offset_.y() * decomp.scale[1]);
+  if (decomp.scale[0]) {
+    offset_.set_x(
+        gfx::ToRoundedInt(SkMScalarToFloat(offset_.x() * decomp.scale[0])));
+  }
+  if (decomp.scale[1]) {
+    offset_.set_y(
+        gfx::ToRoundedInt(SkMScalarToFloat(offset_.y() * decomp.scale[1])));
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -569,6 +612,7 @@ bool KeyEvent::IsRepeated(const KeyEvent& event) {
       event.flags() == last_key_event_->flags() &&
       (event.time_stamp() - last_key_event_->time_stamp()).InMilliseconds() <
       kMaxAutoRepeatTimeMs) {
+    last_key_event_->set_time_stamp(event.time_stamp());
     return true;
   }
   delete last_key_event_;
@@ -591,6 +635,11 @@ KeyEvent::KeyEvent(const base::NativeEvent& native_event)
 #if defined(USE_X11)
   NormalizeFlags();
 #endif
+#if defined(OS_WIN)
+  // Only Windows has native character events.
+  if (is_char_)
+    character_ = native_event.wParam;
+#endif
 }
 
 KeyEvent::KeyEvent(EventType type,
@@ -600,7 +649,7 @@ KeyEvent::KeyEvent(EventType type,
       key_code_(key_code),
       is_char_(false),
       platform_keycode_(0),
-      character_(GetCharacterFromKeyCode(key_code, flags)) {
+      character_() {
 }
 
 KeyEvent::KeyEvent(EventType type,
@@ -612,7 +661,7 @@ KeyEvent::KeyEvent(EventType type,
       code_(code),
       is_char_(false),
       platform_keycode_(0),
-      character_(GetCharacterFromKeyCode(key_code, flags)) {
+      character_(0) {
 }
 
 KeyEvent::KeyEvent(base::char16 character, KeyboardCode key_code, int flags)
@@ -620,19 +669,58 @@ KeyEvent::KeyEvent(base::char16 character, KeyboardCode key_code, int flags)
       key_code_(key_code),
       code_(""),
       is_char_(true),
+      platform_keycode_(0),
       character_(character) {
 }
 
+KeyEvent::KeyEvent(const KeyEvent& rhs)
+    : Event(rhs),
+      key_code_(rhs.key_code_),
+      code_(rhs.code_),
+      is_char_(rhs.is_char_),
+      platform_keycode_(rhs.platform_keycode_),
+      character_(rhs.character_) {
+  if (rhs.extended_key_event_data_)
+    extended_key_event_data_.reset(rhs.extended_key_event_data_->Clone());
+}
+
+KeyEvent& KeyEvent::operator=(const KeyEvent& rhs) {
+  if (this != &rhs) {
+    Event::operator=(rhs);
+    key_code_ = rhs.key_code_;
+    code_ = rhs.code_;
+    is_char_ = rhs.is_char_;
+    platform_keycode_ = rhs.platform_keycode_;
+    character_ = rhs.character_;
+
+    if (rhs.extended_key_event_data_)
+      extended_key_event_data_.reset(rhs.extended_key_event_data_->Clone());
+  }
+  return *this;
+}
+
+KeyEvent::~KeyEvent() {}
+
+void KeyEvent::SetExtendedKeyEventData(scoped_ptr<ExtendedKeyEventData> data) {
+  extended_key_event_data_ = data.Pass();
+}
+
 base::char16 KeyEvent::GetCharacter() const {
-  if (character_)
+  if (is_char_ || character_)
     return character_;
 
+  // TODO(kpschoedel): streamline these cases after settling Ozone
+  // positional coding.
 #if defined(OS_WIN)
-  return (native_event().message == WM_CHAR) ? key_code_ :
-      GetCharacterFromKeyCode(key_code_, flags());
+  // Native Windows character events always have is_char_ == true,
+  // so this is a synthetic or native keystroke event.
+  character_ = GetCharacterFromKeyCode(key_code_, flags());
+  return character_;
 #elif defined(USE_X11)
-  if (!native_event())
-    return GetCharacterFromKeyCode(key_code_, flags());
+  if (!native_event()) {
+    character_ = GetCharacterFromKeyCode(key_code_, flags());
+    return character_;
+  }
 
   DCHECK(native_event()->type == KeyPress ||
          native_event()->type == KeyRelease ||
@@ -655,6 +743,20 @@ base::char16 KeyEvent::GetCharacter() const {
 
   return GetCharacterFromKeyCode(key_code_, flags());
 #endif
+}
+
+base::char16 KeyEvent::GetText() const {
+  if ((flags() & EF_CONTROL_DOWN) != 0) {
+    return GetControlCharacterForKeycode(key_code_,
+                                         (flags() & EF_SHIFT_DOWN) != 0);
+  }
+  return GetUnmodifiedText();
+}
+
+base::char16 KeyEvent::GetUnmodifiedText() const {
+  if (!is_char_ && (key_code_ == VKEY_RETURN))
+    return '\r';
+  return GetCharacter();
 }
 
 bool KeyEvent::IsUnicodeKeyCode() const {
@@ -728,6 +830,83 @@ void KeyEvent::SetTranslated(bool translated) {
     default:
       NOTREACHED();
   }
+}
+
+bool KeyEvent::IsRightSideKey() const {
+  switch (key_code_) {
+    case VKEY_CONTROL:
+    case VKEY_SHIFT:
+    case VKEY_MENU:
+    case VKEY_LWIN:
+#if defined(USE_X11)
+      // Under X11, setting code_ requires platform-dependent information, and
+      // currently assumes that X keycodes are based on Linux evdev keycodes.
+      // In certain test environments this is not the case, and code_ is not
+      // set accurately, so we need a different mechanism. Fortunately X11 key
+      // mapping preserves the left-right distinction, so testing keysyms works
+      // if the value is available (as it is for all X11 native-based events).
+      if (platform_keycode_) {
+        return (platform_keycode_ == XK_Shift_R) ||
+               (platform_keycode_ == XK_Control_R) ||
+               (platform_keycode_ == XK_Alt_R) ||
+               (platform_keycode_ == XK_Meta_R) ||
+               (platform_keycode_ == XK_Super_R) ||
+               (platform_keycode_ == XK_Hyper_R);
+      }
+      // Fall through to the generic code if we have no platform_keycode_.
+      // Under X11, this must be a synthetic event, so we can require that
+      // code_ be set correctly.
+#endif
+      return ((code_.size() > 5) &&
+              (code_.compare(code_.size() - 5, 5, "Right", 5)) == 0);
+    default:
+      return false;
+  }
+}
+
+KeyboardCode KeyEvent::GetLocatedWindowsKeyboardCode() const {
+  switch (key_code_) {
+    case VKEY_SHIFT:
+      return IsRightSideKey() ? VKEY_RSHIFT : VKEY_LSHIFT;
+    case VKEY_CONTROL:
+      return IsRightSideKey() ? VKEY_RCONTROL : VKEY_LCONTROL;
+    case VKEY_MENU:
+      return IsRightSideKey() ? VKEY_RMENU : VKEY_LMENU;
+    case VKEY_LWIN:
+      return IsRightSideKey() ? VKEY_RWIN : VKEY_LWIN;
+    // TODO(kpschoedel): EF_NUMPAD_KEY is present only on X11. Currently this
+    // function is only called on X11. Likely the tests here will be replaced
+    // with a DOM-based code enumeration test in the course of Ozone
+    // platform-indpendent key event work.
+    case VKEY_0:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD0 : VKEY_0;
+    case VKEY_1:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD1 : VKEY_1;
+    case VKEY_2:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD2 : VKEY_2;
+    case VKEY_3:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD3 : VKEY_3;
+    case VKEY_4:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD4 : VKEY_4;
+    case VKEY_5:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD5 : VKEY_5;
+    case VKEY_6:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD6 : VKEY_6;
+    case VKEY_7:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD7 : VKEY_7;
+    case VKEY_8:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD8 : VKEY_8;
+    case VKEY_9:
+      return (flags() & EF_NUMPAD_KEY) ? VKEY_NUMPAD9 : VKEY_9;
+    default:
+      return key_code_;
+  }
+}
+
+uint16 KeyEvent::GetConflatedWindowsKeyCode() const {
+  if (is_char_)
+    return character_;
+  return key_code_;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -12,8 +12,8 @@
 #include "ash/test/display_manager_test_api.h"
 #include "ash/test/test_user_wallpaper_delegate.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_service.h"
@@ -48,7 +48,7 @@ class WallpaperManagerCacheTest : public test::AshTestBase {
 
   FakeUserManager* fake_user_manager() { return fake_user_manager_; }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     test::AshTestBase::SetUp();
   }
 

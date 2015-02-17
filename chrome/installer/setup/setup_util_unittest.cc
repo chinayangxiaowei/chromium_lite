@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/process/kill.h"
@@ -21,8 +21,8 @@
 #include "base/version.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
-#include "chrome/installer/setup/setup_util.h"
 #include "chrome/installer/setup/setup_constants.h"
+#include "chrome/installer/setup/setup_util.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/installation_state.h"
 #include "chrome/installer/util/installer_state.h"
@@ -33,12 +33,12 @@ namespace {
 
 class SetupUtilTestWithDir : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Create a temp directory for testing.
     ASSERT_TRUE(test_dir_.CreateUniqueTempDir());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     // Clean up test directory manually so we can fail if it leaks.
     ASSERT_TRUE(test_dir_.Delete());
   }
@@ -66,13 +66,15 @@ bool CurrentProcessHasPrivilege(const wchar_t* privilege_name) {
 
   // First get the size of the buffer needed for |privileges| below.
   DWORD size;
-  EXPECT_FALSE(::GetTokenInformation(token, TokenPrivileges, NULL, 0, &size));
+  EXPECT_FALSE(::GetTokenInformation(token.Get(), TokenPrivileges, NULL, 0,
+                                     &size));
 
   scoped_ptr<BYTE[]> privileges_bytes(new BYTE[size]);
   TOKEN_PRIVILEGES* privileges =
       reinterpret_cast<TOKEN_PRIVILEGES*>(privileges_bytes.get());
 
-  if (!::GetTokenInformation(token, TokenPrivileges, privileges, size, &size)) {
+  if (!::GetTokenInformation(token.Get(), TokenPrivileges, privileges, size,
+                             &size)) {
     ADD_FAILURE();
     return false;
   }
@@ -287,7 +289,7 @@ class FindArchiveToPatchTest : public SetupUtilTestWithDir {
     }
   };
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     SetupUtilTestWithDir::SetUp();
     product_version_ = Version("30.0.1559.0");
     max_version_ = Version("47.0.1559.0");
@@ -313,7 +315,7 @@ class FindArchiveToPatchTest : public SetupUtilTestWithDir {
     ASSERT_EQ(1, base::WriteFile(GetMaxVersionArchivePath(), "b", 1));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     original_state_.reset();
     SetupUtilTestWithDir::TearDown();
   }
@@ -407,9 +409,8 @@ namespace {
 
 class MigrateMultiToSingleTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
-    registry_override_manager_.OverrideRegistry(kRootKey,
-                                                L"MigrateMultiToSingleTest");
+  virtual void SetUp() override {
+    registry_override_manager_.OverrideRegistry(kRootKey);
   }
 
   static const bool kSystemLevel = false;

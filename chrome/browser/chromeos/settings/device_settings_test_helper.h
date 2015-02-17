@@ -20,8 +20,8 @@
 #include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
-#include "chrome/browser/chromeos/settings/mock_owner_key_util.h"
 #include "chromeos/dbus/session_manager_client.h"
+#include "components/ownership/mock_owner_key_util.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -29,7 +29,7 @@ class TestingProfile;
 
 namespace chromeos {
 
-class FakeDBusThreadManager;
+class DBusThreadManagerSetter;
 
 // A helper class for tests mocking out session_manager's device settings
 // interface. The pattern is to initialize DeviceSettingsService with the helper
@@ -41,9 +41,6 @@ class DeviceSettingsTestHelper : public SessionManagerClient {
   // Wraps a device settings service instance for testing.
   DeviceSettingsTestHelper();
   virtual ~DeviceSettingsTestHelper();
-
-  // Flushes operations on the current message loop and the blocking pool.
-  void FlushLoops();
 
   // Runs all pending store callbacks.
   void FlushStore();
@@ -85,46 +82,48 @@ class DeviceSettingsTestHelper : public SessionManagerClient {
   }
 
   // SessionManagerClient:
-  virtual void Init(dbus::Bus* bus) OVERRIDE;
+  virtual void Init(dbus::Bus* bus) override;
   virtual void SetStubDelegate(SessionManagerClient::StubDelegate* delegate)
-      OVERRIDE;
-  virtual void AddObserver(Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(Observer* observer) OVERRIDE;
-  virtual bool HasObserver(Observer* observer) OVERRIDE;
-  virtual void EmitLoginPromptVisible() OVERRIDE;
-  virtual void RestartJob(int pid, const std::string& command_line) OVERRIDE;
-  virtual void StartSession(const std::string& user_email) OVERRIDE;
-  virtual void StopSession() OVERRIDE;
-  virtual void StartDeviceWipe() OVERRIDE;
-  virtual void RequestLockScreen() OVERRIDE;
-  virtual void NotifyLockScreenShown() OVERRIDE;
-  virtual void NotifyLockScreenDismissed() OVERRIDE;
+      override;
+  virtual void AddObserver(Observer* observer) override;
+  virtual void RemoveObserver(Observer* observer) override;
+  virtual bool HasObserver(Observer* observer) override;
+  virtual void EmitLoginPromptVisible() override;
+  virtual void RestartJob(int pid, const std::string& command_line) override;
+  virtual void StartSession(const std::string& user_email) override;
+  virtual void StopSession() override;
+  virtual void NotifySupervisedUserCreationStarted() override;
+  virtual void NotifySupervisedUserCreationFinished() override;
+  virtual void StartDeviceWipe() override;
+  virtual void RequestLockScreen() override;
+  virtual void NotifyLockScreenShown() override;
+  virtual void NotifyLockScreenDismissed() override;
   virtual void RetrieveActiveSessions(
-      const ActiveSessionsCallback& callback) OVERRIDE;
+      const ActiveSessionsCallback& callback) override;
   virtual void RetrieveDevicePolicy(
-      const RetrievePolicyCallback& callback) OVERRIDE;
+      const RetrievePolicyCallback& callback) override;
   virtual void RetrievePolicyForUser(
       const std::string& username,
-      const RetrievePolicyCallback& callback) OVERRIDE;
+      const RetrievePolicyCallback& callback) override;
   virtual std::string BlockingRetrievePolicyForUser(
-      const std::string& username) OVERRIDE;
+      const std::string& username) override;
   virtual void RetrieveDeviceLocalAccountPolicy(
       const std::string& account_id,
-      const RetrievePolicyCallback& callback) OVERRIDE;
+      const RetrievePolicyCallback& callback) override;
   virtual void StoreDevicePolicy(const std::string& policy_blob,
-                                 const StorePolicyCallback& callback) OVERRIDE;
+                                 const StorePolicyCallback& callback) override;
   virtual void StorePolicyForUser(const std::string& username,
                                   const std::string& policy_blob,
-                                  const StorePolicyCallback& callback) OVERRIDE;
+                                  const StorePolicyCallback& callback) override;
   virtual void StoreDeviceLocalAccountPolicy(
       const std::string& account_id,
       const std::string& policy_blob,
-      const StorePolicyCallback& callback) OVERRIDE;
+      const StorePolicyCallback& callback) override;
   virtual void SetFlagsForUser(
       const std::string& account_id,
-      const std::vector<std::string>& flags) OVERRIDE;
+      const std::vector<std::string>& flags) override;
   virtual void GetServerBackedStateKeys(
-      const StateKeysCallback& callback) OVERRIDE;
+      const StateKeysCallback& callback) override;
 
  private:
   struct PolicyState {
@@ -167,8 +166,8 @@ class DeviceSettingsTestBase : public testing::Test {
   DeviceSettingsTestBase();
   virtual ~DeviceSettingsTestBase();
 
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  virtual void SetUp() override;
+  virtual void TearDown() override;
 
   // Flushes any pending device settings operations.
   void FlushDeviceSettings();
@@ -188,13 +187,13 @@ class DeviceSettingsTestBase : public testing::Test {
   // tested classes depend on implicitly.
   FakeUserManager* user_manager_;
   ScopedUserManagerEnabler user_manager_enabler_;
-  scoped_ptr<TestingProfile> profile_;
-  scoped_refptr<MockOwnerKeyUtil> owner_key_util_;
+  scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util_;
   // Local DeviceSettingsService instance for tests. Avoid using in combination
   // with the global instance (DeviceSettingsService::Get()).
   DeviceSettingsService device_settings_service_;
+  scoped_ptr<TestingProfile> profile_;
 
-  chromeos::FakeDBusThreadManager* fake_dbus_thread_manager_;
+  scoped_ptr<DBusThreadManagerSetter> dbus_setter_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DeviceSettingsTestBase);

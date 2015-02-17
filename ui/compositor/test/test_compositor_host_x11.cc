@@ -12,7 +12,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
+#include "base/thread_task_runner_handle.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/x/x11_types.h"
@@ -23,12 +23,12 @@ class TestCompositorHostX11 : public TestCompositorHost {
  public:
   TestCompositorHostX11(const gfx::Rect& bounds,
                         ui::ContextFactory* context_factory);
-  virtual ~TestCompositorHostX11();
+  ~TestCompositorHostX11() override;
 
  private:
   // Overridden from TestCompositorHost:
-  virtual void Show() OVERRIDE;
-  virtual ui::Compositor* GetCompositor() OVERRIDE;
+  void Show() override;
+  ui::Compositor* GetCompositor() override;
 
   void Draw();
 
@@ -77,7 +77,7 @@ void TestCompositorHostX11::Show() {
   }
   compositor_.reset(new ui::Compositor(window_,
                                        context_factory_,
-                                       base::MessageLoopProxy::current()));
+                                       base::ThreadTaskRunnerHandle::Get()));
   compositor_->SetScaleAndSize(1.0f, bounds_.size());
 }
 

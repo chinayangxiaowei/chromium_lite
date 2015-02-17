@@ -4,11 +4,63 @@
 
 import("//tools/grit/grit_rule.gni")
 
+
+if (is_android) {
+  import("//build/config/android/rules.gni")
+  android_generated_java_resources = [
+    "java/res/values-am/generated_resources.xml",
+    "java/res/values-ar/generated_resources.xml",
+    "java/res/values-bg/generated_resources.xml",
+    "java/res/values-ca/generated_resources.xml",
+    "java/res/values-cs/generated_resources.xml",
+    "java/res/values-da/generated_resources.xml",
+    "java/res/values-de/generated_resources.xml",
+    "java/res/values-el/generated_resources.xml",
+    "java/res/values-en-rGB/generated_resources.xml",
+    "java/res/values-es-rUS/generated_resources.xml",
+    "java/res/values-es/generated_resources.xml",
+    "java/res/values-fa/generated_resources.xml",
+    "java/res/values-fi/generated_resources.xml",
+    "java/res/values-fr/generated_resources.xml",
+    "java/res/values-hi/generated_resources.xml",
+    "java/res/values-hr/generated_resources.xml",
+    "java/res/values-hu/generated_resources.xml",
+    "java/res/values-in/generated_resources.xml",
+    "java/res/values-it/generated_resources.xml",
+    "java/res/values-iw/generated_resources.xml",
+    "java/res/values-ja/generated_resources.xml",
+    "java/res/values-ko/generated_resources.xml",
+    "java/res/values-lt/generated_resources.xml",
+    "java/res/values-lv/generated_resources.xml",
+    "java/res/values-nb/generated_resources.xml",
+    "java/res/values-nl/generated_resources.xml",
+    "java/res/values-pl/generated_resources.xml",
+    "java/res/values-pt-rBR/generated_resources.xml",
+    "java/res/values-pt-rPT/generated_resources.xml",
+    "java/res/values-ro/generated_resources.xml",
+    "java/res/values-ru/generated_resources.xml",
+    "java/res/values-sk/generated_resources.xml",
+    "java/res/values-sl/generated_resources.xml",
+    "java/res/values-sr/generated_resources.xml",
+    "java/res/values-sv/generated_resources.xml",
+    "java/res/values-sw/generated_resources.xml",
+    "java/res/values-th/generated_resources.xml",
+    "java/res/values-tl/generated_resources.xml",
+    "java/res/values-tr/generated_resources.xml",
+    "java/res/values-uk/generated_resources.xml",
+    "java/res/values-vi/generated_resources.xml",
+    "java/res/values-zh-rCN/generated_resources.xml",
+    "java/res/values-zh-rTW/generated_resources.xml",
+    "java/res/values/generated_resources.xml",
+  ]
+}
+
 # GYP version: chrome/chrome_resources.gyp:chrome_strings
 #              (generate_generated_resources action)
 grit("generated_resources") {
   source = "generated_resources.grd"
   output_dir = "$root_gen_dir/chrome"
+  use_qualified_include = true
   outputs = [
     "grit/generated_resources.h",
     "generated_resources_am.pak",
@@ -66,12 +118,27 @@ grit("generated_resources") {
     "generated_resources_zh-CN.pak",
     "generated_resources_zh-TW.pak",
   ]
+
+  if (is_android) {
+    outputs += android_generated_java_resources
+  }
+}
+
+if (is_android) {
+  java_strings_grd_prebuilt("java_strings_grd") {
+    grit_output_dir = "$root_gen_dir/chrome/java/res"
+    generated_files = rebase_path(
+        android_generated_java_resources,
+        "java/res",
+        "."
+    )
+  }
 }
 
 # GYP version: chrome/chrome_resources.gyp:chrome_strings_map
 action("make_generated_resources_map") {
   # Targets should depend on generated_resources_map instead.
-  visibility = ":generated_resources_map"
+  visibility = [ ":generated_resources_map" ]
 
   script = "//chrome/browser/metrics/variations/generate_resources_map.py"
 
@@ -96,6 +163,7 @@ source_set("generated_resources_map") {
 grit("google_chrome_strings") {
   source = "google_chrome_strings.grd"
   output_dir = "$root_gen_dir/chrome"
+  use_qualified_include = true
   outputs = [
     "grit/google_chrome_strings.h",
     "google_chrome_strings_am.pak",
@@ -160,6 +228,7 @@ grit("google_chrome_strings") {
 grit("chromium_strings") {
   source = "chromium_strings.grd"
   output_dir = "$root_gen_dir/chrome"
+  use_qualified_include = true
   outputs = [
     "grit/chromium_strings.h",
     "chromium_strings_am.pak",
@@ -217,4 +286,36 @@ grit("chromium_strings") {
     "chromium_strings_zh-CN.pak",
     "chromium_strings_zh-TW.pak",
   ]
+}
+
+source_set("test_support") {
+  testonly = true
+  visibility = [ "//chrome/test:test_support" ]
+
+  sources = [
+    "chrome_main_delegate.cc",
+    "chrome_main_delegate.h",
+    "close_handle_hook_win.cc",
+    "close_handle_hook_win.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser",
+    "//chrome/common",
+    "//chrome/plugin",
+    "//chrome/renderer",
+    "//chrome/utility",
+    "//content/public/app:both",
+    "//content/public/common",
+    "//ui/base",
+  ]
+
+  if (is_mac) {
+    sources += [
+      "chrome_breakpad_client.cc",
+      "chrome_breakpad_client_mac.mm",
+      "chrome_main_mac.mm",
+    ]
+  }
 }

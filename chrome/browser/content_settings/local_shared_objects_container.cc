@@ -12,6 +12,7 @@
 #include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_service_worker_helper.h"
+#include "chrome/browser/browsing_data/canonical_cookie_hash.h"
 #include "chrome/browser/browsing_data/cookies_tree_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/storage_partition.h"
@@ -51,18 +52,6 @@ LocalSharedObjectsContainer::LocalSharedObjectsContainer(Profile* profile)
 LocalSharedObjectsContainer::~LocalSharedObjectsContainer() {
 }
 
-void LocalSharedObjectsContainer::Reset() {
-  appcaches_->Reset();
-  channel_ids_->Reset();
-  cookies_->Reset();
-  databases_->Reset();
-  file_systems_->Reset();
-  indexed_dbs_->Reset();
-  local_storages_->Reset();
-  service_workers_->Reset();
-  session_storages_->Reset();
-}
-
 size_t LocalSharedObjectsContainer::GetObjectCount() const {
   size_t count = 0;
   count += appcaches()->GetAppCacheCount();
@@ -86,16 +75,15 @@ size_t LocalSharedObjectsContainer::GetObjectCountForDomain(
   // to be a third party regarding the domain of the provided |origin|.
   // E.g. if the origin is "http://foo.com" then all cookies with domain foo.com,
   // a.foo.com, b.a.foo.com or *.foo.com will be counted.
-  typedef CannedBrowsingDataCookieHelper::OriginCookieListMap
-      OriginCookieListMap;
-  const OriginCookieListMap& origin_cookies_list_map =
-      cookies()->origin_cookie_list_map();
-  for (OriginCookieListMap::const_iterator it =
-          origin_cookies_list_map.begin();
-      it != origin_cookies_list_map.end();
-      ++it) {
-    const net::CookieList* cookie_list = it->second;
-    for (net::CookieList::const_iterator cookie = cookie_list->begin();
+  typedef CannedBrowsingDataCookieHelper::OriginCookieSetMap OriginCookieSetMap;
+  const OriginCookieSetMap& origin_cookies_set_map =
+      cookies()->origin_cookie_set_map();
+  for (OriginCookieSetMap::const_iterator it = origin_cookies_set_map.begin();
+       it != origin_cookies_set_map.end();
+       ++it) {
+    const canonical_cookie::CookieHashSet* cookie_list = it->second;
+    for (canonical_cookie::CookieHashSet::const_iterator cookie =
+             cookie_list->begin();
          cookie != cookie_list->end();
          ++cookie) {
       // Strip leading '.'s.
@@ -198,6 +186,18 @@ size_t LocalSharedObjectsContainer::GetObjectCountForDomain(
   }
 
   return count;
+}
+
+void LocalSharedObjectsContainer::Reset() {
+  appcaches_->Reset();
+  channel_ids_->Reset();
+  cookies_->Reset();
+  databases_->Reset();
+  file_systems_->Reset();
+  indexed_dbs_->Reset();
+  local_storages_->Reset();
+  service_workers_->Reset();
+  session_storages_->Reset();
 }
 
 scoped_ptr<CookiesTreeModel>

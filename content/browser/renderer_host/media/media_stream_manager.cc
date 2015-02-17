@@ -19,7 +19,6 @@
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/media/capture/web_contents_capture_util.h"
 #include "content/browser/renderer_host/media/audio_input_device_manager.h"
-#include "content/browser/renderer_host/media/device_request_message_filter.h"
 #include "content/browser/renderer_host/media/media_capture_devices_impl.h"
 #include "content/browser/renderer_host/media/media_stream_requester.h"
 #include "content/browser/renderer_host/media/media_stream_ui_proxy.h"
@@ -31,6 +30,7 @@
 #include "content/public/browser/media_observer.h"
 #include "content/public/browser/media_request_state.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/media_stream_request.h"
 #include "media/audio/audio_manager_base.h"
@@ -42,6 +42,10 @@
 
 #if defined(OS_WIN)
 #include "base/win/scoped_com_initializer.h"
+#endif
+
+#if defined(OS_CHROMEOS)
+#include "chromeos/audio/cras_audio_handler.h"
 #endif
 
 namespace content {
@@ -198,7 +202,6 @@ class MediaStreamManager::DeviceRequest {
                 int requesting_frame_id,
                 int page_request_id,
                 const GURL& security_origin,
-                bool have_permission,
                 bool user_gesture,
                 MediaStreamRequestType request_type,
                 const StreamOptions& options,
@@ -208,7 +211,6 @@ class MediaStreamManager::DeviceRequest {
         requesting_frame_id(requesting_frame_id),
         page_request_id(page_request_id),
         security_origin(security_origin),
-        have_permission(have_permission),
         user_gesture(user_gesture),
         request_type(request_type),
         options(options),
@@ -325,10 +327,6 @@ class MediaStreamManager::DeviceRequest {
 
   const GURL security_origin;
 
-  // This is used when enumerating devices; if we don't have device access
-  // permission, we remove the device label.
-  bool have_permission;
-
   const bool user_gesture;
 
   const MediaStreamRequestType request_type;
@@ -362,13 +360,25 @@ MediaStreamManager::EnumerationCache::~EnumerationCache() {
 
 MediaStreamManager::MediaStreamManager()
     : audio_manager_(NULL),
+#if defined(OS_WIN)
+      video_capture_thread_("VideoCaptureThread"),
+#endif
       monitoring_started_(false),
+#if defined(OS_CHROMEOS)
+      has_checked_keyboard_mic_(false),
+#endif
       io_loop_(NULL),
       use_fake_ui_(false) {}
 
 MediaStreamManager::MediaStreamManager(media::AudioManager* audio_manager)
     : audio_manager_(audio_manager),
+#if defined(OS_WIN)
+      video_capture_thread_("VideoCaptureThread"),
+#endif
       monitoring_started_(false),
+#if defined(OS_CHROMEOS)
+      has_checked_keyboard_mic_(false),
+#endif
       io_loop_(NULL),
       use_fake_ui_(false) {
   DCHECK(audio_manager_);
@@ -396,7 +406,7 @@ MediaStreamManager::MediaStreamManager(media::AudioManager* audio_manager)
 MediaStreamManager::~MediaStreamManager() {
   DVLOG(1) << "~MediaStreamManager";
   DCHECK(requests_.empty());
-  DCHECK(!device_task_runner_);
+  DCHECK(!device_task_runner_.get());
 
   base::PowerMonitor* power_monitor = base::PowerMonitor::Get();
   // The PowerMonitor instance owned by BrowserMainLoops always outlives the
@@ -433,7 +443,6 @@ std::string MediaStreamManager::MakeMediaAccessRequest(
                                              render_frame_id,
                                              page_request_id,
                                              security_origin,
-                                             true,
                                              false,  // user gesture
                                              MEDIA_DEVICE_ACCESS,
                                              options,
@@ -474,7 +483,6 @@ void MediaStreamManager::GenerateStream(MediaStreamRequester* requester,
                                              render_frame_id,
                                              page_request_id,
                                              security_origin,
-                                             true,
                                              user_gesture,
                                              MEDIA_GENERATE_STREAM,
                                              options,
@@ -657,8 +665,7 @@ std::string MediaStreamManager::EnumerateDevices(
     const ResourceContext::SaltCallback& sc,
     int page_request_id,
     MediaStreamType type,
-    const GURL& security_origin,
-    bool have_permission) {
+    const GURL& security_origin) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(requester);
   DCHECK(type == MEDIA_DEVICE_AUDIO_CAPTURE ||
@@ -670,7 +677,6 @@ std::string MediaStreamManager::EnumerateDevices(
                                              render_frame_id,
                                              page_request_id,
                                              security_origin,
-                                             have_permission,
                                              false,  // user gesture
                                              MEDIA_ENUMERATE_DEVICES,
                                              StreamOptions(),
@@ -817,7 +823,6 @@ void MediaStreamManager::OpenDevice(MediaStreamRequester* requester,
                                              render_frame_id,
                                              page_request_id,
                                              security_origin,
-                                             true,
                                              false,  // user gesture
                                              MEDIA_OPEN_DEVICE,
                                              options,
@@ -1085,7 +1090,7 @@ void MediaStreamManager::StartEnumeration(DeviceRequest* request) {
   // Start enumeration for devices of all requested device types.
   const MediaStreamType streams[] = { request->audio_type(),
                                       request->video_type() };
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(streams); ++i) {
+  for (size_t i = 0; i < arraysize(streams); ++i) {
     if (streams[i] == MEDIA_NO_SERVICE)
       continue;
     request->SetState(streams[i], MEDIA_REQUEST_STATE_REQUESTED);
@@ -1223,6 +1228,10 @@ void MediaStreamManager::SetupRequest(const std::string& label) {
                           MEDIA_DEVICE_SCREEN_CAPTURE_FAILURE);
     return;
   }
+
+#if defined(OS_CHROMEOS)
+  EnsureKeyboardMicChecked();
+#endif
 
   if (!is_web_contents_capture && !is_screen_capture) {
     if (EnumerationRequired(&audio_enumeration_cache_, audio_type) ||
@@ -1467,6 +1476,11 @@ void MediaStreamManager::FinalizeEnumerateDevices(const std::string& label,
                                                   DeviceRequest* request) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK_EQ(request->request_type, MEDIA_ENUMERATE_DEVICES);
+  DCHECK(((request->audio_type() == MEDIA_DEVICE_AUDIO_CAPTURE ||
+           request->audio_type() == MEDIA_DEVICE_AUDIO_OUTPUT) &&
+          request->video_type() == MEDIA_NO_SERVICE) ||
+         (request->audio_type() == MEDIA_NO_SERVICE &&
+          request->video_type() == MEDIA_DEVICE_VIDEO_CAPTURE));
 
   if (request->security_origin.is_valid()) {
     for (StreamDeviceInfoArray::iterator it = request->devices.begin();
@@ -1477,7 +1491,44 @@ void MediaStreamManager::FinalizeEnumerateDevices(const std::string& label,
     request->devices.clear();
   }
 
-  if (!request->have_permission)
+  if (use_fake_ui_) {
+    if (!fake_ui_)
+      fake_ui_.reset(new FakeMediaStreamUIProxy());
+    request->ui_proxy = fake_ui_.Pass();
+  } else {
+    request->ui_proxy = MediaStreamUIProxy::Create();
+  }
+
+  // Output label permissions are based on input permission.
+  MediaStreamType type =
+      request->audio_type() == MEDIA_DEVICE_AUDIO_CAPTURE ||
+      request->audio_type() == MEDIA_DEVICE_AUDIO_OUTPUT
+      ? MEDIA_DEVICE_AUDIO_CAPTURE
+      : MEDIA_DEVICE_VIDEO_CAPTURE;
+
+  request->ui_proxy->CheckAccess(
+      request->security_origin,
+      type,
+      request->requesting_process_id,
+      request->requesting_frame_id,
+      base::Bind(&MediaStreamManager::HandleCheckMediaAccessResponse,
+                 base::Unretained(this),
+                 label));
+}
+
+void MediaStreamManager::HandleCheckMediaAccessResponse(
+    const std::string& label,
+    bool have_access) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+  DeviceRequest* request = FindRequest(label);
+  if (!request) {
+    // This can happen if the request was cancelled.
+    DVLOG(1) << "The request with label " << label << " does not exist.";
+    return;
+  }
+
+  if (!have_access)
     ClearDeviceLabels(&request->devices);
 
   request->requester->DevicesEnumerated(
@@ -1529,7 +1580,7 @@ void MediaStreamManager::FinalizeMediaAccessRequest(
 
 void MediaStreamManager::InitializeDeviceManagersOnIOThread() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (device_task_runner_)
+  if (device_task_runner_.get())
     return;
 
   device_task_runner_ = audio_manager_->GetWorkerTaskRunner();
@@ -1550,7 +1601,16 @@ void MediaStreamManager::InitializeDeviceManagersOnIOThread() {
   video_capture_manager_ =
       new VideoCaptureManager(media::VideoCaptureDeviceFactory::CreateFactory(
           BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI)));
+#if defined(OS_WIN)
+  // Use an STA Video Capture Thread to try to avoid crashes on enumeration of
+  // buggy third party Direct Show modules, http://crbug.com/428958.
+  video_capture_thread_.init_com_with_mta(false);
+  CHECK(video_capture_thread_.Start());
+  video_capture_manager_->Register(this,
+                                   video_capture_thread_.message_loop_proxy());
+#else
   video_capture_manager_->Register(this, device_task_runner_);
+#endif
 }
 
 void MediaStreamManager::Opened(MediaStreamType stream_type,
@@ -1926,7 +1986,7 @@ void MediaStreamManager::WillDestroyCurrentMessageLoop() {
   DVLOG(3) << "MediaStreamManager::WillDestroyCurrentMessageLoop()";
   DCHECK_EQ(base::MessageLoop::current(), io_loop_);
   DCHECK(requests_.empty());
-  if (device_task_runner_) {
+  if (device_task_runner_.get()) {
     StopMonitoring();
 
     video_capture_manager_->Unregister();
@@ -2044,5 +2104,37 @@ void MediaStreamManager::OnMediaStreamUIWindowId(MediaStreamType video_type,
     }
   }
 }
+
+#if defined(OS_CHROMEOS)
+void MediaStreamManager::EnsureKeyboardMicChecked() {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  if (!has_checked_keyboard_mic_) {
+    has_checked_keyboard_mic_ = true;
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
+        base::Bind(&MediaStreamManager::CheckKeyboardMicOnUIThread,
+                   base::Unretained(this)));
+  }
+}
+
+void MediaStreamManager::CheckKeyboardMicOnUIThread() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  // We will post this on the device thread before the media media access
+  // request is posted on the UI thread, so setting the keyboard mic info will
+  // be done before any stream is created.
+  if (chromeos::CrasAudioHandler::Get()->HasKeyboardMic()) {
+    device_task_runner_->PostTask(
+        FROM_HERE,
+        base::Bind(&MediaStreamManager::SetKeyboardMicOnDeviceThread,
+                   base::Unretained(this)));
+  }
+}
+
+void MediaStreamManager::SetKeyboardMicOnDeviceThread() {
+  DCHECK(device_task_runner_->BelongsToCurrentThread());
+  audio_manager_->SetHasKeyboardMic();
+}
+#endif
 
 }  // namespace content

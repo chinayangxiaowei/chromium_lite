@@ -35,13 +35,13 @@ class TestLogUploader : public LogUploader {
   }
 
  protected:
-  virtual bool IsUploadScheduled() const OVERRIDE {
+  bool IsUploadScheduled() const override {
     return last_interval_set() != base::TimeDelta();
   }
 
   // Schedules a future call to StartScheduledUpload if one isn't already
   // pending.
-  virtual void ScheduleNextUpload(base::TimeDelta interval) OVERRIDE {
+  void ScheduleNextUpload(base::TimeDelta interval) override {
     EXPECT_EQ(last_interval_set(), base::TimeDelta());
     last_interval_set_ = interval;
   }
@@ -70,7 +70,7 @@ class LogUploaderTest : public testing::Test {
 };
 
 TEST_F(LogUploaderTest, Success) {
-  TestLogUploader uploader(request_context_);
+  TestLogUploader uploader(request_context_.get());
 
   factory_.SetFakeResponse(GURL(kTestServerURL),
                            std::string(),
@@ -84,7 +84,7 @@ TEST_F(LogUploaderTest, Success) {
 }
 
 TEST_F(LogUploaderTest, Rejection) {
-  TestLogUploader uploader(request_context_);
+  TestLogUploader uploader(request_context_.get());
 
   factory_.SetFakeResponse(GURL(kTestServerURL),
                            std::string(),
@@ -98,7 +98,7 @@ TEST_F(LogUploaderTest, Rejection) {
 }
 
 TEST_F(LogUploaderTest, Failure) {
-  TestLogUploader uploader(request_context_);
+  TestLogUploader uploader(request_context_.get());
 
   factory_.SetFakeResponse(GURL(kTestServerURL),
                            std::string(),

@@ -14,7 +14,6 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/common/ssl_status.h"
 #include "ipc/ipc_message_macros.h"
 #include "net/cert/cert_status_flags.h"
@@ -28,7 +27,8 @@ ContentPasswordManagerDriver::ContentPasswordManagerDriver(
     : WebContentsObserver(web_contents),
       password_manager_(client),
       password_generation_manager_(client),
-      password_autofill_manager_(client, autofill_client) {
+      password_autofill_manager_(client, autofill_client),
+      next_free_key_(0) {
   DCHECK(web_contents);
 }
 
@@ -36,9 +36,11 @@ ContentPasswordManagerDriver::~ContentPasswordManagerDriver() {}
 
 void ContentPasswordManagerDriver::FillPasswordForm(
     const autofill::PasswordFormFillData& form_data) {
+  const int key = next_free_key_++;
+  password_autofill_manager_.OnAddPasswordFormMapping(key, form_data);
   DCHECK(web_contents());
   web_contents()->GetRenderViewHost()->Send(new AutofillMsg_FillPasswordForm(
-      web_contents()->GetRenderViewHost()->GetRoutingID(), form_data));
+      web_contents()->GetRenderViewHost()->GetRoutingID(), key, form_data));
 }
 
 void ContentPasswordManagerDriver::AllowPasswordGenerationForForm(
@@ -134,9 +136,6 @@ bool ContentPasswordManagerDriver::OnMessageReceived(
   IPC_MESSAGE_FORWARD(AutofillHostMsg_ShowPasswordSuggestions,
                       &password_autofill_manager_,
                       PasswordAutofillManager::OnShowPasswordSuggestions)
-  IPC_MESSAGE_FORWARD(AutofillHostMsg_AddPasswordFormMapping,
-                      &password_autofill_manager_,
-                      PasswordAutofillManager::OnAddPasswordFormMapping)
   IPC_MESSAGE_FORWARD(AutofillHostMsg_RecordSavePasswordProgress,
                       password_manager_.client(),
                       PasswordManagerClient::LogSavePasswordProgress)

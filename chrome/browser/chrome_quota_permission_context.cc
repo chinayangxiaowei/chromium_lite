@@ -15,18 +15,18 @@
 #include "chrome/browser/ui/website_settings/permission_bubble_manager.h"
 #include "chrome/browser/ui/website_settings/permission_bubble_request.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
+#include "storage/common/quota/quota_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
-#include "webkit/common/quota/quota_types.h"
 
 namespace {
 
@@ -46,18 +46,18 @@ class QuotaPermissionRequest : public PermissionBubbleRequest {
       const std::string& display_languages,
       const content::QuotaPermissionContext::PermissionCallback& callback);
 
-  virtual ~QuotaPermissionRequest();
+  ~QuotaPermissionRequest() override;
 
   // PermissionBubbleRequest:
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetMessageTextFragment() const OVERRIDE;
-  virtual bool HasUserGesture() const OVERRIDE;
-  virtual GURL GetRequestingHostname() const OVERRIDE;
-  virtual void PermissionGranted() OVERRIDE;
-  virtual void PermissionDenied() OVERRIDE;
-  virtual void Cancelled() OVERRIDE;
-  virtual void RequestFinished() OVERRIDE;
+  int GetIconID() const override;
+  base::string16 GetMessageText() const override;
+  base::string16 GetMessageTextFragment() const override;
+  bool HasUserGesture() const override;
+  GURL GetRequestingHostname() const override;
+  void PermissionGranted() override;
+  void PermissionDenied() override;
+  void Cancelled() override;
+  void RequestFinished() override;
 
  private:
   scoped_refptr<ChromeQuotaPermissionContext> context_;
@@ -164,12 +164,12 @@ class RequestQuotaInfoBarDelegate : public ConfirmInfoBarDelegate {
       int64 requested_quota,
       const std::string& display_languages,
       const content::QuotaPermissionContext::PermissionCallback& callback);
-  virtual ~RequestQuotaInfoBarDelegate();
+  ~RequestQuotaInfoBarDelegate() override;
 
   // ConfirmInfoBarDelegate:
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
+  base::string16 GetMessageText() const override;
+  bool Accept() override;
+  bool Cancel() override;
 
   scoped_refptr<ChromeQuotaPermissionContext> context_;
   GURL origin_url_;
@@ -255,7 +255,7 @@ void ChromeQuotaPermissionContext::RequestQuotaPermission(
     const content::StorageQuotaParams& params,
     int render_process_id,
     const PermissionCallback& callback) {
-  if (params.storage_type != quota::kStorageTypePersistent) {
+  if (params.storage_type != storage::kStorageTypePersistent) {
     // For now we only support requesting quota with this interface
     // for Persistent storage type.
     callback.Run(QUOTA_PERMISSION_RESPONSE_DISALLOW);

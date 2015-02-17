@@ -17,8 +17,8 @@
 #include "third_party/WebKit/public/platform/WebURL.h"
 #include "third_party/WebKit/public/web/WebDataSource.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
 #include "third_party/WebKit/public/web/WebFrameClient.h"
+#include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebSecurityOrigin.h"
 #include "third_party/WebKit/public/web/WebView.h"
 
@@ -26,6 +26,8 @@
 #include "chrome/common/extensions/chrome_extension_messages.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/permissions/api_permission.h"
+#include "extensions/common/permissions/permissions_data.h"
 #include "extensions/renderer/dispatcher.h"
 #endif
 
@@ -198,9 +200,17 @@ bool ContentSettingsObserver::IsPluginTemporarilyAllowed(
 
 void ContentSettingsObserver::DidBlockContentType(
     ContentSettingsType settings_type) {
-  if (!content_blocked_[settings_type]) {
+  DidBlockContentType(settings_type, base::string16());
+}
+
+void ContentSettingsObserver::DidBlockContentType(
+    ContentSettingsType settings_type,
+    const base::string16& details) {
+  // Send multiple ContentBlocked messages if details are provided.
+  if (!content_blocked_[settings_type] || !details.empty()) {
     content_blocked_[settings_type] = true;
-    Send(new ChromeViewHostMsg_ContentBlocked(routing_id(), settings_type));
+    Send(new ChromeViewHostMsg_ContentBlocked(routing_id(), settings_type,
+                                              details));
   }
 }
 
@@ -410,10 +420,15 @@ bool ContentSettingsObserver::allowStorage(bool local) {
 bool ContentSettingsObserver::allowReadFromClipboard(bool default_value) {
   bool allowed = false;
 #if defined(ENABLE_EXTENSIONS)
-  WebFrame* frame = render_frame()->GetWebFrame();
-  // TODO(dcheng): Should we consider a toURL() method on WebSecurityOrigin?
-  Send(new ChromeViewHostMsg_CanTriggerClipboardRead(
-      GURL(frame->document().securityOrigin().toString()), &allowed));
+  extensions::ScriptContext* calling_context =
+      extension_dispatcher_->script_context_set().GetCalling();
+  if (calling_context) {
+    const extensions::Extension* extension =
+        calling_context->effective_extension();
+    allowed = extension &&
+              extension->permissions_data()->HasAPIPermission(
+                  extensions::APIPermission::kClipboardRead);
+  }
 #endif
   return allowed;
 }
@@ -421,9 +436,22 @@ bool ContentSettingsObserver::allowReadFromClipboard(bool default_value) {
 bool ContentSettingsObserver::allowWriteToClipboard(bool default_value) {
   bool allowed = false;
 #if defined(ENABLE_EXTENSIONS)
-  WebFrame* frame = render_frame()->GetWebFrame();
-  Send(new ChromeViewHostMsg_CanTriggerClipboardWrite(
-      GURL(frame->document().securityOrigin().toString()), &allowed));
+  // All blessed extension pages could historically write to the clipboard, so
+  // preserve that for compatibility.
+  extensions::ScriptContext* calling_context =
+      extension_dispatcher_->script_context_set().GetCalling();
+  if (calling_context) {
+    if (calling_context->effective_context_type() ==
+        extensions::Feature::BLESSED_EXTENSION_CONTEXT) {
+      allowed = true;
+    } else {
+      const extensions::Extension* extension =
+          calling_context->effective_extension();
+      allowed = extension &&
+                extension->permissions_data()->HasAPIPermission(
+                    extensions::APIPermission::kClipboardWrite);
+    }
+  }
 #endif
   return allowed;
 }

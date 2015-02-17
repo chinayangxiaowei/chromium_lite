@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/guid.h"
-#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -80,15 +79,15 @@ ArticleEntry CreateEntry(std::string entry_id, std::string page_url) {
 class DomDistillerViewerSourceBrowserTest : public InProcessBrowserTest {
  public:
   DomDistillerViewerSourceBrowserTest() {}
-  virtual ~DomDistillerViewerSourceBrowserTest() {}
+  ~DomDistillerViewerSourceBrowserTest() override {}
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     database_model_ = new FakeDB<ArticleEntry>::EntryMap;
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE { delete database_model_; }
+  void TearDownOnMainThread() override { delete database_model_; }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kEnableDomDistiller);
   }
 
@@ -255,7 +254,7 @@ IN_PROC_BROWSER_TEST_F(DomDistillerViewerSourceBrowserTest,
   // Navigate to a URL and wait for the distiller to flush contents to the page.
   GURL url(dom_distiller::url_utils::GetDistillerViewUrlFromUrl(
       kDomDistillerScheme, GURL("http://urlthatlooksvalid.com")));
-  chrome::NavigateParams params(browser(), url, content::PAGE_TRANSITION_TYPED);
+  chrome::NavigateParams params(browser(), url, ui::PAGE_TRANSITION_TYPED);
   chrome::Navigate(&params);
   distillation_done_runner->Run();
 

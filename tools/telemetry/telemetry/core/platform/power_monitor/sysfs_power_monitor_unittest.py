@@ -5,6 +5,7 @@
 import unittest
 
 from telemetry.core.platform.power_monitor import sysfs_power_monitor
+from telemetry.core.platform import android_platform_backend
 
 
 class SysfsPowerMonitorMonitorTest(unittest.TestCase):
@@ -15,7 +16,9 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
     'cpu1': '1700000 11491\n1600000 0\n1500000 0\n1400000 248\n1300000 1166\n'
             '1200000 2082\n1100000 2943\n1000000 6560\n900000 12517\n'
             '800000 8690\n700000 5105\n600000 3800\n500000 5131\n400000 5479\n'
-            '300000 7571\n200000 133618'
+            '300000 7571\n200000 133618',
+    'cpu2': '1700000 1131',
+    'cpu3': '1700000 1131'
   }
   final_freq = {
     'cpu0': '1700000 7159\n1600000 0\n1500000 0\n1400000 68\n1300000 134\n'
@@ -25,7 +28,9 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
     'cpu1': '1700000 12048\n1600000 0\n1500000 0\n1400000 280\n1300000 1267\n'
             '1200000 2272\n1100000 3163\n1000000 7039\n900000 13800\n'
             '800000 9599\n700000 5655\n600000 4144\n500000 5655\n400000 6005\n'
-            '300000 8288\n200000 149724'
+            '300000 8288\n200000 149724',
+    'cpu2': None,
+    'cpu3': ''
   }
   expected_initial_freq = {
     'cpu0': {
@@ -63,6 +68,12 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
       400000000: 5479,
       300000000: 7571,
       200000000: 133618
+    },
+    'cpu2': {
+      1700000000: 1131
+    },
+    'cpu3': {
+      1700000000: 1131
     }
   }
   expected_final_freq = {
@@ -101,7 +112,9 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
       400000000: 6005,
       300000000: 8288,
       200000000: 149724
-    }
+    },
+    'cpu2': None,
+    'cpu3': {}
   }
   expected_freq_percents = {
     'whole_package': {
@@ -157,8 +170,15 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
       400000000: 2.3338361877717633,
       300000000: 3.1812938148904073,
       200000000: 71.46153163546012
-    }
+    },
+    'cpu2': {
+      1700000000: 0.0,
+    },
+    'cpu3': {
+      1700000000: 0.0,
+   }
   }
+
   def testParseCpuFreq(self):
     initial = sysfs_power_monitor.SysfsPowerMonitor.ParseFreqSample(
         self.initial_freq)
@@ -170,7 +190,58 @@ class SysfsPowerMonitorMonitorTest(unittest.TestCase):
   def testComputeCpuStats(self):
     results = sysfs_power_monitor.SysfsPowerMonitor.ComputeCpuStats(
         self.expected_initial_freq, self.expected_final_freq)
-    for cpu in results:
+    for cpu in self.expected_freq_percents:
       for freq in results[cpu]:
         self.assertAlmostEqual(results[cpu][freq],
                                self.expected_freq_percents[cpu][freq])
+
+  def testComputeCpuStatsWithMissingData(self):
+    results = sysfs_power_monitor.SysfsPowerMonitor.ComputeCpuStats(
+        {'cpu1': {}}, {'cpu1': {}})
+    self.assertEqual(results['cpu1'][12345], 0)
+
+    results = sysfs_power_monitor.SysfsPowerMonitor.ComputeCpuStats(
+        {'cpu1': {123: 0}}, {'cpu1': {123: 0}})
+    self.assertEqual(results['cpu1'][123], 0)
+
+    results = sysfs_power_monitor.SysfsPowerMonitor.ComputeCpuStats(
+        {'cpu1': {123: 456}}, {'cpu1': {123: 456}})
+    self.assertEqual(results['cpu1'][123], 0)
+
+  def testComputeCpuStatsWithNumberChange(self):
+    results = sysfs_power_monitor.SysfsPowerMonitor.ComputeCpuStats(
+        {'cpu1': {'C0': 10, 'WFI': 20}},
+        {'cpu1': {'C0': 20, 'WFI': 10}})
+    self.assertEqual(results['cpu1']['C0'], 0)
+    self.assertEqual(results['cpu1']['WFI'], 0)
+
+  def testGetCpuStateForAndroidDevices(self):
+    class PlatformStub(object):
+      def __init__(self, run_command_return_value):
+        self._run_command_return_value = run_command_return_value
+      def RunCommand(self, _cmd):
+        return self._run_command_return_value
+
+    cpu_state_from_samsung_note3 = (
+        "C0\n\nC1\n\nC2\n\nC3\n\n"
+        "53658520886\n1809072\n7073\n1722554\n"
+        "1\n35\n300\n500\n"
+        "1412949256\n")
+    expected_cstate_dict = {
+      'C0': 1412895593940415,
+      'C1': 1809072,
+      'C2': 7073,
+      'C3': 1722554,
+      'WFI': 53658520886
+    }
+    cpus = ["cpu%d" % cpu for cpu in range(2)]
+    expected_result = dict(zip(cpus, [expected_cstate_dict]*len(cpus)))
+
+    sysfsmon = sysfs_power_monitor.SysfsPowerMonitor(
+      PlatformStub(cpu_state_from_samsung_note3))
+    # pylint: disable=W0212
+    sysfsmon._cpus = cpus
+    cstate = sysfsmon.GetCpuState()
+    result = android_platform_backend.AndroidPlatformBackend.ParseCStateSample(
+        cstate)
+    self.assertDictEqual(expected_result, result)

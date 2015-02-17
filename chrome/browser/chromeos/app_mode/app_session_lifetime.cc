@@ -4,14 +4,13 @@
 
 #include "chrome/browser/chromeos/app_mode/app_session_lifetime.h"
 
-#include "apps/app_window.h"
-#include "apps/app_window_registry.h"
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_update_service.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_mode_idle_app_name_notification.h"
 #include "chrome/browser/chromeos/login/demo_mode/demo_app_launcher.h"
@@ -28,8 +27,11 @@
 #include "chromeos/network/network_state_handler.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/app_window/app_window.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 
-using apps::AppWindowRegistry;
+using extensions::AppWindow;
+using extensions::AppWindowRegistry;
 
 namespace chromeos {
 
@@ -50,8 +52,8 @@ class AppWindowHandler : public AppWindowRegistry::Observer {
   }
 
  private:
-  // apps::AppWindowRegistry::Observer overrides:
-  virtual void OnAppWindowRemoved(apps::AppWindow* app_window) OVERRIDE {
+  // extensions::AppWindowRegistry::Observer overrides:
+  virtual void OnAppWindowRemoved(AppWindow* app_window) override {
     if (window_registry_->app_windows().empty()) {
       if (DemoAppLauncher::IsDemoAppSession(
               user_manager::UserManager::Get()->GetActiveUser()->email())) {
@@ -69,7 +71,7 @@ class AppWindowHandler : public AppWindowRegistry::Observer {
     }
   }
 
-  apps::AppWindowRegistry* window_registry_;
+  AppWindowRegistry* window_registry_;
 
   DISALLOW_COPY_AND_ASSIGN(AppWindowHandler);
 };
@@ -102,7 +104,7 @@ class BrowserWindowHandler : public chrome::BrowserListObserver {
   }
 
   // chrome::BrowserListObserver overrides:
-  virtual void OnBrowserAdded(Browser* browser) OVERRIDE {
+  virtual void OnBrowserAdded(Browser* browser) override {
     base::MessageLoop::current()->PostTask(
         FROM_HERE,
         base::Bind(&BrowserWindowHandler::HandleBrowser,
@@ -137,7 +139,10 @@ void InitAppSession(Profile* profile, const std::string& app_id) {
       KioskAppUpdateServiceFactory::GetForProfile(profile);
   DCHECK(update_service);
   if (update_service)
-    update_service->set_app_id(app_id);
+    update_service->Init(app_id);
+
+  // Start to monitor external update from usb stick.
+  KioskAppManager::Get()->MonitorKioskExternalUpdate();
 
   // If the device is not enterprise managed, set prefs to reboot after update
   // and create a user security message which shows the user the application

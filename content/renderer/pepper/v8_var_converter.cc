@@ -47,21 +47,16 @@ struct HashedHandle {
   HashedHandle(v8::Handle<v8::Object> h) : handle(h) {}
   size_t hash() const { return handle->GetIdentityHash(); }
   bool operator==(const HashedHandle& h) const { return handle == h.handle; }
-  bool operator<(const HashedHandle& h) const { return hash() < h.hash(); }
   v8::Handle<v8::Object> handle;
 };
 
 }  // namespace
 
 namespace BASE_HASH_NAMESPACE {
-#if defined(COMPILER_GCC)
 template <>
 struct hash<HashedHandle> {
   size_t operator()(const HashedHandle& handle) const { return handle.hash(); }
 };
-#elif defined(COMPILER_MSVC)
-inline size_t hash_value(const HashedHandle& handle) { return handle.hash(); }
-#endif
 }  // namespace BASE_HASH_NAMESPACE
 
 namespace content {
@@ -83,7 +78,7 @@ typedef base::hash_set<HashedHandle> ParentHandleSet;
 // value was created as a result of calling the function.
 bool GetOrCreateV8Value(v8::Handle<v8::Context> context,
                         const PP_Var& var,
-                        bool object_vars_allowed,
+                        V8VarConverter::AllowObjectVars object_vars_allowed,
                         v8::Handle<v8::Value>* result,
                         bool* did_create,
                         VarHandleMap* visited_ids,
@@ -155,9 +150,17 @@ bool GetOrCreateV8Value(v8::Handle<v8::Context> context,
       *result = v8::Object::New(isolate);
       break;
     case PP_VARTYPE_OBJECT: {
-      DCHECK(object_vars_allowed);
+      // If object vars are disallowed, we should never be passed an object var
+      // to convert. Also, we should never expect to convert an object var which
+      // is nested inside an array or dictionary.
+      if (object_vars_allowed == V8VarConverter::kDisallowObjectVars ||
+          visited_ids->size() != 0) {
+        NOTREACHED();
+        result->Clear();
+        return false;
+      }
       scoped_refptr<V8ObjectVar> v8_object_var = V8ObjectVar::FromPPVar(var);
-      if (!v8_object_var) {
+      if (!v8_object_var.get()) {
         NOTREACHED();
         result->Clear();
         return false;
@@ -187,7 +190,7 @@ bool GetOrCreateV8Value(v8::Handle<v8::Context> context,
 bool GetOrCreateVar(v8::Handle<v8::Value> val,
                     v8::Handle<v8::Context> context,
                     PP_Instance instance,
-                    bool object_vars_allowed,
+                    V8VarConverter::AllowObjectVars object_vars_allowed,
                     PP_Var* result,
                     bool* did_create,
                     HandleVarMap* visited_handles,
@@ -225,19 +228,27 @@ bool GetOrCreateVar(v8::Handle<v8::Value> val,
   } else if (val->IsString() || val->IsStringObject()) {
     v8::String::Utf8Value utf8(val->ToString());
     *result = StringVar::StringToPPVar(std::string(*utf8, utf8.length()));
-  } else if (val->IsArray()) {
-    *result = (new ArrayVar())->GetPPVar();
   } else if (val->IsObject()) {
+    // For any other v8 objects, the conversion happens as follows:
+    // 1) If the object is an array buffer, return an ArrayBufferVar.
+    // 2) If object vars are allowed, return the object wrapped as a
+    //    V8ObjectVar. This is to maintain backward compatibility with
+    //    synchronous scripting in Flash.
+    // 3) If the object is an array, return an ArrayVar.
+    // 4) If the object can be converted to a resource, return the ResourceVar.
+    // 5) Otherwise return a DictionaryVar.
     scoped_ptr<blink::WebArrayBuffer> web_array_buffer(
         blink::WebArrayBufferConverter::createFromV8Value(val, isolate));
     if (web_array_buffer.get()) {
       scoped_refptr<HostArrayBufferVar> buffer_var(
           new HostArrayBufferVar(*web_array_buffer));
       *result = buffer_var->GetPPVar();
-    } else if (object_vars_allowed) {
+    } else if (object_vars_allowed == V8VarConverter::kAllowObjectVars) {
       v8::Handle<v8::Object> object = val->ToObject();
       *result = content::HostGlobals::Get()->
           host_var_tracker()->V8ObjectVarForV8Object(instance, object);
+    } else if (val->IsArray()) {
+      *result = (new ArrayVar())->GetPPVar();
     } else {
       bool was_resource;
       if (!resource_converter->FromV8Value(
@@ -269,27 +280,17 @@ bool CanHaveChildren(PP_Var var) {
 
 }  // namespace
 
-V8VarConverter::V8VarConverter(PP_Instance instance)
+V8VarConverter::V8VarConverter(PP_Instance instance,
+                               AllowObjectVars object_vars_allowed)
     : instance_(instance),
-      object_vars_allowed_(false),
-      message_loop_proxy_(base::MessageLoopProxy::current()) {
-  resource_converter_.reset(new ResourceConverterImpl(
-      instance, RendererPpapiHost::GetForPPInstance(instance)));
-}
-
-V8VarConverter::V8VarConverter(PP_Instance instance, bool object_vars_allowed)
-    : instance_(instance),
-      object_vars_allowed_(object_vars_allowed),
-      message_loop_proxy_(base::MessageLoopProxy::current()) {
-  resource_converter_.reset(new ResourceConverterImpl(
-      instance, RendererPpapiHost::GetForPPInstance(instance)));
+      object_vars_allowed_(object_vars_allowed) {
+  resource_converter_.reset(new ResourceConverterImpl(instance));
 }
 
 V8VarConverter::V8VarConverter(PP_Instance instance,
                                scoped_ptr<ResourceConverter> resource_converter)
     : instance_(instance),
-      object_vars_allowed_(false),
-      message_loop_proxy_(base::MessageLoopProxy::current()),
+      object_vars_allowed_(kDisallowObjectVars),
       resource_converter_(resource_converter.release()) {}
 
 V8VarConverter::~V8VarConverter() {}

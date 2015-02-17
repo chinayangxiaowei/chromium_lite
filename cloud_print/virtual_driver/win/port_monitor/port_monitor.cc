@@ -4,22 +4,22 @@
 
 #include "cloud_print/virtual_driver/win/port_monitor/port_monitor.h"
 
+#include <windows.h>
 #include <lmcons.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <strsafe.h>
 #include <userenv.h>
-#include <windows.h>
 #include <winspool.h>
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/process/process.h"
 #include "base/process/launch.h"
+#include "base/process/process.h"
 #include "base/strings/string16.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
@@ -106,14 +106,22 @@ MONITOR2 g_monitor_2 = {
   Monitor2Shutdown
 };
 
+base::FilePath GetLocalAppDataLow() {
+  wchar_t system_buffer[MAX_PATH];
+  if (FAILED(SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT,
+                             system_buffer)))
+    return base::FilePath();
+  return base::FilePath(system_buffer).DirName().AppendASCII("LocalLow");
+}
+
 base::FilePath GetAppDataDir() {
   base::FilePath file_path;
-  base::win::Version version = base::win::GetVersion();
-  int path_id = (version >= base::win::VERSION_VISTA) ?
-                base::DIR_LOCAL_APP_DATA_LOW : base::DIR_LOCAL_APP_DATA;
-  if (!PathService::Get(path_id, &file_path)) {
-    LOG(ERROR) << "Can't get DIR_LOCAL_APP_DATA";
-    return base::FilePath();
+  if (base::win::GetVersion() >= base::win::VERSION_VISTA)
+    file_path = GetLocalAppDataLow();
+  else
+    PathService::Get(base::DIR_LOCAL_APP_DATA, &file_path);
+  if (file_path.empty()) {
+    LOG(ERROR) << "Can't get app data dir";
   }
   return file_path.Append(kAppDataDir);
 }
@@ -220,7 +228,7 @@ bool LaunchPrintDialog(const base::FilePath& xps_path,
   command_line.AppendSwitchNative(switches::kCloudPrintFileType, kXpsMimeType);
   command_line.AppendSwitchNative(switches::kCloudPrintJobTitle, job_title);
   base::LaunchOptions options;
-  options.as_user = primary_token_scoped;
+  options.as_user = primary_token_scoped.Get();
   base::LaunchProcess(command_line, options, NULL);
   return true;
 }
@@ -246,7 +254,7 @@ void LaunchChromeDownloadPage() {
   command_line.AppendArg(kChromeInstallUrl);
 
   base::LaunchOptions options;
-  options.as_user = token_scoped;
+  options.as_user = token_scoped.Get();
   base::LaunchProcess(command_line, options, NULL);
 }
 
@@ -264,7 +272,7 @@ bool ValidateCurrentUser() {
   if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
     DWORD session_id = 0;
     DWORD dummy;
-    if (!GetTokenInformation(token_scoped,
+    if (!GetTokenInformation(token_scoped.Get(),
                              TokenSessionId,
                              reinterpret_cast<void *>(&session_id),
                              sizeof(DWORD),

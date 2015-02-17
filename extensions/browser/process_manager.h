@@ -15,6 +15,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
+#include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/common/view_type.h"
@@ -40,13 +41,14 @@ class ProcessManagerObserver;
 // Manages dynamic state of running Chromium extensions. There is one instance
 // of this class per Profile. OTR Profiles have a separate instance that keeps
 // track of split-mode extensions only.
-class ProcessManager : public content::NotificationObserver {
+class ProcessManager : public KeyedService,
+                       public content::NotificationObserver {
  public:
   typedef std::set<extensions::ExtensionHost*> ExtensionHostSet;
   typedef ExtensionHostSet::const_iterator const_iterator;
 
-  static ProcessManager* Create(content::BrowserContext* context);
-  virtual ~ProcessManager();
+  static ProcessManager* Get(content::BrowserContext* context);
+  ~ProcessManager() override;
 
   const ExtensionHostSet& background_hosts() const {
     return background_hosts_;
@@ -75,6 +77,16 @@ class ProcessManager : public content::NotificationObserver {
   // apps, not hosted apps.
   virtual content::SiteInstance* GetSiteInstanceForURL(const GURL& url);
 
+  // If the view isn't keeping the lazy background page alive, increments the
+  // keepalive count to do so.
+  void AcquireLazyKeepaliveCountForView(
+      content::RenderViewHost* render_view_host);
+
+  // If the view is keeping the lazy background page alive, decrements the
+  // keepalive count to stop doing it.
+  void ReleaseLazyKeepaliveCountForView(
+      content::RenderViewHost* render_view_host);
+
   // Unregisters a RenderViewHost as hosting any extension.
   void UnregisterRenderViewHost(content::RenderViewHost* render_view_host);
 
@@ -100,13 +112,15 @@ class ProcessManager : public content::NotificationObserver {
   void IncrementLazyKeepaliveCount(const Extension* extension);
   void DecrementLazyKeepaliveCount(const Extension* extension);
 
-  void IncrementLazyKeepaliveCountForView(
-      content::RenderViewHost* render_view_host);
-
   // Keeps a background page alive. Unlike IncrementLazyKeepaliveCount, these
   // impulses will only keep the page alive for a limited amount of time unless
   // called regularly.
   void KeepaliveImpulse(const Extension* extension);
+
+  // Triggers a keepalive impulse for a plug-in (e.g NaCl).
+  static void OnKeepaliveFromPlugin(int render_process_id,
+                                    int render_frame_id,
+                                    const std::string& extension_id);
 
   // Handles a response to the ShouldSuspend message, used for lazy background
   // pages.
@@ -143,6 +157,16 @@ class ProcessManager : public content::NotificationObserver {
   void SetKeepaliveImpulseDecrementCallbackForTesting(
       const ImpulseCallbackForTesting& callback);
 
+  // Sets the time in milliseconds that an extension event page can
+  // be idle before it is shut down; must be > 0.
+  static void SetEventPageIdleTimeForTesting(unsigned idle_time_msec);
+
+  // Sets the time in milliseconds that an extension event page has
+  // between being notified of its impending unload and that unload
+  // happening.
+  static void SetEventPageSuspendingTimeForTesting(
+      unsigned suspending_time_msec);
+
   // Creates a non-incognito instance for tests. |registry| allows unit tests
   // to inject an ExtensionRegistry that is not managed by the usual
   // BrowserContextKeyedServiceFactory system.
@@ -153,7 +177,6 @@ class ProcessManager : public content::NotificationObserver {
   static ProcessManager* CreateIncognitoForTesting(
       content::BrowserContext* incognito_context,
       content::BrowserContext* original_context,
-      ProcessManager* original_manager,
       ExtensionRegistry* registry);
 
   bool startup_background_hosts_created_for_test() const {
@@ -161,7 +184,9 @@ class ProcessManager : public content::NotificationObserver {
   }
 
  protected:
-  // If |context| is incognito pass the master context as |original_context|.
+  static ProcessManager* Create(content::BrowserContext* context);
+
+  //  |context| is incognito pass the master context as |original_context|.
   // Otherwise pass the same context for both. Pass the ExtensionRegistry for
   // |context| as |registry|, or override it for testing.
   ProcessManager(content::BrowserContext* context,
@@ -169,9 +194,9 @@ class ProcessManager : public content::NotificationObserver {
                  ExtensionRegistry* registry);
 
   // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   content::NotificationRegistrar registrar_;
 
@@ -187,14 +212,16 @@ class ProcessManager : public content::NotificationObserver {
   ExtensionRegistry* extension_registry_;
 
  private:
+  friend class ProcessManagerFactory;
   friend class ProcessManagerTest;
 
   // Extra information we keep for each extension's background page.
   struct BackgroundPageData;
+  struct ExtensionRenderViewData;
   typedef std::string ExtensionId;
   typedef std::map<ExtensionId, BackgroundPageData> BackgroundPageDataMap;
-  typedef std::map<content::RenderViewHost*,
-      extensions::ViewType> ExtensionRenderViews;
+  typedef std::map<content::RenderViewHost*, ExtensionRenderViewData>
+      ExtensionRenderViews;
 
   // Load all background pages once the profile data is ready and the pages
   // should be loaded.
@@ -242,14 +269,6 @@ class ProcessManager : public content::NotificationObserver {
   ExtensionRenderViews all_extension_views_;
 
   BackgroundPageDataMap background_page_data_;
-
-  // The time to delay between an extension becoming idle and
-  // sending a ShouldSuspend message; read from command-line switch.
-  base::TimeDelta event_page_idle_time_;
-
-  // The time to delay between sending a ShouldSuspend message and
-  // sending a Suspend message; read from command-line switch.
-  base::TimeDelta event_page_suspending_time_;
 
   // True if we have created the startup set of background hosts.
   bool startup_background_hosts_created_;

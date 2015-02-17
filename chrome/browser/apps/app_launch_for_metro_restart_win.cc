@@ -5,7 +5,6 @@
 #include "chrome/browser/apps/app_launch_for_metro_restart_win.h"
 
 #include "apps/launcher.h"
-#include "apps/pref_names.h"
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/message_loop/message_loop.h"
@@ -19,6 +18,7 @@
 #include "chrome/common/pref_names.h"
 #include "extensions/browser/api/app_runtime/app_runtime_api.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/common/constants.h"
 
 using extensions::AppRuntimeEventRouter;
 using extensions::Extension;
@@ -40,7 +40,8 @@ void LaunchAppWithId(Profile* profile,
   if (!extension)
     return;
 
-  AppRuntimeEventRouter::DispatchOnLaunchedEvent(profile, extension);
+  AppRuntimeEventRouter::DispatchOnLaunchedEvent(
+      profile, extension, extensions::SOURCE_RESTART);
 }
 
 }  // namespace

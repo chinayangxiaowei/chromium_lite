@@ -15,8 +15,8 @@
 #include "ash/test/test_user_wallpaper_delegate.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -64,7 +64,7 @@ class WallpaperManagerBrowserTest : public InProcessBrowserTest {
 
   virtual ~WallpaperManagerBrowserTest () {}
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     controller_ = ash::Shell::GetInstance()->desktop_background_controller();
     local_state_ = g_browser_process->local_state();
     DesktopBackgroundController::TestAPI(controller_)
@@ -72,12 +72,12 @@ class WallpaperManagerBrowserTest : public InProcessBrowserTest {
     UpdateDisplay("800x600");
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kLoginManager);
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     controller_ = NULL;
   }
 
@@ -349,7 +349,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperManagerBrowserTest,
 class WallpaperManagerBrowserTestNoAnimation
     : public WallpaperManagerBrowserTest {
  public:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kLoginManager);
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
     command_line->AppendSwitch(chromeos::switches::kDisableLoginAnimations);
@@ -412,7 +412,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperManagerBrowserTestNoAnimation,
 class WallpaperManagerBrowserTestCrashRestore
     : public WallpaperManagerBrowserTest {
  public:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(chromeos::switches::kDisableLoginAnimations);
     command_line->AppendSwitch(chromeos::switches::kDisableBootAnimation);
     command_line->AppendSwitchASCII(switches::kLoginUser, kTestUser1);
@@ -436,7 +436,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperManagerBrowserTestCrashRestore,
 class WallpaperManagerBrowserTestCacheUpdate
     : public WallpaperManagerBrowserTest {
  public:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kLoginUser, kTestUser1);
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
   }
@@ -567,10 +567,10 @@ class TestObserver : public WallpaperManager::Observer {
     wallpaper_manager_->RemoveObserver(this);
   }
 
-  virtual void OnWallpaperAnimationFinished(const std::string&) OVERRIDE {
+  virtual void OnWallpaperAnimationFinished(const std::string&) override {
   }
 
-  virtual void OnUpdateWallpaperForTesting() OVERRIDE {
+  virtual void OnUpdateWallpaperForTesting() override {
     ++update_wallpaper_count_;
   }
 

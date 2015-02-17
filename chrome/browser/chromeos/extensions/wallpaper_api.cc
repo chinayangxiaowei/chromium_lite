@@ -5,9 +5,8 @@
 #include "chrome/browser/chromeos/extensions/wallpaper_api.h"
 
 #include "ash/desktop_background/desktop_background_controller.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/worker_pool.h"
@@ -54,7 +53,7 @@ class WallpaperFetcher : public net::URLFetcherDelegate {
 
  private:
   // URLFetcherDelegate overrides:
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE {
+  virtual void OnURLFetchComplete(const net::URLFetcher* source) override {
     DCHECK(url_fetcher_.get() == source);
 
     bool success = source->GetStatus().is_success() &&
@@ -104,8 +103,8 @@ bool WallpaperSetWallpaperFunction::RunAsync() {
   user_id_hash_ =
       user_manager::UserManager::Get()->GetLoggedInUser()->username_hash();
 
-  if (params_->details.wallpaper_data) {
-    StartDecode(*params_->details.wallpaper_data);
+  if (params_->details.data) {
+    StartDecode(*params_->details.data);
   } else {
     GURL wallpaper_url(*params_->details.url);
     if (wallpaper_url.is_valid()) {
@@ -127,7 +126,7 @@ void WallpaperSetWallpaperFunction::OnWallpaperDecoded(
   base::FilePath thumbnail_path = wallpaper_manager->GetCustomWallpaperPath(
       chromeos::kThumbnailWallpaperSubDir,
       user_id_hash_,
-      params_->details.name);
+      params_->details.filename);
 
   sequence_token_ = BrowserThread::GetBlockingPool()->
       GetNamedSequenceToken(chromeos::kWallpaperSequenceTokenName);
@@ -141,7 +140,7 @@ void WallpaperSetWallpaperFunction::OnWallpaperDecoded(
       user_id_ == user_manager::UserManager::Get()->GetActiveUser()->email();
   wallpaper_manager->SetCustomWallpaper(user_id_,
                                         user_id_hash_,
-                                        params_->details.name,
+                                        params_->details.filename,
                                         layout,
                                         user_manager::User::CUSTOMIZED,
                                         image,
@@ -209,8 +208,8 @@ void WallpaperSetWallpaperFunction::OnWallpaperFetched(
     bool success,
     const std::string& response) {
   if (success) {
-    params_->details.wallpaper_data.reset(new std::string(response));
-    StartDecode(*params_->details.wallpaper_data);
+    params_->details.data.reset(new std::string(response));
+    StartDecode(*params_->details.data);
   } else {
     SetError(response);
     SendResponse(false);

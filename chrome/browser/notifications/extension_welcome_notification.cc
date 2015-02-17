@@ -16,8 +16,8 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -27,6 +27,8 @@
 #include "ui/message_center/notification_types.h"
 
 const int ExtensionWelcomeNotification::kRequestedShowTimeDays = 14;
+const char ExtensionWelcomeNotification::kChromeNowExtensionID[] =
+    "pafkbggdmjlpgkdkcbjmhmfcdpncadgh";
 
 namespace {
 
@@ -45,10 +47,7 @@ class NotificationCallbacks
   }
 
   // Overridden from NotificationDelegate:
-  virtual void Display() OVERRIDE {}
-  virtual void Error() OVERRIDE {}
-
-  virtual void Close(bool by_user) OVERRIDE {
+  void Close(bool by_user) override {
     if (by_user) {
       // Setting the preference here may cause the notification erasing
       // to reenter. Posting a task avoids this issue.
@@ -58,8 +57,7 @@ class NotificationCallbacks
     }
   }
 
-  virtual void Click() OVERRIDE {}
-  virtual void ButtonClick(int index) OVERRIDE {
+  void ButtonClick(int index) override {
     if (index == 0) {
       OpenNotificationLearnMoreTab();
     } else if (index == 1) {
@@ -80,7 +78,7 @@ class NotificationCallbacks
     chrome::NavigateParams params(
         profile_,
         GURL(chrome::kNotificationWelcomeLearnMoreURL),
-        content::PAGE_TRANSITION_LINK);
+        ui::PAGE_TRANSITION_LINK);
     params.disposition = NEW_FOREGROUND_TAB;
     params.window_action = chrome::NavigateParams::SHOW_WINDOW;
     chrome::Navigate(&params);
@@ -96,7 +94,7 @@ class NotificationCallbacks
         notifier, false);
   }
 
-  virtual ~NotificationCallbacks() {}
+  ~NotificationCallbacks() override {}
 
   Profile* const profile_;
 
@@ -114,17 +112,14 @@ class DefaultDelegate : public ExtensionWelcomeNotification::Delegate {
  public:
   DefaultDelegate() {}
 
-  virtual message_center::MessageCenter* GetMessageCenter() OVERRIDE {
+  message_center::MessageCenter* GetMessageCenter() override {
     return g_browser_process->message_center();
   }
 
-  virtual base::Time GetCurrentTime() OVERRIDE {
-    return base::Time::Now();
-  }
+  base::Time GetCurrentTime() override { return base::Time::Now(); }
 
-  virtual void PostTask(
-      const tracked_objects::Location& from_here,
-      const base::Closure& task) OVERRIDE {
+  void PostTask(const tracked_objects::Location& from_here,
+                const base::Closure& task) override {
     base::MessageLoop::current()->PostTask(from_here, task);
   }
 
@@ -135,10 +130,10 @@ class DefaultDelegate : public ExtensionWelcomeNotification::Delegate {
 }  // namespace
 
 ExtensionWelcomeNotification::ExtensionWelcomeNotification(
-    const std::string& extension_id,
     Profile* const profile,
     ExtensionWelcomeNotification::Delegate* const delegate)
-    : notifier_id_(message_center::NotifierId::APPLICATION, extension_id),
+    : notifier_id_(message_center::NotifierId::APPLICATION,
+          kChromeNowExtensionID),
       profile_(profile),
       delegate_(delegate) {
   welcome_notification_dismissed_pref_.Init(
@@ -153,19 +148,15 @@ ExtensionWelcomeNotification::ExtensionWelcomeNotification(
 }
 
 // static
-scoped_ptr<ExtensionWelcomeNotification> ExtensionWelcomeNotification::Create(
-    const std::string& extension_id,
+ExtensionWelcomeNotification* ExtensionWelcomeNotification::Create(
     Profile* const profile) {
-  return Create(extension_id, profile, new DefaultDelegate()).Pass();
+  return Create(profile, new DefaultDelegate());
 }
 
 // static
-scoped_ptr<ExtensionWelcomeNotification> ExtensionWelcomeNotification::Create(
-    const std::string& extension_id,
-    Profile* const profile,
-    Delegate* const delegate) {
-  return scoped_ptr<ExtensionWelcomeNotification>(
-      new ExtensionWelcomeNotification(extension_id, profile, delegate)).Pass();
+ExtensionWelcomeNotification* ExtensionWelcomeNotification::Create(
+    Profile* const profile, Delegate* const delegate) {
+  return new ExtensionWelcomeNotification(profile, delegate);
 }
 
 ExtensionWelcomeNotification::~ExtensionWelcomeNotification() {

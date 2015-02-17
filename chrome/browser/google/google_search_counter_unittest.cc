@@ -25,11 +25,11 @@ class MockSearchMetrics : public GoogleSearchMetrics {
 class GoogleSearchCounterTest : public testing::Test {
  protected:
   GoogleSearchCounterTest();
-  virtual ~GoogleSearchCounterTest();
+  ~GoogleSearchCounterTest() override;
 
   // testing::Test
-  virtual void SetUp();
-  virtual void TearDown();
+  void SetUp() override;
+  void TearDown() override;
 
   // Test if |url| is a Google search for specific types. When |is_omnibox| is
   // true, this method will append Omnibox identifiers to the simulated URL
@@ -76,9 +76,9 @@ void GoogleSearchCounterTest::TestGoogleSearch(
   scoped_ptr<content::NavigationEntry> entry(
       content::NavigationEntry::Create());
   if (is_omnibox) {
-    entry->SetTransitionType(content::PageTransitionFromInt(
-        content::PAGE_TRANSITION_GENERATED |
-            content::PAGE_TRANSITION_FROM_ADDRESS_BAR));
+    entry->SetTransitionType(ui::PageTransitionFromInt(
+        ui::PAGE_TRANSITION_GENERATED |
+            ui::PAGE_TRANSITION_FROM_ADDRESS_BAR));
   }
   entry->SetURL(GURL(url));
   details.entry = entry.get();

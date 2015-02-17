@@ -10,9 +10,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/window_open_disposition.h"
 
@@ -120,7 +120,7 @@ IN_PROC_BROWSER_TEST_F(TabModalConfirmDialogTest, Navigate) {
   content::OpenURLParams params(GURL("about:blank"),
                                 content::Referrer(),
                                 CURRENT_TAB,
-                                content::PAGE_TRANSITION_LINK,
+                                ui::PAGE_TRANSITION_LINK,
                                 false);
   browser()->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
 

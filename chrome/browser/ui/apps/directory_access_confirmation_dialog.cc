@@ -7,8 +7,8 @@
 #include "base/callback.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -21,15 +21,15 @@ class DirectoryAccessConfirmationDialog : public TabModalConfirmDialogDelegate {
                                     const base::Closure& on_accept,
                                     const base::Closure& on_cancel);
 
-  virtual base::string16 GetTitle() OVERRIDE;
-  virtual base::string16 GetDialogMessage() OVERRIDE;
-  virtual base::string16 GetAcceptButtonTitle() OVERRIDE;
-  virtual base::string16 GetCancelButtonTitle() OVERRIDE;
+  base::string16 GetTitle() override;
+  base::string16 GetDialogMessage() override;
+  base::string16 GetAcceptButtonTitle() override;
+  base::string16 GetCancelButtonTitle() override;
 
  private:
-  virtual void OnAccepted() OVERRIDE;
-  virtual void OnCanceled() OVERRIDE;
-  virtual void OnClosed() OVERRIDE;
+  void OnAccepted() override;
+  void OnCanceled() override;
+  void OnClosed() override;
 
   const base::Closure on_accept_;
   const base::Closure on_cancel_;

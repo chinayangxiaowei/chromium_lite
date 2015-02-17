@@ -4,6 +4,7 @@
 
 #include "chrome/browser/search/hotword_service.h"
 
+#include "base/command_line.h"
 #include "base/i18n/case_conversion.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
@@ -18,10 +19,14 @@
 #include "chrome/browser/extensions/webstore_startup_installer.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/hotword_audio_history_handler.h"
 #include "chrome/browser/search/hotword_service_factory.h"
+#include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/plugin_service.h"
@@ -30,7 +35,6 @@
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/one_shot_event.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using extensions::BrowserContextKeyedAPIFactory;
@@ -140,14 +144,15 @@ ExtensionService* GetExtensionService(Profile* profile) {
 }
 
 std::string GetCurrentLocale(Profile* profile) {
-  std::string locale =
 #if defined(OS_CHROMEOS)
-      // On ChromeOS locale is per-profile.
+  std::string profile_locale =
       profile->GetPrefs()->GetString(prefs::kApplicationLocale);
-#else
-      g_browser_process->GetApplicationLocale();
+  if (!profile_locale.empty()) {
+    // On ChromeOS locale is per-profile, but only if set.
+    return profile_locale;
+  }
 #endif
-  return locale;
+  return g_browser_process->GetApplicationLocale();
 }
 
 }  // namespace
@@ -156,8 +161,11 @@ namespace hotword_internal {
 // Constants for the hotword field trial.
 const char kHotwordFieldTrialName[] = "VoiceTrigger";
 const char kHotwordFieldTrialDisabledGroupName[] = "Disabled";
+const char kHotwordFieldTrialExperimentalGroupName[] = "Experimental";
 // Old preference constant.
 const char kHotwordUnusablePrefName[] = "hotword.search_enabled";
+// String passed to indicate the training state has changed.
+const char kHotwordTrainingEnabled[] = "hotword_training_enabled";
 }  // namespace hotword_internal
 
 // static
@@ -173,28 +181,47 @@ bool HotwordService::DoesHotwordSupportLanguage(Profile* profile) {
   return false;
 }
 
+// static
+bool HotwordService::IsExperimentalHotwordingEnabled() {
+  std::string group = base::FieldTrialList::FindFullName(
+      hotword_internal::kHotwordFieldTrialName);
+  if (!group.empty() &&
+      group == hotword_internal::kHotwordFieldTrialExperimentalGroupName) {
+    return true;
+  }
+
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  return command_line->HasSwitch(switches::kEnableExperimentalHotwording);
+}
+
 HotwordService::HotwordService(Profile* profile)
     : profile_(profile),
       extension_registry_observer_(this),
       client_(NULL),
       error_message_(0),
       reinstall_pending_(false),
+      training_(false),
       weak_factory_(this) {
   extension_registry_observer_.Add(extensions::ExtensionRegistry::Get(profile));
   // This will be called during profile initialization which is a good time
   // to check the user's hotword state.
   HotwordEnabled enabled_state = UNSET;
-  if (profile_->GetPrefs()->HasPrefPath(prefs::kHotwordSearchEnabled)) {
-    if (profile_->GetPrefs()->GetBoolean(prefs::kHotwordSearchEnabled))
-      enabled_state = ENABLED;
-    else
-      enabled_state = DISABLED;
+  if (IsExperimentalHotwordingEnabled()) {
+    // Disable the old extension so it doesn't interfere with the new stuff.
+    DisableHotwordExtension(GetExtensionService(profile_));
   } else {
-    // If the preference has not been set the hotword extension should
-    // not be running. However, this should only be done if auto-install
-    // is enabled which is gated through the IsHotwordAllowed check.
-    if (IsHotwordAllowed())
-      DisableHotwordExtension(GetExtensionService(profile_));
+    if (profile_->GetPrefs()->HasPrefPath(prefs::kHotwordSearchEnabled)) {
+      if (profile_->GetPrefs()->GetBoolean(prefs::kHotwordSearchEnabled))
+        enabled_state = ENABLED;
+      else
+        enabled_state = DISABLED;
+    } else {
+      // If the preference has not been set the hotword extension should
+      // not be running. However, this should only be done if auto-install
+      // is enabled which is gated through the IsHotwordAllowed check.
+      if (IsHotwordAllowed())
+        DisableHotwordExtension(GetExtensionService(profile_));
+    }
   }
   UMA_HISTOGRAM_ENUMERATION("Hotword.Enabled", enabled_state,
                             NUM_HOTWORD_ENABLED_METRICS);
@@ -204,10 +231,6 @@ HotwordService::HotwordService(Profile* profile)
       prefs::kHotwordSearchEnabled,
       base::Bind(&HotwordService::OnHotwordSearchEnabledChanged,
                  base::Unretained(this)));
-
-  registrar_.Add(this,
-                 chrome::NOTIFICATION_BROWSER_WINDOW_READY,
-                 content::NotificationService::AllSources());
 
   extensions::ExtensionSystem::Get(profile_)->ready().Post(
       FROM_HERE,
@@ -221,28 +244,11 @@ HotwordService::HotwordService(Profile* profile)
           hotword_internal::kHotwordUnusablePrefName)) {
     profile_->GetPrefs()->ClearPref(hotword_internal::kHotwordUnusablePrefName);
   }
+
+  audio_history_handler_.reset(new HotwordAudioHistoryHandler(profile_));
 }
 
 HotwordService::~HotwordService() {
-}
-
-void HotwordService::Observe(int type,
-                             const content::NotificationSource& source,
-                             const content::NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_BROWSER_WINDOW_READY) {
-    // The microphone monitor must be initialized as the page is loading
-    // so that the state of the microphone is available when the page
-    // loads. The Ok Google Hotword setting will display an error if there
-    // is no microphone but this information will not be up-to-date unless
-    // the monitor had already been started. Furthermore, the pop up to
-    // opt in to hotwording won't be available if it thinks there is no
-    // microphone. There is no hard guarantee that the monitor will actually
-    // be up by the time it's needed, but this is the best we can do without
-    // starting it at start up which slows down start up too much.
-    // The content/media for microphone uses the same observer design and
-    // makes use of the same audio device monitor.
-    HotwordServiceFactory::GetInstance()->UpdateMicrophoneState();
-  }
 }
 
 void HotwordService::OnExtensionUninstalled(
@@ -251,8 +257,9 @@ void HotwordService::OnExtensionUninstalled(
     extensions::UninstallReason reason) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
 
-  if (extension->id() != extension_misc::kHotwordExtensionId ||
-      profile_ != Profile::FromBrowserContext(browser_context) ||
+  if ((extension->id() != extension_misc::kHotwordExtensionId &&
+       extension->id() != extension_misc::kHotwordSharedModuleId) ||
+       profile_ != Profile::FromBrowserContext(browser_context) ||
       !GetExtensionService(profile_))
     return;
 
@@ -265,9 +272,16 @@ void HotwordService::OnExtensionUninstalled(
   SetPreviousLanguagePref();
 }
 
+std::string HotwordService::ReinstalledExtensionId() {
+  if (IsExperimentalHotwordingEnabled())
+    return extension_misc::kHotwordSharedModuleId;
+
+  return extension_misc::kHotwordExtensionId;
+}
+
 void HotwordService::InstallHotwordExtensionFromWebstore() {
   installer_ = new extensions::WebstoreStartupInstaller(
-      extension_misc::kHotwordExtensionId,
+      ReinstalledExtensionId(),
       profile_,
       false,
       extensions::WebstoreStandaloneInstaller::Callback());
@@ -279,8 +293,9 @@ void HotwordService::OnExtensionInstalled(
     const extensions::Extension* extension,
     bool is_update) {
 
-  if (extension->id() != extension_misc::kHotwordExtensionId ||
-      profile_ != Profile::FromBrowserContext(browser_context))
+  if ((extension->id() != extension_misc::kHotwordExtensionId &&
+       extension->id() != extension_misc::kHotwordSharedModuleId) ||
+       profile_ != Profile::FromBrowserContext(browser_context))
     return;
 
   // If the previous locale pref has never been set, set it now since
@@ -320,7 +335,7 @@ bool HotwordService::MaybeReinstallHotwordExtension() {
     return false;
 
   const extensions::Extension* extension = extension_service->GetExtensionById(
-      extension_misc::kHotwordExtensionId, true);
+      ReinstalledExtensionId(), true);
   if (!extension)
     return false;
 
@@ -345,19 +360,27 @@ bool HotwordService::MaybeReinstallHotwordExtension() {
   // change so it's okay to reinstall.
   reinstall_pending_ = true;
 
+  // Disable always-on on a language change. We do this because the speaker-id
+  // model needs to be re-trained.
+  if (IsAlwaysOnEnabled()) {
+    profile_->GetPrefs()->SetBoolean(prefs::kHotwordAlwaysOnSearchEnabled,
+                                     false);
+  }
+
   return UninstallHotwordExtension(extension_service);
 }
 
 bool HotwordService::UninstallHotwordExtension(
     ExtensionService* extension_service) {
   base::string16 error;
+  std::string extension_id = ReinstalledExtensionId();
   if (!extension_service->UninstallExtension(
-          extension_misc::kHotwordExtensionId,
+          extension_id,
           extensions::UNINSTALL_REASON_INTERNAL_MANAGEMENT,
           base::Bind(&base::DoNothing),
           &error)) {
     LOG(WARNING) << "Cannot uninstall extension with id "
-                 << extension_misc::kHotwordExtensionId
+                 << extension_id
                  << ": " << error;
     reinstall_pending_ = false;
     return false;
@@ -375,7 +398,7 @@ bool HotwordService::IsServiceAvailable() {
   // Include disabled extensions (true parameter) since it may not be enabled
   // if the user opted out.
   const extensions::Extension* extension =
-      service->GetExtensionById(extension_misc::kHotwordExtensionId, true);
+      service->GetExtensionById(ReinstalledExtensionId(), true);
   if (!extension)
     error_message_ = IDS_HOTWORD_GENERIC_ERROR_MESSAGE;
 
@@ -397,10 +420,20 @@ bool HotwordService::IsServiceAvailable() {
   RecordErrorMetrics(error_message_);
 
   // Determine if the proper audio capabilities exist.
-  bool audio_capture_allowed =
-      profile_->GetPrefs()->GetBoolean(prefs::kAudioCaptureAllowed);
-  if (!audio_capture_allowed || !HotwordServiceFactory::IsMicrophoneAvailable())
-    error_message_ = IDS_HOTWORD_MICROPHONE_ERROR_MESSAGE;
+  // The first time this is called, it probably won't return in time, but that's
+  // why it won't be included in the error calculation (i.e., the call to
+  // IsAudioDeviceStateUpdated()). However, this use case is rare and typically
+  // the devices will be initialized by the time a user goes to settings.
+  bool audio_device_state_updated =
+      HotwordServiceFactory::IsAudioDeviceStateUpdated();
+  HotwordServiceFactory::GetInstance()->UpdateMicrophoneState();
+  if (audio_device_state_updated) {
+    bool audio_capture_allowed =
+        profile_->GetPrefs()->GetBoolean(prefs::kAudioCaptureAllowed);
+    if (!audio_capture_allowed ||
+        !HotwordServiceFactory::IsMicrophoneAvailable())
+      error_message_ = IDS_HOTWORD_MICROPHONE_ERROR_MESSAGE;
+  }
 
   return (error_message_ == 0) && IsHotwordAllowed();
 }
@@ -420,9 +453,15 @@ bool HotwordService::IsOptedIntoAudioLogging() {
       profile_->GetPrefs()->GetBoolean(prefs::kHotwordAudioLoggingEnabled);
 }
 
+bool HotwordService::IsAlwaysOnEnabled() {
+  return
+      profile_->GetPrefs()->HasPrefPath(prefs::kHotwordAlwaysOnSearchEnabled) &&
+      profile_->GetPrefs()->GetBoolean(prefs::kHotwordAlwaysOnSearchEnabled);
+}
+
 void HotwordService::EnableHotwordExtension(
     ExtensionService* extension_service) {
-  if (extension_service)
+  if (extension_service && !IsExperimentalHotwordingEnabled())
     extension_service->EnableExtension(extension_misc::kHotwordExtensionId);
 }
 
@@ -433,6 +472,75 @@ void HotwordService::DisableHotwordExtension(
         extension_misc::kHotwordExtensionId,
         extensions::Extension::DISABLE_USER_ACTION);
   }
+}
+
+void HotwordService::LaunchHotwordAudioVerificationApp(
+    const LaunchMode& launch_mode) {
+  hotword_audio_verification_launch_mode_ = launch_mode;
+
+  ExtensionService* extension_service = GetExtensionService(profile_);
+  if (!extension_service)
+    return;
+  const extensions::Extension* extension = extension_service->GetExtensionById(
+      extension_misc::kHotwordAudioVerificationAppId, true);
+  if (!extension)
+    return;
+
+  OpenApplication(AppLaunchParams(
+      profile_, extension, extensions::LAUNCH_CONTAINER_WINDOW, NEW_WINDOW));
+}
+
+HotwordService::LaunchMode
+HotwordService::GetHotwordAudioVerificationLaunchMode() {
+  return hotword_audio_verification_launch_mode_;
+}
+
+void HotwordService::StartTraining() {
+  training_ = true;
+
+  if (!IsServiceAvailable())
+    return;
+
+  HotwordPrivateEventService* event_service =
+      BrowserContextKeyedAPIFactory<HotwordPrivateEventService>::Get(profile_);
+  if (event_service)
+    event_service->OnEnabledChanged(hotword_internal::kHotwordTrainingEnabled);
+}
+
+void HotwordService::FinalizeSpeakerModel() {
+  if (!IsServiceAvailable())
+    return;
+
+  HotwordPrivateEventService* event_service =
+      BrowserContextKeyedAPIFactory<HotwordPrivateEventService>::Get(profile_);
+  if (event_service)
+    event_service->OnFinalizeSpeakerModel();
+}
+
+void HotwordService::StopTraining() {
+  training_ = false;
+
+  if (!IsServiceAvailable())
+    return;
+
+  HotwordPrivateEventService* event_service =
+      BrowserContextKeyedAPIFactory<HotwordPrivateEventService>::Get(profile_);
+  if (event_service)
+    event_service->OnEnabledChanged(hotword_internal::kHotwordTrainingEnabled);
+}
+
+void HotwordService::NotifyHotwordTriggered() {
+  if (!IsServiceAvailable())
+    return;
+
+  HotwordPrivateEventService* event_service =
+      BrowserContextKeyedAPIFactory<HotwordPrivateEventService>::Get(profile_);
+  if (event_service)
+    event_service->OnHotwordTriggered();
+}
+
+bool HotwordService::IsTraining() {
+  return training_;
 }
 
 void HotwordService::OnHotwordSearchEnabledChanged(
@@ -447,7 +555,7 @@ void HotwordService::OnHotwordSearchEnabledChanged(
 }
 
 void HotwordService::RequestHotwordSession(HotwordClient* client) {
-  if (!IsServiceAvailable() || client_)
+  if (!IsServiceAvailable() || (client_ && client_ != client))
     return;
 
   client_ = client;
@@ -462,6 +570,9 @@ void HotwordService::StopHotwordSession(HotwordClient* client) {
   if (!IsServiceAvailable())
     return;
 
+  // Do nothing if there's no client.
+  if (!client_)
+    return;
   DCHECK(client_ == client);
 
   client_ = NULL;

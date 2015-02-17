@@ -25,6 +25,13 @@
 {
   'variables': {
     'input_paths': [],
+    'conditions': [
+      ['target_arch == "arm64"', {
+        'has_relocations_with_addends': 1,
+      }, {
+        'has_relocations_with_addends': 0,
+      }],
+    ],
   },
   'inputs': [
     '<(DEPTH)/build/android/gyp/util/build_utils.py',
@@ -48,12 +55,13 @@
         'python', '<(DEPTH)/build/android/gyp/pack_arm_relocations.py',
         '--configuration-name=<(CONFIGURATION_NAME)',
         '--enable-packing=1',
+        '--has-relocations-with-addends=<(has_relocations_with_addends)',
         '--exclude-packing-list=<@(exclude_packing_list)',
         '--android-pack-relocations=<(PRODUCT_DIR)/relocation_packer',
         '--android-objcopy=<(android_objcopy)',
         '--stripped-libraries-dir=<(stripped_libraries_dir)',
         '--packed-libraries-dir=<(packed_libraries_dir)',
-        '--libraries-file=<(ordered_libraries_file)',
+        '--libraries=@FileArg(<(ordered_libraries_file):libraries)',
         '--stamp=<(stamp)',
       ],
     }, {
@@ -64,7 +72,7 @@
         '--enable-packing=0',
         '--stripped-libraries-dir=<(stripped_libraries_dir)',
         '--packed-libraries-dir=<(packed_libraries_dir)',
-        '--libraries-file=<(ordered_libraries_file)',
+        '--libraries=@FileArg(<(ordered_libraries_file):libraries)',
         '--stamp=<(stamp)',
       ],
     }],

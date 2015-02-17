@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 // TODO:(kaznacheev) Share the EXIF constants with exif_parser.js
 var EXIF_MARK_SOS = 0xffda;  // Start of "stream" (the actual image data).
 var EXIF_MARK_SOI = 0xffd8;  // Start of image data.
@@ -89,7 +87,7 @@ ExifEncoder.prototype.setThumbnailData = function(canvas, quality) {
   var pixelCount = this.metadata_.width * this.metadata_.height;
   var maxEncodedSize = 5000 * Math.min(10, 1 + pixelCount / 1000000);
 
-  var DATA_URL_PREFIX = 'data:' + this.mimeType + ';base64,';
+  var DATA_URL_PREFIX = 'data:' + this.metadata_.media.mimeType + ';base64,';
   var BASE64_BLOAT = 4 / 3;
   var maxDataURLLength =
       DATA_URL_PREFIX.length + Math.ceil(maxEncodedSize * BASE64_BLOAT);
@@ -120,7 +118,7 @@ ExifEncoder.prototype.setThumbnailData = function(canvas, quality) {
     ExifEncoder.findOrCreateTag(thumbnail, EXIF_TAG_ORIENTATION).value = 1;
   } else {
     console.warn(
-       'Thumbnail URL too long: ' + this.metadata_.thumbnailURL.length);
+        'Thumbnail URL too long: ' + this.metadata_.thumbnailURL.length);
     // Delete thumbnail ifd so that it is not written out to a file, but
     // keep thumbnailURL for display purposes.
     if (this.ifd_.thumbnail) {
@@ -379,7 +377,7 @@ ExifEncoder.writeValue = function(bw, tag) {
 
     var signed = (tag.format == 9 || tag.format == 10);
     if (tag.componentCount == 1) {
-       writeComponent(tag.value, signed);
+      writeComponent(tag.value, signed);
     } else {
       for (var i = 0; i != tag.componentCount; i++) {
         writeComponent(tag.value[i], signed);
@@ -477,9 +475,9 @@ ByteWriter.prototype.validateWrite = function(width) {
  */
 ByteWriter.prototype.writeScalar = function(value, width, opt_signed) {
   var method;
-// The below switch is so verbose for two reasons:
-// 1. V8 is faster on method names which are 'symbols'.
-// 2. Method names are discoverable by full text search.
+  // The below switch is so verbose for two reasons:
+  // 1. V8 is faster on method names which are 'symbols'.
+  // 2. Method names are discoverable by full text search.
   switch (width) {
     case 1:
       method = opt_signed ? 'setInt8' : 'setUint8';

@@ -56,6 +56,12 @@ void SetCommonCodecParameters(const webrtc::DesktopSize& size,
   // Start emitting packets immediately.
   config->g_lag_in_frames = 0;
 
+  // Since the transport layer is reliable, keyframes should not be necessary.
+  // However, due to crbug.com/440223, decoding fails after 30,000 non-key
+  // frames, so take the hit of an "unnecessary" key-frame every 10,000 frames.
+  config->kf_min_dist = 10000;
+  config->kf_max_dist = 10000;
+
   // Using 2 threads gives a great boost in performance for most systems with
   // adequate processing power. NB: Going to multiple threads on low end
   // windows systems can really hurt performance.
@@ -133,15 +139,16 @@ ScopedVpxCodec CreateVP9Codec(const webrtc::DesktopSize& size,
   if (vpx_codec_enc_init(codec.get(), algo, &config, 0))
     return ScopedVpxCodec();
 
-  // Request the lowest-CPU encode feature-set that VP9 supports.
+  // Request the lowest-CPU usage that VP9 supports, which depends on whether
+  // we are encoding lossy or lossless.
   // Note that this is configured via the same parameter as for VP8.
-  if (vpx_codec_control(codec.get(), VP8E_SET_CPUUSED, 5))
+  int cpu_used = lossless_encode ? 5 : 6;
+  if (vpx_codec_control(codec.get(), VP8E_SET_CPUUSED, cpu_used))
     return ScopedVpxCodec();
 
   // Use the lowest level of noise sensitivity so as to spend less time
   // on motion estimation and inter-prediction mode.
-  // Note that this is configured via the same parameter as for VP8.
-  if (vpx_codec_control(codec.get(), VP8E_SET_NOISE_SENSITIVITY, 0))
+  if (vpx_codec_control(codec.get(), VP9E_SET_NOISE_SENSITIVITY, 0))
     return ScopedVpxCodec();
 
   return codec.Pass();
@@ -214,12 +221,12 @@ void CreateImage(bool use_i444,
 
 // static
 scoped_ptr<VideoEncoderVpx> VideoEncoderVpx::CreateForVP8() {
-  return scoped_ptr<VideoEncoderVpx>(new VideoEncoderVpx(false));
+  return make_scoped_ptr(new VideoEncoderVpx(false));
 }
 
 // static
 scoped_ptr<VideoEncoderVpx> VideoEncoderVpx::CreateForVP9() {
-  return scoped_ptr<VideoEncoderVpx>(new VideoEncoderVpx(true));
+  return make_scoped_ptr(new VideoEncoderVpx(true));
 }
 
 VideoEncoderVpx::~VideoEncoderVpx() {}
@@ -286,7 +293,9 @@ scoped_ptr<VideoPacket> VideoEncoderVpx::Encode(
 
   // TODO(hclam): Make sure we get exactly one frame from the packet.
   // TODO(hclam): We should provide the output buffer to avoid one copy.
-  scoped_ptr<VideoPacket> packet(new VideoPacket());
+  scoped_ptr<VideoPacket> packet(
+      helper_.CreateVideoPacketWithUpdatedRegion(frame, updated_region));
+  packet->mutable_format()->set_encoding(VideoPacketFormat::ENCODING_VP8);
 
   while (!got_data) {
     const vpx_codec_cx_pkt_t* vpx_packet =
@@ -304,25 +313,9 @@ scoped_ptr<VideoPacket> VideoEncoderVpx::Encode(
     }
   }
 
-  // Construct the VideoPacket message.
-  packet->mutable_format()->set_encoding(VideoPacketFormat::ENCODING_VP8);
-  packet->mutable_format()->set_screen_width(frame.size().width());
-  packet->mutable_format()->set_screen_height(frame.size().height());
-  packet->set_capture_time_ms(frame.capture_time_ms());
+  // Note the time taken to encode the pixel data.
   packet->set_encode_time_ms(
       (base::TimeTicks::Now() - encode_start_time).InMillisecondsRoundedUp());
-  if (!frame.dpi().is_zero()) {
-    packet->mutable_format()->set_x_dpi(frame.dpi().x());
-    packet->mutable_format()->set_y_dpi(frame.dpi().y());
-  }
-  for (webrtc::DesktopRegion::Iterator r(updated_region); !r.IsAtEnd();
-       r.Advance()) {
-    Rect* rect = packet->add_dirty_rects();
-    rect->set_x(r.rect().left());
-    rect->set_y(r.rect().top());
-    rect->set_width(r.rect().width());
-    rect->set_height(r.rect().height());
-  }
 
   return packet.Pass();
 }
@@ -334,9 +327,6 @@ VideoEncoderVpx::VideoEncoderVpx(bool use_vp9)
       active_map_width_(0),
       active_map_height_(0) {
   if (use_vp9_) {
-    // Use lossless encoding mode by default.
-    SetLosslessEncode(true);
-
     // Use I444 colour space, by default, if specified on the command-line.
     if (CommandLine::ForCurrentProcess()->HasSwitch(kEnableI444SwitchName)) {
       SetLosslessColor(true);

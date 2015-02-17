@@ -26,7 +26,9 @@ class CHROMEOS_EXPORT UserContext {
     // Online authentication against GAIA. GAIA redirected to a SAML IdP.
     AUTH_FLOW_GAIA_WITH_SAML,
     // Offline authentication against a cached key.
-    AUTH_FLOW_OFFLINE
+    AUTH_FLOW_OFFLINE,
+    // Offline authentication using and Easy unlock device (e.g. a phone).
+    AUTH_FLOW_EASY_UNLOCK
   };
 
   UserContext();
@@ -39,6 +41,7 @@ class CHROMEOS_EXPORT UserContext {
   bool operator!=(const UserContext& context) const;
 
   const std::string& GetUserID() const;
+  const std::string& GetGaiaID() const;
   const Key* GetKey() const;
   Key* GetKey();
   const std::string& GetAuthCode() const;
@@ -52,6 +55,7 @@ class CHROMEOS_EXPORT UserContext {
   bool HasCredentials() const;
 
   void SetUserID(const std::string& user_id);
+  void SetGaiaID(const std::string& gaia_id);
   void SetKey(const Key& key);
   void SetAuthCode(const std::string& auth_code);
   void SetUserIDHash(const std::string& user_id_hash);
@@ -65,6 +69,7 @@ class CHROMEOS_EXPORT UserContext {
 
  private:
   std::string user_id_;
+  std::string gaia_id_;
   Key key_;
   std::string auth_code_;
   std::string user_id_hash_;

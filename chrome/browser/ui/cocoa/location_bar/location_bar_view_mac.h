@@ -47,42 +47,43 @@ class ZoomDecorationTest;
 class LocationBarViewMac : public LocationBar,
                            public LocationBarTesting,
                            public OmniboxEditController,
-                           public content::NotificationObserver,
                            public SearchModelObserver {
  public:
   LocationBarViewMac(AutocompleteTextField* field,
                      CommandUpdater* command_updater,
                      Profile* profile,
                      Browser* browser);
-  virtual ~LocationBarViewMac();
+  ~LocationBarViewMac() override;
 
   // Overridden from LocationBar:
-  virtual void ShowFirstRunBubble() OVERRIDE;
-  virtual GURL GetDestinationURL() const OVERRIDE;
-  virtual WindowOpenDisposition GetWindowOpenDisposition() const OVERRIDE;
-  virtual content::PageTransition GetPageTransition() const OVERRIDE;
-  virtual void AcceptInput() OVERRIDE;
-  virtual void FocusLocation(bool select_all) OVERRIDE;
-  virtual void FocusSearch() OVERRIDE;
-  virtual void UpdateContentSettingsIcons() OVERRIDE;
-  virtual void UpdateManagePasswordsIconAndBubble() OVERRIDE;
-  virtual void UpdatePageActions() OVERRIDE;
-  virtual void InvalidatePageActions() OVERRIDE;
-  virtual void UpdateOpenPDFInReaderPrompt() OVERRIDE;
-  virtual void UpdateGeneratedCreditCardView() OVERRIDE;
-  virtual void SaveStateToContents(content::WebContents* contents) OVERRIDE;
-  virtual void Revert() OVERRIDE;
-  virtual const OmniboxView* GetOmniboxView() const OVERRIDE;
-  virtual OmniboxView* GetOmniboxView() OVERRIDE;
-  virtual LocationBarTesting* GetLocationBarForTesting() OVERRIDE;
+  void ShowFirstRunBubble() override;
+  GURL GetDestinationURL() const override;
+  WindowOpenDisposition GetWindowOpenDisposition() const override;
+  ui::PageTransition GetPageTransition() const override;
+  void AcceptInput() override;
+  void FocusLocation(bool select_all) override;
+  void FocusSearch() override;
+  void UpdateContentSettingsIcons() override;
+  void UpdateManagePasswordsIconAndBubble() override;
+  void UpdatePageActions() override;
+  void UpdateBookmarkStarVisibility() override;
+  bool ShowPageActionPopup(const extensions::Extension* extension,
+                           bool grant_active_tab) override;
+  void UpdateOpenPDFInReaderPrompt() override;
+  void UpdateGeneratedCreditCardView() override;
+  void SaveStateToContents(content::WebContents* contents) override;
+  void Revert() override;
+  const OmniboxView* GetOmniboxView() const override;
+  OmniboxView* GetOmniboxView() override;
+  LocationBarTesting* GetLocationBarForTesting() override;
 
   // Overridden from LocationBarTesting:
-  virtual int PageActionCount() OVERRIDE;
-  virtual int PageActionVisibleCount() OVERRIDE;
-  virtual ExtensionAction* GetPageAction(size_t index) OVERRIDE;
-  virtual ExtensionAction* GetVisiblePageAction(size_t index) OVERRIDE;
-  virtual void TestPageActionPressed(size_t index) OVERRIDE;
-  virtual bool GetBookmarkStarVisibility() OVERRIDE;
+  int PageActionCount() override;
+  int PageActionVisibleCount() override;
+  ExtensionAction* GetPageAction(size_t index) override;
+  ExtensionAction* GetVisiblePageAction(size_t index) override;
+  void TestPageActionPressed(size_t index) override;
+  bool GetBookmarkStarVisibility() override;
 
   // Set/Get the editable state of the field.
   void SetEditable(bool editable);
@@ -111,6 +112,10 @@ class LocationBarViewMac : public LocationBar,
   // Get the point in window coordinates on the star for the Translate bubble to
   // aim at.
   NSPoint GetTranslateBubblePoint() const;
+
+  // Get the point in window coordinates in the lock icon for the Manage
+  // Passwords bubble to aim at.
+  NSPoint GetManagePasswordsBubblePoint() const;
 
   // Get the point in window coordinates in the security icon at which the page
   // info bubble aims.
@@ -148,38 +153,33 @@ class LocationBarViewMac : public LocationBar,
   NSPoint GetPageActionBubblePoint(ExtensionAction* page_action);
 
   // OmniboxEditController:
-  virtual void Update(const content::WebContents* contents) OVERRIDE;
-  virtual void OnChanged() OVERRIDE;
-  virtual void OnSetFocus() OVERRIDE;
-  virtual void ShowURL() OVERRIDE;
-  virtual void EndOriginChipAnimations(bool cancel_fade) OVERRIDE;
-  virtual InstantController* GetInstant() OVERRIDE;
-  virtual content::WebContents* GetWebContents() OVERRIDE;
-  virtual ToolbarModel* GetToolbarModel() OVERRIDE;
-  virtual const ToolbarModel* GetToolbarModel() const OVERRIDE;
+  void Update(const content::WebContents* contents) override;
+  void OnChanged() override;
+  void OnSetFocus() override;
+  void ShowURL() override;
+  void EndOriginChipAnimations(bool cancel_fade) override;
+  InstantController* GetInstant() override;
+  content::WebContents* GetWebContents() override;
+  ToolbarModel* GetToolbarModel() override;
+  const ToolbarModel* GetToolbarModel() const override;
 
   NSImage* GetKeywordImage(const base::string16& keyword);
 
   AutocompleteTextField* GetAutocompleteTextField() { return field_; }
 
-
-  // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  ManagePasswordsDecoration* manage_passwords_decoration() {
+    return manage_passwords_decoration_.get();
+  }
 
   // SearchModelObserver:
-  virtual void ModelChanged(const SearchModel::State& old_state,
-                            const SearchModel::State& new_state) OVERRIDE;
+  void ModelChanged(const SearchModel::State& old_state,
+                    const SearchModel::State& new_state) override;
 
   Browser* browser() const { return browser_; }
 
-  // Activates the page action for the extension that has the given id.
-  void ActivatePageAction(const std::string& extension_id);
-
  protected:
   // OmniboxEditController:
-  virtual void HideURL() OVERRIDE;
+  void HideURL() override;
 
  private:
   friend ZoomDecorationTest;
@@ -199,6 +199,11 @@ class LocationBarViewMac : public LocationBar,
   // extension service.
   void RefreshPageActionDecorations();
 
+  // Whether the page actions represented by |page_action_decorations_| differ
+  // in ordering or value from |page_actions|.
+  bool PageActionsDiffer(
+      const std::vector<ExtensionAction*>& page_actions) const;
+
   // Updates visibility of the content settings icons based on the current
   // tab contents state.
   bool RefreshContentSettingsDecorations();
@@ -212,9 +217,6 @@ class LocationBarViewMac : public LocationBar,
   // Updates the zoom decoration in the omnibox with the current zoom level.
   // Returns whether any updates were made.
   bool UpdateZoomDecoration();
-
-  // Ensures the star decoration is visible or hidden, as required.
-  void UpdateStarDecorationVisibility();
 
   // Updates the voice search decoration. Returns true if the visible state was
   // changed.
@@ -244,9 +246,6 @@ class LocationBarViewMac : public LocationBar,
   // levels.
   scoped_ptr<ZoomDecoration> zoom_decoration_;
 
-  // The installed page actions.
-  std::vector<ExtensionAction*> page_actions_;
-
   // Decorations for the installed Page Actions.
   ScopedVector<PageActionDecoration> page_action_decorations_;
 
@@ -272,9 +271,6 @@ class LocationBarViewMac : public LocationBar,
   scoped_ptr<ManagePasswordsDecoration> manage_passwords_decoration_;
 
   Browser* browser_;
-
-  // Used to register for notifications received by NotificationObserver.
-  content::NotificationRegistrar registrar_;
 
   // Used to schedule a task for the first run info bubble.
   base::WeakPtrFactory<LocationBarViewMac> weak_ptr_factory_;

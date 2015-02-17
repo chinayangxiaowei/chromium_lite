@@ -9,6 +9,16 @@
 
 #include "base/files/file_path.h"
 
+#if defined(OS_WIN)
+#if defined(GOOGLE_CHROME_BUILD)
+#define PRODUCT_STRING_PATH L"Google\\Chrome"
+#elif defined(CHROMIUM_BUILD)
+#define PRODUCT_STRING_PATH L"Chromium"
+#else
+#error Unknown branding
+#endif
+#endif  // defined(OS_WIN)
+
 namespace chrome {
 
 extern const char kChromeVersion[];
@@ -76,6 +86,7 @@ extern const base::FilePath::CharType kNewTabThumbnailsFilename[];
 extern const base::FilePath::CharType kPreferencesFilename[];
 extern const base::FilePath::CharType kProtectedPreferencesFilenameDeprecated[];
 extern const base::FilePath::CharType kReadmeFilename[];
+extern const base::FilePath::CharType kResetPromptMementoFilename[];
 extern const base::FilePath::CharType kSafeBrowsingBaseFilename[];
 extern const base::FilePath::CharType kSecurePreferencesFilename[];
 extern const base::FilePath::CharType kServiceStateFileName[];
@@ -98,11 +109,6 @@ extern const wchar_t kUserDataDirname[];
 
 extern const bool kRecordModeEnabled;
 
-// If a WebContents is impolite and displays a second JavaScript alert within
-// kJavaScriptMessageExpectedDelay of a previous JavaScript alert being
-// dismissed, display an option to suppress future alerts from this WebContents.
-extern const int kJavaScriptMessageExpectedDelay;
-
 // Are touch icons enabled? False by default.
 extern const bool kEnableTouchIcon;
 
@@ -112,9 +118,6 @@ extern const bool kEnableTouchIcon;
 // enough render processes and not be starved when a lot of extensions are
 // installed.
 extern const float kMaxShareOfExtensionProcesses;
-
-// This is used by the PreRead experiment.
-extern const char kPreReadEnvironmentVariable[];
 
 #if defined(OS_LINUX)
 // The highest and lowest assigned OOM score adjustment
@@ -157,10 +160,8 @@ extern const char kTestUserProfileDir[];
 // Used to identify the application to the system AV function in Windows.
 extern const char kApplicationClientIDStringForAVScanning[];
 
-#if defined(OS_ANDROID)
 // The largest reasonable length we'd assume for a meta tag attribute.
 extern const size_t kMaxMetaTagAttributeLength;
-#endif
 
 }  // namespace chrome
 

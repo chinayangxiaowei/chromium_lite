@@ -4,11 +4,9 @@
 
 #include "chrome/browser/chromeos/login/helper.h"
 
-#include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/network/network_handler.h"
 #include "chromeos/network/network_state.h"
@@ -21,7 +19,8 @@
 namespace chromeos {
 
 gfx::Rect CalculateScreenBounds(const gfx::Size& size) {
-  gfx::Rect bounds(ash::Shell::GetScreen()->GetPrimaryDisplay().bounds());
+  gfx::Rect bounds =
+      gfx::Screen::GetNativeScreen()->GetPrimaryDisplay().bounds();
   if (!size.IsEmpty()) {
     int horizontal_diff = bounds.width() - size.width();
     int vertical_diff = bounds.height() - size.height();
@@ -43,8 +42,15 @@ int GetCurrentUserImageSize() {
 namespace login {
 
 bool LoginScrollIntoViewEnabled() {
+#if defined(USE_ATHENA)
+  // TODO(nkostylev): temporary always enable overscroll mode for Athena,
+  // later we will need special API in Blink to specify which element need to
+  // be centered when virtual keyboard shown, crbug.com/411879
+  return false;
+#else
   return !CommandLine::ForCurrentProcess()->HasSwitch(
       chromeos::switches::kDisableLoginScrollIntoView);
+#endif
 }
 
 NetworkStateHelper::NetworkStateHelper() {}

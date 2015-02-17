@@ -2,117 +2,121 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/macros.h"
 #include "base/message_loop/message_loop.h"
+#include "base/threading/thread.h"
+#include "mojo/application/application_runner_chromium.h"
+#include "mojo/public/c/system/main.h"
 #include "mojo/public/cpp/application/application_connection.h"
 #include "mojo/public/cpp/application/application_delegate.h"
 #include "mojo/public/cpp/application/application_impl.h"
 #include "mojo/public/cpp/application/interface_factory_impl.h"
 #include "mojo/services/html_viewer/blink_platform_impl.h"
 #include "mojo/services/html_viewer/html_document_view.h"
-#include "mojo/services/public/cpp/view_manager/types.h"
-#include "mojo/services/public/cpp/view_manager/view.h"
-#include "mojo/services/public/cpp/view_manager/view_manager.h"
-#include "mojo/services/public/cpp/view_manager/view_manager_client_factory.h"
-#include "mojo/services/public/cpp/view_manager/view_manager_delegate.h"
-#include "mojo/services/public/interfaces/navigation/navigation.mojom.h"
+#include "mojo/services/html_viewer/webmediaplayer_factory.h"
+#include "mojo/services/public/interfaces/content_handler/content_handler.mojom.h"
 #include "third_party/WebKit/public/web/WebKit.h"
+
+#if !defined(COMPONENT_BUILD)
+#include "base/i18n/icu_util.h"
+#include "base/path_service.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_paths.h"
+#endif
 
 namespace mojo {
 
+// Switches for html_viewer to be used with "--args-for". For example:
+// --args-for='mojo:html_viewer --enable-mojo-media-renderer'
+
+// Enable mojo::MediaRenderer in media pipeline instead of using the internal
+// media::Renderer implementation.
+const char kEnableMojoMediaRenderer[] = "--enable-mojo-media-renderer";
+
 class HTMLViewer;
 
-class NavigatorImpl : public InterfaceImpl<Navigator> {
+class ContentHandlerImpl : public InterfaceImpl<ContentHandler> {
  public:
-  explicit NavigatorImpl(HTMLViewer* viewer) : viewer_(viewer) {}
-  virtual ~NavigatorImpl() {}
+  ContentHandlerImpl(scoped_refptr<base::MessageLoopProxy> compositor_thread,
+                     WebMediaPlayerFactory* web_media_player_factory)
+      : compositor_thread_(compositor_thread),
+        web_media_player_factory_(web_media_player_factory) {}
+  ~ContentHandlerImpl() override {}
 
  private:
-  // Overridden from Navigator:
-  virtual void Navigate(
-      uint32_t view_id,
-      NavigationDetailsPtr navigation_details,
-      ResponseDetailsPtr response_details) OVERRIDE;
+  // Overridden from ContentHandler:
+  void StartApplication(ShellPtr shell, URLResponsePtr response) override {
+    new HTMLDocumentView(response.Pass(),
+                         shell.Pass(),
+                         compositor_thread_,
+                         web_media_player_factory_);
+  }
 
-  HTMLViewer* viewer_;
+  scoped_refptr<base::MessageLoopProxy> compositor_thread_;
+  WebMediaPlayerFactory* web_media_player_factory_;
 
-  DISALLOW_COPY_AND_ASSIGN(NavigatorImpl);
+  DISALLOW_COPY_AND_ASSIGN(ContentHandlerImpl);
 };
 
-class HTMLViewer : public ApplicationDelegate, public ViewManagerDelegate {
+class HTMLViewer : public ApplicationDelegate,
+                   public InterfaceFactory<ContentHandler> {
  public:
-  HTMLViewer()
-      : application_impl_(NULL),
-        document_view_(NULL),
-        navigator_factory_(this),
-        view_manager_client_factory_(this) {}
-  virtual ~HTMLViewer() {
-    blink::shutdown();
-  }
+  HTMLViewer() : compositor_thread_("compositor thread") {}
 
-  void Load(ResponseDetailsPtr response_details) {
-    // Need to wait for OnEmbed.
-    response_details_ = response_details.Pass();
-    MaybeLoad();
-  }
+  ~HTMLViewer() override { blink::shutdown(); }
 
  private:
   // Overridden from ApplicationDelegate:
-  virtual void Initialize(ApplicationImpl* app) OVERRIDE {
-    application_impl_ = app;
+  void Initialize(ApplicationImpl* app) override {
     blink_platform_impl_.reset(new BlinkPlatformImpl(app));
     blink::initialize(blink_platform_impl_.get());
+#if !defined(COMPONENT_BUILD)
+    base::i18n::InitializeICU();
+
+    ui::RegisterPathProvider();
+
+    base::FilePath ui_test_pak_path;
+    CHECK(PathService::Get(ui::UI_TEST_PAK, &ui_test_pak_path));
+    ui::ResourceBundle::InitSharedInstanceWithPakPath(ui_test_pak_path);
+#endif
+
+    bool enable_mojo_media_renderer = false;
+    for (const auto& arg : app->args()) {
+      if (arg == kEnableMojoMediaRenderer) {
+        enable_mojo_media_renderer = true;
+        break;
+      }
+    }
+
+    compositor_thread_.Start();
+    web_media_player_factory_.reset(new WebMediaPlayerFactory(
+        compositor_thread_.message_loop_proxy(), enable_mojo_media_renderer));
   }
 
-  virtual bool ConfigureIncomingConnection(ApplicationConnection* connection)
-      OVERRIDE {
-    connection->AddService(&navigator_factory_);
-    connection->AddService(&view_manager_client_factory_);
+  bool ConfigureIncomingConnection(ApplicationConnection* connection) override {
+    connection->AddService(this);
     return true;
   }
 
-  // Overridden from ViewManagerDelegate:
-  virtual void OnEmbed(ViewManager* view_manager,
-                       View* root,
-                       ServiceProviderImpl* exported_services,
-                       scoped_ptr<ServiceProvider> imported_services) OVERRIDE {
-    document_view_ = new HTMLDocumentView(
-        application_impl_->ConnectToApplication("mojo://mojo_window_manager/")->
-            GetServiceProvider(),
-        view_manager);
-    document_view_->AttachToView(root);
-    MaybeLoad();
-  }
-  virtual void OnViewManagerDisconnected(ViewManager* view_manager) OVERRIDE {
-    base::MessageLoop::current()->Quit();
-  }
-
-  void MaybeLoad() {
-    if (document_view_ && response_details_)
-      document_view_->Load(response_details_->response.Pass());
+  // Overridden from InterfaceFactory<ContentHandler>
+  void Create(ApplicationConnection* connection,
+              InterfaceRequest<ContentHandler> request) override {
+    BindToRequest(
+        new ContentHandlerImpl(compositor_thread_.message_loop_proxy(),
+                               web_media_player_factory_.get()),
+        &request);
   }
 
   scoped_ptr<BlinkPlatformImpl> blink_platform_impl_;
-  ApplicationImpl* application_impl_;
-
-  // TODO(darin): Figure out proper ownership of this instance.
-  HTMLDocumentView* document_view_;
-  ResponseDetailsPtr response_details_;
-  InterfaceFactoryImplWithContext<NavigatorImpl, HTMLViewer> navigator_factory_;
-  ViewManagerClientFactory view_manager_client_factory_;
+  base::Thread compositor_thread_;
+  scoped_ptr<WebMediaPlayerFactory> web_media_player_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(HTMLViewer);
 };
 
-void NavigatorImpl::Navigate(
-    uint32_t view_id,
-    NavigationDetailsPtr navigation_details,
-    ResponseDetailsPtr response_details) {
-  viewer_->Load(response_details.Pass());
-}
+}  // namespace mojo
 
-// static
-ApplicationDelegate* ApplicationDelegate::Create() {
-  return new HTMLViewer;
-}
-
+MojoResult MojoMain(MojoHandle shell_handle) {
+  mojo::ApplicationRunnerChromium runner(new mojo::HTMLViewer);
+  return runner.Run(shell_handle);
 }

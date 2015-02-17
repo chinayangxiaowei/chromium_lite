@@ -19,27 +19,32 @@ namespace content {
 typedef SharedMemorySeqLockReader<DeviceLightData>
     DeviceLightSharedMemoryReader;
 
-class CONTENT_EXPORT DeviceLightEventPump : public DeviceSensorEventPump {
+class CONTENT_EXPORT DeviceLightEventPump
+    : public DeviceSensorEventPump<blink::WebDeviceLightListener> {
  public:
-  DeviceLightEventPump();
-  explicit DeviceLightEventPump(int pump_delay_millis);
-  virtual ~DeviceLightEventPump();
+  explicit DeviceLightEventPump(RenderThread* thread);
+  ~DeviceLightEventPump() override;
 
   // Sets the listener to receive updates for device light data at
   // regular intervals. Returns true if the registration was successful.
   bool SetListener(blink::WebDeviceLightListener* listener);
 
-  // RenderProcessObserver implementation.
-  virtual bool OnControlMessageReceived(const IPC::Message& message) OVERRIDE;
+  // PlatformEventObserver implementation.
+  bool OnControlMessageReceived(const IPC::Message& message) override;
+  void SendFakeDataForTesting(void* data) override;
 
  protected:
   // Methods overriden from base class DeviceSensorEventPump
-  virtual void FireEvent() OVERRIDE;
-  virtual bool InitializeReader(base::SharedMemoryHandle handle) OVERRIDE;
-  virtual bool SendStartMessage() OVERRIDE;
-  virtual bool SendStopMessage() OVERRIDE;
+  void FireEvent() override;
+  bool InitializeReader(base::SharedMemoryHandle handle) override;
 
-  blink::WebDeviceLightListener* listener_;
+  // PlatformEventObserver implementation.
+  void SendStartMessage() override;
+  void SendStopMessage() override;
+
+ private:
+  bool ShouldFireEvent(double data) const;
+
   scoped_ptr<DeviceLightSharedMemoryReader> reader_;
   double last_seen_data_;
 

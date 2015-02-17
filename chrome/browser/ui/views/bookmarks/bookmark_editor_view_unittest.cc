@@ -20,6 +20,7 @@
 #include "ui/views/controls/tree/tree_view.h"
 
 using base::ASCIIToUTF16;
+using base::UTF8ToUTF16;
 using base::Time;
 using base::TimeDelta;
 using content::BrowserThread;
@@ -34,18 +35,17 @@ class BookmarkEditorViewTest : public testing::Test {
         model_(NULL) {
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     profile_.reset(new TestingProfile());
     profile_->CreateBookmarkModel(true);
 
     model_ = BookmarkModelFactory::GetForProfile(profile_.get());
-    test::WaitForBookmarkModelToLoad(model_);
+    bookmarks::test::WaitForBookmarkModelToLoad(model_);
 
     AddTestData();
   }
 
-  virtual void TearDown() {
-  }
+  void TearDown() override {}
 
  protected:
   std::string base_path() const { return "file:///c:/tmp/"; }
@@ -185,7 +185,7 @@ TEST_F(BookmarkEditorViewTest, EditTitleKeepsPosition) {
   CreateEditor(profile_.get(), NULL,
                BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                BookmarkEditorView::SHOW_TREE);
-  SetTitleText(L"new_a");
+  SetTitleText(ASCIIToUTF16("new_a"));
 
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(0));
 
@@ -204,7 +204,7 @@ TEST_F(BookmarkEditorViewTest, EditURLKeepsPosition) {
                BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                BookmarkEditorView::SHOW_TREE);
 
-  SetURLText(base::UTF8ToWide(GURL(base_path() + "new_a").spec()));
+  SetURLText(UTF8ToUTF16(GURL(base_path() + "new_a").spec()));
 
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(0));
 
@@ -238,7 +238,7 @@ TEST_F(BookmarkEditorViewTest, ChangeParentAndURL) {
                BookmarkEditor::EditDetails::EditNode(GetNode("a")),
                BookmarkEditorView::SHOW_TREE);
 
-  SetURLText(base::UTF8ToWide(GURL(base_path() + "new_a").spec()));
+  SetURLText(UTF8ToUTF16(GURL(base_path() + "new_a").spec()));
 
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(1));
 
@@ -293,8 +293,8 @@ TEST_F(BookmarkEditorViewTest, NewURL) {
                    bb_node, 1, GURL(), base::string16()),
                BookmarkEditorView::SHOW_TREE);
 
-  SetURLText(base::UTF8ToWide(GURL(base_path() + "a").spec()));
-  SetTitleText(L"new_a");
+  SetURLText(UTF8ToUTF16(GURL(base_path() + "a").spec()));
+  SetTitleText(ASCIIToUTF16("new_a"));
 
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(0));
 
@@ -313,8 +313,8 @@ TEST_F(BookmarkEditorViewTest, ChangeURLNoTree) {
                  model_->other_node()->GetChild(0)),
                BookmarkEditorView::NO_TREE);
 
-  SetURLText(base::UTF8ToWide(GURL(base_path() + "a").spec()));
-  SetTitleText(L"new_a");
+  SetURLText(UTF8ToUTF16(GURL(base_path() + "a").spec()));
+  SetTitleText(ASCIIToUTF16("new_a"));
 
   ApplyEdits(NULL);
 
@@ -335,7 +335,7 @@ TEST_F(BookmarkEditorViewTest, ChangeTitleNoTree) {
                  model_->other_node()->GetChild(0)),
                BookmarkEditorView::NO_TREE);
 
-  SetTitleText(L"new_a");
+  SetTitleText(ASCIIToUTF16("new_a"));
 
   ApplyEdits(NULL);
 
@@ -359,7 +359,7 @@ TEST_F(BookmarkEditorViewTest, NewFolder) {
 
   // The url field shouldn't be visible.
   EXPECT_FALSE(URLTFHasParent());
-  SetTitleText(L"new_F");
+  SetTitleText(ASCIIToUTF16("new_F"));
 
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(0));
 
@@ -387,7 +387,7 @@ TEST_F(BookmarkEditorViewTest, MoveFolder) {
   CreateEditor(profile_.get(), model_->bookmark_bar_node(),
                details, BookmarkEditorView::SHOW_TREE);
 
-  SetTitleText(L"new_F");
+  SetTitleText(ASCIIToUTF16("new_F"));
 
   // Create the folder in the 'other' folder.
   ApplyEdits(editor_tree_model()->GetRoot()->GetChild(1));
@@ -419,8 +419,8 @@ TEST_F(BookmarkEditorViewTest, NewFolderTitleUpdatedOnCommit) {
                BookmarkEditorView::SHOW_TREE);
   ExpandAndSelect();
 
-  SetURLText(base::UTF8ToWide(GURL(base_path() + "a").spec()));
-  SetTitleText(L"new_a");
+  SetURLText(UTF8ToUTF16(GURL(base_path() + "a").spec()));
+  SetTitleText(ASCIIToUTF16("new_a"));
 
   NewFolder();
   ASSERT_TRUE(tree_view()->editor() != NULL);

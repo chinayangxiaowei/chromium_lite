@@ -38,6 +38,10 @@ class KioskAppData;
 class KioskAppExternalLoader;
 class KioskAppManagerObserver;
 
+#if !defined(USE_ATHENA)
+class KioskExternalUpdater;
+#endif
+
 // KioskAppManager manages cached app data.
 class KioskAppManager : public KioskAppDataDelegate,
                         public ExternalCache::Delegate {
@@ -84,6 +88,10 @@ class KioskAppManager : public KioskAppDataDelegate,
 
   // Sub directory under DIR_USER_DATA to store cached crx files.
   static const char kCrxCacheDir[];
+
+  // Sub directory under DIR_USER_DATA to store unpacked crx file for validating
+  // its signature.
+  static const char kCrxUnpackDir[];
 
   // Gets the KioskAppManager instance, which is lazily created on first call..
   static KioskAppManager* Get();
@@ -157,6 +165,12 @@ class KioskAppManager : public KioskAppDataDelegate,
   // Returns true if the app is found in cache.
   bool HasCachedCrx(const std::string& app_id) const;
 
+  // Gets the path and version of the cached crx with |app_id|.
+  // Returns true if the app is found in cache.
+  bool GetCachedCrx(const std::string& app_id,
+                    base::FilePath* file_path,
+                    std::string* version) const;
+
   void AddObserver(KioskAppManagerObserver* observer);
   void RemoveObserver(KioskAppManagerObserver* observer);
 
@@ -168,6 +182,23 @@ class KioskAppManager : public KioskAppDataDelegate,
   void InstallFromCache(const std::string& id);
 
   void UpdateExternalCache();
+
+  // Monitors kiosk external update from usb stick.
+  void MonitorKioskExternalUpdate();
+
+  // Invoked when kiosk app cache has been updated.
+  void OnKioskAppCacheUpdated(const std::string& app_id);
+
+  // Invoked when kiosk app updating from usb stick has been completed.
+  // |success| indicates if all the updates are completed successfully.
+  void OnKioskAppExternalUpdateComplete(bool success);
+
+  // Installs the validated external extension into cache.
+  void PutValidatedExternalExtension(
+      const std::string& app_id,
+      const base::FilePath& crx_path,
+      const std::string& version,
+      const ExternalCache::PutExternalExtensionCallback& callback);
 
   bool external_loader_created() const { return external_loader_created_; }
 
@@ -199,17 +230,17 @@ class KioskAppManager : public KioskAppDataDelegate,
   void UpdateAppData();
 
   // KioskAppDataDelegate overrides:
-  virtual void GetKioskAppIconCacheDir(base::FilePath* cache_dir) OVERRIDE;
-  virtual void OnKioskAppDataChanged(const std::string& app_id) OVERRIDE;
-  virtual void OnKioskAppDataLoadFailure(const std::string& app_id) OVERRIDE;
+  virtual void GetKioskAppIconCacheDir(base::FilePath* cache_dir) override;
+  virtual void OnKioskAppDataChanged(const std::string& app_id) override;
+  virtual void OnKioskAppDataLoadFailure(const std::string& app_id) override;
 
   // ExternalCache::Delegate:
   virtual void OnExtensionListsUpdated(
-      const base::DictionaryValue* prefs) OVERRIDE;
-  virtual void OnExtensionLoadedInCache(const std::string& id) OVERRIDE;
+      const base::DictionaryValue* prefs) override;
+  virtual void OnExtensionLoadedInCache(const std::string& id) override;
   virtual void OnExtensionDownloadFailed(
       const std::string& id,
-      extensions::ExtensionDownloaderDelegate::Error error) OVERRIDE;
+      extensions::ExtensionDownloaderDelegate::Error error) override;
 
   // Callback for EnterpriseInstallAttributes::LockDevice() during
   // EnableConsumerModeKiosk() call.
@@ -232,12 +263,7 @@ class KioskAppManager : public KioskAppDataDelegate,
   void SetAutoLoginState(AutoLoginState state);
 
   void GetCrxCacheDir(base::FilePath* cache_dir);
-
-  // Gets the file path and version information of the cached crx with |app_id|.
-  // Returns true if the app is found in cache.
-  bool GetCachedCrx(const std::string& app_id,
-                    base::FilePath* file_path,
-                    std::string* version) const;
+  void GetCrxUnpackDir(base::FilePath* unpack_dir);
 
   // True if machine ownership is already established.
   bool ownership_established_;
@@ -251,6 +277,10 @@ class KioskAppManager : public KioskAppDataDelegate,
       local_account_auto_login_id_subscription_;
 
   scoped_ptr<ExternalCache> external_cache_;
+
+#if !defined(USE_ATHENA)
+  scoped_ptr<KioskExternalUpdater> usb_stick_updater_;
+#endif
 
   // The extension external loader for installing kiosk app.
   bool external_loader_created_;

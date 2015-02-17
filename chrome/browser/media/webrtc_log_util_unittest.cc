@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
 #include "base/time/time.h"
@@ -19,7 +19,7 @@ class WebRtcLogUtilTest : public testing::Test {
   WebRtcLogUtilTest()
       : file_thread_(content::BrowserThread::FILE, &message_loop_) {}
 
-  virtual void SetUp() {
+  void SetUp() override {
     // Create three files. One with modified date as of now, one with date one
     // day younger than the keep limit, one with date one day older than the
     // limit. The two former are expected to be kept and the last to be deleted

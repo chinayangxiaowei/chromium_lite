@@ -5,11 +5,11 @@
 #include "base/i18n/number_formatting.h"
 #include "base/memory/scoped_vector.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/typed_urls_helper.h"
+#include "components/history/core/browser/history_types.h"
 
 using typed_urls_helper::AddUrlToHistory;
 using typed_urls_helper::AwaitCheckAllProfilesHaveSameURLsAsVerifier;
@@ -18,11 +18,9 @@ using typed_urls_helper::GetTypedUrlsFromClient;
 class MultipleClientTypedUrlsSyncTest : public SyncTest {
  public:
   MultipleClientTypedUrlsSyncTest() : SyncTest(MULTIPLE_CLIENT) {}
-  virtual ~MultipleClientTypedUrlsSyncTest() {}
+  ~MultipleClientTypedUrlsSyncTest() override {}
 
-  virtual bool TestUsesSelfNotifications() OVERRIDE {
-    return false;
-  }
+  bool TestUsesSelfNotifications() override { return false; }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MultipleClientTypedUrlsSyncTest);

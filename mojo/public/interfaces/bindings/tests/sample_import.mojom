@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 [JavaPackage="org.chromium.mojo.bindings.test.mojom.imported"]
-module imported {
+module imported;
 
 // This sample just defines some types that are imported into
 // sample_service.mojom, to show how import works.
@@ -12,6 +12,7 @@ enum Shape {
   RECTANGLE = 1,
   CIRCLE,
   TRIANGLE,
+  LAST = TRIANGLE,
 };
 
 // These enum values should not interfere with those of Shape above.
@@ -35,5 +36,3 @@ struct Point {
 interface ImportedInterface {
   DoSomething();
 };
-
-}  // module imported

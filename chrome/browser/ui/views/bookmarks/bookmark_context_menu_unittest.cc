@@ -45,7 +45,7 @@ namespace {
 // PageNavigator implementation that records the URL.
 class TestingPageNavigator : public PageNavigator {
  public:
-  virtual WebContents* OpenURL(const OpenURLParams& params) OVERRIDE {
+  WebContents* OpenURL(const OpenURLParams& params) override {
     urls_.push_back(params.url);
     return NULL;
   }
@@ -63,18 +63,18 @@ class BookmarkContextMenuTest : public testing::Test {
         model_(NULL) {
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     event_source_ = ui::PlatformEventSource::CreateDefault();
     profile_.reset(new TestingProfile());
     profile_->CreateBookmarkModel(true);
 
     model_ = BookmarkModelFactory::GetForProfile(profile_.get());
-    test::WaitForBookmarkModelToLoad(model_);
+    bookmarks::test::WaitForBookmarkModelToLoad(model_);
 
     AddTestData();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     ui::Clipboard::DestroyClipboardForCurrentThread();
 
     BrowserThread::GetBlockingPool()->FlushForTesting();
@@ -270,12 +270,9 @@ TEST_F(BookmarkContextMenuTest, MultipleFoldersWithURLs) {
 TEST_F(BookmarkContextMenuTest, DisableIncognito) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->bookmark_bar_node()->GetChild(0));
-  TestingProfile::Builder builder;
-  builder.SetIncognito();
-  scoped_ptr<TestingProfile> incognito_ = builder.Build().Pass();
-  incognito_->SetOriginalProfile(profile_.get());
+  Profile* incognito = profile_->GetOffTheRecordProfile();
   BookmarkContextMenu controller(
-      NULL, NULL, incognito_.get(), NULL, nodes[0]->parent(), nodes, false);
+      NULL, NULL, incognito, NULL, nodes[0]->parent(), nodes, false);
   EXPECT_FALSE(controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_INCOGNITO));
   EXPECT_FALSE(
       controller.IsCommandEnabled(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO));
@@ -372,7 +369,7 @@ TEST_F(BookmarkContextMenuTest, ShowManagedBookmarks) {
   base::ListValue list;
   list.Append(dict);
   EXPECT_TRUE(client->managed_node()->empty());
-  profile_->GetPrefs()->Set(prefs::kManagedBookmarks, list);
+  profile_->GetPrefs()->Set(bookmarks::prefs::kManagedBookmarks, list);
   EXPECT_FALSE(client->managed_node()->empty());
 
   // New context menus now show the "Show managed bookmarks" option.

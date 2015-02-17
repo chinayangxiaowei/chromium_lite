@@ -11,9 +11,9 @@
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/locale_settings.h"
 #include "chrome/test/base/testing_pref_service_syncable.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "grit/locale_settings.h"
 #include "sync/api/attachments/attachment_id.h"
 #include "sync/api/sync_change.h"
 #include "sync/api/sync_data.h"
@@ -40,9 +40,9 @@ class TestSyncProcessorStub : public syncer::SyncChangeProcessor {
  public:
   explicit TestSyncProcessorStub(syncer::SyncChangeList* output)
       : output_(output), fail_next_(false) {}
-  virtual syncer::SyncError ProcessSyncChanges(
+  syncer::SyncError ProcessSyncChanges(
       const tracked_objects::Location& from_here,
-      const syncer::SyncChangeList& change_list) OVERRIDE {
+      const syncer::SyncChangeList& change_list) override {
     if (output_)
       output_->insert(output_->end(), change_list.begin(), change_list.end());
     if (fail_next_) {
@@ -58,8 +58,7 @@ class TestSyncProcessorStub : public syncer::SyncChangeProcessor {
     fail_next_ = true;
   }
 
-  virtual syncer::SyncDataList GetAllSyncData(syncer::ModelType type)
-      const OVERRIDE {
+  syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override {
     return syncer::SyncDataList();
   }
  private:
@@ -74,7 +73,7 @@ class PrefsSyncableServiceTest : public testing::Test {
       test_processor_(NULL),
       next_pref_remote_sync_node_id_(0) {}
 
-  virtual void SetUp() {
+  void SetUp() override {
     prefs_.registry()->RegisterStringPref(
         kUnsyncedPreferenceName,
         kUnsyncedPreferenceDefaultValue,

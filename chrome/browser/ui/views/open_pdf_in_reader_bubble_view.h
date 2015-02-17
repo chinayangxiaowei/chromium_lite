@@ -9,7 +9,9 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/link_listener.h"
 
-class OpenPDFInReaderPromptDelegate;
+namespace pdf {
+class OpenPDFInReaderPromptClient;
+}
 
 namespace views {
 class LabelButton;
@@ -20,23 +22,23 @@ class OpenPDFInReaderBubbleView : public views::BubbleDelegateView,
                                   public views::LinkListener {
  public:
   OpenPDFInReaderBubbleView(views::View* anchor_view,
-                            OpenPDFInReaderPromptDelegate* model);
-  virtual ~OpenPDFInReaderBubbleView();
+                            pdf::OpenPDFInReaderPromptClient* model);
+  ~OpenPDFInReaderBubbleView() override;
 
  protected:
   // views::BubbleDelegateView:
-  virtual void Init() OVERRIDE;
+  void Init() override;
 
   // views::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // views::LinkListener:
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void LinkClicked(views::Link* source, int event_flags) override;
 
  private:
-  // Weak pointer; owned by the PDFTabHelper of the currently active tab.
-  OpenPDFInReaderPromptDelegate* model_;
+  // Weak pointer; owned by the PDFWebContentsHelper of the currently active
+  // tab.
+  pdf::OpenPDFInReaderPromptClient* model_;
 
   views::Link* open_in_reader_link_;
   views::LabelButton* close_button_;

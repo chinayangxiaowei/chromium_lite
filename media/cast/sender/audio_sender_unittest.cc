@@ -13,7 +13,6 @@
 #include "media/cast/cast_environment.h"
 #include "media/cast/net/cast_transport_config.h"
 #include "media/cast/net/cast_transport_sender_impl.h"
-#include "media/cast/net/rtcp/rtcp_receiver.h"
 #include "media/cast/sender/audio_sender.h"
 #include "media/cast/test/fake_single_thread_task_runner.h"
 #include "media/cast/test/utility/audio_utility.h"
@@ -26,9 +25,8 @@ class TestPacketSender : public PacketSender {
  public:
   TestPacketSender() : number_of_rtp_packets_(0), number_of_rtcp_packets_(0) {}
 
-  virtual bool SendPacket(PacketRef packet,
-                          const base::Closure& cb) OVERRIDE {
-    if (RtcpReceiver::IsRtcpPacket(&packet->data[0], packet->data.size())) {
+  bool SendPacket(PacketRef packet, const base::Closure& cb) override {
+    if (Rtcp::IsRtcpPacket(&packet->data[0], packet->data.size())) {
       ++number_of_rtcp_packets_;
     } else {
       // Check that at least one RTCP packet was sent before the first RTP
@@ -41,6 +39,8 @@ class TestPacketSender : public PacketSender {
     }
     return true;
   }
+
+  int64 GetBytesSent() override { return 0; }
 
   int number_of_rtp_packets() const { return number_of_rtp_packets_; }
 
@@ -78,6 +78,7 @@ class AudioSenderTest : public ::testing::Test {
         NULL,
         testing_clock_,
         dummy_endpoint,
+        make_scoped_ptr(new base::DictionaryValue),
         base::Bind(&UpdateCastTransportStatus),
         BulkRawEventsCallback(),
         base::TimeDelta(),
@@ -88,7 +89,7 @@ class AudioSenderTest : public ::testing::Test {
     task_runner_->RunTasks();
   }
 
-  virtual ~AudioSenderTest() {}
+  ~AudioSenderTest() override {}
 
   static void UpdateCastTransportStatus(CastTransportStatus status) {
     EXPECT_EQ(TRANSPORT_AUDIO_INITIALIZED, status);

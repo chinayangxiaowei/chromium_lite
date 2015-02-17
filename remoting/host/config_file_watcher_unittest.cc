@@ -4,8 +4,8 @@
 
 #include "remoting/host/config_file_watcher.h"
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "remoting/base/auto_thread.h"
@@ -39,11 +39,11 @@ class ConfigFileWatcherDelegate : public ConfigFileWatcher::Delegate {
 class ConfigFileWatcherTest : public testing::Test {
  public:
   ConfigFileWatcherTest();
-  virtual ~ConfigFileWatcherTest();
+  ~ConfigFileWatcherTest() override;
 
   // testing::Test overrides
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  void SetUp() override;
+  void TearDown() override;
 
   // Stops the config file watcher.
   void StopWatcher();

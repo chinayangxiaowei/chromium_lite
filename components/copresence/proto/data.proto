@@ -15,6 +15,10 @@ message Status {
 }
 message PushServiceRegistration {
   optional PushService service = 1;
+  optional GcmRegistration gcm_registration = 2;
+}
+message GcmRegistration {
+  optional string device_token = 1;
 }
 message DeviceIdentifiers {
   optional int32 ulr_device_id = 1;
@@ -92,10 +96,6 @@ message PublishedMessage {
 message TokenExchangeStrategy {
   optional AudioConfiguration audio_configuration = 1;
   optional BroadcastScanConfiguration broadcast_scan_configuration = 2;
-  // TODO(rkc): Horrible hack. Get rid of this once the server tells us whether
-  // or not to use audible for a given publish or subscribe.
-  // http://b/16849245/
-  optional bool use_audible = 99;
 }
 message SubscribedMessage {
   message Debug {

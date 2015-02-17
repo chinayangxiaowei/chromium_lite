@@ -27,14 +27,14 @@
 #include "chrome/browser/ui/webui/local_discovery/local_discovery_ui_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/signin/core/browser/signin_manager_base.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/page_transition_types.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/message_center/notifier_settings.h"
 
@@ -287,8 +287,10 @@ void PrivetNotificationService::PrivetNotify(bool has_multiple,
 
 void PrivetNotificationService::PrivetRemoveNotification() {
   ReportPrivetUmaEvent(PRIVET_NOTIFICATION_CANCELED);
+  Profile* profile_object = Profile::FromBrowserContext(profile_);
   g_browser_process->notification_ui_manager()->CancelById(
-      kPrivetNotificationID);
+      kPrivetNotificationID,
+      NotificationUIManager::GetProfileID(profile_object));
 }
 
 void PrivetNotificationService::Start() {
@@ -297,7 +299,7 @@ void PrivetNotificationService::Start() {
       SigninManagerFactory::GetForProfileIfExists(
           Profile::FromBrowserContext(profile_));
 
-  if (!signin_manager || signin_manager->GetAuthenticatedUsername().empty())
+  if (!signin_manager || !signin_manager->IsAuthenticated())
     return;
 #endif
 
@@ -343,8 +345,8 @@ void PrivetNotificationService::StartLister() {
   traffic_detector_ = NULL;
 #endif  // ENABLE_MDNS
   service_discovery_client_ = ServiceDiscoverySharedClient::GetInstance();
-  device_lister_.reset(new PrivetDeviceListerImpl(service_discovery_client_,
-                                                  this));
+  device_lister_.reset(
+      new PrivetDeviceListerImpl(service_discovery_client_.get(), this));
   device_lister_->Start();
   device_lister_->DiscoverNewDevices(false);
 
@@ -368,23 +370,6 @@ std::string PrivetNotificationDelegate::id() const {
   return kPrivetNotificationID;
 }
 
-content::WebContents* PrivetNotificationDelegate::GetWebContents() const {
-  return NULL;
-}
-
-void PrivetNotificationDelegate::Display() {
-}
-
-void PrivetNotificationDelegate::Error() {
-  LOG(ERROR) << "Error displaying privet notification";
-}
-
-void PrivetNotificationDelegate::Close(bool by_user) {
-}
-
-void PrivetNotificationDelegate::Click() {
-}
-
 void PrivetNotificationDelegate::ButtonClick(int button_index) {
   if (button_index == 0) {
     ReportPrivetUmaEvent(PRIVET_NOTIFICATION_CLICKED);
@@ -400,7 +385,7 @@ void PrivetNotificationDelegate::OpenTab(const GURL& url) {
 
   chrome::NavigateParams params(profile_obj,
                               url,
-                              content::PAGE_TRANSITION_AUTO_TOPLEVEL);
+                              ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
   params.disposition = NEW_FOREGROUND_TAB;
   chrome::Navigate(&params);
 }

@@ -11,13 +11,13 @@
 #include "base/values.h"
 #include "chrome/browser/ui/webui/chromeos/network_config_message_handler.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/network/network_event_log.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 
 namespace chromeos {
 
@@ -31,7 +31,7 @@ class NetworkUIMessageHandler : public content::WebUIMessageHandler {
   virtual ~NetworkUIMessageHandler() {}
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE {
+  virtual void RegisterMessages() override {
     web_ui()->RegisterMessageCallback(
         "NetworkUI.getNetworkLog",
         base::Bind(&NetworkUIMessageHandler::GetNetworkLog,
@@ -60,7 +60,6 @@ NetworkUI::NetworkUI(content::WebUI* web_ui)
 
   content::WebUIDataSource* html =
       content::WebUIDataSource::Create(chrome::kChromeUINetworkHost);
-  html->SetUseJsonJSFormatV2();
 
   html->AddLocalizedString("titleText", IDS_NETWORK_TITLE);
   html->AddLocalizedString("autoRefreshText", IDS_NETWORK_AUTO_REFRESH);

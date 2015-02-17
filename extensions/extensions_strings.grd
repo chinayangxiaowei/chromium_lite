@@ -174,9 +174,17 @@
   <release seq="1" allow_pseudo="false">
     <messages fallback_to_english="true">
 
+      <!-- Document Scan API strings. Please keep alphabetized. -->
+      <message name="IDS_EXTENSION_PROMPT_WARNING_DOCUMENT_SCAN" desc="Permission string for access to document scanning.">
+        Access document scanners attached via USB or on the local network
+      </message>
+
       <!-- General extensions strings. Please keep alphabetized. -->
       <message name="IDS_EXTENSION_CONTAINS_PRIVATE_KEY" desc="Error message when an extension includes a file containing a private key.">
         This extension includes the key file '<ph name="KEY_PATH">$1<ex>relative/path/to/file.pem</ex></ph>'. You probably don't want to do that.
+      </message>
+      <message name="IDS_EXTENSION_LOAD_ABOUT_PAGE_FAILED" desc="">
+        Could not load about page '<ph name="ABOUT_PAGE">$1<ex>page.html</ex></ph>'.
       </message>
       <message name="IDS_EXTENSION_LOAD_BACKGROUND_SCRIPT_FAILED" desc="">
         Could not load background script '<ph name="BACKGROUND_SCRIPT">$1<ex>script.js</ex></ph>'.
@@ -187,6 +195,12 @@
       <message name="IDS_EXTENSION_LOAD_ICON_FAILED" desc="">
         Could not load extension icon '<ph name="ICON">$1<ex>icon.png</ex></ph>'.
       </message>
+      <message name="IDS_EXTENSION_LOAD_LAUNCHER_PAGE_FAILED" desc="">
+        Could not load launcher page '<ph name="PAGE">$1<ex>index.html</ex></ph>'.
+      </message>
+      <message name="IDS_EXTENSION_LOAD_OPTIONS_PAGE_FAILED" desc="">
+        Could not load options page '<ph name="OPTIONS_PAGE">$1<ex>page.html</ex></ph>'.
+      </message>
       <message name="IDS_EXTENSION_LOCALES_NO_DEFAULT_LOCALE_SPECIFIED" desc="">
         Localization used, but default_locale wasn't specified in the manifest.
       </message>
@@ -196,16 +210,42 @@
       <message name="IDS_EXTENSION_MANIFEST_INVALID" desc="">
         Manifest file is invalid.
       </message>
-      
+      <message name="IDS_EXTENSION_PROMPT_WARNING_DECLARATIVE_WEB_REQUEST" desc="Permission string for Declarative Web Request API.">
+        Block parts of web pages
+      </message>
+      <message name="IDS_LOAD_STATE_PARAMETER_EXTENSION" desc="Parameter to IDS_LOAD_STATE_WAITING_FOR_DELEGATE when we are waiting for an extension. The variable is the extension name.">
+        extension <ph name="EXTENSION_NAME">$1<ex>Adblock</ex></ph>
+      </message>
+
+      <!-- Bluetooth access permissions. Please keep alphabetized. -->
+      <message name="IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH" desc="Permission string for general access to the Bluetooth API.">
+        Access information about Bluetooth devices paired with your system and discover nearby Bluetooth devices.
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_DEVICES" desc="Permission string for implementing Bluetooth profiles.">
+        Send messages to and receive messages from Bluetooth devices.
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_PRIVATE" desc="Permission string for Bluetooth Private API.">
+        Control Bluetooth adapter state and pairing
+      </message>
+
       <!-- Host access permissions. Please keep alphabetized. -->
       <message name="IDS_EXTENSION_PROMPT_WARNING_1_HOST" desc="Permission string for access to data on one website.">
         Read and change your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph>
       </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_1_HOST_READ_ONLY" desc="Permission string for read-only access to data on one website.">
+        Read your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph>
+      </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_2_HOSTS" desc="Permission string for access to data on two websites.">
         Read and change your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph> and <ph name="WEBSITE_2">$2<ex>www.reddit.com</ex></ph>
       </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_2_HOSTS_READ_ONLY" desc="Permission string for read-only access to data on two websites.">
+        Read your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph> and <ph name="WEBSITE_2">$2<ex>www.reddit.com</ex></ph>
+      </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_3_HOSTS" desc="Permission string for access to data on three websites.">
         Read and change your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph>, <ph name="WEBSITE_2">$2<ex>www.reddit.com</ex></ph>, and <ph name="WEBSITE_3">$3<ex>news.ycombinator.com</ex></ph>
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_3_HOSTS_READ_ONLY" desc="Permission string for read-only access to data on three websites.">
+        Read your data on <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph>, <ph name="WEBSITE_2">$2<ex>www.reddit.com</ex></ph>, and <ph name="WEBSITE_3">$3<ex>news.ycombinator.com</ex></ph>
       </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_HOST_AND_SUBDOMAIN" desc="Permission string requesting access to data on a website and its sub-domains.">
         all <ph name="WEBSITE_1">$1<ex>google.com</ex></ph> sites
@@ -216,8 +256,19 @@
       <message name="IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST" desc="Permission string for access to data for an arbitrary list of websites.">
         Read and change your data on a number of websites
       </message>
-      <message name="IDS_EXTENSION_PROMPT_WARNING_HOST_LIST_ENTRY" desc="Single entry in a list of websites.">
-        - <ph name="WEBSITE_1">$1<ex>www.google.com</ex></ph>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_HOSTS_LIST_READ_ONLY" desc="Permission string for read-only access to data for an arbitrary list of websites.">
+        Read your data on a number of websites
+      </message>
+
+      <!-- Media capture permissions. Please keep alphabetized. -->
+      <message name="IDS_EXTENSION_PROMPT_WARNING_AUDIO_CAPTURE" desc="Permission string for access to audio capture devices.">
+        Use your microphone
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_VIDEO_CAPTURE" desc="Permission string for access to video capture devices.">
+        Use your camera
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_AUDIO_AND_VIDEO_CAPTURE" desc="Permission string for access to both audio and video capture devices.">
+        Use your microphone and camera
       </message>
 
       <!-- Media galleries strings. Please keep alphabetized. -->
@@ -231,6 +282,9 @@
       </message>
       <message name="IDS_EXTENSION_CANT_MODIFY_POLICY_REQUIRED" desc="Error message when a user tries to remove or change an extension that is required by administrator policy.">
         The administrator of this machine requires <ph name="EXTENSION_NAME">$1<ex>Google Talk</ex></ph> to be installed. It cannot be removed or modified.
+      </message>
+      <message name="IDS_EXTENSION_CANT_UNINSTALL_POLICY_REQUIRED" desc="Error message when a user tries to uninstall an extension that is required by administrator policy.">
+        The administrator of this machine requires <ph name="EXTENSION_NAME">$1<ex>Google Talk</ex></ph> to be installed. It cannot be uninstalled.
       </message>
 
       <!-- Settings override strings. Please keep alphabetized. -->
@@ -263,8 +317,29 @@
       <message name="IDS_EXTENSION_PROMPT_WARNING_SOCKET_SPECIFIC_HOSTS" desc="Permission string for access to multiple specific computers on the local network or internet.">
         Exchange data with the computers named: <ph name="HOSTNAMES">$1<ex>foo.example.com bar.example.com</ex></ph>
       </message>
-      
+
       <!-- Device API strings. Please keep alphabetized. -->
+      <message name="IDS_DEVICE_PERMISSIONS_DEVICE_NAME" desc="String describing a device in a list of devices.">
+        <ph name="PRODUCT_NAME">$1<ex>SoundKnob</ex></ph> from <ph name="VENDOR_NAME">$2<ex>Griffin Technology</ex></ph>
+      </message>
+      <message name="IDS_DEVICE_PERMISSIONS_PROMPT_HEADING" desc="Title of the device selection dialog.">
+        USB Devices
+      </message>
+      <message name="IDS_DEVICE_PERMISSIONS_PROMPT_SINGLE" desc="Instructions asking the user to select one device for use with an app.">
+        Select a device to use with <ph name="APP_NAME">$1<ex>Chrome Dev Editor</ex></ph>.
+      </message>
+      <message name="IDS_DEVICE_PERMISSIONS_PROMPT_MULTIPLE" desc="Instructions asking the user to select one or more devices for use with an app.">
+        Select devices to use with <ph name="APP_NAME">$1<ex>Chrome Dev Editor</ex></ph>.
+      </message>
+      <message name="IDS_DEVICE_PERMISSIONS_PROMPT_DEVICE_TOOLTIP" desc="String providing device vendor and product ID details in a tooltip.">
+        <ph name="VENDOR_NAME">$1<ex>Griffin Technology</ex></ph> (<ph name="VENDOR_ID">$2<ex>0x1234</ex></ph>), <ph name="PRODUCT_NAME">$3<ex>SoundKnob</ex></ph> (<ph name="PRODUCT_ID">$4<ex>0x5678</ex></ph>)
+      </message>
+      <message name="IDS_DEVICE_UNKNOWN_PRODUCT" desc="String used when no human-readable product name is available for a device.">
+        Product <ph name="PRODUCT_ID">$1<ex>0x1234</ex></ph>
+      </message>
+      <message name="IDS_DEVICE_UNKNOWN_VENDOR" desc="String used when no human-readable vendor name is available for a device.">
+        Vendor <ph name="VENDOR_ID">$1<ex>0x1234</ex></ph>
+      </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_HID" desc="Permission string for access to HID devices.">
         Access your input devices
       </message>
@@ -274,6 +349,9 @@
       <message name="IDS_EXTENSION_PROMPT_WARNING_USB" desc="Permission string for access to USB devices.">
         Access your USB devices
       </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_VPN" desc="Permission string for access to VPN API.">
+        Access your network traffic
+      </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_USB_DEVICE" desc="Permission string for access to a specific USB device.">
         Access the USB device <ph name="PRODUCT_NAME">$1<ex>SoundKnob</ex></ph> from <ph name="VENDOR_NAME">$2<ex>Griffin Technology</ex></ph>
       </message>
@@ -282,6 +360,53 @@
       </message>
       <message name="IDS_EXTENSION_PROMPT_WARNING_USB_DEVICE_MISSING_VENDOR" desc="Permission string for access to a specific USB device when a vendor name cannot be established for a USB device.">
         Access the USB device
+      </message>
+      <message name="IDS_EXTENSION_TASK_MANAGER_APPVIEW_TAG_PREFIX" desc="The prefix for a guest page loaded in an appview tag in the Task Manager">
+        Appview: <ph name="APPVIEW_TAG_NAME">$1<ex>Google Hangouts</ex></ph>
+      </message>
+      <message name="IDS_EXTENSION_TASK_MANAGER_EXTENSIONOPTIONS_TAG_PREFIX" desc="The prefix for a guest page loaded in an extensionoptions tag in the Task Manager">
+        Options: <ph name="EXTENSIONOPTIONS_TAG_NAME">$1<ex>Google Hangouts</ex></ph>
+      </message>
+      <message name="IDS_EXTENSION_TASK_MANAGER_MIMEHANDLERVIEW_TAG_PREFIX" desc="The prefix for a guest page loaded in a mime handler view page in the task manager">
+        Mimehandler: <ph name="MIMEHANDLERVIEW_TAG_NAME">$1<ex>My mime handler view</ex></ph>
+      </message>
+      <message name="IDS_EXTENSION_TASK_MANAGER_WEBVIEW_TAG_PREFIX" desc="The prefix for a guest page loaded in a webview tag in the Task Manager">
+        Webview: <ph name="WEBVIEW_TAG_NAME">$1<ex>Google</ex></ph>
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_USB_DEVICE_SERIAL" desc="Permission string for accessing a USB device with a known vendor name, product name and serial number.">
+        <ph name="PRODUCT_NAME">$1<ex>Nexus 5</ex></ph> from <ph name="VENDOR_NAME">$2<ex>Google Inc.</ex></ph> (serial number <ph name="SERIAL_NUMBER">$3<ex>ABCDEF123456</ex></ph>)
+      </message>
+
+      <!-- Global error messages for extensions. Please keep alphabetized. -->
+      <message name="IDS_EXTENSION_WARNINGS_NETWORK_DELAY" desc="Warning message indicating that an extension caused excessive network delays for web requests">
+        This extension is slowing down <ph name="PRODUCT_NAME">$1<ex>Google Chrome</ex></ph>. You should disable it to restore <ph name="PRODUCT_NAME">$1<ex>Google Chrome</ex></ph>'s performance.
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_NETWORK_CONFLICT" desc="Warning message which indicates that two or more extensions tried to modify a network request in a conflicting way and the modification of this extension was ignored">
+        This extension failed to modify a network request because the modification conflicted with another extension.
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_REDIRECT_CONFLICT" desc="Warning message indicating that two extensions tried to redirect to different destinations">
+        This extension failed to redirect a network request to <ph name="ATTEMPTED_REDIRECT_DESTINATION">$1<ex>http://www.google.com</ex></ph> because another extension (<ph name="EXTENSION_NAME">$2<ex>My Cool Extension</ex></ph>) redirected it to <ph name="ACTUAL_REDIRECT_DESTINATION">$3<ex>https://www.google.com</ex></ph>.
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_REQUEST_HEADER_CONFLICT" desc="Warning message which indicates that two or more extensions tried to modify a network request in a conflicting way and the modification of this extension was ignored">
+        This extension failed to modify the request header "<ph name="HEADER_NAME">$1<ex>User-Agent</ex></ph>" of a network request because the modification conflicted with another extension (<ph name="EXTENSION_NAME">$2<ex>My Cool Extension</ex></ph>).
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_RESPONSE_HEADER_CONFLICT" desc="Warning message which indicates that two or more extensions tried to modify a network request in a conflicting way and the modification of this extension was ignored">
+        This extension failed to modify the response header "<ph name="HEADER_NAME">$1<ex>User-Agents</ex></ph>" of a network request because the modification conflicted with another extension (<ph name="EXTENSION_NAME">$2<ex>My Cool Extension</ex></ph>).
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_CREDENTIALS_CONFLICT" desc="Warning message which indicates that two or more extensions tried to modify a network request in a conflicting way and the modification of this extension was ignored">
+        This extension failed to provide credentials to a network request because another extension (<ph name="EXTENSION_NAME">$1<ex>My Cool Extension</ex></ph>) provided different credentials.
+      </message>
+      <message name="IDS_EXTENSION_WARNINGS_DOWNLOAD_FILENAME_CONFLICT" desc="Warning message which indicates that two or more extensions tried to determine the filename of a downloaded file in a conflicting way and the modification of this extension was ignored">
+        This extension failed to name the download "<ph name="ATTEMPTED_FILENAME">$1<ex>apple.png</ex></ph>" because another extension (<ph name="EXTENSION_NAME">$2<ex>My Cool Extension</ex></ph>) determined a different filename "<ph name="ACTUAL_FILENAME">$3<ex>banana.png</ex></ph>".
+      </message>
+      <message name="IDS_EXTENSION_WARNING_RELOAD_TOO_FREQUENT" desc="Warning message which indates that an extension got stuck in a reload loop.">
+        This extension reloaded itself too frequently.
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_U2F_DEVICES" desc="Warning message which indicates that an extension has access to Universal 2nd Factor devices.">
+        Access your Universal 2nd Factor devices
+      </message>
+      <message name="IDS_EXTENSION_PROMPT_WARNING_WEB_CONNECTABLE" desc="Permission string for allowing websites to connect to extensions.">
+        Communicate with cooperating websites
       </message>
 
     </messages>

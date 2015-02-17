@@ -23,6 +23,7 @@
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/test/result_catcher.h"
 
 using content::WebContents;
 
@@ -36,12 +37,16 @@ const char kId[] = "pgoakhfeplldmjheffidklpoklkppipp";
 // Default keybinding to use for emulating user-defined shortcut overrides. The
 // test extensions use Alt+Shift+F and Alt+Shift+H.
 const char kAltShiftG[] = "Alt+Shift+G";
-}
+
+// Named command for media key overwrite test.
+const char kMediaKeyTestCommand[] = "test_mediakeys_update";
+
+} // namespace
 
 class CommandsApiTest : public ExtensionApiTest {
  public:
   CommandsApiTest() {}
-  virtual ~CommandsApiTest() {}
+  ~CommandsApiTest() override {}
 
  protected:
   BrowserActionTestUtil GetBrowserActionsBar() {
@@ -51,8 +56,33 @@ class CommandsApiTest : public ExtensionApiTest {
   bool IsGrantedForTab(const Extension* extension,
                        const content::WebContents* web_contents) {
     return extension->permissions_data()->HasAPIPermissionForTab(
-        SessionID::IdForTab(web_contents), APIPermission::kTab);
+        SessionTabHelper::IdForTab(web_contents), APIPermission::kTab);
   }
+
+#if defined(OS_CHROMEOS)
+  void RunChromeOSConversionTest(const std::string& extension_path) {
+    // Setup the environment.
+    ASSERT_TRUE(test_server()->Start());
+    ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+    ASSERT_TRUE(RunExtensionTest(extension_path)) << message_;
+    ui_test_utils::NavigateToURL(
+        browser(), test_server()->GetURL("files/extensions/test_file.txt"));
+
+    ResultCatcher catcher;
+
+    // Send all expected keys (Search+Shift+{Left, Up, Right, Down}).
+    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+        browser(), ui::VKEY_LEFT, false, true, false, true));
+    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+        browser(), ui::VKEY_UP, false, true, false, true));
+    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+        browser(), ui::VKEY_RIGHT, false, true, false, true));
+    ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+        browser(), ui::VKEY_DOWN, false, true, false, true));
+
+    ASSERT_TRUE(catcher.GetNextResult());
+  }
+#endif  // OS_CHROMEOS
 };
 
 // Test the basic functionality of the Keybinding API:
@@ -347,9 +377,9 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest,
   const Extension* extension = GetSingleLoadedExtension();
   // Simulate the user setting the keybinding to Ctrl+D.
 #if defined(OS_MACOSX)
-  const char* hotkey = "Command+D";
+  const char hotkey[] = "Command+D";
 #else
-  const char* hotkey = "Ctrl+D";
+  const char hotkey[] = "Ctrl+D";
 #endif  // defined(OS_MACOSX)
   command_service->UpdateKeybindingPrefs(
       extension->id(), manifest_values::kBrowserActionCommandEvent, hotkey);
@@ -648,6 +678,60 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest,
   EXPECT_TRUE(accelerator.IsAltDown());
 }
 
+// Test that Media keys do not overwrite previous settings.
+IN_PROC_BROWSER_TEST_F(CommandsApiTest,
+    MediaKeyShortcutChangedOnUpdateAfterBeingReassignedByUser) {
+  base::ScopedTempDir scoped_temp_dir;
+  EXPECT_TRUE(scoped_temp_dir.CreateUniqueTempDir());
+  base::FilePath pem_path = test_data_dir_.
+      AppendASCII("keybinding").AppendASCII("keybinding.pem");
+  base::FilePath path_v1 = PackExtensionWithOptions(
+      test_data_dir_.AppendASCII("keybinding").AppendASCII("update")
+                    .AppendASCII("mk_v1"),
+      scoped_temp_dir.path().AppendASCII("mk_v1.crx"),
+      pem_path,
+      base::FilePath());
+  base::FilePath path_v2_reassigned = PackExtensionWithOptions(
+      test_data_dir_.AppendASCII("keybinding").AppendASCII("update")
+                    .AppendASCII("mk_v2"),
+      scoped_temp_dir.path().AppendASCII("mk_v2.crx"),
+      pem_path,
+      base::FilePath());
+
+  ExtensionRegistry* registry = ExtensionRegistry::Get(browser()->profile());
+  CommandService* command_service = CommandService::Get(browser()->profile());
+
+  // Install v1 of the extension.
+  ASSERT_TRUE(InstallExtension(path_v1, 1));
+  EXPECT_TRUE(registry->GetExtensionById(kId, ExtensionRegistry::ENABLED) !=
+              NULL);
+
+  // Verify it has a command of MediaPlayPause.
+  ui::Accelerator accelerator = command_service->FindCommandByName(
+      kId, kMediaKeyTestCommand).accelerator();
+  EXPECT_EQ(ui::VKEY_MEDIA_PLAY_PAUSE, accelerator.key_code());
+  EXPECT_FALSE(accelerator.IsCtrlDown());
+  EXPECT_FALSE(accelerator.IsShiftDown());
+  EXPECT_FALSE(accelerator.IsAltDown());
+
+  // Simulate the user setting the keybinding to Alt+Shift+G.
+  command_service->UpdateKeybindingPrefs(
+      kId, kMediaKeyTestCommand, kAltShiftG);
+
+  // Update to version 2 with different keybinding assigned.
+  EXPECT_TRUE(UpdateExtension(kId, path_v2_reassigned, 0));
+  EXPECT_TRUE(registry->GetExtensionById(kId, ExtensionRegistry::ENABLED) !=
+              NULL);
+
+  // Verify it has a command of Alt+Shift+G.
+  accelerator = command_service->FindCommandByName(
+      kId, kMediaKeyTestCommand).accelerator();
+  EXPECT_EQ(ui::VKEY_G, accelerator.key_code());
+  EXPECT_FALSE(accelerator.IsCtrlDown());
+  EXPECT_TRUE(accelerator.IsShiftDown());
+  EXPECT_TRUE(accelerator.IsAltDown());
+}
+
 IN_PROC_BROWSER_TEST_F(CommandsApiTest,
                        ShortcutRemovedOnUpdateAfterBeingReassignedByUser) {
   base::ScopedTempDir scoped_temp_dir;
@@ -700,5 +784,56 @@ IN_PROC_BROWSER_TEST_F(CommandsApiTest,
   EXPECT_TRUE(accelerator.IsShiftDown());
   EXPECT_TRUE(accelerator.IsAltDown());
 }
+
+//
+#if defined(OS_CHROMEOS) && !defined(NDEBUG)
+// TODO(dtseng): Test times out on Chrome OS debug. See http://crbug.com/412456.
+#define MAYBE_ContinuePropagation DISABLED_ContinuePropagation
+#else
+#define MAYBE_ContinuePropagation ContinuePropagation
+#endif
+
+IN_PROC_BROWSER_TEST_F(CommandsApiTest, MAYBE_ContinuePropagation) {
+  // Setup the environment.
+  ASSERT_TRUE(test_server()->Start());
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+  ASSERT_TRUE(RunExtensionTest("keybinding/continue_propagation")) << message_;
+  ui_test_utils::NavigateToURL(
+      browser(), test_server()->GetURL("files/extensions/test_file.txt"));
+
+  ResultCatcher catcher;
+
+  // Activate the shortcut (Ctrl+Shift+F). The page should capture the
+  // keystroke and not the extension since |onCommand| has no event listener
+  // initially.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+      browser(), ui::VKEY_F, true, true, false, false));
+  ASSERT_TRUE(catcher.GetNextResult());
+
+  // Now, the extension should have added an |onCommand| event listener.
+  // Send the same key, but the |onCommand| listener should now receive it.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+      browser(), ui::VKEY_F, true, true, false, false));
+  ASSERT_TRUE(catcher.GetNextResult());
+
+  // The extension should now have removed its |onCommand| event listener.
+  // Finally, the page should again receive the key.
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+      browser(), ui::VKEY_F, true, true, false, false));
+  ASSERT_TRUE(catcher.GetNextResult());
+}
+
+// Test is only applicable on Chrome OS.
+#if defined(OS_CHROMEOS)
+// http://crbug.com/410534
+#if defined(USE_OZONE)
+#define MAYBE_ChromeOSConversions DISABLED_ChromeOSConversions
+#else
+#define MAYBE_ChromeOSConversions ChromeOSConversions
+#endif
+IN_PROC_BROWSER_TEST_F(CommandsApiTest, MAYBE_ChromeOSConversions) {
+  RunChromeOSConversionTest("keybinding/chromeos_conversions");
+}
+#endif  // OS_CHROMEOS
 
 }  // namespace extensions

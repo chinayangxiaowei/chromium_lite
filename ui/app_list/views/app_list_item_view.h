@@ -9,6 +9,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/strings/string16.h"
 #include "base/timer/timer.h"
 #include "ui/app_list/app_list_export.h"
 #include "ui/app_list/app_list_item_observer.h"
@@ -38,7 +39,17 @@ class APP_LIST_EXPORT AppListItemView : public views::CustomButton,
   static const char kViewClassName[];
 
   AppListItemView(AppsGridView* apps_grid_view, AppListItem* item);
-  virtual ~AppListItemView();
+  ~AppListItemView() override;
+
+  // Set the icon of this image, adding a drop shadow if |has_shadow|.
+  void SetIcon(const gfx::ImageSkia& icon, bool has_shadow);
+
+  // Set the item name.
+  void SetItemName(const base::string16& display_name,
+                   const base::string16& full_name);
+  void SetItemIsInstalling(bool is_installing);
+  void SetItemIsHighlighted(bool is_highlighted);
+  void SetItemPercentDownloaded(int percent_downloaded);
 
   void Prerender();
 
@@ -50,7 +61,7 @@ class APP_LIST_EXPORT AppListItemView : public views::CustomButton,
 
   void SetAsAttemptedFolderTarget(bool is_target_folder);
 
-  AppListItem* item() const { return item_; }
+  AppListItem* item() const { return item_weak_; }
 
   views::ImageView* icon() const { return icon_; }
 
@@ -95,44 +106,47 @@ class APP_LIST_EXPORT AppListItemView : public views::CustomButton,
   // having something dropped onto it, enables subpixel AA for the title.
   void SetTitleSubpixelAA();
 
-  // AppListItemObserver overrides:
-  virtual void ItemIconChanged() OVERRIDE;
-  virtual void ItemNameChanged() OVERRIDE;
-  virtual void ItemHighlightedChanged() OVERRIDE;
-  virtual void ItemIsInstallingChanged() OVERRIDE;
-  virtual void ItemPercentDownloadedChanged() OVERRIDE;
-
   // views::View overrides:
-  virtual const char* GetClassName() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
-  virtual void SchedulePaintInRect(const gfx::Rect& r) OVERRIDE;
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  const char* GetClassName() const override;
+  void Layout() override;
+  void SchedulePaintInRect(const gfx::Rect& r) override;
+  void OnPaint(gfx::Canvas* canvas) override;
 
   // views::ContextMenuController overrides:
-  virtual void ShowContextMenuForView(views::View* source,
-                                      const gfx::Point& point,
-                                      ui::MenuSourceType source_type) OVERRIDE;
+  void ShowContextMenuForView(views::View* source,
+                              const gfx::Point& point,
+                              ui::MenuSourceType source_type) override;
 
   // views::CustomButton overrides:
-  virtual void StateChanged() OVERRIDE;
-  virtual bool ShouldEnterPushedState(const ui::Event& event) OVERRIDE;
+  void StateChanged() override;
+  bool ShouldEnterPushedState(const ui::Event& event) override;
 
   // views::View overrides:
-  virtual bool OnKeyPressed(const ui::KeyEvent& event) OVERRIDE;
-  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseCaptureLost() OVERRIDE;
-  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnMouseReleased(const ui::MouseEvent& event) override;
+  void OnMouseCaptureLost() override;
+  bool OnMouseDragged(const ui::MouseEvent& event) override;
 
   // ui::EventHandler overrides:
-  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
+  void OnGestureEvent(ui::GestureEvent* event) override;
 
-  AppListItem* item_;  // Owned by AppListModel.
+  // AppListItemObserver overrides:
+  void ItemIconChanged() override;
+  void ItemNameChanged() override;
+  void ItemIsInstallingChanged() override;
+  void ItemPercentDownloadedChanged() override;
+  void ItemBeingDestroyed() override;
 
-  AppsGridView* apps_grid_view_;  // Owned by views hierarchy.
-  views::ImageView* icon_;  // Owned by views hierarchy.
-  CachedLabel* title_;  // Owned by views hierarchy.
-  ProgressBarView* progress_bar_;  // Owned by views hierarchy.
+  const bool is_folder_;
+  const bool is_in_folder_;
+
+  AppListItem* item_weak_;  // Owned by AppListModel. Can be NULL.
+
+  AppsGridView* apps_grid_view_;   // Parent view, owns this.
+  views::ImageView* icon_;         // Strongly typed child view.
+  CachedLabel* title_;             // Strongly typed child view.
+  ProgressBarView* progress_bar_;  // Strongly typed child view.
 
   scoped_ptr<views::MenuRunner> context_menu_runner_;
 
@@ -140,6 +154,9 @@ class APP_LIST_EXPORT AppListItemView : public views::CustomButton,
 
   // True if scroll gestures should contribute to dragging.
   bool touch_dragging_;
+
+  bool is_installing_;
+  bool is_highlighted_;
 
   // A timer to defer showing drag UI when mouse is pressed.
   base::OneShotTimer<AppListItemView> mouse_drag_timer_;

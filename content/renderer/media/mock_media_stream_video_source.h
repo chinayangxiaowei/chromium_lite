@@ -39,12 +39,12 @@ class MockMediaStreamVideoSource : public MediaStreamVideoSource {
 
   void CompleteGetSupportedFormats();
 
-  const media::VideoCaptureParams& start_params() const { return params_; }
+  const media::VideoCaptureFormat& start_format() const { return format_; }
   int max_requested_height() const { return max_requested_height_; }
   int max_requested_width() const { return max_requested_width_; }
   double max_requested_frame_rate() const { return max_requested_frame_rate_; }
 
-  void SetMutedState(bool muted_state) {
+  virtual void SetMutedState(bool muted_state) override {
     MediaStreamVideoSource::SetMutedState(muted_state);
     DoSetMutedState(muted_state);
   }
@@ -60,14 +60,14 @@ class MockMediaStreamVideoSource : public MediaStreamVideoSource {
       int max_requested_height,
       int max_requested_width,
       double max_requested_frame_rate,
-      const VideoCaptureDeviceFormatsCB& callback) OVERRIDE;
+      const VideoCaptureDeviceFormatsCB& callback) override;
   virtual void StartSourceImpl(
-      const media::VideoCaptureParams& params,
-      const VideoCaptureDeliverFrameCB& frame_callback) OVERRIDE;
-  virtual void StopSourceImpl() OVERRIDE;
+      const media::VideoCaptureFormat& format,
+      const VideoCaptureDeliverFrameCB& frame_callback) override;
+  virtual void StopSourceImpl() override;
 
  private:
-  media::VideoCaptureParams params_;
+  media::VideoCaptureFormat format_;
   media::VideoCaptureFormats supported_formats_;
   bool manual_get_supported_formats_;
   int max_requested_height_;

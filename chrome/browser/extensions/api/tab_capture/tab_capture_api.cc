@@ -16,7 +16,7 @@
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_registry.h"
 #include "chrome/browser/extensions/extension_renderer_state.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_id.h"
+#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -51,7 +51,7 @@ const char kMediaStreamSourceTab[] = "tab";
 
 // Whitelisted extensions that do not check for a browser action grant because
 // they provide API's.
-const char* whitelisted_extensions[] = {
+const char* const whitelisted_extensions[] = {
   "enhhojjnijigcajfphajepfemndkmdlo",  // Dev
   "pkedcjkdefgpdelpbcmbmeomcjbeemfm",  // Trusted Tester
   "fmfcbgogabcbclcofgocippekhfcmgfj",  // Staging
@@ -87,7 +87,7 @@ bool TabCaptureCaptureFunction::RunSync() {
   // Make sure either we have been granted permission to capture through an
   // extension icon click or our extension is whitelisted.
   if (!extension()->permissions_data()->HasAPIPermissionForTab(
-          SessionID::IdForTab(target_contents),
+          SessionTabHelper::IdForTab(target_contents),
           APIPermission::kTabCaptureForTab) &&
       CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kWhitelistedExtensionID) != extension_id &&

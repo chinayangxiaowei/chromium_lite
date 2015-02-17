@@ -13,7 +13,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -83,7 +83,7 @@ class DownloadRequestLimiter
     TabDownloadState(DownloadRequestLimiter* host,
                      content::WebContents* web_contents,
                      content::WebContents* originating_web_contents);
-    virtual ~TabDownloadState();
+    ~TabDownloadState() override;
 
     // Status of the download.
     void set_download_status(DownloadRequestLimiter::DownloadStatus status) {
@@ -101,18 +101,13 @@ class DownloadRequestLimiter
       return download_count_;
     }
 
-    // Promote protected accessor to public.
-    content::WebContents* web_contents() const {
-      return content::WebContentsObserver::web_contents();
-    }
-
     // content::WebContentsObserver overrides.
-    virtual void AboutToNavigateRenderView(
-        content::RenderViewHost* render_view_host) OVERRIDE;
+    void AboutToNavigateRenderView(
+        content::RenderViewHost* render_view_host) override;
     // Invoked when a user gesture occurs (mouse click, enter or space). This
     // may result in invoking Remove on DownloadRequestLimiter.
-    virtual void DidGetUserGesture() OVERRIDE;
-    virtual void WebContentsDestroyed() OVERRIDE;
+    void DidGetUserGesture() override;
+    void WebContentsDestroyed() override;
 
     // Asks the user if they really want to allow the download.
     // See description above CanDownloadOnIOThread for details on lifetime of
@@ -137,9 +132,9 @@ class DownloadRequestLimiter
     bool is_showing_prompt() const;
 
     // content::NotificationObserver method.
-    virtual void Observe(int type,
-                         const content::NotificationSource& source,
-                         const content::NotificationDetails& details) OVERRIDE;
+    void Observe(int type,
+                 const content::NotificationSource& source,
+                 const content::NotificationDetails& details) override;
 
     // Remember to either block or allow automatic downloads from this origin.
     void SetContentSetting(ContentSetting setting);

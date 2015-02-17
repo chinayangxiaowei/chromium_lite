@@ -1,10 +1,8 @@
 # Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-import logging
 from operator import attrgetter
 
-from telemetry.page import page_test
 from telemetry.web_perf.metrics import rendering_frame
 
 # These are LatencyInfo component names indicating the various components
@@ -28,19 +26,6 @@ END_COMP_NAME = 'INPUT_EVENT_LATENCY_TERMINATED_FRAME_SWAP_COMPONENT'
 SCROLL_UPDATE_EVENT_NAME = 'InputLatency:ScrollUpdate'
 # Name for a gesture scroll update latency event.
 GESTURE_SCROLL_UPDATE_EVENT_NAME  = 'InputLatency:GestureScrollUpdate'
-
-
-class NotEnoughFramesError(page_test.MeasurementFailure):
-  def __init__(self, frame_count):
-    super(NotEnoughFramesError, self).__init__(
-      'Only %i frame timestamps were collected ' % frame_count +
-      '(at least two are required).\n'
-      'Issues that have caused this in the past:\n' +
-      '- Browser bugs that prevents the page from redrawing\n' +
-      '- Bugs in the synthetic gesture code\n' +
-      '- Page and benchmark out of sync (e.g. clicked element was renamed)\n' +
-      '- Pages that render extremely slow\n' +
-      '- Pages that can\'t be scrolled')
 
 
 def GetInputLatencyEvents(process, timeline_range):
@@ -112,7 +97,7 @@ def HasRenderingStats(process):
   if not process:
     return False
   for event in process.IterAllSlicesOfName(
-      'BenchmarkInstrumentation::MainThreadRenderingStats'):
+      'BenchmarkInstrumentation::DisplayRenderingStats'):
     if 'data' in event.args and event.args['data']['frame_count'] == 1:
       return True
   for event in process.IterAllSlicesOfName(
@@ -121,6 +106,13 @@ def HasRenderingStats(process):
       return True
   return False
 
+def GetTimestampEventName(process):
+  """ Returns the name of the events used to count frame timestamps. """
+  event_name = 'BenchmarkInstrumentation::DisplayRenderingStats'
+  for event in process.IterAllSlicesOfName(event_name):
+    if 'data' in event.args and event.args['data']['frame_count'] == 1:
+      return event_name
+  return 'BenchmarkInstrumentation::ImplThreadRenderingStats'
 
 class RenderingStats(object):
   def __init__(self, renderer_process, browser_process, timeline_ranges):
@@ -139,7 +131,13 @@ class RenderingStats(object):
     if HasRenderingStats(browser_process):
       timestamp_process = browser_process
     else:
-      timestamp_process  = renderer_process
+      timestamp_process = renderer_process
+
+    timestamp_event_name = GetTimestampEventName(timestamp_process)
+
+    # A lookup from list names below to any errors or exceptions encountered
+    # in attempting to generate that list.
+    self.errors = {}
 
     self.frame_timestamps = []
     self.frame_times = []
@@ -147,8 +145,6 @@ class RenderingStats(object):
     self.painted_pixel_counts = []
     self.record_times = []
     self.recorded_pixel_counts = []
-    self.rasterize_times = []
-    self.rasterized_pixel_counts = []
     self.approximated_pixel_percentages = []
     # End-to-end latency for input event - from when input event is
     # generated to when the its resulted page is swap buffered.
@@ -167,8 +163,6 @@ class RenderingStats(object):
       self.painted_pixel_counts.append([])
       self.record_times.append([])
       self.recorded_pixel_counts.append([])
-      self.rasterize_times.append([])
-      self.rasterized_pixel_counts.append([])
       self.approximated_pixel_percentages.append([])
       self.input_event_latency.append([])
       self.scroll_update_latency.append([])
@@ -176,7 +170,8 @@ class RenderingStats(object):
 
       if timeline_range.is_empty:
         continue
-      self._InitFrameTimestampsFromTimeline(timestamp_process, timeline_range)
+      self._InitFrameTimestampsFromTimeline(
+          timestamp_process, timestamp_event_name, timeline_range)
       self._InitMainThreadRenderingStatsFromTimeline(
           renderer_process, timeline_range)
       self._InitImplThreadRenderingStatsFromTimeline(
@@ -186,12 +181,6 @@ class RenderingStats(object):
       self._InitFrameQueueingDurationsFromTimeline(
           renderer_process, timeline_range)
 
-    # Check if we have collected at least 2 frames in every range. Otherwise we
-    # can't compute any meaningful metrics.
-    for segment in self.frame_timestamps:
-      if len(segment) < 2:
-        raise NotEnoughFramesError(len(segment))
-
   def _InitInputLatencyStatsFromTimeline(
       self, browser_process, renderer_process, timeline_range):
     latency_events = GetInputLatencyEvents(browser_process, timeline_range)
@@ -199,8 +188,12 @@ class RenderingStats(object):
     latency_events.extend(GetInputLatencyEvents(renderer_process,
                                                 timeline_range))
     input_event_latencies = ComputeInputEventLatencies(latency_events)
+    # Don't include scroll updates in the overall input latency measurement,
+    # because scroll updates can take much more time to process than other
+    # input events and would therefore add noise to overall latency numbers.
     self.input_event_latency[-1] = [
-        latency for name, latency in input_event_latencies]
+        latency for name, latency in input_event_latencies
+        if name != SCROLL_UPDATE_EVENT_NAME]
     self.scroll_update_latency[-1] = [
         latency for name, latency in input_event_latencies
         if name == SCROLL_UPDATE_EVENT_NAME]
@@ -229,13 +222,10 @@ class RenderingStats(object):
         self.frame_times[-1].append(round(self.frame_timestamps[-1][-1] -
                                           self.frame_timestamps[-1][-2], 2))
 
-  def _InitFrameTimestampsFromTimeline(self, process, timeline_range):
-    event_name = 'BenchmarkInstrumentation::MainThreadRenderingStats'
-    for event in self._GatherEvents(event_name, process, timeline_range):
-      self._AddFrameTimestamp(event)
-
-    event_name = 'BenchmarkInstrumentation::ImplThreadRenderingStats'
-    for event in self._GatherEvents(event_name, process, timeline_range):
+  def _InitFrameTimestampsFromTimeline(
+      self, process, timestamp_event_name, timeline_range):
+    for event in self._GatherEvents(
+        timestamp_event_name, process, timeline_range):
       self._AddFrameTimestamp(event)
 
   def _InitMainThreadRenderingStatsFromTimeline(self, process, timeline_range):
@@ -251,8 +241,6 @@ class RenderingStats(object):
     event_name = 'BenchmarkInstrumentation::ImplThreadRenderingStats'
     for event in self._GatherEvents(event_name, process, timeline_range):
       data = event.args['data']
-      self.rasterize_times[-1].append(1000.0 * data['rasterize_time'])
-      self.rasterized_pixel_counts[-1].append(data['rasterized_pixel_count'])
       if data.get('visible_content_area', 0):
         self.approximated_pixel_percentages[-1].append(
             round(float(data['approximated_visible_content_area']) /
@@ -267,5 +255,5 @@ class RenderingStats(object):
       new_frame_queueing_durations = [e.queueing_duration for e in events]
       self.frame_queueing_durations.append(new_frame_queueing_durations)
     except rendering_frame.NoBeginFrameIdException:
-      logging.warning('Current chrome version does not support the queueing '
-                      'delay metric.')
+      self.errors['frame_queueing_durations'] = (
+          'Current chrome version does not support the queueing delay metric.')

@@ -4,8 +4,8 @@
 
 #include "extensions/browser/value_store/value_store_unittest.h"
 
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
@@ -32,16 +32,16 @@ INSTANTIATE_TEST_CASE_P(
 class LeveldbValueStoreUnitTest : public testing::Test {
  public:
   LeveldbValueStoreUnitTest() {}
-  virtual ~LeveldbValueStoreUnitTest() {}
+  ~LeveldbValueStoreUnitTest() override {}
 
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
     OpenStore();
     ASSERT_FALSE(store_->Get()->HasError());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     store_->Clear();
     store_.reset();
   }

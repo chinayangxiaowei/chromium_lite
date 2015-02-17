@@ -34,7 +34,7 @@
 //
 // For example, if the user is now selecting a JPEG file, Files.app will
 // receive file tasks represented as a JSON object via
-// chrome.fileBrowserPrivate.getFileTasks() API, which look like:
+// chrome.fileManagerPrivate.getFileTasks() API, which look like:
 //
 // [
 //   {
@@ -93,10 +93,10 @@
 //
 // HOW TASKS ARE EXECUTED?
 //
-// chrome.fileBrowserPrivate.viewFiles() is used to open a file in a browser,
+// chrome.fileManagerPrivate.viewFiles() is used to open a file in a browser,
 // without any handler. Browser will take care of handling the file (ex. PDF).
 //
-// chrome.fileBrowserPrivate.executeTasks() is used to open a file with a
+// chrome.fileManagerPrivate.executeTasks() is used to open a file with a
 // handler (Chrome Extension/App or Drive App).
 //
 // Some built-in handlers such as "play" are handled internally in Files.app.
@@ -104,7 +104,7 @@
 // should be simplified: crbug.com/267313
 //
 // See also:
-// ui/file_manager/file_manager/js/file_tasks.js
+// ui/file_manager/file_manager/foreground/js/file_tasks.js
 //
 
 #ifndef CHROME_BROWSER_CHROMEOS_FILE_MANAGER_FILE_TASKS_H_
@@ -117,7 +117,7 @@
 #include "base/basictypes.h"
 #include "base/callback_forward.h"
 #include "chrome/browser/extensions/api/file_handlers/app_file_handler_util.h"
-#include "chrome/common/extensions/api/file_browser_private.h"
+#include "chrome/common/extensions/api/file_manager_private.h"
 #include "url/gurl.h"
 
 class PrefService;
@@ -127,7 +127,7 @@ namespace drive {
 class DriveAppRegistry;
 }
 
-namespace fileapi {
+namespace storage {
 class FileSystemURL;
 }
 
@@ -166,7 +166,8 @@ class FullTaskDescriptor {
   FullTaskDescriptor(const TaskDescriptor& task_descriptor,
                      const std::string& task_title,
                      const GURL& icon_url,
-                     bool is_default);
+                     bool is_default,
+                     bool is_generic_file_handler);
   const TaskDescriptor& task_descriptor() const { return task_descriptor_; }
 
   // The title of the task.
@@ -178,11 +179,21 @@ class FullTaskDescriptor {
   bool is_default() const { return is_default_; }
   void set_is_default(bool is_default) { is_default_ = is_default; }
 
+  // True if this task is from generic file handler. Generic file handler is a
+  // file handler which handles any type of files (e.g. extensions: ["*"],
+  // types: ["*/*"]). Partial wild card (e.g. types: ["image/*"]) is not
+  // generic file handler.
+  bool is_generic_file_handler() const { return is_generic_file_handler_; }
+  void set_is_generic_file_handler(bool is_generic_file_handler) {
+    is_generic_file_handler_ = is_generic_file_handler;
+  }
+
  private:
   TaskDescriptor task_descriptor_;
   std::string task_title_;
   GURL icon_url_;
   bool is_default_;
+  bool is_generic_file_handler_;
 };
 
 // Update the default file handler for the given sets of suffixes and MIME
@@ -222,7 +233,7 @@ bool ParseTaskID(const std::string& task_id, TaskDescriptor* task);
 
 // The callback is used for ExecuteFileTask(). Will be called with true if
 // the file task execution is successful, or false if unsuccessful.
-typedef base::Callback<void(extensions::api::file_browser_private::TaskResult
+typedef base::Callback<void(extensions::api::file_manager_private::TaskResult
                                 result)> FileTaskFinishedCallback;
 
 // Executes file handler task for each element of |file_urls|.
@@ -241,7 +252,7 @@ typedef base::Callback<void(extensions::api::file_browser_private::TaskResult
 bool ExecuteFileTask(Profile* profile,
                      const GURL& source_url,
                      const TaskDescriptor& task,
-                     const std::vector<fileapi::FileSystemURL>& file_urls,
+                     const std::vector<storage::FileSystemURL>& file_urls,
                      const FileTaskFinishedCallback& done);
 
 typedef extensions::app_file_handler_util::PathAndMimeTypeSet
@@ -253,6 +264,9 @@ typedef extensions::app_file_handler_util::PathAndMimeTypeSet
 void FindDriveAppTasks(const drive::DriveAppRegistry& drive_app_registry,
                        const PathAndMimeTypeSet& path_mime_set,
                        std::vector<FullTaskDescriptor>* result_list);
+
+// Returns whether a file handler info is a generic file handler or not.
+bool IsGenericFileHandler(const extensions::FileHandlerInfo& file_handler_info);
 
 // Finds the file handler tasks (apps declaring "file_handlers" in
 // manifest.json) that can be used with the given files, appending them to

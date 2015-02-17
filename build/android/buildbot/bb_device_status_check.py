@@ -31,7 +31,6 @@ from pylib import android_commands
 from pylib import constants
 from pylib.cmd_helper import GetCmdOutput
 from pylib.device import device_blacklist
-from pylib.device import device_errors
 from pylib.device import device_list
 from pylib.device import device_utils
 
@@ -70,21 +69,35 @@ def DeviceInfo(serial, options):
   imei_slice = _GetData('Device ID = (\d+)',
                         device_adb.old_interface.GetSubscriberInfo(),
                         lambda x: x[-6:])
+  json_data = {
+    'serial': serial,
+    'type': device_type,
+    'build': device_build,
+    'build_detail': device_adb.GetProp('ro.build.fingerprint'),
+    'battery': battery_info,
+    'imei_slice': imei_slice,
+    'wifi_ip': device_adb.GetProp('dhcp.wlan0.ipaddress'),
+  }
   report = ['Device %s (%s)' % (serial, device_type),
             '  Build: %s (%s)' %
-              (device_build, device_adb.GetProp('ro.build.fingerprint')),
+              (device_build, json_data['build_detail']),
             '  Current Battery Service state: ',
             '\n'.join(['    %s: %s' % (k, v)
                        for k, v in battery_info.iteritems()]),
             '  IMEI slice: %s' % imei_slice,
-            '  Wifi IP: %s' % device_adb.GetProp('dhcp.wlan0.ipaddress'),
+            '  Wifi IP: %s' % json_data['wifi_ip'],
             '']
 
   errors = []
   dev_good = True
   if battery_level < 15:
-    errors += ['Device critically low in battery. Turning off device.']
+    errors += ['Device critically low in battery. Will add to blacklist.']
     dev_good = False
+    if not device_adb.old_interface.IsDeviceCharging():
+      if device_adb.old_interface.CanControlUsbCharging():
+        device_adb.old_interface.EnableUsbCharging()
+      else:
+        logging.error('Device %s is not charging' % serial)
   if not options.no_provisioning_check:
     setup_wizard_disabled = (
         device_adb.GetProp('ro.setupwizard.mode') == 'DISABLED')
@@ -94,18 +107,10 @@ def DeviceInfo(serial, options):
       battery_info.get('AC powered', None) != 'true'):
     errors += ['Mantaray device not connected to AC power.']
 
-  # Turn off devices with low battery.
-  if battery_level < 15:
-    try:
-      device_adb.EnableRoot()
-    except device_errors.CommandFailedError as e:
-      # Attempt shutdown anyway.
-      # TODO(jbudorick) Handle this exception appropriately after interface
-      #                 conversions are finished.
-      logging.error(str(e))
-    device_adb.old_interface.Shutdown()
   full_report = '\n'.join(report)
-  return device_type, device_build, battery_level, full_report, errors, dev_good
+
+  return (device_type, device_build, battery_level, full_report, errors,
+    dev_good, json_data)
 
 
 def CheckForMissingDevices(options, adb_online_devs):
@@ -149,14 +154,16 @@ def CheckForMissingDevices(options, adb_online_devs):
     bb_annotations.PrintSummaryText(devices_missing_msg)
 
     from_address = 'chrome-bot@chromium.org'
-    to_addresses = ['chrome-labs-tech-ticket@google.com']
+    to_addresses = ['chrome-labs-tech-ticket@google.com',
+                    'chrome-android-device-alert@google.com']
+    cc_addresses = ['chrome-android-device-alert@google.com']
     subject = 'Devices offline on %s, %s, %s' % (
       os.environ.get('BUILDBOT_SLAVENAME'),
       os.environ.get('BUILDBOT_BUILDERNAME'),
       os.environ.get('BUILDBOT_BUILDNUMBER'))
     msg = ('Please reboot the following devices:\n%s' %
            '\n'.join(map(str,new_missing_devs)))
-    SendEmail(from_address, to_addresses, subject, msg)
+    SendEmail(from_address, to_addresses, cc_addresses, subject, msg)
 
   all_known_devices = list(set(adb_online_devs) | set(last_devices))
   device_list.WritePersistentDeviceList(last_devices_path, all_known_devices)
@@ -198,9 +205,10 @@ def CheckForMissingDevices(options, adb_online_devs):
              'regularly scheduled program.' % list(new_devs))
 
 
-def SendEmail(from_address, to_addresses, subject, msg):
+def SendEmail(from_address, to_addresses, cc_addresses, subject, msg):
   msg_body = '\r\n'.join(['From: %s' % from_address,
                           'To: %s' % ', '.join(to_addresses),
+                          'CC: %s' % ', '.join(cc_addresses),
                           'Subject: %s' % subject, '', msg])
   try:
     server = smtplib.SMTP('localhost')
@@ -249,7 +257,7 @@ def KillAllAdb():
       try:
         if 'adb' in p.name:
           yield p
-      except (psutil.error.NoSuchProcess, psutil.error.AccessDenied):
+      except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
   for sig in [signal.SIGTERM, signal.SIGQUIT, signal.SIGKILL]:
@@ -258,12 +266,12 @@ def KillAllAdb():
         print 'kill %d %d (%s [%s])' % (sig, p.pid, p.name,
             ' '.join(p.cmdline))
         p.send_signal(sig)
-      except (psutil.error.NoSuchProcess, psutil.error.AccessDenied):
+      except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
   for p in GetAllAdb():
     try:
       print 'Unable to kill %d (%s [%s])' % (p.pid, p.name, ' '.join(p.cmdline))
-    except (psutil.error.NoSuchProcess, psutil.error.AccessDenied):
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
       pass
 
 
@@ -322,10 +330,10 @@ def main():
   offline_devices = android_commands.GetAttachedDevices(
       hardware=False, emulator=False, offline=True)
 
-  types, builds, batteries, reports, errors = [], [], [], [], []
+  types, builds, batteries, reports, errors, json_data = [], [], [], [], [], []
   fail_step_lst = []
   if devices:
-    types, builds, batteries, reports, errors, fail_step_lst = (
+    types, builds, batteries, reports, errors, fail_step_lst, json_data = (
         zip(*[DeviceInfo(dev, options) for dev in devices]))
 
   err_msg = CheckForMissingDevices(options, devices) or []
@@ -351,7 +359,7 @@ def main():
     bot_name = os.environ.get('BUILDBOT_BUILDERNAME')
     slave_name = os.environ.get('BUILDBOT_SLAVENAME')
     subject = 'Device status check errors on %s, %s.' % (slave_name, bot_name)
-    SendEmail(from_address, to_addresses, subject, msg)
+    SendEmail(from_address, to_addresses, [], subject, msg)
 
   if options.device_status_dashboard:
     perf_tests_results_helper.PrintPerfResult('BotDevices', 'OnlineDevices',
@@ -366,18 +374,15 @@ def main():
 
   if options.json_output:
     with open(options.json_output, 'wb') as f:
-      f.write(json.dumps({
-        'online_devices': devices,
-        'offline_devices': offline_devices,
-        'expected_devices': expected_devices,
-        'unique_types': unique_types,
-        'unique_builds': unique_builds,
-      }))
+      f.write(json.dumps(json_data, indent=4))
 
-  if False in fail_step_lst:
-    # TODO(navabi): Build fails on device status check step if there exists any
-    # devices with critically low battery. Remove those devices from testing,
-    # allowing build to continue with good devices.
+  num_failed_devs = 0
+  for fail_status, device in zip(fail_step_lst, devices):
+    if not fail_status:
+      device_blacklist.ExtendBlacklist([str(device)])
+      num_failed_devs += 1
+
+  if num_failed_devs == len(devices):
     return 2
 
   if not devices:

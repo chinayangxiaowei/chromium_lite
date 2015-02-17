@@ -84,6 +84,26 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver,
       const content::MediaResponseCallback& callback,
       const extensions::Extension* extension);
 
+  // Checks if we have media access permission. Note that this only checks the
+  // settings and does not query the user.
+  bool CheckMediaAccessPermission(content::BrowserContext* browser_context,
+                                  const GURL& security_origin,
+                                  content::MediaStreamType type);
+
+  // Method called from WebCapturerDelegate implementations to check media
+  // access permission. Note that this does not query the user.
+  bool CheckMediaAccessPermission(content::WebContents* web_contents,
+                                  const GURL& security_origin,
+                                  content::MediaStreamType type);
+
+  // Same as above but for an |extension|, which may not be NULL.
+#if defined(ENABLE_EXTENSIONS)
+  bool CheckMediaAccessPermission(content::WebContents* web_contents,
+                                  const GURL& security_origin,
+                                  content::MediaStreamType type,
+                                  const extensions::Extension* extension);
+#endif
+
   // Helper to get the default devices which can be used by the media request.
   // Uses the first available devices if the default devices are not available.
   // If the return list is empty, it means there is no available device on the
@@ -112,26 +132,16 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver,
   void DisableDeviceEnumerationForTesting();
 
   // Overridden from content::MediaObserver:
-  virtual void OnAudioCaptureDevicesChanged() OVERRIDE;
-  virtual void OnVideoCaptureDevicesChanged() OVERRIDE;
-  virtual void OnMediaRequestStateChanged(
-      int render_process_id,
-      int render_frame_id,
-      int page_request_id,
-      const GURL& security_origin,
-      content::MediaStreamType stream_type,
-      content::MediaRequestState state) OVERRIDE;
-  virtual void OnCreatingAudioStream(int render_process_id,
-                                     int render_frame_id) OVERRIDE;
-  virtual void OnAudioStreamPlaying(
-      int render_process_id,
-      int render_frame_id,
-      int stream_id,
-      const ReadPowerAndClipCallback& power_read_callback) OVERRIDE;
-  virtual void OnAudioStreamStopped(
-      int render_process_id,
-      int render_frame_id,
-      int stream_id) OVERRIDE;
+  void OnAudioCaptureDevicesChanged() override;
+  void OnVideoCaptureDevicesChanged() override;
+  void OnMediaRequestStateChanged(int render_process_id,
+                                  int render_frame_id,
+                                  int page_request_id,
+                                  const GURL& security_origin,
+                                  content::MediaStreamType stream_type,
+                                  content::MediaRequestState state) override;
+  void OnCreatingAudioStream(int render_process_id,
+                             int render_frame_id) override;
 
   scoped_refptr<MediaStreamCaptureIndicator> GetMediaStreamCaptureIndicator();
 
@@ -160,12 +170,12 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver,
   typedef std::map<content::WebContents*, RequestsQueue> RequestsQueues;
 
   MediaCaptureDevicesDispatcher();
-  virtual ~MediaCaptureDevicesDispatcher();
+  ~MediaCaptureDevicesDispatcher() override;
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Helpers for ProcessMediaAccessRequest().
   void ProcessDesktopCaptureAccessRequest(
@@ -183,11 +193,13 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver,
       const content::MediaStreamRequest& request,
       const content::MediaResponseCallback& callback,
       const extensions::Extension* extension);
+#if defined(ENABLE_EXTENSIONS)
   void ProcessMediaAccessRequestFromPlatformAppOrExtension(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
       const content::MediaResponseCallback& callback,
       const extensions::Extension* extension);
+#endif
   void ProcessRegularMediaAccessRequest(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,

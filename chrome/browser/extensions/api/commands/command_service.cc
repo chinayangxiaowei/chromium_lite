@@ -550,20 +550,24 @@ void CommandService::AssignKeybindings(const Extension* extension) {
 
 bool CommandService::CanAutoAssign(const Command &command,
                                    const Extension* extension) {
-  // Media Keys are non-exclusive, so allow auto-assigning them.
-  if (Command::IsMediaKey(command.accelerator()))
-    return true;
-
   // Extensions are allowed to auto-assign updated keys if the user has not
   // changed from the previous value.
   if (IsCommandShortcutUserModified(extension, command.command_name()))
     return false;
+
+  // Media Keys are non-exclusive, so allow auto-assigning them.
+  if (Command::IsMediaKey(command.accelerator()))
+    return true;
 
   if (command.global()) {
     using namespace extensions;
     if (command.command_name() == manifest_values::kBrowserActionCommandEvent ||
         command.command_name() == manifest_values::kPageActionCommandEvent)
       return false;  // Browser and page actions are not global in nature.
+
+    if (extension->permissions_data()->HasAPIPermission(
+            APIPermission::kCommandsAccessibility))
+      return true;
 
     // Global shortcuts are restricted to (Ctrl|Command)+Shift+[0-9].
 #if defined OS_MACOSX

@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "apps/app_window_geometry_cache.h"
 #include "chrome/browser/apps/app_browsertest_util.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/app_window/app_window_geometry_cache.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/result_catcher.h"
 
-using apps::AppWindowGeometryCache;
+using extensions::AppWindowGeometryCache;
+using extensions::ResultCatcher;
 
 // This helper class can be used to wait for changes in the app window
 // geometry cache registry for a specific window in a specific extension.
@@ -44,10 +46,9 @@ class GeometryCacheChangeHelper : AppWindowGeometryCache::Observer {
   }
 
   // Implements the content::NotificationObserver interface.
-  virtual void OnGeometryCacheChanged(const std::string& extension_id,
-                                      const std::string& window_id,
-                                      const gfx::Rect& bounds)
-      OVERRIDE {
+  void OnGeometryCacheChanged(const std::string& extension_id,
+                              const std::string& window_id,
+                              const gfx::Rect& bounds) override {
     if (extension_id != extension_id_ || window_id != window_id_)
       return;
 
@@ -140,6 +141,17 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestCloseEvent) {
 
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestMaximize) {
   ASSERT_TRUE(RunAppWindowAPITest("testMaximize")) << message_;
+}
+
+// Flaky on Linux. http://crbug.com/424399.
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#define MAYBE_TestMinimize DISABLED_TestMinimize
+#else
+#define MAYBE_TestMinimize TestMinimize
+#endif
+
+IN_PROC_BROWSER_TEST_F(AppWindowAPITest, MAYBE_TestMinimize) {
+  ASSERT_TRUE(RunAppWindowAPITest("testMinimize")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestRestore) {
@@ -248,12 +260,10 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestBadging) {
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestFrameColors) {
   ASSERT_TRUE(RunAppWindowAPITest("testFrameColors")) << message_;
 }
-
-// TODO(benwells): Remove this test once all the things are merged together. It
-// is currently present as this feature was previously disabled on stable
-// channel, so the test is to ensure it has all been re-enabled properly.
-IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestFrameColorsInStable) {
-  extensions::ScopedCurrentChannel channel(chrome::VersionInfo::CHANNEL_STABLE);
-  ASSERT_TRUE(RunAppWindowAPITest("testFrameColors")) << message_;
-}
 #endif
+
+IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestVisibleOnAllWorkspaces) {
+  ASSERT_TRUE(
+      RunAppWindowAPITestAndWaitForRoundTrip("testVisibleOnAllWorkspaces"))
+      << message_;
+}

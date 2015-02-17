@@ -37,9 +37,6 @@ const char kDisableBootAnimation[] = "disable-boot-animation";
 // Disables the ChromeOS demo.
 const char kDisableDemoMode[] = "disable-demo-mode";
 
-// Disable Genius App and use the original Help App instead.
-const char kDisableGeniusApp[] = "disable-genius-app";
-
 // Disable HID-detection OOBE screen.
 const char kDisableHIDDetectionOnOOBE[] = "disable-hid-detection-on-oobe";
 
@@ -56,11 +53,17 @@ const char kDisableNewChannelSwitcherUI[] = "disable-new-channel-switcher-ui";
 // Disables new Kiosk UI when kiosk apps are represented as user pods.
 const char kDisableNewKioskUI[] = "disable-new-kiosk-ui";
 
+// Disables the new File System Provider API based ZIP unpacker.
+const char kDisableNewZIPUnpacker[] = "disable-new-zip-unpacker";
+
 // Disable Office Editing for Docs, Sheets & Slides component app so handlers
 // won't be registered, making it possible to install another version for
 // testing.
 const char kDisableOfficeEditingComponentApp[] =
     "disable-office-editing-component-extension";
+
+// Disables rollback option on reset screen.
+const char kDisableRollbackOption[] = "disable-rollback-option";
 
 // Disables volume adjust sound.
 const char kDisableVolumeAdjustSound[] = "disable-volume-adjust-sound";
@@ -72,30 +75,38 @@ const char kDisableNetworkPortalNotification[] =
 // Enables switching between different cellular carriers from the UI.
 const char kEnableCarrierSwitching[] = "enable-carrier-switching";
 
-// Enables the next generation version of ChromeVox. Only valid with
-// use_chromevox_next=1 within your GYP_DEFINES.
+// Enables the next generation version of ChromeVox.
 const char kEnableChromeVoxNext[] = "enable-chromevox-next";
+
+// Enables cloud backup feature.
+const char kEnableCloudBackup[] = "enable-cloud-backup";
 
 // Enables consumer management, which allows user to enroll, remotely lock and
 // locate the device.
 const char kEnableConsumerManagement[] = "enable-consumer-management";
 
+// If this switch is set, the device cannot be remotely disabled by its owner.
+const char kDisableDeviceDisabling[] = "disable-device-disabling";
+
 // If this switch is set, Chrome OS login screen uses |EmbeddedSignin| endpoint
 // of GAIA.
 const char kEnableEmbeddedSignin[] = "enable-embedded-signin";
 
+// If this switch is set, the new Korean IME will be available in
+// chrome://settings/languages.
+const char kEnableNewKoreanIme[] = "enable-new-korean-ime";
+
+// If this switch is set, the US keyboard input method will provide suggestions
+// as typing on physical keyboard.
+const char kEnablePhysicalKeyboardAutocorrect[] =
+    "enable-physical-keyboard-autocorrect";
+
 // Enabled sharing assets for installed default apps.
 const char kEnableExtensionAssetsSharing[]  = "enable-extension-assets-sharing";
-
-// Enables MTP support in Files.app.
-const char kEnableFileManagerMTP[] = "enable-filemanager-mtp";
 
 // Enables notifications about captive portals in session.
 const char kEnableNetworkPortalNotification[] =
     "enable-network-portal-notification";
-
-// Enables rollback option on reset screen.
-const char kEnableRollbackOption[] = "enable-rollback-option";
 
 // Enables touchpad three-finger-click as middle button.
 const char kEnableTouchpadThreeFingerClick[]
@@ -131,10 +142,6 @@ const char kEnterpriseEnrollmentModulusLimit[] =
 const char kEnterpriseEnrollmentSkipRobotAuth[] =
     "enterprise-enrollment-skip-robot-auth";
 
-// Enables the new gallery in the Files.app.
-const char kFileManagerEnableNewGallery[] =
-    "file-manager-enable-new-gallery";
-
 // Enables the chromecast support for video player app.
 const char kEnableVideoPlayerChromecastSupport[] =
     "enable-video-player-chromecast-support";
@@ -160,6 +167,9 @@ const char kHasChromeOSDiamondKey[] = "has-chromeos-diamond-key";
 
 // Defines user homedir. This defaults to primary user homedir.
 const char kHomedir[]           = "homedir";
+
+// With this switch, start remora OOBE with the pairing screen.
+const char kHostPairingOobe[] = "host-pairing-oobe";
 
 // If true, profile selection in UserManager will always return active user's
 // profile.
@@ -220,14 +230,6 @@ const char kPowerStub[] = "power-stub";
 //  'interactive=3' - Interactive mode, connect/scan/etc requests take 3 secs
 const char kShillStub[] = "shill-stub";
 
-// If this switch is set, controller pairing process is displayed after update
-// stage of OOBE.
-const char kShowControllerPairingDemo[] = "show-controller-pairing-demo";
-
-// If this switch is set, controller pairing process is displayed after update
-// stage of OOBE.
-const char kShowHostPairingDemo[] = "show-host-pairing-demo";
-
 // Sends test messages on first call to RequestUpdate (stub only).
 const char kSmsTestMessages[] = "sms-test-messages";
 
@@ -244,6 +246,9 @@ const char kForceFirstRunUI[] = "force-first-run-ui";
 
 // Enables testing for auto update UI.
 const char kTestAutoUpdateUI[] = "test-auto-update-ui";
+
+// Enables waking the device based on the receipt of some network packets.
+const char kWakeOnPackets[] = "wake-on-packets";
 
 // Screenshot testing: specifies the directory where the golden screenshots are
 // stored.

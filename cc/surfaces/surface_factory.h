@@ -5,11 +5,15 @@
 #ifndef CC_SURFACES_SURFACE_FACTORY_H_
 #define CC_SURFACES_SURFACE_FACTORY_H_
 
+#include <set>
+
+#include "base/callback_forward.h"
 #include "base/containers/scoped_ptr_hash_map.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "cc/surfaces/surface_id.h"
 #include "cc/surfaces/surface_resource_holder.h"
+#include "cc/surfaces/surface_sequence.h"
 #include "cc/surfaces/surfaces_export.h"
 
 namespace gfx {
@@ -18,6 +22,7 @@ class Size;
 
 namespace cc {
 class CompositorFrame;
+class CopyOutputRequest;
 class Surface;
 class SurfaceFactoryClient;
 class SurfaceManager;
@@ -35,9 +40,15 @@ class CC_SURFACES_EXPORT SurfaceFactory
 
   void Create(SurfaceId surface_id, const gfx::Size& size);
   void Destroy(SurfaceId surface_id);
+  void DestroyAll();
   // A frame can only be submitted to a surface created by this factory,
   // although the frame may reference surfaces created by other factories.
-  void SubmitFrame(SurfaceId surface_id, scoped_ptr<CompositorFrame> frame);
+  // The callback is called the first time this frame is used to draw.
+  void SubmitFrame(SurfaceId surface_id,
+                   scoped_ptr<CompositorFrame> frame,
+                   const base::Closure& callback);
+  void RequestCopyOfSurface(SurfaceId surface_id,
+                            scoped_ptr<CopyOutputRequest> copy_request);
 
   SurfaceFactoryClient* client() { return client_; }
 
@@ -45,13 +56,15 @@ class CC_SURFACES_EXPORT SurfaceFactory
   void RefResources(const TransferableResourceArray& resources);
   void UnrefResources(const ReturnedResourceArray& resources);
 
+  SurfaceManager* manager() { return manager_; }
+
  private:
   SurfaceManager* manager_;
   SurfaceFactoryClient* client_;
+  SurfaceResourceHolder holder_;
+
   typedef base::ScopedPtrHashMap<SurfaceId, Surface> OwningSurfaceMap;
   base::ScopedPtrHashMap<SurfaceId, Surface> surface_map_;
-
-  SurfaceResourceHolder holder_;
 
   DISALLOW_COPY_AND_ASSIGN(SurfaceFactory);
 };

@@ -56,6 +56,7 @@ const char kImeOptionsPage[] = "options_page";
 const char kImport[] = "import";
 const char kIncognito[] = "incognito";
 const char kIncludeGlobs[] = "include_globs";
+const char kIndicator[] = "indicator";
 const char kInputComponents[] = "input_components";
 const char kInputView[] = "input_view";
 const char kIsolation[] = "app.isolation";
@@ -96,6 +97,7 @@ const char kOmnibox[] = "omnibox";
 const char kOmniboxKeyword[] = "omnibox.keyword";
 const char kOptionalPermissions[] = "optional_permissions";
 const char kOptionsPage[] = "options_page";
+const char kOptionsUI[] = "options_ui";
 const char kOverrideHomepage[] = "chrome_settings_overrides.homepage";
 const char kOverrideSearchProvider[] =
     "chrome_settings_overrides.search_provider";
@@ -108,21 +110,17 @@ const char kPageActionIcons[] = "icons";
 const char kPageActionId[] = "id";
 const char kPageActionPopup[] = "popup";
 const char kPageActionPopupPath[] = "path";
-const char kPageActions[] = "page_actions";
 const char kPermissions[] = "permissions";
 const char kPlatformAppBackground[] = "app.background";
 const char kPlatformAppBackgroundPage[] = "app.background.page";
 const char kPlatformAppBackgroundScripts[] = "app.background.scripts";
 const char kPlatformAppContentSecurityPolicy[] = "app.content_security_policy";
-const char kPlatformAppServiceWorker[] = "app.service_worker";
-const char kPlatformAppServiceWorkerScript[] = "app.service_worker.script";
 const char kPlatforms[] = "platforms";
 const char kPlugins[] = "plugins";
 const char kPluginsPath[] = "path";
 const char kPluginsPublic[] = "public";
 const char kPublicKey[] = "key";
 const char kRemoveButton[] = "remove_button";
-const char kResources[] = "resources";
 const char kRequirements[] = "requirements";
 const char kRunAt[] = "run_at";
 const char kSandboxedPages[] = "sandbox.pages";
@@ -144,7 +142,7 @@ const char kSpellcheckDictionaryPath[] = "dictionary_path";
 const char kStorageManagedSchema[] = "storage.managed_schema";
 const char kSubPackagePath[] = "sub_package_path";
 const char kSuggestedKey[] = "suggested_key";
-const char kSynthesizeBrowserAction[] = "_synthesize_browser_action";
+const char kSynthesizeExtensionAction[] = "_synthesize_extension_action";
 const char kSystemIndicator[] = "system_indicator";
 const char kTheme[] = "theme";
 const char kThemeColors[] = "colors";
@@ -214,6 +212,7 @@ const char kKeyPgDwn[] = "PageDown";
 const char kKeyPgUp[] = "PageUp";
 const char kKeyPeriod[] = "Period";
 const char kKeyRight[] = "Right";
+const char kKeySearch[] = "Search";
 const char kKeySeparator[] = "+";
 const char kKeyShift[] = "Shift";
 const char kKeyTab[] = "Tab";
@@ -337,10 +336,6 @@ const char kInvalidExport[] =
     "Invalid value for 'export'.";
 const char kInvalidExportPermissions[] =
     "Permissions are not allowed for extensions that export resources.";
-const char kInvalidExportResources[] =
-    "Invalid value for 'export.resources'.";
-const char kInvalidExportResourcesString[] =
-    "Invalid value for 'export.resources[*]'.";
 const char kInvalidExportWhitelist[] =
     "Invalid value for 'export.whitelist'.";
 const char kInvalidExportWhitelistString[] =
@@ -467,6 +462,9 @@ const char kInvalidKioskOnly[] =
     "Invalid value for 'kiosk_only'.";
 const char kInvalidKioskOnlyButNotEnabled[] =
     "The 'kiosk_only' key is set, but 'kiosk_enabled' is not set.";
+const char kInvalidLauncherPage[] = "Invalid value for 'launcher_page'.";
+const char kInvalidLauncherPagePage[] =
+    "Invalid value for 'launcher_page.page'.";
 const char kInvalidLaunchContainer[] =
     "Invalid value for 'app.launch.container'.";
 const char kInvalidLaunchValue[] =
@@ -514,13 +512,16 @@ const char kInvalidOfflineEnabled[] =
     "Invalid value for 'offline_enabled'.";
 const char kInvalidOmniboxKeyword[] =
     "Invalid value for 'omnibox.keyword'.";
-const char kInvalidOptionsPage[] =
-    "Invalid value for 'options_page'.";
+const char kInvalidOptionsPage[] = "Invalid value for '*'.";
 const char kInvalidOptionsPageExpectUrlInPackage[] =
     "Invalid value for 'options_page'.  Value must be a relative path.";
 const char kInvalidOptionsPageInHostedApp[] =
     "Invalid value for 'options_page'. Hosted apps must specify an "
     "absolute URL.";
+const char kInvalidOptionsUIChromeStyle[] =
+    "Invalid value for 'options_ui.chrome_style'.";
+const char kInvalidOptionsUIOpenInTab[] =
+    "Invalid value for 'options_ui.open_in_tab'.";
 const char kInvalidPageAction[] =
     "Invalid value for 'page_action'.";
 const char kInvalidPageActionDefaultTitle[] =
@@ -538,12 +539,6 @@ const char kInvalidPageActionPopup[] =
     "Invalid type for page action popup.";
 const char kInvalidPageActionPopupPath[] =
     "Invalid value for page action popup path [*].";
-const char kInvalidPageActionsList[] =
-    "Invalid value for 'page_actions'.";
-const char kInvalidPageActionsListSize[] =
-    "Invalid value for 'page_actions'. There can be at most one page action.";
-const char kInvalidPageActionTypeValue[] =
-    "Invalid value for 'page_actions[*].type', expected 'tab' or 'permanent'.";
 const char kInvalidPermissionWithDetail[] =
     "Invalid value for 'permissions[*]': *.";
 const char kInvalidPermission[] =
@@ -577,8 +572,6 @@ const char kInvalidSearchEngineMissingKeys[] =
     "'chrome_settings_overrides.search_provider'.";
 const char kInvalidSearchEngineURL[] =
     "Invalid URL [*] for 'chrome_settings_overrides.search_provider'.";
-const char kInvalidServiceWorkerScript[] =
-    "Invalid value for 'service_worker.script'.";
 const char kInvalidShortName[] =
     "Invalid value for 'short_name'.";
 const char kInvalidSignature[] =
@@ -668,6 +661,8 @@ const char kInsecureContentSecurityPolicy[] =
     " see http://developer.chrome.com/extensions/contentSecurityPolicy.html";
 const char kKeyIsDeprecatedWithReplacement[] =
     "Key \"*\" is deprecated.  Key \"*\" should be used instead.";
+const char kLauncherPagePageRequired[] =
+    "The 'launcher_page.page' key is required.";
 const char kLaunchPathAndExtentAreExclusive[] =
     "The 'app.launch.local_path' and 'app.urls' keys cannot both be set.";
 const char kLaunchPathAndURLAreExclusive[] =
@@ -719,9 +714,6 @@ const char kScriptBadgeIconIgnored[] =
 const char kScriptBadgeTitleIgnored[] =
     "default_title specified in script_badge manifest section will not be "
     "used.";
-const char kServiceWorkerRequiresFlag[] =
-    "Service worker features require "
-    "--enable-experimental-web-platform-features command-line flag.";
 const char kUnrecognizedManifestKey[] = "Unrecognized manifest key '*'.";
 const char kUnrecognizedManifestProperty[] =
     "Unrecognized property '*' of manifest key '*'.";

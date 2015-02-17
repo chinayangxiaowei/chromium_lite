@@ -5,8 +5,8 @@
 #include "chrome/browser/resources_util.h"
 
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/resources/grit/ui_resources.h"
 
 #if defined(OS_CHROMEOS)
 #include "grit/ui_chromeos_resources.h"
@@ -18,8 +18,8 @@ TEST(ResourcesUtil, SpotCheckIds) {
     int id;
   } kCases[] = {
     // IDRs from chrome/app/theme/theme_resources.grd should be valid.
-    {"IDR_BACK", IDR_BACK},
-    {"IDR_STOP", IDR_STOP},
+    {"IDR_INFOBAR_COOKIE", IDR_INFOBAR_COOKIE},
+    {"IDR_PAGEINFO_BAD", IDR_PAGEINFO_BAD},
     // IDRs from ui/resources/ui_resources.grd should be valid.
     {"IDR_CHECKMARK", IDR_CHECKMARK},
     {"IDR_THROBBER", IDR_THROBBER},
@@ -32,6 +32,6 @@ TEST(ResourcesUtil, SpotCheckIds) {
     {"backstar", -1},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kCases); ++i)
+  for (size_t i = 0; i < arraysize(kCases); ++i)
     EXPECT_EQ(kCases[i].id, ResourcesUtil::GetThemeResourceId(kCases[i].name));
 }

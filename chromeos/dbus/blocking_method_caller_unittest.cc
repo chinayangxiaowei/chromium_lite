@@ -27,11 +27,11 @@ class FakeTaskRunner : public base::TaskRunner {
  public:
   virtual bool PostDelayedTask(const tracked_objects::Location& from_here,
                                const base::Closure& task,
-                               base::TimeDelta delay) OVERRIDE {
+                               base::TimeDelta delay) override {
     task.Run();
     return true;
   }
-  virtual bool RunsTasksOnCurrentThread() const OVERRIDE { return true; }
+  virtual bool RunsTasksOnCurrentThread() const override { return true; }
 
  protected:
   virtual ~FakeTaskRunner() {}
@@ -72,7 +72,7 @@ class BlockingMethodCallerTest : public testing::Test {
     // Set an expectation so mock_bus's GetDBusTaskRunner will return the fake
     // task runner.
     EXPECT_CALL(*mock_bus_.get(), GetDBusTaskRunner())
-        .WillRepeatedly(Return(task_runner_));
+        .WillRepeatedly(Return(task_runner_.get()));
 
     // ShutdownAndBlock() will be called in TearDown().
     EXPECT_CALL(*mock_bus_.get(), ShutdownAndBlock()).WillOnce(Return());

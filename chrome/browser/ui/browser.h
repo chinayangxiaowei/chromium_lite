@@ -17,9 +17,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/prefs/pref_change_registrar.h"
 #include "base/prefs/pref_member.h"
+#include "base/scoped_observer.h"
 #include "base/strings/string16.h"
 #include "chrome/browser/devtools/devtools_toggle_action.h"
-#include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper_delegate.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -31,18 +31,23 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "chrome/browser/ui/zoom/zoom_observer.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/sessions/session_id.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/common/page_zoom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/rect.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
+
+#if defined(ENABLE_EXTENSIONS)
+#include "extensions/browser/extension_registry_observer.h"
+#endif
 
 class BrowserContentSettingBubbleModelDelegate;
 class BrowserContentTranslateDriverObserver;
@@ -77,6 +82,7 @@ class SessionStorageNamespace;
 
 namespace extensions {
 class Extension;
+class ExtensionRegistry;
 class WindowController;
 }
 
@@ -91,6 +97,7 @@ class WebDialogDelegate;
 }
 
 namespace web_modal {
+class PopupManager;
 class WebContentsModalDialogHost;
 }
 
@@ -104,6 +111,9 @@ class Browser : public TabStripModelObserver,
                 public ZoomObserver,
                 public content::PageNavigator,
                 public content::NotificationObserver,
+#if defined(ENABLE_EXTENSIONS)
+                public extensions::ExtensionRegistryObserver,
+#endif
                 public ui::SelectFileDialog::Listener {
  public:
   // SessionService::WindowType mirrors these values.  If you add to this
@@ -197,7 +207,7 @@ class Browser : public TabStripModelObserver,
   // Constructors, Creation, Showing //////////////////////////////////////////
 
   explicit Browser(const CreateParams& params);
-  virtual ~Browser();
+  ~Browser() override;
 
   // Set overrides for the initial window bounds and maximized state.
   void set_override_bounds(const gfx::Rect& bounds) {
@@ -242,6 +252,9 @@ class Browser : public TabStripModelObserver,
     toolbar_model->swap(toolbar_model_);
   }
 #endif
+  web_modal::PopupManager* popup_manager() {
+    return popup_manager_.get();
+  }
   TabStripModel* tab_strip_model() const { return tab_strip_model_.get(); }
   chrome::BrowserCommandController* command_controller() {
     return command_controller_.get();
@@ -389,67 +402,59 @@ class Browser : public TabStripModelObserver,
   // Called by chrome::Navigate() when a navigation has occurred in a tab in
   // this Browser. Updates the UI for the start of this navigation.
   void UpdateUIForNavigationInTab(content::WebContents* contents,
-                                  content::PageTransition transition,
+                                  ui::PageTransition transition,
                                   bool user_initiated);
 
   // Interface implementations ////////////////////////////////////////////////
 
   // Overridden from content::PageNavigator:
-  virtual content::WebContents* OpenURL(
-      const content::OpenURLParams& params) OVERRIDE;
+  content::WebContents* OpenURL(const content::OpenURLParams& params) override;
 
   // Overridden from TabStripModelObserver:
-  virtual void TabInsertedAt(content::WebContents* contents,
-                             int index,
-                             bool foreground) OVERRIDE;
-  virtual void TabClosingAt(TabStripModel* tab_strip_model,
-                            content::WebContents* contents,
-                            int index) OVERRIDE;
-  virtual void TabDetachedAt(content::WebContents* contents,
-                             int index) OVERRIDE;
-  virtual void TabDeactivated(content::WebContents* contents) OVERRIDE;
-  virtual void ActiveTabChanged(content::WebContents* old_contents,
-                                content::WebContents* new_contents,
-                                int index,
-                                int reason) OVERRIDE;
-  virtual void TabMoved(content::WebContents* contents,
-                        int from_index,
-                        int to_index) OVERRIDE;
-  virtual void TabReplacedAt(TabStripModel* tab_strip_model,
-                             content::WebContents* old_contents,
-                             content::WebContents* new_contents,
-                             int index) OVERRIDE;
-  virtual void TabPinnedStateChanged(content::WebContents* contents,
-                                     int index) OVERRIDE;
-  virtual void TabStripEmpty() OVERRIDE;
+  void TabInsertedAt(content::WebContents* contents,
+                     int index,
+                     bool foreground) override;
+  void TabClosingAt(TabStripModel* tab_strip_model,
+                    content::WebContents* contents,
+                    int index) override;
+  void TabDetachedAt(content::WebContents* contents, int index) override;
+  void TabDeactivated(content::WebContents* contents) override;
+  void ActiveTabChanged(content::WebContents* old_contents,
+                        content::WebContents* new_contents,
+                        int index,
+                        int reason) override;
+  void TabMoved(content::WebContents* contents,
+                int from_index,
+                int to_index) override;
+  void TabReplacedAt(TabStripModel* tab_strip_model,
+                     content::WebContents* old_contents,
+                     content::WebContents* new_contents,
+                     int index) override;
+  void TabPinnedStateChanged(content::WebContents* contents,
+                             int index) override;
+  void TabStripEmpty() override;
 
   // Overridden from content::WebContentsDelegate:
-  virtual bool CanOverscrollContent() const OVERRIDE;
-  virtual bool ShouldPreserveAbortedURLs(content::WebContents* source) OVERRIDE;
-  virtual bool PreHandleKeyboardEvent(
+  bool CanOverscrollContent() const override;
+  bool ShouldPreserveAbortedURLs(content::WebContents* source) override;
+  bool PreHandleKeyboardEvent(content::WebContents* source,
+                              const content::NativeWebKeyboardEvent& event,
+                              bool* is_keyboard_shortcut) override;
+  void HandleKeyboardEvent(
       content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event,
-      bool* is_keyboard_shortcut) OVERRIDE;
-  virtual void HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) OVERRIDE;
-  virtual void OverscrollUpdate(int delta_y) OVERRIDE;
-  virtual void ShowValidationMessage(content::WebContents* web_contents,
-                                     const gfx::Rect& anchor_in_root_view,
-                                     const base::string16& main_text,
-                                     const base::string16& sub_text) OVERRIDE;
-  virtual void HideValidationMessage(
-      content::WebContents* web_contents) OVERRIDE;
-  virtual void MoveValidationMessage(
-      content::WebContents* web_contents,
-      const gfx::Rect& anchor_in_root_view) OVERRIDE;
-  virtual bool PreHandleGestureEvent(
-      content::WebContents* source,
-      const blink::WebGestureEvent& event) OVERRIDE;
-  virtual bool CanDragEnter(
-      content::WebContents* source,
-      const content::DropData& data,
-      blink::WebDragOperationsMask operations_allowed) OVERRIDE;
+      const content::NativeWebKeyboardEvent& event) override;
+  void ShowValidationMessage(content::WebContents* web_contents,
+                             const gfx::Rect& anchor_in_root_view,
+                             const base::string16& main_text,
+                             const base::string16& sub_text) override;
+  void HideValidationMessage(content::WebContents* web_contents) override;
+  void MoveValidationMessage(content::WebContents* web_contents,
+                             const gfx::Rect& anchor_in_root_view) override;
+  bool PreHandleGestureEvent(content::WebContents* source,
+                             const blink::WebGestureEvent& event) override;
+  bool CanDragEnter(content::WebContents* source,
+                    const content::DropData& data,
+                    blink::WebDragOperationsMask operations_allowed) override;
 
   bool is_type_tabbed() const { return type_ == TYPE_TABBED; }
   bool is_type_popup() const { return type_ == TYPE_POPUP; }
@@ -533,176 +538,177 @@ class Browser : public TabStripModelObserver,
   };
 
   // Overridden from content::WebContentsDelegate:
-  virtual content::WebContents* OpenURLFromTab(
+  content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) OVERRIDE;
-  virtual void NavigationStateChanged(
-      const content::WebContents* source,
-      content::InvalidateTypes changed_flags) OVERRIDE;
-  virtual void VisibleSSLStateChanged(
-      const content::WebContents* source) OVERRIDE;
-  virtual void AddNewContents(content::WebContents* source,
-                              content::WebContents* new_contents,
-                              WindowOpenDisposition disposition,
-                              const gfx::Rect& initial_pos,
-                              bool user_gesture,
-                              bool* was_blocked) OVERRIDE;
-  virtual void ActivateContents(content::WebContents* contents) OVERRIDE;
-  virtual void DeactivateContents(content::WebContents* contents) OVERRIDE;
-  virtual void LoadingStateChanged(content::WebContents* source,
-                                   bool to_different_document) OVERRIDE;
-  virtual void CloseContents(content::WebContents* source) OVERRIDE;
-  virtual void MoveContents(content::WebContents* source,
-                            const gfx::Rect& pos) OVERRIDE;
-  virtual bool IsPopupOrPanel(
-      const content::WebContents* source) const OVERRIDE;
-  virtual void UpdateTargetURL(content::WebContents* source, int32 page_id,
-                               const GURL& url) OVERRIDE;
-  virtual void ContentsMouseEvent(content::WebContents* source,
-                                  const gfx::Point& location,
-                                  bool motion) OVERRIDE;
-  virtual void ContentsZoomChange(bool zoom_in) OVERRIDE;
-  virtual void WebContentsFocused(content::WebContents* content) OVERRIDE;
-  virtual bool TakeFocus(content::WebContents* source, bool reverse) OVERRIDE;
-  virtual gfx::Rect GetRootWindowResizerRect() const OVERRIDE;
-  virtual void BeforeUnloadFired(content::WebContents* source,
-                                 bool proceed,
-                                 bool* proceed_to_fire_unload) OVERRIDE;
-  virtual bool ShouldFocusLocationBarByDefault(
-      content::WebContents* source) OVERRIDE;
-  virtual void SetFocusToLocationBar(bool select_all) OVERRIDE;
-  virtual int GetExtraRenderViewHeight() const OVERRIDE;
-  virtual void ViewSourceForTab(content::WebContents* source,
-                                const GURL& page_url) OVERRIDE;
-  virtual void ViewSourceForFrame(
-      content::WebContents* source,
-      const GURL& frame_url,
-      const content::PageState& frame_page_state) OVERRIDE;
-  virtual void ShowRepostFormWarningDialog(
-      content::WebContents* source) OVERRIDE;
-  virtual bool ShouldCreateWebContents(
+      const content::OpenURLParams& params) override;
+  void NavigationStateChanged(const content::WebContents* source,
+                              content::InvalidateTypes changed_flags) override;
+  void VisibleSSLStateChanged(const content::WebContents* source) override;
+  void AddNewContents(content::WebContents* source,
+                      content::WebContents* new_contents,
+                      WindowOpenDisposition disposition,
+                      const gfx::Rect& initial_pos,
+                      bool user_gesture,
+                      bool* was_blocked) override;
+  void ActivateContents(content::WebContents* contents) override;
+  void DeactivateContents(content::WebContents* contents) override;
+  void LoadingStateChanged(content::WebContents* source,
+                           bool to_different_document) override;
+  void CloseContents(content::WebContents* source) override;
+  void MoveContents(content::WebContents* source,
+                    const gfx::Rect& pos) override;
+  bool IsPopupOrPanel(const content::WebContents* source) const override;
+  void UpdateTargetURL(content::WebContents* source, const GURL& url) override;
+  void ContentsMouseEvent(content::WebContents* source,
+                          const gfx::Point& location,
+                          bool motion) override;
+  void ContentsZoomChange(bool zoom_in) override;
+  void WebContentsFocused(content::WebContents* content) override;
+  bool TakeFocus(content::WebContents* source, bool reverse) override;
+  gfx::Rect GetRootWindowResizerRect() const override;
+  void BeforeUnloadFired(content::WebContents* source,
+                         bool proceed,
+                         bool* proceed_to_fire_unload) override;
+  bool ShouldFocusLocationBarByDefault(content::WebContents* source) override;
+  void SetFocusToLocationBar(bool select_all) override;
+  int GetExtraRenderViewHeight() const override;
+  void ViewSourceForTab(content::WebContents* source,
+                        const GURL& page_url) override;
+  void ViewSourceForFrame(content::WebContents* source,
+                          const GURL& frame_url,
+                          const content::PageState& frame_page_state) override;
+  void ShowRepostFormWarningDialog(content::WebContents* source) override;
+  bool ShouldCreateWebContents(
       content::WebContents* web_contents,
       int route_id,
       WindowContainerType window_container_type,
       const base::string16& frame_name,
       const GURL& target_url,
       const std::string& partition_id,
-      content::SessionStorageNamespace* session_storage_namespace) OVERRIDE;
-  virtual void WebContentsCreated(content::WebContents* source_contents,
-                                  int opener_render_frame_id,
-                                  const base::string16& frame_name,
-                                  const GURL& target_url,
-                                  content::WebContents* new_contents) OVERRIDE;
-  virtual void RendererUnresponsive(content::WebContents* source) OVERRIDE;
-  virtual void RendererResponsive(content::WebContents* source) OVERRIDE;
-  virtual void WorkerCrashed(content::WebContents* source) OVERRIDE;
-  virtual void DidNavigateMainFramePostCommit(
-      content::WebContents* web_contents) OVERRIDE;
-  virtual void DidNavigateToPendingEntry(
-      content::WebContents* web_contents) OVERRIDE;
-  virtual content::JavaScriptDialogManager*
-      GetJavaScriptDialogManager() OVERRIDE;
-  virtual content::ColorChooser* OpenColorChooser(
+      content::SessionStorageNamespace* session_storage_namespace) override;
+  void WebContentsCreated(content::WebContents* source_contents,
+                          int opener_render_frame_id,
+                          const base::string16& frame_name,
+                          const GURL& target_url,
+                          content::WebContents* new_contents) override;
+  void RendererUnresponsive(content::WebContents* source) override;
+  void RendererResponsive(content::WebContents* source) override;
+  void WorkerCrashed(content::WebContents* source) override;
+  void DidNavigateMainFramePostCommit(
+      content::WebContents* web_contents) override;
+  void DidNavigateToPendingEntry(content::WebContents* web_contents) override;
+  content::JavaScriptDialogManager* GetJavaScriptDialogManager() override;
+  content::ColorChooser* OpenColorChooser(
       content::WebContents* web_contents,
       SkColor color,
-      const std::vector<content::ColorSuggestion>& suggestions) OVERRIDE;
-  virtual void RunFileChooser(
-      content::WebContents* web_contents,
-      const content::FileChooserParams& params) OVERRIDE;
-  virtual void EnumerateDirectory(content::WebContents* web_contents,
-                                  int request_id,
-                                  const base::FilePath& path) OVERRIDE;
-  virtual bool EmbedsFullscreenWidget() const OVERRIDE;
-  virtual void ToggleFullscreenModeForTab(content::WebContents* web_contents,
-      bool enter_fullscreen) OVERRIDE;
-  virtual bool IsFullscreenForTabOrPending(
-      const content::WebContents* web_contents) const OVERRIDE;
-  virtual void RegisterProtocolHandler(content::WebContents* web_contents,
-                                       const std::string& protocol,
-                                       const GURL& url,
-                                       bool user_gesture) OVERRIDE;
-  virtual void UnregisterProtocolHandler(content::WebContents* web_contents,
-                                         const std::string& protocol,
-                                         const GURL& url,
-                                         bool user_gesture) OVERRIDE;
-  virtual void UpdatePreferredSize(content::WebContents* source,
-                                   const gfx::Size& pref_size) OVERRIDE;
-  virtual void ResizeDueToAutoResize(content::WebContents* source,
-                                     const gfx::Size& new_size) OVERRIDE;
-  virtual void FindReply(content::WebContents* web_contents,
-                         int request_id,
-                         int number_of_matches,
-                         const gfx::Rect& selection_rect,
-                         int active_match_ordinal,
-                         bool final_update) OVERRIDE;
-  virtual void RequestToLockMouse(content::WebContents* web_contents,
-                                  bool user_gesture,
-                                  bool last_unlocked_by_target) OVERRIDE;
-  virtual void LostMouseLock() OVERRIDE;
-  virtual void RequestMediaAccessPermission(
+      const std::vector<content::ColorSuggestion>& suggestions) override;
+  void RunFileChooser(content::WebContents* web_contents,
+                      const content::FileChooserParams& params) override;
+  void EnumerateDirectory(content::WebContents* web_contents,
+                          int request_id,
+                          const base::FilePath& path) override;
+  bool EmbedsFullscreenWidget() const override;
+  void ToggleFullscreenModeForTab(content::WebContents* web_contents,
+                                  bool enter_fullscreen) override;
+  bool IsFullscreenForTabOrPending(
+      const content::WebContents* web_contents) const override;
+  void RegisterProtocolHandler(content::WebContents* web_contents,
+                               const std::string& protocol,
+                               const GURL& url,
+                               bool user_gesture) override;
+  void UnregisterProtocolHandler(content::WebContents* web_contents,
+                                 const std::string& protocol,
+                                 const GURL& url,
+                                 bool user_gesture) override;
+  void UpdatePreferredSize(content::WebContents* source,
+                           const gfx::Size& pref_size) override;
+  void ResizeDueToAutoResize(content::WebContents* source,
+                             const gfx::Size& new_size) override;
+  void FindReply(content::WebContents* web_contents,
+                 int request_id,
+                 int number_of_matches,
+                 const gfx::Rect& selection_rect,
+                 int active_match_ordinal,
+                 bool final_update) override;
+  void RequestToLockMouse(content::WebContents* web_contents,
+                          bool user_gesture,
+                          bool last_unlocked_by_target) override;
+  void LostMouseLock() override;
+  void RequestMediaAccessPermission(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback) OVERRIDE;
-  virtual bool RequestPpapiBrokerPermission(
+      const content::MediaResponseCallback& callback) override;
+  bool CheckMediaAccessPermission(content::WebContents* web_contents,
+                                  const GURL& security_origin,
+                                  content::MediaStreamType type) override;
+  bool RequestPpapiBrokerPermission(
       content::WebContents* web_contents,
       const GURL& url,
       const base::FilePath& plugin_path,
-      const base::Callback<void(bool)>& callback) OVERRIDE;
-  virtual gfx::Size GetSizeForNewRenderView(
-      content::WebContents* web_contents) const OVERRIDE;
+      const base::Callback<void(bool)>& callback) override;
+  gfx::Size GetSizeForNewRenderView(
+      content::WebContents* web_contents) const override;
 
   // Overridden from CoreTabHelperDelegate:
   // Note that the caller is responsible for deleting |old_contents|.
-  virtual void SwapTabContents(content::WebContents* old_contents,
-                               content::WebContents* new_contents,
-                               bool did_start_load,
-                               bool did_finish_load) OVERRIDE;
-  virtual bool CanReloadContents(
-      content::WebContents* web_contents) const OVERRIDE;
-  virtual bool CanSaveContents(
-      content::WebContents* web_contents) const OVERRIDE;
+  void SwapTabContents(content::WebContents* old_contents,
+                       content::WebContents* new_contents,
+                       bool did_start_load,
+                       bool did_finish_load) override;
+  bool CanReloadContents(content::WebContents* web_contents) const override;
+  bool CanSaveContents(content::WebContents* web_contents) const override;
 
   // Overridden from SearchEngineTabHelperDelegate:
-  virtual void ConfirmAddSearchProvider(TemplateURL* template_url,
-                                        Profile* profile) OVERRIDE;
+  void ConfirmAddSearchProvider(TemplateURL* template_url,
+                                Profile* profile) override;
 
   // Overridden from SearchTabHelperDelegate:
-  virtual void NavigateOnThumbnailClick(
-      const GURL& url,
-      WindowOpenDisposition disposition,
-      content::WebContents* source_contents) OVERRIDE;
-  virtual void OnWebContentsInstantSupportDisabled(
-      const content::WebContents* web_contents) OVERRIDE;
-  virtual OmniboxView* GetOmniboxView() OVERRIDE;
-  virtual std::set<std::string> GetOpenUrls() OVERRIDE;
+  void NavigateOnThumbnailClick(const GURL& url,
+                                WindowOpenDisposition disposition,
+                                content::WebContents* source_contents) override;
+  void OnWebContentsInstantSupportDisabled(
+      const content::WebContents* web_contents) override;
+  OmniboxView* GetOmniboxView() override;
+  std::set<std::string> GetOpenUrls() override;
 
   // Overridden from WebContentsModalDialogManagerDelegate:
-  virtual void SetWebContentsBlocked(content::WebContents* web_contents,
-                                     bool blocked) OVERRIDE;
-  virtual web_modal::WebContentsModalDialogHost*
-      GetWebContentsModalDialogHost() OVERRIDE;
+  void SetWebContentsBlocked(content::WebContents* web_contents,
+                             bool blocked) override;
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
+      override;
 
   // Overridden from BookmarkTabHelperDelegate:
-  virtual void URLStarredChanged(content::WebContents* web_contents,
-                                 bool starred) OVERRIDE;
+  void URLStarredChanged(content::WebContents* web_contents,
+                         bool starred) override;
 
   // Overridden from ZoomObserver:
-  virtual void OnZoomChanged(
-      const ZoomController::ZoomChangedEventData& data) OVERRIDE;
+  void OnZoomChanged(const ZoomController::ZoomChangedEventData& data) override;
 
   // Overridden from SelectFileDialog::Listener:
-  virtual void FileSelected(const base::FilePath& path,
-                            int index,
-                            void* params) OVERRIDE;
-  virtual void FileSelectedWithExtraInfo(
-      const ui::SelectedFileInfo& file_info,
-      int index,
-      void* params) OVERRIDE;
+  void FileSelected(const base::FilePath& path,
+                    int index,
+                    void* params) override;
+  void FileSelectedWithExtraInfo(const ui::SelectedFileInfo& file_info,
+                                 int index,
+                                 void* params) override;
 
   // Overridden from content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
+
+#if defined(ENABLE_EXTENSIONS)
+  // Overridden from extensions::ExtensionRegistryObserver:
+  void OnExtensionUninstalled(content::BrowserContext* browser_context,
+                              const extensions::Extension* extension,
+                              extensions::UninstallReason reason) override;
+  void OnExtensionLoaded(content::BrowserContext* browser_context,
+                         const extensions::Extension* extension) override;
+  void OnExtensionUnloaded(
+      content::BrowserContext* browser_context,
+      const extensions::Extension* extension,
+      extensions::UnloadedExtensionInfo::Reason reason) override;
+#endif
 
   // Command and state updating ///////////////////////////////////////////////
 
@@ -740,7 +746,6 @@ class Browser : public TabStripModelObserver,
   //             the LocationBarView's edit.
   friend class AutomationProvider;
   friend class BrowserProxy;
-  friend class TestingAutomationProvider;
 
   // Returns the StatusBubble from the current toolbar. It is possible for
   // this to return NULL if called before the toolbar has initialized.
@@ -817,6 +822,12 @@ class Browser : public TabStripModelObserver,
 
   content::NotificationRegistrar registrar_;
 
+#if defined(ENABLE_EXTENSIONS)
+  ScopedObserver<extensions::ExtensionRegistry,
+                 extensions::ExtensionRegistryObserver>
+      extension_registry_observer_;
+#endif
+
   PrefChangeRegistrar profile_pref_registrar_;
 
   // This Browser's type.
@@ -827,6 +838,10 @@ class Browser : public TabStripModelObserver,
 
   // This Browser's window.
   BrowserWindow* window_;
+
+  // Manages popup windows (bubbles, tab-modals) visible overlapping this
+  // window. JS alerts are not handled by this manager.
+  scoped_ptr<web_modal::PopupManager> popup_manager_;
 
   scoped_ptr<TabStripModelDelegate> tab_strip_model_delegate_;
   scoped_ptr<TabStripModel> tab_strip_model_;
@@ -942,12 +957,12 @@ class Browser : public TabStripModelObserver,
   // The following factory is used for chrome update coalescing.
   base::WeakPtrFactory<Browser> chrome_updater_factory_;
 
-  // The following factory is used to close the frame at a later time.
-  base::WeakPtrFactory<Browser> weak_factory_;
-
   scoped_ptr<BrowserContentTranslateDriverObserver> translate_driver_observer_;
 
   scoped_ptr<chrome::ValidationMessageBubble> validation_message_bubble_;
+
+  // The following factory is used to close the frame at a later time.
+  base::WeakPtrFactory<Browser> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(Browser);
 };

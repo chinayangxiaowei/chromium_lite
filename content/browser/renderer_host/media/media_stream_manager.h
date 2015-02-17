@@ -37,6 +37,7 @@
 #include "base/message_loop/message_loop.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/system_monitor/system_monitor.h"
+#include "base/threading/thread.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
 #include "content/common/content_export.h"
 #include "content/common/media/media_stream_options.h"
@@ -50,6 +51,7 @@ class AudioManager;
 namespace content {
 
 class AudioInputDeviceManager;
+class BrowserContext;
 class FakeMediaStreamUIProxy;
 class MediaStreamDeviceSettings;
 class MediaStreamRequester;
@@ -71,7 +73,7 @@ class CONTENT_EXPORT MediaStreamManager
       MediaRequestResponseCallback;
 
   explicit MediaStreamManager(media::AudioManager* audio_manager);
-  virtual ~MediaStreamManager();
+  ~MediaStreamManager() override;
 
   // Used to access VideoCaptureManager.
   VideoCaptureManager* video_capture_manager();
@@ -129,15 +131,13 @@ class CONTENT_EXPORT MediaStreamManager
   // and video devices and also start monitoring device changes, such as
   // plug/unplug. The new device lists will be delivered via media observer to
   // MediaCaptureDevicesDispatcher.
-  // If |have_permission| is false, we remove the device label from the result.
   virtual std::string EnumerateDevices(MediaStreamRequester* requester,
                                        int render_process_id,
                                        int render_frame_id,
                                        const ResourceContext::SaltCallback& sc,
                                        int page_request_id,
                                        MediaStreamType type,
-                                       const GURL& security_origin,
-                                       bool have_permission);
+                                       const GURL& security_origin);
 
   // Open a device identified by |device_id|.  |type| must be either
   // MEDIA_DEVICE_AUDIO_CAPTURE or MEDIA_DEVICE_VIDEO_CAPTURE.
@@ -166,18 +166,14 @@ class CONTENT_EXPORT MediaStreamManager
   void EnsureDeviceMonitorStarted();
 
   // Implements MediaStreamProviderListener.
-  virtual void Opened(MediaStreamType stream_type,
-                      int capture_session_id) OVERRIDE;
-  virtual void Closed(MediaStreamType stream_type,
-                      int capture_session_id) OVERRIDE;
-  virtual void DevicesEnumerated(MediaStreamType stream_type,
-                                 const StreamDeviceInfoArray& devices) OVERRIDE;
-  virtual void Aborted(MediaStreamType stream_type,
-                       int capture_session_id) OVERRIDE;
+  void Opened(MediaStreamType stream_type, int capture_session_id) override;
+  void Closed(MediaStreamType stream_type, int capture_session_id) override;
+  void DevicesEnumerated(MediaStreamType stream_type,
+                         const StreamDeviceInfoArray& devices) override;
+  void Aborted(MediaStreamType stream_type, int capture_session_id) override;
 
   // Implements base::SystemMonitor::DevicesChangedObserver.
-  virtual void OnDevicesChanged(
-      base::SystemMonitor::DeviceType device_type) OVERRIDE;
+  void OnDevicesChanged(base::SystemMonitor::DeviceType device_type) override;
 
   // Called by the tests to specify a fake UI that should be used for next
   // generated stream (or when using --use-fake-ui-for-media-stream).
@@ -196,7 +192,7 @@ class CONTENT_EXPORT MediaStreamManager
   // But for some tests which use TestBrowserThreadBundle, we need to call
   // WillDestroyCurrentMessageLoop explicitly because the notification happens
   // too late. (see http://crbug.com/247525#c14).
-  virtual void WillDestroyCurrentMessageLoop() OVERRIDE;
+  void WillDestroyCurrentMessageLoop() override;
 
   // Sends log messages to the render process hosts whose corresponding render
   // processes are making device requests, to be used by the
@@ -209,8 +205,8 @@ class CONTENT_EXPORT MediaStreamManager
   static void SendMessageToNativeLog(const std::string& message);
 
   // base::PowerObserver overrides.
-  virtual void OnSuspend() OVERRIDE;
-  virtual void OnResume() OVERRIDE;
+  void OnSuspend() override;
+  void OnResume() override;
 
  protected:
   // Used for testing.
@@ -322,6 +318,8 @@ class CONTENT_EXPORT MediaStreamManager
                                   const MediaStreamDevices& devices);
   void FinalizeEnumerateDevices(const std::string& label,
                                 DeviceRequest* request);
+  void HandleCheckMediaAccessResponse(const std::string& label,
+                                      bool have_access);
 
   // This method is called when an audio or video device is plugged in or
   // removed. It make sure all MediaStreams that use a removed device is
@@ -362,6 +360,20 @@ class CONTENT_EXPORT MediaStreamManager
                                StreamDeviceInfoArray devices,
                                gfx::NativeViewId window_id);
 
+#if defined(OS_CHROMEOS)
+  // Ensures that we have checked for presence of a keyboard mic. This is only
+  // done once. This function should be called before posting a request on the
+  // UI thread.
+  void EnsureKeyboardMicChecked();
+
+  // Checks if the system has a keyboard mic, and if so, inform the audio
+  // manager via SetKeyboardMicOnDeviceThread().
+  void CheckKeyboardMicOnUIThread();
+
+  // Tells the audio mananger that the system supports a keyboard mic.
+  void SetKeyboardMicOnDeviceThread();
+#endif
+
   // Task runner shared by VideoCaptureManager and AudioInputDeviceManager and
   // used for enumerating audio output devices.
   // Note: Enumeration tasks may take seconds to complete so must never be run
@@ -371,9 +383,20 @@ class CONTENT_EXPORT MediaStreamManager
   media::AudioManager* const audio_manager_;  // not owned
   scoped_refptr<AudioInputDeviceManager> audio_input_device_manager_;
   scoped_refptr<VideoCaptureManager> video_capture_manager_;
+#if defined(OS_WIN)
+  base::Thread video_capture_thread_;
+#endif
 
   // Indicator of device monitoring state.
   bool monitoring_started_;
+
+#if defined(OS_CHROMEOS)
+  // Flag that's set when we have checked if the system has a keyboard mic. We
+  // only need to check it once, and not when constructing since that will
+  // affect startup time.
+  // Must be accessed on the IO thread;
+  bool has_checked_keyboard_mic_;
+#endif
 
   // Stores most recently enumerated device lists. The cache is cleared when
   // monitoring is stopped or there is no request for that type of device.

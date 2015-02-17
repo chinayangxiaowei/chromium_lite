@@ -6,6 +6,7 @@
 #define MEDIA_BASE_WALL_CLOCK_TIME_SOURCE_H_
 
 #include "base/memory/scoped_ptr.h"
+#include "base/synchronization/lock.h"
 #include "media/base/media_export.h"
 #include "media/base/time_source.h"
 
@@ -19,18 +20,21 @@ namespace media {
 class MEDIA_EXPORT WallClockTimeSource : public TimeSource {
  public:
   WallClockTimeSource();
-  virtual ~WallClockTimeSource();
+  ~WallClockTimeSource() override;
 
   // TimeSource implementation.
-  virtual void StartTicking() OVERRIDE;
-  virtual void StopTicking() OVERRIDE;
-  virtual void SetPlaybackRate(float playback_rate) OVERRIDE;
-  virtual void SetMediaTime(base::TimeDelta time) OVERRIDE;
-  virtual base::TimeDelta CurrentMediaTime() OVERRIDE;
+  void StartTicking() override;
+  void StopTicking() override;
+  void SetPlaybackRate(float playback_rate) override;
+  void SetMediaTime(base::TimeDelta time) override;
+  base::TimeDelta CurrentMediaTime() override;
+  base::TimeDelta CurrentMediaTimeForSyncingVideo() override;
 
   void SetTickClockForTesting(scoped_ptr<base::TickClock> tick_clock);
 
  private:
+  base::TimeDelta CurrentMediaTime_Locked();
+
   scoped_ptr<base::TickClock> tick_clock_;
   bool ticking_;
 
@@ -40,6 +44,10 @@ class MEDIA_EXPORT WallClockTimeSource : public TimeSource {
   float playback_rate_;
   base::TimeDelta base_time_;
   base::TimeTicks reference_wall_ticks_;
+
+  // TODO(scherkus): Remove internal locking from this class after access to
+  // Renderer::CurrentMediaTime() is single threaded http://crbug.com/370634
+  base::Lock lock_;
 
   DISALLOW_COPY_AND_ASSIGN(WallClockTimeSource);
 };

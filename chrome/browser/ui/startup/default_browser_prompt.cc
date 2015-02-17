@@ -20,6 +20,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/installer/util/master_preferences.h"
 #include "chrome/installer/util/master_preferences_constants.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
@@ -27,8 +29,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -68,19 +68,18 @@ class DefaultBrowserInfoBarDelegate : public ConfirmInfoBarDelegate {
  private:
   DefaultBrowserInfoBarDelegate(PrefService* prefs,
                                 bool interactive_flow_required);
-  virtual ~DefaultBrowserInfoBarDelegate();
+  ~DefaultBrowserInfoBarDelegate() override;
 
   void AllowExpiry() { should_expire_ = true; }
 
   // ConfirmInfoBarDelegate:
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
-  virtual bool OKButtonTriggersUACPrompt() const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
-  virtual bool ShouldExpireInternal(
-      const NavigationDetails& details) const OVERRIDE;
+  int GetIconID() const override;
+  base::string16 GetMessageText() const override;
+  base::string16 GetButtonLabel(InfoBarButton button) const override;
+  bool OKButtonTriggersUACPrompt() const override;
+  bool Accept() override;
+  bool Cancel() override;
+  bool ShouldExpireInternal(const NavigationDetails& details) const override;
 
   // The prefs to use.
   PrefService* prefs_;
@@ -255,7 +254,6 @@ void ShowDefaultBrowserPrompt(Profile* profile, HostDesktopType desktop_type) {
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE, FROM_HERE,
       base::Bind(&CheckDefaultBrowserCallback, desktop_type));
-
 }
 
 #if !defined(OS_WIN)

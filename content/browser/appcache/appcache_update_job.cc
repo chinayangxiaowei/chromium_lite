@@ -12,6 +12,7 @@
 #include "base/strings/stringprintf.h"
 #include "content/browser/appcache/appcache_group.h"
 #include "content/browser/appcache/appcache_histograms.h"
+#include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -19,6 +20,15 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_context.h"
+
+namespace {
+bool IsDataReductionProxy(const net::HostPortPair& proxy_server) {
+  return (
+      proxy_server.Equals(net::HostPortPair("proxy.googlezip.net", 443)) ||
+      proxy_server.Equals(net::HostPortPair("compress.googlezip.net", 80)) ||
+      proxy_server.Equals(net::HostPortPair("proxy-dev.googlezip.net", 80)));
+}
+}  // namspace
 
 namespace content {
 
@@ -144,6 +154,16 @@ void AppCacheUpdateJob::URLFetcher::OnReceivedRedirect(
     const net::RedirectInfo& redirect_info,
     bool* defer_redirect) {
   DCHECK(request_ == request);
+  // TODO(bengr): Remove this special case logic when crbug.com/429505 is
+  // resolved. Until then, the data reduction proxy client logic uses the
+  // redirect mechanism to resend requests over a direct connection when
+  // the proxy instructs it to do so. The redirect is to the same location
+  // as the original URL.
+  if ((request->load_flags() & net::LOAD_BYPASS_PROXY) &&
+      IsDataReductionProxy(request->proxy_server())) {
+    DCHECK_EQ(request->original_url(), request->url());
+    return;
+  }
   // Redirect is not allowed by the update process.
   job_->MadeProgress();
   redirect_response_code_ = request->GetResponseCode();
@@ -160,46 +180,49 @@ void AppCacheUpdateJob::URLFetcher::OnResponseStarted(
     response_code = request->GetResponseCode();
     job_->MadeProgress();
   }
-  if ((response_code / 100) == 2) {
 
-    // See http://code.google.com/p/chromium/issues/detail?id=69594
-    // We willfully violate the HTML5 spec at this point in order
-    // to support the appcaching of cross-origin HTTPS resources.
-    // We've opted for a milder constraint and allow caching unless
-    // the resource has a "no-store" header. A spec change has been
-    // requested on the whatwg list.
-    // TODO(michaeln): Consider doing this for cross-origin HTTP resources too.
-    if (url_.SchemeIsSecure() &&
-        url_.GetOrigin() != job_->manifest_url_.GetOrigin()) {
-      if (request->response_headers()->
-              HasHeaderValue("cache-control", "no-store")) {
-        DCHECK_EQ(-1, redirect_response_code_);
-        request->Cancel();
-        result_ = SERVER_ERROR;  // Not the best match?
-        OnResponseCompleted();
-        return;
-      }
-    }
-
-    // Write response info to storage for URL fetches. Wait for async write
-    // completion before reading any response data.
-    if (fetch_type_ == URL_FETCH || fetch_type_ == MASTER_ENTRY_FETCH) {
-      response_writer_.reset(job_->CreateResponseWriter());
-      scoped_refptr<HttpResponseInfoIOBuffer> io_buffer(
-          new HttpResponseInfoIOBuffer(
-              new net::HttpResponseInfo(request->response_info())));
-      response_writer_->WriteInfo(
-          io_buffer.get(),
-          base::Bind(&URLFetcher::OnWriteComplete, base::Unretained(this)));
-    } else {
-      ReadResponseData();
-    }
-  } else {
+  if ((response_code / 100) != 2) {
     if (response_code > 0)
       result_ = SERVER_ERROR;
     else
       result_ = NETWORK_ERROR;
     OnResponseCompleted();
+    return;
+  }
+
+  if (url_.SchemeIsSecure()) {
+    // Do not cache content with cert errors.
+    // Also, we willfully violate the HTML5 spec at this point in order
+    // to support the appcaching of cross-origin HTTPS resources.
+    // We've opted for a milder constraint and allow caching unless
+    // the resource has a "no-store" header. A spec change has been
+    // requested on the whatwg list.
+    // See http://code.google.com/p/chromium/issues/detail?id=69594
+    // TODO(michaeln): Consider doing this for cross-origin HTTP too.
+    if (net::IsCertStatusError(request->ssl_info().cert_status) ||
+        (url_.GetOrigin() != job_->manifest_url_.GetOrigin() &&
+            request->response_headers()->
+                HasHeaderValue("cache-control", "no-store"))) {
+      DCHECK_EQ(-1, redirect_response_code_);
+      request->Cancel();
+      result_ = SECURITY_ERROR;
+      OnResponseCompleted();
+      return;
+    }
+  }
+
+  // Write response info to storage for URL fetches. Wait for async write
+  // completion before reading any response data.
+  if (fetch_type_ == URL_FETCH || fetch_type_ == MASTER_ENTRY_FETCH) {
+    response_writer_.reset(job_->CreateResponseWriter());
+    scoped_refptr<HttpResponseInfoIOBuffer> io_buffer(
+        new HttpResponseInfoIOBuffer(
+            new net::HttpResponseInfo(request->response_info())));
+    response_writer_->WriteInfo(
+        io_buffer.get(),
+        base::Bind(&URLFetcher::OnWriteComplete, base::Unretained(this)));
+  } else {
+    ReadResponseData();
   }
 }
 
@@ -579,7 +602,7 @@ void AppCacheUpdateJob::ContinueHandleManifestFetchCompleted(bool changed) {
     return;
   }
 
-  Manifest manifest;
+  AppCacheManifest manifest;
   if (!ParseManifest(manifest_url_, manifest_data_.data(),
                      manifest_data_.length(),
                      manifest_has_valid_mime_type_ ?
@@ -1094,7 +1117,7 @@ void AppCacheUpdateJob::OnManifestDataReadComplete(int result) {
   }
 }
 
-void AppCacheUpdateJob::BuildUrlFileList(const Manifest& manifest) {
+void AppCacheUpdateJob::BuildUrlFileList(const AppCacheManifest& manifest) {
   for (base::hash_set<std::string>::const_iterator it =
            manifest.explicit_urls.begin();
        it != manifest.explicit_urls.end(); ++it) {

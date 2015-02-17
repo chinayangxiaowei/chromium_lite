@@ -51,7 +51,7 @@ class StubAccountSettingsProvider : public StubCrosSettingsProvider {
   }
 
   // StubCrosSettingsProvider implementation.
-  virtual bool HandlesSetting(const std::string& path) const OVERRIDE {
+  virtual bool HandlesSetting(const std::string& path) const override {
     const char** end = kKnownSettings + arraysize(kKnownSettings);
     return std::find(kKnownSettings, end, path) != end;
   }
@@ -90,7 +90,7 @@ class SharedOptionsTest : public LoginManagerTest {
   virtual ~SharedOptionsTest() {
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     LoginManagerTest::SetUpOnMainThread();
 
     CrosSettings* settings = CrosSettings::Get();
@@ -103,7 +103,7 @@ class SharedOptionsTest : public LoginManagerTest {
     settings->AddSettingsProvider(device_settings_provider_);
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     CrosSettings* settings = CrosSettings::Get();
     settings->RemoveSettingsProvider(&stub_settings_provider_);
     LoginManagerTest::TearDownOnMainThread();
@@ -158,8 +158,8 @@ class SharedOptionsTest : public LoginManagerTest {
         "var success = false;"
         "if (input) {"
         "  success = input.disabled == %d;"
-        "  var indicator = document.querySelector(input.tagName +"
-        "      prefSelector + ' + span span.controlled-setting-indicator');"
+        "  var indicator = input.parentNode.parentNode.querySelector("
+        "      '.controlled-setting-indicator');"
         "  if (controlledBy) {"
         "    success = success && indicator &&"
         "              indicator.getAttribute('controlled-by') == controlledBy;"
@@ -369,7 +369,9 @@ IN_PROC_BROWSER_TEST_F(SharedOptionsTest, PRE_ScreenLockPreferenceSecondary) {
 // (The checkbox is unset if the current user's preference is false, but if any
 // other signed-in user has enabled this preference, the shared setting
 // indicator explains this.)
-IN_PROC_BROWSER_TEST_F(SharedOptionsTest, ScreenLockPreferenceSecondary) {
+// crbug.com/421498
+IN_PROC_BROWSER_TEST_F(SharedOptionsTest,
+                       DISABLED_ScreenLockPreferenceSecondary) {
   LoginUser(kTestOwner);
   UserAddingScreen::Get()->Start();
   content::RunAllPendingInMessageLoop();

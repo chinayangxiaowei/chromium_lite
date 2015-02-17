@@ -14,7 +14,6 @@
 #include "ash/display/display_manager.h"
 #include "ash/display/mirror_window_controller.h"
 #include "ash/display/root_window_transformers.h"
-#include "ash/display/virtual_keyboard_window_controller.h"
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/host/ash_window_tree_host_init_params.h"
 #include "ash/host/root_window_transformer.h"
@@ -128,13 +127,17 @@ void SetDisplayPropertiesOnHost(AshWindowTreeHost* ash_host,
       CreateRootWindowTransformerForDisplay(host->window(), display));
   ash_host->SetRootWindowTransformer(transformer.Pass());
 
-  DisplayMode mode;
-  if (GetDisplayManager()->GetSelectedModeForDisplayId(display.id(), &mode) &&
-      mode.refresh_rate > 0.0f) {
+  DisplayMode mode =
+      GetDisplayManager()->GetActiveModeForDisplayId(display.id());
+  if (mode.refresh_rate > 0.0f) {
     host->compositor()->vsync_manager()->SetAuthoritativeVSyncInterval(
         base::TimeDelta::FromMicroseconds(
             base::Time::kMicrosecondsPerSecond / mode.refresh_rate));
   }
+
+  // Just movnig the display requires the full redraw.
+  // chrome-os-partner:33558.
+  host->compositor()->ScheduleFullRedraw();
 }
 
 aura::Window* GetWindow(AshWindowTreeHost* ash_host) {
@@ -249,10 +252,6 @@ DisplayController::~DisplayController() {
 }
 
 void DisplayController::Start() {
-  // Created here so that Shell has finished being created. Adds itself
-  // as a ShellObserver.
-  virtual_keyboard_window_controller_.reset(
-      new VirtualKeyboardWindowController);
   Shell::GetScreen()->AddObserver(this);
   Shell::GetInstance()->display_manager()->set_delegate(this);
 }
@@ -264,7 +263,6 @@ void DisplayController::Shutdown() {
 
   cursor_window_controller_.reset();
   mirror_window_controller_.reset();
-  virtual_keyboard_window_controller_.reset();
 
   Shell::GetScreen()->RemoveObserver(this);
 
@@ -608,8 +606,9 @@ void DisplayController::OnDisplayRemoved(const gfx::Display& display) {
       primary_tree_host_for_replace_ = host_to_delete;
       return;
     }
-    DCHECK_EQ(1U, window_tree_hosts_.size());
-    primary_display_id = ScreenUtil::GetSecondaryDisplay().id();
+    primary_display_id = window_tree_hosts_.begin()->first;
+    CHECK_NE(gfx::Display::kInvalidDisplayID, primary_display_id);
+
     AshWindowTreeHost* primary_host = host_to_delete;
 
     // Delete the other host instead.
@@ -665,12 +664,6 @@ void DisplayController::CreateOrUpdateNonDesktopDisplay(
     case DisplayManager::MIRRORING:
       mirror_window_controller_->UpdateWindow(info);
       cursor_window_controller_->UpdateContainer();
-      virtual_keyboard_window_controller_->Close();
-      break;
-    case DisplayManager::VIRTUAL_KEYBOARD:
-      mirror_window_controller_->Close();
-      cursor_window_controller_->UpdateContainer();
-      virtual_keyboard_window_controller_->UpdateWindow(info);
       break;
     case DisplayManager::EXTENDED:
       NOTREACHED();
@@ -685,7 +678,6 @@ void DisplayController::CloseNonDesktopDisplay() {
   // to handle the cursor_window at all. See: http://crbug.com/412910
   if (!cursor_window_controller_->is_cursor_compositing_enabled())
     cursor_window_controller_->UpdateContainer();
-  virtual_keyboard_window_controller_->Close();
 }
 
 void DisplayController::PreDisplayConfigurationChange(bool clear_focus) {
@@ -759,7 +751,7 @@ AshWindowTreeHost* DisplayController::AddWindowTreeHostForDisplay(
 
 #if defined(OS_CHROMEOS)
   static bool force_constrain_pointer_to_root =
-      CommandLine::ForCurrentProcess()->HasSwitch(
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kAshConstrainPointerToRoot);
   if (base::SysInfo::IsRunningOnChromeOS() || force_constrain_pointer_to_root)
     ash_host->ConfineCursorToRootWindow();

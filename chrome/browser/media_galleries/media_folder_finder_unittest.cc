@@ -9,9 +9,8 @@
 
 #include "base/base_paths.h"
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_path_override.h"
 #include "base/threading/sequenced_worker_pool.h"
@@ -19,23 +18,18 @@
 #include "chrome/common/chrome_paths.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
-
+#include "content/public/test/test_utils.h"
 
 class MediaFolderFinderTest : public testing::Test {
  public:
   MediaFolderFinderTest() {
   }
 
-  virtual ~MediaFolderFinderTest() {
-  }
+  ~MediaFolderFinderTest() override {}
 
-  virtual void SetUp() OVERRIDE {
-    ASSERT_TRUE(fake_dir_.CreateUniqueTempDir());
-  }
+  void SetUp() override { ASSERT_TRUE(fake_dir_.CreateUniqueTempDir()); }
 
-  virtual void TearDown() OVERRIDE {
-    ASSERT_EQ(NULL, media_folder_finder_.get());
-  }
+  void TearDown() override { ASSERT_EQ(NULL, media_folder_finder_.get()); }
 
  protected:
   void CreateMediaFolderFinder(
@@ -136,14 +130,9 @@ class MediaFolderFinderTest : public testing::Test {
     }
   }
 
-  void RunLoop() {
-    base::RunLoop().RunUntilIdle();
-    content::BrowserThread::GetBlockingPool()->FlushForTesting();
-  }
-
   void RunLoopUntilReceivedCallback() {
     while (!received_results())
-      RunLoop();
+      content::RunAllBlockingPoolTasksUntilIdle();
   }
 
  private:
@@ -210,7 +199,7 @@ TEST_F(MediaFolderFinderTest, ScanAndCancel) {
   CreateMediaFolderFinder(folders, false, expected_results);
   StartScan();
   DeleteMediaFolderFinder();
-  RunLoop();
+  content::RunAllBlockingPoolTasksUntilIdle();
   EXPECT_TRUE(received_results());
 }
 

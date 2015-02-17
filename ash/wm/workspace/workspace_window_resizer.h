@@ -49,17 +49,16 @@ class ASH_EXPORT WorkspaceWindowResizer : public WindowResizer {
   // to move or resize beyond that edge.
   static const int kStickyDistancePixels;
 
-  virtual ~WorkspaceWindowResizer();
+  ~WorkspaceWindowResizer() override;
 
   static WorkspaceWindowResizer* Create(
       wm::WindowState* window_state,
       const std::vector<aura::Window*>& attached_windows);
 
   // WindowResizer:
-  virtual void Drag(const gfx::Point& location_in_parent,
-                    int event_flags) OVERRIDE;
-  virtual void CompleteDrag() OVERRIDE;
-  virtual void RevertDrag() OVERRIDE;
+  void Drag(const gfx::Point& location_in_parent, int event_flags) override;
+  void CompleteDrag() override;
+  void RevertDrag() override;
 
  private:
   WorkspaceWindowResizer(wm::WindowState* window_state,
@@ -167,6 +166,9 @@ class ASH_EXPORT WorkspaceWindowResizer : public WindowResizer {
 
   const std::vector<aura::Window*> attached_windows_;
 
+  // Returns the currently used instance for test.
+  static WorkspaceWindowResizer* GetInstanceForTest();
+
   bool did_lock_cursor_;
 
   // Set to true once Drag() is invoked and the bounds of the window change.
@@ -220,9 +222,6 @@ class ASH_EXPORT WorkspaceWindowResizer : public WindowResizer {
   // Used to determine if this has been deleted during a drag such as when a tab
   // gets dragged into another browser window.
   base::WeakPtrFactory<WorkspaceWindowResizer> weak_ptr_factory_;
-
-  // Current instance for use by the WorkspaceWindowResizerTest.
-  static WorkspaceWindowResizer* instance_;
 
   DISALLOW_COPY_AND_ASSIGN(WorkspaceWindowResizer);
 };

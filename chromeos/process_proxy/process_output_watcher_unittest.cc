@@ -10,7 +10,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/run_loop.h"
@@ -90,7 +90,7 @@ class ProcessOutputWatcherTest : public testing::Test {
 
   virtual ~ProcessOutputWatcherTest() {}
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     if (output_watch_thread_started_)
       output_watch_thread_->Stop();
   }
@@ -150,9 +150,8 @@ class ProcessOutputWatcherTest : public testing::Test {
       ssize_t test_size = test_str.length() * sizeof(*test_str.c_str());
       if (test_cases[i].should_send_terminating_null)
         test_size += sizeof(*test_str.c_str());
-      EXPECT_EQ(test_size,
-                base::WriteFileDescriptor(pt_pipe[1], test_str.c_str(),
-                                          test_size));
+      EXPECT_TRUE(base::WriteFileDescriptor(pt_pipe[1], test_str.c_str(),
+                                            test_size));
 
       run_loop.Run();
       EXPECT_TRUE(expectations_.IsDone());
@@ -161,7 +160,7 @@ class ProcessOutputWatcherTest : public testing::Test {
     }
 
     // Send stop signal. It is not important which string we send.
-    EXPECT_EQ(1, base::WriteFileDescriptor(stop_pipe[1], "q", 1));
+    EXPECT_TRUE(base::WriteFileDescriptor(stop_pipe[1], "q", 1));
 
     EXPECT_NE(-1, IGNORE_EINTR(close(stop_pipe[1])));
     EXPECT_NE(-1, IGNORE_EINTR(close(pt_pipe[1])));
@@ -191,7 +190,7 @@ TEST_F(ProcessOutputWatcherTest, DISABLED_OutputWatcher) {
   test_cases.push_back(TestCase("testing error2\n", false));
 
   RunTest(test_cases);
-};
+}
 
 // http://crbug.com/396496
 TEST_F(ProcessOutputWatcherTest, DISABLED_SplitUTF8Character) {
@@ -299,7 +298,7 @@ TEST_F(ProcessOutputWatcherTest, DISABLED_FourByteUTF8) {
   test_cases.push_back(TestCase("\xa2", false, "\xf0\xa4\xad\xa2"));
 
   RunTest(test_cases);
-};
+}
 
 // Verifies that sending '\0' generates PROCESS_OUTPUT_TYPE_OUT event and does
 // not terminate output watcher.
@@ -313,6 +312,6 @@ TEST_F(ProcessOutputWatcherTest, DISABLED_SendNull) {
   test_cases.push_back(TestCase("a", true));
 
   RunTest(test_cases);
-};
+}
 
 }  // namespace chromeos

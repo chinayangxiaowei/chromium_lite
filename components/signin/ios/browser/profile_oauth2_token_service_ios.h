@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/threading/thread_checker.h"
-#include "components/signin/core/browser/mutable_profile_oauth2_token_service.h"
+#include "components/signin/core/browser/profile_oauth2_token_service.h"
 
 class OAuth2AccessTokenFetcher;
 
@@ -24,73 +24,52 @@ class ProfileOAuth2TokenServiceIOSProvider;
 //
 // Note: Requests should be started from the UI thread. To start a
 // request from aother thread, please use OAuth2TokenServiceRequest.
-class ProfileOAuth2TokenServiceIOS : public MutableProfileOAuth2TokenService {
+class ProfileOAuth2TokenServiceIOS : public ProfileOAuth2TokenService {
  public:
-  ProfileOAuth2TokenServiceIOS();
-  virtual ~ProfileOAuth2TokenServiceIOS();
-
   // KeyedService
-  virtual void Shutdown() OVERRIDE;
+  virtual void Shutdown() override;
 
   // OAuth2TokenService
   virtual bool RefreshTokenIsAvailable(
-      const std::string& account_id) const OVERRIDE;
+      const std::string& account_id) const override;
 
   virtual void InvalidateOAuth2Token(const std::string& account_id,
                                      const std::string& client_id,
                                      const ScopeSet& scopes,
-                                     const std::string& access_token) OVERRIDE;
+                                     const std::string& access_token) override;
 
   // ProfileOAuth2TokenService
-  virtual void Initialize(SigninClient* client) OVERRIDE;
-  virtual void LoadCredentials(const std::string& primary_account_id) OVERRIDE;
-  virtual std::vector<std::string> GetAccounts() OVERRIDE;
+  virtual void Initialize(SigninClient* client) override;
+  virtual void LoadCredentials(const std::string& primary_account_id) override;
+  virtual std::vector<std::string> GetAccounts() override;
   virtual void UpdateAuthError(const std::string& account_id,
-                               const GoogleServiceAuthError& error) OVERRIDE;
+                               const GoogleServiceAuthError& error) override;
 
   // This method should not be called when using shared authentication.
   virtual void UpdateCredentials(const std::string& account_id,
-                                 const std::string& refresh_token) OVERRIDE;
+                                 const std::string& refresh_token) override;
 
   // Removes all credentials from this instance of |ProfileOAuth2TokenService|,
   // however, it does not revoke the identities from the device.
   // Subsequent calls to |RefreshTokenIsAvailable| will return |false|.
-  virtual void RevokeAllCredentials() OVERRIDE;
-
-  // Returns the refresh token for |account_id| .
-  // Must only be called when |ShouldUseIOSSharedAuthentication| returns false.
-  std::string GetRefreshTokenWhenNotUsingSharedAuthentication(
-      const std::string& account_id);
+  virtual void RevokeAllCredentials() override;
 
   // Reloads accounts from the provider. Fires |OnRefreshTokenAvailable| for
   // each new account. Fires |OnRefreshTokenRevoked| for each account that was
   // removed.
   void ReloadCredentials();
 
-  // Upgrades to using shared authentication token service.
-  //
-  // Note: If this |ProfileOAuth2TokenServiceIOS| was using the legacy token
-  // service, then this call also revokes all tokens from the parent
-  // |MutableProfileOAuth2TokenService|.
-  void StartUsingSharedAuthentication();
-
-  // Sets |use_legacy_token_service_| to |use_legacy_token_service|.
-  //
-  // Should only be called for testing.
-  void SetUseLegacyTokenServiceForTesting(bool use_legacy_token_service);
-
-  // Revokes the OAuth2 refresh tokens for all accounts from the parent
-  // |MutableProfileOAuth2TokenService|.
-  //
-  // Note: This method should only be called if the legacy pre-SSOAuth token
-  // service is used.
-  void ForceInvalidGrantResponses();
-
  protected:
+  friend class ProfileOAuth2TokenServiceFactory;
+  friend class ProfileOAuth2TokenServiceIOSTest;
+
+  ProfileOAuth2TokenServiceIOS();
+  virtual ~ProfileOAuth2TokenServiceIOS();
+
   virtual OAuth2AccessTokenFetcher* CreateAccessTokenFetcher(
       const std::string& account_id,
       net::URLRequestContextGetter* getter,
-      OAuth2AccessTokenConsumer* consumer) OVERRIDE;
+      OAuth2AccessTokenConsumer* consumer) override;
 
   // Protected and virtual to be overriden by fake for testing.
 
@@ -113,9 +92,9 @@ class ProfileOAuth2TokenServiceIOS : public MutableProfileOAuth2TokenService {
     void SetLastAuthError(const GoogleServiceAuthError& error);
 
     // SigninErrorController::AuthStatusProvider implementation.
-    virtual std::string GetAccountId() const OVERRIDE;
-    virtual std::string GetUsername() const OVERRIDE;
-    virtual GoogleServiceAuthError GetAuthStatus() const OVERRIDE;
+    virtual std::string GetAccountId() const override;
+    virtual std::string GetUsername() const override;
+    virtual GoogleServiceAuthError GetAuthStatus() const override;
 
    private:
     ProfileOAuth2TokenService* token_service_;
@@ -129,10 +108,6 @@ class ProfileOAuth2TokenServiceIOS : public MutableProfileOAuth2TokenService {
   // to information about the account.
   typedef std::map<std::string, linked_ptr<AccountInfo> > AccountInfoMap;
 
-  // MutableProfileOAuth2TokenService
-  virtual std::string GetRefreshToken(
-      const std::string& account_id) const OVERRIDE;
-
   // Returns the iOS provider;
   ios::ProfileOAuth2TokenServiceIOSProvider* GetProvider();
 
@@ -140,22 +115,9 @@ class ProfileOAuth2TokenServiceIOS : public MutableProfileOAuth2TokenService {
   AccountInfoMap accounts_;
 
   // Calls to this class are expected to be made from the browser UI thread.
-  // The purpose of this  this checker is to warn us if the upstream usage of
-  // ProfileOAuth2TokenService ever gets changed to have it be used across
-  // multiple threads.
+  // The purpose of this checker is to detect access to
+  // ProfileOAuth2TokenService from multiple threads in upstream code.
   base::ThreadChecker thread_checker_;
-
-  // Whether to use the legacy pre-SSOAuth token service.
-  //
-  // |use_legacy_token_service_| is true iff the provider is not using shared
-  // authentication during |LoadCredentials|. Note that |LoadCredentials| is
-  // called exactly once after the PO2TS initialization iff the user is signed
-  // in.
-  //
-  // If |use_legacy_token_service_| is true, then this
-  // |ProfileOAuth2TokenServiceIOS| delegates all calls to the parent
-  // |MutableProfileOAuth2TokenService|.
-  bool use_legacy_token_service_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileOAuth2TokenServiceIOS);
 };

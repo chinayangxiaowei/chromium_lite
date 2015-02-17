@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/extension_system_factory.h"
 
+#include "chrome/browser/extensions/blacklist_factory.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -12,6 +14,7 @@
 #include "extensions/browser/extension_registry_factory.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/browser/process_manager_factory.h"
 #include "extensions/browser/renderer_startup_helper.h"
 
 namespace extensions {
@@ -36,11 +39,14 @@ ExtensionSystemSharedFactory::ExtensionSystemSharedFactory()
         "ExtensionSystemShared",
         BrowserContextDependencyManager::GetInstance()) {
   DependsOn(ExtensionPrefsFactory::GetInstance());
+  DependsOn(ExtensionManagementFactory::GetInstance());
   // This depends on ExtensionService which depends on ExtensionRegistry.
   DependsOn(ExtensionRegistryFactory::GetInstance());
   DependsOn(GlobalErrorServiceFactory::GetInstance());
   DependsOn(policy::ProfilePolicyConnectorFactory::GetInstance());
+  DependsOn(ProcessManagerFactory::GetInstance());
   DependsOn(RendererStartupHelperFactory::GetInstance());
+  DependsOn(BlacklistFactory::GetInstance());
 }
 
 ExtensionSystemSharedFactory::~ExtensionSystemSharedFactory() {

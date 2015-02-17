@@ -12,10 +12,10 @@
 #include "chrome/browser/sync_file_system/sync_file_status.h"
 #include "chrome/browser/sync_file_system/sync_status_code.h"
 #include "chrome/common/extensions/api/sync_file_system.h"
-#include "webkit/browser/fileapi/file_system_url.h"
-#include "webkit/common/quota/quota_types.h"
+#include "storage/browser/fileapi/file_system_url.h"
+#include "storage/common/quota/quota_types.h"
 
-namespace fileapi {
+namespace storage {
 class FileSystemContext;
 }
 
@@ -30,8 +30,8 @@ class SyncFileSystemDeleteFileSystemFunction
   //                            SYNCFILESYSTEM_DELETEFILESYSTEM)
 
  protected:
-  virtual ~SyncFileSystemDeleteFileSystemFunction() {}
-  virtual bool RunAsync() OVERRIDE;
+  ~SyncFileSystemDeleteFileSystemFunction() override {}
+  bool RunAsync() override;
 
  private:
   void DidDeleteFileSystem(base::File::Error error);
@@ -44,8 +44,8 @@ class SyncFileSystemGetFileStatusFunction
                              SYNCFILESYSTEM_GETFILESYNCSTATUS)
 
  protected:
-  virtual ~SyncFileSystemGetFileStatusFunction() {}
-  virtual bool RunAsync() OVERRIDE;
+  ~SyncFileSystemGetFileStatusFunction() override {}
+  bool RunAsync() override;
 
  private:
   void DidGetFileStatus(
@@ -61,19 +61,19 @@ class SyncFileSystemGetFileStatusesFunction
   SyncFileSystemGetFileStatusesFunction();
 
  protected:
-  virtual ~SyncFileSystemGetFileStatusesFunction();
-  virtual bool RunAsync() OVERRIDE;
+  ~SyncFileSystemGetFileStatusesFunction() override;
+  bool RunAsync() override;
 
  private:
   typedef std::pair<sync_file_system::SyncStatusCode,
                     sync_file_system::SyncFileStatus> FileStatusPair;
-  typedef std::map<fileapi::FileSystemURL, FileStatusPair,
-                   fileapi::FileSystemURL::Comparator> URLToStatusMap;
+  typedef std::map<storage::FileSystemURL,
+                   FileStatusPair,
+                   storage::FileSystemURL::Comparator> URLToStatusMap;
 
-  void DidGetFileStatus(
-      const fileapi::FileSystemURL& file_system_url,
-      sync_file_system::SyncStatusCode sync_status_code,
-      sync_file_system::SyncFileStatus sync_file_statuses);
+  void DidGetFileStatus(const storage::FileSystemURL& file_system_url,
+                        sync_file_system::SyncStatusCode sync_status_code,
+                        sync_file_system::SyncFileStatus sync_file_statuses);
 
   unsigned int num_expected_results_;
   unsigned int num_results_received_;
@@ -87,11 +87,11 @@ class SyncFileSystemGetUsageAndQuotaFunction
                              SYNCFILESYSTEM_GETUSAGEANDQUOTA)
 
  protected:
-  virtual ~SyncFileSystemGetUsageAndQuotaFunction() {}
-  virtual bool RunAsync() OVERRIDE;
+  ~SyncFileSystemGetUsageAndQuotaFunction() override {}
+  bool RunAsync() override;
 
  private:
-  void DidGetUsageAndQuota(quota::QuotaStatusCode status,
+  void DidGetUsageAndQuota(storage::QuotaStatusCode status,
                            int64 usage,
                            int64 quota);
 };
@@ -103,14 +103,14 @@ class SyncFileSystemRequestFileSystemFunction
                              SYNCFILESYSTEM_REQUESTFILESYSTEM)
 
  protected:
-  virtual ~SyncFileSystemRequestFileSystemFunction() {}
-  virtual bool RunAsync() OVERRIDE;
+  ~SyncFileSystemRequestFileSystemFunction() override {}
+  bool RunAsync() override;
 
  private:
   typedef SyncFileSystemRequestFileSystemFunction self;
 
   // Returns the file system context for this extension.
-  fileapi::FileSystemContext* GetFileSystemContext();
+  storage::FileSystemContext* GetFileSystemContext();
 
   void DidOpenFileSystem(const GURL& root_url,
                          const std::string& file_system_name,
@@ -124,8 +124,8 @@ class SyncFileSystemSetConflictResolutionPolicyFunction
                              SYNCFILESYSTEM_SETCONFLICTRESOLUTIONPOLICY)
 
  protected:
-  virtual ~SyncFileSystemSetConflictResolutionPolicyFunction() {}
-  virtual bool RunSync() OVERRIDE;
+  ~SyncFileSystemSetConflictResolutionPolicyFunction() override {}
+  bool RunSync() override;
 };
 
 class SyncFileSystemGetConflictResolutionPolicyFunction
@@ -135,8 +135,8 @@ class SyncFileSystemGetConflictResolutionPolicyFunction
                              SYNCFILESYSTEM_GETCONFLICTRESOLUTIONPOLICY)
 
  protected:
-  virtual ~SyncFileSystemGetConflictResolutionPolicyFunction() {}
-  virtual bool RunSync() OVERRIDE;
+  ~SyncFileSystemGetConflictResolutionPolicyFunction() override {}
+  bool RunSync() override;
 };
 
 class SyncFileSystemGetServiceStatusFunction
@@ -146,8 +146,8 @@ class SyncFileSystemGetServiceStatusFunction
                              SYNCFILESYSTEM_GETSERVICESTATUS)
 
  protected:
-  virtual ~SyncFileSystemGetServiceStatusFunction() {}
-  virtual bool RunSync() OVERRIDE;
+  ~SyncFileSystemGetServiceStatusFunction() override {}
+  bool RunSync() override;
 };
 
 }  // namespace extensions

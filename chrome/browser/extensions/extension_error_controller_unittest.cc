@@ -26,7 +26,7 @@ namespace {
 class MockExtensionErrorUI : public ExtensionErrorUI {
  public:
   explicit MockExtensionErrorUI(ExtensionErrorUI::Delegate* delegate);
-  virtual ~MockExtensionErrorUI();
+  ~MockExtensionErrorUI() override;
 
   // Wrappers around the similar methods in ExtensionErrorUI.
   void CloseUI();
@@ -37,9 +37,9 @@ class MockExtensionErrorUI : public ExtensionErrorUI {
 
  private:
   // ExtensionErrorUI implementation.
-  virtual bool ShowErrorInBubbleView() OVERRIDE;
-  virtual void ShowExtensions() OVERRIDE;
-  virtual void Close() OVERRIDE;
+  bool ShowErrorInBubbleView() override;
+  void ShowExtensions() override;
+  void Close() override;
 
   // Keep a copy of the delegate around for ourselves.
   ExtensionErrorUI::Delegate* delegate_;
@@ -104,7 +104,7 @@ scoped_refptr<const Extension> BuildExtension() {
 
 class ExtensionErrorControllerUnitTest : public ExtensionServiceTestBase {
  protected:
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
   // Add an extension to chrome, and mark it as blacklisted in the prefs.
   testing::AssertionResult AddBlacklistedExtension(const Extension* extension);
@@ -152,7 +152,7 @@ ExtensionPrefs* ExtensionErrorControllerUnitTest::GetPrefs() {
 TEST_F(ExtensionErrorControllerUnitTest, ClosingAcknowledgesBlacklisted) {
   // Add a blacklisted extension.
   scoped_refptr<const Extension> extension = BuildExtension();
-  ASSERT_TRUE(AddBlacklistedExtension(extension));
+  ASSERT_TRUE(AddBlacklistedExtension(extension.get()));
 
   service_->Init();
 
@@ -181,7 +181,7 @@ TEST_F(ExtensionErrorControllerUnitTest, ClosingAcknowledgesBlacklisted) {
 TEST_F(ExtensionErrorControllerUnitTest, AcceptingAcknowledgesBlacklisted) {
   // Add a blacklisted extension.
   scoped_refptr<const Extension> extension = BuildExtension();
-  ASSERT_TRUE(AddBlacklistedExtension(extension));
+  ASSERT_TRUE(AddBlacklistedExtension(extension.get()));
 
   service_->Init();
 
@@ -200,7 +200,7 @@ TEST_F(ExtensionErrorControllerUnitTest, AcceptingAcknowledgesBlacklisted) {
 // already been acknowledged.
 TEST_F(ExtensionErrorControllerUnitTest, DontWarnForAcknowledgedBlacklisted) {
   scoped_refptr<const Extension> extension = BuildExtension();
-  ASSERT_TRUE(AddBlacklistedExtension(extension));
+  ASSERT_TRUE(AddBlacklistedExtension(extension.get()));
 
   GetPrefs()->AcknowledgeBlacklistedExtension(extension->id());
 

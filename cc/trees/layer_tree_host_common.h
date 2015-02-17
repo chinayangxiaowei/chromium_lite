@@ -13,9 +13,9 @@
 #include "cc/base/cc_export.h"
 #include "cc/base/scoped_ptr_vector.h"
 #include "cc/layers/layer_lists.h"
-#include "ui/gfx/rect.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/transform.h"
-#include "ui/gfx/vector2d.h"
 
 namespace cc {
 
@@ -130,6 +130,8 @@ class CC_EXPORT LayerTreeHostCommon {
 
   struct ScrollUpdateInfo {
     int layer_id;
+    // TODO(miletus) : Use ScrollOffset once LayerTreeHost/Blink fully supports
+    // franctional scroll offset.
     gfx::Vector2d scroll_delta;
   };
 };
@@ -140,6 +142,7 @@ struct CC_EXPORT ScrollAndScaleSet {
 
   std::vector<LayerTreeHostCommon::ScrollUpdateInfo> scrolls;
   float page_scale_delta;
+  float top_controls_delta;
   ScopedPtrVector<SwapPromise> swap_promises;
 };
 

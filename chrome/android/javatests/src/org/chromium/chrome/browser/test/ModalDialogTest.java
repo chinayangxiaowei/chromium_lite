@@ -184,7 +184,8 @@ public class ModalDialogTest extends ChromeShellTestBase {
                 "Stay on this page");
         clickCancel(jsDialog);
 
-        assertEquals(BEFORE_UNLOAD_URL, getActivity().getActiveContentViewCore().getUrl());
+        assertEquals(BEFORE_UNLOAD_URL, getActivity().getActiveContentViewCore()
+                .getWebContents().getUrl());
         executeJavaScriptAndWaitForDialog("history.back();");
 
         jsDialog = getCurrentDialog();
@@ -198,7 +199,8 @@ public class ModalDialogTest extends ChromeShellTestBase {
         int callCount = onPageLoaded.getCallCount();
         clickOk(jsDialog);
         onPageLoaded.waitForCallback(callCount);
-        assertEquals(EMPTY_PAGE, getActivity().getActiveContentViewCore().getUrl());
+        assertEquals(EMPTY_PAGE, getActivity().getActiveContentViewCore()
+                .getWebContents().getUrl());
     }
 
     /**
@@ -263,7 +265,7 @@ public class ModalDialogTest extends ChromeShellTestBase {
         clickCancel(jsDialog);
         scriptEvent.waitUntilHasValue();
 
-        scriptEvent.evaluateJavaScript(getActivity().getActiveContentViewCore(),
+        scriptEvent.evaluateJavaScript(getActivity().getActiveContentViewCore().getWebContents(),
                 "alert('Android');");
         assertTrue("No further dialog boxes should be shown.", scriptEvent.waitUntilHasValue());
     }
@@ -281,7 +283,7 @@ public class ModalDialogTest extends ChromeShellTestBase {
         ThreadUtils.runOnUiThreadBlocking(new Runnable() {
             @Override
             public void run() {
-                getActivity().createTab(EMPTY_PAGE);
+                getActivity().closeAllTabs();
             }
         });
 
@@ -308,7 +310,7 @@ public class ModalDialogTest extends ChromeShellTestBase {
     private OnEvaluateJavaScriptResultHelper executeJavaScriptAndWaitForDialog(
             final OnEvaluateJavaScriptResultHelper helper, String script)
             throws InterruptedException {
-        helper.evaluateJavaScript(getActivity().getActiveContentViewCore(),
+        helper.evaluateJavaScript(getActivity().getActiveContentViewCore().getWebContents(),
                 script);
         boolean criteriaSatisfied = CriteriaHelper.pollForCriteria(
                 new JavascriptAppModalDialogShownCriteria(true));

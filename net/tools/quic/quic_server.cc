@@ -19,6 +19,7 @@
 #include "net/quic/quic_crypto_stream.h"
 #include "net/quic/quic_data_reader.h"
 #include "net/quic/quic_protocol.h"
+#include "net/tools/quic/quic_dispatcher.h"
 #include "net/tools/quic/quic_in_memory_cache.h"
 #include "net/tools/quic/quic_socket_utils.h"
 
@@ -35,7 +36,6 @@ namespace {
 
 const int kEpollFlags = EPOLLIN | EPOLLOUT | EPOLLET;
 const char kSourceAddressTokenSecret[] = "secret";
-const uint32 kServerInitialFlowControlWindow = 100 * net::kMaxPacketSize;
 
 }  // namespace
 
@@ -47,8 +47,6 @@ QuicServer::QuicServer()
       use_recvmmsg_(false),
       crypto_config_(kSourceAddressTokenSecret, QuicRandom::GetInstance()),
       supported_versions_(QuicSupportedVersions()) {
-  // Use hardcoded crypto parameters for now.
-  config_.SetDefaults();
   Initialize();
 }
 
@@ -79,9 +77,6 @@ void QuicServer::Initialize() {
       crypto_config_.AddDefaultConfig(
           QuicRandom::GetInstance(), &clock,
           QuicCryptoServerConfig::ConfigOptions()));
-
-  // Set flow control options in the config.
-  config_.SetInitialCongestionWindowToSend(kServerInitialFlowControlWindow);
 }
 
 QuicServer::~QuicServer() {
@@ -165,6 +160,7 @@ QuicDispatcher* QuicServer::CreateQuicDispatcher() {
       config_,
       crypto_config_,
       supported_versions_,
+      new QuicDispatcher::DefaultPacketWriterFactory(),
       &epoll_server_);
 }
 
@@ -191,7 +187,7 @@ void QuicServer::OnEvent(int fd, EpollEvent* event) {
     while (read) {
         read = ReadAndDispatchSinglePacket(
             fd_, port_, dispatcher_.get(),
-            overflow_supported_ ? &packets_dropped_ : NULL);
+            overflow_supported_ ? &packets_dropped_ : nullptr);
     }
   }
   if (event->in_events & EPOLLOUT) {

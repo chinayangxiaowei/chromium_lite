@@ -22,14 +22,15 @@
 #include "chrome/browser/supervised_user/supervised_user_shared_settings_update.h"
 #include "chrome/browser/supervised_user/supervised_user_sync_service.h"
 #include "chrome/browser/supervised_user/supervised_user_sync_service_factory.h"
-#include "chrome/browser/sync/glue/device_info.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/browser/signin_manager.h"
+#include "content/public/browser/browser_thread.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "sync/util/get_session_name.h"
 
 using base::DictionaryValue;
 
@@ -48,7 +49,7 @@ class SupervisedUserRegistrationUtilityImpl
       SupervisedUserSyncService* service,
       SupervisedUserSharedSettingsService* shared_settings_service);
 
-  virtual ~SupervisedUserRegistrationUtilityImpl();
+  ~SupervisedUserRegistrationUtilityImpl() override;
 
   // Registers a new supervised user with the server. |supervised_user_id| is a
   // new unique ID for the new supervised user. If its value is the same as that
@@ -58,15 +59,15 @@ class SupervisedUserRegistrationUtilityImpl
   // the user and his avatar. |callback| is called with the result of the
   // registration. We use the info here and not the profile, because on Chrome
   // OS the profile of the supervised user does not yet exist.
-  virtual void Register(const std::string& supervised_user_id,
-                        const SupervisedUserRegistrationInfo& info,
-                        const RegistrationCallback& callback) OVERRIDE;
+  void Register(const std::string& supervised_user_id,
+                const SupervisedUserRegistrationInfo& info,
+                const RegistrationCallback& callback) override;
 
   // SupervisedUserSyncServiceObserver:
-  virtual void OnSupervisedUserAcknowledged(
-      const std::string& supervised_user_id) OVERRIDE;
-  virtual void OnSupervisedUsersSyncingStopped() OVERRIDE;
-  virtual void OnSupervisedUsersChanged() OVERRIDE;
+  void OnSupervisedUserAcknowledged(
+      const std::string& supervised_user_id) override;
+  void OnSupervisedUsersSyncingStopped() override;
+  void OnSupervisedUsersChanged() override;
 
  private:
   // Fetches the supervised user token when we have the device name.
@@ -304,7 +305,8 @@ void SupervisedUserRegistrationUtilityImpl::Register(
             weak_ptr_factory_.GetWeakPtr())));
   }
 
-  browser_sync::DeviceInfo::GetClientName(
+  syncer::GetSessionName(
+      content::BrowserThread::GetBlockingPool(),
       base::Bind(&SupervisedUserRegistrationUtilityImpl::FetchToken,
                  weak_ptr_factory_.GetWeakPtr()));
 }

@@ -29,56 +29,96 @@
 using net::URLFetcher;
 
 const int kNumRetries = 1;
-const char kIdKey[] = "id";
-const char kNamespace[] = "CHROME";
+const char kNamespace[] = "PERMISSION_CHROME_URL";
 const char kState[] = "PENDING";
 
+const char kPermissionRequestKey[] = "permissionRequest";
+const char kIdKey[] = "id";
+
 static const char kAuthorizationHeaderFormat[] = "Authorization: Bearer %s";
+
+struct PermissionRequestCreatorApiary::Request {
+  Request(const GURL& url_requested,
+          const SuccessCallback& callback,
+          int url_fetcher_id);
+  ~Request();
+
+  GURL url_requested;
+  SuccessCallback callback;
+  scoped_ptr<OAuth2TokenService::Request> access_token_request;
+  std::string access_token;
+  bool access_token_expired;
+  int url_fetcher_id;
+  scoped_ptr<net::URLFetcher> url_fetcher;
+};
+
+PermissionRequestCreatorApiary::Request::Request(
+    const GURL& url_requested,
+    const SuccessCallback& callback,
+    int url_fetcher_id)
+    : url_requested(url_requested),
+      callback(callback),
+      access_token_expired(false),
+      url_fetcher_id(url_fetcher_id) {
+}
+
+PermissionRequestCreatorApiary::Request::~Request() {}
 
 PermissionRequestCreatorApiary::PermissionRequestCreatorApiary(
     OAuth2TokenService* oauth2_token_service,
     scoped_ptr<SupervisedUserSigninManagerWrapper> signin_wrapper,
-    net::URLRequestContextGetter* context)
+    net::URLRequestContextGetter* context,
+    const GURL& apiary_url)
     : OAuth2TokenService::Consumer("permissions_creator"),
       oauth2_token_service_(oauth2_token_service),
       signin_wrapper_(signin_wrapper.Pass()),
       context_(context),
-      access_token_expired_(false) {}
+      apiary_url_(apiary_url),
+      url_fetcher_id_(0) {
+  DCHECK(apiary_url_.is_valid());
+}
 
 PermissionRequestCreatorApiary::~PermissionRequestCreatorApiary() {}
 
 // static
 scoped_ptr<PermissionRequestCreator>
-PermissionRequestCreatorApiary::CreateWithProfile(Profile* profile) {
+PermissionRequestCreatorApiary::CreateWithProfile(Profile* profile,
+                                                  const GURL& apiary_url) {
   ProfileOAuth2TokenService* token_service =
       ProfileOAuth2TokenServiceFactory::GetForProfile(profile);
   SigninManagerBase* signin = SigninManagerFactory::GetForProfile(profile);
   scoped_ptr<SupervisedUserSigninManagerWrapper> signin_wrapper(
       new SupervisedUserSigninManagerWrapper(profile, signin));
-  scoped_ptr<PermissionRequestCreator> creator(
-      new PermissionRequestCreatorApiary(
-          token_service, signin_wrapper.Pass(), profile->GetRequestContext()));
-  return creator.Pass();
+  return make_scoped_ptr(new PermissionRequestCreatorApiary(
+      token_service, signin_wrapper.Pass(), profile->GetRequestContext(),
+      apiary_url));
+}
+
+bool PermissionRequestCreatorApiary::IsEnabled() const {
+  return true;
 }
 
 void PermissionRequestCreatorApiary::CreatePermissionRequest(
-    const std::string& url_requested,
-    const base::Closure& callback) {
-  url_requested_ = url_requested;
-  callback_ = callback;
-  StartFetching();
+    const GURL& url_requested,
+    const SuccessCallback& callback) {
+  requests_.push_back(new Request(url_requested, callback, url_fetcher_id_));
+  StartFetching(requests_.back());
 }
 
-void PermissionRequestCreatorApiary::StartFetching() {
-  OAuth2TokenService::ScopeSet scopes;
+std::string PermissionRequestCreatorApiary::GetApiScopeToUse() const {
   if (CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kPermissionRequestApiScope)) {
-    scopes.insert(CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-        switches::kPermissionRequestApiScope));
+    return CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+        switches::kPermissionRequestApiScope);
   } else {
-    scopes.insert(signin_wrapper_->GetSyncScopeToUse());
+    return signin_wrapper_->GetSyncScopeToUse();
   }
-  access_token_request_ = oauth2_token_service_->StartRequest(
+}
+
+void PermissionRequestCreatorApiary::StartFetching(Request* request) {
+  OAuth2TokenService::ScopeSet scopes;
+  scopes.insert(GetApiScopeToUse());
+  request->access_token_request = oauth2_token_service_->StartRequest(
       signin_wrapper_->GetAccountIdToUse(), scopes, this);
 }
 
@@ -86,63 +126,84 @@ void PermissionRequestCreatorApiary::OnGetTokenSuccess(
     const OAuth2TokenService::Request* request,
     const std::string& access_token,
     const base::Time& expiration_time) {
-  DCHECK_EQ(access_token_request_.get(), request);
-  access_token_ = access_token;
-  GURL url(CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-      switches::kPermissionRequestApiUrl));
-  const int id = 0;
+  RequestIterator it = requests_.begin();
+  while (it != requests_.end()) {
+    if (request == (*it)->access_token_request.get())
+      break;
+    ++it;
+  }
+  DCHECK(it != requests_.end());
+  (*it)->access_token = access_token;
 
-  url_fetcher_.reset(URLFetcher::Create(id, url, URLFetcher::POST, this));
+  (*it)->url_fetcher.reset(URLFetcher::Create((*it)->url_fetcher_id,
+                                              apiary_url_,
+                                              URLFetcher::POST,
+                                              this));
 
-  url_fetcher_->SetRequestContext(context_);
-  url_fetcher_->SetLoadFlags(net::LOAD_DO_NOT_SEND_COOKIES |
-                             net::LOAD_DO_NOT_SAVE_COOKIES);
-  url_fetcher_->SetAutomaticallyRetryOnNetworkChanges(kNumRetries);
-  url_fetcher_->AddExtraRequestHeader(
+  (*it)->url_fetcher->SetRequestContext(context_);
+  (*it)->url_fetcher->SetLoadFlags(net::LOAD_DO_NOT_SEND_COOKIES |
+                                   net::LOAD_DO_NOT_SAVE_COOKIES);
+  (*it)->url_fetcher->SetAutomaticallyRetryOnNetworkChanges(kNumRetries);
+  (*it)->url_fetcher->AddExtraRequestHeader(
       base::StringPrintf(kAuthorizationHeaderFormat, access_token.c_str()));
 
   base::DictionaryValue dict;
   dict.SetStringWithoutPathExpansion("namespace", kNamespace);
-  dict.SetStringWithoutPathExpansion("objectRef", url_requested_);
+  dict.SetStringWithoutPathExpansion("objectRef", (*it)->url_requested.spec());
   dict.SetStringWithoutPathExpansion("state", kState);
   std::string body;
   base::JSONWriter::Write(&dict, &body);
-  url_fetcher_->SetUploadData("application/json", body);
+  (*it)->url_fetcher->SetUploadData("application/json", body);
 
-  url_fetcher_->Start();
+  (*it)->url_fetcher->Start();
 }
 
 void PermissionRequestCreatorApiary::OnGetTokenFailure(
     const OAuth2TokenService::Request* request,
     const GoogleServiceAuthError& error) {
-  DCHECK_EQ(access_token_request_.get(), request);
-  callback_.Run();
-  callback_.Reset();
+  VLOG(1) << "Couldn't get token";
+  RequestIterator it = requests_.begin();
+  while (it != requests_.end()) {
+    if (request == (*it)->access_token_request.get())
+      break;
+    ++it;
+  }
+  DCHECK(it != requests_.end());
+  (*it)->callback.Run(false);
+  requests_.erase(it);
 }
 
 void PermissionRequestCreatorApiary::OnURLFetchComplete(
     const URLFetcher* source) {
+  RequestIterator it = requests_.begin();
+  while (it != requests_.end()) {
+    if (source == (*it)->url_fetcher.get())
+      break;
+    ++it;
+  }
+  DCHECK(it != requests_.end());
+
   const net::URLRequestStatus& status = source->GetStatus();
   if (!status.is_success()) {
-    DispatchNetworkError(status.error());
+    DispatchNetworkError(it, status.error());
     return;
   }
 
   int response_code = source->GetResponseCode();
-  if (response_code == net::HTTP_UNAUTHORIZED && !access_token_expired_) {
-    access_token_expired_ = true;
+  if (response_code == net::HTTP_UNAUTHORIZED && !(*it)->access_token_expired) {
+    (*it)->access_token_expired = true;
     OAuth2TokenService::ScopeSet scopes;
-    scopes.insert(signin_wrapper_->GetSyncScopeToUse());
+    scopes.insert(GetApiScopeToUse());
     oauth2_token_service_->InvalidateToken(
-        signin_wrapper_->GetAccountIdToUse(), scopes, access_token_);
-    StartFetching();
+        signin_wrapper_->GetAccountIdToUse(), scopes, (*it)->access_token);
+    StartFetching(*it);
     return;
   }
 
   if (response_code != net::HTTP_OK) {
-    DLOG(WARNING) << "HTTP error " << response_code;
+    LOG(WARNING) << "HTTP error " << response_code;
     DispatchGoogleServiceAuthError(
-        GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+        it, GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
     return;
   }
 
@@ -151,25 +212,33 @@ void PermissionRequestCreatorApiary::OnURLFetchComplete(
   scoped_ptr<base::Value> value(base::JSONReader::Read(response_body));
   base::DictionaryValue* dict = NULL;
   if (!value || !value->GetAsDictionary(&dict)) {
-    DispatchNetworkError(net::ERR_INVALID_RESPONSE);
+    DispatchNetworkError(it, net::ERR_INVALID_RESPONSE);
+    return;
+  }
+  base::DictionaryValue* permission_dict = NULL;
+  if (!dict->GetDictionary(kPermissionRequestKey, &permission_dict)) {
+    DispatchNetworkError(it, net::ERR_INVALID_RESPONSE);
     return;
   }
   std::string id;
-  if (!dict->GetString(kIdKey, &id)) {
-    DispatchNetworkError(net::ERR_INVALID_RESPONSE);
+  if (!permission_dict->GetString(kIdKey, &id)) {
+    DispatchNetworkError(it, net::ERR_INVALID_RESPONSE);
     return;
   }
-  callback_.Run();
-  callback_.Reset();
+  (*it)->callback.Run(true);
+  requests_.erase(it);
 }
 
-void PermissionRequestCreatorApiary::DispatchNetworkError(int error_code) {
+void PermissionRequestCreatorApiary::DispatchNetworkError(RequestIterator it,
+                                                          int error_code) {
   DispatchGoogleServiceAuthError(
-      GoogleServiceAuthError::FromConnectionError(error_code));
+      it, GoogleServiceAuthError::FromConnectionError(error_code));
 }
 
 void PermissionRequestCreatorApiary::DispatchGoogleServiceAuthError(
+    RequestIterator it,
     const GoogleServiceAuthError& error) {
-  callback_.Run();
-  callback_.Reset();
+  VLOG(1) << "GoogleServiceAuthError: " << error.ToString();
+  (*it)->callback.Run(false);
+  requests_.erase(it);
 }

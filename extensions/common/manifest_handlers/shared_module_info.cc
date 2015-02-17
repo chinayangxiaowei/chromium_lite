@@ -10,6 +10,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
+#include "components/crx_file/id_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/manifest_constants.h"
@@ -52,7 +53,7 @@ void SharedModuleInfo::ParseImportedPath(const std::string& path,
   std::vector<std::string> tokens;
   Tokenize(path, std::string("/"), &tokens);
   if (tokens.size() > 2 && tokens[0] == kModulesDir &&
-      Extension::IdIsValid(tokens[1])) {
+      crx_file::id_util::IdIsValid(tokens[1])) {
     *import_id = tokens[1];
     *import_relative_path = tokens[2];
     for (size_t i = 3; i < tokens.size(); ++i)
@@ -65,7 +66,7 @@ bool SharedModuleInfo::IsImportedPath(const std::string& path) {
   std::vector<std::string> tokens;
   Tokenize(path, std::string("/"), &tokens);
   if (tokens.size() > 2 && tokens[0] == kModulesDir &&
-      Extension::IdIsValid(tokens[1])) {
+      crx_file::id_util::IdIsValid(tokens[1])) {
     return true;
   }
   return false;
@@ -75,13 +76,6 @@ bool SharedModuleInfo::IsImportedPath(const std::string& path) {
 bool SharedModuleInfo::IsSharedModule(const Extension* extension) {
   CHECK(extension);
   return extension->manifest()->is_shared_module();
-}
-
-// static
-bool SharedModuleInfo::IsExportAllowed(const Extension* extension,
-                                       const std::string& relative_path) {
-  return GetSharedModuleInfo(extension).
-      exported_set_.MatchesURL(extension->url().Resolve(relative_path));
 }
 
 // static
@@ -140,11 +134,6 @@ bool SharedModuleInfo::Parse(const Extension* extension,
       *error = base::ASCIIToUTF16(errors::kInvalidExport);
       return false;
     }
-    const base::ListValue* resources_list = NULL;
-    if (!export_value->GetList(keys::kResources, &resources_list)) {
-      *error = base::ASCIIToUTF16(errors::kInvalidExportResources);
-      return false;
-    }
     if (export_value->HasKey(keys::kWhitelist)) {
       const base::ListValue* whitelist = NULL;
       if (!export_value->GetList(keys::kWhitelist, &whitelist)) {
@@ -154,29 +143,13 @@ bool SharedModuleInfo::Parse(const Extension* extension,
       for (size_t i = 0; i < whitelist->GetSize(); ++i) {
         std::string extension_id;
         if (!whitelist->GetString(i, &extension_id) ||
-            !Extension::IdIsValid(extension_id)) {
+            !crx_file::id_util::IdIsValid(extension_id)) {
           *error = ErrorUtils::FormatErrorMessageUTF16(
               errors::kInvalidExportWhitelistString, base::IntToString(i));
           return false;
         }
         export_whitelist_.insert(extension_id);
       }
-    }
-    for (size_t i = 0; i < resources_list->GetSize(); ++i) {
-      std::string resource_path;
-      if (!resources_list->GetString(i, &resource_path)) {
-        *error = ErrorUtils::FormatErrorMessageUTF16(
-            errors::kInvalidExportResourcesString, base::IntToString(i));
-        return false;
-      }
-      const GURL& resolved_path = extension->url().Resolve(resource_path);
-      if (!resolved_path.is_valid()) {
-        *error = ErrorUtils::FormatErrorMessageUTF16(
-            errors::kInvalidExportResourcesString, base::IntToString(i));
-        return false;
-      }
-      exported_set_.AddPattern(
-          URLPattern(URLPattern::SCHEME_EXTENSION, resolved_path.spec()));
     }
   }
 
@@ -195,7 +168,7 @@ bool SharedModuleInfo::Parse(const Extension* extension,
       std::string extension_id;
       imports_.push_back(ImportInfo());
       if (!import_entry->GetString(keys::kId, &extension_id) ||
-          !Extension::IdIsValid(extension_id)) {
+          !crx_file::id_util::IdIsValid(extension_id)) {
         *error = ErrorUtils::FormatErrorMessageUTF16(
             errors::kInvalidImportId, base::IntToString(i));
         return false;

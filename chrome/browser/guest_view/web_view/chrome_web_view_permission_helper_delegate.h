@@ -5,62 +5,53 @@
 #ifndef CHROME_BROWSER_GUEST_VIEW_WEB_VIEW_CHROME_WEB_VIEW_PERMISSION_HELPER_DELEGATE_H_
 #define CHROME_BROWSER_GUEST_VIEW_WEB_VIEW_CHROME_WEB_VIEW_PERMISSION_HELPER_DELEGATE_H_
 
-#include "chrome/browser/guest_view/web_view/web_view_permission_helper.h"
+#include "extensions/browser/guest_view/web_view/web_view_permission_helper.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 
 namespace extensions {
 class WebViewGuest;
-}
 
 class ChromeWebViewPermissionHelperDelegate :
-  public extensions::WebViewPermissionHelperDelegate {
+  public WebViewPermissionHelperDelegate {
  public:
   explicit ChromeWebViewPermissionHelperDelegate(
-      extensions::WebViewPermissionHelper* web_view_permission_helper);
-  virtual ~ChromeWebViewPermissionHelperDelegate();
+      WebViewPermissionHelper* web_view_permission_helper);
+  ~ChromeWebViewPermissionHelperDelegate() override;
 
   // WebViewPermissionHelperDelegate implementation.
-  virtual void RequestMediaAccessPermission(
-      content::WebContents* source,
-      const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback) OVERRIDE;
-  virtual void CanDownload(
-      content::RenderViewHost* render_view_host,
-      const GURL& url,
-      const std::string& request_method,
-      const base::Callback<void(bool)>& callback) OVERRIDE;
-  virtual void RequestPointerLockPermission(
+  void CanDownload(content::RenderViewHost* render_view_host,
+                   const GURL& url,
+                   const std::string& request_method,
+                   const base::Callback<void(bool)>& callback) override;
+  void RequestPointerLockPermission(
       bool user_gesture,
       bool last_unlocked_by_target,
-      const base::Callback<void(bool)>& callback) OVERRIDE;
-  virtual void RequestGeolocationPermission(
+      const base::Callback<void(bool)>& callback) override;
+  void RequestGeolocationPermission(
       int bridge_id,
       const GURL& requesting_frame,
       bool user_gesture,
-      const base::Callback<void(bool)>& callback) OVERRIDE;
-  virtual void CancelGeolocationPermissionRequest(int bridge_id) OVERRIDE;
-  virtual void RequestFileSystemPermission(
+      const base::Callback<void(bool)>& callback) override;
+  void CancelGeolocationPermissionRequest(int bridge_id) override;
+  void RequestFileSystemPermission(
       const GURL& url,
       bool allowed_by_default,
-      const base::Callback<void(bool)>& callback) OVERRIDE;
-  virtual void FileSystemAccessedAsync(
-      int render_process_id,
-      int render_frame_id,
-      int request_id,
-      const GURL& url,
-      bool blocked_by_policy) OVERRIDE;
-  virtual void FileSystemAccessedSync(
-      int render_process_id,
-      int render_frame_id,
-      const GURL& url,
-      bool blocked_by_policy,
-      IPC::Message* reply_msg) OVERRIDE;
+      const base::Callback<void(bool)>& callback) override;
+  void FileSystemAccessedAsync(int render_process_id,
+                               int render_frame_id,
+                               int request_id,
+                               const GURL& url,
+                               bool blocked_by_policy) override;
+  void FileSystemAccessedSync(int render_process_id,
+                              int render_frame_id,
+                              const GURL& url,
+                              bool blocked_by_policy,
+                              IPC::Message* reply_msg) override;
 #if defined(ENABLE_PLUGINS)
   // content::WebContentsObserver implementation.
-  virtual bool OnMessageReceived(
-      const IPC::Message& message,
-      content::RenderFrameHost* render_frame_host) OVERRIDE;
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message,
+                         content::RenderFrameHost* render_frame_host) override;
+  bool OnMessageReceived(const IPC::Message& message) override;
 #endif  // defined(ENABLE_PLUGINS)
 
  private:
@@ -96,12 +87,6 @@ class ChromeWebViewPermissionHelperDelegate :
       bool allow,
       const std::string& user_input);
 
-  void OnMediaPermissionResponse(
-      const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback,
-      bool allow,
-      const std::string& user_input);
-
   void OnDownloadPermissionResponse(
       const base::Callback<void(bool)>& callback,
       bool allow,
@@ -129,11 +114,9 @@ class ChromeWebViewPermissionHelperDelegate :
                                       IPC::Message* reply_msg,
                                       bool allowed);
 
-  extensions::WebViewGuest* web_view_guest() {
-    return web_view_permission_helper_->web_view_guest();
+  WebViewGuest* web_view_guest() {
+    return web_view_permission_helper()->web_view_guest();
   }
-
-  extensions::WebViewPermissionHelper* web_view_permission_helper_;
 
   std::map<int, int> bridge_id_to_request_id_map_;
 
@@ -141,5 +124,7 @@ class ChromeWebViewPermissionHelperDelegate :
 
   DISALLOW_COPY_AND_ASSIGN(ChromeWebViewPermissionHelperDelegate);
 };
+
+}  // namespace extensions
 
 #endif  // CHROME_BROWSER_GUEST_VIEW_WEB_VIEW_CHROME_WEB_VIEW_PERMISSION_HELPER_DELEGATE_H_

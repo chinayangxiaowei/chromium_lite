@@ -10,9 +10,9 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_bridge.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
-#include "grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
@@ -26,17 +26,13 @@ class TestBookmarkMenuBridge : public BookmarkMenuBridge {
       : BookmarkMenuBridge(profile, menu),
         menu_(menu) {
   }
-  virtual ~TestBookmarkMenuBridge() {
-    [menu_ autorelease];
-  }
+  ~TestBookmarkMenuBridge() override { [menu_ autorelease]; }
 
   NSMenu* menu_;
 
  protected:
   // Overridden from BookmarkMenuBridge.
-  virtual NSMenu* BookmarkMenu() OVERRIDE {
-    return menu_;
-  }
+  NSMenu* BookmarkMenu() override { return menu_; }
 };
 
 // TODO(jrg): see refactor comment in bookmark_bar_state_controller_unittest.mm

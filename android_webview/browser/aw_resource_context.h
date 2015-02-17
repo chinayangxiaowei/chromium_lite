@@ -26,10 +26,8 @@ class AwResourceContext : public content::ResourceContext {
   std::string GetExtraHeaders(const GURL& url);
 
   // content::ResourceContext implementation.
-  virtual net::HostResolver* GetHostResolver() OVERRIDE;
-  virtual net::URLRequestContext* GetRequestContext() OVERRIDE;
-  virtual bool AllowMicAccess(const GURL& origin) OVERRIDE;
-  virtual bool AllowCameraAccess(const GURL& origin) OVERRIDE;
+  virtual net::HostResolver* GetHostResolver() override;
+  virtual net::URLRequestContext* GetRequestContext() override;
 
  private:
   net::URLRequestContextGetter* getter_;

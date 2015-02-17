@@ -6,7 +6,6 @@
 
 #include "chromeos/audio/cras_audio_handler.h"
 #include "grit/ash_resources.h"
-#include "grit/ash_strings.h"
 
 using chromeos::CrasAudioHandler;
 
@@ -27,7 +26,7 @@ int TrayAudioDelegateChromeOs::GetOutputVolumeLevel() {
 
 int TrayAudioDelegateChromeOs::GetActiveOutputDeviceIconId() {
   chromeos::AudioDevice device;
-  if (!CrasAudioHandler::Get()->GetActiveOutputDevice(&device))
+  if (!CrasAudioHandler::Get()->GetPrimaryActiveOutputDevice(&device))
     return kNoAudioDeviceIcon;
 
   if (device.type == chromeos::AUDIO_TYPE_HEADPHONE)
@@ -59,6 +58,12 @@ void TrayAudioDelegateChromeOs::SetOutputAudioIsMuted(bool is_muted) {
 
 void TrayAudioDelegateChromeOs::SetOutputVolumeLevel(int level) {
   CrasAudioHandler::Get()->SetOutputVolumePercent(level);
+}
+
+void TrayAudioDelegateChromeOs::SetInternalSpeakerChannelMode(
+    AudioChannelMode mode) {
+  CrasAudioHandler::Get()->SwapInternalSpeakerLeftRightChannel(
+      mode == LEFT_RIGHT_SWAPPED);
 }
 
 }  // namespace system

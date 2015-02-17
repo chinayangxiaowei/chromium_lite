@@ -8,7 +8,7 @@
 #include "third_party/WebKit/public/platform/WebMediaStreamCenter.h"
 
 #include "base/basictypes.h"
-#include "content/shell/renderer/test_runner/WebTask.h"
+#include "content/shell/renderer/test_runner/web_task.h"
 
 namespace blink {
 class WebAudioSourceProvider;
@@ -25,8 +25,6 @@ class MockWebMediaStreamCenter : public blink::WebMediaStreamCenter {
                            TestInterfaces* interfaces);
   virtual ~MockWebMediaStreamCenter();
 
-  virtual bool getMediaStreamTrackSources(
-      const blink::WebMediaStreamTrackSourcesRequest& request);
   virtual void didEnableMediaStreamTrack(
       const blink::WebMediaStreamTrack& track);
   virtual void didDisableMediaStreamTrack(

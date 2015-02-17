@@ -13,8 +13,8 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_service.h"
@@ -24,14 +24,16 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/login/users/wallpaper/wallpaper_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/platform_locale_settings.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/event_router.h"
+#include "grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/strings/grit/app_locale_settings.h"
@@ -123,7 +125,7 @@ class WindowStateManager : public aura::WindowObserver {
   void RemoveObserverIfUnreferenced(aura::Window* window);
 
   // aura::WindowObserver overrides.
-  virtual void OnWindowDestroyed(aura::Window* window) OVERRIDE;
+  virtual void OnWindowDestroyed(aura::Window* window) override;
 
   // Map of user id hash and associated list of minimized windows.
   UserIDHashWindowListMap user_id_hash_window_list_map_;
@@ -286,8 +288,20 @@ bool WallpaperPrivateGetStringsFunction::RunSync() {
     dict->SetString("wallpaperAppName", app_name);
 
   dict->SetBoolean("isOEMDefaultWallpaper", IsOEMDefaultWallpaper());
+  dict->SetBoolean("isExperimental", true);
   dict->SetString("canceledWallpaper",
                   wallpaper_api_util::kCancelWallpaperMessage);
+  return true;
+}
+
+bool WallpaperPrivateGetSyncSettingFunction::RunSync() {
+  Profile* profile =  Profile::FromBrowserContext(browser_context());
+  ProfileSyncService* sync =
+      ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile);
+  base::DictionaryValue* dict = new base::DictionaryValue();
+  SetResult(dict);
+  dict->SetBoolean("syncThemes",
+                   sync->GetActiveDataTypes().Has(syncer::THEMES));
   return true;
 }
 
@@ -298,6 +312,8 @@ WallpaperPrivateSetWallpaperIfExistsFunction::
     ~WallpaperPrivateSetWallpaperIfExistsFunction() {}
 
 bool WallpaperPrivateSetWallpaperIfExistsFunction::RunAsync() {
+#if !defined(USE_ATHENA)
+  // TODO(bshe): Support wallpaper manager in Athena, crbug.com/408734.
   params = set_wallpaper_if_exists::Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params);
 
@@ -331,6 +347,7 @@ bool WallpaperPrivateSetWallpaperIfExistsFunction::RunAsync() {
           &WallpaperPrivateSetWallpaperIfExistsFunction::
               ReadFileAndInitiateStartDecode,
           this, wallpaper_path, fallback_path));
+#endif
   return true;
 }
 

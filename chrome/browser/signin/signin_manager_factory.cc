@@ -24,20 +24,6 @@ SigninManagerFactory::SigninManagerFactory()
 }
 
 SigninManagerFactory::~SigninManagerFactory() {
-#if defined(OS_MACOSX)
-  // Check that the number of remaining observers is as expected. Mac has a
-  // known issue wherein there might be a remaining observer
-  // (UIAppListViewDelegate).
-  int num_observers = 0;
-  if (observer_list_.might_have_observers()) {
-    ObserverListBase<SigninManagerFactory::Observer>::Iterator it(
-        observer_list_);
-    while (it.GetNext()) {
-      num_observers++;
-    }
-  }
-  DCHECK_LE(num_observers, 1);
-#endif  // defined(OS_MACOSX)
 }
 
 #if defined(OS_CHROMEOS)
@@ -76,6 +62,10 @@ SigninManagerFactory* SigninManagerFactory::GetInstance() {
 
 void SigninManagerFactory::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterStringPref(
+      prefs::kGoogleServicesHostedDomain,
+      std::string(),
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterStringPref(
       prefs::kGoogleServicesLastUsername,
       std::string(),

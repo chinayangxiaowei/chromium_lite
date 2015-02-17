@@ -70,6 +70,7 @@ typedef NSUInteger NSWindowButton;
 
 - (NSEventPhase)momentumPhase;
 - (NSEventPhase)phase;
+- (BOOL)hasPreciseScrollingDeltas;
 - (CGFloat)scrollingDeltaX;
 - (CGFloat)scrollingDeltaY;
 - (void)trackSwipeEventWithOptions:(NSEventSwipeTrackingOptions)options
@@ -151,8 +152,27 @@ enum CWChannelBand {
 @property(readonly) CWChannelBand channelBand;
 @end
 
+enum {
+   kCWSecurityNone = 0,
+   kCWSecurityWEP = 1,
+   kCWSecurityWPAPersonal = 2,
+   kCWSecurityWPAPersonalMixed = 3,
+   kCWSecurityWPA2Personal = 4,
+   kCWSecurityPersonal = 5,
+   kCWSecurityDynamicWEP = 6,
+   kCWSecurityWPAEnterprise = 7,
+   kCWSecurityWPAEnterpriseMixed = 8,
+   kCWSecurityWPA2Enterprise = 9,
+   kCWSecurityEnterprise = 10,
+   kCWSecurityUnknown = NSIntegerMax,
+};
+
+typedef NSInteger CWSecurity;
+
 @interface CWNetwork (LionSDK)
 @property(readonly) CWChannel* wlanChannel;
+@property(readonly) NSInteger rssiValue;
+- (BOOL)supportsSecurity:(CWSecurity)security;
 @end
 
 @interface IOBluetoothHostController (LionSDK)
@@ -187,6 +207,16 @@ enum {
 @end
 
 BASE_EXPORT extern "C" NSString* const NSWindowWillEnterFullScreenNotification;
+BASE_EXPORT extern "C" NSString* const NSWindowWillExitFullScreenNotification;
+BASE_EXPORT extern "C" NSString* const NSWindowDidEnterFullScreenNotification;
+BASE_EXPORT extern "C" NSString* const NSWindowDidExitFullScreenNotification;
+BASE_EXPORT extern "C" NSString* const
+    NSWindowDidChangeBackingPropertiesNotification;
+
+@protocol NSWindowDelegateFullScreenAdditions
+- (void)windowDidFailToEnterFullScreen:(NSWindow*)window;
+- (void)windowDidFailToExitFullScreen:(NSWindow*)window;
+@end
 
 #endif  // MAC_OS_X_VERSION_10_7
 
@@ -239,6 +269,10 @@ enum {
 
 @end
 
+@interface NSScreen (MavericksSDK)
++ (BOOL)screensHaveSeparateSpaces;
+@end
+
 // NSAppearance is a new class in the 10.9 SDK. New classes cannot be
 // forward-declared because they also require an @implementation, which would
 // produce conflicting linkage. Instead, just declare the necessary pieces of
@@ -261,6 +295,34 @@ typedef NSUInteger NSWindowOcclusionState;
 - (NSWindowOcclusionState)occlusionState;
 @end
 
+
+BASE_EXPORT extern "C" NSString* const
+    NSWindowDidChangeOcclusionStateNotification;
+
+enum {
+  NSWorkspaceLaunchWithErrorPresentation = 0x00000040
+};
+
+#else  // !MAC_OS_X_VERSION_10_9
+
+typedef enum {
+   kCWSecurityModeOpen = 0,
+   kCWSecurityModeWEP,
+   kCWSecurityModeWPA_PSK,
+   kCWSecurityModeWPA2_PSK,
+   kCWSecurityModeWPA_Enterprise,
+   kCWSecurityModeWPA2_Enterprise,
+   kCWSecurityModeWPS,
+   kCWSecurityModeDynamicWEP
+} CWSecurityMode;
+
+@interface CWNetwork (SnowLeopardSDK)
+@property(readonly) NSNumber* rssi;
+@property(readonly) NSNumber* securityMode;
+@end
+
+BASE_EXPORT extern "C" NSString* const kCWSSIDDidChangeNotification;
+
 #endif  // MAC_OS_X_VERSION_10_9
 
 #if !defined(MAC_OS_X_VERSION_10_10) || \
@@ -269,6 +331,7 @@ typedef NSUInteger NSWindowOcclusionState;
 @interface NSUserActivity : NSObject
 
 @property (readonly, copy) NSString* activityType;
+@property (copy) NSDictionary* userInfo;
 @property (copy) NSURL* webPageURL;
 
 @end

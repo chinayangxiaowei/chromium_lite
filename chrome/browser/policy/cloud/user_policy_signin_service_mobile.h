@@ -74,14 +74,14 @@ class UserPolicySigninService : public UserPolicySigninServiceBase {
                                       PolicyRegistrationCallback callback);
 
   // KeyedService implementation:
-  virtual void Shutdown() OVERRIDE;
+  virtual void Shutdown() override;
 
   // CloudPolicyService::Observer implementation:
-  virtual void OnInitializationCompleted(CloudPolicyService* service) OVERRIDE;
+  virtual void OnInitializationCompleted(CloudPolicyService* service) override;
 
   // Overridden from UserPolicySigninServiceBase to cancel the pending delayed
   // registration.
-  virtual void ShutdownUserCloudPolicyManager() OVERRIDE;
+  virtual void ShutdownUserCloudPolicyManager() override;
 
   // Registers for cloud policy for an already signed-in user.
   void RegisterCloudPolicyService();
@@ -92,7 +92,6 @@ class UserPolicySigninService : public UserPolicySigninServiceBase {
   void OnRegistrationDone();
 
   scoped_ptr<CloudPolicyClientRegistrationHelper> registration_helper_;
-  base::WeakPtrFactory<UserPolicySigninService> weak_factory_;
 
   // Weak pointer to the token service used to authenticate the
   // CloudPolicyClient during registration.
@@ -100,6 +99,8 @@ class UserPolicySigninService : public UserPolicySigninServiceBase {
 
   // The PrefService associated with the profile.
   PrefService* profile_prefs_;
+
+  base::WeakPtrFactory<UserPolicySigninService> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(UserPolicySigninService);
 };

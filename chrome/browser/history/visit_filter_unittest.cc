@@ -8,7 +8,7 @@
 
 #include "base/logging.h"
 #include "base/time/time.h"
-#include "chrome/browser/history/history_types.h"
+#include "components/history/core/browser/history_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -28,8 +28,8 @@ class VisitFilterTest : public testing::Test {
   VisitFilterTest();
 
  protected:
-  virtual void SetUp();
-  virtual void TearDown();
+  void SetUp() override;
+  void TearDown() override;
 };
 
 VisitFilterTest::VisitFilterTest() {

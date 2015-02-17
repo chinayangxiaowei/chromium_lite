@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// This test creates a fake safebrowsing service, where we can inject
-// malware and phishing urls.  It then uses a real browser to go to
-// these urls, and sends "goback" or "proceed" commands and verifies
-// they work.
+// This test creates a fake safebrowsing service, where we can inject known-
+// threat urls.  It then uses a real browser to go to these urls, and sends
+// "goback" or "proceed" commands and verifies they work.
 
 #include "base/bind.h"
 #include "base/command_line.h"
@@ -23,6 +22,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -34,6 +34,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_browser_thread.h"
 #include "content/public/test/test_utils.h"
 
@@ -48,33 +49,6 @@ const char kEmptyPage[] = "files/empty.html";
 const char kMalwarePage[] = "files/safe_browsing/malware.html";
 const char kMalwareIframe[] = "files/safe_browsing/malware_iframe.html";
 
-class InterstitialObserver : public content::WebContentsObserver {
- public:
-  InterstitialObserver(content::WebContents* web_contents,
-                       const base::Closure& attach_callback,
-                       const base::Closure& detach_callback)
-      : WebContentsObserver(web_contents),
-        attach_callback_(attach_callback),
-        detach_callback_(detach_callback) {
-  }
-
-  virtual void DidAttachInterstitialPage() OVERRIDE {
-    LOG(INFO) << __FUNCTION__;
-    attach_callback_.Run();
-  }
-
-  virtual void DidDetachInterstitialPage() OVERRIDE {
-    LOG(INFO) << __FUNCTION__;
-    detach_callback_.Run();
-  }
-
- private:
-  base::Closure attach_callback_;
-  base::Closure detach_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterstitialObserver);
-};
-
 // A SafeBrowsingDatabaseManager class that allows us to inject the malicious
 // URLs.
 class FakeSafeBrowsingDatabaseManager :  public SafeBrowsingDatabaseManager {
@@ -87,7 +61,7 @@ class FakeSafeBrowsingDatabaseManager :  public SafeBrowsingDatabaseManager {
   // Otherwise it returns false, and "client" is called asynchronously with the
   // result when it is ready.
   // Overrides SafeBrowsingDatabaseManager::CheckBrowseUrl.
-  virtual bool CheckBrowseUrl(const GURL& gurl, Client* client) OVERRIDE {
+  bool CheckBrowseUrl(const GURL& gurl, Client* client) override {
     if (badurls[gurl.spec()] == SB_THREAT_TYPE_SAFE)
       return true;
 
@@ -102,6 +76,7 @@ class FakeSafeBrowsingDatabaseManager :  public SafeBrowsingDatabaseManager {
     std::vector<SBThreatType> expected_threats;
     expected_threats.push_back(SB_THREAT_TYPE_URL_MALWARE);
     expected_threats.push_back(SB_THREAT_TYPE_URL_PHISHING);
+    expected_threats.push_back(SB_THREAT_TYPE_URL_UNWANTED);
     SafeBrowsingDatabaseManager::SafeBrowsingCheck sb_check(
         std::vector<GURL>(1, gurl),
         std::vector<SBFullHash>(),
@@ -117,7 +92,7 @@ class FakeSafeBrowsingDatabaseManager :  public SafeBrowsingDatabaseManager {
   }
 
  private:
-  virtual ~FakeSafeBrowsingDatabaseManager() {}
+  ~FakeSafeBrowsingDatabaseManager() override {}
 
   base::hash_map<std::string, SBThreatType> badurls;
   DISALLOW_COPY_AND_ASSIGN(FakeSafeBrowsingDatabaseManager);
@@ -130,8 +105,7 @@ class FakeSafeBrowsingUIManager :  public SafeBrowsingUIManager {
       SafeBrowsingUIManager(service) { }
 
   // Overrides SafeBrowsingUIManager
-  virtual void SendSerializedMalwareDetails(
-      const std::string& serialized) OVERRIDE {
+  void SendSerializedMalwareDetails(const std::string& serialized) override {
     // Notify the UI thread that we got a report.
     BrowserThread::PostTask(
         BrowserThread::UI,
@@ -164,7 +138,7 @@ class FakeSafeBrowsingUIManager :  public SafeBrowsingUIManager {
   }
 
  protected:
-  virtual ~FakeSafeBrowsingUIManager() { }
+  ~FakeSafeBrowsingUIManager() override {}
 
  private:
   std::string report_;
@@ -191,14 +165,14 @@ class FakeSafeBrowsingService : public SafeBrowsingService {
   }
 
  protected:
-  virtual ~FakeSafeBrowsingService() { }
+  ~FakeSafeBrowsingService() override {}
 
-  virtual SafeBrowsingDatabaseManager* CreateDatabaseManager() OVERRIDE {
+  SafeBrowsingDatabaseManager* CreateDatabaseManager() override {
     fake_database_manager_ = new FakeSafeBrowsingDatabaseManager(this);
     return fake_database_manager_;
   }
 
-  virtual SafeBrowsingUIManager* CreateUIManager() OVERRIDE {
+  SafeBrowsingUIManager* CreateUIManager() override {
     fake_ui_manager_ = new FakeSafeBrowsingUIManager(this);
     return fake_ui_manager_;
   }
@@ -215,9 +189,9 @@ class TestSafeBrowsingServiceFactory : public SafeBrowsingServiceFactory {
  public:
   TestSafeBrowsingServiceFactory() :
       most_recent_service_(NULL) { }
-  virtual ~TestSafeBrowsingServiceFactory() { }
+  ~TestSafeBrowsingServiceFactory() override {}
 
-  virtual SafeBrowsingService* CreateSafeBrowsingService() OVERRIDE {
+  SafeBrowsingService* CreateSafeBrowsingService() override {
     most_recent_service_ =  new FakeSafeBrowsingService();
     return most_recent_service_;
   }
@@ -241,9 +215,9 @@ class FakeMalwareDetails : public MalwareDetails {
         got_dom_(false),
         waiting_(false) { }
 
-  virtual void AddDOMDetails(
+  void AddDOMDetails(
       const std::vector<SafeBrowsingHostMsg_MalwareDOMDetails_Node>& params)
-          OVERRIDE {
+      override {
     EXPECT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::IO));
     MalwareDetails::AddDOMDetails(params);
 
@@ -255,19 +229,17 @@ class FakeMalwareDetails : public MalwareDetails {
 
   void WaitForDOM() {
     if (got_dom_) {
-      LOG(INFO) << "Already got the dom details.";
       return;
     }
     // This condition might not trigger normally, but if you add a
     // sleep(1) in malware_dom_details it triggers :).
     waiting_ = true;
-    LOG(INFO) << "Waiting for dom details.";
     content::RunMessageLoop();
     EXPECT_TRUE(got_dom_);
   }
 
  private:
-  virtual ~FakeMalwareDetails() {}
+  ~FakeMalwareDetails() override {}
 
   void OnDOMDetailsDone() {
     got_dom_ = true;
@@ -285,12 +257,12 @@ class FakeMalwareDetails : public MalwareDetails {
 class TestMalwareDetailsFactory : public MalwareDetailsFactory {
  public:
   TestMalwareDetailsFactory() : details_() { }
-  virtual ~TestMalwareDetailsFactory() { }
+  ~TestMalwareDetailsFactory() override {}
 
-  virtual MalwareDetails* CreateMalwareDetails(
+  MalwareDetails* CreateMalwareDetails(
       SafeBrowsingUIManager* delegate,
       WebContents* web_contents,
-      const SafeBrowsingUIManager::UnsafeResource& unsafe_resource) OVERRIDE {
+      const SafeBrowsingUIManager::UnsafeResource& unsafe_resource) override {
     details_ = new FakeMalwareDetails(delegate, web_contents,
                                       unsafe_resource);
     return details_;
@@ -316,8 +288,7 @@ class TestSafeBrowsingBlockingPage : public SafeBrowsingBlockingPage {
     malware_details_proceed_delay_ms_ = 100;
   }
 
-  virtual ~TestSafeBrowsingBlockingPage() {
-    LOG(INFO) << __FUNCTION__;
+  ~TestSafeBrowsingBlockingPage() override {
     if (!wait_for_delete_)
       return;
 
@@ -327,24 +298,16 @@ class TestSafeBrowsingBlockingPage : public SafeBrowsingBlockingPage {
   }
 
   void WaitForDelete() {
-    LOG(INFO) << __FUNCTION__;
     wait_for_delete_ = true;
     content::RunMessageLoop();
   }
 
   // InterstitialPageDelegate methods:
-  virtual void CommandReceived(const std::string& command) OVERRIDE {
-    LOG(INFO) << __FUNCTION__ << " " << command;
+  void CommandReceived(const std::string& command) override {
     SafeBrowsingBlockingPage::CommandReceived(command);
   }
-  virtual void OnProceed() OVERRIDE {
-    LOG(INFO) << __FUNCTION__;
-    SafeBrowsingBlockingPage::OnProceed();
-  }
-  virtual void OnDontProceed() OVERRIDE {
-    LOG(INFO) << __FUNCTION__;
-    SafeBrowsingBlockingPage::OnDontProceed();
-  }
+  void OnProceed() override { SafeBrowsingBlockingPage::OnProceed(); }
+  void OnDontProceed() override { SafeBrowsingBlockingPage::OnDontProceed(); }
 
  private:
   bool wait_for_delete_;
@@ -354,13 +317,13 @@ class TestSafeBrowsingBlockingPageFactory
     : public SafeBrowsingBlockingPageFactory {
  public:
   TestSafeBrowsingBlockingPageFactory() { }
-  virtual ~TestSafeBrowsingBlockingPageFactory() { }
+  ~TestSafeBrowsingBlockingPageFactory() override {}
 
-  virtual SafeBrowsingBlockingPage* CreateSafeBrowsingPage(
+  SafeBrowsingBlockingPage* CreateSafeBrowsingPage(
       SafeBrowsingUIManager* delegate,
       WebContents* web_contents,
       const SafeBrowsingBlockingPage::UnsafeResourceList& unsafe_resources)
-          OVERRIDE {
+      override {
     return new TestSafeBrowsingBlockingPage(delegate, web_contents,
                                               unsafe_resources);
   }
@@ -371,7 +334,7 @@ class TestSafeBrowsingBlockingPageFactory
 // Tests the safe browsing blocking page in a browser.
 class SafeBrowsingBlockingPageBrowserTest
     : public InProcessBrowserTest,
-      public testing::WithParamInterface<int> {
+      public testing::WithParamInterface<SBThreatType> {
  public:
   enum Visibility {
     VISIBILITY_ERROR = -1,
@@ -379,24 +342,28 @@ class SafeBrowsingBlockingPageBrowserTest
     VISIBLE = 1
   };
 
-  SafeBrowsingBlockingPageBrowserTest() {
-  }
+  SafeBrowsingBlockingPageBrowserTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     SafeBrowsingService::RegisterFactory(&factory_);
     SafeBrowsingBlockingPage::RegisterFactory(&blocking_page_factory_);
     MalwareDetails::RegisterFactory(&details_factory_);
     InProcessBrowserTest::SetUp();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
+    command_line->AppendSwitchASCII(
+        switches::kForceFieldTrials, "UwSInterstitialStatus/On/");
+  }
+
+  void TearDown() override {
     InProcessBrowserTest::TearDown();
     SafeBrowsingBlockingPage::RegisterFactory(NULL);
     SafeBrowsingService::RegisterFactory(NULL);
     MalwareDetails::RegisterFactory(NULL);
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ASSERT_TRUE(test_server()->Start());
   }
 
@@ -409,26 +376,25 @@ class SafeBrowsingBlockingPageBrowserTest
     service->fake_database_manager()->SetURLThreatType(url, threat_type);
   }
 
-  // Adds a safebrowsing result of type |threat_type| to the fake safebrowsing
-  // service, navigates to that page, and returns the url.
-  GURL SetupWarningAndNavigate(SBThreatType threat_type) {
+  // Adds a safebrowsing result of the current test threat to the fake
+  // safebrowsing service, navigates to that page, and returns the url.
+  GURL SetupWarningAndNavigate() {
     GURL url = test_server()->GetURL(kEmptyPage);
-    SetURLThreatType(url, threat_type);
+    SetURLThreatType(url, GetParam());
 
     ui_test_utils::NavigateToURL(browser(), url);
     EXPECT_TRUE(WaitForReady());
     return url;
   }
 
-  // Adds a safebrowsing malware result to the fake safebrowsing service,
-  // navigates to a page with an iframe containing the malware site, and
-  // returns the url of the parent page.
-  GURL SetupMalwareIframeWarningAndNavigate() {
+  // Adds a safebrowsing threat result to the fake safebrowsing service,
+  // navigates to a page with an iframe containing the threat site, and returns
+  // the url of the parent page.
+  GURL SetupThreatIframeWarningAndNavigate() {
     GURL url = test_server()->GetURL(kMalwarePage);
     GURL iframe_url = test_server()->GetURL(kMalwareIframe);
-    SetURLThreatType(iframe_url, SB_THREAT_TYPE_URL_MALWARE);
+    SetURLThreatType(iframe_url, GetParam());
 
-    LOG(INFO) << "navigating... " << url.spec();
     ui_test_utils::NavigateToURL(browser(), url);
     EXPECT_TRUE(WaitForReady());
     return url;
@@ -493,27 +459,13 @@ class SafeBrowsingBlockingPageBrowserTest
     return interstitial_page != NULL;
   }
 
-  void WaitForInterstitial() {
-    WebContents* contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    scoped_refptr<content::MessageLoopRunner> loop_runner(
-        new content::MessageLoopRunner);
-    InterstitialObserver observer(contents,
-                                  loop_runner->QuitClosure(),
-                                  base::Closure());
-    if (!InterstitialPage::GetInterstitialPage(contents))
-      loop_runner->Run();
-  }
-
   void SetReportSentCallback(const base::Closure& callback) {
-    LOG(INFO) << __FUNCTION__;
     factory_.most_recent_service()
         ->fake_ui_manager()
         ->set_malware_details_done_callback(callback);
   }
 
   std::string GetReportSent() {
-    LOG(INFO) << __FUNCTION__;
     return factory_.most_recent_service()->fake_ui_manager()->GetReport();
   }
 
@@ -521,7 +473,7 @@ class SafeBrowsingBlockingPageBrowserTest
     GURL load_url = test_server()->GetURL(
         "files/safe_browsing/interstitial_cancel.html");
     GURL malware_url("http://localhost/files/safe_browsing/malware.html");
-    SetURLThreatType(malware_url, SB_THREAT_TYPE_URL_MALWARE);
+    SetURLThreatType(malware_url, GetParam());
 
     // Load the test page.
     ui_test_utils::NavigateToURL(browser(), load_url);
@@ -532,7 +484,9 @@ class SafeBrowsingBlockingPageBrowserTest
         GURL("javascript:" + open_function + "()"),
         CURRENT_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
-    WaitForInterstitial();
+    WebContents* contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    content::WaitForInterstitialAttach(contents);
     // Cancel the redirect request while interstitial page is open.
     browser()->tab_strip_model()->ActivateTabAt(0, true);
     ui_test_utils::NavigateToURLWithDisposition(
@@ -542,7 +496,7 @@ class SafeBrowsingBlockingPageBrowserTest
         ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
     browser()->tab_strip_model()->ActivateTabAt(1, true);
     // Simulate the user clicking "proceed", there should be no crash.  Since
-    // clicking proceed may do nothing (see comment in MalwareRedirectCanceled
+    // clicking proceed may do nothing (see comment in RedirectCanceled
     // below, and crbug.com/76460), we use SendCommand to trigger the callback
     // directly rather than using ClickAndWaitForDetach since there might not
     // be a notification to wait for.
@@ -558,7 +512,6 @@ class SafeBrowsingBlockingPageBrowserTest
   }
 
   bool WaitForReady() {
-    LOG(INFO) << __FUNCTION__;
     content::RenderViewHost* rvh = GetRenderViewHost();
     if (!rvh)
       return false;
@@ -572,7 +525,6 @@ class SafeBrowsingBlockingPageBrowserTest
       if (!value.get() || !value->GetAsString(&ready_state))
         return false;
     } while (ready_state != "complete");
-    LOG(INFO) << "done waiting";
     return true;
   }
 
@@ -596,7 +548,6 @@ class SafeBrowsingBlockingPageBrowserTest
   }
 
   bool Click(const std::string& node_id) {
-    LOG(INFO) << "Click " << node_id;
     content::RenderViewHost* rvh = GetRenderViewHost();
     if (!rvh)
       return false;
@@ -613,15 +564,10 @@ class SafeBrowsingBlockingPageBrowserTest
     // We wait for interstitial_detached rather than nav_entry_committed, as
     // going back from a main-frame malware interstitial page will not cause a
     // nav entry committed event.
-    scoped_refptr<content::MessageLoopRunner> loop_runner(
-        new content::MessageLoopRunner);
-    InterstitialObserver observer(
-        browser()->tab_strip_model()->GetActiveWebContents(),
-        base::Closure(),
-        loop_runner->QuitClosure());
     if (!Click(node_id))
       return false;
-    loop_runner->Run();
+    content::WaitForInterstitialDetach(
+        browser()->tab_strip_model()->GetActiveWebContents());
     return true;
   }
 
@@ -638,12 +584,12 @@ class SafeBrowsingBlockingPageBrowserTest
 // TODO(linux_aura) http://crbug.com/163931
 // TODO(win_aura) http://crbug.com/154081
 #if defined(USE_AURA) && !defined(OS_CHROMEOS)
-#define MAYBE_MalwareRedirectInIFrameCanceled DISABLED_MalwareRedirectInIFrameCanceled
+#define MAYBE_RedirectInIFrameCanceled DISABLED_RedirectInIFrameCanceled
 #else
-#define MAYBE_MalwareRedirectInIFrameCanceled MalwareRedirectInIFrameCanceled
+#define MAYBE_RedirectInIFrameCanceled RedirectInIFrameCanceled
 #endif
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       MAYBE_MalwareRedirectInIFrameCanceled) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
+                       MAYBE_RedirectInIFrameCanceled) {
   // 1. Test the case that redirect is a subresource.
   MalwareRedirectCancelAndProceed("openWinIFrame");
   // If the redirect was from subresource but canceled, "proceed" will continue
@@ -651,8 +597,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
   AssertNoInterstitial(true);
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       MalwareRedirectCanceled) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, RedirectCanceled) {
   // 2. Test the case that redirect is the only resource.
   MalwareRedirectCancelAndProceed("openWin");
   // Clicking proceed won't do anything if the main request is cancelled
@@ -660,15 +605,14 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
   EXPECT_TRUE(YesInterstitial());
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       MalwareDontProceed) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, DontProceed) {
 #if defined(OS_WIN) && defined(USE_ASH)
   // Disable this test in Metro+Ash for now (http://crbug.com/262796).
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
     return;
 #endif
 
-  SetupWarningAndNavigate(SB_THREAT_TYPE_URL_MALWARE);
+  SetupWarningAndNavigate();
 
   EXPECT_EQ(VISIBLE, GetVisibility("primary-button"));
   EXPECT_EQ(HIDDEN, GetVisibility("details"));
@@ -685,8 +629,8 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest, MalwareProceed) {
-  GURL url = SetupWarningAndNavigate(SB_THREAT_TYPE_URL_MALWARE);
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, Proceed) {
+  GURL url = SetupWarningAndNavigate();
 
   EXPECT_TRUE(ClickAndWaitForDetach("proceed-link"));
   AssertNoInterstitial(true);  // Assert the interstitial is gone.
@@ -694,15 +638,14 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest, MalwareProceed) {
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       MalwareIframeDontProceed) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, IframeDontProceed) {
 #if defined(OS_WIN) && defined(USE_ASH)
   // Disable this test in Metro+Ash for now (http://crbug.com/262796).
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
     return;
 #endif
 
-  SetupMalwareIframeWarningAndNavigate();
+  SetupThreatIframeWarningAndNavigate();
 
   EXPECT_EQ(VISIBLE, GetVisibility("primary-button"));
   EXPECT_EQ(HIDDEN, GetVisibility("details"));
@@ -720,9 +663,8 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-    MalwareIframeProceed) {
-  GURL url = SetupMalwareIframeWarningAndNavigate();
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, IframeProceed) {
+  GURL url = SetupThreatIframeWarningAndNavigate();
 
   EXPECT_TRUE(ClickAndWaitForDetach("proceed-link"));
   AssertNoInterstitial(true);  // Assert the interstitial is gone
@@ -731,50 +673,58 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(felt): Needs to be re-enabled: http://crbug.com/273302
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       DISABLED_MalwareIframeReportDetails) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
+                       IframeOptInAndReportMalwareDetails) {
+  // The extended reporting opt-in is presented in the interstitial for both
+  // malware and UwS threats. It however only results in uploading further
+  // details about the immediate threat when facing malware threats.
+  const bool expect_extended_optin_option =
+      GetParam() == SB_THREAT_TYPE_URL_MALWARE ||
+      GetParam() == SB_THREAT_TYPE_URL_UNWANTED;
+  const bool expect_malware_details = GetParam() == SB_THREAT_TYPE_URL_MALWARE;
+
   scoped_refptr<content::MessageLoopRunner> malware_report_sent_runner(
       new content::MessageLoopRunner);
-  SetReportSentCallback(malware_report_sent_runner->QuitClosure());
+  if (expect_malware_details)
+    SetReportSentCallback(malware_report_sent_runner->QuitClosure());
 
-  GURL url = SetupMalwareIframeWarningAndNavigate();
+  GURL url = SetupThreatIframeWarningAndNavigate();
 
-  LOG(INFO) << "1";
+  FakeMalwareDetails* fake_malware_details = details_factory_.get_details();
+  EXPECT_EQ(expect_malware_details, fake_malware_details != nullptr);
 
-  // If the DOM details from renderer did not already return, wait for them.
-  details_factory_.get_details()->WaitForDOM();
-  LOG(INFO) << "2";
+  // If the DOM details from renderer did not already return when they are
+  // expected, wait for them.
+  if (expect_malware_details)
+    fake_malware_details->WaitForDOM();
 
-  EXPECT_TRUE(Click("check-report"));
-  LOG(INFO) << "3";
-
-  EXPECT_TRUE(ClickAndWaitForDetach("proceed"));
-  LOG(INFO) << "4";
+  EXPECT_EQ(expect_extended_optin_option ? VISIBLE : HIDDEN,
+            GetVisibility("malware-opt-in"));
+  if (expect_extended_optin_option)
+    EXPECT_TRUE(Click("opt-in-checkbox"));
+  EXPECT_TRUE(ClickAndWaitForDetach("proceed-link"));
   AssertNoInterstitial(true);  // Assert the interstitial is gone
-  LOG(INFO) << "5";
 
-  ASSERT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
-      prefs::kSafeBrowsingExtendedReportingEnabled));
-  LOG(INFO) << "6";
-
+  EXPECT_EQ(expect_extended_optin_option,
+            browser()->profile()->GetPrefs()->GetBoolean(
+                prefs::kSafeBrowsingExtendedReportingEnabled));
   EXPECT_EQ(url,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
-  LOG(INFO) << "7";
 
-  malware_report_sent_runner->Run();
-  std::string serialized = GetReportSent();
-  safe_browsing::ClientMalwareReportRequest report;
-  ASSERT_TRUE(report.ParseFromString(serialized));
-  // Verify the report is complete.
-  EXPECT_TRUE(report.complete());
-  LOG(INFO) << "8";
+  if (expect_malware_details) {
+    malware_report_sent_runner->Run();
+    std::string serialized = GetReportSent();
+    safe_browsing::ClientMalwareReportRequest report;
+    ASSERT_TRUE(report.ParseFromString(serialized));
+    // Verify the report is complete.
+    EXPECT_TRUE(report.complete());
+  }
 }
 
 // Verifies that the "proceed anyway" link isn't available when it is disabled
 // by the corresponding policy. Also verifies that sending the "proceed"
 // command anyway doesn't advance to the malware site.
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest, ProceedDisabled) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, ProceedDisabled) {
 #if defined(OS_WIN) && defined(USE_ASH)
   // Disable this test in Metro+Ash for now (http://crbug.com/262796).
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
@@ -785,7 +735,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest, ProceedDisabled) {
   browser()->profile()->GetPrefs()->SetBoolean(
       prefs::kSafeBrowsingProceedAnywayDisabled, true);
 
-  SetupWarningAndNavigate(SB_THREAT_TYPE_URL_MALWARE);
+  SetupWarningAndNavigate();
 
   EXPECT_EQ(VISIBLE, GetVisibility("primary-button"));
   EXPECT_EQ(HIDDEN, GetVisibility("details"));
@@ -802,12 +752,10 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest, ProceedDisabled) {
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(felt): Needs to be re-enabled: http://crbug.com/273302
 // Verifies that the reporting checkbox is hidden on non-HTTP pages.
 // TODO(mattm): Should also verify that no report is sent, but there isn't a
 // good way to do that in the current design.
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-                       DISABLED_ReportingDisabled) {
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, ReportingDisabled) {
 #if defined(OS_WIN) && defined(USE_ASH)
   // Disable this test in Metro+Ash for now (http://crbug.com/262796).
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
@@ -822,90 +770,38 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
       base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   ASSERT_TRUE(https_server.Start());
   GURL url = https_server.GetURL(kEmptyPage);
-  SetURLThreatType(url, SB_THREAT_TYPE_URL_MALWARE);
+  SetURLThreatType(url, GetParam());
   ui_test_utils::NavigateToURL(browser(), url);
   ASSERT_TRUE(WaitForReady());
 
-  EXPECT_EQ(HIDDEN, GetVisibility("check-report"));
-  EXPECT_EQ(HIDDEN, GetVisibility("show-diagnostic-link"));
-  EXPECT_EQ(HIDDEN, GetVisibility("proceed"));
-  EXPECT_TRUE(Click("see-more-link"));
-  EXPECT_EQ(VISIBLE, GetVisibility("show-diagnostic-link"));
-  EXPECT_EQ(VISIBLE, GetVisibility("proceed"));
+  EXPECT_EQ(HIDDEN, GetVisibility("malware-opt-in"));
+  EXPECT_EQ(HIDDEN, GetVisibility("opt-in-checkbox"));
+  EXPECT_EQ(HIDDEN, GetVisibility("proceed-link"));
+  EXPECT_TRUE(Click("details-button"));
+  EXPECT_EQ(VISIBLE, GetVisibility("help-link"));
+  EXPECT_EQ(VISIBLE, GetVisibility("proceed-link"));
 
-  EXPECT_TRUE(ClickAndWaitForDetach("back"));
+  EXPECT_TRUE(ClickAndWaitForDetach("primary-button"));
   AssertNoInterstitial(false);   // Assert the interstitial is gone
   EXPECT_EQ(GURL(url::kAboutBlankURL),  // Back to "about:blank"
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-    PhishingDontProceed) {
-#if defined(OS_WIN) && defined(USE_ASH)
-  // Disable this test in Metro+Ash for now (http://crbug.com/262796).
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kAshBrowserTests))
-    return;
-#endif
-
-  SetupWarningAndNavigate(SB_THREAT_TYPE_URL_PHISHING);
-
-  EXPECT_EQ(VISIBLE, GetVisibility("primary-button"));
-  EXPECT_EQ(HIDDEN, GetVisibility("details"));
-  EXPECT_EQ(HIDDEN, GetVisibility("proceed-link"));
-  EXPECT_EQ(HIDDEN, GetVisibility("error-code"));
-  EXPECT_TRUE(Click("details-button"));
-  EXPECT_EQ(VISIBLE, GetVisibility("details"));
-  EXPECT_EQ(VISIBLE, GetVisibility("proceed-link"));
-  EXPECT_EQ(HIDDEN, GetVisibility("error-code"));
-  EXPECT_TRUE(ClickAndWaitForDetach("primary-button"));
-
-  AssertNoInterstitial(false);  // Assert the interstitial is gone
-  EXPECT_EQ(GURL(url::kAboutBlankURL),  // We are back to "about:blank".
-            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
-}
-
-// http://crbug.com/247763
-#if defined(OS_WIN)
-// Temporarily re-enabled to get some logs.
-#define MAYBE_PhishingProceed PhishingProceed
-#else
-#define MAYBE_PhishingProceed PhishingProceed
-#endif
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-    MAYBE_PhishingProceed) {
-  GURL url = SetupWarningAndNavigate(SB_THREAT_TYPE_URL_PHISHING);
-  LOG(INFO) << "1";
-
-  EXPECT_TRUE(ClickAndWaitForDetach("proceed-link"));
-  LOG(INFO) << "2";
-  AssertNoInterstitial(true);  // Assert the interstitial is gone
-  LOG(INFO) << "3";
-  EXPECT_EQ(url,
-            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
-  LOG(INFO) << "4";
-}
-
-// See crbug.com/248447
-#if defined(OS_WIN)
-// Temporarily re-enabled to get some logs.
-#define MAYBE_PhishingLearnMore PhishingLearnMore
-#else
-#define MAYBE_PhishingLearnMore PhishingLearnMore
-#endif
-
-IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageBrowserTest,
-    MAYBE_PhishingLearnMore) {
-  SetupWarningAndNavigate(SB_THREAT_TYPE_URL_PHISHING);
-  LOG(INFO) << "1";
-
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest, LearnMore) {
+  SetupWarningAndNavigate();
   EXPECT_TRUE(ClickAndWaitForDetach("help-link"));
-  LOG(INFO) << "2";
   AssertNoInterstitial(false);  // Assert the interstitial is gone
 
-  LOG(INFO) << "3";
   // We are in the help page.
   EXPECT_EQ(
-      "/transparencyreport/safebrowsing/",
-       browser()->tab_strip_model()->GetActiveWebContents()->GetURL().path());
-  LOG(INFO) << "4";
+      GetParam() == SB_THREAT_TYPE_URL_PHISHING
+          ? "/transparencyreport/safebrowsing/"
+          : "/safebrowsing/diagnostic",
+      browser()->tab_strip_model()->GetActiveWebContents()->GetURL().path());
 }
+
+INSTANTIATE_TEST_CASE_P(SafeBrowsingBlockingPageBrowserTestWithThreatType,
+                        SafeBrowsingBlockingPageBrowserTest,
+                        testing::Values(SB_THREAT_TYPE_URL_MALWARE,
+                                        SB_THREAT_TYPE_URL_PHISHING,
+                                        SB_THREAT_TYPE_URL_UNWANTED));

@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/message_loop/message_loop_proxy.h"
@@ -19,6 +19,7 @@
 #include "chrome/browser/prefs/pref_service_mock_factory.h"
 #include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/common/chrome_constants.h"
+#include "components/crx_file/id_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_pref_store.h"
@@ -43,10 +44,9 @@ class IncrementalTimeProvider : public ExtensionPrefs::TimeProvider {
   IncrementalTimeProvider() : current_time_(base::Time::Now()) {
   }
 
-  virtual ~IncrementalTimeProvider() {
-  }
+  ~IncrementalTimeProvider() override {}
 
-  virtual base::Time GetCurrentTime() const OVERRIDE {
+  base::Time GetCurrentTime() const override {
     current_time_ += base::TimeDelta::FromSeconds(10);
     return current_time_;
   }
@@ -59,7 +59,8 @@ class IncrementalTimeProvider : public ExtensionPrefs::TimeProvider {
 
 }  // namespace
 
-TestExtensionPrefs::TestExtensionPrefs(base::SequencedTaskRunner* task_runner)
+TestExtensionPrefs::TestExtensionPrefs(
+    const scoped_refptr<base::SequencedTaskRunner>& task_runner)
     : task_runner_(task_runner), extensions_disabled_(false) {
   EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
   preferences_file_ = temp_dir_.path().Append(chrome::kPreferencesFilename);
@@ -161,7 +162,7 @@ scoped_refptr<Extension> TestExtensionPrefs::AddExtensionWithManifestAndFlags(
   if (!extension.get())
     return NULL;
 
-  EXPECT_TRUE(Extension::IdIsValid(extension->id()));
+  EXPECT_TRUE(crx_file::id_util::IdIsValid(extension->id()));
   prefs_->OnExtensionInstalled(extension.get(),
                                Extension::ENABLED,
                                syncer::StringOrdinal::CreateInitialOrdinal(),

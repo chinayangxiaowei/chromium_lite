@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/drive/file_system/download_operation.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/task_runner_util.h"
 #include "chrome/browser/chromeos/drive/fake_free_disk_space_getter.h"
 #include "chrome/browser/chromeos/drive/file_cache.h"
@@ -23,7 +23,7 @@ namespace file_system {
 
 class DownloadOperationTest : public OperationTestBase {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     OperationTestBase::SetUp();
 
     operation_.reset(new DownloadOperation(

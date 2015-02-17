@@ -5,15 +5,29 @@
 <include src="../uber/uber_utils.js">
 <include src="extension_code.js">
 <include src="extension_commands_overlay.js">
+<include src="extension_error_overlay.js">
 <include src="extension_focus_manager.js">
 <include src="extension_list.js">
 <include src="pack_extension_overlay.js">
-<include src="extension_error_overlay.js">
 <include src="extension_loader.js">
+<include src="extension_options_overlay.js">
 
 <if expr="chromeos">
 <include src="chromeos/kiosk_apps.js">
 </if>
+
+/**
+ * The type of the extension data object. The definition is based on
+ * chrome/browser/ui/webui/extensions/extension_settings_handler.cc:
+ *     ExtensionSettingsHandler::HandleRequestExtensionsData()
+ * @typedef {{developerMode: boolean,
+ *            extensions: Array,
+ *            incognitoAvailable: boolean,
+ *            loadUnpackedDisabled: boolean,
+ *            profileIsSupervised: boolean,
+ *            promoteAppsDevTools: boolean}}
+ */
+var ExtensionDataResponse;
 
 // Used for observing function of the backend datasource for this page by
 // tests.
@@ -41,7 +55,7 @@ cr.define('extensions', function() {
     },
     /** @override */
     doDragLeave: function() {
-      ExtensionSettings.showOverlay(null);
+      this.hideDropTargetOverlay_();
       chrome.send('stopDrag');
     },
     /** @override */
@@ -50,7 +64,7 @@ cr.define('extensions', function() {
     },
     /** @override */
     doDrop: function(e) {
-      ExtensionSettings.showOverlay(null);
+      this.hideDropTargetOverlay_();
       if (e.dataTransfer.files.length != 1)
         return;
 
@@ -75,6 +89,16 @@ cr.define('extensions', function() {
         e.preventDefault();
         chrome.send(toSend);
       }
+    },
+
+    /**
+     * Hide the current overlay if it is the drop target overlay.
+     * @private
+     */
+    hideDropTargetOverlay_: function() {
+      var currentOverlay = ExtensionSettings.getCurrentOverlay();
+      if (currentOverlay && currentOverlay.id === 'drop-target-overlay')
+        ExtensionSettings.showOverlay(null);
     }
   };
 
@@ -153,6 +177,9 @@ cr.define('extensions', function() {
       extensions.ExtensionErrorOverlay.getInstance().initializePage(
           extensions.ExtensionSettings.showOverlay);
 
+      extensions.ExtensionOptionsOverlay.getInstance().initializePage(
+          extensions.ExtensionSettings.showOverlay);
+
       // Initialize the kiosk overlay.
       if (cr.isChromeOS) {
         var kioskOverlay = extensions.KioskAppsOverlay.getInstance();
@@ -178,8 +205,6 @@ cr.define('extensions', function() {
         if (overlayName == 'configureCommands')
           this.showExtensionCommandsConfigUi_();
       }
-
-      preventDefaultOnPoundLinkClicks();  // From webui/js/util.js.
     },
 
     /**
@@ -255,7 +280,7 @@ cr.define('extensions', function() {
       } else {
         $('extension-settings').classList.remove('dev-mode');
       }
-      window.setTimeout(this.updatePromoVisibility_.bind(this));
+      window.setTimeout(this.updatePromoVisibility_.bind(this), 0);
 
       chrome.send('extensionSettingsToggleDeveloperMode');
     },
@@ -276,6 +301,7 @@ cr.define('extensions', function() {
   /**
    * Called by the dom_ui_ to re-populate the page with data representing
    * the current state of installed extensions.
+   * @param {ExtensionDataResponse} extensionsData
    */
   ExtensionSettings.returnExtensionsData = function(extensionsData) {
     // We can get called many times in short order, thus we need to
@@ -399,7 +425,7 @@ cr.define('extensions', function() {
       pages[i].setAttribute('aria-hidden', node ? 'true' : 'false');
     }
 
-    overlay.hidden = !node;
+    $('overlay').hidden = !node;
     uber.invokeMethodOnParent(node ? 'beginInterceptingEvents' :
                                      'stopInterceptingEvents');
   };
@@ -414,12 +440,15 @@ cr.define('extensions', function() {
     var measuringDiv = $('font-measuring-div');
     measuringDiv.textContent =
         loadTimeData.getString('extensionSettingsEnabled');
+    measuringDiv.className = 'enabled-text';
     var pxWidth = measuringDiv.clientWidth + trashWidth;
     measuringDiv.textContent =
         loadTimeData.getString('extensionSettingsEnable');
+    measuringDiv.className = 'enable-text';
     pxWidth = Math.max(measuringDiv.clientWidth + trashWidth, pxWidth);
     measuringDiv.textContent =
         loadTimeData.getString('extensionSettingsDeveloperMode');
+    measuringDiv.className = '';
     pxWidth = Math.max(measuringDiv.clientWidth, pxWidth);
 
     var style = document.createElement('style');

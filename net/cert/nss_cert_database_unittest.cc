@@ -9,12 +9,11 @@
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/message_loop/message_loop.h"
 #include "base/message_loop/message_loop_proxy.h"
-#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
@@ -55,7 +54,7 @@ void SwapCertList(CertificateList* destination,
 
 class CertDatabaseNSSTest : public testing::Test {
  public:
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(test_nssdb_.is_open());
     cert_db_.reset(new NSSCertDatabase(
         crypto::ScopedPK11Slot(
@@ -68,7 +67,7 @@ class CertDatabaseNSSTest : public testing::Test {
     EXPECT_EQ(0U, ListCerts().size());
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     // Run the message loop to process any observer callbacks (e.g. for the
     // ClientSocketFactory singleton) so that the scoped ref ptrs created in
     // NSSCertDatabase::NotifyObservers* get released.
@@ -569,7 +568,7 @@ TEST_F(CertDatabaseNSSTest, DISABLED_ImportServerCert) {
 
 TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
   CertificateList certs;
-  ASSERT_TRUE(ReadCertIntoList("punycodetest.der", &certs));
+  ASSERT_TRUE(ReadCertIntoList("punycodetest.pem", &certs));
 
   NSSCertDatabase::ImportCertFailureList failed;
   EXPECT_TRUE(cert_db_->ImportServerCert(certs, NSSCertDatabase::TRUST_DEFAULT,
@@ -600,7 +599,7 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
 
 TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned_Trusted) {
   CertificateList certs;
-  ASSERT_TRUE(ReadCertIntoList("punycodetest.der", &certs));
+  ASSERT_TRUE(ReadCertIntoList("punycodetest.pem", &certs));
 
   NSSCertDatabase::ImportCertFailureList failed;
   EXPECT_TRUE(cert_db_->ImportServerCert(certs, NSSCertDatabase::TRUSTED_SSL,

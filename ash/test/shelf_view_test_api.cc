@@ -19,12 +19,11 @@ namespace {
 class TestAPIAnimationObserver : public views::BoundsAnimatorObserver {
  public:
   TestAPIAnimationObserver() {}
-  virtual ~TestAPIAnimationObserver() {}
+  ~TestAPIAnimationObserver() override {}
 
   // views::BoundsAnimatorObserver overrides:
-  virtual void OnBoundsAnimatorProgressed(
-      views::BoundsAnimator* animator) OVERRIDE {}
-  virtual void OnBoundsAnimatorDone(views::BoundsAnimator* animator) OVERRIDE {
+  void OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) override {}
+  void OnBoundsAnimatorDone(views::BoundsAnimator* animator) override {
     base::MessageLoop::current()->Quit();
   }
 
@@ -112,6 +111,11 @@ int ShelfViewTestAPI::GetButtonSize() {
 
 int ShelfViewTestAPI::GetButtonSpacing() {
   return kShelfButtonSpacing;
+}
+
+void ShelfViewTestAPI::ButtonPressed(views::Button* sender,
+                                     const ui::Event& event) {
+  return shelf_view_->ButtonPressed(sender, event);
 }
 
 bool ShelfViewTestAPI::SameDragType(ShelfItemType typea,

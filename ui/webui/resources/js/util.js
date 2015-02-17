@@ -168,14 +168,14 @@ function setQueryParam(location, key, value) {
 }
 
 /**
- * @param {Node} el An element to search for ancestors with |className|.
+ * @param {Node} el A node to search for ancestors with |className|.
  * @param {string} className A class to search for.
- * @return {Node} A node with class of |className| or null if none is found.
+ * @return {Element} A node with class of |className| or null if none is found.
  */
 function findAncestorByClass(el, className) {
-  return findAncestor(el, function(el) {
+  return /** @type {Element} */(findAncestor(el, function(el) {
     return el.classList && el.classList.contains(className);
-  });
+  }));
 }
 
 /**
@@ -227,6 +227,7 @@ function disableTextSelectAndDrag(opt_allowSelectStart, opt_allowDragStart) {
 }
 
 /**
+ * TODO(dbeam): DO NOT USE. THIS IS DEPRECATED. Use an action-link instead.
  * Call this to stop clicks on <a href="#"> links from scrolling to the top of
  * the page (and possibly showing a # in the link).
  */
@@ -254,12 +255,26 @@ function isRTL() {
  * calling getElementById and not checking the result because this lets us
  * satisfy the JSCompiler type system.
  * @param {string} id The identifier name.
- * @return {!Element} the Element.
+ * @return {!HTMLElement} the Element.
  */
 function getRequiredElement(id) {
-  var element = $(id);
-  assert(element, 'Missing required element: ' + id);
-  return /** @type {!Element} */(element);
+  return assertInstanceof($(id), HTMLElement,
+                          'Missing required element: ' + id);
+}
+
+/**
+ * Query an element that's known to exist by a selector. We use this instead of
+ * just calling querySelector and not checking the result because this lets us
+ * satisfy the JSCompiler type system.
+ * @param {(!Document|!DocumentFragment|!Element)} context The context object
+ *     for querySelector.
+ * @param {string} selectors CSS selectors to query the element.
+ * @return {!HTMLElement} the Element.
+ */
+function queryRequiredElement(context, selectors) {
+  var element = context.querySelector(selectors);
+  return assertInstanceof(element, HTMLElement,
+                          'Missing required element: ' + selectors);
 }
 
 // Handle click on a link. If the link points to a chrome: or file: url, then

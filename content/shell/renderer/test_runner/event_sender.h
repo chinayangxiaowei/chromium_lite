@@ -13,7 +13,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
-#include "content/shell/renderer/test_runner/WebTask.h"
+#include "content/shell/renderer/test_runner/web_task.h"
 #include "third_party/WebKit/public/platform/WebDragData.h"
 #include "third_party/WebKit/public/platform/WebPoint.h"
 #include "third_party/WebKit/public/web/WebDragOperation.h"
@@ -99,7 +99,10 @@ class EventSender : public base::SupportsWeakPtr<EventSender> {
   void ZoomPageOut();
   void SetPageZoomFactor(double zoom_factor);
 
+  // TODO: Move these into Internals once PageScaleConstraints are moved out of
+  // Source/web. crbug.com/434450.
   void SetPageScaleFactor(float scale_factor, int x, int y);
+  void SetPageScaleFactorLimits(float min_scale, float max_scale);
 
   void ClearTouchPoints();
   void ReleaseTouchPoint(unsigned index);

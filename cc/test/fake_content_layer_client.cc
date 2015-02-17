@@ -10,7 +10,8 @@
 namespace cc {
 
 FakeContentLayerClient::FakeContentLayerClient()
-    : paint_all_opaque_(false), last_canvas_(NULL) {}
+    : fill_with_nonsolid_color_(false), last_canvas_(NULL) {
+}
 
 FakeContentLayerClient::~FakeContentLayerClient() {
 }
@@ -18,13 +19,9 @@ FakeContentLayerClient::~FakeContentLayerClient() {
 void FakeContentLayerClient::PaintContents(
     SkCanvas* canvas,
     const gfx::Rect& paint_rect,
-    gfx::RectF* opaque_rect,
     ContentLayerClient::GraphicsContextStatus gc_status) {
   last_canvas_ = canvas;
   last_context_status_ = gc_status;
-
-  if (paint_all_opaque_)
-    *opaque_rect = paint_rect;
 
   canvas->clipRect(gfx::RectToSkRect(paint_rect));
   for (RectPaintVector::const_iterator it = draw_rects_.begin();
@@ -41,6 +38,17 @@ void FakeContentLayerClient::PaintContents(
   for (BitmapVector::const_iterator it = draw_bitmaps_.begin();
       it != draw_bitmaps_.end(); ++it) {
     canvas->drawBitmap(it->bitmap, it->point.x(), it->point.y(), &it->paint);
+  }
+
+  if (fill_with_nonsolid_color_) {
+    gfx::RectF draw_rect = paint_rect;
+    bool red = true;
+    while (!draw_rect.IsEmpty()) {
+      SkPaint paint;
+      paint.setColor(red ? SK_ColorRED : SK_ColorBLUE);
+      canvas->drawRect(gfx::RectFToSkRect(draw_rect), paint);
+      draw_rect.Inset(1, 1);
+    }
   }
 }
 

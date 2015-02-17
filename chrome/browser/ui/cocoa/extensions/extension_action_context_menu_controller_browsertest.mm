@@ -6,7 +6,6 @@
 
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/extensions/browser_action_test_util.h"
 #include "chrome/browser/extensions/extension_action.h"
@@ -22,10 +21,10 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
-#include "content/public/browser/devtools_manager.h"
+#include "chrome/grit/generated_resources.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/common/extension.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
 using extensions::Extension;
@@ -147,13 +146,11 @@ class DevToolsAttachedObserver {
         devtools_callback_(base::Bind(
             &DevToolsAttachedObserver::OnDevToolsStateChanged,
             base::Unretained(this))) {
-    content::DevToolsManager::GetInstance()->AddAgentStateCallback(
-        devtools_callback_);
+    content::DevToolsAgentHost::AddAgentStateCallback(devtools_callback_);
   }
 
   ~DevToolsAttachedObserver() {
-    content::DevToolsManager::GetInstance()->RemoveAgentStateCallback(
-        devtools_callback_);
+    content::DevToolsAgentHost::RemoveAgentStateCallback(devtools_callback_);
   }
 
   void OnDevToolsStateChanged(content::DevToolsAgentHost*, bool attached) {

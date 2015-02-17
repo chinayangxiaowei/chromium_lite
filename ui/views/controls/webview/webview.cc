@@ -79,7 +79,7 @@ void WebView::SetEmbedFullscreenWidgetMode(bool enable) {
 
 void WebView::LoadInitialURL(const GURL& url) {
   GetWebContents()->GetController().LoadURL(
-      url, content::Referrer(), content::PAGE_TRANSITION_AUTO_TOPLEVEL,
+      url, content::Referrer(), ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
       std::string());
 }
 
@@ -210,7 +210,7 @@ void WebView::AboutToRequestFocusFromTabTraversal(bool reverse) {
 }
 
 void WebView::GetAccessibleState(ui::AXViewState* state) {
-  state->role = ui::AX_ROLE_GROUP;
+  state->role = ui::AX_ROLE_WEB_VIEW;
 }
 
 gfx::NativeViewAccessible WebView::GetNativeViewAccessible() {
@@ -301,6 +301,7 @@ void WebView::AttachWebContents() {
   OnBoundsChanged(bounds());
   if (holder_->native_view() == view_to_attach)
     return;
+
   holder_->Attach(view_to_attach);
 
   // The view will not be focused automatically when it is attached, so we need

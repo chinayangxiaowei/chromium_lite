@@ -92,21 +92,20 @@ class InputInjectorLinux : public InputInjector {
  public:
   explicit InputInjectorLinux(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-  virtual ~InputInjectorLinux();
+  ~InputInjectorLinux() override;
 
   bool Init();
 
   // Clipboard stub interface.
-  virtual void InjectClipboardEvent(const ClipboardEvent& event) OVERRIDE;
+  void InjectClipboardEvent(const ClipboardEvent& event) override;
 
   // InputStub interface.
-  virtual void InjectKeyEvent(const KeyEvent& event) OVERRIDE;
-  virtual void InjectTextEvent(const TextEvent& event) OVERRIDE;
-  virtual void InjectMouseEvent(const MouseEvent& event) OVERRIDE;
+  void InjectKeyEvent(const KeyEvent& event) override;
+  void InjectTextEvent(const TextEvent& event) override;
+  void InjectMouseEvent(const MouseEvent& event) override;
 
   // InputInjector interface.
-  virtual void Start(
-      scoped_ptr<protocol::ClipboardStub> client_clipboard) OVERRIDE;
+  void Start(scoped_ptr<protocol::ClipboardStub> client_clipboard) override;
 
  private:
   // The actual implementation resides in InputInjectorLinux::Core class.
@@ -276,14 +275,14 @@ void InputInjectorLinux::Core::InjectKeyEvent(const KeyEvent& event) {
     return;
   }
 
-  ui::KeycodeConverter* key_converter = ui::KeycodeConverter::GetInstance();
-  int keycode = key_converter->UsbKeycodeToNativeKeycode(event.usb_keycode());
+  int keycode =
+      ui::KeycodeConverter::UsbKeycodeToNativeKeycode(event.usb_keycode());
 
   VLOG(3) << "Converting USB keycode: " << std::hex << event.usb_keycode()
           << " to keycode: " << keycode << std::dec;
 
   // Ignore events which can't be mapped.
-  if (keycode == key_converter->InvalidNativeKeycode())
+  if (keycode == ui::KeycodeConverter::InvalidNativeKeycode())
     return;
 
   if (event.pressed()) {
@@ -607,8 +606,8 @@ scoped_ptr<InputInjector> InputInjector::Create(
   scoped_ptr<InputInjectorLinux> injector(
       new InputInjectorLinux(main_task_runner));
   if (!injector->Init())
-    return scoped_ptr<InputInjector>();
-  return injector.PassAs<InputInjector>();
+    return nullptr;
+  return injector.Pass();
 }
 
 }  // namespace remoting

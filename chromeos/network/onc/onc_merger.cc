@@ -217,7 +217,7 @@ class MergeSettingsAndPolicies : public MergeListOfDictionaries {
   // MergeListOfDictionaries override.
   virtual scoped_ptr<base::Value> MergeListOfValues(
       const std::string& key,
-      const std::vector<const base::Value*>& values) OVERRIDE {
+      const std::vector<const base::Value*>& values) override {
     bool user_editable = !HasUserPolicy();
     if (values[kUserEditableIndex])
       values[kUserEditableIndex]->GetAsBoolean(&user_editable);
@@ -305,7 +305,7 @@ class MergeToEffective : public MergeSettingsAndPolicies {
   // MergeSettingsAndPolicies override.
   virtual scoped_ptr<base::Value> MergeValues(
       const std::string& key,
-      const ValueParams& values) OVERRIDE {
+      const ValueParams& values) override {
     std::string which;
     return MergeValues(key, values, &which);
   }
@@ -360,88 +360,92 @@ class MergeToAugmented : public MergeToEffective {
   // MergeSettingsAndPolicies override.
   virtual scoped_ptr<base::Value> MergeValues(
       const std::string& key,
-      const ValueParams& values) OVERRIDE {
+      const ValueParams& values) override {
+    const OncFieldSignature* field = NULL;
+    if (signature_)
+      field = GetFieldSignature(*signature_, key);
+
+    if (!field) {
+      // This field is not part of the provided ONCSignature, thus it cannot be
+      // controlled by policy. Return the plain active value instead of an
+      // augmented dictionary.
+      return make_scoped_ptr(values.active_setting->DeepCopy());
+    }
+
+    // This field is part of the provided ONCSignature, thus it can be
+    // controlled by policy.
+    std::string which_effective;
+    scoped_ptr<base::Value> effective_value =
+        MergeToEffective::MergeValues(key, values, &which_effective);
+
+    if (IsIdentifierField(*signature_, key)) {
+      // Don't augment the GUID but write the plain value.
+      if (!effective_value) {
+        LOG(ERROR) << "GUID field has no effective value";
+        return nullptr;
+      }
+
+      // DCHECK that all provided GUIDs are identical.
+      DCHECK(AllPresentValuesEqual(values, *effective_value));
+
+      // Return the un-augmented GUID.
+      return effective_value.Pass();
+    }
+
     scoped_ptr<base::DictionaryValue> augmented_value(
         new base::DictionaryValue);
+
     if (values.active_setting) {
       augmented_value->SetWithoutPathExpansion(
           ::onc::kAugmentationActiveSetting, values.active_setting->DeepCopy());
     }
 
-    const OncFieldSignature* field = NULL;
-    if (signature_)
-      field = GetFieldSignature(*signature_, key);
-
-    if (field) {
-      // This field is part of the provided ONCSignature, thus it can be
-      // controlled by policy.
-      std::string which_effective;
-      scoped_ptr<base::Value> effective_value =
-          MergeToEffective::MergeValues(key, values, &which_effective);
-
-      if (IsIdentifierField(*signature_, key)) {
-        // Don't augment the GUID but write the plain value.
-        DCHECK(effective_value);
-
-        // DCHECK that all provided GUIDs are identical.
-        DCHECK(AllPresentValuesEqual(values, *effective_value));
-
-        // Return the un-augmented GUID.
-        return effective_value.Pass();
-      }
-
-      if (!which_effective.empty()) {
-        augmented_value->SetStringWithoutPathExpansion(
-            ::onc::kAugmentationEffectiveSetting, which_effective);
-      }
-      bool is_credential = onc::FieldIsCredential(*signature_, key);
-
-      // Prevent credentials from being forwarded in cleartext to
-      // UI. User/shared credentials are not stored separately, so they cannot
-      // leak here.
-      if (!is_credential) {
-        if (values.user_policy) {
-          augmented_value->SetWithoutPathExpansion(
-              ::onc::kAugmentationUserPolicy, values.user_policy->DeepCopy());
-        }
-        if (values.device_policy) {
-          augmented_value->SetWithoutPathExpansion(
-              ::onc::kAugmentationDevicePolicy,
-              values.device_policy->DeepCopy());
-        }
-      }
-      if (values.user_setting) {
-        augmented_value->SetWithoutPathExpansion(
-            ::onc::kAugmentationUserSetting, values.user_setting->DeepCopy());
-      }
-      if (values.shared_setting) {
-        augmented_value->SetWithoutPathExpansion(
-            ::onc::kAugmentationSharedSetting,
-            values.shared_setting->DeepCopy());
-      }
-      if (HasUserPolicy() && values.user_editable) {
-        augmented_value->SetBooleanWithoutPathExpansion(
-            ::onc::kAugmentationUserEditable, true);
-      }
-      if (HasDevicePolicy() && values.device_editable) {
-        augmented_value->SetBooleanWithoutPathExpansion(
-            ::onc::kAugmentationDeviceEditable, true);
-      }
-    } else {
-      // This field is not part of the provided ONCSignature, thus it cannot be
-      // controlled by policy.
+    if (!which_effective.empty()) {
       augmented_value->SetStringWithoutPathExpansion(
-          ::onc::kAugmentationEffectiveSetting, ::onc::kAugmentationUnmanaged);
+          ::onc::kAugmentationEffectiveSetting, which_effective);
+    }
+
+    // Prevent credentials from being forwarded in cleartext to
+    // UI. User/shared credentials are not stored separately, so they cannot
+    // leak here.
+    bool is_credential = onc::FieldIsCredential(*signature_, key);
+    if (!is_credential) {
+      if (values.user_policy) {
+        augmented_value->SetWithoutPathExpansion(
+            ::onc::kAugmentationUserPolicy, values.user_policy->DeepCopy());
+      }
+      if (values.device_policy) {
+        augmented_value->SetWithoutPathExpansion(
+            ::onc::kAugmentationDevicePolicy,
+            values.device_policy->DeepCopy());
+      }
+    }
+    if (values.user_setting) {
+      augmented_value->SetWithoutPathExpansion(
+          ::onc::kAugmentationUserSetting, values.user_setting->DeepCopy());
+    }
+    if (values.shared_setting) {
+      augmented_value->SetWithoutPathExpansion(
+          ::onc::kAugmentationSharedSetting,
+          values.shared_setting->DeepCopy());
+    }
+    if (HasUserPolicy() && values.user_editable) {
+      augmented_value->SetBooleanWithoutPathExpansion(
+          ::onc::kAugmentationUserEditable, true);
+    }
+    if (HasDevicePolicy() && values.device_editable) {
+      augmented_value->SetBooleanWithoutPathExpansion(
+          ::onc::kAugmentationDeviceEditable, true);
     }
     if (augmented_value->empty())
       augmented_value.reset();
-    return augmented_value.PassAs<base::Value>();
+    return augmented_value.Pass();
   }
 
   // MergeListOfDictionaries override.
   virtual DictionaryPtr MergeNestedDictionaries(
       const std::string& key,
-      const DictPtrs &dicts) OVERRIDE {
+      const DictPtrs &dicts) override {
     DictionaryPtr result;
     if (signature_) {
       const OncValueSignature* enclosing_signature = signature_;

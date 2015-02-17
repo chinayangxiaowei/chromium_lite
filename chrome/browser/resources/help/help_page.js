@@ -22,13 +22,8 @@ cr.define('help', function() {
     __proto__: Page.prototype,
 
     /**
-     * True if after update powerwash button should be displayed.
-     * @private
-     */
-    powerwashAfterUpdate_: false,
-
-    /**
-     * List of the channel names.
+     * List of the channel names. Should be ordered in increasing level of
+     * stability.
      * @private
      */
     channelList_: ['dev-channel', 'beta-channel', 'stable-channel'],
@@ -44,6 +39,24 @@ cr.define('help', function() {
      * @private
      */
     targetChannel_: null,
+
+    /**
+     * Last status received from the version updater.
+     * @private
+     */
+    status_: null,
+
+    /**
+     * Last message received from the version updater.
+     * @private
+     */
+    message_: null,
+
+    /**
+     * True if user is allowed to change channels, false otherwise.
+     * @private
+     */
+    can_change_channel_: false,
 
     /** @override */
     initializePage: function() {
@@ -97,6 +110,10 @@ cr.define('help', function() {
           }
         };
       }
+      this.maybeSetOnClick_($('about-done'), function() {
+        // Event listener for the close button when shown as an overlay.
+        PageManager.closeOverlay();
+      });
 
       var self = this;
       var channelChanger = $('channel-changer');
@@ -107,12 +124,12 @@ cr.define('help', function() {
       }
 
       if (cr.isChromeOS) {
-        // Add event listener for the close button when shown as an overlay.
-        if ($('about-done')) {
-          $('about-done').addEventListener('click', function() {
-            PageManager.closeOverlay();
-          });
-        }
+        // Add event listener for the check for and apply updates button.
+        this.maybeSetOnClick_($('request-update'), function() {
+          self.setUpdateStatus_('checking');
+          $('request-update').disabled = true;
+          chrome.send('requestUpdate');
+        });
 
         $('change-channel').onclick = function() {
           PageManager.showPageByName('channel-change-page', false);
@@ -138,7 +155,21 @@ cr.define('help', function() {
                                  $('help-container'),
                                  cr.ui.ArrowLocation.TOP_END);
         };
+
+        // Unhide the product label if/when the image loads.
+        var productLabel = $('product-label');
+        var show = function() { $('product-label-container').hidden = false; };
+        if (productLabel.naturalWidth)
+          show();
+        else
+          productLabel.onload = show;
       }
+
+      var logo = $('product-logo');
+      logo.onclick = function(e) {
+        logo.classList.remove('spin');
+        setTimeout(function() { logo.classList.add('spin'); }, 0);
+      };
 
       // Attempt to update.
       chrome.send('onPageLoaded');
@@ -180,7 +211,7 @@ cr.define('help', function() {
     /**
      * Assigns |method| to the onclick property of |el| if |el| exists.
      * @param {HTMLElement} el The element on which to set the click handler.
-     * @param {function} method The click handler.
+     * @param {Function} method The click handler.
      * @private
      */
     maybeSetOnClick_: function(el, method) {
@@ -217,11 +248,52 @@ cr.define('help', function() {
     },
 
     /**
+     * @return {boolean} True if target channel is more stable than the current
+     *     one, and false otherwise.
+     * @private
+     */
+    targetChannelIsMoreStable_: function() {
+      var current = this.currentChannel_;
+      var target = this.targetChannel_;
+      if (current == null || target == null)
+        return false;
+      var currentIndex = this.channelList_.indexOf(current);
+      var targetIndex = this.channelList_.indexOf(target);
+      if (currentIndex < 0 || targetIndex < 0)
+        return false;
+      return currentIndex < targetIndex;
+    },
+
+    /**
      * @param {string} status The status of the update.
      * @param {string} message Failure message to display.
      * @private
      */
     setUpdateStatus_: function(status, message) {
+      this.status_ = status;
+      this.message_ = message;
+
+      this.updateUI_();
+    },
+
+    /**
+      * Updates UI elements on the page according to current state.
+      * @private
+      */
+    updateUI_: function() {
+      var status = this.status_;
+      var message = this.message_;
+      var channel = this.targetChannel_;
+
+      if (this.channelList_.indexOf(channel) >= 0) {
+        $('current-channel').textContent = loadTimeData.getStringF(
+            'currentChannel', this.channelTable_[channel].label);
+        this.updateChannelChangePageContainerVisibility_();
+      }
+
+      if (status == null)
+        return;
+
       if (cr.isMac &&
           $('update-status-message') &&
           $('update-status-message').hidden) {
@@ -231,7 +303,6 @@ cr.define('help', function() {
         return;
       }
 
-      var channel = this.targetChannel_;
       if (status == 'checking') {
         this.setUpdateImage_('working');
         $('update-status-message').innerHTML =
@@ -264,6 +335,12 @@ cr.define('help', function() {
         $('update-status-message').innerHTML = message;
       }
 
+      if (cr.isChromeOS) {
+        $('change-channel').disabled = !this.can_change_channel_ ||
+            status == 'nearly_updated';
+        $('channel-change-disallowed-icon').hidden = this.can_change_channel_;
+      }
+
       // Following invariant must be established at the end of this function:
       // { ~$('relaunch_and_powerwash').hidden -> $('relaunch').hidden }
       var relaunchAndPowerwashHidden = true;
@@ -272,8 +349,18 @@ cr.define('help', function() {
         // when user explicitly decides to update to a more stable
         // channel.
         relaunchAndPowerwashHidden =
-            !this.powerwashAfterUpdate_ || status != 'nearly_updated';
+            !this.targetChannelIsMoreStable_() || status != 'nearly_updated';
         $('relaunch-and-powerwash').hidden = relaunchAndPowerwashHidden;
+      }
+
+      if (cr.isChromeOS) {
+        // Only enable the update button if it hasn't been used yet or the
+        // status isn't 'updated'.
+        if (!$('request-update').disabled || status != 'updated') {
+          // Disable the button if an update is already in progress.
+          $('request-update').disabled =
+            ['checking', 'updating', 'nearly_updated'].indexOf(status) > -1;
+        }
       }
 
       var container = $('update-status-container');
@@ -281,6 +368,17 @@ cr.define('help', function() {
         container.hidden = status == 'disabled';
         $('relaunch').hidden =
             (status != 'nearly_updated') || !relaunchAndPowerwashHidden;
+
+        if (cr.isChromeOS) {
+          // Assume the "updated" status is stale if we haven't checked yet.
+          if (status == 'updated' && !$('request-update').disabled)
+            container.hidden = true;
+
+          // Hide the request update button if auto-updating is disabled or
+          // a relaunch button is showing.
+          $('request-update').hidden = status == 'disabled' ||
+            !$('relaunch').hidden || !relaunchAndPowerwashHidden;
+        }
 
         if (!cr.isMac)
           $('update-percentage').hidden = status != 'updating';
@@ -379,6 +477,17 @@ cr.define('help', function() {
     },
 
     /**
+     * Updates page UI according to device owhership policy.
+     * @param {boolean} isEnterpriseManaged True if the device is
+     *     enterprise managed.
+     * @private
+     */
+    updateIsEnterpriseManaged_: function(isEnterpriseManaged) {
+      help.ChannelChangePage.updateIsEnterpriseManaged(isEnterpriseManaged);
+      this.updateUI_();
+    },
+
+    /**
      * Updates name of the current channel, i.e. the name of the
      * channel the device is currently on.
      * @param {string} channel The name of the current channel.
@@ -387,10 +496,23 @@ cr.define('help', function() {
     updateCurrentChannel_: function(channel) {
       if (this.channelList_.indexOf(channel) < 0)
         return;
-      $('current-channel').textContent = loadTimeData.getStringF(
-          'currentChannel', this.channelTable_[channel].label);
       this.currentChannel_ = channel;
       help.ChannelChangePage.updateCurrentChannel(channel);
+      this.updateUI_();
+    },
+
+    /**
+     * Updates name of the target channel, i.e. the name of the
+     * channel the device is supposed to be.
+     * @param {string} channel The name of the target channel.
+     * @private
+     */
+    updateTargetChannel_: function(channel) {
+      if (this.channelList_.indexOf(channel) < 0)
+        return;
+      this.targetChannel_ = channel;
+      help.ChannelChangePage.updateTargetChannel(channel);
+      this.updateUI_();
     },
 
     /**
@@ -399,8 +521,8 @@ cr.define('help', function() {
      */
     updateEnableReleaseChannel_: function(enabled) {
       this.updateChannelChangerContainerVisibility_(enabled);
-      $('change-channel').disabled = !enabled;
-      $('channel-change-disallowed-icon').hidden = enabled;
+      this.can_change_channel_ = enabled;
+      this.updateUI_();
     },
 
     /**
@@ -410,12 +532,11 @@ cr.define('help', function() {
      * @private
      */
     setChannel_: function(channel, isPowerwashAllowed) {
-      this.powerwashAfterUpdate_ = isPowerwashAllowed;
-      this.targetChannel_ = channel;
       chrome.send('setChannel', [channel, isPowerwashAllowed]);
       $('channel-change-confirmation').hidden = false;
       $('channel-change-confirmation').textContent = loadTimeData.getStringF(
           'channel-changed', this.channelTable_[channel].name);
+      this.updateTargetChannel_(channel);
     },
 
     /**
@@ -455,6 +576,15 @@ cr.define('help', function() {
         return;
       }
       $('channel-changer').hidden = !visible;
+    },
+
+    /**
+     * Sets the product label's alt text.
+     * @param {string} text The text to use for the image.
+     * @private
+     */
+    setProductLabelText_: function(text) {
+      $('product-label').setAttribute('alt', text);
     },
   };
 
@@ -498,7 +628,7 @@ cr.define('help', function() {
   HelpPage.updateIsEnterpriseManaged = function(isEnterpriseManaged) {
     if (!cr.isChromeOS)
       return;
-    help.ChannelChangePage.updateIsEnterpriseManaged(isEnterpriseManaged);
+    HelpPage.getInstance().updateIsEnterpriseManaged_(isEnterpriseManaged);
   };
 
   HelpPage.updateCurrentChannel = function(channel) {
@@ -510,7 +640,7 @@ cr.define('help', function() {
   HelpPage.updateTargetChannel = function(channel) {
     if (!cr.isChromeOS)
       return;
-    help.ChannelChangePage.updateTargetChannel(channel);
+    HelpPage.getInstance().updateTargetChannel_(channel);
   };
 
   HelpPage.updateEnableReleaseChannel = function(enabled) {
@@ -525,8 +655,8 @@ cr.define('help', function() {
     HelpPage.getInstance().setBuildDate_(buildDate);
   };
 
-  HelpPage.updateChannelChangePageContainerVisibility = function() {
-    HelpPage.getInstance().updateChannelChangePageContainerVisibility_();
+  HelpPage.setProductLabelText = function(text) {
+    HelpPage.getInstance().setProductLabelText_(text);
   };
 
   // Export

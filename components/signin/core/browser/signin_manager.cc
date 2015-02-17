@@ -21,6 +21,7 @@
 #include "components/signin/core/browser/signin_metrics.h"
 #include "components/signin/core/common/signin_pref_names.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/escape.h"
 #include "third_party/icu/source/i18n/unicode/regex.h"
@@ -63,9 +64,9 @@ SigninManager::SigninManager(SigninClient* client,
     : SigninManagerBase(client),
       prohibit_signout_(false),
       type_(SIGNIN_TYPE_NONE),
-      weak_pointer_factory_(this),
       client_(client),
-      token_service_(token_service) {}
+      token_service_(token_service),
+      weak_pointer_factory_(this) {}
 
 void SigninManager::AddMergeSessionObserver(
     MergeSessionHelper::Observer* observer) {
@@ -82,9 +83,8 @@ void SigninManager::RemoveMergeSessionObserver(
 SigninManager::~SigninManager() {}
 
 void SigninManager::InitTokenService() {
-  const std::string& account_id = GetAuthenticatedUsername();
-  if (token_service_ && !account_id.empty())
-    token_service_->LoadCredentials(account_id);
+  if (token_service_ && IsAuthenticated())
+    token_service_->LoadCredentials(GetAuthenticatedAccountId());
 }
 
 std::string SigninManager::SigninTypeToString(SigninManager::SigninType type) {
@@ -131,7 +131,7 @@ void SigninManager::StartSignInWithRefreshToken(
     const std::string& username,
     const std::string& password,
     const OAuthTokenFetchedCallback& callback) {
-  DCHECK(GetAuthenticatedUsername().empty() ||
+  DCHECK(!IsAuthenticated() ||
          gaia::AreEmailsSame(username, GetAuthenticatedUsername()));
 
   if (!PrepareForSignin(SIGNIN_TYPE_WITH_REFRESH_TOKEN, username, password))
@@ -178,7 +178,7 @@ void SigninManager::SignOut(
   DCHECK(IsInitialized());
 
   signin_metrics::LogSignout(signout_source_metric);
-  if (GetAuthenticatedUsername().empty()) {
+  if (!IsAuthenticated()) {
     if (AuthInProgress()) {
       // If the user is in the process of signing in, then treat a call to
       // SignOut as a cancellation request.
@@ -201,14 +201,16 @@ void SigninManager::SignOut(
 
   ClearTransientSigninData();
 
+  const std::string account_id = GetAuthenticatedAccountId();
   const std::string username = GetAuthenticatedUsername();
   const base::Time signin_time =
       base::Time::FromInternalValue(
           client_->GetPrefs()->GetInt64(prefs::kSignedInTime));
-  clear_authenticated_username();
+  ClearAuthenticatedUsername();
+  client_->GetPrefs()->ClearPref(prefs::kGoogleServicesHostedDomain);
   client_->GetPrefs()->ClearPref(prefs::kGoogleServicesUsername);
   client_->GetPrefs()->ClearPref(prefs::kSignedInTime);
-  client_->ClearSigninScopedDeviceId();
+  client_->OnSignedOut();
 
   // Erase (now) stale information from AboutSigninInternals.
   NotifyDiagnosticsObservers(USERNAME, "");
@@ -227,7 +229,9 @@ void SigninManager::SignOut(
                << "IsSigninAllowed: " << IsSigninAllowed();
   token_service_->RevokeAllCredentials();
 
-  FOR_EACH_OBSERVER(Observer, observer_list_, GoogleSignedOut(username));
+  FOR_EACH_OBSERVER(Observer,
+                    observer_list_,
+                    GoogleSignedOut(account_id, username));
 }
 
 void SigninManager::Initialize(PrefService* local_state) {
@@ -269,7 +273,7 @@ void SigninManager::Shutdown() {
 }
 
 void SigninManager::OnGoogleServicesUsernamePatternChanged() {
-  if (!GetAuthenticatedUsername().empty() &&
+  if (IsAuthenticated() &&
       !IsAllowedUsername(GetAuthenticatedUsername())) {
     // Signed in user is invalid according to the current policy so sign
     // the user out.
@@ -347,17 +351,18 @@ void SigninManager::CompletePendingSignin() {
 
   if (client_->ShouldMergeSigninCredentialsIntoCookieJar()) {
     merge_session_helper_.reset(new MergeSessionHelper(
-        token_service_, client_->GetURLRequestContext(), NULL));
+        token_service_, GaiaConstants::kChromeSource,
+        client_->GetURLRequestContext(), NULL));
   }
 
   DCHECK(!temp_refresh_token_.empty());
-  DCHECK(!GetAuthenticatedUsername().empty());
-  token_service_->UpdateCredentials(GetAuthenticatedUsername(),
-                                    temp_refresh_token_);
+  DCHECK(IsAuthenticated());
+  std::string account_id = GetAuthenticatedAccountId();
+  token_service_->UpdateCredentials(account_id, temp_refresh_token_);
   temp_refresh_token_.clear();
 
   if (client_->ShouldMergeSigninCredentialsIntoCookieJar())
-    merge_session_helper_->LogIn(GetAuthenticatedUsername());
+    merge_session_helper_->LogIn(account_id);
 }
 
 void SigninManager::OnExternalSigninCompleted(const std::string& username) {
@@ -373,9 +378,13 @@ void SigninManager::OnSignedIn(const std::string& username) {
   FOR_EACH_OBSERVER(
       Observer,
       observer_list_,
-      GoogleSigninSucceeded(GetAuthenticatedUsername(), password_));
+      GoogleSigninSucceeded(GetAuthenticatedAccountId(),
+                            GetAuthenticatedUsername(),
+                            password_));
 
-  client_->GoogleSigninSucceeded(GetAuthenticatedUsername(), password_);
+  client_->GoogleSigninSucceeded(GetAuthenticatedAccountId(),
+                                 GetAuthenticatedUsername(),
+                                 password_);
 
   signin_metrics::LogSigninProfile(client_->IsFirstRun(),
                                    client_->GetInstallDate());

@@ -28,16 +28,33 @@ std::string GetUserName(const std::string& email) {
 
 }  // namespace
 
+bool User::IsSupervised() const {
+  return false;
+}
+
+void User::SetIsSupervised(bool is_supervised) {
+  VLOG(1) << "Ignoring SetIsSupervised call with param " << is_supervised;
+}
+
 class RegularUser : public User {
  public:
   explicit RegularUser(const std::string& email);
   virtual ~RegularUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
-  virtual bool CanSyncImage() const OVERRIDE;
+  virtual UserType GetType() const override;
+  virtual bool CanSyncImage() const override;
+  virtual void SetIsSupervised(bool is_supervised) override {
+    VLOG(1) << "Setting user is supervised to " << is_supervised;
+    is_supervised_ = is_supervised;
+  }
+  virtual bool IsSupervised() const override {
+    return is_supervised_;
+  }
 
  private:
+  bool is_supervised_;
+
   DISALLOW_COPY_AND_ASSIGN(RegularUser);
 };
 
@@ -47,7 +64,7 @@ class GuestUser : public User {
   virtual ~GuestUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
+  virtual UserType GetType() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(GuestUser);
@@ -59,7 +76,7 @@ class KioskAppUser : public User {
   virtual ~KioskAppUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
+  virtual UserType GetType() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(KioskAppUser);
@@ -71,8 +88,9 @@ class SupervisedUser : public User {
   virtual ~SupervisedUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
-  virtual std::string display_email() const OVERRIDE;
+  virtual UserType GetType() const override;
+  virtual bool IsSupervised() const override;
+  virtual std::string display_email() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SupervisedUser);
@@ -84,7 +102,7 @@ class RetailModeUser : public User {
   virtual ~RetailModeUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
+  virtual UserType GetType() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(RetailModeUser);
@@ -96,7 +114,7 @@ class PublicAccountUser : public User {
   virtual ~PublicAccountUser();
 
   // Overridden from User:
-  virtual UserType GetType() const OVERRIDE;
+  virtual UserType GetType() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(PublicAccountUser);
@@ -224,7 +242,8 @@ void User::SetStubImage(const UserImage& stub_user_image,
   image_is_loading_ = is_loading;
 }
 
-RegularUser::RegularUser(const std::string& email) : User(email) {
+RegularUser::RegularUser(const std::string& email)
+    : User(email), is_supervised_(false) {
   set_can_lock(true);
   set_display_email(email);
 }
@@ -276,6 +295,10 @@ UserType SupervisedUser::GetType() const {
 
 std::string SupervisedUser::display_email() const {
   return base::UTF16ToUTF8(display_name());
+}
+
+bool SupervisedUser::IsSupervised() const {
+  return true;
 }
 
 RetailModeUser::RetailModeUser() : User(chromeos::login::kRetailModeUserName) {

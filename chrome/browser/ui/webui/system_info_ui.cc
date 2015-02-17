@@ -10,7 +10,6 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,14 +21,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "net/base/directory_lister.h"
 #include "net/base/escape.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -47,21 +46,19 @@ class SystemInfoUIHTMLSource : public content::URLDataSource{
   SystemInfoUIHTMLSource();
 
   // content::URLDataSource implementation.
-  virtual std::string GetSource() const OVERRIDE;
-  virtual void StartDataRequest(
+  std::string GetSource() const override;
+  void StartDataRequest(
       const std::string& path,
       int render_process_id,
       int render_frame_id,
-      const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
-  virtual std::string GetMimeType(const std::string&) const OVERRIDE {
+      const content::URLDataSource::GotDataCallback& callback) override;
+  std::string GetMimeType(const std::string&) const override {
     return "text/html";
   }
-  virtual bool ShouldAddContentSecurityPolicy() const OVERRIDE {
-    return false;
-  }
+  bool ShouldAddContentSecurityPolicy() const override { return false; }
 
  private:
-  virtual ~SystemInfoUIHTMLSource() {}
+  ~SystemInfoUIHTMLSource() override {}
 
   void SysInfoComplete(scoped_ptr<SystemLogsResponse> response);
   void RequestComplete();
@@ -81,10 +78,10 @@ class SystemInfoHandler : public WebUIMessageHandler,
                           public base::SupportsWeakPtr<SystemInfoHandler> {
  public:
   SystemInfoHandler();
-  virtual ~SystemInfoHandler();
+  ~SystemInfoHandler() override;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SystemInfoHandler);
@@ -158,8 +155,7 @@ void SystemInfoUIHTMLSource::RequestComplete() {
   static const base::StringPiece systeminfo_html(
       ResourceBundle::GetSharedInstance().GetRawDataResource(
           IDR_ABOUT_SYS_HTML));
-  std::string full_html = webui::GetTemplatesHtml(
-      systeminfo_html, &strings, "t" /* template root node id */);
+  std::string full_html = webui::GetI18nTemplateHtml(systeminfo_html, &strings);
   callback_.Run(base::RefCountedString::TakeString(&full_html));
 }
 

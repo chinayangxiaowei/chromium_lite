@@ -6,7 +6,8 @@
 
 #include "base/command_line.h"
 #include "base/threading/thread.h"
-#include "cc/output/output_surface.h"
+#include "cc/surfaces/surface_id_allocator.h"
+#include "cc/test/pixel_test_output_surface.h"
 #include "cc/test/test_shared_bitmap_manager.h"
 #include "ui/compositor/compositor_switches.h"
 #include "ui/compositor/reflector.h"
@@ -19,8 +20,11 @@
 namespace ui {
 
 InProcessContextFactory::InProcessContextFactory()
-    : shared_bitmap_manager_(new cc::TestSharedBitmapManager()) {
-  DCHECK_NE(gfx::GetGLImplementation(), gfx::kGLImplementationNone);
+    : next_surface_id_namespace_(1u) {
+  DCHECK_NE(gfx::GetGLImplementation(), gfx::kGLImplementationNone)
+      << "If running tests, ensure that main() is calling "
+      << "gfx::GLSurface::InitializeOneOffForTests()";
+
 #if defined(OS_CHROMEOS)
   bool use_thread = !CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kUIDisableThreadedCompositing);
@@ -35,8 +39,8 @@ InProcessContextFactory::InProcessContextFactory()
 
 InProcessContextFactory::~InProcessContextFactory() {}
 
-scoped_ptr<cc::OutputSurface> InProcessContextFactory::CreateOutputSurface(
-    Compositor* compositor,
+void InProcessContextFactory::CreateOutputSurface(
+    base::WeakPtr<Compositor> compositor,
     bool software_fallback) {
   DCHECK(!software_fallback);
   blink::WebGraphicsContext3D::Attributes attrs;
@@ -56,7 +60,9 @@ scoped_ptr<cc::OutputSurface> InProcessContextFactory::CreateOutputSurface(
   scoped_refptr<ContextProviderInProcess> context_provider =
       ContextProviderInProcess::Create(context3d.Pass(), "UICompositor");
 
-  return make_scoped_ptr(new cc::OutputSurface(context_provider));
+  bool flipped_output_surface = false;
+  compositor->SetOutputSurface(make_scoped_ptr(new cc::PixelTestOutputSurface(
+      context_provider, flipped_output_surface)));
 }
 
 scoped_refptr<Reflector> InProcessContextFactory::CreateReflector(
@@ -70,7 +76,7 @@ void InProcessContextFactory::RemoveReflector(
 
 scoped_refptr<cc::ContextProvider>
 InProcessContextFactory::SharedMainThreadContextProvider() {
-  if (shared_main_thread_contexts_ &&
+  if (shared_main_thread_contexts_.get() &&
       !shared_main_thread_contexts_->DestroyedOnMainThread())
     return shared_main_thread_contexts_;
 
@@ -78,7 +84,7 @@ InProcessContextFactory::SharedMainThreadContextProvider() {
   shared_main_thread_contexts_ =
       webkit::gpu::ContextProviderInProcess::CreateOffscreen(
           lose_context_when_out_of_memory);
-  if (shared_main_thread_contexts_ &&
+  if (shared_main_thread_contexts_.get() &&
       !shared_main_thread_contexts_->BindToCurrentThread())
     shared_main_thread_contexts_ = NULL;
 
@@ -90,13 +96,24 @@ void InProcessContextFactory::RemoveCompositor(Compositor* compositor) {}
 bool InProcessContextFactory::DoesCreateTestContexts() { return false; }
 
 cc::SharedBitmapManager* InProcessContextFactory::GetSharedBitmapManager() {
-  return shared_bitmap_manager_.get();
+  return &shared_bitmap_manager_;
+}
+
+gpu::GpuMemoryBufferManager*
+InProcessContextFactory::GetGpuMemoryBufferManager() {
+  return &gpu_memory_buffer_manager_;
 }
 
 base::MessageLoopProxy* InProcessContextFactory::GetCompositorMessageLoop() {
   if (!compositor_thread_)
     return NULL;
-  return compositor_thread_->message_loop_proxy();
+  return compositor_thread_->message_loop_proxy().get();
+}
+
+scoped_ptr<cc::SurfaceIdAllocator>
+InProcessContextFactory::CreateSurfaceIdAllocator() {
+  return make_scoped_ptr(
+      new cc::SurfaceIdAllocator(next_surface_id_namespace_++));
 }
 
 }  // namespace ui

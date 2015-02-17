@@ -2,29 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/api/declarative_webrequest/webrequest_action.h"
+#include "extensions/browser/api/declarative_webrequest/webrequest_action.h"
 
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/extensions/api/declarative_webrequest/request_stage.h"
-#include "chrome/browser/extensions/api/declarative_webrequest/webrequest_condition.h"
-#include "chrome/browser/extensions/api/declarative_webrequest/webrequest_constants.h"
-#include "chrome/browser/extensions/api/web_request/web_request_api_helpers.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_test_util.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "extensions/browser/api/declarative_webrequest/request_stage.h"
+#include "extensions/browser/api/declarative_webrequest/webrequest_condition.h"
+#include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
+#include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/info_map.h"
 #include "extensions/common/extension.h"
 #include "net/base/request_priority.h"
 #include "net/http/http_response_headers.h"
+#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -58,7 +58,7 @@ scoped_ptr<WebRequestActionSet> CreateSetOfActions(const char* json) {
   bool bad_message = false;
 
   scoped_ptr<WebRequestActionSet> action_set(
-      WebRequestActionSet::Create(NULL, actions, &error, &bad_message));
+      WebRequestActionSet::Create(NULL, NULL, actions, &error, &bad_message));
   EXPECT_EQ("", error);
   EXPECT_FALSE(bad_message);
   CHECK(action_set);
@@ -75,7 +75,7 @@ class WebRequestActionWithThreadsTest : public testing::Test {
       : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP) {}
 
  protected:
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
   // Creates a URL request for URL |url_string|, and applies the actions from
   // |action_set| as if they were triggered by the extension with
@@ -140,12 +140,12 @@ bool WebRequestActionWithThreadsTest::ActionWorksOnRequest(
     const std::string& extension_id,
     const WebRequestActionSet* action_set,
     RequestStage stage) {
-  net::TestURLRequest regular_request(
-      GURL(url_string), net::DEFAULT_PRIORITY, NULL, &context_);
+  scoped_ptr<net::URLRequest> regular_request(context_.CreateRequest(
+      GURL(url_string), net::DEFAULT_PRIORITY, NULL, NULL));
   std::list<LinkedPtrEventResponseDelta> deltas;
   scoped_refptr<net::HttpResponseHeaders> headers(
       new net::HttpResponseHeaders(""));
-  WebRequestData request_data(&regular_request, stage, headers.get());
+  WebRequestData request_data(regular_request.get(), stage, headers.get());
   std::set<std::string> ignored_tags;
   WebRequestAction::ApplyInfo apply_info = { extension_info_map_.get(),
                                              request_data,
@@ -186,28 +186,29 @@ TEST(WebRequestActionTest, CreateAction) {
   // Test wrong data type passed.
   error.clear();
   base::ListValue empty_list;
-  result = WebRequestAction::Create(NULL, empty_list, &error, &bad_message);
+  result = WebRequestAction::Create(
+      NULL, NULL, empty_list, &error, &bad_message);
   EXPECT_TRUE(bad_message);
   EXPECT_FALSE(result.get());
 
   // Test missing instanceType element.
   base::DictionaryValue input;
   error.clear();
-  result = WebRequestAction::Create(NULL, input, &error, &bad_message);
+  result = WebRequestAction::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_TRUE(bad_message);
   EXPECT_FALSE(result.get());
 
   // Test wrong instanceType element.
   input.SetString(keys::kInstanceTypeKey, kUnknownActionType);
   error.clear();
-  result = WebRequestAction::Create(NULL, input, &error, &bad_message);
+  result = WebRequestAction::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_NE("", error);
   EXPECT_FALSE(result.get());
 
   // Test success
   input.SetString(keys::kInstanceTypeKey, keys::kCancelRequestType);
   error.clear();
-  result = WebRequestAction::Create(NULL, input, &error, &bad_message);
+  result = WebRequestAction::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_EQ("", error);
   EXPECT_FALSE(bad_message);
   ASSERT_TRUE(result.get());
@@ -223,7 +224,7 @@ TEST(WebRequestActionTest, CreateActionSet) {
 
   // Test empty input.
   error.clear();
-  result = WebRequestActionSet::Create(NULL, input, &error, &bad_message);
+  result = WebRequestActionSet::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_TRUE(error.empty()) << error;
   EXPECT_FALSE(bad_message);
   ASSERT_TRUE(result.get());
@@ -239,7 +240,7 @@ TEST(WebRequestActionTest, CreateActionSet) {
   // Test success.
   input.push_back(linked_ptr<base::Value>(correct_action.DeepCopy()));
   error.clear();
-  result = WebRequestActionSet::Create(NULL, input, &error, &bad_message);
+  result = WebRequestActionSet::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_TRUE(error.empty()) << error;
   EXPECT_FALSE(bad_message);
   ASSERT_TRUE(result.get());
@@ -251,7 +252,7 @@ TEST(WebRequestActionTest, CreateActionSet) {
   // Test failure.
   input.push_back(linked_ptr<base::Value>(incorrect_action.DeepCopy()));
   error.clear();
-  result = WebRequestActionSet::Create(NULL, input, &error, &bad_message);
+  result = WebRequestActionSet::Create(NULL, NULL, input, &error, &bad_message);
   EXPECT_NE("", error);
   EXPECT_FALSE(result.get());
 }
@@ -556,7 +557,7 @@ TEST(WebRequestActionTest, GetName) {
       " \"lowerPriorityThan\": 123,"
       " \"hasTag\": \"some_tag\""
       "}]";
-  const char* kExpectedNames[] = {
+  const char* const kExpectedNames[] = {
     "declarativeWebRequest.RedirectRequest",
     "declarativeWebRequest.RedirectByRegEx",
     "declarativeWebRequest.SetRequestHeader",

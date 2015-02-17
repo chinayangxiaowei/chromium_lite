@@ -26,7 +26,6 @@ class WebDataServiceBackend;
 
 namespace autofill {
 
-class AutofillChange;
 class AutofillProfile;
 class AutofillWebDataServiceObserverOnDBThread;
 class CreditCard;
@@ -54,13 +53,12 @@ class AutofillWebDataBackendImpl
       const base::Closure& on_changed_callback);
 
   // AutofillWebDataBackend implementation.
-  virtual void AddObserver(AutofillWebDataServiceObserverOnDBThread* observer)
-      OVERRIDE;
-  virtual void RemoveObserver(
-      AutofillWebDataServiceObserverOnDBThread* observer) OVERRIDE;
-  virtual WebDatabase* GetDatabase() OVERRIDE;
-  virtual void RemoveExpiredFormElements() OVERRIDE;
-  virtual void NotifyOfMultipleAutofillChanges() OVERRIDE;
+  void AddObserver(AutofillWebDataServiceObserverOnDBThread* observer) override;
+  void RemoveObserver(
+      AutofillWebDataServiceObserverOnDBThread* observer) override;
+  WebDatabase* GetDatabase() override;
+  void RemoveExpiredFormElements() override;
+  void NotifyOfMultipleAutofillChanges() override;
 
   // Returns a SupportsUserData objects that may be used to store data
   // owned by the DB thread on this object. Should be called only from
@@ -113,6 +111,11 @@ class AutofillWebDataBackendImpl
   // Returns all Autofill profiles from the web database.
   scoped_ptr<WDTypedResult> GetAutofillProfiles(WebDatabase* db);
 
+  // Updates Autofill entries in the web database.
+  WebDatabase::State UpdateAutofillEntries(
+      const std::vector<autofill::AutofillEntry>& autofill_entries,
+      WebDatabase* db);
+
   // Adds a credit card to the web database.
   WebDatabase::State AddCreditCard(const CreditCard& credit_card,
                                    WebDatabase* db);
@@ -142,7 +145,7 @@ class AutofillWebDataBackendImpl
       WebDatabase* db);
 
  protected:
-  virtual ~AutofillWebDataBackendImpl();
+  ~AutofillWebDataBackendImpl() override;
 
  private:
   friend class base::RefCountedDeleteOnMessageLoop<AutofillWebDataBackendImpl>;
@@ -155,7 +158,8 @@ class AutofillWebDataBackendImpl
   class SupportsUserDataAggregatable : public base::SupportsUserData {
    public:
     SupportsUserDataAggregatable() {}
-    virtual ~SupportsUserDataAggregatable() {}
+    ~SupportsUserDataAggregatable() override {}
+
    private:
     DISALLOW_COPY_AND_ASSIGN(SupportsUserDataAggregatable);
   };

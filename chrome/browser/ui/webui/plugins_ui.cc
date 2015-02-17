@@ -23,7 +23,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/plugins/plugin_finder.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
@@ -34,6 +33,8 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/plugin_service.h"
@@ -43,7 +44,6 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/content_constants.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -67,7 +67,6 @@ void AssertPluginEnabled(bool did_enable) {
 content::WebUIDataSource* CreatePluginsUIHTMLSource(Profile* profile) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIPluginsHost);
-  source->SetUseJsonJSFormatV2();
 
   source->AddLocalizedString("pluginsTitle", IDS_PLUGINS_TITLE);
   source->AddLocalizedString("pluginsDetailsModeLink",
@@ -141,11 +140,11 @@ base::string16 PluginTypeToString(int type) {
 class PluginsDOMHandler : public WebUIMessageHandler,
                           public content::NotificationObserver {
  public:
-  explicit PluginsDOMHandler();
-  virtual ~PluginsDOMHandler() {}
+  PluginsDOMHandler();
+  ~PluginsDOMHandler() override {}
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // Callback for the "requestPluginsData" message.
   void HandleRequestPluginsData(const base::ListValue* args);
@@ -163,9 +162,9 @@ class PluginsDOMHandler : public WebUIMessageHandler,
   void HandleSetPluginAlwaysAllowed(const base::ListValue* args);
 
   // content::NotificationObserver method overrides
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
  private:
   void LoadPlugins();

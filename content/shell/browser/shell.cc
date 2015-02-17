@@ -7,18 +7,19 @@
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "content/public/browser/devtools_manager.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/renderer_preferences.h"
+#include "content/shell/browser/layout_test/layout_test_devtools_frontend.h"
+#include "content/shell/browser/layout_test/layout_test_javascript_dialog_manager.h"
 #include "content/shell/browser/notify_done_forwarder.h"
 #include "content/shell/browser/shell_browser_main_parts.h"
 #include "content/shell/browser/shell_content_browser_client.h"
@@ -46,7 +47,7 @@ class Shell::DevToolsWebContentsObserver : public WebContentsObserver {
   }
 
   // WebContentsObserver
-  virtual void WebContentsDestroyed() OVERRIDE {
+  void WebContentsDestroyed() override {
     shell_->OnDevToolsWebContentsDestroyed();
   }
 
@@ -114,7 +115,7 @@ Shell* Shell::CreateShell(WebContents* web_contents,
 
 void Shell::CloseAllWindows() {
   base::AutoReset<bool> auto_reset(&quit_message_loop_, false);
-  DevToolsManager::GetInstance()->CloseAllClientHosts();
+  DevToolsAgentHost::DetachAllClients();
   std::vector<Shell*> open_windows(windows_);
   for (size_t i = 0; i < open_windows.size(); ++i)
     open_windows[i]->Close();
@@ -171,8 +172,8 @@ void Shell::LoadURL(const GURL& url) {
 
 void Shell::LoadURLForFrame(const GURL& url, const std::string& frame_name) {
   NavigationController::LoadURLParams params(url);
-  params.transition_type = PageTransitionFromInt(
-      PAGE_TRANSITION_TYPED | PAGE_TRANSITION_FROM_ADDRESS_BAR);
+  params.transition_type = ui::PageTransitionFromInt(
+      ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
   params.frame_name = frame_name;
   web_contents_->GetController().LoadURLWithParams(params);
   web_contents_->Focus();
@@ -329,8 +330,12 @@ void Shell::DidNavigateMainFramePostCommit(WebContents* web_contents) {
 }
 
 JavaScriptDialogManager* Shell::GetJavaScriptDialogManager() {
-  if (!dialog_manager_)
-    dialog_manager_.reset(new ShellJavaScriptDialogManager());
+  if (!dialog_manager_) {
+    const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+    dialog_manager_.reset(command_line.HasSwitch(switches::kDumpRenderTree)
+        ? new LayoutTestJavaScriptDialogManager
+        : new ShellJavaScriptDialogManager);
+  }
   return dialog_manager_.get();
 }
 
@@ -380,8 +385,13 @@ void Shell::TitleWasSet(NavigationEntry* entry, bool explicit_set) {
 void Shell::InnerShowDevTools(const std::string& settings,
                               const std::string& frontend_url) {
   if (!devtools_frontend_) {
-    devtools_frontend_ = ShellDevToolsFrontend::Show(
-        web_contents(), settings, frontend_url);
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kDumpRenderTree)) {
+      devtools_frontend_ = LayoutTestDevToolsFrontend::Show(
+          web_contents(), settings, frontend_url);
+    } else {
+      devtools_frontend_ = ShellDevToolsFrontend::Show(web_contents());
+    }
     devtools_observer_.reset(new DevToolsWebContentsObserver(
         this, devtools_frontend_->frontend_shell()->web_contents()));
   }

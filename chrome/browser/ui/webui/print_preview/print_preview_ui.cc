@@ -26,13 +26,14 @@
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/print_messages.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/google_chrome_strings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/google_chrome_strings.h"
+#include "grit/components_strings.h"
 #include "printing/page_size_margins.h"
 #include "printing/print_job_constants.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -47,11 +48,11 @@ namespace {
 
 #if defined(OS_MACOSX)
 // U+0028 U+21E7 U+2318 U+0050 U+0029 in UTF8
-const char kAdvancedPrintShortcut[] = "\x28\xE2\x8c\xA5\xE2\x8C\x98\x50\x29";
+const char kBasicPrintShortcut[] = "\x28\xE2\x8c\xA5\xE2\x8C\x98\x50\x29";
 #elif defined(OS_WIN) || defined(OS_CHROMEOS)
-const char kAdvancedPrintShortcut[] = "(Ctrl+Shift+P)";
+const char kBasicPrintShortcut[] = "(Ctrl+Shift+P)";
 #else
-const char kAdvancedPrintShortcut[] = "(Shift+Ctrl+P)";
+const char kBasicPrintShortcut[] = "(Shift+Ctrl+P)";
 #endif
 
 // Thread-safe wrapper around a std::map to keep track of mappings from
@@ -210,26 +211,14 @@ content::WebUIDataSource* CreatePrintPreviewUISource() {
                              IDS_PRINT_PREVIEW_PAGE_LABEL_SINGULAR);
   source->AddLocalizedString("printPreviewPageLabelPlural",
                              IDS_PRINT_PREVIEW_PAGE_LABEL_PLURAL);
-  const base::string16 shortcut_text(base::UTF8ToUTF16(kAdvancedPrintShortcut));
-#if defined(OS_CHROMEOS)
-  source->AddString(
-      "systemDialogOption",
-      l10n_util::GetStringFUTF16(
-          IDS_PRINT_PREVIEW_CLOUD_DIALOG_OPTION,
-          l10n_util::GetStringUTF16(IDS_GOOGLE_CLOUD_PRINT),
-          shortcut_text));
-#else
+  const base::string16 shortcut_text(base::UTF8ToUTF16(kBasicPrintShortcut));
+#if !defined(OS_CHROMEOS)
   source->AddString(
       "systemDialogOption",
       l10n_util::GetStringFUTF16(
           IDS_PRINT_PREVIEW_SYSTEM_DIALOG_OPTION,
           shortcut_text));
 #endif
-  source->AddString(
-      "cloudPrintDialogOption",
-      l10n_util::GetStringFUTF16(
-          IDS_PRINT_PREVIEW_CLOUD_DIALOG_OPTION_NO_SHORTCUT,
-          l10n_util::GetStringUTF16(IDS_GOOGLE_CLOUD_PRINT)));
 #if defined(OS_MACOSX)
   source->AddLocalizedString("openPdfInPreviewOption",
                              IDS_PRINT_PREVIEW_OPEN_PDF_IN_PREVIEW_APP);
@@ -275,6 +264,10 @@ content::WebUIDataSource* CreatePrintPreviewUISource() {
   source->AddLocalizedString("right", IDS_PRINT_PREVIEW_RIGHT_MARGIN_LABEL);
   source->AddLocalizedString("mediaSizeLabel",
                              IDS_PRINT_PREVIEW_MEDIA_SIZE_LABEL);
+  source->AddLocalizedString("dpiLabel", IDS_PRINT_PREVIEW_DPI_LABEL);
+  source->AddLocalizedString("dpiItemLabel", IDS_PRINT_PREVIEW_DPI_ITEM_LABEL);
+  source->AddLocalizedString("nonIsotropicDpiItemLabel",
+                             IDS_PRINT_PREVIEW_NON_ISOTROPIC_DPI_ITEM_LABEL);
   source->AddLocalizedString("destinationSearchTitle",
                              IDS_PRINT_PREVIEW_DESTINATION_SEARCH_TITLE);
   source->AddLocalizedString("accountSelectTitle",
@@ -336,6 +329,9 @@ content::WebUIDataSource* CreatePrintPreviewUISource() {
   source->AddLocalizedString("advancedSettingsDialogTitle",
                              IDS_PRINT_PREVIEW_ADVANCED_SETTINGS_DIALOG_TITLE);
   source->AddLocalizedString(
+      "noAdvancedSettingsMatchSearchHint",
+      IDS_PRINT_PREVIEW_NO_ADVANCED_SETTINGS_MATCH_SEARCH_HINT);
+  source->AddLocalizedString(
       "advancedSettingsDialogConfirm",
       IDS_PRINT_PREVIEW_ADVANCED_SETTINGS_DIALOG_CONFIRM);
   source->AddLocalizedString("cancel", IDS_CANCEL);
@@ -343,6 +339,15 @@ content::WebUIDataSource* CreatePrintPreviewUISource() {
                              IDS_PRINT_PREVIEW_ADVANCED_OPTIONS_LABEL);
   source->AddLocalizedString("showAdvancedOptions",
                              IDS_PRINT_PREVIEW_SHOW_ADVANCED_OPTIONS);
+
+  source->AddLocalizedString("accept", IDS_PRINT_PREVIEW_ACCEPT_INVITE);
+  source->AddLocalizedString(
+      "acceptForGroup", IDS_PRINT_PREVIEW_ACCEPT_GROUP_INVITE);
+  source->AddLocalizedString("reject", IDS_PRINT_PREVIEW_REJECT_INVITE);
+  source->AddLocalizedString(
+      "groupPrinterSharingInviteText", IDS_PRINT_PREVIEW_GROUP_INVITE_TEXT);
+  source->AddLocalizedString(
+      "printerSharingInviteText", IDS_PRINT_PREVIEW_INVITE_TEXT);
 
   source->SetJsonPath("strings.js");
   source->AddResourcePath("print_preview.js", IDR_PRINT_PREVIEW_JS);
@@ -363,6 +368,8 @@ content::WebUIDataSource* CreatePrintPreviewUISource() {
   source->SetDefaultResource(IDR_PRINT_PREVIEW_HTML);
   source->SetRequestFilter(base::Bind(&HandleRequestCallback));
   source->OverrideContentSecurityPolicyObjectSrc("object-src 'self';");
+  source->AddLocalizedString("moreOptionsLabel", IDS_MORE_OPTIONS_LABEL);
+  source->AddLocalizedString("lessOptionsLabel", IDS_LESS_OPTIONS_LABEL);
   return source;
 }
 
@@ -481,9 +488,11 @@ void PrintPreviewUI::OnPrintPreviewRequest(int request_id) {
   g_print_preview_request_id_map.Get().Set(id_, request_id);
 }
 
+#if defined(ENABLE_BASIC_PRINTING)
 void PrintPreviewUI::OnShowSystemDialog() {
   web_ui()->CallJavascriptFunction("onSystemDialogLinkClicked");
 }
+#endif  // ENABLE_BASIC_PRINTING
 
 void PrintPreviewUI::OnDidGetPreviewPageCount(
     const PrintHostMsg_DidGetPreviewPageCount_Params& params) {

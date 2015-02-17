@@ -47,16 +47,16 @@ class SimpleTestBackgroundModeManager : public BackgroundModeManager {
     ResumeBackgroundMode();
   }
 
-  virtual void EnableLaunchOnStartup(bool launch) OVERRIDE {
+  void EnableLaunchOnStartup(bool launch) override {
     launch_on_startup_ = launch;
   }
 
-  virtual void DisplayAppInstalledNotification(
-      const extensions::Extension* extension) OVERRIDE {
+  void DisplayAppInstalledNotification(
+      const extensions::Extension* extension) override {
     has_shown_balloon_ = true;
   }
-  virtual void CreateStatusTrayIcon() OVERRIDE { have_status_tray_ = true; }
-  virtual void RemoveStatusTrayIcon() OVERRIDE { have_status_tray_ = false; }
+  void CreateStatusTrayIcon() override { have_status_tray_ = true; }
+  void RemoveStatusTrayIcon() override { have_status_tray_ = false; }
 
   bool HaveStatusTray() const { return have_status_tray_; }
   bool IsLaunchOnStartup() const { return launch_on_startup_; }
@@ -75,14 +75,12 @@ class SimpleTestBackgroundModeManager : public BackgroundModeManager {
 class TestStatusIcon : public StatusIcon {
  public:
   TestStatusIcon() {}
-  virtual void SetImage(const gfx::ImageSkia& image) OVERRIDE {}
-  virtual void SetPressedImage(const gfx::ImageSkia& image) OVERRIDE {}
-  virtual void SetToolTip(const base::string16& tool_tip) OVERRIDE {}
-  virtual void DisplayBalloon(const gfx::ImageSkia& icon,
-                              const base::string16& title,
-                              const base::string16& contents) OVERRIDE {}
-  virtual void UpdatePlatformContextMenu(
-      StatusIconMenuModel* menu) OVERRIDE {}
+  void SetImage(const gfx::ImageSkia& image) override {}
+  void SetToolTip(const base::string16& tool_tip) override {}
+  void DisplayBalloon(const gfx::ImageSkia& icon,
+                      const base::string16& title,
+                      const base::string16& contents) override {}
+  void UpdatePlatformContextMenu(StatusIconMenuModel* menu) override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestStatusIcon);
@@ -104,9 +102,8 @@ class TestBackgroundModeManager : public SimpleTestBackgroundModeManager {
     ResumeBackgroundMode();
   }
 
-  virtual int GetBackgroundAppCount() const OVERRIDE { return app_count_; }
-  virtual int GetBackgroundAppCountForProfile(
-      Profile* const profile) const OVERRIDE {
+  int GetBackgroundAppCount() const override { return app_count_; }
+  int GetBackgroundAppCountForProfile(Profile* const profile) const override {
     return profile_app_count_;
   }
   void SetBackgroundAppCount(int count) { app_count_ = count; }
@@ -117,7 +114,7 @@ class TestBackgroundModeManager : public SimpleTestBackgroundModeManager {
     enabled_ = enabled;
     OnBackgroundModeEnabledPrefChanged();
   }
-  virtual bool IsBackgroundModePrefEnabled() const OVERRIDE { return enabled_; }
+  bool IsBackgroundModePrefEnabled() const override { return enabled_; }
 
  private:
   bool enabled_;
@@ -155,8 +152,8 @@ void AssertBackgroundModeSuspended(
 class BackgroundModeManagerTest : public testing::Test {
  public:
   BackgroundModeManagerTest() {}
-  virtual ~BackgroundModeManagerTest() {}
-  virtual void SetUp() OVERRIDE {
+  ~BackgroundModeManagerTest() override {}
+  void SetUp() override {
     command_line_.reset(new CommandLine(CommandLine::NO_PROGRAM));
     profile_manager_ = CreateTestingProfileManager();
     profile_ = profile_manager_->CreateTestingProfile("p1");
@@ -204,8 +201,8 @@ class BackgroundModeManagerWithExtensionsTest
     : public BackgroundModeManagerTest {
  public:
   BackgroundModeManagerWithExtensionsTest() {}
-  virtual ~BackgroundModeManagerWithExtensionsTest() {}
-  virtual void SetUp() OVERRIDE {
+  ~BackgroundModeManagerWithExtensionsTest() override {}
+  void SetUp() override {
     BackgroundModeManagerTest::SetUp();
     // Aura clears notifications from the message center at shutdown.
     message_center::MessageCenter::Initialize();
@@ -229,7 +226,7 @@ class BackgroundModeManagerWithExtensionsTest
     manager_->RegisterProfile(profile_);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     // Clean up the status icon. If this is not done before profile deletes,
     // the context menu updates will DCHECK with the now deleted profiles.
     StatusIcon* status_icon = manager_->status_icon_;
@@ -607,10 +604,10 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BackgroundMenuGeneration) {
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   service->Init();
 
-  service->AddComponentExtension(component_extension);
-  service->AddComponentExtension(component_extension_with_options);
-  service->AddExtension(regular_extension);
-  service->AddExtension(regular_extension_with_options);
+  service->AddComponentExtension(component_extension.get());
+  service->AddComponentExtension(component_extension_with_options.get());
+  service->AddExtension(regular_extension.get());
+  service->AddExtension(regular_extension_with_options.get());
 
   scoped_ptr<StatusIconMenuModel> menu(new StatusIconMenuModel(NULL));
   scoped_ptr<StatusIconMenuModel> submenu(new StatusIconMenuModel(NULL));
@@ -685,10 +682,10 @@ TEST_F(BackgroundModeManagerWithExtensionsTest,
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   service1->Init();
 
-  service1->AddComponentExtension(component_extension);
-  service1->AddComponentExtension(component_extension_with_options);
-  service1->AddExtension(regular_extension);
-  service1->AddExtension(regular_extension_with_options);
+  service1->AddComponentExtension(component_extension.get());
+  service1->AddComponentExtension(component_extension_with_options.get());
+  service1->AddExtension(regular_extension.get());
+  service1->AddExtension(regular_extension_with_options.get());
 
   static_cast<extensions::TestExtensionSystem*>(
       extensions::ExtensionSystem::Get(profile2))->CreateExtensionService(
@@ -699,9 +696,9 @@ TEST_F(BackgroundModeManagerWithExtensionsTest,
       extensions::ExtensionSystem::Get(profile2)->extension_service();
   service2->Init();
 
-  service2->AddComponentExtension(component_extension);
-  service2->AddExtension(regular_extension);
-  service2->AddExtension(regular_extension_with_options);
+  service2->AddComponentExtension(component_extension.get());
+  service2->AddExtension(regular_extension.get());
+  service2->AddExtension(regular_extension_with_options.get());
 
   manager_->RegisterProfile(profile2);
 
@@ -858,21 +855,21 @@ TEST_F(BackgroundModeManagerWithExtensionsTest, BalloonDisplay) {
 
   // Adding a background extension should show the balloon.
   EXPECT_FALSE(manager_->HasShownBalloon());
-  service->AddExtension(bg_ext);
+  service->AddExtension(bg_ext.get());
   EXPECT_TRUE(manager_->HasShownBalloon());
 
   // Adding an extension without background should not show the balloon.
   manager_->SetHasShownBalloon(false);
-  service->AddExtension(no_bg_ext);
+  service->AddExtension(no_bg_ext.get());
   EXPECT_FALSE(manager_->HasShownBalloon());
 
   // Upgrading an extension that has background should not reshow the balloon.
-  service->AddExtension(upgraded_bg_ext);
+  service->AddExtension(upgraded_bg_ext.get());
   EXPECT_FALSE(manager_->HasShownBalloon());
 
   // Upgrading an extension that didn't have background to one that does should
   // show the balloon.
-  service->AddExtension(upgraded_no_bg_ext_has_bg);
+  service->AddExtension(upgraded_no_bg_ext_has_bg.get());
   EXPECT_TRUE(manager_->HasShownBalloon());
 
   // Installing an ephemeral app should not show the balloon.

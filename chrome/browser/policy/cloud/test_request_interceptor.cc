@@ -12,11 +12,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/run_loop.h"
 #include "base/sequenced_task_runner.h"
-#include "content/test/net/url_request_mock_http_job.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/net_errors.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/base/upload_data_stream.h"
 #include "net/base/upload_element_reader.h"
+#include "net/test/url_request/url_request_mock_http_job.h"
 #include "net/url_request/url_request_error_job.h"
 #include "net/url_request/url_request_filter.h"
 #include "net/url_request/url_request_interceptor.h"
@@ -52,10 +53,13 @@ net::URLRequestJob* BadRequestJobCallback(
 net::URLRequestJob* FileJobCallback(const base::FilePath& file_path,
                                     net::URLRequest* request,
                                     net::NetworkDelegate* network_delegate) {
-  return new content::URLRequestMockHTTPJob(
+  return new net::URLRequestMockHTTPJob(
       request,
       network_delegate,
-      file_path);
+      file_path,
+      content::BrowserThread::GetBlockingPool()
+          ->GetTaskRunnerWithShutdownBehavior(
+              base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
 }
 
 // Parses the upload data in |request| into |request_msg|, and validates the
@@ -77,11 +81,11 @@ bool ValidRequest(net::URLRequest* request,
   const net::UploadDataStream* stream = request->get_upload();
   if (!stream)
     return false;
-  const ScopedVector<net::UploadElementReader>& readers =
-      stream->element_readers();
-  if (readers.size() != 1u)
+  const ScopedVector<net::UploadElementReader>* readers =
+      stream->GetElementReaders();
+  if (!readers || readers->size() != 1u)
     return false;
-  const net::UploadBytesElementReader* reader = readers[0]->AsBytesReader();
+  const net::UploadBytesElementReader* reader = (*readers)[0]->AsBytesReader();
   if (!reader)
     return false;
   std::string data(reader->bytes(), reader->length());
@@ -156,12 +160,12 @@ class TestRequestInterceptor::Delegate : public net::URLRequestInterceptor {
  public:
   Delegate(const std::string& hostname,
            scoped_refptr<base::SequencedTaskRunner> io_task_runner);
-  virtual ~Delegate();
+  ~Delegate() override;
 
   // net::URLRequestInterceptor implementation:
-  virtual net::URLRequestJob* MaybeInterceptRequest(
+  net::URLRequestJob* MaybeInterceptRequest(
       net::URLRequest* request,
-      net::NetworkDelegate* network_delegate) const OVERRIDE;
+      net::NetworkDelegate* network_delegate) const override;
 
   void GetPendingSize(size_t* pending_size) const;
   void PushJobCallback(const JobCallback& callback);

@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/field_trial.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
@@ -23,7 +24,7 @@ bool EnumerateLinkHeaders(
     void** iter,
     const std::string& rel,
     std::string* url,
-    std::vector<std::pair<std::string, std::string> >* attributes) {
+    base::StringPairs* attributes) {
   std::string header_body;
   bool rel_matched = false;
   while (!rel_matched && headers->EnumerateHeader(iter, "link", &header_body)) {
@@ -81,15 +82,29 @@ TransitionLayerData::TransitionLayerData() {
 TransitionLayerData::~TransitionLayerData() {
 }
 
+TransitionRequestManager::TransitionRequestData::AllowedEntry::AllowedEntry(
+    const std::string& allowed_destination_host_pattern,
+    const std::string& css_selector,
+    const std::string& markup,
+    const std::vector<TransitionElement>& elements)
+    : allowed_destination_host_pattern(allowed_destination_host_pattern),
+      css_selector(css_selector),
+      markup(markup),
+      elements(elements) {
+}
+
+TransitionRequestManager::TransitionRequestData::AllowedEntry::~AllowedEntry() {
+}
+
 void TransitionRequestManager::ParseTransitionStylesheetsFromHeaders(
     const scoped_refptr<net::HttpResponseHeaders>& headers,
     std::vector<GURL>& entering_stylesheets,
     const GURL& resolve_address) {
-  if (headers == NULL)
+  if (headers.get() == NULL)
     return;
 
   std::string transition_stylesheet;
-  std::vector<std::pair<std::string, std::string> > attributes;
+  base::StringPairs attributes;
   void* header_iter = NULL;
   while (EnumerateLinkHeaders(headers,
                               &header_iter,
@@ -111,10 +126,12 @@ TransitionRequestManager::TransitionRequestData::~TransitionRequestData() {
 void TransitionRequestManager::TransitionRequestData::AddEntry(
     const std::string& allowed_destination_host_pattern,
     const std::string& css_selector,
-    const std::string& markup) {
+    const std::string& markup,
+    const std::vector<TransitionElement>& elements) {
   allowed_entries_.push_back(AllowedEntry(allowed_destination_host_pattern,
                                           css_selector,
-                                          markup));
+                                          markup,
+                                          elements));
 }
 
 bool TransitionRequestManager::TransitionRequestData::FindEntry(
@@ -132,10 +149,11 @@ bool TransitionRequestManager::TransitionRequestData::FindEntry(
   const AllowedEntry& allowed_entry = allowed_entries_[0];
   transition_data->markup = allowed_entry.markup;
   transition_data->css_selector = allowed_entry.css_selector;
+  transition_data->elements = allowed_entry.elements;
   return true;
 }
 
-bool TransitionRequestManager::HasPendingTransitionRequest(
+bool TransitionRequestManager::GetPendingTransitionRequest(
     int render_process_id,
     int render_frame_id,
     const GURL& request_url,
@@ -154,13 +172,26 @@ void TransitionRequestManager::AddPendingTransitionRequestData(
     int render_frame_id,
     const std::string& allowed_destination_host_pattern,
     const std::string& css_selector,
-    const std::string& markup) {
+    const std::string& markup,
+    const std::vector<TransitionElement>& elements) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   std::pair<int, int> key(render_process_id, render_frame_id);
-  pending_transition_frames_[key].AddEntry(allowed_destination_host_pattern,
-                                           css_selector,
-                                           markup);
+  pending_transition_frames_[key].AddEntry(
+      allowed_destination_host_pattern, css_selector, markup, elements);
+}
+
+void TransitionRequestManager::AddPendingTransitionRequestDataForTesting(
+    int render_process_id,
+    int render_frame_id) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+  std::pair<int, int> key(render_process_id, render_frame_id);
+  pending_transition_frames_[key].AddEntry(
+      "*", /* allowed_destination_host_pattern */
+      "", /* css_selector */
+      "", /* markup */
+      std::vector<TransitionElement>()); /* elements */
 }
 
 void TransitionRequestManager::ClearPendingTransitionRequestData(

@@ -7,8 +7,6 @@ import("//build/config/crypto.gni")
 # GYP version: chrome/chrome_common.gypi:common_net
 static_library("net") {
   sources = [
-    "net_error_info.cc",
-    "net_error_info.h",
     "net_resource_provider.cc",
     "net_resource_provider.h",
     "predictor_common.h",
@@ -24,6 +22,7 @@ static_library("net") {
     "//base",
     "//chrome:resources",
     "//chrome:strings",
+    "//components/error_page/common",
     "//crypto",
     "//net",
     "//net:net_resources",
@@ -44,6 +43,10 @@ static_library("net") {
       "x509_certificate_model_nss.cc",
       "x509_certificate_model_openssl.cc",
     ]
+  } else if (use_openssl) {
+    sources -= [ "x509_certificate_model_nss.cc" ]
+  } else {
+    sources -= [ "x509_certificate_model_openssl.cc" ]
   }
 
   if (is_android) {
@@ -52,18 +55,6 @@ static_library("net") {
       "x509_certificate_model_openssl.cc",
     ]
     deps += [ "//third_party/boringssl" ]
-  }
-
-  if (use_openssl) {
-    # networking_private_crypto.cc uses NSS functions.
-    sources -= [
-      "x509_certificate_model_nss.cc",
-    ]
-  } else if (is_linux) {
-    # Already removed for non-Linux cases above.
-    sources -= [
-      "x509_certificate_model_openssl.cc",
-    ]
   }
 
   if (is_win) {

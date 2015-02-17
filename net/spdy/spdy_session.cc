@@ -16,6 +16,7 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/metrics/stats_counters.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -35,6 +36,7 @@
 #include "net/http/http_server_properties.h"
 #include "net/http/http_util.h"
 #include "net/http/transport_security_state.h"
+#include "net/socket/ssl_client_socket.h"
 #include "net/spdy/spdy_buffer_producer.h"
 #include "net/spdy/spdy_frame_builder.h"
 #include "net/spdy/spdy_http_utils.h"
@@ -134,6 +136,18 @@ base::Value* NetLogSpdySessionCallback(const HostPortProxyPair* host_pair,
   return dict;
 }
 
+base::Value* NetLogSpdyInitializedCallback(NetLog::Source source,
+                                           const NextProto protocol_version,
+                                           NetLog::LogLevel /* log_level */) {
+  base::DictionaryValue* dict = new base::DictionaryValue();
+  if (source.IsValid()) {
+    source.AddToEventParameters(dict);
+  }
+  dict->SetString("protocol",
+                  SSLClientSocket::NextProtoToString(protocol_version));
+  return dict;
+}
+
 base::Value* NetLogSpdySettingsCallback(const HostPortPair& host_port_pair,
                                         bool clear_persisted,
                                         NetLog::LogLevel /* log_level */) {
@@ -144,18 +158,22 @@ base::Value* NetLogSpdySettingsCallback(const HostPortPair& host_port_pair,
 }
 
 base::Value* NetLogSpdySettingCallback(SpdySettingsIds id,
+                                       const SpdyMajorVersion protocol_version,
                                        SpdySettingsFlags flags,
                                        uint32 value,
                                        NetLog::LogLevel /* log_level */) {
   base::DictionaryValue* dict = new base::DictionaryValue();
-  dict->SetInteger("id", id);
+  dict->SetInteger("id",
+                   SpdyConstants::SerializeSettingId(protocol_version, id));
   dict->SetInteger("flags", flags);
   dict->SetInteger("value", value);
   return dict;
 }
 
-base::Value* NetLogSpdySendSettingsCallback(const SettingsMap* settings,
-                                            NetLog::LogLevel /* log_level */) {
+base::Value* NetLogSpdySendSettingsCallback(
+    const SettingsMap* settings,
+    const SpdyMajorVersion protocol_version,
+    NetLog::LogLevel /* log_level */) {
   base::DictionaryValue* dict = new base::DictionaryValue();
   base::ListValue* settings_list = new base::ListValue();
   for (SettingsMap::const_iterator it = settings->begin();
@@ -163,8 +181,11 @@ base::Value* NetLogSpdySendSettingsCallback(const SettingsMap* settings,
     const SpdySettingsIds id = it->first;
     const SpdySettingsFlags flags = it->second.first;
     const uint32 value = it->second.second;
-    settings_list->Append(new base::StringValue(
-        base::StringPrintf("[id:%u flags:%u value:%u]", id, flags, value)));
+    settings_list->Append(new base::StringValue(base::StringPrintf(
+        "[id:%u flags:%u value:%u]",
+        SpdyConstants::SerializeSettingId(protocol_version, id),
+        flags,
+        value)));
   }
   dict->Set("settings", settings_list);
   return dict;
@@ -558,7 +579,6 @@ bool SpdySession::CanPool(TransportSecurityState* transport_security_state,
   std::string pinning_failure_log;
   if (!transport_security_state->CheckPublicKeyPins(
           new_hostname,
-          true, /* sni_available */
           ssl_info.is_issued_by_known_root,
           ssl_info.public_key_hashes,
           &pinning_failure_log)) {
@@ -590,6 +610,7 @@ SpdySession::SpdySession(
       transport_security_state_(transport_security_state),
       read_buffer_(new IOBuffer(kReadBufferSize)),
       stream_hi_water_mark_(kFirstStreamId),
+      last_accepted_push_stream_id_(0),
       num_pushed_streams_(0u),
       num_active_pushed_streams_(0u),
       in_flight_write_frame_type_(DATA),
@@ -718,16 +739,15 @@ void SpdySession::InitializeWithSocket(
                              enable_compression_));
   buffered_spdy_framer_->set_visitor(this);
   buffered_spdy_framer_->set_debug_visitor(this);
-  UMA_HISTOGRAM_ENUMERATION("Net.SpdyVersion", protocol_, kProtoMaximumVersion);
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  UMA_HISTOGRAM_BOOLEAN("Net.SpdySessions_DataReductionProxy",
-                        host_port_pair().Equals(HostPortPair::FromURL(
-                            GURL(SPDY_PROXY_AUTH_ORIGIN))));
-#endif
+  UMA_HISTOGRAM_ENUMERATION(
+      "Net.SpdyVersion2",
+      protocol_ - kProtoSPDYMinimumVersion,
+      kProtoSPDYMaximumVersion - kProtoSPDYMinimumVersion + 1);
 
-  net_log_.AddEvent(
-      NetLog::TYPE_SPDY_SESSION_INITIALIZED,
-      connection_->socket()->NetLog().source().ToEventParametersCallback());
+  net_log_.AddEvent(NetLog::TYPE_SPDY_SESSION_INITIALIZED,
+                    base::Bind(&NetLogSpdyInitializedCallback,
+                               connection_->socket()->NetLog().source(),
+                               protocol_));
 
   DCHECK_EQ(availability_state_, STATE_AVAILABLE);
   connection_->AddHigherLayeredPool(this);
@@ -1182,7 +1202,10 @@ scoped_ptr<SpdyBuffer> SpdySession::CreateDataBuffer(SpdyStreamId stream_id,
 
   scoped_ptr<SpdyBuffer> data_buffer(new SpdyBuffer(frame.Pass()));
 
-  if (flow_control_state_ == FLOW_CONTROL_STREAM_AND_SESSION) {
+  // Send window size is based on payload size, so nothing to do if this is
+  // just a FIN with no payload.
+  if (flow_control_state_ == FLOW_CONTROL_STREAM_AND_SESSION &&
+      effective_len != 0) {
     DecreaseSendWindowSize(static_cast<int32>(effective_len));
     data_buffer->AddConsumeCallback(
         base::Bind(&SpdySession::OnWriteBufferConsumed,
@@ -1314,6 +1337,11 @@ void SpdySession::EnqueueResetStreamFrame(SpdyStreamId stream_id,
 }
 
 void SpdySession::PumpReadLoop(ReadState expected_read_state, int result) {
+  // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is fixed.
+  tracked_objects::ScopedTracker tracking_profile(
+      FROM_HERE_WITH_EXPLICIT_FUNCTION(
+          "418183 DoReadCallback => SpdySession::PumpReadLoop"));
+
   CHECK(!in_io_loop_);
   if (availability_state_ == STATE_DRAINING) {
     return;
@@ -1674,7 +1702,7 @@ void SpdySession::DoDrainSession(Error err, const std::string& description) {
       err != ERR_SOCKET_NOT_CONNECTED &&
       err != ERR_CONNECTION_CLOSED && err != ERR_CONNECTION_RESET) {
     // Enqueue a GOAWAY to inform the peer of why we're closing the connection.
-    SpdyGoAwayIR goaway_ir(0,  // Last accepted stream ID.
+    SpdyGoAwayIR goaway_ir(last_accepted_push_stream_id_,
                            MapNetErrorToGoAwayStatus(err),
                            description);
     EnqueueSessionWrite(HIGHEST,
@@ -2098,10 +2126,13 @@ void SpdySession::OnSetting(SpdySettingsIds id,
   received_settings_ = true;
 
   // Log the setting.
-  net_log_.AddEvent(
-      NetLog::TYPE_SPDY_SESSION_RECV_SETTING,
-      base::Bind(&NetLogSpdySettingCallback,
-                 id, static_cast<SpdySettingsFlags>(flags), value));
+  const SpdyMajorVersion protocol_version = GetProtocolVersion();
+  net_log_.AddEvent(NetLog::TYPE_SPDY_SESSION_RECV_SETTING,
+                    base::Bind(&NetLogSpdySettingCallback,
+                               id,
+                               protocol_version,
+                               static_cast<SpdySettingsFlags>(flags),
+                               value));
 }
 
 void SpdySession::OnSendCompressedFrame(
@@ -2174,11 +2205,7 @@ void SpdySession::OnSynStream(SpdyStreamId stream_id,
                               const SpdyHeaderBlock& headers) {
   CHECK(in_io_loop_);
 
-  if (GetProtocolVersion() >= SPDY4) {
-    DCHECK_EQ(0u, associated_stream_id);
-    OnHeaders(stream_id, fin, headers);
-    return;
-  }
+  DCHECK_LE(GetProtocolVersion(), SPDY3);
 
   base::Time response_time = base::Time::Now();
   base::TimeTicks recv_first_byte_time = time_func_();
@@ -2301,6 +2328,8 @@ void SpdySession::OnSynReply(SpdyStreamId stream_id,
 }
 
 void SpdySession::OnHeaders(SpdyStreamId stream_id,
+                            bool has_priority,
+                            SpdyPriority priority,
                             bool fin,
                             const SpdyHeaderBlock& headers) {
   CHECK(in_io_loop_);
@@ -2350,6 +2379,18 @@ void SpdySession::OnHeaders(SpdyStreamId stream_id,
       DCHECK(active_streams_.find(stream_id) == active_streams_.end());
     }
   }
+}
+
+bool SpdySession::OnUnknownFrame(SpdyStreamId stream_id, int frame_type) {
+  // Validate stream id.
+  // Was the frame sent on a stream id that has not been used in this session?
+  if (stream_id % 2 == 1 && stream_id > stream_hi_water_mark_)
+    return false;
+
+  if (stream_id % 2 == 0 && stream_id > last_accepted_push_stream_id_)
+    return false;
+
+  return true;
 }
 
 void SpdySession::OnRstStream(SpdyStreamId stream_id,
@@ -2509,13 +2550,31 @@ bool SpdySession::TryCreatePushStream(SpdyStreamId stream_id,
   // Server-initiated streams should have even sequence numbers.
   if ((stream_id & 0x1) != 0) {
     LOG(WARNING) << "Received invalid push stream id " << stream_id;
+    if (GetProtocolVersion() > SPDY2)
+      CloseSessionOnError(ERR_SPDY_PROTOCOL_ERROR, "Odd push stream id.");
     return false;
   }
 
+  if (GetProtocolVersion() > SPDY2) {
+    if (stream_id <= last_accepted_push_stream_id_) {
+      LOG(WARNING) << "Received push stream id lesser or equal to the last "
+                   << "accepted before " << stream_id;
+      CloseSessionOnError(
+          ERR_SPDY_PROTOCOL_ERROR,
+          "New push stream id must be greater than the last accepted.");
+      return false;
+    }
+  }
+
   if (IsStreamActive(stream_id)) {
+    // For SPDY3 and higher we should not get here, we'll start going away
+    // earlier on |last_seen_push_stream_id_| check.
+    CHECK_GT(SPDY3, GetProtocolVersion());
     LOG(WARNING) << "Received push for active stream " << stream_id;
     return false;
   }
+
+  last_accepted_push_stream_id_ = stream_id;
 
   RequestPriority request_priority =
       ConvertSpdyPriorityToRequestPriority(priority, GetProtocolVersion());
@@ -2723,35 +2782,37 @@ void SpdySession::SendInitialData() {
         kDefaultInitialRecvWindowSize - session_recv_window_size_);
   }
 
-  // Finally, notify the server about the settings they have
-  // previously told us to use when communicating with them (after
-  // applying them).
-  const SettingsMap& server_settings_map =
-      http_server_properties_->GetSpdySettings(host_port_pair());
-  if (server_settings_map.empty())
-    return;
+  if (protocol_ <= kProtoSPDY31) {
+    // Finally, notify the server about the settings they have
+    // previously told us to use when communicating with them (after
+    // applying them).
+    const SettingsMap& server_settings_map =
+        http_server_properties_->GetSpdySettings(host_port_pair());
+    if (server_settings_map.empty())
+      return;
 
-  SettingsMap::const_iterator it =
-      server_settings_map.find(SETTINGS_CURRENT_CWND);
-  uint32 cwnd = (it != server_settings_map.end()) ? it->second.second : 0;
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Net.SpdySettingsCwndSent", cwnd, 1, 200, 100);
+    SettingsMap::const_iterator it =
+        server_settings_map.find(SETTINGS_CURRENT_CWND);
+    uint32 cwnd = (it != server_settings_map.end()) ? it->second.second : 0;
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Net.SpdySettingsCwndSent", cwnd, 1, 200, 100);
 
-  for (SettingsMap::const_iterator it = server_settings_map.begin();
-       it != server_settings_map.end(); ++it) {
-    const SpdySettingsIds new_id = it->first;
-    const uint32 new_val = it->second.second;
-    HandleSetting(new_id, new_val);
+    for (SettingsMap::const_iterator it = server_settings_map.begin();
+         it != server_settings_map.end(); ++it) {
+      const SpdySettingsIds new_id = it->first;
+      const uint32 new_val = it->second.second;
+      HandleSetting(new_id, new_val);
+    }
+
+    SendSettings(server_settings_map);
   }
-
-  SendSettings(server_settings_map);
 }
 
 
 void SpdySession::SendSettings(const SettingsMap& settings) {
+  const SpdyMajorVersion protocol_version = GetProtocolVersion();
   net_log_.AddEvent(
       NetLog::TYPE_SPDY_SESSION_SEND_SETTINGS,
-      base::Bind(&NetLogSpdySendSettingsCallback, &settings));
-
+      base::Bind(&NetLogSpdySendSettingsCallback, &settings, protocol_version));
   // Create the SETTINGS frame and send it.
   DCHECK(buffered_spdy_framer_.get());
   scoped_ptr<SpdyFrame> settings_frame(

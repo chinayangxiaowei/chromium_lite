@@ -40,7 +40,7 @@ class DriveAppConverter::IconFetcher : public net::URLFetcherDelegate,
       : converter_(converter),
         icon_url_(icon_url),
         expected_size_(expected_size) {}
-  virtual ~IconFetcher() {
+  ~IconFetcher() override {
     if (image_decoder_.get())
       image_decoder_->set_delegate(NULL);
   }
@@ -58,7 +58,7 @@ class DriveAppConverter::IconFetcher : public net::URLFetcherDelegate,
 
  private:
   // net::URLFetcherDelegate overrides:
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE {
+  void OnURLFetchComplete(const net::URLFetcher* source) override {
     CHECK_EQ(fetcher_.get(), source);
     scoped_ptr<net::URLFetcher> fetcher(fetcher_.Pass());
 
@@ -78,14 +78,14 @@ class DriveAppConverter::IconFetcher : public net::URLFetcherDelegate,
   }
 
   // ImageDecoder::Delegate overrides:
-  virtual void OnImageDecoded(const ImageDecoder* decoder,
-                              const SkBitmap& decoded_image) OVERRIDE {
+  void OnImageDecoded(const ImageDecoder* decoder,
+                      const SkBitmap& decoded_image) override {
     if (decoded_image.width() == expected_size_)
       icon_ = decoded_image;
     converter_->OnIconFetchComplete(this);
   }
 
-  virtual void OnDecodeImageFailed(const ImageDecoder* decoder) OVERRIDE {
+  void OnDecodeImageFailed(const ImageDecoder* decoder) override {
     converter_->OnIconFetchComplete(this);
   }
 
@@ -150,11 +150,11 @@ void DriveAppConverter::Start() {
 }
 
 bool DriveAppConverter::IsStarted() const {
-  return !fetchers_.empty() || crx_installer_;
+  return !fetchers_.empty() || crx_installer_.get();
 }
 
 bool DriveAppConverter::IsInstalling(const std::string& app_id) const {
-  return crx_installer_ && crx_installer_->extension() &&
+  return crx_installer_.get() && crx_installer_->extension() &&
          crx_installer_->extension()->id() == app_id;
 }
 
@@ -176,7 +176,7 @@ void DriveAppConverter::OnIconFetchComplete(const IconFetcher* fetcher) {
 }
 
 void DriveAppConverter::StartInstall() {
-  DCHECK(!crx_installer_);
+  DCHECK(!crx_installer_.get());
   crx_installer_ = extensions::CrxInstaller::CreateSilent(
       extensions::ExtensionSystem::Get(profile_)->extension_service());
   // The converted url app should not be syncable. Drive apps go with the user's
@@ -190,7 +190,7 @@ void DriveAppConverter::StartInstall() {
 }
 
 void DriveAppConverter::PostInstallCleanUp() {
-  if (!crx_installer_)
+  if (!crx_installer_.get())
     return;
 
   extensions::InstallTracker::Get(profile_)->RemoveObserver(this);

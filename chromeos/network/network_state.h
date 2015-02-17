@@ -38,11 +38,11 @@ class CHROMEOS_EXPORT NetworkState : public ManagedState {
   // ManagedState overrides
   // If you change this method, update GetProperties too.
   virtual bool PropertyChanged(const std::string& key,
-                               const base::Value& value) OVERRIDE;
+                               const base::Value& value) override;
   virtual bool InitialPropertiesReceived(
-      const base::DictionaryValue& properties) OVERRIDE;
+      const base::DictionaryValue& properties) override;
   virtual void GetStateProperties(
-      base::DictionaryValue* dictionary) const OVERRIDE;
+      base::DictionaryValue* dictionary) const override;
 
   void IPConfigPropertiesChanged(const base::DictionaryValue& properties);
 
@@ -87,6 +87,7 @@ class CHROMEOS_EXPORT NetworkState : public ManagedState {
   const std::string& activation_type() const { return activation_type_; }
   const std::string& activation_state() const { return activation_state_; }
   const std::string& roaming() const { return roaming_; }
+  const std::string& payment_url() const { return payment_url_; }
   bool cellular_out_of_credits() const { return cellular_out_of_credits_; }
 
   // Whether this network has a CACertNSS nickname set.
@@ -169,6 +170,7 @@ class CHROMEOS_EXPORT NetworkState : public ManagedState {
   std::string activation_type_;
   std::string activation_state_;
   std::string roaming_;
+  std::string payment_url_;
   bool cellular_out_of_credits_;
 
   // Whether a deprecated CaCertNSS property of this network is set. Required

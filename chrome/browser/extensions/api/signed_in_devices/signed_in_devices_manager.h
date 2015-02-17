@@ -10,7 +10,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_vector.h"
 #include "base/scoped_observer.h"
-#include "chrome/browser/sync/glue/synced_device_tracker.h"
+#include "components/sync_driver/device_info_tracker.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_registry_observer.h"
@@ -38,13 +38,13 @@ struct EventListenerInfo;
 // public ids for devices(public ids for a device, is not the same for
 // all extensions).
 class SignedInDevicesChangeObserver
-    : public browser_sync::SyncedDeviceTracker::Observer {
+    : public sync_driver::DeviceInfoTracker::Observer {
  public:
   SignedInDevicesChangeObserver(const std::string& extension_id,
                                 Profile* profile);
   virtual ~SignedInDevicesChangeObserver();
 
-  virtual void OnDeviceInfoChange() OVERRIDE;
+  void OnDeviceInfoChange() override;
 
   const std::string& extension_id() {
     return extension_id_;
@@ -63,21 +63,20 @@ class SignedInDevicesManager : public BrowserContextKeyedAPI,
   // Default constructor used for testing.
   SignedInDevicesManager();
   explicit SignedInDevicesManager(content::BrowserContext* context);
-  virtual ~SignedInDevicesManager();
+  ~SignedInDevicesManager() override;
 
   // BrowserContextKeyedAPI implementation.
   static BrowserContextKeyedAPIFactory<SignedInDevicesManager>*
       GetFactoryInstance();
 
   // ExtensionRegistryObserver implementation.
-  virtual void OnExtensionUnloaded(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      UnloadedExtensionInfo::Reason reason) OVERRIDE;
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionInfo::Reason reason) override;
 
   // EventRouter::Observer:
-  virtual void OnListenerAdded(const EventListenerInfo& details) OVERRIDE;
-  virtual void OnListenerRemoved(const EventListenerInfo& details) OVERRIDE;
+  void OnListenerAdded(const EventListenerInfo& details) override;
+  void OnListenerRemoved(const EventListenerInfo& details) override;
 
  private:
   friend class BrowserContextKeyedAPIFactory<SignedInDevicesManager>;

@@ -26,7 +26,7 @@ const char* GetComponentName(ui::LatencyComponentType type) {
     CASE_TYPE(INPUT_EVENT_LATENCY_UI_COMPONENT);
     CASE_TYPE(INPUT_EVENT_LATENCY_RENDERING_SCHEDULED_COMPONENT);
     CASE_TYPE(INPUT_EVENT_LATENCY_FORWARD_SCROLL_UPDATE_TO_MAIN_COMPONENT);
-    CASE_TYPE(INPUT_EVENT_LATENCY_ACKED_TOUCH_COMPONENT);
+    CASE_TYPE(INPUT_EVENT_LATENCY_ACK_RWH_COMPONENT);
     CASE_TYPE(WINDOW_SNAPSHOT_FRAME_NUMBER_COMPONENT);
     CASE_TYPE(WINDOW_OLD_SNAPSHOT_FRAME_NUMBER_COMPONENT);
     CASE_TYPE(INPUT_EVENT_LATENCY_TERMINATED_MOUSE_COMPONENT);
@@ -73,11 +73,11 @@ class LatencyInfoTracedValue : public base::debug::ConvertableToTraceFormat {
   static scoped_refptr<ConvertableToTraceFormat> FromValue(
       scoped_ptr<base::Value> value);
 
-  virtual void AppendAsTraceFormat(std::string* out) const OVERRIDE;
+  void AppendAsTraceFormat(std::string* out) const override;
 
  private:
   explicit LatencyInfoTracedValue(base::Value* value);
-  virtual ~LatencyInfoTracedValue();
+  ~LatencyInfoTracedValue() override;
 
   scoped_ptr<base::Value> value_;
 
@@ -111,20 +111,38 @@ scoped_refptr<base::debug::ConvertableToTraceFormat> AsTraceableData(
            latency.latency_components.begin();
        it != latency.latency_components.end(); ++it) {
     base::DictionaryValue* component_info = new base::DictionaryValue();
-    component_info->SetDouble("comp_id", it->first.second);
-    component_info->SetDouble("time", it->second.event_time.ToInternalValue());
+    component_info->SetDouble("comp_id", static_cast<double>(it->first.second));
+    component_info->SetDouble(
+        "time", static_cast<double>(it->second.event_time.ToInternalValue()));
     component_info->SetDouble("count", it->second.event_count);
     record_data->Set(GetComponentName(it->first.first), component_info);
   }
-  record_data->SetDouble("trace_id", latency.trace_id);
-  return LatencyInfoTracedValue::FromValue(record_data.PassAs<base::Value>());
+  record_data->SetDouble("trace_id", static_cast<double>(latency.trace_id));
+
+  scoped_ptr<base::ListValue> coordinates(new base::ListValue());
+  for (size_t i = 0; i < latency.input_coordinates_size; i++) {
+    scoped_ptr<base::DictionaryValue> coordinate_pair(
+        new base::DictionaryValue());
+    coordinate_pair->SetDouble("x", latency.input_coordinates[i].x);
+    coordinate_pair->SetDouble("y", latency.input_coordinates[i].y);
+    coordinates->Append(coordinate_pair.release());
+  }
+  record_data->Set("coordinates", coordinates.release());
+  return LatencyInfoTracedValue::FromValue(record_data.Pass());
 }
 
 }  // namespace
 
 namespace ui {
 
-LatencyInfo::LatencyInfo() : trace_id(-1), terminated(false) {
+LatencyInfo::InputCoordinate::InputCoordinate() : x(0), y(0) {
+}
+
+LatencyInfo::InputCoordinate::InputCoordinate(float x, float y) : x(x), y(y) {
+}
+
+LatencyInfo::LatencyInfo()
+    : input_coordinates_size(0), trace_id(-1), terminated(false) {
 }
 
 LatencyInfo::~LatencyInfo() {
@@ -137,6 +155,14 @@ bool LatencyInfo::Verify(const std::vector<LatencyInfo>& latency_info,
                << latency_info.size() << " is too big.";
     return false;
   }
+  for (size_t i = 0; i < latency_info.size(); i++) {
+    if (latency_info[i].input_coordinates_size > kMaxInputCoordinates) {
+      LOG(ERROR) << referring_msg << ", coordinate vector size "
+                 << latency_info[i].input_coordinates_size << " is too big.";
+      return false;
+    }
+  }
+
   return true;
 }
 

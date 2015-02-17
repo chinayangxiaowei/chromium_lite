@@ -96,11 +96,6 @@ class CannedBrowsingDataIndexedDBHelper
   explicit CannedBrowsingDataIndexedDBHelper(
       content::IndexedDBContext* context);
 
-  // Return a copy of the IndexedDB helper. Only one consumer can use the
-  // StartFetching method at a time, so we need to create a copy of the helper
-  // every time we instantiate a cookies tree model for it.
-  CannedBrowsingDataIndexedDBHelper* Clone();
-
   // Add a indexed database to the set of canned indexed databases that is
   // returned by this helper.
   void AddIndexedDB(const GURL& origin,
@@ -120,13 +115,12 @@ class CannedBrowsingDataIndexedDBHelper
       GetIndexedDBInfo() const;
 
   // BrowsingDataIndexedDBHelper methods.
-  virtual void StartFetching(
-      const base::Callback<void(const std::list<content::IndexedDBInfo>&)>&
-          callback) OVERRIDE;
-  virtual void DeleteIndexedDB(const GURL& origin) OVERRIDE;
+  void StartFetching(const base::Callback<
+      void(const std::list<content::IndexedDBInfo>&)>& callback) override;
+  void DeleteIndexedDB(const GURL& origin) override;
 
  private:
-  virtual ~CannedBrowsingDataIndexedDBHelper();
+  ~CannedBrowsingDataIndexedDBHelper() override;
 
   std::set<PendingIndexedDBInfo> pending_indexed_db_info_;
 

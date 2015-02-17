@@ -43,10 +43,10 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/bindings_policy.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "sync/protocol/session_specifics.pb.h"
+#include "ui/base/page_transition_types.h"
 
 using sessions::SerializedNavigationEntry;
 using sessions::SerializedNavigationEntryTestHelper;
@@ -65,14 +65,14 @@ class SessionRestoreTest : public InProcessBrowserTest {
 
  protected:
 #if defined(OS_CHROMEOS)
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     // TODO(nkostylev): Investigate if we can remove this switch.
     command_line->AppendSwitch(switches::kCreateBrowserOnStartupForTests);
     InProcessBrowserTest::SetUpCommandLine(command_line);
   }
 #endif
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     active_browser_list_ = BrowserList::GetInstance(chrome::GetActiveDesktop());
 
     SessionStartupPref pref(SessionStartupPref::LAST);
@@ -93,7 +93,7 @@ class SessionRestoreTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
   }
 
-  virtual bool SetUpUserDataDirectory() OVERRIDE {
+  bool SetUpUserDataDirectory() override {
     url1_ = ui_test_utils::GetTestUrl(
         base::FilePath().AppendASCII("session_history"),
         base::FilePath().AppendASCII("bot1.html"));
@@ -144,7 +144,7 @@ class SessionRestoreTest : public InProcessBrowserTest {
     } else {
       chrome::NavigateParams params(profile,
                                     url,
-                                    content::PAGE_TRANSITION_LINK);
+                                    ui::PAGE_TRANSITION_LINK);
       chrome::Navigate(&params);
     }
     Browser* new_browser = window_observer.WaitForSingleNewBrowser();
@@ -401,7 +401,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreTest, RestoreIndividualTabFromWindow) {
         content::NOTIFICATION_LOAD_STOP,
         content::NotificationService::AllSources());
     chrome::AddSelectedTabWithURL(browser(), url2,
-                                  content::PAGE_TRANSITION_LINK);
+                                  ui::PAGE_TRANSITION_LINK);
     observer.Wait();
   }
   {
@@ -409,7 +409,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreTest, RestoreIndividualTabFromWindow) {
         content::NOTIFICATION_LOAD_STOP,
         content::NotificationService::AllSources());
     chrome::AddSelectedTabWithURL(browser(), url3,
-                                  content::PAGE_TRANSITION_LINK);
+                                  ui::PAGE_TRANSITION_LINK);
     observer.Wait();
   }
 
@@ -893,7 +893,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreTest, ActiveIndexUpdatedAtInsert) {
       ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
 
   chrome::NavigateParams navigate_params(browser(), url3_,
-                                         content::PAGE_TRANSITION_TYPED);
+                                         ui::PAGE_TRANSITION_TYPED);
   navigate_params.tabstrip_index = 0;
   navigate_params.disposition = NEW_BACKGROUND_TAB;
   ui_test_utils::NavigateToURL(&navigate_params);

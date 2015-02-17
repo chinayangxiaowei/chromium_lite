@@ -5,8 +5,8 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_clock.h"
@@ -44,27 +44,27 @@ namespace extensions {
 // the unit tests.
 class ActivityDatabaseTestPolicy : public ActivityDatabase::Delegate {
  public:
-  ActivityDatabaseTestPolicy() {};
+  ActivityDatabaseTestPolicy() {}
 
   static const char kTableName[];
-  static const char* kTableContentFields[];
-  static const char* kTableFieldTypes[];
+  static const char* const kTableContentFields[];
+  static const char* const kTableFieldTypes[];
 
   virtual void Record(ActivityDatabase* db, scoped_refptr<Action> action);
 
  protected:
-  virtual bool InitDatabase(sql::Connection* db) OVERRIDE;
-  virtual bool FlushDatabase(sql::Connection*) OVERRIDE;
-  virtual void OnDatabaseFailure() OVERRIDE {}
-  virtual void OnDatabaseClose() OVERRIDE { delete this; }
+  bool InitDatabase(sql::Connection* db) override;
+  bool FlushDatabase(sql::Connection*) override;
+  void OnDatabaseFailure() override {}
+  void OnDatabaseClose() override { delete this; }
 
   std::vector<scoped_refptr<Action> > queue_;
 };
 
 const char ActivityDatabaseTestPolicy::kTableName[] = "actions";
-const char* ActivityDatabaseTestPolicy::kTableContentFields[] = {
+const char* const ActivityDatabaseTestPolicy::kTableContentFields[] = {
     "extension_id", "time", "action_type", "api_name"};
-const char* ActivityDatabaseTestPolicy::kTableFieldTypes[] = {
+const char* const ActivityDatabaseTestPolicy::kTableFieldTypes[] = {
     "LONGVARCHAR NOT NULL", "INTEGER", "INTEGER", "LONGVARCHAR"};
 
 bool ActivityDatabaseTestPolicy::InitDatabase(sql::Connection* db) {
@@ -82,7 +82,7 @@ bool ActivityDatabaseTestPolicy::FlushDatabase(sql::Connection* db) {
 
   std::vector<scoped_refptr<Action> >::size_type i;
   for (i = 0; i < queue_.size(); i++) {
-    const Action& action = *queue_[i];
+    const Action& action = *queue_[i].get();
     sql::Statement statement(db->GetCachedStatement(
         sql::StatementID(SQL_FROM_HERE), sql_str.c_str()));
     statement.BindString(0, action.extension_id());
@@ -107,7 +107,7 @@ void ActivityDatabaseTestPolicy::Record(ActivityDatabase* db,
 
 class ActivityDatabaseTest : public ChromeRenderViewHostTestHarness {
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 #if defined OS_CHROMEOS
     test_user_manager_.reset(new chromeos::ScopedTestUserManager());
@@ -117,7 +117,7 @@ class ActivityDatabaseTest : public ChromeRenderViewHostTestHarness {
         switches::kEnableExtensionActivityLogTesting);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
 #if defined OS_CHROMEOS
     test_user_manager_.reset();
 #endif

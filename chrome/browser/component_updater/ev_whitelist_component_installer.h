@@ -5,12 +5,14 @@
 #ifndef CHROME_BROWSER_COMPONENT_UPDATER_EV_WHITELIST_COMPONENT_INSTALLER_H_
 #define CHROME_BROWSER_COMPONENT_UPDATER_EV_WHITELIST_COMPONENT_INSTALLER_H_
 
+#include <stdint.h>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/macros.h"
 #include "base/values.h"
-#include "chrome/browser/component_updater/default_component_installer.h"
+#include "components/component_updater/default_component_installer.h"
 
 namespace component_updater {
 
@@ -19,22 +21,21 @@ class ComponentUpdateService;
 class EVWhitelistComponentInstallerTraits : public ComponentInstallerTraits {
  public:
   EVWhitelistComponentInstallerTraits();
-  virtual ~EVWhitelistComponentInstallerTraits() {}
+  ~EVWhitelistComponentInstallerTraits() override {}
 
  private:
   // The following methods override ComponentInstallerTraits.
-  virtual bool CanAutoUpdate() const OVERRIDE;
-  virtual bool OnCustomInstall(const base::DictionaryValue& manifest,
-                               const base::FilePath& install_dir) OVERRIDE;
-  virtual bool VerifyInstallation(
-      const base::FilePath& install_dir) const OVERRIDE;
-  virtual void ComponentReady(
-      const base::Version& version,
-      const base::FilePath& path,
-      scoped_ptr<base::DictionaryValue> manifest) OVERRIDE;
-  virtual base::FilePath GetBaseDirectory() const OVERRIDE;
-  virtual void GetHash(std::vector<uint8>* hash) const OVERRIDE;
-  virtual std::string GetName() const OVERRIDE;
+  bool CanAutoUpdate() const override;
+  bool OnCustomInstall(const base::DictionaryValue& manifest,
+                       const base::FilePath& install_dir) override;
+  bool VerifyInstallation(const base::DictionaryValue& manifest,
+                          const base::FilePath& install_dir) const override;
+  void ComponentReady(const base::Version& version,
+                      const base::FilePath& path,
+                      scoped_ptr<base::DictionaryValue> manifest) override;
+  base::FilePath GetBaseDirectory() const override;
+  void GetHash(std::vector<uint8_t>* hash) const override;
+  std::string GetName() const override;
 
   static base::FilePath GetInstalledPath(const base::FilePath& base);
 

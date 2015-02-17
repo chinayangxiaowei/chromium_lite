@@ -159,11 +159,12 @@ void AddCpuInfoToFingerprint(Fingerprint::MachineCharacteristics* machine) {
 }
 
 // Writes info about the machine's GPU into the |machine|.
-void AddGpuInfoToFingerprint(Fingerprint::MachineCharacteristics* machine) {
-  const gpu::GPUInfo& gpu_info =
-      content::GpuDataManager::GetInstance()->GetGPUInfo();
-  if (!gpu_info.finalized)
+void AddGpuInfoToFingerprint(Fingerprint::MachineCharacteristics* machine,
+                             const content::GpuDataManager& gpu_data_manager) {
+  if (!gpu_data_manager.IsEssentialGpuInfoAvailable())
     return;
+
+  const gpu::GPUInfo gpu_info = gpu_data_manager.GetGPUInfo();
 
   Fingerprint::MachineCharacteristics::Graphics* graphics =
       machine->mutable_graphics_card();
@@ -198,10 +199,10 @@ class FingerprintDataLoader : public content::GpuDataManagerObserver {
       const base::Callback<void(scoped_ptr<Fingerprint>)>& callback);
 
  private:
-  virtual ~FingerprintDataLoader() {}
+  ~FingerprintDataLoader() override {}
 
   // content::GpuDataManagerObserver:
-  virtual void OnGpuInfoUpdate() OVERRIDE;
+  void OnGpuInfoUpdate() override;
 
   // Callbacks for asynchronously loaded data.
   void OnGotFonts(scoped_ptr<base::ListValue> fonts);
@@ -246,16 +247,16 @@ class FingerprintDataLoader : public content::GpuDataManagerObserver {
   // if not all asynchronous data has been loaded.
   base::OneShotTimer<FingerprintDataLoader> timeout_timer_;
 
-  // For invalidating asynchronous callbacks that might arrive after |this|
-  // instance is destroyed.
-  base::WeakPtrFactory<FingerprintDataLoader> weak_ptr_factory_;
-
   // The callback that will be called once all the data is available.
   base::Callback<void(scoped_ptr<Fingerprint>)> callback_;
 
   // The callback used as an "observer" of the GeolocationProvider.
   scoped_ptr<content::GeolocationProvider::Subscription>
       geolocation_subscription_;
+
+  // For invalidating asynchronous callbacks that might arrive after |this|
+  // instance is destroyed.
+  base::WeakPtrFactory<FingerprintDataLoader> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(FingerprintDataLoader);
 };
@@ -286,8 +287,8 @@ FingerprintDataLoader::FingerprintDataLoader(
       user_agent_(user_agent),
       install_time_(install_time),
       waiting_on_plugins_(true),
-      weak_ptr_factory_(this),
-      callback_(callback) {
+      callback_(callback),
+      weak_ptr_factory_(this) {
   DCHECK(!install_time_.is_null());
 
   timeout_timer_.Start(FROM_HERE, timeout,
@@ -296,7 +297,7 @@ FingerprintDataLoader::FingerprintDataLoader(
 
   // Load GPU data if needed.
   if (gpu_data_manager_->GpuAccessAllowed(NULL) &&
-      !gpu_data_manager_->IsCompleteGpuInfoAvailable()) {
+      !gpu_data_manager_->IsEssentialGpuInfoAvailable()) {
     gpu_observer_.Add(gpu_data_manager_);
     gpu_data_manager_->RequestCompleteGpuInfoIfNeeded();
   }
@@ -324,7 +325,7 @@ FingerprintDataLoader::FingerprintDataLoader(
 }
 
 void FingerprintDataLoader::OnGpuInfoUpdate() {
-  if (!gpu_data_manager_->IsCompleteGpuInfoAvailable())
+  if (!gpu_data_manager_->IsEssentialGpuInfoAvailable())
     return;
 
   gpu_observer_.Remove(gpu_data_manager_);
@@ -362,7 +363,7 @@ void FingerprintDataLoader::MaybeFillFingerprint() {
   // fill the fingerprint and clean up.
   if (!timeout_timer_.IsRunning() ||
       ((!gpu_data_manager_->GpuAccessAllowed(NULL) ||
-        gpu_data_manager_->IsCompleteGpuInfoAvailable()) &&
+        gpu_data_manager_->IsEssentialGpuInfoAvailable()) &&
        fonts_ &&
        !waiting_on_plugins_ &&
        (geoposition_.Validate() ||
@@ -395,7 +396,7 @@ void FingerprintDataLoader::FillFingerprint() {
   AddAcceptLanguagesToFingerprint(accept_languages_, machine);
   AddScreenInfoToFingerprint(screen_info_, machine);
   AddCpuInfoToFingerprint(machine);
-  AddGpuInfoToFingerprint(machine);
+  AddGpuInfoToFingerprint(machine, *gpu_data_manager_);
 
   // TODO(isherman): Record the user_and_device_name_hash.
   // TODO(isherman): Record the partition size of the hard drives?

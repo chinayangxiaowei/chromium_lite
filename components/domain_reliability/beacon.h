@@ -24,10 +24,13 @@ struct DOMAIN_RELIABILITY_EXPORT DomainReliabilityBeacon {
 
   // Converts the Beacon to JSON format for uploading. Calculates the age
   // relative to an upload time of |upload_time|.
-  base::Value* ToValue(base::TimeTicks upload_time) const;
+  base::Value* ToValue(base::TimeTicks upload_time,
+                       base::TimeTicks last_network_change_time) const;
 
   // The URL that the beacon is reporting on, if included.
   std::string url;
+  // The domain that the beacon is reporting on, if included.
+  std::string domain;
   // The resource name that the beacon is reporting on, if included.
   std::string resource;
   // Status string (e.g. "ok", "dns.nxdomain", "http.403").

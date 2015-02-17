@@ -24,57 +24,57 @@ namespace wifi {
 class WiFiServiceMac : public WiFiService {
  public:
   WiFiServiceMac();
-  virtual ~WiFiServiceMac();
+  ~WiFiServiceMac() override;
 
   // WiFiService interface implementation.
-  virtual void Initialize(
-      scoped_refptr<base::SequencedTaskRunner> task_runner) OVERRIDE;
+  void Initialize(
+      scoped_refptr<base::SequencedTaskRunner> task_runner) override;
 
-  virtual void UnInitialize() OVERRIDE;
+  void UnInitialize() override;
 
-  virtual void GetProperties(const std::string& network_guid,
-                             base::DictionaryValue* properties,
-                             std::string* error) OVERRIDE;
+  void GetProperties(const std::string& network_guid,
+                     base::DictionaryValue* properties,
+                     std::string* error) override;
 
-  virtual void GetManagedProperties(const std::string& network_guid,
-                                    base::DictionaryValue* managed_properties,
-                                    std::string* error) OVERRIDE;
+  void GetManagedProperties(const std::string& network_guid,
+                            base::DictionaryValue* managed_properties,
+                            std::string* error) override;
 
-  virtual void GetState(const std::string& network_guid,
-                        base::DictionaryValue* properties,
-                        std::string* error) OVERRIDE;
+  void GetState(const std::string& network_guid,
+                base::DictionaryValue* properties,
+                std::string* error) override;
 
-  virtual void SetProperties(const std::string& network_guid,
-                             scoped_ptr<base::DictionaryValue> properties,
-                             std::string* error) OVERRIDE;
+  void SetProperties(const std::string& network_guid,
+                     scoped_ptr<base::DictionaryValue> properties,
+                     std::string* error) override;
 
-  virtual void CreateNetwork(bool shared,
-                             scoped_ptr<base::DictionaryValue> properties,
-                             std::string* network_guid,
-                             std::string* error) OVERRIDE;
+  void CreateNetwork(bool shared,
+                     scoped_ptr<base::DictionaryValue> properties,
+                     std::string* network_guid,
+                     std::string* error) override;
 
-  virtual void GetVisibleNetworks(const std::string& network_type,
-                                  base::ListValue* network_list,
-                                  bool include_details) OVERRIDE;
+  void GetVisibleNetworks(const std::string& network_type,
+                          base::ListValue* network_list,
+                          bool include_details) override;
 
-  virtual void RequestNetworkScan() OVERRIDE;
+  void RequestNetworkScan() override;
 
-  virtual void StartConnect(const std::string& network_guid,
-                            std::string* error) OVERRIDE;
+  void StartConnect(const std::string& network_guid,
+                    std::string* error) override;
 
-  virtual void StartDisconnect(const std::string& network_guid,
-                               std::string* error) OVERRIDE;
+  void StartDisconnect(const std::string& network_guid,
+                       std::string* error) override;
 
-  virtual void GetKeyFromSystem(const std::string& network_guid,
-                                std::string* key_data,
-                                std::string* error) OVERRIDE;
+  void GetKeyFromSystem(const std::string& network_guid,
+                        std::string* key_data,
+                        std::string* error) override;
 
-  virtual void SetEventObservers(
+  void SetEventObservers(
       scoped_refptr<base::MessageLoopProxy> message_loop_proxy,
       const NetworkGuidListCallback& networks_changed_observer,
-      const NetworkGuidListCallback& network_list_changed_observer) OVERRIDE;
+      const NetworkGuidListCallback& network_list_changed_observer) override;
 
-  virtual void RequestConnectedNetworkUpdate() OVERRIDE;
+  void RequestConnectedNetworkUpdate() override;
 
  private:
   // Checks |ns_error| and if is not |nil|, then stores |error_name|
@@ -99,6 +99,10 @@ class WiFiServiceMac : public WiFiService {
 
   // Converts |CWSecurityMode| into onc::wifi::k{WPA|WEP}* security constant.
   std::string SecurityFromCWSecurityMode(CWSecurityMode security) const;
+
+  // Returns onc::wifi::k{WPA|WEP}* security constant supported by the
+  // |CWNetwork|.
+  std::string SecurityFromCWNetwork(const CWNetwork* network) const;
 
   // Converts |CWChannelBand| into Frequency constant.
   Frequency FrequencyFromCWChannelBand(CWChannelBand band) const;
@@ -505,10 +509,26 @@ void WiFiServiceMac::NetworkPropertiesFromCWNetwork(
   properties->frequency = FrequencyFromCWChannelBand(
       static_cast<CWChannelBand>([[network wlanChannel] channelBand]));
   properties->frequency_set.insert(properties->frequency);
-  properties->security = SecurityFromCWSecurityMode(
-      static_cast<CWSecurityMode>([[network securityMode] intValue]));
 
-  properties->signal_strength = [[network rssi] intValue];
+  // -[CWNetwork supportsSecurity:] is available from 10.7 SDK while
+  // -[CWNetwork securityMode] is deprecated and hidden as private since
+  // 10.9 SDK. The latter is kept for now to support running on 10.6. It
+  // should be removed when 10.6 support is dropped.
+  if ([network respondsToSelector:@selector(supportsSecurity:)]) {
+    properties->security = SecurityFromCWNetwork(network);
+  } else {
+    properties->security = SecurityFromCWSecurityMode(
+        static_cast<CWSecurityMode>([[network securityMode] intValue]));
+  }
+
+  // rssiValue property of CWNetwork is available from 10.7 SDK while
+  // -[CWNetwork rssi] is deprecated and hidden as private since 10.9 SDK.
+  // The latter is kept for now to support running on 10.6. It should be
+  // removed when 10.6 support is dropped.
+  if ([network respondsToSelector:@selector(rssiValue)])
+    properties->signal_strength = [network rssiValue];
+  else
+    properties->signal_strength = [[network rssi] intValue];
 }
 
 std::string WiFiServiceMac::SecurityFromCWSecurityMode(
@@ -529,6 +549,31 @@ std::string WiFiServiceMac::SecurityFromCWSecurityMode(
     case kCWSecurityModeDynamicWEP:
       return onc::wifi::kWPA_EAP;
   }
+  return onc::wifi::kWPA_EAP;
+}
+
+std::string WiFiServiceMac::SecurityFromCWNetwork(
+    const CWNetwork* network) const {
+  if ([network supportsSecurity:kCWSecurityWPAEnterprise] ||
+      [network supportsSecurity:kCWSecurityWPA2Enterprise]) {
+    return onc::wifi::kWPA_EAP;
+  }
+
+  if ([network supportsSecurity:kCWSecurityWPAPersonal] ||
+      [network supportsSecurity:kCWSecurityWPA2Personal]) {
+    return onc::wifi::kWPA_PSK;
+  }
+
+  if ([network supportsSecurity:kCWSecurityWEP])
+    return onc::wifi::kWEP_PSK;
+
+  if ([network supportsSecurity:kCWSecurityNone])
+    return onc::wifi::kSecurityNone;
+
+  // TODO(mef): Figure out correct mapping.
+  if ([network supportsSecurity:kCWSecurityDynamicWEP])
+    return onc::wifi::kWPA_EAP;
+
   return onc::wifi::kWPA_EAP;
 }
 

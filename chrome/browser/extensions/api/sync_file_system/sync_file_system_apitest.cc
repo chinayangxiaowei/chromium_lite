@@ -4,10 +4,8 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/sync_file_system/drive_backend_v1/drive_file_sync_service.h"
 #include "chrome/browser/sync_file_system/file_status_observer.h"
 #include "chrome/browser/sync_file_system/local_change_processor.h"
 #include "chrome/browser/sync_file_system/mock_remote_file_sync_service.h"
@@ -17,17 +15,17 @@
 #include "chrome/browser/sync_file_system/syncable_file_system_util.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/test/base/test_switches.h"
+#include "storage/browser/fileapi/file_system_url.h"
+#include "storage/browser/quota/quota_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/browser/fileapi/file_system_url.h"
-#include "webkit/browser/quota/quota_manager.h"
 
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::Ne;
 using ::testing::Property;
 using ::testing::Return;
-using fileapi::FileSystemURL;
+using storage::FileSystemURL;
 using sync_file_system::MockRemoteFileSyncService;
 using sync_file_system::RemoteFileSyncService;
 using sync_file_system::SyncFileSystemServiceFactory;
@@ -41,27 +39,29 @@ class SyncFileSystemApiTest : public ExtensionApiTest {
         real_minimum_preserved_space_(0),
         real_default_quota_(0) {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
 
     real_minimum_preserved_space_ =
-        quota::QuotaManager::kMinimumPreserveForSystem;
-    quota::QuotaManager::kMinimumPreserveForSystem = 0;
+        storage::QuotaManager::kMinimumPreserveForSystem;
+    storage::QuotaManager::kMinimumPreserveForSystem = 0;
 
     // TODO(calvinlo): Update test code after default quota is made const
     // (http://crbug.com/155488).
-    real_default_quota_ = quota::QuotaManager::kSyncableStorageDefaultHostQuota;
-    quota::QuotaManager::kSyncableStorageDefaultHostQuota = 123456;
+    real_default_quota_ =
+        storage::QuotaManager::kSyncableStorageDefaultHostQuota;
+    storage::QuotaManager::kSyncableStorageDefaultHostQuota = 123456;
   }
 
-  virtual void TearDownInProcessBrowserTestFixture() OVERRIDE {
-    quota::QuotaManager::kMinimumPreserveForSystem =
+  void TearDownInProcessBrowserTestFixture() override {
+    storage::QuotaManager::kMinimumPreserveForSystem =
         real_minimum_preserved_space_;
-    quota::QuotaManager::kSyncableStorageDefaultHostQuota = real_default_quota_;
+    storage::QuotaManager::kSyncableStorageDefaultHostQuota =
+        real_default_quota_;
     ExtensionApiTest::TearDownInProcessBrowserTestFixture();
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     // Must happen after the browser process is created because instantiating
     // the factory will instantiate ExtensionSystemFactory which depends on
     // ExtensionsBrowserClient setup in BrowserProcessImpl.
@@ -93,12 +93,13 @@ ACTION_P2(UpdateRemoteChangeQueue, origin, mock_remote_service) {
   mock_remote_service->NotifyRemoteChangeQueueUpdated(1);
 }
 
-ACTION_P5(ReturnWithFakeFileAddedStatus,
+ACTION_P6(ReturnWithFakeFileAddedStatus,
           origin,
           mock_remote_service,
-          sync_direction,
+          file_type,
           sync_file_status,
-          sync_action_taken) {
+          sync_action_taken,
+          sync_direction) {
   FileSystemURL mock_url = sync_file_system::CreateSyncableFileSystemURL(
       *origin,
       base::FilePath(FILE_PATH_LITERAL("foo.txt")));
@@ -108,7 +109,11 @@ ACTION_P5(ReturnWithFakeFileAddedStatus,
                             sync_file_system::SYNC_STATUS_OK,
                             mock_url));
   mock_remote_service->NotifyFileStatusChanged(
-      mock_url, sync_direction, sync_file_status, sync_action_taken);
+      mock_url,
+      file_type,
+      sync_file_status,
+      sync_action_taken,
+      sync_direction);
 }
 
 }  // namespace
@@ -139,6 +144,7 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemApiTest, OnFileStatusChanged) {
       .WillOnce(ReturnWithFakeFileAddedStatus(
           &origin,
           mock_remote_service(),
+          sync_file_system::SYNC_FILE_TYPE_FILE,
           sync_file_system::SYNC_FILE_STATUS_SYNCED,
           sync_file_system::SYNC_ACTION_ADDED,
           sync_file_system::SYNC_DIRECTION_REMOTE_TO_LOCAL));
@@ -155,6 +161,7 @@ IN_PROC_BROWSER_TEST_F(SyncFileSystemApiTest, OnFileStatusChangedDeleted) {
       .WillOnce(ReturnWithFakeFileAddedStatus(
           &origin,
           mock_remote_service(),
+          sync_file_system::SYNC_FILE_TYPE_FILE,
           sync_file_system::SYNC_FILE_STATUS_SYNCED,
           sync_file_system::SYNC_ACTION_DELETED,
           sync_file_system::SYNC_DIRECTION_REMOTE_TO_LOCAL));

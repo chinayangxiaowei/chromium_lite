@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+<include src="../node_utils.js">
+
 cr.define('cr.ui.pageManager', function() {
   var PageManager = cr.ui.pageManager.PageManager;
 
@@ -15,7 +17,7 @@ cr.define('cr.ui.pageManager', function() {
    * @param {string} name Page name.
    * @param {string} title Page title, used for history.
    * @param {string} pageDivName ID of the div corresponding to the page.
-   * @extends {EventTarget}
+   * @extends {cr.EventTarget}
    */
   function Page(name, title, pageDivName) {
     this.name = name;
@@ -28,6 +30,7 @@ cr.define('cr.ui.pageManager', function() {
     this.pageDiv.page = null;
     this.tab = null;
     this.lastFocusedElement = null;
+    this.hash = '';
   }
 
   Page.prototype = {
@@ -35,7 +38,7 @@ cr.define('cr.ui.pageManager', function() {
 
     /**
      * The parent page of this page, or null for root pages.
-     * @type {Page}
+     * @type {cr.ui.pageManager.Page}
      */
     parentPage: null,
 
@@ -66,6 +69,12 @@ cr.define('cr.ui.pageManager', function() {
     initializePage: function() {},
 
     /**
+     * Called by the PageManager when this.hash changes while the page is
+     * already visible. This is analogous to the hashchange DOM event.
+     */
+    didChangeHash: function() {},
+
+    /**
      * Sets focus on the first focusable element. Override for a custom focus
      * strategy.
      */
@@ -86,27 +95,13 @@ cr.define('cr.ui.pageManager', function() {
     },
 
     /**
-     * Reverses the child elements of this overlay's button strip if it hasn't
-     * already been reversed. This is necessary because WebKit does not alter
-     * the tab order for elements that are visually reversed using
-     * flex-direction: reverse, and the button order is reversed for views.
-     * See http://webk.it/62664 for more information.
+     * Reverse any buttons strips in this page (only applies to overlays).
+     * @see cr.ui.reverseButtonStrips for an explanation of why this is
+     * necessary and when it's done.
      */
     reverseButtonStrip: function() {
       assert(this.isOverlay);
-      var buttonStrips =
-          this.pageDiv.querySelectorAll('.button-strip:not([reversed])');
-
-      // Reverse all button-strips in the overlay.
-      for (var j = 0; j < buttonStrips.length; j++) {
-        var buttonStrip = buttonStrips[j];
-
-        var childNodes = buttonStrip.childNodes;
-        for (var i = childNodes.length - 1; i >= 0; i--)
-          buttonStrip.appendChild(childNodes[i]);
-
-        buttonStrip.setAttribute('reversed', '');
-      }
+      cr.ui.reverseButtonStrips(this.pageDiv);
     },
 
     /**
@@ -116,6 +111,35 @@ cr.define('cr.ui.pageManager', function() {
     canShowPage: function() {
       return true;
     },
+
+    /**
+     * Updates the hash of the current page. If the page is topmost, the history
+     * state is updated.
+     * @param {string} hash The new hash value. Like location.hash, this
+     *     should include the leading '#' if not empty.
+     */
+    setHash: function(hash) {
+      if (this.hash == hash)
+        return;
+      this.hash = hash;
+      PageManager.onPageHashChanged(this);
+    },
+
+    /**
+     * Called after the page has been shown.
+     */
+    didShowPage: function() {},
+
+    /**
+     * Called before the page will be hidden, e.g., when a different root page
+     * will be shown.
+     */
+    willHidePage: function() {},
+
+    /**
+     * Called after the overlay has been closed.
+     */
+    didClosePage: function() {},
 
     /**
      * Gets the container div for this page if it is an overlay.
@@ -243,6 +267,7 @@ cr.define('cr.ui.pageManager', function() {
         pageDiv.page = this;
         // NOTE: This is a hacky way to force the container to layout which
         // will allow us to trigger the webkit transition.
+        /** @suppress {uselessCode} */
         container.scrollTop;
 
         this.pageDiv.removeAttribute('aria-hidden');

@@ -8,7 +8,6 @@
 #include "base/bind_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration.h"
@@ -24,6 +23,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "chrome/installer/util/install_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -32,8 +33,6 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_font_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/font.h"
@@ -74,7 +73,7 @@ content::WebUIDataSource* CreateSetAsDefaultBrowserUIHTMLSource() {
                                   IDS_METRO_FLOW_LOGO_STRING_ALT);
   data_source->SetJsonPath("strings.js");
   data_source->AddResourcePath("set_as_default_browser.js",
-      IDR_SET_AS_DEFAULT_BROWSER_JS);
+                               IDR_SET_AS_DEFAULT_BROWSER_JS);
   data_source->SetDefaultResource(IDR_SET_AS_DEFAULT_BROWSER_HTML);
   return data_source;
 }
@@ -102,13 +101,13 @@ class SetAsDefaultBrowserHandler
   virtual ~SetAsDefaultBrowserHandler();
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
   // ShellIntegration::DefaultWebClientObserver implementation.
   virtual void SetDefaultWebClientUIState(
-      ShellIntegration::DefaultWebClientUIState state) OVERRIDE;
-  virtual void OnSetAsDefaultConcluded(bool close_chrome)  OVERRIDE;
-  virtual bool IsInteractiveSetDefaultPermitted() OVERRIDE;
+      ShellIntegration::DefaultWebClientUIState state) override;
+  virtual void OnSetAsDefaultConcluded(bool close_chrome)  override;
+  virtual bool IsInteractiveSetDefaultPermitted() override;
 
  private:
   // Handler for the 'Next' (or 'make Chrome the Metro browser') button.
@@ -208,25 +207,25 @@ class SetAsDefaultBrowserDialogImpl : public ui::WebDialogDelegate,
 
  protected:
   // Overridden from WebDialogDelegate:
-  virtual ui::ModalType GetDialogModalType() const OVERRIDE;
-  virtual base::string16 GetDialogTitle() const OVERRIDE;
-  virtual GURL GetDialogContentURL() const OVERRIDE;
+  virtual ui::ModalType GetDialogModalType() const override;
+  virtual base::string16 GetDialogTitle() const override;
+  virtual GURL GetDialogContentURL() const override;
   virtual void GetWebUIMessageHandlers(
-      std::vector<WebUIMessageHandler*>* handlers) const OVERRIDE;
-  virtual void GetDialogSize(gfx::Size* size) const OVERRIDE;
-  virtual std::string GetDialogArgs() const OVERRIDE;
-  virtual void OnDialogClosed(const std::string& json_retval) OVERRIDE;
+      std::vector<WebUIMessageHandler*>* handlers) const override;
+  virtual void GetDialogSize(gfx::Size* size) const override;
+  virtual std::string GetDialogArgs() const override;
+  virtual void OnDialogClosed(const std::string& json_retval) override;
   virtual void OnCloseContents(WebContents* source,
-                               bool* out_close_dialog) OVERRIDE;
-  virtual bool ShouldShowDialogTitle() const OVERRIDE;
+                               bool* out_close_dialog) override;
+  virtual bool ShouldShowDialogTitle() const override;
   virtual bool HandleContextMenu(
-      const content::ContextMenuParams& params) OVERRIDE;
+      const content::ContextMenuParams& params) override;
 
   // Overridden from ResponseDelegate:
   virtual void SetDialogInteractionResult(MakeChromeDefaultResult result);
 
   // Overridden from BrowserListObserver:
-  virtual void OnBrowserRemoved(Browser* browser) OVERRIDE;
+  virtual void OnBrowserRemoved(Browser* browser) override;
 
  private:
   Profile* profile_;

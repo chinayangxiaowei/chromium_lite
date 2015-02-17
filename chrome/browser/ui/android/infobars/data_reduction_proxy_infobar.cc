@@ -16,11 +16,12 @@
 
 // static
 void DataReductionProxyInfoBar::Launch(
-    JNIEnv* env, jclass, jobject jweb_contents) {
+    JNIEnv* env, jclass, jobject jweb_contents, jstring jlink_url) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   DCHECK(web_contents);
-  DataReductionProxyInfoBarDelegate::Create(web_contents);
+  DataReductionProxyInfoBarDelegate::Create(
+      web_contents, base::android::ConvertJavaStringToUTF8(env, jlink_url));
 }
 
 // static
@@ -30,8 +31,7 @@ bool DataReductionProxyInfoBar::Register(JNIEnv* env) {
 
 DataReductionProxyInfoBar::DataReductionProxyInfoBar(
     scoped_ptr<DataReductionProxyInfoBarDelegate> delegate)
-    : ConfirmInfoBar(delegate.PassAs<ConfirmInfoBarDelegate>()),
-      java_data_reduction_proxy_delegate_() {
+    : ConfirmInfoBar(delegate.Pass()), java_data_reduction_proxy_delegate_() {
 }
 
 DataReductionProxyInfoBar::~DataReductionProxyInfoBar() {
@@ -65,6 +65,7 @@ scoped_ptr<infobars::InfoBar> DataReductionProxyInfoBarDelegate::CreateInfoBar(
 
 
 // JNI for DataReductionProxyInfoBarDelegate.
-void Launch(JNIEnv* env, jclass clazz, jobject jweb_contents) {
-  DataReductionProxyInfoBar::Launch(env, clazz, jweb_contents);
+void
+Launch(JNIEnv* env, jclass clazz, jobject jweb_contents, jstring jlink_url) {
+  DataReductionProxyInfoBar::Launch(env, clazz, jweb_contents, jlink_url);
 }

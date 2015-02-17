@@ -13,7 +13,7 @@
 #include "base/compiler_specific.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/message_loop/message_loop.h"
+#include "base/thread_task_runner_handle.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/rect.h"
 
@@ -71,8 +71,7 @@ class AppKitHost : public FoundationHost {
   AppKitHost() {
     [NSApplication sharedApplication];
   }
-  virtual ~AppKitHost() {
-  }
+  ~AppKitHost() override {}
  private:
   DISALLOW_COPY_AND_ASSIGN(AppKitHost);
 };
@@ -84,12 +83,12 @@ class TestCompositorHostMac : public TestCompositorHost,
  public:
   TestCompositorHostMac(const gfx::Rect& bounds,
                         ui::ContextFactory* context_factory);
-  virtual ~TestCompositorHostMac();
+  ~TestCompositorHostMac() override;
 
  private:
   // TestCompositorHost:
-  virtual void Show() OVERRIDE;
-  virtual ui::Compositor* GetCompositor() OVERRIDE;
+  void Show() override;
+  ui::Compositor* GetCompositor() override;
 
   gfx::Rect bounds_;
 
@@ -133,7 +132,7 @@ void TestCompositorHostMac::Show() {
       [[AcceleratedTestView alloc] init]);
   compositor_.reset(new ui::Compositor(view,
                                        context_factory_,
-                                       base::MessageLoopProxy::current()));
+                                       base::ThreadTaskRunnerHandle::Get()));
   compositor_->SetScaleAndSize(1.0f, bounds_.size());
   [view setCompositor:compositor_.get()];
   [window_ setContentView:view];

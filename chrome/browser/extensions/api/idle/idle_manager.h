@@ -69,22 +69,21 @@ class IdleManager : public ExtensionRegistryObserver,
   };
 
   explicit IdleManager(Profile* profile);
-  virtual ~IdleManager();
+  ~IdleManager() override;
 
   void Init();
 
   // KeyedService implementation.
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // ExtensionRegistryObserver implementation.
-  virtual void OnExtensionUnloaded(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      UnloadedExtensionInfo::Reason reason) OVERRIDE;
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionInfo::Reason reason) override;
 
   // EventRouter::Observer implementation.
-  virtual void OnListenerAdded(const EventListenerInfo& details) OVERRIDE;
-  virtual void OnListenerRemoved(const EventListenerInfo& details) OVERRIDE;
+  void OnListenerAdded(const EventListenerInfo& details) override;
+  void OnListenerRemoved(const EventListenerInfo& details) override;
 
   void QueryState(int threshold, QueryStateCallback notify);
   void SetThreshold(const std::string& extension_id, int threshold);
@@ -126,7 +125,6 @@ class IdleManager : public ExtensionRegistryObserver,
   MonitorMap monitors_;
 
   base::RepeatingTimer<IdleManager> poll_timer_;
-  base::WeakPtrFactory<IdleManager> weak_factory_;
 
   scoped_ptr<IdleTimeProvider> idle_time_provider_;
   scoped_ptr<EventDelegate> event_delegate_;
@@ -136,6 +134,8 @@ class IdleManager : public ExtensionRegistryObserver,
   // Listen to extension unloaded notification.
   ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observer_;
+
+  base::WeakPtrFactory<IdleManager> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(IdleManager);
 };

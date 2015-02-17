@@ -124,7 +124,7 @@ class ShuntedHttpBridge : public HttpBridge {
           NetworkTimeUpdateCallback()),
         test_(test), never_finishes_(never_finishes) { }
  protected:
-  virtual void MakeAsynchronousPost() OVERRIDE {
+  void MakeAsynchronousPost() override {
     ASSERT_TRUE(base::MessageLoop::current() == test_->GetIOThreadLoop());
     if (never_finishes_)
       return;
@@ -135,7 +135,7 @@ class ShuntedHttpBridge : public HttpBridge {
         base::Bind(&ShuntedHttpBridge::CallOnURLFetchComplete, this));
   }
  private:
-  virtual ~ShuntedHttpBridge() {}
+  ~ShuntedHttpBridge() override {}
 
   void CallOnURLFetchComplete() {
     ASSERT_TRUE(base::MessageLoop::current() == test_->GetIOThreadLoop());
@@ -499,10 +499,10 @@ TEST_F(SyncHttpBridgeTest, EarlyAbortFactory) {
 
   // UI Thread: Initialize the HttpBridgeFactory.  The next step would be to
   // post a task to SBH::Core to have it initialized.
-  scoped_ptr<syncer::HttpBridgeFactory> factory(new HttpBridgeFactory(
-      baseline_context_getter,
-      NetworkTimeUpdateCallback(),
-      &release_request_context_signal));
+  scoped_ptr<syncer::HttpBridgeFactory> factory(
+      new HttpBridgeFactory(baseline_context_getter.get(),
+                            NetworkTimeUpdateCallback(),
+                            &release_request_context_signal));
 
   // UI Thread: A very early shutdown request arrives and executes on the UI
   // thread before the posted sync thread task is run.

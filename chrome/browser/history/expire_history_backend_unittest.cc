@@ -8,25 +8,19 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/path_service.h"
 #include "base/stl_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/expire_history_backend.h"
 #include "chrome/browser/history/history_database.h"
-#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/thumbnail_database.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/tools/profiles/thumbnail-inl.h"
-#include "components/bookmarks/browser/bookmark_model.h"
-#include "components/bookmarks/browser/bookmark_utils.h"
-#include "components/bookmarks/test/test_bookmark_client.h"
 #include "components/history/core/common/thumbnail_score.h"
 #include "components/history/core/test/history_client_fake_bookmarks.h"
 #include "content/public/test/test_browser_thread.h"
@@ -52,7 +46,7 @@ namespace history {
 // ExpireHistoryTest -----------------------------------------------------------
 
 class ExpireHistoryTest : public testing::Test,
-                          public BroadcastNotificationDelegate {
+                          public ExpireHistoryBackendDelegate {
  public:
   ExpireHistoryTest()
       : ui_thread_(BrowserThread::UI, &message_loop_),
@@ -78,12 +72,15 @@ class ExpireHistoryTest : public testing::Test,
   // |expired|, or manually deleted.
   void EnsureURLInfoGone(const URLRow& row, bool expired);
 
-  // Returns whether a NOTIFICATION_HISTORY_URLS_MODIFIED was sent for |url|.
+  // Returns whether ExpireHistoryBackendDelegate::NotifyURLsModified was
+  // called for |url|.
   bool ModifiedNotificationSent(const GURL& url);
 
   // Clears the list of notifications received.
   void ClearLastNotifications() {
     STLDeleteValues(&notifications_);
+    urls_modified_notifications_.clear();
+    urls_deleted_notifications_.clear();
   }
 
   void StarURL(const GURL& url) { history_client_.AddBookmark(url); }
@@ -119,8 +116,14 @@ class ExpireHistoryTest : public testing::Test,
       NotificationList;
   NotificationList notifications_;
 
+  typedef std::vector<URLRows> URLsModifiedNotificationList;
+  URLsModifiedNotificationList urls_modified_notifications_;
+
+  typedef std::vector<std::pair<bool, URLRows>> URLsDeletedNotificationList;
+  URLsDeletedNotificationList urls_deleted_notifications_;
+
  private:
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(tmp_dir_.CreateUniqueTempDir());
 
     base::FilePath history_name = path().Append(kHistoryFile);
@@ -139,7 +142,7 @@ class ExpireHistoryTest : public testing::Test,
     top_sites_ = profile_.GetTopSites();
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     top_sites_ = NULL;
 
     ClearLastNotifications();
@@ -150,18 +153,17 @@ class ExpireHistoryTest : public testing::Test,
     thumb_db_.reset();
   }
 
-  // BroadcastNotificationDelegate:
-  virtual void BroadcastNotifications(
-      int type,
-      scoped_ptr<HistoryDetails> details) OVERRIDE {
-    // This gets called when there are notifications to broadcast. Instead, we
-    // store them so we can tell that the correct notifications were sent.
-    notifications_.push_back(std::make_pair(type, details.release()));
+  // ExpireHistoryBackendDelegate:
+  void NotifyURLsModified(const URLRows& rows) override {
+    urls_modified_notifications_.push_back(rows);
   }
-  virtual void NotifySyncURLsModified(URLRows* rows) OVERRIDE {}
-  virtual void NotifySyncURLsDeleted(bool all_history,
-                                     bool expired,
-                                     URLRows* rows) OVERRIDE {}
+
+  void NotifyURLsDeleted(bool all_history,
+                         bool expired,
+                         const URLRows& rows,
+                         const std::set<GURL>& favicon_urls) override {
+    urls_deleted_notifications_.push_back(std::make_pair(expired, rows));
+  }
 };
 
 // The example data consists of 4 visits. The middle two visits are to the
@@ -239,7 +241,7 @@ void ExpireHistoryTest::AddExampleData(URLID url_ids[3], Time visit_times[4]) {
   VisitRow visit_row3;
   visit_row3.url_id = url_ids[1];
   visit_row3.visit_time = visit_times[2];
-  visit_row3.transition = content::PAGE_TRANSITION_TYPED;
+  visit_row3.transition = ui::PAGE_TRANSITION_TYPED;
   main_db_->AddVisit(&visit_row3, SOURCE_BROWSED);
 
   VisitRow visit_row4;
@@ -262,19 +264,19 @@ void ExpireHistoryTest::AddExampleSourceData(const GURL& url, URLID* id) {
 
   // Four times for each visit.
   VisitRow visit_row1(url_id, last_visit_time - TimeDelta::FromDays(4), 0,
-                      content::PAGE_TRANSITION_TYPED, 0);
+                      ui::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row1, SOURCE_SYNCED);
 
   VisitRow visit_row2(url_id, last_visit_time - TimeDelta::FromDays(3), 0,
-                      content::PAGE_TRANSITION_TYPED, 0);
+                      ui::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row2, SOURCE_BROWSED);
 
   VisitRow visit_row3(url_id, last_visit_time - TimeDelta::FromDays(2), 0,
-                      content::PAGE_TRANSITION_TYPED, 0);
+                      ui::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row3, SOURCE_EXTENSION);
 
   VisitRow visit_row4(
-      url_id, last_visit_time, 0, content::PAGE_TRANSITION_TYPED, 0);
+      url_id, last_visit_time, 0, ui::PAGE_TRANSITION_TYPED, 0);
   main_db_->AddVisit(&visit_row4, SOURCE_FIREFOX_IMPORTED);
 }
 
@@ -325,45 +327,34 @@ void ExpireHistoryTest::EnsureURLInfoGone(const URLRow& row, bool expired) {
   // EXPECT_FALSE(HasThumbnail(row.id()));
 
   bool found_delete_notification = false;
-  for (size_t i = 0; i < notifications_.size(); i++) {
-    if (notifications_[i].first == chrome::NOTIFICATION_HISTORY_URLS_DELETED) {
-      URLsDeletedDetails* details = reinterpret_cast<URLsDeletedDetails*>(
-          notifications_[i].second);
-      EXPECT_EQ(expired, details->expired);
-      const history::URLRows& rows(details->rows);
-      history::URLRows::const_iterator it_row = std::find_if(
-          rows.begin(), rows.end(), history::URLRow::URLRowHasURL(row.url()));
-      if (it_row != rows.end()) {
-        // Further verify that the ID is set to what had been in effect in the
-        // main database before the deletion. The InMemoryHistoryBackend relies
-        // on this to delete its cached copy of the row.
-        EXPECT_EQ(row.id(), it_row->id());
-        found_delete_notification = true;
-      }
-    } else if (notifications_[i].first ==
-        chrome::NOTIFICATION_HISTORY_URLS_MODIFIED) {
-      const history::URLRows& rows =
-          static_cast<URLsModifiedDetails*>(notifications_[i].second)->
-              changed_urls;
-      EXPECT_TRUE(
-          std::find_if(rows.begin(), rows.end(),
-                        history::URLRow::URLRowHasURL(row.url())) ==
-              rows.end());
+  for (const std::pair<bool, URLRows>& pair : urls_deleted_notifications_) {
+    EXPECT_EQ(expired, pair.first);
+    const history::URLRows& rows(pair.second);
+    history::URLRows::const_iterator it_row = std::find_if(
+        rows.begin(), rows.end(), history::URLRow::URLRowHasURL(row.url()));
+    if (it_row != rows.end()) {
+      // Further verify that the ID is set to what had been in effect in the
+      // main database before the deletion. The InMemoryHistoryBackend relies
+      // on this to delete its cached copy of the row.
+      EXPECT_EQ(row.id(), it_row->id());
+      found_delete_notification = true;
     }
+  }
+  for (const auto& rows : urls_modified_notifications_) {
+    EXPECT_TRUE(std::find_if(rows.begin(),
+                             rows.end(),
+                             history::URLRow::URLRowHasURL(row.url())) ==
+                rows.end());
   }
   EXPECT_TRUE(found_delete_notification);
 }
 
 bool ExpireHistoryTest::ModifiedNotificationSent(const GURL& url) {
-  for (size_t i = 0; i < notifications_.size(); i++) {
-    if (notifications_[i].first == chrome::NOTIFICATION_HISTORY_URLS_MODIFIED) {
-      const history::URLRows& rows =
-          static_cast<URLsModifiedDetails*>(notifications_[i].second)->
-              changed_urls;
-      if (std::find_if(rows.begin(), rows.end(),
-                       history::URLRow::URLRowHasURL(url)) != rows.end())
-        return true;
-    }
+  for (const auto& rows : urls_modified_notifications_) {
+    if (std::find_if(rows.begin(),
+                     rows.end(),
+                     history::URLRow::URLRowHasURL(url)) != rows.end())
+      return true;
   }
   return false;
 }

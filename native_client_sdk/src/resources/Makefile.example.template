@@ -34,6 +34,8 @@ NACL_SDK_ROOT ?= $(abspath $(CURDIR)/{{rel_sdk}})
 EXTRA_INC_PATHS={{' '.join(targets[0]['INCLUDES'])}}
 [[]]
 
+TARGET = {{targets[0]['NAME']}}
+
 [[if multi_platform:]]
 # Build with platform-specific subdirectories, to reduce the download size of
 # the app.
@@ -46,19 +48,8 @@ include $(NACL_SDK_ROOT)/tools/common.mk
 CHROME_ARGS += --allow-nacl-socket-api=localhost
 [[]]
 
-TARGET = {{targets[0]['NAME']}}
-[[if sel_ldr and targets[0].get('SEL_LDR_LIBS'):]]
-ifdef SEL_LDR
-[[  ExpandDict('DEPS', targets[0].get('SEL_LDR_DEPS', []))]]
-[[  ExpandDict('LIBS', targets[0].get('SEL_LDR_LIBS', []))]]
-else
-[[  ExpandDict('DEPS', targets[0].get('DEPS', []))]]
-[[  ExpandDict('LIBS', targets[0].get('LIBS', []))]]
-endif
-[[else:]]
-[[  ExpandDict('DEPS', targets[0].get('DEPS', []))]]
-[[  ExpandDict('LIBS', targets[0].get('LIBS', []))]]
-[[]]
+[[ExpandDict('DEPS', targets[0].get('DEPS', []))]]
+[[ExpandDict('LIBS', targets[0].get('LIBS', []))]]
 
 [[for target in targets:]]
 [[  source_list = (s for s in sorted(target['SOURCES']) if not s.endswith('.h'))]]

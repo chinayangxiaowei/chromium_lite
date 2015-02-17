@@ -16,15 +16,15 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #import "chrome/browser/ui/cocoa/history_menu_cocoa_controller.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/text_elider.h"
+#include "ui/resources/grit/ui_resources.h"
 
 namespace {
 
@@ -117,10 +117,9 @@ HistoryMenuBridge::~HistoryMenuBridge() {
   if (history_service_) {
     registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URLS_MODIFIED,
                       content::Source<Profile>(profile_));
-    registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URL_VISITED,
-                      content::Source<Profile>(profile_));
     registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
                       content::Source<Profile>(profile_));
+    history_service_->RemoveObserver(this);
   } else {
     registrar_.Remove(this, chrome::NOTIFICATION_HISTORY_LOADED,
                       content::Source<Profile>(profile_));
@@ -158,9 +157,8 @@ void HistoryMenuBridge::Observe(int type,
   }
 
   // All other notification types that we observe indicate that the history has
-  // changed and we need to rebuild.
-  need_recreate_ = true;
-  CreateMenu();
+  // changed.
+  OnHistoryChanged();
 }
 
 void HistoryMenuBridge::TabRestoreServiceChanged(TabRestoreService* service) {
@@ -274,6 +272,14 @@ void HistoryMenuBridge::BuildMenu() {
     CreateMenu();
 }
 
+void HistoryMenuBridge::OnURLVisited(HistoryService* history_service,
+                                     ui::PageTransition transition,
+                                     const history::URLRow& row,
+                                     const history::RedirectList& redirects,
+                                     base::Time visit_time) {
+  OnHistoryChanged();
+}
+
 HistoryMenuBridge::HistoryItem* HistoryMenuBridge::HistoryItemForMenuItem(
     NSMenuItem* item) {
   std::map<NSMenuItem*, HistoryItem*>::iterator it = menu_item_map_.find(item);
@@ -360,12 +366,12 @@ NSMenuItem* HistoryMenuBridge::AddItemToMenu(HistoryItem* item,
 }
 
 void HistoryMenuBridge::Init() {
+  DCHECK(history_service_);
   registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_MODIFIED,
-                 content::Source<Profile>(profile_));
-  registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URL_VISITED,
                  content::Source<Profile>(profile_));
   registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
                  content::Source<Profile>(profile_));
+  history_service_->AddObserver(this);
 }
 
 void HistoryMenuBridge::CreateMenu() {
@@ -387,6 +393,12 @@ void HistoryMenuBridge::CreateMenu() {
       base::Bind(&HistoryMenuBridge::OnVisitedHistoryResults,
                  base::Unretained(this)),
       &cancelable_task_tracker_);
+}
+
+void HistoryMenuBridge::OnHistoryChanged() {
+  // History has changed, rebuild menu.
+  need_recreate_ = true;
+  CreateMenu();
 }
 
 void HistoryMenuBridge::OnVisitedHistoryResults(

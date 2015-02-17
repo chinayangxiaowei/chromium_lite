@@ -11,9 +11,10 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/macros.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/version.h"
-#include "chrome/browser/component_updater/component_updater_service.h"
+#include "components/component_updater/component_updater_service.h"
 
 namespace base {
 class DictionaryValue;
@@ -38,15 +39,15 @@ class PnaclComponentInstaller : public ComponentInstaller {
  public:
   PnaclComponentInstaller();
 
-  virtual ~PnaclComponentInstaller();
+  ~PnaclComponentInstaller() override;
 
-  virtual void OnUpdateError(int error) OVERRIDE;
+  void OnUpdateError(int error) override;
 
-  virtual bool Install(const base::DictionaryValue& manifest,
-                       const base::FilePath& unpack_path) OVERRIDE;
+  bool Install(const base::DictionaryValue& manifest,
+               const base::FilePath& unpack_path) override;
 
-  virtual bool GetInstalledFile(const std::string& file,
-                                base::FilePath* installed_file) OVERRIDE;
+  bool GetInstalledFile(const std::string& file,
+                        base::FilePath* installed_file) override;
 
   // Register a PNaCl component for the first time.
   void RegisterPnaclComponent(ComponentUpdateService* cus);

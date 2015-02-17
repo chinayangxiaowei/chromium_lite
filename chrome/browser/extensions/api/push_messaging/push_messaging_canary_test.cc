@@ -16,6 +16,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "extensions/common/extension_set.h"
+#include "extensions/test/result_catcher.h"
 #include "net/dns/mock_host_resolver.h"
 
 namespace {
@@ -36,10 +37,9 @@ class PushMessagingCanaryTest : public ExtensionApiTest {
     sync_setup_helper_.reset(new SyncSetupHelper());
   }
 
-  virtual ~PushMessagingCanaryTest() {
-  }
+  ~PushMessagingCanaryTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     CommandLine* command_line = CommandLine::ForCurrentProcess();
 
     ASSERT_TRUE(command_line->HasSwitch(kPasswordFileForTest));
@@ -73,9 +73,7 @@ class PushMessagingCanaryTest : public ExtensionApiTest {
   // InProcessBrowserTest override. Destroys the sync client and sync
   // profile created by the test.  We must clean up ProfileSyncServiceHarness
   // now before the profile is cleaned up.
-  virtual void TearDownOnMainThread() OVERRIDE {
-    sync_setup_helper_.reset();
-  }
+  void TearDownOnMainThread() override { sync_setup_helper_.reset(); }
 
   const SyncSetupHelper* sync_setup_helper() const {
     return sync_setup_helper_.get();
@@ -84,13 +82,13 @@ class PushMessagingCanaryTest : public ExtensionApiTest {
  protected:
   // Override InProcessBrowserTest. Change behavior of the default host
   // resolver to avoid DNS lookup errors, so we can make network calls.
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     // The resolver object lifetime is managed by sync_test_setup, not here.
     EnableDNSLookupForThisTest(
         new net::RuleBasedHostResolverProc(host_resolver()));
   }
 
-  virtual void TearDownInProcessBrowserTestFixture() OVERRIDE {
+  void TearDownInProcessBrowserTestFixture() override {
     DisableDNSLookupForThisTest();
   }
 
@@ -144,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingCanaryTest, MANUAL_ReceivesPush) {
   ASSERT_TRUE(installed_extensions->Contains(kTestExtensionId));
 
   ResultCatcher catcher;
-  catcher.RestrictToProfile(profile());
+  catcher.RestrictToBrowserContext(profile());
 
   const Extension* extension =
       extension_service()->extensions()->GetByID(kTestExtensionId);

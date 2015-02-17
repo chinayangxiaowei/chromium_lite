@@ -6,8 +6,8 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/file_util.h"
 #include "base/files/file.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/message_loop/message_loop_proxy.h"
 #include "base/path_service.h"
@@ -46,13 +46,13 @@ IOBufferWithSize* CreateTestDataBuffer() {
 
 class FileStreamTest : public PlatformTest {
  public:
-  virtual void SetUp() {
+  void SetUp() override {
     PlatformTest::SetUp();
 
     base::CreateTemporaryFile(&temp_file_path_);
     base::WriteFile(temp_file_path_, kTestData, kTestDataSize);
   }
-  virtual void TearDown() {
+  void TearDown() override {
     // FileStreamContexts must be asynchronously closed on the file task runner
     // before they can be deleted. Pump the RunLoop to avoid leaks.
     base::RunLoop().RunUntilIdle();
@@ -172,7 +172,7 @@ TEST_F(FileStreamTest, UseClosedStream) {
 
   // Try reading...
   scoped_refptr<IOBufferWithSize> buf = new IOBufferWithSize(10);
-  rv = stream.Read(buf, buf->size(), callback.callback());
+  rv = stream.Read(buf.get(), buf->size(), callback.callback());
   EXPECT_EQ(ERR_UNEXPECTED, callback.GetResult(rv));
 }
 

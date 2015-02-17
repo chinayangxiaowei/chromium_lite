@@ -24,10 +24,14 @@ embedder.setUp_ = function(config) {
       '/extensions/platform_apps/web_view/shim/guest.html';
   embedder.noReferrerGuestURL = embedder.baseGuestURL +
       '/extensions/platform_apps/web_view/shim/guest_noreferrer.html';
+  embedder.detectUserAgentURL = embedder.baseGuestURL + '/detect-user-agent';
   embedder.redirectGuestURL = embedder.baseGuestURL + '/server-redirect';
   embedder.redirectGuestURLDest = embedder.baseGuestURL +
       '/extensions/platform_apps/web_view/shim/guest_redirect.html';
   embedder.closeSocketURL = embedder.baseGuestURL + '/close-socket';
+  embedder.testImageBaseURL = embedder.baseGuestURL +
+      '/extensions/platform_apps/web_view/shim/';
+  embedder.virtualURL = 'http://virtualurl/';
 };
 
 window.runTest = function(testName) {
@@ -92,6 +96,75 @@ embedder.test.assertFalse = function(condition) {
 };
 
 // Tests begin.
+
+// This test verifies that the allowtransparency property is interpreted as true
+// if it exists (regardless of its value), and can be removed by setting it to
+// to anything false.
+function testAllowTransparencyAttribute() {
+  var webview = document.createElement('webview');
+  webview.src = 'data:text/html,webview test';
+  embedder.test.assertFalse(webview.hasAttribute('allowtransparency'));
+  embedder.test.assertFalse(webview.allowtransparency);
+  webview.allowtransparency = true;
+
+  webview.addEventListener('loadstop', function(e) {
+    embedder.test.assertTrue(webview.hasAttribute('allowtransparency'));
+    embedder.test.assertTrue(webview.allowtransparency);
+    webview.allowtransparency = false;
+    embedder.test.assertFalse(webview.hasAttribute('allowtransparency'));
+    embedder.test.assertFalse(webview.allowtransparency);
+    webview.allowtransparency = '';
+    embedder.test.assertFalse(webview.hasAttribute('allowtransparency'));
+    embedder.test.assertFalse(webview.allowtransparency);
+    webview.allowtransparency = 'some string';
+    embedder.test.assertTrue(webview.hasAttribute('allowtransparency'));
+    embedder.test.assertTrue(webview.allowtransparency);
+    embedder.test.succeed();
+  });
+
+  document.body.appendChild(webview);
+}
+
+// This test verifies that a lengthy page with autosize enabled will report
+// the correct height in the sizechanged event.
+function testAutosizeHeight() {
+  var webview = document.createElement('webview');
+
+  webview.autosize = true;
+  webview.minwidth = 200;
+  webview.maxwidth = 210;
+  webview.minheight = 40;
+  webview.maxheight = 200;
+
+  var step = 1;
+  webview.addEventListener('sizechanged', function(e) {
+    switch (step) {
+      case 1:
+        embedder.test.assertEq(200, e.newHeight);
+        // Change the maxheight to verify that we see the change.
+        webview.maxheight = 50;
+        break;
+      case 2:
+        embedder.test.assertEq(200, e.oldHeight);
+        embedder.test.assertEq(50, e.newHeight);
+        embedder.test.succeed();
+        break;
+      default:
+        window.console.log('Unexpected sizechanged event, step = ' + step);
+        embedder.test.fail();
+        break;
+    }
+    ++step;
+  });
+
+  webview.src = 'data:text/html,' +
+                'a<br/>b<br/>c<br/>d<br/>e<br/>f<br/>' +
+                'a<br/>b<br/>c<br/>d<br/>e<br/>f<br/>' +
+                'a<br/>b<br/>c<br/>d<br/>e<br/>f<br/>' +
+                'a<br/>b<br/>c<br/>d<br/>e<br/>f<br/>' +
+                'a<br/>b<br/>c<br/>d<br/>e<br/>f<br/>';
+  document.body.appendChild(webview);
+}
 
 // This test verifies that if a browser plugin is in autosize mode before
 // navigation then the guest starts auto-sized.
@@ -550,7 +623,7 @@ function testLoadProgressEvent() {
 // Current expected behavior is that the second event listener will still
 // fire without crashing.
 function testDestroyOnEventListener() {
-  var webview = util.createWebViewTagInDOM(arguments.callee.name);
+  var webview = document.createElement('webview');
   var url = 'data:text/html,<body>Destroy test</body>';
 
   var loadCommitCount = 0;
@@ -581,13 +654,14 @@ function testDestroyOnEventListener() {
     loadCommitCommon(e);
   });
   webview.setAttribute('src', url);
+  document.body.appendChild(webview);
 }
 
 // This test registers two event listeners on a same event (loadcommit).
 // Each of the listener tries to change some properties on the event param,
 // which should not be possible.
 function testCannotMutateEventName() {
-  var webview = util.createWebViewTagInDOM(arguments.callee.name);
+  var webview = document.createElement('webview');
   var url = 'data:text/html,<body>Two</body>';
 
   var loadCommitACalled = false;
@@ -629,23 +703,20 @@ function testCannotMutateEventName() {
   webview.addEventListener('loadcommit', onLoadCommitA);
   webview.addEventListener('loadcommit', onLoadCommitB);
   webview.setAttribute('src', url);
+  document.body.appendChild(webview);
 }
 
-// This test verifies that setting the partition attribute after the src has
-// been set raises an exception.
-function testPartitionRaisesException() {
+// This test verifies that the partion attribute cannot be changed after the src
+// has been set.
+function testPartitionChangeAfterNavigation() {
   var webview = document.createElement('webview');
   var partitionAttribute = arguments.callee.name;
   webview.setAttribute('partition', partitionAttribute);
 
   var loadstopHandler = function(e) {
-    try {
-      webview.partition = 'illegal';
-      embedder.test.fail();
-    } catch (e) {
-      embedder.test.assertEq(partitionAttribute, webview.partition);
-      embedder.test.succeed();
-    }
+    webview.partition = 'illegal';
+    embedder.test.assertEq(partitionAttribute, webview.partition);
+    embedder.test.succeed();
   };
   webview.addEventListener('loadstop', loadstopHandler);
 
@@ -891,6 +962,8 @@ function testPluginLoadPermission() {
     pluginIdentifier = 'libppapi_tests.so';
   else if (navigator.platform.match(/win32/i))
     pluginIdentifier = 'ppapi_tests.dll';
+  else if (navigator.platform.match(/win64/i))
+    pluginIdentifier = 'ppapi_tests.dll';
   else if (navigator.platform.match(/mac/i))
     pluginIdentifier = 'ppapi_tests.plugin';
 
@@ -1013,6 +1086,52 @@ function testWebRequestAPI() {
     embedder.test.succeed();
   }, { urls: ['<all_urls>']}) ;
   webview.src = embedder.windowOpenGuestURL;
+  document.body.appendChild(webview);
+}
+
+// This test verifies that the WebRequest API onBeforeSendHeaders event fires on
+// webview and supports headers. This tests verifies that we can modify HTTP
+// headers via the WebRequest API and those modified headers will be sent to the
+// HTTP server.
+function testWebRequestAPIWithHeaders() {
+  var webview = new WebView();
+  var requestFilter = {
+    urls: ['<all_urls>']
+  };
+  var extraInfoSpec = ['requestHeaders', 'blocking'];
+  webview.request.onBeforeSendHeaders.addListener(function(details) {
+    var headers = details.requestHeaders;
+    for( var i = 0, l = headers.length; i < l; ++i ) {
+      if (headers[i].name == 'User-Agent') {
+        headers[i].value = 'foobar';
+        break;
+      }
+    }
+    var blockingResponse = {};
+    blockingResponse.requestHeaders = headers;
+    return blockingResponse;
+  }, requestFilter, extraInfoSpec);
+
+  var loadstartCalled = false;
+  webview.addEventListener('loadstart', function(e) {
+    embedder.test.assertTrue(e.isTopLevel);
+    embedder.test.assertEq(embedder.detectUserAgentURL, e.url);
+    loadstartCalled = true;
+  });
+
+  webview.addEventListener('loadredirect', function(e) {
+    embedder.test.assertTrue(e.isTopLevel);
+    embedder.test.assertEq(embedder.detectUserAgentURL,
+        e.oldUrl.replace('127.0.0.1', 'localhost'));
+    embedder.test.assertEq(embedder.redirectGuestURLDest,
+        e.newUrl.replace('127.0.0.1', 'localhost'));
+    if (loadstartCalled) {
+      embedder.test.succeed();
+    } else {
+      embedder.test.fail();
+    }
+  });
+  webview.src = embedder.detectUserAgentURL;
   document.body.appendChild(webview);
 }
 
@@ -1323,6 +1442,40 @@ function testReload() {
   document.body.appendChild(webview);
 }
 
+// This test verifies that the reload method on webview functions as expected.
+function testReloadAfterTerminate() {
+  var triggerNavUrl = 'data:text/html,trigger navigation';
+  var webview = document.createElement('webview');
+
+  var step = 1;
+  webview.addEventListener('loadstop', function(e) {
+    switch (step) {
+      case 1:
+        webview.terminate();
+        break;
+      case 2:
+        setTimeout(function() { embedder.test.succeed(); }, 0);
+        break;
+      default:
+        window.console.log('Unexpected loadstop event, step = ' + step);
+        embedder.test.fail();
+        break;
+    }
+    ++step;
+  });
+
+  webview.addEventListener('exit', function(e) {
+    // Trigger a focus state change of the guest to test for
+    // http://crbug.com/413874.
+    webview.blur();
+    webview.focus();
+    setTimeout(function() { webview.reload(); }, 0);
+  });
+
+  webview.src = triggerNavUrl;
+  document.body.appendChild(webview);
+}
+
 // This test verifies that a <webview> is torn down gracefully when removed from
 // the DOM on exit.
 
@@ -1470,6 +1623,70 @@ function testResizeWebviewResizesContent() {
   document.body.appendChild(webview);
 }
 
+function testResizeWebviewWithDisplayNoneResizesContent() {
+  var webview = new WebView();
+  webview.src = 'about:blank';
+  var loadStopCalled = false;
+  webview.addEventListener('loadstop', function listener(e) {
+    if (loadStopCalled) {
+      window.console.log('webview is unexpectedly reloading.');
+      embedder.test.fail();
+      return;
+    }
+    loadStopCalled = true;
+    webview.executeScript(
+      {file: 'inject_resize_test.js'},
+      function(results) {
+        if (!results || !results.length) {
+          embedder.test.fail();
+          return;
+        }
+        window.console.log('The resize test has been injected into webview.');
+      }
+    );
+    webview.executeScript(
+      {file: 'inject_comm_channel.js'},
+      function(results) {
+        if (!results || !results.length) {
+          embedder.test.fail();
+          return;
+        }
+        window.console.log('The guest script for a two-way comm channel has ' +
+            'been injected into webview.');
+        // Establish a communication channel with the guest.
+        var msg = ['connect'];
+        webview.contentWindow.postMessage(JSON.stringify(msg), '*');
+      }
+    );
+  });
+  window.addEventListener('message', function(e) {
+    var data = JSON.parse(e.data);
+    if (data[0] == 'connected') {
+      console.log('A communication channel has been established with webview.');
+      console.log('Resizing <webview> width from 300px to 400px.');
+      webview.style.display = 'none';
+      window.setTimeout(function() {
+        webview.style.width = '400px';
+        window.setTimeout(function() {
+          webview.style.display = 'block';
+        }, 0);
+      }, 0);
+      return;
+    }
+    if (data[0] == 'resize') {
+      var width = data[1];
+      var height = data[2];
+      embedder.test.assertEq(400, width);
+      embedder.test.assertEq(300, height);
+      embedder.test.succeed();
+      return;
+    }
+    window.console.log('Unexpected message: \'' + data[0]  + '\'');
+    embedder.test.fail();
+  });
+  document.body.appendChild(webview);
+}
+
 function testPostMessageCommChannel() {
   var webview = new WebView();
   webview.src = 'about:blank';
@@ -1540,7 +1757,7 @@ function testZoomAPI() {
   webview.addEventListener('loadstop', function(e) {
     // getZoom() should work initially.
     webview.getZoom(function(zoomFactor) {
-      embedder.test.assertFalse(zoomFactor == undefined);
+      embedder.test.assertEq(zoomFactor, 1);
     });
 
     // Two consecutive calls to getZoom() should return the same result.
@@ -1729,7 +1946,46 @@ function testFindAPI_findupdate() {
   document.body.appendChild(webview);
 };
 
+function testLoadDataAPI() {
+  var webview = new WebView();
+  webview.src = 'about:blank';
+
+  var loadstopListener2 = function(e) {
+    // Test the virtual URL.
+    embedder.test.assertEq(webview.src, embedder.virtualURL);
+
+    // Test that the image was loaded from the right source.
+    webview.executeScript(
+        {code: "document.querySelector('img').src"}, function(e) {
+          embedder.test.assertEq(e, embedder.testImageBaseURL + "test.bmp");
+
+          // Test that insertCSS works (executeScript already works to reach
+          // this point).
+          webview.insertCSS({code: ''}, function() {
+            embedder.test.succeed();
+          });
+        });
+  }
+
+  var loadstopListener1 = function(e) {
+    webview.removeEventListener('loadstop', loadstopListener1);
+    webview.addEventListener('loadstop', loadstopListener2);
+
+    // Load a data URL containing a relatively linked image, with the
+    // image's base URL specified, and a virtual URL provided.
+    webview.loadDataWithBaseUrl("data:text/html;base64,PGh0bWw+CiAgVGhpcyBpcy" +
+        "BhIHRlc3QuPGJyPgogIDxpbWcgc3JjPSJ0ZXN0LmJtcCI+PGJyPgo8L2h0bWw+Cg==",
+                                embedder.testImageBaseURL,
+                                embedder.virtualURL);
+  }
+
+  webview.addEventListener('loadstop', loadstopListener1);
+  document.body.appendChild(webview);
+};
+
 embedder.test.testList = {
+  'testAllowTransparencyAttribute': testAllowTransparencyAttribute,
+  'testAutosizeHeight': testAutosizeHeight,
   'testAutosizeAfterNavigation': testAutosizeAfterNavigation,
   'testAutosizeBeforeNavigation': testAutosizeBeforeNavigation,
   'testAutosizeRemoveAttributes': testAutosizeRemoveAttributes,
@@ -1748,7 +2004,7 @@ embedder.test.testList = {
   'testLoadProgressEvent': testLoadProgressEvent,
   'testDestroyOnEventListener': testDestroyOnEventListener,
   'testCannotMutateEventName': testCannotMutateEventName,
-  'testPartitionRaisesException': testPartitionRaisesException,
+  'testPartitionChangeAfterNavigation': testPartitionChangeAfterNavigation,
   'testPartitionRemovalAfterNavigationFails':
       testPartitionRemovalAfterNavigationFails,
   'testExecuteScriptFail': testExecuteScriptFail,
@@ -1772,6 +2028,7 @@ embedder.test.testList = {
   'testDeclarativeWebRequestAPISendMessage':
       testDeclarativeWebRequestAPISendMessage,
   'testWebRequestAPI': testWebRequestAPI,
+  'testWebRequestAPIWithHeaders': testWebRequestAPIWithHeaders,
   'testWebRequestAPIGoogleProperty': testWebRequestAPIGoogleProperty,
   'testWebRequestListenerSurvivesReparenting':
       testWebRequestListenerSurvivesReparenting,
@@ -1789,14 +2046,18 @@ embedder.test.testList = {
   'testNavigateAfterResize': testNavigateAfterResize,
   'testNavigationToExternalProtocol': testNavigationToExternalProtocol,
   'testReload': testReload,
+  'testReloadAfterTerminate': testReloadAfterTerminate,
   'testRemoveWebviewOnExit': testRemoveWebviewOnExit,
   'testRemoveWebviewAfterNavigation': testRemoveWebviewAfterNavigation,
   'testResizeWebviewResizesContent': testResizeWebviewResizesContent,
+  'testResizeWebviewWithDisplayNoneResizesContent':
+      testResizeWebviewWithDisplayNoneResizesContent,
   'testPostMessageCommChannel': testPostMessageCommChannel,
   'testScreenshotCapture' : testScreenshotCapture,
   'testZoomAPI' : testZoomAPI,
   'testFindAPI': testFindAPI,
-  'testFindAPI_findupdate': testFindAPI
+  'testFindAPI_findupdate': testFindAPI,
+  'testLoadDataAPI': testLoadDataAPI
 };
 
 onload = function() {

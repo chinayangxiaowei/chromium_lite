@@ -4,7 +4,6 @@
 
 #include "components/autofill/core/browser/name_field.h"
 
-#include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -25,12 +24,12 @@ class FullNameField : public NameField {
 
  protected:
   // FormField:
-  virtual bool ClassifyField(ServerFieldTypeMap* map) const OVERRIDE;
+  bool ClassifyField(ServerFieldTypeMap* map) const override;
 
  private:
-  explicit FullNameField(const AutofillField* field);
+  explicit FullNameField(AutofillField* field);
 
-  const AutofillField* field_;
+  AutofillField* field_;
 
   DISALLOW_COPY_AND_ASSIGN(FullNameField);
 };
@@ -44,14 +43,14 @@ class FirstLastNameField : public NameField {
 
  protected:
   // FormField:
-  virtual bool ClassifyField(ServerFieldTypeMap* map) const OVERRIDE;
+  bool ClassifyField(ServerFieldTypeMap* map) const override;
 
  private:
   FirstLastNameField();
 
-  const AutofillField* first_name_;
-  const AutofillField* middle_name_;  // Optional.
-  const AutofillField* last_name_;
+  AutofillField* first_name_;
+  AutofillField* middle_name_;  // Optional.
+  AutofillField* last_name_;
   bool middle_initial_;  // True if middle_name_ is a middle initial.
 
   DISALLOW_COPY_AND_ASSIGN(FirstLastNameField);
@@ -87,7 +86,7 @@ FullNameField* FullNameField::Parse(AutofillScanner* scanner) {
   // Searching for any label containing the word "name" is too general;
   // for example, Travelocity_Edit travel profile.html contains a field
   // "Travel Profile Name".
-  const AutofillField* field = NULL;
+  AutofillField* field = NULL;
   if (ParseField(scanner, UTF8ToUTF16(autofill::kNameRe), &field))
     return new FullNameField(field);
 
@@ -98,8 +97,7 @@ bool FullNameField::ClassifyField(ServerFieldTypeMap* map) const {
   return AddClassification(field_, NAME_FULL, map);
 }
 
-FullNameField::FullNameField(const AutofillField* field)
-    : field_(field) {
+FullNameField::FullNameField(AutofillField* field) : field_(field) {
 }
 
 FirstLastNameField* FirstLastNameField::ParseSpecificName(
@@ -109,7 +107,7 @@ FirstLastNameField* FirstLastNameField::ParseSpecificName(
   scoped_ptr<FirstLastNameField> v(new FirstLastNameField);
   scanner->SaveCursor();
 
-  const AutofillField* next = NULL;
+  AutofillField* next = NULL;
   if (ParseField(scanner,
                  UTF8ToUTF16(autofill::kNameSpecificRe), &v->first_name_) &&
       ParseEmptyLabel(scanner, &next)) {

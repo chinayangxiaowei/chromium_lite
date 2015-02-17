@@ -130,15 +130,6 @@ void TestURLRequestContext::Init() {
     context_storage_.set_job_factory(new URLRequestJobFactoryImpl);
 }
 
-TestURLRequest::TestURLRequest(const GURL& url,
-                               RequestPriority priority,
-                               Delegate* delegate,
-                               TestURLRequestContext* context)
-    : URLRequest(url, priority, delegate, context) {}
-
-TestURLRequest::~TestURLRequest() {
-}
-
 TestURLRequestContextGetter::TestURLRequestContextGetter(
     const scoped_refptr<base::SingleThreadTaskRunner>& network_task_runner)
     : network_task_runner_(network_task_runner) {
@@ -326,10 +317,14 @@ TestNetworkDelegate::TestNetworkDelegate()
       blocked_set_cookie_count_(0),
       set_cookie_count_(0),
       observed_before_proxy_headers_sent_callbacks_(0),
+      before_send_headers_count_(0),
+      headers_received_count_(0),
       has_load_timing_info_before_redirect_(false),
       has_load_timing_info_before_auth_(false),
       can_access_files_(true),
-      can_throttle_requests_(true) {
+      can_throttle_requests_(true),
+      cancel_request_with_policy_violating_referrer_(false),
+      will_be_intercepted_on_next_error_(false) {
 }
 
 TestNetworkDelegate::~TestNetworkDelegate() {
@@ -394,7 +389,7 @@ int TestNetworkDelegate::OnBeforeSendHeaders(
   next_states_[req_id] =
       kStageSendHeaders |
       kStageCompletedError;  // request canceled by delegate
-
+  before_send_headers_count_++;
   return OK;
 }
 
@@ -414,9 +409,11 @@ void TestNetworkDelegate::OnSendHeaders(
   event_order_[req_id] += "OnSendHeaders\n";
   EXPECT_TRUE(next_states_[req_id] & kStageSendHeaders) <<
       event_order_[req_id];
-  next_states_[req_id] =
-      kStageHeadersReceived |
-      kStageCompletedError;
+  if (!will_be_intercepted_on_next_error_)
+    next_states_[req_id] = kStageHeadersReceived | kStageCompletedError;
+  else
+    next_states_[req_id] = kStageResponseStarted;
+  will_be_intercepted_on_next_error_ = false;
 }
 
 int TestNetworkDelegate::OnHeadersReceived(
@@ -453,7 +450,7 @@ int TestNetworkDelegate::OnHeadersReceived(
     if (!allowed_unsafe_redirect_url_.is_empty())
       *allowed_unsafe_redirect_url = allowed_unsafe_redirect_url_;
   }
-
+  headers_received_count_++;
   return OK;
 }
 
@@ -611,6 +608,13 @@ int TestNetworkDelegate::OnBeforeSocketStreamConnect(
     SocketStream* socket,
     const CompletionCallback& callback) {
   return OK;
+}
+
+bool TestNetworkDelegate::OnCancelURLRequestWithPolicyViolatingReferrerHeader(
+    const URLRequest& request,
+    const GURL& target_url,
+    const GURL& referrer_url) const {
+  return cancel_request_with_policy_violating_referrer_;
 }
 
 // static

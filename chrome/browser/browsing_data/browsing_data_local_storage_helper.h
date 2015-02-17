@@ -75,11 +75,6 @@ class CannedBrowsingDataLocalStorageHelper
  public:
   explicit CannedBrowsingDataLocalStorageHelper(Profile* profile);
 
-  // Return a copy of the local storage helper. Only one consumer can use the
-  // StartFetching method at a time, so we need to create a copy of the helper
-  // every time we instantiate a cookies tree model for it.
-  CannedBrowsingDataLocalStorageHelper* Clone();
-
   // Add a local storage to the set of canned local storages that is returned
   // by this helper.
   void AddLocalStorage(const GURL& origin);
@@ -97,17 +92,15 @@ class CannedBrowsingDataLocalStorageHelper
   const std::set<GURL>& GetLocalStorageInfo() const;
 
   // BrowsingDataLocalStorageHelper implementation.
-  virtual void StartFetching(
+  void StartFetching(
       const base::Callback<void(const std::list<LocalStorageInfo>&)>& callback)
-          OVERRIDE;
-  virtual void DeleteOrigin(const GURL& origin) OVERRIDE;
+      override;
+  void DeleteOrigin(const GURL& origin) override;
 
  private:
-  virtual ~CannedBrowsingDataLocalStorageHelper();
+  ~CannedBrowsingDataLocalStorageHelper() override;
 
   std::set<GURL> pending_local_storage_info_;
-
-  Profile* profile_;
 
   DISALLOW_COPY_AND_ASSIGN(CannedBrowsingDataLocalStorageHelper);
 };

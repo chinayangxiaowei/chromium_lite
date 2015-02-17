@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -89,7 +89,7 @@ class NetInternalsTest::MessageHandler : public content::WebUIMessageHandler {
   explicit MessageHandler(NetInternalsTest* net_internals_test);
 
  private:
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // Runs NetInternalsTest.callback with the given value.
   void RunJavascriptCallback(base::Value* value);

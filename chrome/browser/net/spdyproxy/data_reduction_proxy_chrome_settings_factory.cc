@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "base/memory/singleton.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_params.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_usage_stats.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_usage_stats.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "content/public/browser/browser_thread.h"
@@ -52,13 +52,9 @@ DataReductionProxyChromeSettingsFactory::
 
 KeyedService* DataReductionProxyChromeSettingsFactory::BuildServiceInstanceFor(
     content::BrowserContext* context) const {
-  int flags = 0;
-  if (DataReductionProxyParams::IsIncludedInFieldTrial()) {
-    flags |= (DataReductionProxyParams::kAllowed |
-              DataReductionProxyParams::kFallbackAllowed);
-  }
-  if (DataReductionProxyParams::IsIncludedInAlternativeFieldTrial())
-    flags |= DataReductionProxyParams::kAlternativeAllowed;
+  int flags = DataReductionProxyParams::kAllowed |
+      DataReductionProxyParams::kFallbackAllowed |
+      DataReductionProxyParams::kAlternativeAllowed;
   if (DataReductionProxyParams::IsIncludedInPromoFieldTrial())
     flags |= DataReductionProxyParams::kPromoAllowed;
   if (DataReductionProxyParams::IsIncludedInHoldbackFieldTrial())

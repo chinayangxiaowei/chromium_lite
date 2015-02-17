@@ -13,6 +13,7 @@
 #include "chrome/browser/chromeos/accessibility/magnification_manager.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/login_utils.h"
+#include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/chromeos/preferences.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/extensions/api/braille_display_private/mock_braille_controller.h"
@@ -115,7 +116,7 @@ bool IsHighContrastEnabled() {
 
 void SetSpokenFeedbackEnabled(bool enabled) {
   return AccessibilityManager::Get()->EnableSpokenFeedback(
-      enabled, ash::A11Y_NOTIFICATION_NONE);
+      enabled, ui::A11Y_NOTIFICATION_NONE);
 }
 
 bool IsSpokenFeedbackEnabled() {
@@ -203,7 +204,7 @@ int GetAutoclickDelayFromPref() {
 bool IsBrailleImeActive() {
   InputMethodManager* imm = InputMethodManager::Get();
   scoped_ptr<InputMethodDescriptors> descriptors =
-      imm->GetActiveInputMethods();
+      imm->GetActiveIMEState()->GetActiveInputMethods();
   for (InputMethodDescriptors::const_iterator i = descriptors->begin();
        i != descriptors->end();
        ++i) {
@@ -215,7 +216,7 @@ bool IsBrailleImeActive() {
 
 bool IsBrailleImeCurrent() {
   InputMethodManager* imm = InputMethodManager::Get();
-  return imm->GetCurrentInputMethod().id() ==
+  return imm->GetActiveIMEState()->GetCurrentInputMethod().id() ==
          extension_misc::kBrailleImeEngineId;
 }
 }  // anonymous namespace
@@ -225,24 +226,24 @@ class AccessibilityManagerTest : public InProcessBrowserTest {
   AccessibilityManagerTest() : default_autoclick_delay_(0) {}
   virtual ~AccessibilityManagerTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(chromeos::switches::kLoginManager);
     command_line->AppendSwitchASCII(chromeos::switches::kLoginProfile,
                                     TestingProfile::kTestUserProfileDir);
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     AccessibilityManager::SetBrailleControllerForTest(&braille_controller_);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     // Sets the login-screen profile.
     AccessibilityManager::Get()->
         SetProfileForTest(ProfileHelper::GetSigninProfile());
     default_autoclick_delay_ = GetAutoclickDelay();
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     AccessibilityManager::SetBrailleControllerForTest(NULL);
   }
 
@@ -629,7 +630,8 @@ IN_PROC_BROWSER_TEST_P(AccessibilityManagerUserTypeTest, BrailleWhenLoggedIn) {
   chromeos::Preferences prefs;
   prefs.InitUserPrefsForTesting(
       PrefServiceSyncable::FromProfile(GetProfile()),
-      user_manager::UserManager::Get()->GetActiveUser());
+      user_manager::UserManager::Get()->GetActiveUser(),
+      UserSessionManager::GetInstance()->GetDefaultIMEState(GetProfile()));
 
   // Make sure we start in the expected state.
   EXPECT_FALSE(IsBrailleImeActive());
@@ -664,7 +666,7 @@ IN_PROC_BROWSER_TEST_P(AccessibilityManagerUserTypeTest, BrailleWhenLoggedIn) {
   EXPECT_TRUE(IsBrailleImeActive());
 }
 
-IN_PROC_BROWSER_TEST_F(AccessibilityManagerTest, AcessibilityMenuVisibility) {
+IN_PROC_BROWSER_TEST_F(AccessibilityManagerTest, AccessibilityMenuVisibility) {
   // Log in.
   user_manager::UserManager::Get()->UserLoggedIn(
       kTestUserName, kTestUserName, true);

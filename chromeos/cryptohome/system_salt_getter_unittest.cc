@@ -7,8 +7,8 @@
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_cryptohome_client.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
@@ -24,12 +24,10 @@ class SystemSaltGetterTest : public testing::Test {
  protected:
   SystemSaltGetterTest() : fake_cryptohome_client_(NULL) {}
 
-  virtual void SetUp() OVERRIDE {
-    FakeDBusThreadManager* dbus_thread_manager = new FakeDBusThreadManager;
+  virtual void SetUp() override {
     fake_cryptohome_client_ = new FakeCryptohomeClient;
-    dbus_thread_manager->SetCryptohomeClient(
+    DBusThreadManager::GetSetterForTesting()->SetCryptohomeClient(
         scoped_ptr<CryptohomeClient>(fake_cryptohome_client_));
-    DBusThreadManager::InitializeForTesting(dbus_thread_manager);
 
     EXPECT_FALSE(SystemSaltGetter::IsInitialized());
     SystemSaltGetter::Initialize();
@@ -37,7 +35,7 @@ class SystemSaltGetterTest : public testing::Test {
     ASSERT_TRUE(SystemSaltGetter::Get());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     SystemSaltGetter::Shutdown();
     DBusThreadManager::Shutdown();
   }

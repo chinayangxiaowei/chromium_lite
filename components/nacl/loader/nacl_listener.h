@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/shared_memory.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
 #include "components/nacl/common/nacl_types.h"
@@ -28,7 +29,7 @@ class SyncMessageFilter;
 class NaClListener : public IPC::Listener {
  public:
   NaClListener();
-  virtual ~NaClListener();
+  ~NaClListener() override;
   // Listen for a request to launch a NaCl module.
   void Listen();
 
@@ -45,8 +46,20 @@ class NaClListener : public IPC::Listener {
   }
 #endif
 
+  void* crash_info_shmem_memory() const { return crash_info_shmem_->memory(); }
+
+  typedef base::Callback<void(IPC::PlatformFileForTransit, base::FilePath)>
+      ResolveFileTokenCallback;
+  void ResolveFileToken(uint64_t token_lo,
+                        uint64_t token_hi,
+                        ResolveFileTokenCallback cb);
+  void OnFileTokenResolved(uint64_t token_lo,
+                           uint64_t token_hi,
+                           IPC::PlatformFileForTransit ipc_fd,
+                           base::FilePath file_path);
+
  private:
-  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& msg) override;
 
   void OnStart(const nacl::NaClStartParams& params);
 
@@ -71,7 +84,11 @@ class NaClListener : public IPC::Listener {
   int number_of_cores_;
 #endif
 
+  scoped_ptr<base::SharedMemory> crash_info_shmem_;
+
   scoped_refptr<NaClTrustedListener> trusted_listener_;
+
+  ResolveFileTokenCallback resolved_cb_;
 
   // Used to identify what thread we're on.
   base::MessageLoop* main_loop_;

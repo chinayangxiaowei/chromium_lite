@@ -14,11 +14,11 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/browsing_data/browsing_data_quota_helper.h"
-#include "webkit/common/quota/quota_types.h"
+#include "storage/common/quota/quota_types.h"
 
 class GURL;
 
-namespace quota {
+namespace storage {
 class QuotaManager;
 }
 
@@ -27,35 +27,35 @@ class QuotaManager;
 // IO thread, we have to communicate over thread using PostTask.
 class BrowsingDataQuotaHelperImpl : public BrowsingDataQuotaHelper {
  public:
-  virtual void StartFetching(const FetchResultCallback& callback) OVERRIDE;
-  virtual void RevokeHostQuota(const std::string& host) OVERRIDE;
+  void StartFetching(const FetchResultCallback& callback) override;
+  void RevokeHostQuota(const std::string& host) override;
 
  private:
   BrowsingDataQuotaHelperImpl(base::MessageLoopProxy* ui_thread,
                               base::MessageLoopProxy* io_thread,
-                              quota::QuotaManager* quota_manager);
-  virtual ~BrowsingDataQuotaHelperImpl();
+                              storage::QuotaManager* quota_manager);
+  ~BrowsingDataQuotaHelperImpl() override;
 
   void FetchQuotaInfo();
 
   // Callback function for GetOriginModifiedSince.
-  void GotOrigins(const std::set<GURL>& origins, quota::StorageType type);
+  void GotOrigins(const std::set<GURL>& origins, storage::StorageType type);
 
   void ProcessPendingHosts();
-  void GetHostUsage(const std::string& host, quota::StorageType type);
+  void GetHostUsage(const std::string& host, storage::StorageType type);
 
   // Callback function for GetHostUsage.
   void GotHostUsage(const std::string& host,
-                    quota::StorageType type,
+                    storage::StorageType type,
                     int64 usage);
 
   void OnComplete();
-  void DidRevokeHostQuota(quota::QuotaStatusCode status, int64 quota);
+  void DidRevokeHostQuota(storage::QuotaStatusCode status, int64 quota);
 
-  scoped_refptr<quota::QuotaManager> quota_manager_;
+  scoped_refptr<storage::QuotaManager> quota_manager_;
   FetchResultCallback callback_;
 
-  typedef std::set<std::pair<std::string, quota::StorageType> > PendingHosts;
+  typedef std::set<std::pair<std::string, storage::StorageType> > PendingHosts;
   PendingHosts pending_hosts_;
   std::map<std::string, QuotaInfo> quota_info_;
 

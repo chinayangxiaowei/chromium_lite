@@ -71,19 +71,18 @@ class DesktopSessionAgent
       scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner);
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelConnected(int32 peer_pid) override;
+  void OnChannelError() override;
 
   // webrtc::DesktopCapturer::Callback implementation.
-  virtual webrtc::SharedMemory* CreateSharedMemory(size_t size) OVERRIDE;
-  virtual void OnCaptureCompleted(webrtc::DesktopFrame* frame) OVERRIDE;
+  webrtc::SharedMemory* CreateSharedMemory(size_t size) override;
+  void OnCaptureCompleted(webrtc::DesktopFrame* frame) override;
 
   // webrtc::MouseCursorMonitor::Callback implementation.
-  virtual void OnMouseCursor(webrtc::MouseCursor* cursor) OVERRIDE;
-  virtual void OnMouseCursorPosition(
-      webrtc::MouseCursorMonitor::CursorState state,
-      const webrtc::DesktopVector& position) OVERRIDE;
+  void OnMouseCursor(webrtc::MouseCursor* cursor) override;
+  void OnMouseCursorPosition(webrtc::MouseCursorMonitor::CursorState state,
+                             const webrtc::DesktopVector& position) override;
 
   // Forwards a local clipboard event though the IPC channel to the network
   // process.
@@ -104,15 +103,14 @@ class DesktopSessionAgent
  protected:
   friend class base::RefCountedThreadSafe<DesktopSessionAgent>;
 
-  virtual ~DesktopSessionAgent();
+  ~DesktopSessionAgent() override;
 
   // ClientSessionControl interface.
-  virtual const std::string& client_jid() const OVERRIDE;
-  virtual void DisconnectSession() OVERRIDE;
-  virtual void OnLocalMouseMoved(
-    const webrtc::DesktopVector& position) OVERRIDE;
-  virtual void SetDisableInputs(bool disable_inputs) OVERRIDE;
-  virtual void ResetVideoPipeline() OVERRIDE;
+  const std::string& client_jid() const override;
+  void DisconnectSession() override;
+  void OnLocalMouseMoved(const webrtc::DesktopVector& position) override;
+  void SetDisableInputs(bool disable_inputs) override;
+  void ResetVideoPipeline() override;
 
   // Handles StartSessionAgent request from the client.
   void OnStartSessionAgent(const std::string& authenticated_jid,
@@ -179,9 +177,6 @@ class DesktopSessionAgent
 
   std::string client_jid_;
 
-  // Used to disable callbacks to |this|.
-  base::WeakPtrFactory<ClientSessionControl> control_factory_;
-
   base::WeakPtr<Delegate> delegate_;
 
   // The DesktopEnvironment instance used by this agent.
@@ -227,6 +222,9 @@ class DesktopSessionAgent
   // Keep reference to the last frame sent to make sure shared buffer is alive
   // before it's received.
   scoped_ptr<webrtc::DesktopFrame> last_frame_;
+
+  // Used to disable callbacks to |this|.
+  base::WeakPtrFactory<DesktopSessionAgent> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(DesktopSessionAgent);
 };

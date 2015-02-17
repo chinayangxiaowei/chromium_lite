@@ -18,9 +18,14 @@
 #include "ui/views/window/native_frame_view.h"
 
 @interface NativeWidgetMacNSWindow : NSWindow
+- (ViewsNSWindowDelegate*)viewsNSWindowDelegate;
 @end
 
 @implementation NativeWidgetMacNSWindow
+
+- (ViewsNSWindowDelegate*)viewsNSWindowDelegate {
+  return base::mac::ObjCCastStrict<ViewsNSWindowDelegate>([self delegate]);
+}
 
 // Override canBecome{Key,Main}Window to always return YES, otherwise Windows
 // with a styleMask of NSBorderlessWindowMask default to NO.
@@ -30,6 +35,15 @@
 
 - (BOOL)canBecomeMainWindow {
   return YES;
+}
+
+// Override orderWindow to intercept visibility changes, since there is no way
+// to observe these changes via NSWindowDelegate.
+- (void)orderWindow:(NSWindowOrderingMode)orderingMode
+         relativeTo:(NSInteger)otherWindowNumber {
+  [[self viewsNSWindowDelegate] onWindowOrderWillChange:orderingMode];
+  [super orderWindow:orderingMode relativeTo:otherWindowNumber];
+  [[self viewsNSWindowDelegate] onWindowOrderChanged];
 }
 
 @end
@@ -118,6 +132,9 @@ void NativeWidgetMac::InitNativeWidget(const Widget::InitParams& params) {
   delegate_->OnNativeWidgetCreated(true);
 
   bridge_->SetFocusManager(GetWidget()->GetFocusManager());
+
+  DCHECK(GetWidget()->GetRootView());
+  bridge_->SetRootView(GetWidget()->GetRootView());
 }
 
 NonClientFrameView* NativeWidgetMac::CreateNonClientFrameView() {
@@ -164,12 +181,7 @@ const ui::Compositor* NativeWidgetMac::GetCompositor() const {
   return NULL;
 }
 
-ui::Compositor* NativeWidgetMac::GetCompositor() {
-  NOTIMPLEMENTED();
-  return NULL;
-}
-
-ui::Layer* NativeWidgetMac::GetLayer() {
+const ui::Layer* NativeWidgetMac::GetLayer() const {
   NOTIMPLEMENTED();
   return NULL;
 }
@@ -266,8 +278,7 @@ gfx::Rect NativeWidgetMac::GetClientAreaBoundsInScreen() const {
 }
 
 gfx::Rect NativeWidgetMac::GetRestoredBounds() const {
-  NOTIMPLEMENTED();
-  return gfx::Rect();
+  return bridge_ ? bridge_->GetRestoredBounds() : gfx::Rect();
 }
 
 void NativeWidgetMac::SetBounds(const gfx::Rect& bounds) {
@@ -299,6 +310,12 @@ void NativeWidgetMac::SetShape(gfx::NativeRegion shape) {
 }
 
 void NativeWidgetMac::Close() {
+  if (!bridge_)
+    return;
+
+  // Clear the view early to suppress repaints.
+  bridge_->SetRootView(NULL);
+
   NSWindow* window = GetNativeWindow();
   // Calling performClose: will momentarily highlight the close button, but
   // AppKit will reject it if there is no close button.
@@ -337,7 +354,6 @@ void NativeWidgetMac::ShowWithWindowState(ui::WindowShowState state) {
     case ui::SHOW_STATE_FULLSCREEN:
       NOTIMPLEMENTED();
       break;
-    case ui::SHOW_STATE_DETACHED:
     case ui::SHOW_STATE_END:
       NOTREACHED();
       break;
@@ -403,7 +419,7 @@ void NativeWidgetMac::SetVisibleOnAllWorkspaces(bool always_visible) {
 }
 
 void NativeWidgetMac::Maximize() {
-  NOTIMPLEMENTED();
+  NOTIMPLEMENTED();  // See IsMaximized().
 }
 
 void NativeWidgetMac::Minimize() {
@@ -411,7 +427,8 @@ void NativeWidgetMac::Minimize() {
 }
 
 bool NativeWidgetMac::IsMaximized() const {
-  NOTIMPLEMENTED();
+  // The window frame isn't altered on Mac unless going fullscreen. The green
+  // "+" button just makes the window bigger. So, always false.
   return false;
 }
 
@@ -425,12 +442,14 @@ void NativeWidgetMac::Restore() {
 }
 
 void NativeWidgetMac::SetFullscreen(bool fullscreen) {
-  NOTIMPLEMENTED();
+  if (!bridge_ || fullscreen == IsFullscreen())
+    return;
+
+  bridge_->ToggleDesiredFullscreenState();
 }
 
 bool NativeWidgetMac::IsFullscreen() const {
-  NOTIMPLEMENTED();
-  return false;
+  return bridge_ && bridge_->target_fullscreen_state();
 }
 
 void NativeWidgetMac::SetOpacity(unsigned char opacity) {
@@ -493,6 +512,16 @@ void NativeWidgetMac::SetVisibilityChangedAnimationsEnabled(bool value) {
   NOTIMPLEMENTED();
 }
 
+void NativeWidgetMac::SetVisibilityAnimationDuration(
+    const base::TimeDelta& duration) {
+  NOTIMPLEMENTED();
+}
+
+void NativeWidgetMac::SetVisibilityAnimationTransition(
+    Widget::VisibilityTransition transition) {
+  NOTIMPLEMENTED();
+}
+
 ui::NativeTheme* NativeWidgetMac::GetNativeTheme() const {
   return ui::NativeTheme::instance();
 }
@@ -503,6 +532,10 @@ void NativeWidgetMac::OnRootViewLayout() {
 
 bool NativeWidgetMac::IsTranslucentWindowOpacitySupported() const {
   return false;
+}
+
+void NativeWidgetMac::OnSizeConstraintsChanged() {
+  NOTIMPLEMENTED();
 }
 
 void NativeWidgetMac::RepostNativeEvent(gfx::NativeEvent native_event) {

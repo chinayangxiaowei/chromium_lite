@@ -9,6 +9,7 @@
 
 namespace athena {
 
+class WindowListProvider;
 class WindowManagerObserver;
 
 // Manages the application, web windows.
@@ -18,16 +19,22 @@ class ATHENA_EXPORT WindowManager {
   // implementation.
   static WindowManager* Create();
   static void Shutdown();
-  static WindowManager* GetInstance();
+  static WindowManager* Get();
 
   virtual ~WindowManager() {}
 
-  virtual void ToggleOverview() = 0;
-
+  virtual void EnterOverview() = 0;
+  virtual void ExitOverview() = 0;
   virtual bool IsOverviewModeActive() = 0;
 
   virtual void AddObserver(WindowManagerObserver* observer) = 0;
   virtual void RemoveObserver(WindowManagerObserver* observer) = 0;
+
+  virtual void ToggleSplitViewForTest() = 0;
+
+  // This returns the window list provider of the current MRU order of windows.
+  // The ownership remains with the WindowManager.
+  virtual WindowListProvider* GetWindowListProvider() = 0;
 };
 
 }  // namespace athena

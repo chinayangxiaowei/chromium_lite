@@ -13,6 +13,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/signin/core/browser/account_tracker_service.h"
 #include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/common/signin_pref_names.h"
 #include "components/signin/core/common/signin_switches.h"
@@ -56,10 +57,11 @@ const std::string& SigninManagerBase::GetAuthenticatedUsername() const {
 }
 
 const std::string& SigninManagerBase::GetAuthenticatedAccountId() const {
-  return GetAuthenticatedUsername();
+  return authenticated_account_id_;
 }
 
 void SigninManagerBase::SetAuthenticatedUsername(const std::string& username) {
+  DCHECK(!username.empty());
   if (!authenticated_username_.empty()) {
     DLOG_IF(ERROR, !gaia::AreEmailsSame(username, authenticated_username_))
         << "Tried to change the authenticated username to something different: "
@@ -83,6 +85,14 @@ void SigninManagerBase::SetAuthenticatedUsername(const std::string& username) {
   DCHECK(pref_username.empty() || gaia::AreEmailsSame(username, pref_username))
       << "username: " << username << "; pref_username: " << pref_username;
   authenticated_username_ = username;
+
+  // TODO(rogerta): remove this DCHECK when migration work is started.
+  DCHECK_EQ(AccountTrackerService::MIGRATION_NOT_STARTED,
+            AccountTrackerService::GetMigrationState(client_->GetPrefs()));
+  authenticated_account_id_ =
+      AccountTrackerService::PickAccountIdForAccount(client_->GetPrefs(),
+                                                     username,
+                                                     username);
   client_->GetPrefs()->SetString(prefs::kGoogleServicesUsername, username);
   NotifyDiagnosticsObservers(USERNAME, username);
 
@@ -92,8 +102,13 @@ void SigninManagerBase::SetAuthenticatedUsername(const std::string& username) {
   client_->GetPrefs()->SetString(prefs::kGoogleServicesLastUsername, username);
 }
 
-void SigninManagerBase::clear_authenticated_username() {
+void SigninManagerBase::ClearAuthenticatedUsername() {
   authenticated_username_.clear();
+  authenticated_account_id_.clear();
+}
+
+bool SigninManagerBase::IsAuthenticated() const {
+  return !authenticated_account_id_.empty();
 }
 
 bool SigninManagerBase::AuthInProgress() const {

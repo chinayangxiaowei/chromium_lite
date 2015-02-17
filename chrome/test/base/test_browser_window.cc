@@ -22,13 +22,11 @@ class TestBrowserWindowOwner : public chrome::BrowserListObserver {
   explicit TestBrowserWindowOwner(TestBrowserWindow* window) : window_(window) {
     BrowserList::AddObserver(this);
   }
-  virtual ~TestBrowserWindowOwner() {
-    BrowserList::RemoveObserver(this);
-  }
+  ~TestBrowserWindowOwner() override { BrowserList::RemoveObserver(this); }
 
  private:
   // Overridden from BrowserListObserver:
-  virtual void OnBrowserRemoved(Browser* browser) OVERRIDE {
+  void OnBrowserRemoved(Browser* browser) override {
     if (browser->window() == window_.get())
       delete this;
   }
@@ -61,9 +59,14 @@ WindowOpenDisposition
   return CURRENT_TAB;
 }
 
-content::PageTransition
+ui::PageTransition
     TestBrowserWindow::TestLocationBar::GetPageTransition() const {
-  return content::PAGE_TRANSITION_LINK;
+  return ui::PAGE_TRANSITION_LINK;
+}
+
+bool TestBrowserWindow::TestLocationBar::ShowPageActionPopup(
+    const extensions::Extension* extension, bool grant_active_tab) {
+  return false;
 }
 
 const OmniboxView* TestBrowserWindow::TestLocationBar::GetOmniboxView() const {
@@ -94,7 +97,7 @@ bool TestBrowserWindow::IsAlwaysOnTop() const {
   return false;
 }
 
-gfx::NativeWindow TestBrowserWindow::GetNativeWindow() {
+gfx::NativeWindow TestBrowserWindow::GetNativeWindow() const {
   return NULL;
 }
 
@@ -218,9 +221,3 @@ TestBrowserWindow::GetRenderViewHeightInsetWithDetachedBookmarkBar() {
 void TestBrowserWindow::ExecuteExtensionCommand(
     const extensions::Extension* extension,
     const extensions::Command& command) {}
-
-void TestBrowserWindow::ShowPageActionPopup(
-    const extensions::Extension* extension) {}
-
-void TestBrowserWindow::ShowBrowserActionPopup(
-    const extensions::Extension* extension) {}

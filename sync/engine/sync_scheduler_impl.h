@@ -49,50 +49,43 @@ class SYNC_EXPORT_PRIVATE SyncSchedulerImpl
                     Syncer* syncer);
 
   // Calls Stop().
-  virtual ~SyncSchedulerImpl();
+  ~SyncSchedulerImpl() override;
 
-  virtual void Start(Mode mode) OVERRIDE;
-  virtual void ScheduleConfiguration(
-      const ConfigurationParams& params) OVERRIDE;
-  virtual void Stop() OVERRIDE;
-  virtual void ScheduleLocalNudge(
-      const base::TimeDelta& desired_delay,
+  void Start(Mode mode) override;
+  void ScheduleConfiguration(const ConfigurationParams& params) override;
+  void Stop() override;
+  void ScheduleLocalNudge(
       ModelTypeSet types,
-      const tracked_objects::Location& nudge_location) OVERRIDE;
-  virtual void ScheduleLocalRefreshRequest(
-      const base::TimeDelta& desired_delay,
+      const tracked_objects::Location& nudge_location) override;
+  void ScheduleLocalRefreshRequest(
       ModelTypeSet types,
-      const tracked_objects::Location& nudge_location) OVERRIDE;
-  virtual void ScheduleInvalidationNudge(
-      const base::TimeDelta& desired_delay,
+      const tracked_objects::Location& nudge_location) override;
+  void ScheduleInvalidationNudge(
       syncer::ModelType type,
       scoped_ptr<InvalidationInterface> invalidation,
-      const tracked_objects::Location& nudge_location) OVERRIDE;
-  virtual void ScheduleInitialSyncNudge(syncer::ModelType model_type) OVERRIDE;
-  virtual void SetNotificationsEnabled(bool notifications_enabled) OVERRIDE;
+      const tracked_objects::Location& nudge_location) override;
+  void ScheduleInitialSyncNudge(syncer::ModelType model_type) override;
+  void SetNotificationsEnabled(bool notifications_enabled) override;
 
-  virtual base::TimeDelta GetSessionsCommitDelay() const OVERRIDE;
-
-  virtual void OnCredentialsUpdated() OVERRIDE;
-  virtual void OnConnectionStatusChange() OVERRIDE;
+  void OnCredentialsUpdated() override;
+  void OnConnectionStatusChange() override;
 
   // SyncSession::Delegate implementation.
-  virtual void OnThrottled(const base::TimeDelta& throttle_duration) OVERRIDE;
-  virtual void OnTypesThrottled(
-      ModelTypeSet types,
-      const base::TimeDelta& throttle_duration) OVERRIDE;
-  virtual bool IsCurrentlyThrottled() OVERRIDE;
-  virtual void OnReceivedShortPollIntervalUpdate(
-      const base::TimeDelta& new_interval) OVERRIDE;
-  virtual void OnReceivedLongPollIntervalUpdate(
-      const base::TimeDelta& new_interval) OVERRIDE;
-  virtual void OnReceivedSessionsCommitDelay(
-      const base::TimeDelta& new_delay) OVERRIDE;
-  virtual void OnReceivedClientInvalidationHintBufferSize(int size) OVERRIDE;
-  virtual void OnSyncProtocolError(
-      const SyncProtocolError& sync_protocol_error) OVERRIDE;
-  virtual void OnReceivedGuRetryDelay(const base::TimeDelta& delay) OVERRIDE;
-  virtual void OnReceivedMigrationRequest(syncer::ModelTypeSet types) OVERRIDE;
+  void OnThrottled(const base::TimeDelta& throttle_duration) override;
+  void OnTypesThrottled(ModelTypeSet types,
+                        const base::TimeDelta& throttle_duration) override;
+  bool IsCurrentlyThrottled() override;
+  void OnReceivedShortPollIntervalUpdate(
+      const base::TimeDelta& new_interval) override;
+  void OnReceivedLongPollIntervalUpdate(
+      const base::TimeDelta& new_interval) override;
+  void OnReceivedCustomNudgeDelays(
+      const std::map<ModelType, base::TimeDelta>& nudge_delays) override;
+  void OnReceivedClientInvalidationHintBufferSize(int size) override;
+  void OnSyncProtocolError(
+      const SyncProtocolError& sync_protocol_error) override;
+  void OnReceivedGuRetryDelay(const base::TimeDelta& delay) override;
+  void OnReceivedMigrationRequest(syncer::ModelTypeSet types) override;
 
   // Returns true if the client is currently in exponential backoff.
   bool IsBackingOff() const;
@@ -149,6 +142,8 @@ class SYNC_EXPORT_PRIVATE SyncSchedulerImpl
   };
 
   static const char* GetModeString(Mode mode);
+
+  void SetDefaultNudgeDelay(base::TimeDelta delay_ms);
 
   // Invoke the syncer to perform a nudge job.
   void DoNudgeSyncSessionJob(JobPriority priority);
@@ -250,9 +245,6 @@ class SYNC_EXPORT_PRIVATE SyncSchedulerImpl
   // updated by the server.
   base::TimeDelta syncer_short_poll_interval_seconds_;
   base::TimeDelta syncer_long_poll_interval_seconds_;
-
-  // Server-tweakable sessions commit delay.
-  base::TimeDelta sessions_commit_delay_;
 
   // Periodic timer for polling.  See AdjustPolling.
   base::RepeatingTimer<SyncSchedulerImpl> poll_timer_;

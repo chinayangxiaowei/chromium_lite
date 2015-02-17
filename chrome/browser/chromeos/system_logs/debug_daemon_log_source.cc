@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -30,7 +30,8 @@ const char kUserLogFileKeyName[] = "user_log_files";
 namespace system_logs {
 
 DebugDaemonLogSource::DebugDaemonLogSource(bool scrub)
-    : response_(new SystemLogsResponse()),
+    : SystemLogsSource("DebugDemon"),
+      response_(new SystemLogsResponse()),
       num_pending_requests_(0),
       scrub_(scrub),
       weak_ptr_factory_(this) {}

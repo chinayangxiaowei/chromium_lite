@@ -5,21 +5,17 @@
 import os
 
 from telemetry import decorators
+from telemetry.core import app
 from telemetry.core import browser_credentials
 from telemetry.core import exceptions
 from telemetry.core import extension_dict
 from telemetry.core import local_server
 from telemetry.core import memory_cache_http_server
 from telemetry.core import tab_list
-from telemetry.core import wpr_modes
-from telemetry.core import wpr_server
 from telemetry.core.backends import browser_backend
-from telemetry.core.platform import tracing_category_filter
-from telemetry.core.platform import tracing_options
-from telemetry.core.platform.profiler import profiler_finder
 
 
-class Browser(object):
+class Browser(app.App):
   """A running browser instance that can be controlled in a limited way.
 
   To create a browser instance, use browser_finder.FindBrowser.
@@ -27,37 +23,38 @@ class Browser(object):
   Be sure to clean up after yourself by calling Close() when you are done with
   the browser. Or better yet:
     browser_to_create = FindBrowser(options)
-    with browser_to_create.Create() as browser:
+    with browser_to_create.Create(options) as browser:
       ... do all your operations on browser here
   """
-  def __init__(self, backend, platform_backend):
-    assert platform_backend.platform != None
-
+  def __init__(self, backend, platform_backend, credentials_path):
+    super(Browser, self).__init__(app_backend=backend,
+                                  platform_backend=platform_backend)
     self._browser_backend = backend
     self._platform_backend = platform_backend
-    self._wpr_server = None
-    self._active_profilers = []
-    self._profilers_states = {}
     self._local_server_controller = local_server.LocalServerController(backend)
     self._tabs = tab_list.TabList(backend.tab_list_backend)
     self.credentials = browser_credentials.BrowserCredentials()
-
+    self.credentials.credentials_path = credentials_path
     self._platform_backend.DidCreateBrowser(self, self._browser_backend)
 
-  def __enter__(self):
-    self.Start()
-    return self
+    browser_options = self._browser_backend.browser_options
+    self.platform.FlushDnsCache()
+    if browser_options.clear_sytem_cache_for_browser_and_profile_on_start:
+      if self.platform.CanFlushIndividualFilesFromSystemCache():
+        self.platform.FlushSystemCacheForDirectory(
+            self._browser_backend.profile_directory)
+        self.platform.FlushSystemCacheForDirectory(
+            self._browser_backend.browser_directory)
+      else:
+        self.platform.FlushEntireSystemCache()
 
-  def __exit__(self, *args):
-    self.Close()
-
-  @property
-  def platform(self):
-    return self._platform_backend.platform
+    self._browser_backend.SetBrowser(self)
+    self._browser_backend.Start()
+    self._platform_backend.DidStartBrowser(self, self._browser_backend)
 
   @property
   def browser_type(self):
-    return self._browser_backend.browser_type
+    return self.app_type
 
   @property
   def supports_extensions(self):
@@ -94,14 +91,6 @@ class Browser(object):
       raise browser_backend.ExtensionsNotSupportedException(
           'Extensions not supported')
     return extension_dict.ExtensionDict(self._browser_backend.extension_backend)
-
-  @property
-  def supports_tracing(self):
-    return self.platform.tracing_controller.IsChromeTracingSupported(self)
-
-  def is_profiler_active(self, profiler_name):
-    return profiler_name in [profiler.name() for
-                             profiler in self._active_profilers]
 
   def _GetStatsCommon(self, pid_stats_function):
     browser_pid = self._browser_backend.pid
@@ -208,6 +197,11 @@ class Browser(object):
     result = self._GetStatsCommon(self._platform_backend.GetCpuStats)
     del result['ProcessCount']
 
+    # FIXME: Renderer process CPU times are impossible to compare correctly.
+    # http://crbug.com/419786#c11
+    if 'Renderer' in result:
+      del result['Renderer']
+
     # We want a single time value, not the sum for all processes.
     cpu_timestamp = self._platform_backend.GetCpuTimestamp()
     for process_type in result:
@@ -244,87 +238,10 @@ class Browser(object):
     del result['ProcessCount']
     return result
 
-  def StartProfiling(self, profiler_name, base_output_file):
-    """Starts profiling using |profiler_name|. Results are saved to
-    |base_output_file|.<process_name>."""
-    assert not self._active_profilers, 'Already profiling. Must stop first.'
-
-    profiler_class = profiler_finder.FindProfiler(profiler_name)
-
-    if not profiler_class.is_supported(self._browser_backend.browser_type):
-      raise Exception('The %s profiler is not '
-                      'supported on this platform.' % profiler_name)
-
-    if not profiler_class in self._profilers_states:
-      self._profilers_states[profiler_class] = {}
-
-    self._active_profilers.append(
-        profiler_class(self._browser_backend, self._platform_backend,
-            base_output_file, self._profilers_states[profiler_class]))
-
-  def StopProfiling(self):
-    """Stops all active profilers and saves their results.
-
-    Returns:
-      A list of filenames produced by the profiler.
-    """
-    output_files = []
-    for profiler in self._active_profilers:
-      output_files.extend(profiler.CollectProfile())
-    self._active_profilers = []
-    return output_files
-
-
-  def StartTracing(self, custom_categories=None, timeout=10):
-    """Note: this function is deprecated. Prefer platform.tracing_controller."""
-    if not isinstance(custom_categories,
-                      tracing_category_filter.TracingCategoryFilter):
-      category_filter = tracing_category_filter.TracingCategoryFilter(
-          filter_string=custom_categories)
-    else:
-      category_filter = custom_categories
-    options = tracing_options.TracingOptions()
-    options.enable_chrome_trace = True
-    return self.platform.tracing_controller.Start(
-        options, category_filter, timeout)
-
-  @property
-  def is_tracing_running(self):
-    """Note: this function is deprecated. Prefer platform.tracing_controller."""
-    return self.platform.tracing_controller.is_tracing_running
-
-  def StopTracing(self):
-    """Note: this function is deprecated. Prefer platform.tracing_controller."""
-    return self.platform.tracing_controller.Stop()
-
-  def Start(self):
-    browser_options = self._browser_backend.browser_options
-    self.platform.FlushDnsCache()
-    if browser_options.clear_sytem_cache_for_browser_and_profile_on_start:
-      if self.platform.CanFlushIndividualFilesFromSystemCache():
-        self.platform.FlushSystemCacheForDirectory(
-            self._browser_backend.profile_directory)
-        self.platform.FlushSystemCacheForDirectory(
-            self._browser_backend.browser_directory)
-      else:
-        self.platform.FlushEntireSystemCache()
-
-    self._browser_backend.SetBrowser(self)
-    self._browser_backend.Start()
-    self._platform_backend.DidStartBrowser(self, self._browser_backend)
-
   def Close(self):
     """Closes this browser."""
-    for profiler_class in self._profilers_states:
-      profiler_class.WillCloseBrowser(self._browser_backend,
-                                      self._platform_backend)
-
     if self._browser_backend.IsBrowserRunning():
       self._platform_backend.WillCloseBrowser(self, self._browser_backend)
-
-    if self._wpr_server:
-      self._wpr_server.Close()
-      self._wpr_server = None
 
     self._local_server_controller.Close()
     self._browser_backend.Close()
@@ -375,29 +292,6 @@ class Browser(object):
   def local_servers(self):
     """Returns the currently running local servers."""
     return self._local_server_controller.local_servers
-
-  def SetReplayArchivePath(self, archive_path, append_to_existing_wpr=False,
-                           make_javascript_deterministic=True):
-    if self._wpr_server:
-      self._wpr_server.Close()
-      self._wpr_server = None
-
-    if not archive_path:
-      return None
-
-    if self._browser_backend.wpr_mode == wpr_modes.WPR_OFF:
-      return
-
-    use_record_mode = self._browser_backend.wpr_mode == wpr_modes.WPR_RECORD
-    if not use_record_mode:
-      assert os.path.isfile(archive_path)
-
-    self._wpr_server = wpr_server.ReplayServer(
-        self._browser_backend,
-        archive_path,
-        use_record_mode,
-        append_to_existing_wpr,
-        make_javascript_deterministic)
 
   def GetStandardOutput(self):
     return self._browser_backend.GetStandardOutput()

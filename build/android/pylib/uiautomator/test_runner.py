@@ -27,7 +27,6 @@ class TestRunner(instr_test_runner.TestRunner):
     instrumentation_options = instr_test_options.InstrumentationOptions(
         test_options.tool,
         test_options.cleanup_test_files,
-        test_options.push_deps,
         test_options.annotations,
         test_options.exclude_annotations,
         test_options.test_filter,
@@ -74,5 +73,13 @@ class TestRunner(instr_test_runner.TestRunner):
                       package=self._package),
         blocking=True,
         force_stop=True)
-    return self.device.old_interface.RunUIAutomatorTest(
-        test, self.test_pkg.GetPackageName(), timeout)
+    cmd = ['uiautomator', 'runtest', self.test_pkg.GetPackageName(),
+           '-e', 'class', test]
+    return self.device.RunShellCommand(cmd, timeout=timeout, retries=0)
+
+  #override
+  def _GenerateTestResult(self, test, instr_statuses, start_ms, duration_ms):
+    # uiautomator emits its summary status with INSTRUMENTATION_STATUS_CODE,
+    # not INSTRUMENTATION_CODE, so we have to drop if off the list of statuses.
+    return super(TestRunner, self)._GenerateTestResult(
+        test, instr_statuses[:-1], start_ms, duration_ms)

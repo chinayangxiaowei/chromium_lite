@@ -5,8 +5,20 @@
 #include "base/logging.h"
 #include "chrome/browser/ui/apps/app_info_dialog.h"
 
-void ShowAppInfoDialog(AppListControllerDelegate* app_list_controller_delegate,
-                       Profile* profile,
-                       const extensions::Extension* app) {
+void ShowAppInfoInAppList(gfx::NativeWindow parent,
+                          const gfx::Rect& app_list_bounds,
+                          Profile* profile,
+                          const extensions::Extension* app,
+                          const base::Closure& close_callback) {
+  // TODO(sashab): Implement the App Info dialog on Mac.
+  NOTIMPLEMENTED();
+}
+
+void ShowAppInfoInNativeDialog(gfx::NativeWindow parent,
+                               const gfx::Size& size,
+                               Profile* profile,
+                               const extensions::Extension* app,
+                               const base::Closure& close_callback) {
+  // TODO(sashab): Implement the App Info dialog on Mac.
   NOTIMPLEMENTED();
 }

@@ -24,7 +24,7 @@ class DesktopMediaPickerViewsTest : public testing::Test {
   DesktopMediaPickerViewsTest() {}
   virtual ~DesktopMediaPickerViewsTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     bool enable_pixel_output = false;
     ui::ContextFactory* context_factory =
         ui::InitializeContextFactoryForTests(enable_pixel_output);
@@ -50,12 +50,12 @@ class DesktopMediaPickerViewsTest : public testing::Test {
                         NULL,
                         app_name,
                         app_name,
-                        media_list.PassAs<DesktopMediaList>(),
+                        media_list.Pass(),
                         base::Bind(&DesktopMediaPickerViewsTest::OnPickerDone,
                                    base::Unretained(this)));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     test_helper_->TearDown();
     ui::TerminateContextFactoryForTests();
   }
@@ -126,13 +126,9 @@ TEST_F(DesktopMediaPickerViewsTest, DoneCallbackCalledOnDoubleTap) {
                   content::DesktopMediaID::TYPE_WINDOW, kFakeId)));
 
   media_list_->AddSource(kFakeId);
-
-  ui::GestureEvent double_tap(
-      10,
-      10,
-      0,
-      base::TimeDelta(),
-      ui::GestureEventDetails(ui::ET_GESTURE_TAP, 2, 0));
+  ui::GestureEventDetails details(ui::ET_GESTURE_TAP);
+  details.set_tap_count(2);
+  ui::GestureEvent double_tap(10, 10, 0, base::TimeDelta(), details);
 
   GetPickerDialogView()->GetMediaSourceViewForTesting(0)->OnGestureEvent(
       &double_tap);

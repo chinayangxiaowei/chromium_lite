@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
 #include "base/prefs/pref_service.h"
@@ -41,7 +41,7 @@ namespace {
 
 class MockWebContentsDelegate : public content::WebContentsDelegate {
  public:
-  virtual ~MockWebContentsDelegate() {}
+  ~MockWebContentsDelegate() override {}
 };
 
 // Google Mock action that posts a task to the current message loop that invokes
@@ -77,14 +77,14 @@ class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
   virtual ~TestChromeDownloadManagerDelegate() {}
 
   virtual safe_browsing::DownloadProtectionService*
-      GetDownloadProtectionService() OVERRIDE {
+      GetDownloadProtectionService() override {
     return NULL;
   }
 
   virtual void NotifyExtensions(
       content::DownloadItem* download,
       const base::FilePath& suggested_virtual_path,
-      const NotifyExtensionsCallback& callback) OVERRIDE {
+      const NotifyExtensionsCallback& callback) override {
     callback.Run(base::FilePath(),
                  DownloadPathReservationTracker::UNIQUIFY);
   }
@@ -95,7 +95,7 @@ class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
       bool create_directory,
       DownloadPathReservationTracker::FilenameConflictAction conflict_action,
       const DownloadPathReservationTracker::ReservedPathCallback& callback)
-      OVERRIDE {
+      override {
     // Pretend the path reservation succeeded without any change to
     // |target_path|.
     base::MessageLoop::current()->PostTask(
@@ -106,7 +106,7 @@ class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
       DownloadItem* download,
       const base::FilePath& suggested_path,
       const DownloadTargetDeterminerDelegate::FileSelectedCallback& callback)
-      OVERRIDE {
+      override {
     base::FilePath return_path = MockPromptUserForDownloadPath(download,
                                                                suggested_path,
                                                                callback);
@@ -127,8 +127,8 @@ class ChromeDownloadManagerDelegateTest
   ChromeDownloadManagerDelegateTest();
 
   // ::testing::Test
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  void SetUp() override;
+  void TearDown() override;
 
   // Verifies and clears test expectations for |delegate_| and
   // |download_manager_|.
@@ -218,7 +218,7 @@ content::MockDownloadItem*
   ON_CALL(*item, GetTargetFilePath())
       .WillByDefault(ReturnRefOfCopy(base::FilePath()));
   ON_CALL(*item, GetTransitionType())
-      .WillByDefault(Return(content::PAGE_TRANSITION_LINK));
+      .WillByDefault(Return(ui::PAGE_TRANSITION_LINK));
   ON_CALL(*item, GetWebContents())
       .WillByDefault(Return(web_contents()));
   ON_CALL(*item, HasUserGesture())

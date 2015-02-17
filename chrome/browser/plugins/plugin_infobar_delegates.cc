@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
@@ -16,14 +15,15 @@
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "components/google/core/browser/google_util.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
+#include "grit/components_strings.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -61,7 +61,7 @@ bool PluginInfoBarDelegate::LinkClicked(WindowOpenDisposition disposition) {
       content::OpenURLParams(
           GURL(GetLearnMoreURL()), content::Referrer(),
           (disposition == CURRENT_TAB) ? NEW_FOREGROUND_TAB : disposition,
-          content::PAGE_TRANSITION_LINK, false));
+          ui::PAGE_TRANSITION_LINK, false));
   return false;
 }
 
@@ -79,92 +79,6 @@ int PluginInfoBarDelegate::GetIconID() const {
 base::string16 PluginInfoBarDelegate::GetLinkText() const {
   return l10n_util::GetStringUTF16(IDS_LEARN_MORE);
 }
-
-
-// UnauthorizedPluginInfoBarDelegate ------------------------------------------
-
-// static
-void UnauthorizedPluginInfoBarDelegate::Create(
-    InfoBarService* infobar_service,
-    HostContentSettingsMap* content_settings,
-    const base::string16& name,
-    const std::string& identifier) {
-  infobar_service->AddInfoBar(ConfirmInfoBarDelegate::CreateInfoBar(
-      scoped_ptr<ConfirmInfoBarDelegate>(new UnauthorizedPluginInfoBarDelegate(
-          content_settings, name, identifier))));
-
-  content::RecordAction(UserMetricsAction("BlockedPluginInfobar.Shown"));
-  std::string utf8_name(base::UTF16ToUTF8(name));
-  if (utf8_name == PluginMetadata::kJavaGroupName) {
-    content::RecordAction(UserMetricsAction("BlockedPluginInfobar.Shown.Java"));
-  } else if (utf8_name == PluginMetadata::kQuickTimeGroupName) {
-    content::RecordAction(
-        UserMetricsAction("BlockedPluginInfobar.Shown.QuickTime"));
-  } else if (utf8_name == PluginMetadata::kShockwaveGroupName) {
-    content::RecordAction(
-        UserMetricsAction("BlockedPluginInfobar.Shown.Shockwave"));
-  } else if (utf8_name == PluginMetadata::kRealPlayerGroupName) {
-    content::RecordAction(
-        UserMetricsAction("BlockedPluginInfobar.Shown.RealPlayer"));
-  } else if (utf8_name == PluginMetadata::kWindowsMediaPlayerGroupName) {
-    content::RecordAction(
-        UserMetricsAction("BlockedPluginInfobar.Shown.WindowsMediaPlayer"));
-  }
-}
-
-UnauthorizedPluginInfoBarDelegate::UnauthorizedPluginInfoBarDelegate(
-    HostContentSettingsMap* content_settings,
-    const base::string16& name,
-    const std::string& identifier)
-    : PluginInfoBarDelegate(identifier),
-      content_settings_(content_settings),
-      name_(name) {
-}
-
-UnauthorizedPluginInfoBarDelegate::~UnauthorizedPluginInfoBarDelegate() {
-  content::RecordAction(UserMetricsAction("BlockedPluginInfobar.Closed"));
-}
-
-std::string UnauthorizedPluginInfoBarDelegate::GetLearnMoreURL() const {
-  return chrome::kBlockedPluginLearnMoreURL;
-}
-
-base::string16 UnauthorizedPluginInfoBarDelegate::GetMessageText() const {
-  return l10n_util::GetStringFUTF16(IDS_PLUGIN_NOT_AUTHORIZED, name_);
-}
-
-base::string16 UnauthorizedPluginInfoBarDelegate::GetButtonLabel(
-    InfoBarButton button) const {
-  return l10n_util::GetStringUTF16((button == BUTTON_OK) ?
-      IDS_PLUGIN_ENABLE_TEMPORARILY : IDS_PLUGIN_ENABLE_ALWAYS);
-}
-
-bool UnauthorizedPluginInfoBarDelegate::Accept() {
-  content::RecordAction(
-      UserMetricsAction("BlockedPluginInfobar.AllowThisTime"));
-  LoadBlockedPlugins();
-  return true;
-}
-
-bool UnauthorizedPluginInfoBarDelegate::Cancel() {
-  content::RecordAction(UserMetricsAction("BlockedPluginInfobar.AlwaysAllow"));
-  const GURL& url = InfoBarService::WebContentsFromInfoBar(infobar())->GetURL();
-  content_settings_->AddExceptionForURL(url, url, CONTENT_SETTINGS_TYPE_PLUGINS,
-                                        CONTENT_SETTING_ALLOW);
-  LoadBlockedPlugins();
-  return true;
-}
-
-void UnauthorizedPluginInfoBarDelegate::InfoBarDismissed() {
-  content::RecordAction(UserMetricsAction("BlockedPluginInfobar.Dismissed"));
-}
-
-bool UnauthorizedPluginInfoBarDelegate::LinkClicked(
-    WindowOpenDisposition disposition) {
-  content::RecordAction(UserMetricsAction("BlockedPluginInfobar.LearnMore"));
-  return PluginInfoBarDelegate::LinkClicked(disposition);
-}
-
 
 #if defined(ENABLE_PLUGIN_INSTALLATION)
 
@@ -400,7 +314,7 @@ bool PluginInstallerInfoBarDelegate::LinkClicked(
       content::OpenURLParams(
           url, content::Referrer(),
           (disposition == CURRENT_TAB) ? NEW_FOREGROUND_TAB : disposition,
-          content::PAGE_TRANSITION_LINK, false));
+          ui::PAGE_TRANSITION_LINK, false));
   return false;
 }
 
@@ -482,15 +396,9 @@ int PluginMetroModeInfoBarDelegate::GetButtons() const {
 
 base::string16 PluginMetroModeInfoBarDelegate::GetButtonLabel(
     InfoBarButton button) const {
-#if defined(USE_AURA) && defined(USE_ASH)
-  return l10n_util::GetStringUTF16(IDS_WIN8_DESKTOP_RESTART);
-#else
-  return l10n_util::GetStringUTF16((mode_ == MISSING_PLUGIN) ?
-      IDS_WIN8_DESKTOP_RESTART : IDS_WIN8_DESKTOP_OPEN);
-#endif
+  return l10n_util::GetStringUTF16(IDS_WIN_DESKTOP_RESTART);
 }
 
-#if defined(USE_AURA) && defined(USE_ASH)
 void LaunchDesktopInstanceHelper(const base::string16& url) {
   base::FilePath exe_path;
   if (!PathService::Get(base::FILE_EXE, &exe_path))
@@ -504,7 +412,6 @@ void LaunchDesktopInstanceHelper(const base::string16& url) {
   aura::RemoteWindowTreeHostWin::Instance()->HandleOpenURLOnDesktop(
       shortcut_path, url);
 }
-#endif
 
 bool PluginMetroModeInfoBarDelegate::Accept() {
   chrome::AttemptRestartToDesktopMode();
@@ -527,7 +434,7 @@ bool PluginMetroModeInfoBarDelegate::LinkClicked(
               "https://support.google.com/chrome/?p=ib_redirect_to_desktop"),
           content::Referrer(),
           (disposition == CURRENT_TAB) ? NEW_FOREGROUND_TAB : disposition,
-          content::PAGE_TRANSITION_LINK, false));
+          ui::PAGE_TRANSITION_LINK, false));
   return false;
 }
 

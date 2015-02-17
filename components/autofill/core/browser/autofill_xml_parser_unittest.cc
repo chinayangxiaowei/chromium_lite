@@ -10,7 +10,7 @@
 #include "components/autofill/core/browser/autofill_xml_parser.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlparser.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlparser.h"
 
 namespace autofill {
 namespace {
@@ -18,7 +18,7 @@ namespace {
 class AutofillQueryXmlParserTest : public testing::Test {
  public:
   AutofillQueryXmlParserTest(): upload_required_(USE_UPLOAD_RATES) {};
-  virtual ~AutofillQueryXmlParserTest() {};
+  ~AutofillQueryXmlParserTest() override{};
 
  protected:
   void ParseQueryXML(const std::string& xml, bool should_succeed) {
@@ -37,7 +37,7 @@ class AutofillQueryXmlParserTest : public testing::Test {
 class AutofillUploadXmlParserTest : public testing::Test {
  public:
   AutofillUploadXmlParserTest(): positive_(0), negative_(0) {};
-  virtual ~AutofillUploadXmlParserTest() {};
+  ~AutofillUploadXmlParserTest() override{};
 
  protected:
   void ParseUploadXML(const std::string& xml, bool should_succeed) {

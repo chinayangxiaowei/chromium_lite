@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/api/declarative/rules_registry_service.h"
+#include "extensions/browser/api/declarative/rules_registry_service.h"
 
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
-#include "chrome/browser/extensions/api/declarative/test_rules_registry.h"
-#include "chrome/browser/extensions/api/declarative_webrequest/webrequest_constants.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread.h"
+#include "extensions/browser/api/declarative/test_rules_registry.h"
+#include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -41,9 +41,9 @@ class RulesRegistryServiceTest : public testing::Test {
       : ui_(content::BrowserThread::UI, &message_loop_),
         io_(content::BrowserThread::IO, &message_loop_) {}
 
-  virtual ~RulesRegistryServiceTest() {}
+  ~RulesRegistryServiceTest() override {}
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     // Make sure that deletion traits of all registries are executed.
     message_loop_.RunUntilIdle();
   }

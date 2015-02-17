@@ -5,8 +5,8 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
@@ -33,12 +33,12 @@ class ResourceLoaderBrowserTest : public InProcessBrowserTest {
   ResourceLoaderBrowserTest() {}
 
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     // Needed to load file:// URLs in XHRs.
     command_line->AppendSwitch(switches::kDisableWebSecurity);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     // Create the root page containing resource_loader.js.
     std::string root_page =
         "<html>"

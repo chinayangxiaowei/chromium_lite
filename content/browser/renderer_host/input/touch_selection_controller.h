@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_INPUT_TOUCH_SELECTION_CONTROLLER_H_
 #define CONTENT_BROWSER_RENDERER_HOST_INPUT_TOUCH_SELECTION_CONTROLLER_H_
 
+#include "cc/output/viewport_selection_bound.h"
 #include "content/browser/renderer_host/input/selection_event_type.h"
 #include "content/browser/renderer_host/input/touch_handle.h"
 #include "content/common/content_export.h"
@@ -30,8 +31,9 @@ class CONTENT_EXPORT TouchSelectionControllerClient {
   virtual bool SupportsAnimation() const = 0;
   virtual void SetNeedsAnimate() = 0;
   virtual void MoveCaret(const gfx::PointF& position) = 0;
-  virtual void SelectBetweenCoordinates(const gfx::PointF& start,
-                                        const gfx::PointF& end) = 0;
+  virtual void MoveRangeSelectionExtent(const gfx::PointF& extent) = 0;
+  virtual void SelectBetweenCoordinates(const gfx::PointF& base,
+                                        const gfx::PointF& extent) = 0;
   virtual void OnSelectionEvent(SelectionEventType event,
                                 const gfx::PointF& position) = 0;
   virtual scoped_ptr<TouchHandleDrawable> CreateDrawable() = 0;
@@ -40,18 +42,16 @@ class CONTENT_EXPORT TouchSelectionControllerClient {
 // Controller for manipulating text selection via touch input.
 class CONTENT_EXPORT TouchSelectionController : public TouchHandleClient {
  public:
-  explicit TouchSelectionController(TouchSelectionControllerClient* client);
-  virtual ~TouchSelectionController();
+  TouchSelectionController(TouchSelectionControllerClient* client,
+                           base::TimeDelta tap_timeout,
+                           float tap_slop);
+  ~TouchSelectionController() override;
 
   // To be called when the selection bounds have changed.
   // Note that such updates will trigger handle updates only if preceded
   // by an appropriate call to allow automatic showing.
-  void OnSelectionBoundsChanged(const gfx::RectF& start_rect,
-                                TouchHandleOrientation start_orientation,
-                                bool start_visible,
-                                const gfx::RectF& end_rect,
-                                TouchHandleOrientation end_orientation,
-                                bool end_visible);
+  void OnSelectionBoundsChanged(const cc::ViewportSelectionBound& start,
+                                const cc::ViewportSelectionBound& end);
 
   // Allows touch-dragging of the handle.
   // Returns true iff the event was consumed, in which case the caller should
@@ -87,13 +87,15 @@ class CONTENT_EXPORT TouchSelectionController : public TouchHandleClient {
   enum InputEventType { TAP, LONG_PRESS, INPUT_EVENT_TYPE_NONE };
 
   // TouchHandleClient implementation.
-  virtual void OnHandleDragBegin(const TouchHandle& handle) OVERRIDE;
-  virtual void OnHandleDragUpdate(const TouchHandle& handle,
-                                  const gfx::PointF& new_position) OVERRIDE;
-  virtual void OnHandleDragEnd(const TouchHandle& handle) OVERRIDE;
-  virtual void OnHandleTapped(const TouchHandle& handle) OVERRIDE;
-  virtual void SetNeedsAnimate() OVERRIDE;
-  virtual scoped_ptr<TouchHandleDrawable> CreateDrawable() OVERRIDE;
+  void OnHandleDragBegin(const TouchHandle& handle) override;
+  void OnHandleDragUpdate(const TouchHandle& handle,
+                          const gfx::PointF& new_position) override;
+  void OnHandleDragEnd(const TouchHandle& handle) override;
+  void OnHandleTapped(const TouchHandle& handle) override;
+  void SetNeedsAnimate() override;
+  scoped_ptr<TouchHandleDrawable> CreateDrawable() override;
+  base::TimeDelta GetTapTimeout() const override;
+  float GetTapSlop() const override;
 
   void ShowInsertionHandleAutomatically();
   void ShowSelectionHandlesAutomatically();
@@ -107,24 +109,24 @@ class CONTENT_EXPORT TouchSelectionController : public TouchHandleClient {
   void DeactivateSelection();
   void ResetCachedValuesIfInactive();
 
-  gfx::PointF GetStartPosition() const;
-  gfx::PointF GetEndPosition() const;
-  float GetStartLineHeight() const;
-  float GetEndLineHeight() const;
+  const gfx::PointF& GetStartPosition() const;
+  const gfx::PointF& GetEndPosition() const;
+  gfx::Vector2dF GetStartLineOffset() const;
+  gfx::Vector2dF GetEndLineOffset() const;
   bool GetStartVisible() const;
   bool GetEndVisible() const;
   TouchHandle::AnimationStyle GetAnimationStyle(bool was_active) const;
 
   TouchSelectionControllerClient* const client_;
+  const base::TimeDelta tap_timeout_;
+  const float tap_slop_;
 
   InputEventType response_pending_input_event_;
 
-  gfx::RectF start_rect_;
+  cc::ViewportSelectionBound start_;
+  cc::ViewportSelectionBound end_;
   TouchHandleOrientation start_orientation_;
-  bool start_visible_;
-  gfx::RectF end_rect_;
   TouchHandleOrientation end_orientation_;
-  bool end_visible_;
 
   scoped_ptr<TouchHandle> insertion_handle_;
   bool is_insertion_active_;
@@ -132,7 +134,6 @@ class CONTENT_EXPORT TouchSelectionController : public TouchHandleClient {
 
   scoped_ptr<TouchHandle> start_selection_handle_;
   scoped_ptr<TouchHandle> end_selection_handle_;
-  gfx::PointF fixed_handle_position_;
   bool is_selection_active_;
   bool activate_selection_automatically_;
 

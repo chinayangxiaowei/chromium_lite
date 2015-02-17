@@ -58,7 +58,7 @@ TEST_F(SpellcheckMacTest, IgnoreWords_EN_US) {
     "noooen",
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTestCases); ++i) {
+  for (size_t i = 0; i < arraysize(kTestCases); ++i) {
     const base::string16 word(base::ASCIIToUTF16(kTestCases[i]));
     const int doc_tag = spellcheck_mac::GetDocumentTag();
 
@@ -136,7 +136,10 @@ TEST_F(SpellcheckMacTest, SpellCheckSuggestions_EN_US) {
     {"beleive", "believe"},
     {"bellweather", "bellwether"},
     {"benifit", "benefit"},
-    {"bouy", "buoy"},
+    // This particular spelling correction was removed in OSX 10.10. Replacing
+    // it with another spelling correction that also works on older OSes.
+    // {"bouy", "buoy"},
+    {"bouy", "body"},
     {"briliant", "brilliant"},
     {"burgler", "burglar"},
     {"camoflage", "camouflage"},
@@ -353,7 +356,7 @@ TEST_F(SpellcheckMacTest, SpellCheckSuggestions_EN_US) {
     {"writting", "writing"},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTestCases); ++i) {
+  for (size_t i = 0; i < arraysize(kTestCases); ++i) {
     const base::string16 word(base::ASCIIToUTF16(kTestCases[i].input));
     EXPECT_FALSE(spellcheck_mac::CheckSpelling(word, 0)) << word;
 

@@ -33,7 +33,7 @@ class POLICY_EXPORT UserCloudPolicyStore : public UserCloudPolicyStoreBase {
       const base::FilePath& key_file,
       const std::string& verification_key,
       scoped_refptr<base::SequencedTaskRunner> background_task_runner);
-  virtual ~UserCloudPolicyStore();
+  ~UserCloudPolicyStore() override;
 
   // Factory method for creating a UserCloudPolicyStore for a profile with path
   // |profile_path|.
@@ -53,9 +53,8 @@ class POLICY_EXPORT UserCloudPolicyStore : public UserCloudPolicyStoreBase {
   virtual void Clear();
 
   // CloudPolicyStore implementation.
-  virtual void Load() OVERRIDE;
-  virtual void Store(
-      const enterprise_management::PolicyFetchResponse& policy) OVERRIDE;
+  void Load() override;
+  void Store(const enterprise_management::PolicyFetchResponse& policy) override;
 
   // The key used to sign the current policy (empty if there either is no
   // loaded policy yet, or if the policy is unsigned).
@@ -91,9 +90,6 @@ class POLICY_EXPORT UserCloudPolicyStore : public UserCloudPolicyStoreBase {
   // Callback invoked to store the policy after validation has finished.
   void StorePolicyAfterValidation(UserCloudPolicyValidator* validator);
 
-  // WeakPtrFactory used to create callbacks for validating and storing policy.
-  base::WeakPtrFactory<UserCloudPolicyStore> weak_factory_;
-
   // The key used to verify signatures of cached policy.
   std::string policy_key_;
 
@@ -105,6 +101,9 @@ class POLICY_EXPORT UserCloudPolicyStore : public UserCloudPolicyStoreBase {
 
   // The hard-coded key used to verify new signing keys.
   const std::string verification_key_;
+
+  // WeakPtrFactory used to create callbacks for validating and storing policy.
+  base::WeakPtrFactory<UserCloudPolicyStore> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyStore);
 };

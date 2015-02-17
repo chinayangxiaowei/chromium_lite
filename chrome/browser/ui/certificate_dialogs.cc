@@ -9,13 +9,13 @@
 
 #include "base/base64.h"
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/common/net/x509_certificate_model.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
-#include "grit/generated_resources.h"
 #include "net/base/filename_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
@@ -69,12 +69,14 @@ class Exporter : public ui::SelectFileDialog::Listener {
            gfx::NativeWindow parent,
            net::X509Certificate::OSCertHandles::iterator certs_begin,
            net::X509Certificate::OSCertHandles::iterator certs_end);
-  virtual ~Exporter();
+  ~Exporter() override;
 
   // SelectFileDialog::Listener implemenation.
-  virtual void FileSelected(const base::FilePath& path,
-                            int index, void* params) OVERRIDE;
-  virtual void FileSelectionCanceled(void* params) OVERRIDE;
+  void FileSelected(const base::FilePath& path,
+                    int index,
+                    void* params) override;
+  void FileSelectionCanceled(void* params) override;
+
  private:
   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
 

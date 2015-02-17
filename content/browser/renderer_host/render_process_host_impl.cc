@@ -11,10 +11,6 @@
 #include <limits>
 #include <vector>
 
-#if defined(OS_POSIX)
-#include <utility>  // for pair<>
-#endif
-
 #include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -26,8 +22,6 @@
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/numerics/safe_math.h"
-#include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
@@ -41,12 +35,12 @@
 #include "cc/base/switches.h"
 #include "content/browser/appcache/appcache_dispatcher_host.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "content/browser/battery_status/battery_status_message_filter.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/browser_main.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/browser_plugin/browser_plugin_message_filter.h"
 #include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/device_sensors/device_light_message_filter.h"
 #include "content/browser/device_sensors/device_motion_message_filter.h"
 #include "content/browser/device_sensors/device_orientation_message_filter.h"
 #include "content/browser/dom_storage/dom_storage_context_wrapper.h"
@@ -55,6 +49,7 @@
 #include "content/browser/fileapi/chrome_blob_storage_context.h"
 #include "content/browser/fileapi/fileapi_message_filter.h"
 #include "content/browser/frame_host/render_frame_message_filter.h"
+#include "content/browser/geofencing/geofencing_dispatcher_host.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/gpu/gpu_process_host.h"
@@ -70,9 +65,9 @@
 #include "content/browser/message_port_message_filter.h"
 #include "content/browser/mime_registry_message_filter.h"
 #include "content/browser/mojo/mojo_application_host.h"
-#include "content/browser/plugin_service_impl.h"
+#include "content/browser/notifications/notification_message_filter.h"
 #include "content/browser/profiler_message_filter.h"
-#include "content/browser/push_messaging_message_filter.h"
+#include "content/browser/push_messaging/push_messaging_message_filter.h"
 #include "content/browser/quota_dispatcher_host.h"
 #include "content/browser/renderer_host/clipboard_message_filter.h"
 #include "content/browser/renderer_host/database_message_filter.h"
@@ -81,7 +76,6 @@
 #include "content/browser/renderer_host/gpu_message_filter.h"
 #include "content/browser/renderer_host/media/audio_input_renderer_host.h"
 #include "content/browser/renderer_host/media/audio_renderer_host.h"
-#include "content/browser/renderer_host/media/device_request_message_filter.h"
 #include "content/browser/renderer_host/media/media_stream_dispatcher_host.h"
 #include "content/browser/renderer_host/media/peer_connection_tracker_host.h"
 #include "content/browser/renderer_host/media/video_capture_host.h"
@@ -93,7 +87,6 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "content/browser/renderer_host/socket_stream_dispatcher_host.h"
 #include "content/browser/renderer_host/text_input_client_message_filter.h"
 #include "content/browser/renderer_host/websocket_dispatcher_host.h"
 #include "content/browser/resolve_proxy_msg_helper.h"
@@ -110,7 +103,6 @@
 #include "content/common/child_process_host_impl.h"
 #include "content/common/child_process_messages.h"
 #include "content/common/content_switches_internal.h"
-#include "content/common/gpu/client/gpu_memory_buffer_impl.h"
 #include "content/common/gpu/gpu_messages.h"
 #include "content/common/mojo/mojo_messages.h"
 #include "content/common/resource_messages.h"
@@ -134,39 +126,44 @@
 #include "content/public/common/result_codes.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/url_constants.h"
+#include "device/battery/battery_monitor_impl.h"
+#include "gpu/command_buffer/client/gpu_switches.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_logging.h"
 #include "ipc/ipc_switches.h"
 #include "ipc/mojo/ipc_channel_mojo.h"
+#include "ipc/mojo/ipc_channel_mojo_host.h"
 #include "media/base/media_switches.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "ppapi/shared_impl/ppapi_switches.h"
+#include "storage/browser/fileapi/sandbox_file_system_backend.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_switches.h"
 #include "ui/gfx/switches.h"
 #include "ui/gl/gl_switches.h"
+#include "ui/gl/gpu_switching_manager.h"
 #include "ui/native_theme/native_theme_switches.h"
-#include "webkit/browser/fileapi/sandbox_file_system_backend.h"
 
 #if defined(OS_ANDROID)
 #include "content/browser/media/android/browser_demuxer_android.h"
-#include "content/browser/renderer_host/compositor_impl_android.h"
 #include "content/browser/screen_orientation/screen_orientation_message_filter_android.h"
-#include "content/common/gpu/client/gpu_memory_buffer_impl_surface_texture.h"
-#endif
-
-#if defined(OS_MACOSX)
-#include "content/common/gpu/client/gpu_memory_buffer_impl_io_surface.h"
 #endif
 
 #if defined(OS_WIN)
-#include "base/strings/string_number_conversions.h"
 #include "base/win/scoped_com_initializer.h"
 #include "content/common/font_cache_dispatcher_win.h"
 #include "content/common/sandbox_win.h"
 #include "ui/gfx/win/dpi.h"
+#endif
+
+#if defined(ENABLE_BROWSER_CDMS)
+#include "content/browser/media/cdm/browser_cdm_manager.h"
+#endif
+
+#if defined(ENABLE_PLUGINS)
+#include "content/browser/plugin_service_impl.h"
 #endif
 
 #if defined(ENABLE_WEBRTC)
@@ -180,10 +177,10 @@
 
 extern bool g_exited_main_message_loop;
 
-static const char* kSiteProcessMapKeyName = "content_site_process_map";
-
 namespace content {
 namespace {
+
+const char kSiteProcessMapKeyName[] = "content_site_process_map";
 
 void CacheShaderInfo(int32 id, base::FilePath path) {
   ShaderCacheFactory::GetInstance()->SetCacheInfo(id, path);
@@ -302,15 +299,15 @@ SiteProcessMap* GetSiteProcessMapForBrowserContext(BrowserContext* context) {
 
 // NOTE: changes to this class need to be reviewed by the security team.
 class RendererSandboxedProcessLauncherDelegate
-    : public content::SandboxedProcessLauncherDelegate {
+    : public SandboxedProcessLauncherDelegate {
  public:
-  RendererSandboxedProcessLauncherDelegate(IPC::ChannelProxy* channel)
+  explicit RendererSandboxedProcessLauncherDelegate(IPC::ChannelProxy* channel)
 #if defined(OS_POSIX)
-       : ipc_fd_(channel->TakeClientFileDescriptor())
+      : ipc_fd_(channel->TakeClientFileDescriptor())
 #endif  // OS_POSIX
   {}
 
-  virtual ~RendererSandboxedProcessLauncherDelegate() {}
+  ~RendererSandboxedProcessLauncherDelegate() override {}
 
 #if defined(OS_WIN)
   virtual void PreSpawnTarget(sandbox::TargetPolicy* policy,
@@ -320,47 +317,28 @@ class RendererSandboxedProcessLauncherDelegate
   }
 
 #elif defined(OS_POSIX)
-  virtual bool ShouldUseZygote() OVERRIDE {
+  bool ShouldUseZygote() override {
     const base::CommandLine& browser_command_line =
         *base::CommandLine::ForCurrentProcess();
     base::CommandLine::StringType renderer_prefix =
         browser_command_line.GetSwitchValueNative(switches::kRendererCmdPrefix);
     return renderer_prefix.empty();
   }
-  virtual int GetIpcFd() OVERRIDE {
-    return ipc_fd_;
-  }
+  base::ScopedFD TakeIpcFd() override { return ipc_fd_.Pass(); }
 #endif  // OS_WIN
 
  private:
 #if defined(OS_POSIX)
-  int ipc_fd_;
+  base::ScopedFD ipc_fd_;
 #endif  // OS_POSIX
 };
-
-#if defined(OS_MACOSX)
-void AddBooleanValue(CFMutableDictionaryRef dictionary,
-                     const CFStringRef key,
-                     bool value) {
-  CFDictionaryAddValue(
-      dictionary, key, value ? kCFBooleanTrue : kCFBooleanFalse);
-}
-
-void AddIntegerValue(CFMutableDictionaryRef dictionary,
-                     const CFStringRef key,
-                     int32 value) {
-  base::ScopedCFTypeRef<CFNumberRef> number(
-      CFNumberCreate(NULL, kCFNumberSInt32Type, &value));
-  CFDictionaryAddValue(dictionary, key, number.get());
-}
-#endif
 
 const char kSessionStorageHolderKey[] = "kSessionStorageHolderKey";
 
 class SessionStorageHolder : public base::SupportsUserData::Data {
  public:
   SessionStorageHolder() {}
-  virtual ~SessionStorageHolder() {}
+  ~SessionStorageHolder() override {}
 
   void Hold(const SessionStorageNamespaceMap& sessions, int view_route_id) {
     session_storage_namespaces_awaiting_close_[view_route_id] = sessions;
@@ -456,7 +434,6 @@ RenderProcessHostImpl::RenderProcessHostImpl(
 #endif
       pending_views_(0),
       mojo_application_host_(new MojoApplicationHost),
-      mojo_activation_required_(false),
       visible_widgets_(0),
       backgrounded_(true),
       is_initialized_(false),
@@ -539,7 +516,7 @@ RenderProcessHostImpl::~RenderProcessHostImpl() {
   ChildProcessSecurityPolicyImpl::GetInstance()->Remove(GetID());
 
   if (gpu_observer_registered_) {
-    GpuDataManagerImpl::GetInstance()->RemoveObserver(this);
+    ui::GpuSwitchingManager::GetInstance()->RemoveObserver(this);
     gpu_observer_registered_ = false;
   }
 
@@ -557,10 +534,6 @@ RenderProcessHostImpl::~RenderProcessHostImpl() {
     BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
                             base::Bind(&RemoveShaderInfo, GetID()));
   }
-
-#if defined(OS_ANDROID)
-  CompositorImpl::DestroyAllSurfaceTextures(GetID());
-#endif
 }
 
 void RenderProcessHostImpl::EnableSendQueue() {
@@ -608,6 +581,7 @@ bool RenderProcessHostImpl::Init() {
   GetContentClient()->browser()->RenderProcessWillLaunch(this);
 
   CreateMessageFilters();
+  RegisterMojoServices();
 
   if (run_renderer_in_process()) {
     DCHECK(g_renderer_main_thread_factory);
@@ -656,33 +630,21 @@ bool RenderProcessHostImpl::Init() {
 
   if (!gpu_observer_registered_) {
     gpu_observer_registered_ = true;
-    GpuDataManagerImpl::GetInstance()->AddObserver(this);
+    ui::GpuSwitchingManager::GetInstance()->AddObserver(this);
   }
 
   power_monitor_broadcaster_.Init();
 
   is_initialized_ = true;
+  init_time_ = base::TimeTicks::Now();
   return true;
-}
-
-void RenderProcessHostImpl::MaybeActivateMojo() {
-  // TODO(darin): Following security review, we can unconditionally initialize
-  // Mojo in all renderers. We will then be able to directly call Activate()
-  // from OnProcessLaunched.
-  if (!mojo_activation_required_)
-    return;  // Waiting on someone to require Mojo.
-
-  if (!GetHandle())
-    return;  // Waiting on renderer startup.
-
-  if (!mojo_application_host_->did_activate())
-    mojo_application_host_->Activate(this, GetHandle());
 }
 
 bool RenderProcessHostImpl::ShouldUseMojoChannel() const {
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
-  return command_line.HasSwitch(switches::kEnableRendererMojoChannel);
+  return command_line.HasSwitch(switches::kEnableRendererMojoChannel) ||
+         IPC::ChannelMojo::ShouldBeUsed();
 }
 
 scoped_ptr<IPC::ChannelProxy> RenderProcessHostImpl::CreateChannelProxy(
@@ -691,10 +653,16 @@ scoped_ptr<IPC::ChannelProxy> RenderProcessHostImpl::CreateChannelProxy(
       BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
   if (ShouldUseMojoChannel()) {
     VLOG(1) << "Mojo Channel is enabled on host";
+    if (!channel_mojo_host_) {
+      channel_mojo_host_.reset(new IPC::ChannelMojoHost(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)));
+    }
+
     return IPC::ChannelProxy::Create(
-        IPC::ChannelMojo::CreateFactory(
-            channel_id, IPC::Channel::MODE_SERVER, runner),
-        this, runner.get());
+        IPC::ChannelMojo::CreateServerFactory(
+            channel_mojo_host_->channel_delegate(), channel_id),
+        this,
+        runner.get());
   }
 
   return IPC::ChannelProxy::Create(
@@ -756,17 +724,17 @@ void RenderProcessHostImpl::CreateMessageFilters() {
   AddFilter(new AudioInputRendererHost(
       audio_manager,
       media_stream_manager,
-      BrowserMainLoop::GetInstance()->audio_mirroring_manager(),
+      AudioMirroringManager::GetInstance(),
       BrowserMainLoop::GetInstance()->user_input_monitor()));
   // The AudioRendererHost needs to be available for lookup, so it's
   // stashed in a member variable.
   audio_renderer_host_ = new AudioRendererHost(
       GetID(),
       audio_manager,
-      BrowserMainLoop::GetInstance()->audio_mirroring_manager(),
+      AudioMirroringManager::GetInstance(),
       media_internals,
       media_stream_manager);
-  AddFilter(audio_renderer_host_);
+  AddFilter(audio_renderer_host_.get());
   AddFilter(
       new MidiHost(GetID(), BrowserMainLoop::GetInstance()->midi_manager()));
   AddFilter(new VideoCaptureHost(media_stream_manager));
@@ -793,10 +761,7 @@ void RenderProcessHostImpl::CreateMessageFilters() {
   AddFilter(new MediaStreamDispatcherHost(
       GetID(),
       browser_context->GetResourceContext()->GetMediaDeviceIDSalt(),
-      media_stream_manager,
-      resource_context));
-  AddFilter(new DeviceRequestMessageFilter(
-      resource_context, media_stream_manager, GetID()));
+      media_stream_manager));
   AddFilter(new MediaStreamTrackMetricsHost());
 #endif
 #if defined(ENABLE_PLUGINS)
@@ -824,18 +789,12 @@ void RenderProcessHostImpl::CreateMessageFilters() {
   channel_->AddFilter(new FontCacheDispatcher());
 #elif defined(OS_ANDROID)
   browser_demuxer_android_ = new BrowserDemuxerAndroid();
-  AddFilter(browser_demuxer_android_);
+  AddFilter(browser_demuxer_android_.get());
 #endif
-
-  SocketStreamDispatcherHost::GetRequestContextCallback
-      request_context_callback(
-          base::Bind(&GetRequestContext, request_context,
-                     media_request_context));
-
-  SocketStreamDispatcherHost* socket_stream_dispatcher_host =
-      new SocketStreamDispatcherHost(
-          GetID(), request_context_callback, resource_context);
-  AddFilter(socket_stream_dispatcher_host);
+#if defined(ENABLE_BROWSER_CDMS)
+  browser_cdm_manager_ = new BrowserCdmManager(GetID(), NULL);
+  AddFilter(browser_cdm_manager_.get());
+#endif
 
   WebSocketDispatcherHost::GetRequestContextCallback
       websocket_request_context_callback(
@@ -848,13 +807,14 @@ void RenderProcessHostImpl::CreateMessageFilters() {
   message_port_message_filter_ = new MessagePortMessageFilter(
       base::Bind(&RenderWidgetHelper::GetNextRoutingID,
                  base::Unretained(widget_helper_.get())));
-  AddFilter(message_port_message_filter_);
+  AddFilter(message_port_message_filter_.get());
 
   scoped_refptr<ServiceWorkerDispatcherHost> service_worker_filter =
-      new ServiceWorkerDispatcherHost(GetID(), message_port_message_filter_);
+      new ServiceWorkerDispatcherHost(
+          GetID(), message_port_message_filter_.get(), resource_context);
   service_worker_filter->Init(
       storage_partition_impl_->GetServiceWorkerContext());
-  AddFilter(service_worker_filter);
+  AddFilter(service_worker_filter.get());
 
   AddFilter(new SharedWorkerMessageFilter(
       GetID(),
@@ -868,13 +828,13 @@ void RenderProcessHostImpl::CreateMessageFilters() {
           storage_partition_impl_->GetDatabaseTracker(),
           storage_partition_impl_->GetIndexedDBContext(),
           storage_partition_impl_->GetServiceWorkerContext()),
-      message_port_message_filter_));
+      message_port_message_filter_.get()));
 
 #if defined(ENABLE_WEBRTC)
   p2p_socket_dispatcher_host_ = new P2PSocketDispatcherHost(
       resource_context,
       browser_context->GetRequestContextForRenderProcess(GetID()));
-  AddFilter(p2p_socket_dispatcher_host_);
+  AddFilter(p2p_socket_dispatcher_host_.get());
 #endif
 
   AddFilter(new TraceMessageFilter());
@@ -884,7 +844,15 @@ void RenderProcessHostImpl::CreateMessageFilters() {
       GetID(),
       storage_partition_impl_->GetQuotaManager(),
       GetContentClient()->browser()->CreateQuotaPermissionContext()));
+
+  notification_message_filter_ = new NotificationMessageFilter(
+      GetID(),
+      resource_context,
+      browser_context);
+  AddFilter(notification_message_filter_.get());
+
   AddFilter(new GamepadBrowserMessageFilter());
+  AddFilter(new DeviceLightMessageFilter());
   AddFilter(new DeviceMotionMessageFilter());
   AddFilter(new DeviceOrientationMessageFilter());
   AddFilter(new ProfilerMessageFilter(PROCESS_TYPE_RENDERER));
@@ -897,16 +865,21 @@ void RenderProcessHostImpl::CreateMessageFilters() {
   AddFilter(new VibrationMessageFilter());
   AddFilter(new PushMessagingMessageFilter(
       GetID(), storage_partition_impl_->GetServiceWorkerContext()));
-  AddFilter(new BatteryStatusMessageFilter());
 #if defined(OS_ANDROID)
   AddFilter(new ScreenOrientationMessageFilterAndroid());
 #endif
+  AddFilter(new GeofencingDispatcherHost(
+      storage_partition_impl_->GetGeofencingManager()));
+}
+
+void RenderProcessHostImpl::RegisterMojoServices() {
+  mojo_application_host_->service_registry()->AddService(
+      base::Bind(&device::BatteryMonitorImpl::Create));
 }
 
 int RenderProcessHostImpl::GetNextRoutingID() {
   return widget_helper_->GetNextRoutingID();
 }
-
 
 void RenderProcessHostImpl::ResumeDeferredNavigation(
     const GlobalRequestID& request_id) {
@@ -927,9 +900,16 @@ ServiceRegistry* RenderProcessHostImpl::GetServiceRegistry() {
   return mojo_application_host_->service_registry();
 }
 
+const base::TimeTicks& RenderProcessHostImpl::GetInitTimeForNavigationMetrics()
+    const {
+  return init_time_;
+}
+
 void RenderProcessHostImpl::AddRoute(
     int32 routing_id,
     IPC::Listener* listener) {
+  CHECK(!listeners_.Lookup(routing_id))
+      << "Found Routing ID Conflict: " << routing_id;
   listeners_.AddWithID(listener, routing_id);
 }
 
@@ -1020,13 +1000,17 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
   if (IsDelegatedRendererEnabled())
     command_line->AppendSwitch(switches::kEnableDelegatedRenderer);
 
-  if (IsImplSidePaintingEnabled())
+  if (IsImplSidePaintingEnabled()) {
     command_line->AppendSwitch(switches::kEnableImplSidePainting);
+    command_line->AppendSwitchASCII(
+        switches::kNumRasterThreads,
+        base::IntToString(NumberOfRendererRasterThreads()));
+  }
 
-  if (content::IsGpuRasterizationEnabled())
+  if (IsGpuRasterizationEnabled())
     command_line->AppendSwitch(switches::kEnableGpuRasterization);
 
-  if (content::IsForceGpuRasterizationEnabled())
+  if (IsForceGpuRasterizationEnabled())
     command_line->AppendSwitch(switches::kForceGpuRasterization);
 
   // Appending disable-gpu-feature switches due to software rendering list.
@@ -1064,7 +1048,7 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
   GetContentClient()->browser()->AppendExtraCommandLineSwitches(
       command_line, GetID());
 
-  if (content::IsPinchToZoomEnabled())
+  if (IsPinchToZoomEnabled())
     command_line->AppendSwitch(switches::kEnablePinch);
 
 #if defined(OS_WIN)
@@ -1091,16 +1075,15 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kDefaultTileWidth,
     switches::kDefaultTileHeight,
     switches::kDisable3DAPIs,
-    switches::kDisableAcceleratedFixedRootBackground,
-    switches::kDisableAcceleratedOverflowScroll,
     switches::kDisableAcceleratedVideoDecode,
     switches::kDisableApplicationCache,
+    switches::kDisableBlinkScheduler,
     switches::kDisableBreakpad,
-    switches::kDisableCompositingForFixedPosition,
+    switches::kDisablePreferCompositingToLCDText,
     switches::kDisableCompositingForTransition,
     switches::kDisableDatabases,
-    switches::kDisableDesktopNotifications,
     switches::kDisableDirectNPAPIRequests,
+    switches::kDisableDisplayList2dCanvas,
     switches::kDisableDistanceFieldText,
     switches::kDisableFileSystem,
     switches::kDisableGpuCompositing,
@@ -1112,24 +1095,28 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kDisableLocalStorage,
     switches::kDisableLogging,
     switches::kDisableMediaSource,
+    switches::kDisableOneCopy,
     switches::kDisableOverlayScrollbar,
     switches::kDisablePinch,
     switches::kDisablePrefixedEncryptedMedia,
     switches::kDisableSeccompFilterSandbox,
     switches::kDisableSessionStorage,
     switches::kDisableSharedWorkers,
+    switches::kDisableSVG1DOM,
     switches::kDisableThreadedCompositing,
+    switches::kDisableThreadedScrolling,
     switches::kDisableTouchAdjustment,
     switches::kDisableTouchDragDrop,
     switches::kDisableTouchEditing,
-    switches::kDisableZeroCopy,
+    switches::kDisableV8IdleNotificationAfterCommit,
     switches::kDomAutomationController,
-    switches::kEnableAcceleratedFixedRootBackground,
-    switches::kEnableAcceleratedOverflowScroll,
+    switches::kEnableAcceleratedJpegDecoding,
     switches::kEnableBeginFrameScheduling,
     switches::kEnableBleedingEdgeRenderingFastPaths,
-    switches::kEnableCompositingForFixedPosition,
+    switches::kEnableBrowserSideNavigation,
+    switches::kEnablePreferCompositingToLCDText,
     switches::kEnableCompositingForTransition,
+    switches::kEnableCredentialManagerAPI,
     switches::kEnableDeferredImageDecoding,
     switches::kEnableDisplayList2dCanvas,
     switches::kEnableDistanceFieldText,
@@ -1139,7 +1126,7 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kEnableGPUClientLogging,
     switches::kEnableGpuClientTracing,
     switches::kEnableGPUServiceLogging,
-    switches::kEnableHighDpiCompositingForFixedPosition,
+    switches::kEnableLinkDisambiguationPopup,
     switches::kEnableLowResTiling,
     switches::kEnableInbandTextTracks,
     switches::kEnableLCDText,
@@ -1159,14 +1146,13 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kEnableSmoothScrolling,
     switches::kEnableStatsTable,
     switches::kEnableStrictSiteIsolation,
-    switches::kEnableTargetedStyleRecalc,
     switches::kEnableThreadedCompositing,
     switches::kEnableTouchDragDrop,
     switches::kEnableTouchEditing,
+    switches::kEnableV8IdleNotificationAfterCommit,
     switches::kEnableViewport,
     switches::kEnableViewportMeta,
     switches::kEnableVtune,
-    switches::kEnableWebAnimationsSVG,
     switches::kEnableWebGLDraftExtensions,
     switches::kEnableWebGLImageChromium,
     switches::kEnableWebMIDI,
@@ -1183,13 +1169,13 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kMemoryMetrics,
     switches::kNoReferrers,
     switches::kNoSandbox,
-    switches::kNumRasterThreads,
     switches::kPpapiInProcess,
     switches::kProfilerTiming,
     switches::kReduceSecurityForTesting,
     switches::kRegisterPepperPlugins,
     switches::kRendererAssertTest,
     switches::kRendererStartupDialog,
+    switches::kRootLayerScrolls,
     switches::kShowPaintRects,
     switches::kSitePerProcess,
     switches::kStatsCollectionController,
@@ -1209,7 +1195,6 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     cc::switches::kCompositeToMailbox,
     cc::switches::kDisableCompositedAntialiasing,
     cc::switches::kDisableMainFrameBeforeActivation,
-    cc::switches::kDisableMainFrameBeforeDraw,
     cc::switches::kDisableThreadedAnimation,
     cc::switches::kEnableGpuBenchmarking,
     cc::switches::kEnableMainFrameBeforeActivation,
@@ -1232,6 +1217,7 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     cc::switches::kTopControlsShowThreshold,
 #if defined(ENABLE_PLUGINS)
     switches::kEnablePepperTesting,
+    switches::kEnablePluginPowerSaver,
 #endif
 #if defined(ENABLE_WEBRTC)
     switches::kDisableAudioTrackProcessing,
@@ -1248,13 +1234,18 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
     switches::kMediaDrmEnableNonCompositing,
     switches::kNetworkCountryIso,
     switches::kDisableWebAudio,
+    switches::kRendererWaitForJavaDebugger,
 #endif
 #if defined(OS_MACOSX)
     // Allow this to be set when invoking the browser and relayed along.
     switches::kEnableSandboxLogging,
 #endif
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+    switches::kEnableThreadedEventHandlingMac,
+#endif
 #if defined(OS_WIN)
     switches::kDisableDirectWrite,
+    switches::kEnableWin32kRendererLockDown,
 #endif
 #if defined(OS_CHROMEOS)
     switches::kDisableVaapiAcceleratedVideoEncode,
@@ -1282,16 +1273,26 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
   if (IsImplSidePaintingEnabled() &&
       !browser_cmd.HasSwitch(switches::kEnableDeferredImageDecoding))
     renderer_cmd->AppendSwitch(switches::kEnableDeferredImageDecoding);
+
+  // Add kWaitForDebugger to let renderer process wait for a debugger.
+  if (browser_cmd.HasSwitch(switches::kWaitForDebuggerChildren)) {
+    // Look to pass-on the kWaitForDebugger flag.
+    std::string value =
+        browser_cmd.GetSwitchValueASCII(switches::kWaitForDebuggerChildren);
+    if (value.empty() || value == switches::kRendererProcess) {
+      renderer_cmd->AppendSwitch(switches::kWaitForDebugger);
+    }
+  }
 }
 
 base::ProcessHandle RenderProcessHostImpl::GetHandle() const {
   if (run_renderer_in_process())
-    return base::Process::Current().handle();
+    return base::GetCurrentProcessHandle();
 
   if (!child_process_launcher_.get() || child_process_launcher_->IsStarting())
     return base::kNullProcessHandle;
 
-  return child_process_launcher_->GetHandle();
+  return child_process_launcher_->GetProcess().Handle();
 }
 
 bool RenderProcessHostImpl::FastShutdownIfPossible() {
@@ -1376,11 +1377,6 @@ bool RenderProcessHostImpl::OnMessageReceived(const IPC::Message& msg) {
       IPC_MESSAGE_HANDLER(ViewHostMsg_UserMetricsRecordAction,
                           OnUserMetricsRecordAction)
       IPC_MESSAGE_HANDLER(ViewHostMsg_SavedPageAsMHTML, OnSavedPageAsMHTML)
-      IPC_MESSAGE_HANDLER_DELAY_REPLY(
-          ChildProcessHostMsg_SyncAllocateGpuMemoryBuffer,
-          OnAllocateGpuMemoryBuffer)
-      IPC_MESSAGE_HANDLER(ChildProcessHostMsg_DeletedGpuMemoryBuffer,
-                          OnDeletedGpuMemoryBuffer)
       IPC_MESSAGE_HANDLER(ViewHostMsg_Close_ACK, OnCloseACK)
 #if defined(ENABLE_WEBRTC)
       IPC_MESSAGE_HANDLER(AecDumpMsg_RegisterAecDumpConsumer,
@@ -1580,7 +1576,7 @@ RenderProcessHostImpl::StartRtpDump(
     bool incoming,
     bool outgoing,
     const WebRtcRtpPacketCallback& packet_callback) {
-  if (!p2p_socket_dispatcher_host_)
+  if (!p2p_socket_dispatcher_host_.get())
     return WebRtcStopRtpDumpCallback();
 
   BrowserThread::PostTask(BrowserThread::IO,
@@ -1912,6 +1908,11 @@ void RenderProcessHostImpl::ProcessDied(bool already_dead) {
       base::TERMINATION_STATUS_NORMAL_TERMINATION;
 
   RendererClosedDetails details(GetHandle(), status, exit_code);
+  mojo_application_host_->WillDestroySoon();
+
+  child_process_launcher_.reset();
+  channel_.reset();
+
   within_process_died_observer_ = true;
   NotificationService::current()->Notify(
       NOTIFICATION_RENDERER_PROCESS_CLOSED,
@@ -1919,13 +1920,9 @@ void RenderProcessHostImpl::ProcessDied(bool already_dead) {
       Details<RendererClosedDetails>(&details));
   FOR_EACH_OBSERVER(RenderProcessHostObserver,
                     observers_,
-                    RenderProcessExited(this, GetHandle(), status, exit_code));
+                    RenderProcessExited(this, status, exit_code));
   within_process_died_observer_ = false;
 
-  mojo_application_host_->WillDestroySoon();
-
-  child_process_launcher_.reset();
-  channel_.reset();
   gpu_message_filter_ = NULL;
   message_port_message_filter_ = NULL;
   RemoveUserData(kSessionStorageHolderKey);
@@ -1940,7 +1937,6 @@ void RenderProcessHostImpl::ProcessDied(bool already_dead) {
   }
 
   mojo_application_host_.reset(new MojoApplicationHost);
-  mojo_activation_required_ = false;
 
   // It's possible that one of the calls out to the observers might have caused
   // this object to be no longer needed.
@@ -2084,11 +2080,7 @@ void RenderProcessHostImpl::OnProcessLaunched() {
     return;
 
   if (child_process_launcher_) {
-    if (!child_process_launcher_->GetHandle()) {
-      OnChannelError();
-      return;
-    }
-
+    DCHECK(child_process_launcher_->GetProcess().IsValid());
     SetBackgrounded(backgrounded_);
   }
 
@@ -2107,7 +2099,10 @@ void RenderProcessHostImpl::OnProcessLaunched() {
   // Allow Mojo to be setup before the renderer sees any Chrome IPC messages.
   // This way, Mojo can be safely used from the renderer in response to any
   // Chrome IPC message.
-  MaybeActivateMojo();
+  mojo_application_host_->Activate(this, GetHandle());
+
+  if (channel_mojo_host_)
+    channel_mojo_host_->OnClientLaunched(GetHandle());
 
   while (!queued_messages_.empty()) {
     Send(queued_messages_.front());
@@ -2142,7 +2137,7 @@ void RenderProcessHostImpl::OnSavedPageAsMHTML(int job_id, int64 data_size) {
   MHTMLGenerationManager::GetInstance()->MHTMLGenerated(job_id, data_size);
 }
 
-void RenderProcessHostImpl::OnGpuSwitching() {
+void RenderProcessHostImpl::OnGpuSwitched() {
   // We are updating all widgets including swapped out ones.
   scoped_ptr<RenderWidgetHostIterator> widgets(
       RenderWidgetHostImpl::GetAllRenderWidgetHosts());
@@ -2246,119 +2241,6 @@ void RenderProcessHostImpl::DecrementWorkerRefCount() {
   --worker_ref_count_;
   if (worker_ref_count_ == 0)
     Cleanup();
-}
-
-void RenderProcessHostImpl::EnsureMojoActivated() {
-  mojo_activation_required_ = true;
-  MaybeActivateMojo();
-}
-
-void RenderProcessHostImpl::OnAllocateGpuMemoryBuffer(uint32 width,
-                                                      uint32 height,
-                                                      uint32 internalformat,
-                                                      uint32 usage,
-                                                      IPC::Message* reply) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!GpuMemoryBufferImpl::IsFormatValid(internalformat) ||
-      !GpuMemoryBufferImpl::IsUsageValid(usage)) {
-    GpuMemoryBufferAllocated(reply, gfx::GpuMemoryBufferHandle());
-    return;
-  }
-  base::CheckedNumeric<int> size = width;
-  size *= height;
-  if (!size.IsValid()) {
-    GpuMemoryBufferAllocated(reply, gfx::GpuMemoryBufferHandle());
-    return;
-  }
-
-#if defined(OS_MACOSX)
-  // TODO(reveman): This should be moved to
-  // GpuMemoryBufferImpl::AllocateForChildProcess and
-  // GpuMemoryBufferImplIOSurface. crbug.com/325045, crbug.com/323304
-  if (GpuMemoryBufferImplIOSurface::IsConfigurationSupported(internalformat,
-                                                             usage)) {
-    base::ScopedCFTypeRef<CFMutableDictionaryRef> properties;
-    properties.reset(
-        CFDictionaryCreateMutable(kCFAllocatorDefault,
-                                  0,
-                                  &kCFTypeDictionaryKeyCallBacks,
-                                  &kCFTypeDictionaryValueCallBacks));
-    AddIntegerValue(properties, kIOSurfaceWidth, width);
-    AddIntegerValue(properties, kIOSurfaceHeight, height);
-    AddIntegerValue(properties,
-                    kIOSurfaceBytesPerElement,
-                    GpuMemoryBufferImpl::BytesPerPixel(internalformat));
-    AddIntegerValue(
-        properties,
-        kIOSurfacePixelFormat,
-        GpuMemoryBufferImplIOSurface::PixelFormat(internalformat));
-    // TODO(reveman): Remove this when using a mach_port_t to transfer
-    // IOSurface to renderer process. crbug.com/323304
-    AddBooleanValue(
-        properties, kIOSurfaceIsGlobal, true);
-
-    base::ScopedCFTypeRef<IOSurfaceRef> io_surface(IOSurfaceCreate(properties));
-    if (io_surface) {
-      gfx::GpuMemoryBufferHandle handle;
-      handle.type = gfx::IO_SURFACE_BUFFER;
-      handle.io_surface_id = IOSurfaceGetID(io_surface);
-
-      // TODO(reveman): This makes the assumption that the renderer will
-      // grab a reference to the surface before sending another message.
-      // crbug.com/325045
-      last_io_surface_ = io_surface;
-      GpuMemoryBufferAllocated(reply, handle);
-      return;
-    }
-  }
-#endif
-
-#if defined(OS_ANDROID)
-  // TODO(reveman): This should be moved to
-  // GpuMemoryBufferImpl::AllocateForChildProcess and
-  // GpuMemoryBufferImplSurfaceTexture when adding support for out-of-process
-  // GPU service. crbug.com/368716
-  if (GpuMemoryBufferImplSurfaceTexture::IsConfigurationSupported(
-          internalformat, usage)) {
-    // Each surface texture is associated with a render process id. This allows
-    // the GPU service and Java Binder IPC to verify that a renderer is not
-    // trying to use a surface texture it doesn't own.
-    int surface_texture_id = CompositorImpl::CreateSurfaceTexture(GetID());
-    if (surface_texture_id != -1) {
-      gfx::GpuMemoryBufferHandle handle;
-      handle.type = gfx::SURFACE_TEXTURE_BUFFER;
-      handle.surface_texture_id =
-          gfx::SurfaceTextureId(surface_texture_id, GetID());
-      GpuMemoryBufferAllocated(reply, handle);
-      return;
-    }
-  }
-#endif
-
-  GpuMemoryBufferImpl::AllocateForChildProcess(
-      gfx::Size(width, height),
-      internalformat,
-      usage,
-      GetHandle(),
-      base::Bind(&RenderProcessHostImpl::GpuMemoryBufferAllocated,
-                 weak_factory_.GetWeakPtr(),
-                 reply));
-}
-
-void RenderProcessHostImpl::GpuMemoryBufferAllocated(
-    IPC::Message* reply,
-    const gfx::GpuMemoryBufferHandle& handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  ChildProcessHostMsg_SyncAllocateGpuMemoryBuffer::WriteReplyParams(reply,
-                                                                    handle);
-  Send(reply);
-}
-
-void RenderProcessHostImpl::OnDeletedGpuMemoryBuffer(
-    gfx::GpuMemoryBufferType type,
-    const gfx::GpuMemoryBufferId& id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  GpuMemoryBufferImpl::DeletedByChildProcess(type, id, GetHandle());
 }
 
 }  // namespace content

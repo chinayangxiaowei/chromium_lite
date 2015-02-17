@@ -15,7 +15,6 @@
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/autocomplete_controller.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
-#include "chrome/browser/autocomplete/search_provider.h"
 #include "chrome/browser/autocomplete/shortcuts_backend_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -26,7 +25,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/sessions/session_id.h"
+#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/search/instant_search_prerenderer.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "chrome/common/instant_types.h"
@@ -39,6 +38,7 @@
 #include "components/omnibox/autocomplete_match.h"
 #include "components/omnibox/autocomplete_match_type.h"
 #include "components/omnibox/omnibox_field_trial.h"
+#include "components/omnibox/search_provider.h"
 #include "components/search/search.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/notification_details.h"
@@ -76,7 +76,7 @@ class ZeroSuggestPrefetcher : public AutocompleteControllerDelegate {
   void SelfDestruct();
 
   // AutocompleteControllerDelegate:
-  virtual void OnResultChanged(bool default_match_changed) OVERRIDE;
+  virtual void OnResultChanged(bool default_match_changed) override;
 
   scoped_ptr<AutocompleteController> controller_;
   base::OneShotTimer<ZeroSuggestPrefetcher> expire_timer_;
@@ -91,7 +91,7 @@ ZeroSuggestPrefetcher::ZeroSuggestPrefetcher(Profile* profile)
   base::string16 fake_request_source(base::ASCIIToUTF16(
       "http://www.foobarbazblah.com"));
   controller_->StartZeroSuggest(AutocompleteInput(
-      fake_request_source, base::string16::npos, base::string16(),
+      fake_request_source, base::string16::npos, std::string(),
       GURL(fake_request_source), OmniboxEventProto::INVALID_SPEC, false, false,
       true, true, ChromeAutocompleteSchemeClassifier(profile)));
   // Delete ourselves after 10s. This is enough time to cache results or
@@ -136,12 +136,12 @@ void AutocompleteControllerAndroid::Start(JNIEnv* env,
   if (!autocomplete_controller_)
     return;
 
-  base::string16 desired_tld;
+  std::string desired_tld;
   GURL current_url;
   if (j_current_url != NULL)
     current_url = GURL(ConvertJavaStringToUTF16(env, j_current_url));
   if (j_desired_tld != NULL)
-    desired_tld = ConvertJavaStringToUTF16(env, j_desired_tld);
+    desired_tld = base::android::ConvertJavaStringToUTF8(env, j_desired_tld);
   base::string16 text = ConvertJavaStringToUTF16(env, j_text);
   OmniboxEventProto::PageClassification page_classification =
       OmniboxEventProto::OTHER;
@@ -179,7 +179,7 @@ void AutocompleteControllerAndroid::StartZeroSuggest(
     omnibox_text = url;
 
   input_ = AutocompleteInput(
-      omnibox_text, base::string16::npos, base::string16(), current_url,
+      omnibox_text, base::string16::npos, std::string(), current_url,
       ClassifyPage(current_url, is_query_in_omnibox, focused_from_fakebox),
       false, false, true, true, ChromeAutocompleteSchemeClassifier(profile_));
   autocomplete_controller_->StartZeroSuggest(input_);
@@ -221,7 +221,7 @@ void AutocompleteControllerAndroid::OnSuggestionSelected(
       true,
       selected_index,
       false,
-      SessionID::IdForTab(web_contents),
+      SessionTabHelper::IdForTab(web_contents),
       current_page_classification,
       base::TimeDelta::FromMilliseconds(elapsed_time_since_first_modified),
       base::string16::npos,

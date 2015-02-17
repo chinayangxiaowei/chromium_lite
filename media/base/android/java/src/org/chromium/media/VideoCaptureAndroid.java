@@ -6,61 +6,28 @@ package org.chromium.media;
 
 import android.content.Context;
 import android.graphics.ImageFormat;
-import android.hardware.Camera;
-import android.hardware.Camera.Size;
 import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * This class extends the VideoCapture base class for manipulating normal video
- * capture devices in Android, including receiving copies of preview frames via
- * Java-allocated buffers. It also includes class BuggyDeviceHack to deal with
- * troublesome devices.
+ * This class extends the VideoCaptureCamera base class for manipulating normal
+ * video capture devices in Android, including receiving copies of preview
+ * frames via Java-allocated buffers. It also includes class BuggyDeviceHack to
+ * deal with troublesome devices.
  **/
-public class VideoCaptureAndroid extends VideoCapture {
+@SuppressWarnings("deprecation")
+public class VideoCaptureAndroid extends VideoCaptureCamera {
 
     // Some devices don't support YV12 format correctly, even with JELLY_BEAN or
     // newer OS. To work around the issues on those devices, we have to request
-    // NV21. Some other devices have troubles with certain capture resolutions
-    // under a given one: for those, the resolution is swapped with a known
-    // good. Both are supposed to be temporary hacks.
+    // NV21. This is supposed to be a temporary hack.
     private static class BuggyDeviceHack {
-        private static class IdAndSizes {
-            IdAndSizes(String model, String device, int minWidth, int minHeight) {
-                mModel = model;
-                mDevice = device;
-                mMinWidth = minWidth;
-                mMinHeight = minHeight;
-            }
-            public final String mModel;
-            public final String mDevice;
-            public final int mMinWidth;
-            public final int mMinHeight;
-        }
-
-        private static final IdAndSizes CAPTURESIZE_BUGGY_DEVICE_LIST[] = {
-            new IdAndSizes("Nexus 7", "flo", 640, 480)
-        };
-
         private static final String[] COLORSPACE_BUGGY_DEVICE_LIST = {
             "SAMSUNG-SGH-I747",
             "ODROID-U2",
         };
-
-        static void applyMinDimensions(CaptureFormat format) {
-            // NOTE: this can discard requested aspect ratio considerations.
-            for (IdAndSizes buggyDevice : CAPTURESIZE_BUGGY_DEVICE_LIST) {
-                if (buggyDevice.mModel.contentEquals(android.os.Build.MODEL) &&
-                        buggyDevice.mDevice.contentEquals(android.os.Build.DEVICE)) {
-                    format.mWidth = (buggyDevice.mMinWidth > format.mWidth)
-                            ? buggyDevice.mMinWidth : format.mWidth;
-                    format.mHeight = (buggyDevice.mMinHeight > format.mHeight)
-                            ? buggyDevice.mMinHeight : format.mHeight;
-                }
-            }
-        }
 
         static int getImageFormat() {
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.JELLY_BEAN) {
@@ -80,15 +47,26 @@ public class VideoCaptureAndroid extends VideoCapture {
     private static final int NUM_CAPTURE_BUFFERS = 3;
     private static final String TAG = "VideoCaptureAndroid";
 
+    static int getNumberOfCameras() {
+        return android.hardware.Camera.getNumberOfCameras();
+    }
+
+    static String getName(int id) {
+        android.hardware.Camera.CameraInfo cameraInfo = VideoCaptureCamera.getCameraInfo(id);
+        if (cameraInfo == null) return null;
+        return "camera " + id + ", facing " + (cameraInfo.facing
+                == android.hardware.Camera.CameraInfo.CAMERA_FACING_FRONT ? "front" : "back");
+    }
+
     static CaptureFormat[] getDeviceSupportedFormats(int id) {
-        Camera camera;
+        android.hardware.Camera camera;
         try {
-             camera = Camera.open(id);
+            camera = android.hardware.Camera.open(id);
         } catch (RuntimeException ex) {
             Log.e(TAG, "Camera.open: " + ex);
             return null;
         }
-        Camera.Parameters parameters = getCameraParameters(camera);
+        android.hardware.Camera.Parameters parameters = getCameraParameters(camera);
         if (parameters == null) {
             return null;
         }
@@ -106,10 +84,9 @@ public class VideoCaptureAndroid extends VideoCapture {
             pixelFormats.add(ImageFormat.UNKNOWN);
         }
         for (Integer previewFormat : pixelFormats) {
-            int pixelFormat =
-                    AndroidImageFormatList.ANDROID_IMAGEFORMAT_UNKNOWN;
+            int pixelFormat = AndroidImageFormat.UNKNOWN;
             if (previewFormat == ImageFormat.YV12) {
-                pixelFormat = AndroidImageFormatList.ANDROID_IMAGEFORMAT_YV12;
+                pixelFormat = AndroidImageFormat.YV12;
             } else if (previewFormat == ImageFormat.NV21) {
                 continue;
             }
@@ -122,15 +99,15 @@ public class VideoCaptureAndroid extends VideoCapture {
                 listFpsRange.add(new int[] {0, 0});
             }
             for (int[] fpsRange : listFpsRange) {
-                List<Camera.Size> supportedSizes =
+                List<android.hardware.Camera.Size> supportedSizes =
                         parameters.getSupportedPreviewSizes();
                 if (supportedSizes == null) {
-                    supportedSizes = new ArrayList<Camera.Size>();
+                    supportedSizes = new ArrayList<android.hardware.Camera.Size>();
                 }
                 if (supportedSizes.size() == 0) {
                     supportedSizes.add(camera.new Size(0, 0));
                 }
-                for (Camera.Size size : supportedSizes) {
+                for (android.hardware.Camera.Size size : supportedSizes) {
                     formatList.add(new CaptureFormat(size.width,
                                                      size.height,
                                                      (fpsRange[1] + 999) / 1000,
@@ -153,18 +130,15 @@ public class VideoCaptureAndroid extends VideoCapture {
             int width,
             int height,
             int frameRate,
-            Camera.Parameters cameraParameters) {
+            android.hardware.Camera.Parameters cameraParameters) {
         mCaptureFormat = new CaptureFormat(
                 width, height, frameRate, BuggyDeviceHack.getImageFormat());
-        // Hack to avoid certain capture resolutions under a minimum one,
-        // see http://crbug.com/305294.
-        BuggyDeviceHack.applyMinDimensions(mCaptureFormat);
     }
 
     @Override
     protected void allocateBuffers() {
-        mExpectedFrameSize = mCaptureFormat.mWidth * mCaptureFormat.mHeight *
-                ImageFormat.getBitsPerPixel(mCaptureFormat.mPixelFormat) / 8;
+        mExpectedFrameSize = mCaptureFormat.mWidth * mCaptureFormat.mHeight
+                * ImageFormat.getBitsPerPixel(mCaptureFormat.mPixelFormat) / 8;
         for (int i = 0; i < NUM_CAPTURE_BUFFERS; i++) {
             byte[] buffer = new byte[mExpectedFrameSize];
             mCamera.addCallbackBuffer(buffer);
@@ -172,12 +146,12 @@ public class VideoCaptureAndroid extends VideoCapture {
     }
 
     @Override
-    protected void setPreviewCallback(Camera.PreviewCallback cb) {
+    protected void setPreviewCallback(android.hardware.Camera.PreviewCallback cb) {
         mCamera.setPreviewCallbackWithBuffer(cb);
     }
 
     @Override
-    public void onPreviewFrame(byte[] data, Camera camera) {
+    public void onPreviewFrame(byte[] data, android.hardware.Camera camera) {
         mPreviewBufferLock.lock();
         try {
             if (!mIsRunning) {
@@ -188,7 +162,7 @@ public class VideoCaptureAndroid extends VideoCapture {
                 if (rotation != mDeviceOrientation) {
                     mDeviceOrientation = rotation;
                 }
-                if (mCameraFacing == Camera.CameraInfo.CAMERA_FACING_BACK) {
+                if (mCameraFacing == android.hardware.Camera.CameraInfo.CAMERA_FACING_BACK) {
                     rotation = 360 - rotation;
                 }
                 rotation = (mCameraOrientation + rotation) % 360;

@@ -3,9 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/version.h"
-#include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
+#include "extensions/common/manifest_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -23,21 +23,17 @@ const char* kNoImport = "cccccccccccccccccccccccccccccccc";
 
 namespace extensions {
 
-class SharedModuleManifestTest : public ExtensionManifestTest {
+class SharedModuleManifestTest : public ManifestTest {
 };
 
 TEST_F(SharedModuleManifestTest, ExportsAll) {
-  Manifest manifest("shared_module_export.json");
+  ManifestData manifest("shared_module_export.json");
 
   scoped_refptr<Extension> extension = LoadAndExpectSuccess(manifest);
 
   EXPECT_TRUE(SharedModuleInfo::IsSharedModule(extension.get()))
       << manifest.name();
   EXPECT_FALSE(SharedModuleInfo::ImportsModules(extension.get()))
-      << manifest.name();
-  EXPECT_TRUE(SharedModuleInfo::IsExportAllowed(extension.get(), "foo"))
-      << manifest.name();
-  EXPECT_TRUE(SharedModuleInfo::IsExportAllowed(extension.get(), "foo/bar"))
       << manifest.name();
 
   EXPECT_TRUE(SharedModuleInfo::IsExportAllowedByWhitelist(extension.get(),
@@ -49,7 +45,7 @@ TEST_F(SharedModuleManifestTest, ExportsAll) {
 }
 
 TEST_F(SharedModuleManifestTest, ExportWhitelistAll) {
-  Manifest manifest("shared_module_export_no_whitelist.json");
+  ManifestData manifest("shared_module_export_no_whitelist.json");
 
   scoped_refptr<Extension> extension = LoadAndExpectSuccess(manifest);
 
@@ -61,31 +57,12 @@ TEST_F(SharedModuleManifestTest, ExportWhitelistAll) {
                   kNoImport)) << manifest.name();
 }
 
-TEST_F(SharedModuleManifestTest, ExportFoo) {
-  Manifest manifest("shared_module_export_foo.json");
-
-  scoped_refptr<Extension> extension = LoadAndExpectSuccess(manifest);
-
-  EXPECT_TRUE(SharedModuleInfo::IsSharedModule(extension.get()))
-      << manifest.name();
-  EXPECT_FALSE(SharedModuleInfo::ImportsModules(extension.get()))
-      << manifest.name();
-  EXPECT_TRUE(SharedModuleInfo::IsExportAllowed(extension.get(), "foo"))
-      << manifest.name();
-  EXPECT_FALSE(SharedModuleInfo::IsExportAllowed(extension.get(), "foo/bar"))
-      << manifest.name();
-}
-
 TEST_F(SharedModuleManifestTest, ExportParseErrors) {
   Testcase testcases[] = {
     Testcase("shared_module_export_and_import.json",
              "Simultaneous 'import' and 'export' are not allowed."),
     Testcase("shared_module_export_not_dict.json",
              "Invalid value for 'export'."),
-    Testcase("shared_module_export_resources_not_list.json",
-             "Invalid value for 'export.resources'."),
-    Testcase("shared_module_export_resource_not_string.json",
-             "Invalid value for 'export.resources[1]'."),
     Testcase("shared_module_export_whitelist_item_not_id.json",
              "Invalid value for 'export.whitelist[0]'."),
     Testcase("shared_module_export_whitelist_item_not_string.json",
@@ -108,7 +85,7 @@ TEST_F(SharedModuleManifestTest, SharedModuleStaticFunctions) {
 }
 
 TEST_F(SharedModuleManifestTest, Import) {
-  Manifest manifest("shared_module_import.json");
+  ManifestData manifest("shared_module_import.json");
 
   scoped_refptr<Extension> extension = LoadAndExpectSuccess(manifest);
 

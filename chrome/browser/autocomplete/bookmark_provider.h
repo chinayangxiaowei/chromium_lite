@@ -34,8 +34,7 @@ class BookmarkProvider : public AutocompleteProvider {
   // When |minimal_changes| is true short circuit any additional searching and
   // leave the previous matches for this provider unchanged, otherwise perform
   // a complete search for |input| across all bookmark titles.
-  virtual void Start(const AutocompleteInput& input,
-                     bool minimal_changes) OVERRIDE;
+  void Start(const AutocompleteInput& input, bool minimal_changes) override;
 
   // Sets the BookmarkModel for unit tests.
   void set_bookmark_model_for_testing(BookmarkModel* bookmark_model) {
@@ -45,7 +44,7 @@ class BookmarkProvider : public AutocompleteProvider {
  private:
   FRIEND_TEST_ALL_PREFIXES(BookmarkProviderTest, InlineAutocompletion);
 
-  virtual ~BookmarkProvider();
+  ~BookmarkProvider() override;
 
   // Performs the actual matching of |input| over the bookmarks and fills in
   // |matches_|.
@@ -72,9 +71,6 @@ class BookmarkProvider : public AutocompleteProvider {
 
   Profile* profile_;
   BookmarkModel* bookmark_model_;
-
-  // True if we should use matches in the URL for scoring.
-  const bool score_using_url_matches_;
 
   // Languages used during the URL formatting.
   std::string languages_;

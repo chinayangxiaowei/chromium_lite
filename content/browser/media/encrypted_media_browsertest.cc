@@ -80,9 +80,10 @@ class EncryptedMediaTest : public content::MediaBrowserTest,
       return;
     }
 
-    media::QueryParams query_params;
+    base::StringPairs query_params;
     query_params.push_back(std::make_pair("keySystem", CurrentKeySystem()));
     query_params.push_back(std::make_pair("runEncrypted", "1"));
+    query_params.push_back(std::make_pair("usePrefixedEME", "1"));
     RunMediaTestPage("mse_config_change.html", query_params, kEnded, true);
   }
 
@@ -97,12 +98,13 @@ class EncryptedMediaTest : public content::MediaBrowserTest,
       return;
     }
 
-    media::QueryParams query_params;
+    base::StringPairs query_params;
     query_params.push_back(std::make_pair("mediaFile", media_file));
     query_params.push_back(std::make_pair("mediaType", media_type));
     query_params.push_back(std::make_pair("keySystem", key_system));
     if (src_type == MSE)
       query_params.push_back(std::make_pair("useMSE", "1"));
+    query_params.push_back(std::make_pair("usePrefixedEME", "1"));
     RunMediaTestPage(html_page, query_params, expectation, true);
   }
 
@@ -120,14 +122,14 @@ class EncryptedMediaTest : public content::MediaBrowserTest,
 
  protected:
   // We want to fail quickly when a test fails because an error is encountered.
-  virtual void AddWaitForTitles(content::TitleWatcher* title_watcher) OVERRIDE {
+  void AddWaitForTitles(content::TitleWatcher* title_watcher) override {
     MediaBrowserTest::AddWaitForTitles(title_watcher);
     title_watcher->AlsoWaitForTitle(base::ASCIIToUTF16(kEmeNotSupportedError));
     title_watcher->AlsoWaitForTitle(base::ASCIIToUTF16(kEmeKeyError));
   }
 
 #if defined(OS_ANDROID)
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(
         switches::kDisableGestureRequirementForMediaPlayback);
   }
@@ -175,9 +177,6 @@ IN_PROC_BROWSER_TEST_P(EncryptedMediaTest, FrameSizeChangeVideo) {
 #if defined(OS_WIN)
   if (base::win::GetVersion() < base::win::VERSION_VISTA)
     return;
-#elif defined(__aarch64__)
-  // Times out on arm64 currently due to http://crbug.com/403308
-  return;
 #endif
   TestFrameSizeChange();
 }

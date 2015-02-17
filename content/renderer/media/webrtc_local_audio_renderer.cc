@@ -12,6 +12,7 @@
 #include "content/renderer/media/audio_device_factory.h"
 #include "content/renderer/media/media_stream_dispatcher.h"
 #include "content/renderer/media/webrtc_audio_capturer.h"
+#include "content/renderer/media/webrtc_audio_renderer.h"
 #include "content/renderer/render_frame_impl.h"
 #include "media/audio/audio_output_device.h"
 #include "media/base/audio_block_fifo.h"
@@ -153,7 +154,7 @@ void WebRtcLocalAudioRenderer::Stop() {
   // Stop the output audio stream, i.e, stop asking for data to render.
   // It is safer to call Stop() on the |sink_| to clean up the resources even
   // when the |sink_| is never started.
-  if (sink_) {
+  if (sink_.get()) {
     sink_->Stop();
     sink_ = NULL;
   }
@@ -273,7 +274,7 @@ void WebRtcLocalAudioRenderer::ReconfigureSink(
     DVLOG(1) << "DUCKING not forced ON for output";
   }
 
-  if (source_params_ == params)
+  if (source_params_.Equals(params))
     return;
 
   // Reset the |source_params_|, |sink_params_| and |loopback_fifo_| to match
@@ -282,18 +283,10 @@ void WebRtcLocalAudioRenderer::ReconfigureSink(
   source_params_ = params;
 
   sink_params_ = media::AudioParameters(source_params_.format(),
-      source_params_.channel_layout(), source_params_.channels(),
-      source_params_.input_channels(), source_params_.sample_rate(),
+      source_params_.channel_layout(), source_params_.sample_rate(),
       source_params_.bits_per_sample(),
-#if defined(OS_ANDROID)
-      // On Android, input and output use the same sample rate. In order to
-      // use the low latency mode, we need to use the buffer size suggested by
-      // the AudioManager for the sink.  It will later be used to decide
-      // the buffer size of the shared memory buffer.
-      frames_per_buffer_,
-#else
-      2 * source_params_.frames_per_buffer(),
-#endif
+      WebRtcAudioRenderer::GetOptimalBufferSize(source_params_.sample_rate(),
+                                                frames_per_buffer_),
       // If DUCKING is enabled on the source, it needs to be enabled on the
       // sink as well.
       source_params_.effects() | implicit_ducking_effect);
@@ -316,7 +309,7 @@ void WebRtcLocalAudioRenderer::ReconfigureSink(
     loopback_fifo_.reset(new_fifo);
   }
 
-  if (!sink_)
+  if (!sink_.get())
     return;  // WebRtcLocalAudioRenderer has not yet been started.
 
   // Stop |sink_| and re-create a new one to be initialized with different audio

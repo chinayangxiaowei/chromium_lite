@@ -16,7 +16,6 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPaint.h"
-#include "third_party/skia/include/effects/SkPorterDuff.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/screen.h"
 
@@ -29,7 +28,7 @@ SkBitmap CreateOverscrollGlowLBitmap(const gfx::Size& screen_size) {
 
   SkPaint paint;
   paint.setAntiAlias(true);
-  paint.setAlpha(0x33);
+  paint.setAlpha(0xBB);
   paint.setStyle(SkPaint::kFill_Style);
 
   const float arc_width =
@@ -40,11 +39,7 @@ SkBitmap CreateOverscrollGlowLBitmap(const gfx::Size& screen_size) {
   SkRect arc_rect = SkRect::MakeXYWH(
       -arc_width / 2.f, -arc_width - y, arc_width * 2.f, arc_width * 2.f);
   SkBitmap glow_bitmap;
-  if (!glow_bitmap.allocPixels(
-          SkImageInfo::MakeA8(bounds.width(), bounds.height()))) {
-    LOG(FATAL) << " Failed to allocate bitmap of size " << bounds.width() << "x"
-               << bounds.height();
-  }
+  glow_bitmap.allocPixels(SkImageInfo::MakeA8(bounds.width(), bounds.height()));
   glow_bitmap.eraseColor(SK_ColorTRANSPARENT);
 
   SkCanvas canvas(glow_bitmap);
@@ -108,13 +103,13 @@ class SystemUIResourceManagerImpl::Entry
 
   // content::UIResourceClient implementation.
   virtual cc::UIResourceBitmap GetBitmap(cc::UIResourceId uid,
-                                         bool resource_lost) OVERRIDE {
+                                         bool resource_lost) override {
     DCHECK(!bitmap_.empty());
     return cc::UIResourceBitmap(bitmap_);
   }
 
   // content::UIResourceClientAndroid implementation.
-  virtual void UIResourceIsInvalid() OVERRIDE { id_ = 0; }
+  virtual void UIResourceIsInvalid() override { id_ = 0; }
 
   const SkBitmap& bitmap() const { return bitmap_; }
 

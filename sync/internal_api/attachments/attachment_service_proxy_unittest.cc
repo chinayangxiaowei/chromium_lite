@@ -32,11 +32,13 @@ class StubAttachmentService : public AttachmentService,
     DetachFromThread();
   }
 
-  virtual ~StubAttachmentService() {}
+  ~StubAttachmentService() override {}
 
-  virtual void GetOrDownloadAttachments(const AttachmentIdList& attachment_ids,
-                                        const GetOrDownloadCallback& callback)
-      OVERRIDE {
+  AttachmentStore* GetStore() override { return NULL; }
+
+  void GetOrDownloadAttachments(
+      const AttachmentIdList& attachment_ids,
+      const GetOrDownloadCallback& callback) override {
     CalledOnValidThread();
     Increment();
     scoped_ptr<AttachmentMap> attachments(new AttachmentMap());
@@ -47,20 +49,17 @@ class StubAttachmentService : public AttachmentService,
                    base::Passed(&attachments)));
   }
 
-  virtual void DropAttachments(const AttachmentIdList& attachment_ids,
-                               const DropCallback& callback) OVERRIDE {
+  void DropAttachments(const AttachmentIdList& attachment_ids,
+                       const DropCallback& callback) override {
     CalledOnValidThread();
     Increment();
     base::MessageLoop::current()->PostTask(
         FROM_HERE, base::Bind(callback, AttachmentService::DROP_SUCCESS));
   }
 
-  virtual void StoreAttachments(const AttachmentList& attachments,
-                                const StoreCallback& callback) OVERRIDE {
+  void UploadAttachments(const AttachmentIdSet& attachments_ids) override {
     CalledOnValidThread();
     Increment();
-    base::MessageLoop::current()->PostTask(
-        FROM_HERE, base::Bind(callback, AttachmentService::STORE_SUCCESS));
   }
 
   virtual base::WeakPtr<AttachmentService> AsWeakPtr() {
@@ -105,15 +104,12 @@ class AttachmentServiceProxyTest : public testing::Test,
                    base::Unretained(this));
     callback_drop = base::Bind(&AttachmentServiceProxyTest::IncrementDrop,
                                base::Unretained(this));
-    callback_store = base::Bind(&AttachmentServiceProxyTest::IncrementStore,
-                                base::Unretained(this));
     count_callback_get_or_download = 0;
     count_callback_drop = 0;
-    count_callback_store = 0;
   }
 
   virtual void TearDown()
-      OVERRIDE {
+      override {
     // We must take care to call the stub's destructor on the stub_thread
     // because that's the thread to which its WeakPtrs are bound.
     if (stub) {
@@ -136,12 +132,6 @@ class AttachmentServiceProxyTest : public testing::Test,
     ++count_callback_drop;
   }
 
-  // a StoreCallback
-  void IncrementStore(const AttachmentService::StoreResult&) {
-    CalledOnValidThread();
-    ++count_callback_store;
-  }
-
   void WaitForStubThread() {
     base::WaitableEvent done(false, false);
     stub_thread->message_loop()->PostTask(
@@ -157,23 +147,24 @@ class AttachmentServiceProxyTest : public testing::Test,
 
   AttachmentService::GetOrDownloadCallback callback_get_or_download;
   AttachmentService::DropCallback callback_drop;
-  AttachmentService::StoreCallback callback_store;
 
   // number of times callback_get_or_download was invoked
   int count_callback_get_or_download;
   // number of times callback_drop was invoked
   int count_callback_drop;
-  // number of times callback_store was invoked
-  int count_callback_store;
 };
 
-// Verify that each of AttachmentServiceProxy's callback methods (those that
-// take callbacks) are invoked on the stub and that the passed callbacks are
-// invoked in this thread.
-TEST_F(AttachmentServiceProxyTest, MethodsWithCallbacksAreProxied) {
+TEST_F(AttachmentServiceProxyTest, GetStore) {
+  EXPECT_EQ(NULL, proxy->GetStore());
+}
+
+// Verify that each of AttachmentServiceProxy's methods are invoked on the stub.
+// Verify that the methods that take callbacks invoke passed callbacks on this
+// thread.
+TEST_F(AttachmentServiceProxyTest, MethodsAreProxied) {
   proxy->GetOrDownloadAttachments(AttachmentIdList(), callback_get_or_download);
   proxy->DropAttachments(AttachmentIdList(), callback_drop);
-  proxy->StoreAttachments(AttachmentList(), callback_store);
+  proxy->UploadAttachments(AttachmentIdSet());
   // Wait for the posted calls to execute in the stub thread.
   WaitForStubThread();
   EXPECT_EQ(3, stub->GetCallCount());
@@ -185,7 +176,6 @@ TEST_F(AttachmentServiceProxyTest, MethodsWithCallbacksAreProxied) {
   loop.RunUntilIdle();
   EXPECT_EQ(1, count_callback_get_or_download);
   EXPECT_EQ(1, count_callback_drop);
-  EXPECT_EQ(1, count_callback_store);
 }
 
 // Verify that it's safe to use an AttachmentServiceProxy even after its wrapped

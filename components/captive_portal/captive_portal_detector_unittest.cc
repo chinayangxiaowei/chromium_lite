@@ -52,10 +52,10 @@ class CaptivePortalDetectorTest : public testing::Test,
                                   public CaptivePortalDetectorTestBase {
  public:
   CaptivePortalDetectorTest() {}
-  virtual ~CaptivePortalDetectorTest() {}
+  ~CaptivePortalDetectorTest() override {}
 
-  virtual void SetUp() OVERRIDE {
-    CHECK(base::MessageLoopProxy::current());
+  void SetUp() override {
+    CHECK(base::MessageLoopProxy::current().get());
     scoped_refptr<net::URLRequestContextGetter> request_context_getter(
         new net::TestURLRequestContextGetter(
             base::MessageLoopProxy::current()));
@@ -64,9 +64,7 @@ class CaptivePortalDetectorTest : public testing::Test,
     set_detector(detector_.get());
   }
 
-  virtual void TearDown() OVERRIDE {
-    detector_.reset();
-  }
+  void TearDown() override { detector_.reset(); }
 
   void RunTest(const CaptivePortalDetector::Results& expected_results,
                int net_error,

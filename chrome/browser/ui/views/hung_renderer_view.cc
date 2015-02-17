@@ -14,16 +14,15 @@
 #include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
-#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/result_codes.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -43,10 +42,6 @@
 #include "chrome/browser/shell_integration.h"
 #include "ui/base/win/shell.h"
 #include "ui/views/win/hwnd_util.h"
-#endif
-
-#if defined(OS_WIN)
-#include "ui/base/win/shell.h"
 #endif
 
 using content::WebContents;
@@ -237,7 +232,7 @@ void HungRendererDialogView::ShowForWebContents(WebContents* contents) {
     Browser* browser = chrome::FindBrowserWithWebContents(contents);
     if (browser) {
       ChromeWebModalDialogManagerDelegate* manager = browser;
-      UpdateBrowserModalDialogPosition(
+      UpdateWidgetModalDialogPosition(
           GetWidget(), manager->GetWebContentsModalDialogHost());
     }
 
@@ -347,7 +342,6 @@ void HungRendererDialogView::ButtonPressed(
     views::Button* sender, const ui::Event& event) {
   if (sender == kill_button_ &&
       hung_pages_table_model_->GetRenderProcessHost()) {
-
     base::ProcessHandle process_handle =
         hung_pages_table_model_->GetRenderProcessHost()->GetHandle();
 
@@ -367,6 +361,7 @@ void HungRendererDialogView::TabDestroyed() {
 
 void HungRendererDialogView::ViewHierarchyChanged(
     const ViewHierarchyChangedDetails& details) {
+  views::DialogDelegateView::ViewHierarchyChanged(details);
   if (!initialized_ && details.is_add && details.child == this && GetWidget())
     Init();
 }

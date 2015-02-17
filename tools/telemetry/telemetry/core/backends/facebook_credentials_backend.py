@@ -7,10 +7,12 @@ from telemetry.core.backends import form_based_credentials_backend
 
 class FacebookCredentialsBackend(
     form_based_credentials_backend.FormBasedCredentialsBackend):
-  def IsAlreadyLoggedIn(self, tab):
-    return tab.EvaluateJavaScript(
-        'document.getElementById("fbNotificationsList")!== null || '
-        'document.getElementById("m_home_notice")!== null')
+
+  @property
+  def logged_in_javascript(self):
+    """Evaluates to true iff already logged in."""
+    return ('document.getElementById("fbNotificationsList")!== null || '
+            'document.getElementById("m_home_notice")!== null')
 
   @property
   def credentials_type(self):
@@ -31,3 +33,14 @@ class FacebookCredentialsBackend(
   @property
   def password_input_id(self):
     return 'pass'
+
+class FacebookCredentialsBackend2(FacebookCredentialsBackend):
+  """ Facebook credential backend for https client. """
+
+  @property
+  def credentials_type(self):
+    return 'facebook2'
+
+  @property
+  def url(self):
+    return 'https://www.facebook.com/'

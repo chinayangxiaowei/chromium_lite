@@ -46,7 +46,6 @@ class DisplayManager;
 class FocusActivationStore;
 class MirrorWindowController;
 class RootWindowController;
-class VirtualKeyboardWindowController;
 
 // DisplayController owns and maintains RootWindows for each attached
 // display, keeping them in sync with display configuration changes.
@@ -73,7 +72,7 @@ class ASH_EXPORT DisplayController : public gfx::DisplayObserver,
   };
 
   DisplayController();
-  virtual ~DisplayController();
+  ~DisplayController() override;
 
   void Start();
   void Shutdown();
@@ -88,10 +87,6 @@ class ASH_EXPORT DisplayController : public gfx::DisplayObserver,
 
   MirrorWindowController* mirror_window_controller() {
     return mirror_window_controller_.get();
-  }
-
-  VirtualKeyboardWindowController* virtual_keyboard_window_controller() {
-    return virtual_keyboard_window_controller_.get();
   }
 
   // Create a WindowTreeHost for the primary display. This replaces
@@ -149,20 +144,19 @@ class ASH_EXPORT DisplayController : public gfx::DisplayObserver,
   bool UpdateWorkAreaOfDisplayNearestWindow(const aura::Window* window,
                                             const gfx::Insets& insets);
   // gfx::DisplayObserver overrides:
-  virtual void OnDisplayAdded(const gfx::Display& display) OVERRIDE;
-  virtual void OnDisplayRemoved(const gfx::Display& display) OVERRIDE;
-  virtual void OnDisplayMetricsChanged(const gfx::Display& display,
-                                       uint32_t metrics) OVERRIDE;
+  void OnDisplayAdded(const gfx::Display& display) override;
+  void OnDisplayRemoved(const gfx::Display& display) override;
+  void OnDisplayMetricsChanged(const gfx::Display& display,
+                               uint32_t metrics) override;
 
   // aura::WindowTreeHostObserver overrides:
-  virtual void OnHostResized(const aura::WindowTreeHost* host) OVERRIDE;
+  void OnHostResized(const aura::WindowTreeHost* host) override;
 
   // aura::DisplayManager::Delegate overrides:
-  virtual void CreateOrUpdateNonDesktopDisplay(const DisplayInfo& info)
-      OVERRIDE;
-  virtual void CloseNonDesktopDisplay() OVERRIDE;
-  virtual void PreDisplayConfigurationChange(bool clear_focus) OVERRIDE;
-  virtual void PostDisplayConfigurationChange() OVERRIDE;
+  void CreateOrUpdateNonDesktopDisplay(const DisplayInfo& info) override;
+  void CloseNonDesktopDisplay() override;
+  void PreDisplayConfigurationChange(bool clear_focus) override;
+  void PostDisplayConfigurationChange() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(DisplayControllerTest, BoundsUpdated);
@@ -216,8 +210,6 @@ class ASH_EXPORT DisplayController : public gfx::DisplayObserver,
 
   scoped_ptr<CursorWindowController> cursor_window_controller_;
   scoped_ptr<MirrorWindowController> mirror_window_controller_;
-  scoped_ptr<VirtualKeyboardWindowController>
-      virtual_keyboard_window_controller_;
 
   // Stores the curent cursor location (in native coordinates) used to
   // restore the cursor location when display configuration

@@ -112,7 +112,7 @@ void QuicSpdyServerStream::SendResponse() {
   // Find response in cache. If not found, send error response.
   const QuicInMemoryCache::Response* response =
       QuicInMemoryCache::GetInstance()->GetResponse(request_url_);
-  if (response == NULL) {
+  if (response == nullptr) {
     SendErrorResponse();
     return;
   }
@@ -137,7 +137,7 @@ void QuicSpdyServerStream::SendErrorResponse() {
   scoped_refptr<HttpResponseHeaders> headers
       = new HttpResponseHeaders(string("HTTP/1.1 500 Server Error") + '\0' +
                                 "content-length: 3" + '\0' + '\0');
-  SendHeadersAndBody(*headers, "bad");
+  SendHeadersAndBody(*headers.get(), "bad");
 }
 
 void QuicSpdyServerStream::SendHeadersAndBody(
@@ -153,10 +153,10 @@ void QuicSpdyServerStream::SendHeadersAndBody(
                                     kDefaultSpdyMajorVersion,
                                     &header_block);
 
-  WriteHeaders(header_block, body.empty(), NULL);
+  WriteHeaders(header_block, body.empty(), nullptr);
 
   if (!body.empty()) {
-    WriteOrBufferData(body, true, NULL);
+    WriteOrBufferData(body, true, nullptr);
   }
 }
 

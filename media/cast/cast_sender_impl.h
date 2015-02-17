@@ -27,23 +27,28 @@ class CastSenderImpl : public CastSender {
   CastSenderImpl(scoped_refptr<CastEnvironment> cast_environment,
                  CastTransportSender* const transport_sender);
 
-  virtual void InitializeAudio(
+  void InitializeAudio(
       const AudioSenderConfig& audio_config,
-      const CastInitializationCallback& cast_initialization_cb) OVERRIDE;
-  virtual void InitializeVideo(
+      const CastInitializationCallback& cast_initialization_cb) override;
+  void InitializeVideo(
       const VideoSenderConfig& video_config,
       const CastInitializationCallback& cast_initialization_cb,
       const CreateVideoEncodeAcceleratorCallback& create_vea_cb,
       const CreateVideoEncodeMemoryCallback& create_video_encode_mem_cb)
-      OVERRIDE;
+      override;
 
-  virtual ~CastSenderImpl();
+  void SetTargetPlayoutDelay(base::TimeDelta new_target_playout_delay) override;
 
-  virtual scoped_refptr<AudioFrameInput> audio_frame_input() OVERRIDE;
-  virtual scoped_refptr<VideoFrameInput> video_frame_input() OVERRIDE;
+  ~CastSenderImpl() override;
+
+  scoped_refptr<AudioFrameInput> audio_frame_input() override;
+  scoped_refptr<VideoFrameInput> video_frame_input() override;
 
  private:
   void ReceivedPacket(scoped_ptr<Packet> packet);
+  void OnVideoInitialized(
+      const CastInitializationCallback& initialization_cb,
+      media::cast::CastInitializationStatus result);
 
   CastInitializationCallback initialization_callback_;
   scoped_ptr<AudioSender> audio_sender_;
@@ -54,8 +59,6 @@ class CastSenderImpl : public CastSender {
   // The transport sender is owned by the owner of the CastSender, and should be
   // valid throughout the lifetime of the CastSender.
   CastTransportSender* const transport_sender_;
-  uint32 ssrc_of_audio_sender_;
-  uint32 ssrc_of_video_sender_;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<CastSenderImpl> weak_factory_;

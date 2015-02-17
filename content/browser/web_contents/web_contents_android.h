@@ -41,6 +41,10 @@ class CONTENT_EXPORT WebContentsAndroid
                                                       jobject obj) const;
   base::android::ScopedJavaLocalRef<jstring> GetVisibleURL(JNIEnv* env,
                                                            jobject obj) const;
+
+  bool IsLoading(JNIEnv* env, jobject obj) const;
+  bool IsLoadingToDifferentDocument(JNIEnv* env, jobject obj) const;
+
   void Stop(JNIEnv* env, jobject obj);
   jint GetBackgroundColor(JNIEnv* env, jobject obj);
   base::android::ScopedJavaLocalRef<jstring> GetURL(JNIEnv* env, jobject) const;
@@ -50,6 +54,7 @@ class CONTENT_EXPORT WebContentsAndroid
   void SetHasPendingNavigationTransitionForTesting(JNIEnv* env, jobject obj);
   void SetupTransitionView(JNIEnv* env, jobject jobj, jstring markup);
   void BeginExitTransition(JNIEnv* env, jobject jobj, jstring css_selector);
+  void ClearNavigationTransitionData(JNIEnv* env, jobject jobj);
 
   // This method is invoked when the request is deferred immediately after
   // receiving response headers.
@@ -65,7 +70,6 @@ class CONTENT_EXPORT WebContentsAndroid
   void OnHide(JNIEnv* env, jobject obj);
   void OnShow(JNIEnv* env, jobject obj);
   void ReleaseMediaPlayers(JNIEnv* env, jobject jobj);
-  void PauseVideo();
 
   void AddStyleSheetByURL(
       JNIEnv* env, jobject obj, jstring url);
@@ -88,9 +92,9 @@ class CONTENT_EXPORT WebContentsAndroid
   void EvaluateJavaScript(JNIEnv* env,
                           jobject obj,
                           jstring script,
-                          jobject callback,
-                          jboolean start_renderer);
-
+                          jobject callback);
+  void PostMessageToFrame(JNIEnv* env, jobject obj, jstring frame_id,
+      jstring message, jstring source_origin, jstring target_origin);
  private:
   RenderWidgetHostViewAndroid* GetRenderWidgetHostViewAndroid();
 

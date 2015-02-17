@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/pdf/pdf_tab_helper.h"
-
-#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/constrained_window/constrained_window_views.h"
+#include "components/pdf/browser/pdf_web_contents_helper_client.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/message_box_view.h"
@@ -21,29 +20,28 @@ class PDFPasswordDialogViews : public views::DialogDelegate {
  public:
   PDFPasswordDialogViews(content::WebContents* web_contents,
                          const base::string16& prompt,
-                         const PasswordDialogClosedCallback& callback);
-  virtual ~PDFPasswordDialogViews();
+                         const pdf::PasswordDialogClosedCallback& callback);
+  ~PDFPasswordDialogViews() override;
 
   // views::DialogDelegate:
-  virtual base::string16 GetWindowTitle() const OVERRIDE;
-  virtual base::string16 GetDialogButtonLabel(
-      ui::DialogButton button) const OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
-  virtual bool Accept() OVERRIDE;
+  base::string16 GetWindowTitle() const override;
+  base::string16 GetDialogButtonLabel(ui::DialogButton button) const override;
+  bool Cancel() override;
+  bool Accept() override;
 
   // views::WidgetDelegate:
-  virtual views::View* GetInitiallyFocusedView() OVERRIDE;
-  virtual views::View* GetContentsView() OVERRIDE;
-  virtual views::Widget* GetWidget() OVERRIDE;
-  virtual const views::Widget* GetWidget() const OVERRIDE;
-  virtual void DeleteDelegate() OVERRIDE;
-  virtual ui::ModalType GetModalType() const OVERRIDE;
+  views::View* GetInitiallyFocusedView() override;
+  views::View* GetContentsView() override;
+  views::Widget* GetWidget() override;
+  const views::Widget* GetWidget() const override;
+  void DeleteDelegate() override;
+  ui::ModalType GetModalType() const override;
 
  private:
   // The message box view whose commands we handle.
   views::MessageBoxView* message_box_view_;
 
-  PasswordDialogClosedCallback callback_;
+  pdf::PasswordDialogClosedCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(PDFPasswordDialogViews);
 };
@@ -51,9 +49,8 @@ class PDFPasswordDialogViews : public views::DialogDelegate {
 PDFPasswordDialogViews::PDFPasswordDialogViews(
     content::WebContents* web_contents,
     const base::string16& prompt,
-    const PasswordDialogClosedCallback& callback)
-    : message_box_view_(NULL),
-      callback_(callback) {
+    const pdf::PasswordDialogClosedCallback& callback)
+    : message_box_view_(NULL), callback_(callback) {
   views::MessageBoxView::InitParams init_params(prompt);
   init_params.options = views::MessageBoxView::HAS_PROMPT_FIELD;
   init_params.inter_row_vertical_spacing =
@@ -130,6 +127,6 @@ ui::ModalType PDFPasswordDialogViews::GetModalType() const {
 
 void ShowPDFPasswordDialog(content::WebContents* web_contents,
                            const base::string16& prompt,
-                           const PasswordDialogClosedCallback& callback) {
+                           const pdf::PasswordDialogClosedCallback& callback) {
   new PDFPasswordDialogViews(web_contents, prompt, callback);
 }

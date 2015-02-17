@@ -4,20 +4,31 @@
 
 import logging
 import os
+import platform
 import subprocess
 import sys
 
 from telemetry import decorators
+from telemetry.core.platform import linux_based_platform_backend
 from telemetry.core.platform import platform_backend
 from telemetry.core.platform import posix_platform_backend
-from telemetry.core.platform import proc_supporting_platform_backend
+from telemetry.core.platform.power_monitor import msr_power_monitor
 from telemetry.util import cloud_storage
 from telemetry.util import support_binaries
 
 
+_POSSIBLE_PERFHOST_APPLICATIONS = [
+  'perfhost_precise',
+  'perfhost_trusty',
+]
+
+
 class LinuxPlatformBackend(
     posix_platform_backend.PosixPlatformBackend,
-    proc_supporting_platform_backend.ProcSupportingPlatformBackend):
+    linux_based_platform_backend.LinuxBasedPlatformBackend):
+  def __init__(self):
+    super(LinuxPlatformBackend, self).__init__()
+    self._power_monitor = msr_power_monitor.MsrPowerMonitor(self)
 
   def StartRawDisplayFrameRateMeasurement(self):
     raise NotImplementedError()
@@ -34,6 +45,10 @@ class LinuxPlatformBackend(
   def HasBeenThermallyThrottled(self):
     raise NotImplementedError()
 
+  @decorators.Cache
+  def GetArchName(self):
+    return platform.machine()
+
   def GetOSName(self):
     return 'linux'
 
@@ -44,15 +59,17 @@ class LinuxPlatformBackend(
 
     codename = None
     version = None
-    with open('/etc/lsb-release') as f:
-      for line in f.readlines():
-        key, _, value = line.partition('=')
-        if key == 'DISTRIB_CODENAME':
-          codename = value.strip()
-        elif key == 'DISTRIB_RELEASE':
+    for line in self.GetFileContents('/etc/lsb-release').splitlines():
+      key, _, value = line.partition('=')
+      if key == 'DISTRIB_CODENAME':
+        codename = value.strip()
+      elif key == 'DISTRIB_RELEASE':
+        try:
           version = float(value)
-        if codename and version:
-          break
+        except ValueError:
+          version = 0
+      if codename and version:
+        break
     return platform_backend.OSVersion(codename, version)
 
   def CanFlushIndividualFilesFromSystemCache(self):
@@ -72,20 +89,47 @@ class LinuxPlatformBackend(
     if application == 'ipfw':
       self._InstallIpfw()
     elif application == 'avconv':
-      self._InstallBinary(application, 'libav-tools')
-    elif application == 'perfhost':
-      self._InstallBinary(application, 'linux-tools')
+      self._InstallBinary(application, fallback_package='libav-tools')
+    elif application in _POSSIBLE_PERFHOST_APPLICATIONS:
+      self._InstallBinary(application)
     else:
       raise NotImplementedError(
           'Please teach Telemetry how to install ' + application)
+
+  def CanMonitorPower(self):
+    return self._power_monitor.CanMonitorPower()
+
+  def CanMeasurePerApplicationPower(self):
+    return self._power_monitor.CanMeasurePerApplicationPower()
+
+  def StartMonitoringPower(self, browser):
+    self._power_monitor.StartMonitoringPower(browser)
+
+  def StopMonitoringPower(self):
+    return self._power_monitor.StopMonitoringPower()
+
+  def ReadMsr(self, msr_number, start=0, length=64):
+    cmd = ['rdmsr', '-d', str(msr_number)]
+    (out, err) = subprocess.Popen(cmd,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE).communicate()
+    if err:
+      raise OSError(err)
+    try:
+      result = int(out)
+    except ValueError:
+      raise OSError('Cannot interpret rdmsr output: %s' % out)
+    return result >> start & ((1 << length) - 1)
 
   def _IsIpfwKernelModuleInstalled(self):
     return 'ipfw_mod' in subprocess.Popen(
         ['lsmod'], stdout=subprocess.PIPE).communicate()[0]
 
   def _InstallIpfw(self):
-    ipfw_bin = support_binaries.FindPath('ipfw', self.GetOSName())
-    ipfw_mod = support_binaries.FindPath('ipfw_mod.ko', self.GetOSName())
+    ipfw_bin = support_binaries.FindPath(
+        'ipfw', self.GetArchName(), self.GetOSName())
+    ipfw_mod = support_binaries.FindPath(
+        'ipfw_mod.ko', self.GetArchName(), self.GetOSName())
 
     try:
       changed = cloud_storage.GetIfChanged(
@@ -94,20 +138,28 @@ class LinuxPlatformBackend(
           ipfw_mod, cloud_storage.INTERNAL_BUCKET)
     except cloud_storage.CloudStorageError, e:
       logging.error(str(e))
-      logging.error('You may proceed by manually installing dummynet. See: '
+      logging.error('You may proceed by manually building and installing'
+                    'dummynet for your kernel. See: '
                     'http://info.iet.unipi.it/~luigi/dummynet/')
       sys.exit(1)
 
     if changed or not self.CanLaunchApplication('ipfw'):
       if not self._IsIpfwKernelModuleInstalled():
-        subprocess.check_call(['sudo', 'insmod', ipfw_mod])
+        subprocess.check_call(['/usr/bin/sudo', 'insmod', ipfw_mod])
       os.chmod(ipfw_bin, 0755)
-      subprocess.check_call(['sudo', 'cp', ipfw_bin, '/usr/local/sbin'])
+      subprocess.check_call(
+          ['/usr/bin/sudo', 'cp', ipfw_bin, '/usr/local/sbin'])
 
-    assert self.CanLaunchApplication('ipfw'), 'Failed to install ipfw'
+    assert self.CanLaunchApplication('ipfw'), 'Failed to install ipfw. ' \
+        'ipfw provided binaries are not supported for linux kernel < 3.13. ' \
+        'You may proceed by manually building and installing dummynet for ' \
+        'your kernel. See: http://info.iet.unipi.it/~luigi/dummynet/'
 
   def _InstallBinary(self, bin_name, fallback_package=None):
-    bin_path = support_binaries.FindPath(bin_name, self.GetOSName())
+    bin_path = support_binaries.FindPath(
+        bin_name, self.GetArchName(), self.GetOSName())
+    if not bin_path:
+      raise Exception('Could not find the binary package %s' % bin_name)
     os.environ['PATH'] += os.pathsep + os.path.dirname(bin_path)
 
     try:
@@ -116,8 +168,8 @@ class LinuxPlatformBackend(
     except cloud_storage.CloudStorageError, e:
       logging.error(str(e))
       if fallback_package:
-        logging.error('You may proceed by manually installing %s via:\n'
-                      'sudo apt-get install %s' % (bin_name, fallback_package))
-      sys.exit(1)
+        raise Exception('You may proceed by manually installing %s via:\n'
+                        'sudo apt-get install %s' %
+                        (bin_name, fallback_package))
 
     assert self.CanLaunchApplication(bin_name), 'Failed to install ' + bin_name

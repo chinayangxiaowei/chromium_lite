@@ -8,7 +8,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
@@ -54,11 +54,11 @@ class DownloadItemObserver : public DownloadItem::Observer {
   explicit DownloadItemObserver(DownloadItem* download_item);
 
  private:
-  virtual ~DownloadItemObserver();
+  ~DownloadItemObserver() override;
 
   // DownloadItem::Observer
-  virtual void OnDownloadUpdated(DownloadItem* download) OVERRIDE;
-  virtual void OnDownloadDestroyed(DownloadItem* download) OVERRIDE;
+  void OnDownloadUpdated(DownloadItem* download) override;
+  void OnDownloadDestroyed(DownloadItem* download) override;
 
   DownloadItem* download_item_;
 

@@ -14,11 +14,10 @@ import android.util.Log;
 import android.webkit.WebSettings;
 import android.webkit.WebSettings.PluginState;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.VisibleForTesting;
 
 /**
  * Stores Android WebView specific settings that does not need to be synced to WebKit.
@@ -69,7 +68,7 @@ public class AwSettings {
     private String mSerifFontFamily = "serif";
     private String mCursiveFontFamily = "cursive";
     private String mFantasyFontFamily = "fantasy";
-    private String mDefaultTextEncoding;
+    private String mDefaultTextEncoding = "UTF-8";
     private String mUserAgent;
     private int mMinimumFontSize = 8;
     private int mMinimumLogicalFontSize = 8;
@@ -160,7 +159,7 @@ public class AwSettings {
                         case RUN_RUNNABLE_BLOCKING:
                             synchronized (mAwSettingsLock) {
                                 if (mNativeAwSettings != 0) {
-                                    ((Runnable)msg.obj).run();
+                                    ((Runnable) msg.obj).run();
                                 }
                                 mSynchronizationPending = false;
                                 mAwSettingsLock.notifyAll();
@@ -215,10 +214,10 @@ public class AwSettings {
     public AwSettings(Context context,
             boolean isAccessFromFileURLsGrantedByDefault,
             boolean supportsLegacyQuirks) {
-       boolean hasInternetPermission = context.checkPermission(
-                    android.Manifest.permission.INTERNET,
-                    Process.myPid(),
-                    Process.myUid()) == PackageManager.PERMISSION_GRANTED;
+        boolean hasInternetPermission = context.checkPermission(
+                android.Manifest.permission.INTERNET,
+                Process.myPid(),
+                Process.myUid()) == PackageManager.PERMISSION_GRANTED;
         synchronized (mAwSettingsLock) {
             mHasInternetPermission = hasInternetPermission;
             mBlockNetworkLoads = !hasInternetPermission;
@@ -228,7 +227,6 @@ public class AwSettings {
                 mAllowFileAccessFromFileURLs = true;
             }
 
-            mDefaultTextEncoding = AwResource.getDefaultTextEncoding();
             mUserAgent = LazyDefaultUserAgent.sInstance;
 
             // Best-guess a sensible initial value based on the features supported on the device.
@@ -302,8 +300,8 @@ public class AwSettings {
     public void setBlockNetworkLoads(boolean flag) {
         synchronized (mAwSettingsLock) {
             if (!flag && !mHasInternetPermission) {
-                throw new SecurityException("Permission denied - " +
-                        "application missing INTERNET permission");
+                throw new SecurityException("Permission denied - "
+                        + "application missing INTERNET permission");
             }
             mBlockNetworkLoads = flag;
         }
@@ -1440,8 +1438,8 @@ public class AwSettings {
      */
     public void setDefaultVideoPosterURL(String url) {
         synchronized (mAwSettingsLock) {
-            if (mDefaultVideoPosterURL != null && !mDefaultVideoPosterURL.equals(url) ||
-                    mDefaultVideoPosterURL == null && url != null) {
+            if (mDefaultVideoPosterURL != null && !mDefaultVideoPosterURL.equals(url)
+                    || mDefaultVideoPosterURL == null && url != null) {
                 mDefaultVideoPosterURL = url;
                 mEventHandler.updateWebkitPreferencesLocked();
             }
@@ -1565,8 +1563,8 @@ public class AwSettings {
     @CalledByNative
     private boolean getAllowDisplayingInsecureContentLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
-        return mMixedContentMode == MIXED_CONTENT_ALWAYS_ALLOW ||
-                mMixedContentMode == MIXED_CONTENT_COMPATIBILITY_MODE;
+        return mMixedContentMode == MIXED_CONTENT_ALWAYS_ALLOW
+                || mMixedContentMode == MIXED_CONTENT_COMPATIBILITY_MODE;
     }
 
     /**

@@ -5,8 +5,7 @@
 #include <ctime>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
-#include "base/path_service.h"
+#include "base/files/file_util.h"
 #include "base/process/launch.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/stringprintf.h"
@@ -29,6 +28,8 @@
 static const base::FilePath::CharType kReferenceFile[] =
 #if defined (OS_WIN)
     FILE_PATH_LITERAL("human-voice-win.wav");
+#elif defined (OS_MACOSX)
+    FILE_PATH_LITERAL("human-voice-mac.wav");
 #else
     FILE_PATH_LITERAL("human-voice-linux.wav");
 #endif
@@ -39,6 +40,8 @@ static const base::FilePath::CharType kReferenceFile[] =
 static const char kReferenceFileRelativeUrl[] =
 #if defined (OS_WIN)
     "resources/human-voice-win.wav";
+#elif defined (OS_MACOSX)
+    "resources/human-voice-mac.wav";
 #else
     "resources/human-voice-linux.wav";
 #endif
@@ -48,14 +51,15 @@ static const char kMainWebrtcTestHtmlPage[] =
 
 // Test we can set up a WebRTC call and play audio through it.
 //
-// You must have the src-internal solution in your .gclient to put the required
-// pyauto_private directory into chrome/test/data/.
+// If you're not a googler and want to run this test, you need to provide a
+// pesq binary for your platform (and sox.exe on windows). Read more on how
+// resources are managed in chrome/test/data/webrtc/resources/README.
 //
 // This test will only work on machines that have been configured to record
 // their own input.
 //
 // On Linux:
-// 1. # sudo apt-get install pavucontrol
+// 1. # sudo apt-get install pavucontrol sox
 // 2. For the user who will run the test: # pavucontrol
 // 3. In a separate terminal, # arecord dummy
 // 4. In pavucontrol, go to the recording tab.
@@ -68,6 +72,25 @@ static const char kMainWebrtcTestHtmlPage[] =
 //
 // Note: the volume for ALL your input devices will be forced to 100% by
 //       running this test on Linux.
+//
+// On Mac:
+// 1. Get SoundFlower: http://rogueamoeba.com/freebies/soundflower/download.php
+// 2. Install it + reboot.
+// 3. Install MacPorts (http://www.macports.org/).
+// 4. Install sox: sudo port install sox.
+// 5. (For Chrome bots) Ensure sox and rec are reachable from the env the test
+//    executes in (sox and rec tends to install in /opt/, which generally isn't
+//    in the Chrome bots' env). For instance, run
+//    sudo ln -s /opt/local/bin/rec /usr/local/bin/rec
+//    sudo ln -s /opt/local/bin/sox /usr/local/bin/sox
+// 6. In Sound Preferences, set both input and output to Soundflower (2ch).
+//    Note: You will no longer hear audio on this machine, and it will no
+//    longer use any built-in mics.
+// 7. Try launching chrome as the target user on the target machine, try
+//    playing, say, a YouTube video, and record with 'rec test.wav trim 0 5'.
+//    Stop the video in chrome and try playing back the file; you should hear
+//    a recording of the video (note; if you play back on the target machine
+//    you must revert the changes in step 3 first).
 //
 // On Windows 7:
 // 1. Control panel > Sound > Manage audio devices.
@@ -85,11 +108,11 @@ static const char kMainWebrtcTestHtmlPage[] =
 class WebRtcAudioQualityBrowserTest : public WebRtcTestBase {
  public:
   WebRtcAudioQualityBrowserTest() {}
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     DetectErrorsInJavaScript();  // Look for errors in our rather complex js.
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     // This test expects real device handling and requires a real webcam / audio
     // device; it will not work with fake devices.
     EXPECT_FALSE(command_line->HasSwitch(
@@ -162,6 +185,21 @@ class AudioRecorder {
     command_line.AppendArgPath(output_file);
     command_line.AppendArg("/DURATION");
     command_line.AppendArg(duration_in_hms);
+#elif defined(OS_MACOSX)
+    command_line.SetProgram(base::FilePath("rec"));
+    command_line.AppendArg("-b");
+    command_line.AppendArg("16");
+    command_line.AppendArg("-q");
+    command_line.AppendArgPath(output_file);
+    command_line.AppendArg("trim");
+    command_line.AppendArg("0");
+    command_line.AppendArg(base::StringPrintf("%d", duration_sec));
+    command_line.AppendArg("rate");
+    command_line.AppendArg("16k");
+    if (mono) {
+      command_line.AppendArg("remix");
+      command_line.AppendArg("-");
+    }
 #else
     int num_channels = mono ? 1 : 2;
     command_line.SetProgram(base::FilePath("arecord"));
@@ -174,7 +212,7 @@ class AudioRecorder {
     command_line.AppendArgPath(output_file);
 #endif
 
-    VLOG(0) << "Running " << command_line.GetCommandLineString();
+    DVLOG(0) << "Running " << command_line.GetCommandLineString();
     return base::LaunchProcess(command_line, base::LaunchOptions(),
                                &recording_application_);
   }
@@ -191,9 +229,22 @@ class AudioRecorder {
 
 bool ForceMicrophoneVolumeTo100Percent() {
 #if defined(OS_WIN)
+  // Note: the force binary isn't in tools since it's one of our own.
   CommandLine command_line(test::GetReferenceFilesDir().Append(
       FILE_PATH_LITERAL("force_mic_volume_max.exe")));
-  VLOG(0) << "Running " << command_line.GetCommandLineString();
+  DVLOG(0) << "Running " << command_line.GetCommandLineString();
+  std::string result;
+  if (!base::GetAppOutput(command_line, &result)) {
+    LOG(ERROR) << "Failed to set source volume: output was " << result;
+    return false;
+  }
+#elif defined(OS_MACOSX)
+  CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("osascript")));
+  command_line.AppendArg("-e");
+  command_line.AppendArg("set volume input volume 100");
+  command_line.AppendArg("-e");
+  command_line.AppendArg("set volume output volume 100");
+
   std::string result;
   if (!base::GetAppOutput(command_line, &result)) {
     LOG(ERROR) << "Failed to set source volume: output was " << result;
@@ -210,7 +261,7 @@ bool ForceMicrophoneVolumeTo100Percent() {
     command_line.AppendArg("set-source-volume");
     command_line.AppendArg(base::StringPrintf("%d", device_index));
     command_line.AppendArg(kHundredPercentVolume);
-    VLOG(0) << "Running " << command_line.GetCommandLineString();
+    DVLOG(0) << "Running " << command_line.GetCommandLineString();
     if (!base::GetAppOutput(command_line, &result)) {
       LOG(ERROR) << "Failed to set source volume: output was " << result;
       return false;
@@ -239,8 +290,14 @@ bool RemoveSilence(const base::FilePath& input_file,
   const char* kTreshold = "5%";
 
 #if defined(OS_WIN)
-  CommandLine command_line(test::GetReferenceFilesDir().Append(
-      FILE_PATH_LITERAL("sox.exe")));
+  base::FilePath sox_path = test::GetReferenceFilesDir().Append(
+      FILE_PATH_LITERAL("tools/sox.exe"));
+  if (!base::PathExists(sox_path)) {
+    LOG(ERROR) << "Missing sox.exe binary in " << sox_path.value()
+               << "; you may have to provide this binary yourself.";
+    return false;
+  }
+  CommandLine command_line(sox_path);
 #else
   CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("sox")));
 #endif
@@ -257,10 +314,10 @@ bool RemoveSilence(const base::FilePath& input_file,
   command_line.AppendArg(kTreshold);
   command_line.AppendArg("reverse");
 
-  VLOG(0) << "Running " << command_line.GetCommandLineString();
+  DVLOG(0) << "Running " << command_line.GetCommandLineString();
   std::string result;
   bool ok = base::GetAppOutput(command_line, &result);
-  VLOG(0) << "Output was:\n\n" << result;
+  DVLOG(0) << "Output was:\n\n" << result;
   return ok;
 }
 
@@ -288,14 +345,18 @@ bool RunPesq(const base::FilePath& reference_file,
 
 #if defined(OS_WIN)
   base::FilePath pesq_path =
-      test::GetReferenceFilesDir().Append(FILE_PATH_LITERAL("pesq.exe"));
+      test::GetReferenceFilesDir().Append(FILE_PATH_LITERAL("tools/pesq.exe"));
+#elif defined(OS_MACOSX)
+  base::FilePath pesq_path =
+      test::GetReferenceFilesDir().Append(FILE_PATH_LITERAL("tools/pesq_mac"));
 #else
   base::FilePath pesq_path =
-      test::GetReferenceFilesDir().Append(FILE_PATH_LITERAL("pesq"));
+      test::GetReferenceFilesDir().Append(FILE_PATH_LITERAL("tools/pesq"));
 #endif
 
   if (!base::PathExists(pesq_path)) {
-    LOG(ERROR) << "Missing PESQ binary in " << pesq_path.value();
+    LOG(ERROR) << "Missing PESQ binary in " << pesq_path.value()
+               << "; you may have to provide this binary yourself.";
     return false;
   }
 
@@ -304,19 +365,19 @@ bool RunPesq(const base::FilePath& reference_file,
   command_line.AppendArgPath(reference_file);
   command_line.AppendArgPath(actual_file);
 
-  VLOG(0) << "Running " << command_line.GetCommandLineString();
+  DVLOG(0) << "Running " << command_line.GetCommandLineString();
   std::string result;
   if (!base::GetAppOutput(command_line, &result)) {
     LOG(ERROR) << "Failed to run PESQ.";
     return false;
   }
-  VLOG(0) << "Output was:\n\n" << result;
+  DVLOG(0) << "Output was:\n\n" << result;
 
   const std::string result_anchor = "Prediction (Raw MOS, MOS-LQO):  = ";
   std::size_t anchor_pos = result.find(result_anchor);
   if (anchor_pos == std::string::npos) {
     LOG(ERROR) << "PESQ was not able to compute a score; we probably recorded "
-        << "only silence.";
+        << "only silence. Please check the output/input volume levels.";
     return false;
   }
 
@@ -330,10 +391,10 @@ bool RunPesq(const base::FilePath& reference_file,
   return true;
 }
 
-#if defined(OS_LINUX) || defined(OS_WIN)
-// Only implemented on Linux and Windows for now.
+#if defined(OS_LINUX) || defined(OS_WIN) || defined(OS_MACOSX)
 #define MAYBE_MANUAL_TestAudioQuality MANUAL_TestAudioQuality
 #else
+// Not implemented on Android, ChromeOS etc.
 #define MAYBE_MANUAL_TestAudioQuality DISABLED_MANUAL_TestAudioQuality
 #endif
 
@@ -392,14 +453,14 @@ IN_PROC_BROWSER_TEST_F(WebRtcAudioQualityBrowserTest,
   PlayAudioFile(left_tab);
 
   ASSERT_TRUE(recorder.WaitForRecordingToEnd());
-  VLOG(0) << "Done recording to " << recording.value() << std::endl;
+  DVLOG(0) << "Done recording to " << recording.value() << std::endl;
 
   HangUp(left_tab);
 
   base::FilePath trimmed_recording = CreateTemporaryWaveFile();
 
   ASSERT_TRUE(RemoveSilence(recording, trimmed_recording));
-  VLOG(0) << "Trimmed silence: " << trimmed_recording.value() << std::endl;
+  DVLOG(0) << "Trimmed silence: " << trimmed_recording.value() << std::endl;
 
   std::string raw_mos;
   std::string mos_lqo;

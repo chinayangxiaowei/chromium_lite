@@ -8,9 +8,9 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/browser/ui/views/signed_certificate_timestamp_info_view.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/signed_certificate_timestamp_store.h"
 #include "content/public/common/signed_certificate_timestamp_id_and_status.h"
@@ -56,11 +56,11 @@ class SCTListModel : public ui::ComboboxModel {
  public:
   explicit SCTListModel(
       const net::SignedCertificateTimestampAndStatusList& sct_list);
-  virtual ~SCTListModel();
+  ~SCTListModel() override;
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  int GetItemCount() const override;
+  base::string16 GetItemAt(int index) override;
 
  private:
   net::SignedCertificateTimestampAndStatusList sct_list_;
@@ -79,7 +79,7 @@ int SCTListModel::GetItemCount() const { return sct_list_.size(); }
 base::string16 SCTListModel::GetItemAt(int index) {
   DCHECK_LT(static_cast<size_t>(index), sct_list_.size());
   std::string origin = l10n_util::GetStringUTF8(
-      chrome::ct::SCTOriginToResourceID(*(sct_list_[index].sct)));
+      chrome::ct::SCTOriginToResourceID(*(sct_list_[index].sct.get())));
 
   std::string status = l10n_util::GetStringUTF8(
       chrome::ct::StatusToResourceID(sct_list_[index].status));
@@ -122,6 +122,7 @@ void SignedCertificateTimestampsViews::OnPerformAction(
 
 void SignedCertificateTimestampsViews::ViewHierarchyChanged(
     const ViewHierarchyChangedDetails& details) {
+  views::DialogDelegateView::ViewHierarchyChanged(details);
   if (details.is_add && details.child == this)
     Init();
 }
@@ -152,7 +153,7 @@ void SignedCertificateTimestampsViews::Init() {
   sct_info_view_ = new SignedCertificateTimestampInfoView();
   layout->AddView(sct_info_view_);
 
-  sct_info_view_->SetSignedCertificateTimestamp(*(sct_list_[0].sct),
+  sct_info_view_->SetSignedCertificateTimestamp(*(sct_list_[0].sct.get()),
                                                 sct_list_[0].status);
 }
 
@@ -160,8 +161,8 @@ void SignedCertificateTimestampsViews::ShowSCTInfo(int sct_index) {
   if ((sct_index < 0) || (static_cast<size_t>(sct_index) > sct_list_.size()))
     return;
 
-  sct_info_view_->SetSignedCertificateTimestamp(*(sct_list_[sct_index].sct),
-                                                sct_list_[sct_index].status);
+  sct_info_view_->SetSignedCertificateTimestamp(
+      *(sct_list_[sct_index].sct.get()), sct_list_[sct_index].status);
 }
 
 void SignedCertificateTimestampsViews::Observe(

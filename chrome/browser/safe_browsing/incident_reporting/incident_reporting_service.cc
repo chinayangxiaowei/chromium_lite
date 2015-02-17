@@ -25,6 +25,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/database_manager.h"
 #include "chrome/browser/safe_browsing/incident_reporting/binary_integrity_incident_handlers.h"
+#include "chrome/browser/safe_browsing/incident_reporting/blacklist_load_incident_handlers.h"
 #include "chrome/browser/safe_browsing/incident_reporting/environment_data_collection.h"
 #include "chrome/browser/safe_browsing/incident_reporting/incident_report_uploader_impl.h"
 #include "chrome/browser/safe_browsing/incident_reporting/preference_validation_delegate.h"
@@ -47,8 +48,9 @@ enum IncidentType {
   // the histogram.
   TRACKED_PREFERENCE = 1,
   BINARY_INTEGRITY = 2,
+  BLACKLIST_LOAD = 3,
   // Values for new incident types go here.
-  NUM_INCIDENT_TYPES
+  NUM_INCIDENT_TYPES = 4
 };
 
 // The action taken for an incident; used for user metrics (see
@@ -85,6 +87,8 @@ size_t CountIncidents(const ClientIncidentReport_IncidentData& incident) {
     ++result;
   if (incident.has_binary_integrity())
     ++result;
+  if (incident.has_blacklist_load())
+    ++result;
   // Add detection for new incident types here.
   return result;
 }
@@ -96,9 +100,11 @@ IncidentType GetIncidentType(
     return TRACKED_PREFERENCE;
   if (incident_data.has_binary_integrity())
     return BINARY_INTEGRITY;
+  if (incident_data.has_blacklist_load())
+    return BLACKLIST_LOAD;
 
   // Add detection for new incident types here.
-  COMPILE_ASSERT(BINARY_INTEGRITY + 1 == NUM_INCIDENT_TYPES,
+  COMPILE_ASSERT(BLACKLIST_LOAD + 1 == NUM_INCIDENT_TYPES,
                  add_support_for_new_types);
   NOTREACHED();
   return NUM_INCIDENT_TYPES;
@@ -131,9 +137,13 @@ PersistentIncidentState ComputeIncidentState(
       state.key = GetBinaryIntegrityIncidentKey(incident);
       state.digest = GetBinaryIntegrityIncidentDigest(incident);
       break;
+    case BLACKLIST_LOAD:
+      state.key = GetBlacklistLoadIncidentKey(incident);
+      state.digest = GetBlacklistLoadIncidentDigest(incident);
+      break;
     // Add handling for new incident types here.
     default:
-      COMPILE_ASSERT(BINARY_INTEGRITY + 1 == NUM_INCIDENT_TYPES,
+      COMPILE_ASSERT(BLACKLIST_LOAD + 1 == NUM_INCIDENT_TYPES,
                      add_support_for_new_types);
       NOTREACHED();
       break;
@@ -239,8 +249,9 @@ IncidentReportingService::UploadContext::~UploadContext() {
 IncidentReportingService::IncidentReportingService(
     SafeBrowsingService* safe_browsing_service,
     const scoped_refptr<net::URLRequestContextGetter>& request_context_getter)
-    : database_manager_(safe_browsing_service ?
-                        safe_browsing_service->database_manager() : NULL),
+    : database_manager_(safe_browsing_service
+                            ? safe_browsing_service->database_manager()
+                            : NULL),
       url_request_context_getter_(request_context_getter),
       collect_environment_data_fn_(&CollectEnvironmentData),
       environment_collection_task_runner_(
@@ -258,6 +269,7 @@ IncidentReportingService::IncidentReportingService(
           content::BrowserThread::GetBlockingPool()
               ->GetTaskRunnerWithShutdownBehavior(
                   base::SequencedWorkerPool::SKIP_ON_SHUTDOWN)),
+      download_metadata_manager_(content::BrowserThread::GetBlockingPool()),
       receiver_weak_ptr_factory_(this),
       weak_ptr_factory_(this) {
   notification_registrar_.Add(this,
@@ -266,6 +278,16 @@ IncidentReportingService::IncidentReportingService(
   notification_registrar_.Add(this,
                               chrome::NOTIFICATION_PROFILE_DESTROYED,
                               content::NotificationService::AllSources());
+  DownloadProtectionService* download_protection_service =
+      (safe_browsing_service ?
+       safe_browsing_service->download_protection_service() :
+       NULL);
+  if (download_protection_service) {
+    client_download_request_subscription_ =
+        download_protection_service->RegisterClientDownloadRequestCallback(
+            base::Bind(&IncidentReportingService::OnClientDownloadRequest,
+                       base::Unretained(this)));
+  }
 }
 
 IncidentReportingService::~IncidentReportingService() {
@@ -323,13 +345,19 @@ void IncidentReportingService::RegisterDelayedAnalysisCallback(
     delayed_analysis_callbacks_.Start();
 }
 
+void IncidentReportingService::AddDownloadManager(
+    content::DownloadManager* download_manager) {
+  download_metadata_manager_.AddDownloadManager(download_manager);
+}
+
 IncidentReportingService::IncidentReportingService(
     SafeBrowsingService* safe_browsing_service,
     const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
     base::TimeDelta delayed_task_interval,
     const scoped_refptr<base::TaskRunner>& delayed_task_runner)
-    : database_manager_(safe_browsing_service ?
-                        safe_browsing_service->database_manager() : NULL),
+    : database_manager_(safe_browsing_service
+                            ? safe_browsing_service->database_manager()
+                            : NULL),
       url_request_context_getter_(request_context_getter),
       collect_environment_data_fn_(&CollectEnvironmentData),
       environment_collection_task_runner_(
@@ -343,6 +371,7 @@ IncidentReportingService::IncidentReportingService(
                        this,
                        &IncidentReportingService::OnCollationTimeout),
       delayed_analysis_callbacks_(delayed_task_interval, delayed_task_runner),
+      download_metadata_manager_(content::BrowserThread::GetBlockingPool()),
       receiver_weak_ptr_factory_(this),
       weak_ptr_factory_(this) {
   notification_registrar_.Add(this,
@@ -417,7 +446,10 @@ void IncidentReportingService::OnProfileAdded(Profile* profile) {
 
 scoped_ptr<LastDownloadFinder> IncidentReportingService::CreateDownloadFinder(
     const LastDownloadFinder::LastDownloadCallback& callback) {
-  return LastDownloadFinder::Create(callback).Pass();
+  return LastDownloadFinder::Create(
+             base::Bind(&DownloadMetadataManager::GetDownloadDetails,
+                        base::Unretained(&download_metadata_manager_)),
+             callback).Pass();
 }
 
 scoped_ptr<IncidentReportUploader> IncidentReportingService::StartReportUpload(
@@ -426,6 +458,10 @@ scoped_ptr<IncidentReportUploader> IncidentReportingService::StartReportUpload(
     const ClientIncidentReport& report) {
   return IncidentReportUploaderImpl::UploadReport(
              callback, request_context_getter, report).Pass();
+}
+
+bool IncidentReportingService::IsProcessingReport() const {
+  return report_ != NULL;
 }
 
 IncidentReportingService::ProfileContext*
@@ -670,11 +706,11 @@ bool IncidentReportingService::WaitingForMostRecentDownload() {
   // The next easy case: waiting if the finder is operating.
   if (last_download_finder_)
     return true;
-  // The harder case: waiting if a profile has not yet been added.
+  // The harder case: waiting if a non-NULL profile has not yet been added.
   for (ProfileContextCollection::const_iterator scan = profiles_.begin();
        scan != profiles_.end();
        ++scan) {
-    if (!scan->second->added)
+    if (scan->first && !scan->second->added)
       return true;
   }
   // There is no most recent download and there's nothing more to wait for.
@@ -844,7 +880,7 @@ void IncidentReportingService::UploadIfCollectionComplete() {
 
   scoped_ptr<UploadContext> context(new UploadContext(report.Pass()));
   context->profiles_to_state.swap(profiles_to_state);
-  if (!database_manager_) {
+  if (!database_manager_.get()) {
     // No database manager during testing. Take ownership of the context and
     // continue processing.
     UploadContext* temp_context = context.get();
@@ -929,6 +965,13 @@ void IncidentReportingService::OnReportUploadResult(
   if (result == IncidentReportUploader::UPLOAD_SUCCESS)
     HandleResponse(*upload);
   // else retry?
+}
+
+void IncidentReportingService::OnClientDownloadRequest(
+    content::DownloadItem* download,
+    const ClientDownloadRequest* request) {
+  if (!download->GetBrowserContext()->IsOffTheRecord())
+    download_metadata_manager_.SetRequest(download, request);
 }
 
 void IncidentReportingService::Observe(

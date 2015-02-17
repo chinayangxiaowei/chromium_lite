@@ -6,9 +6,9 @@
 
 #include <string>
 
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/browser_ppapi_host.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"

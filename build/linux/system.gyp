@@ -413,6 +413,9 @@
             ],
           },
           'link_settings': {
+            'ldflags': [
+              '<!@(<(pkg-config) --libs-only-L --libs-only-other gbm)',
+            ],
             'libraries': [
               '<!@(<(pkg-config) --libs-only-l gbm)',
             ],
@@ -435,6 +438,99 @@
               '<!@(<(pkg-config) --libs-only-l libdrm)',
             ],
           },
+        },
+      ],
+    }],
+    ['use_udev==1', {
+      'targets': [
+        {
+          'target_name': 'udev',
+          'type': 'none',
+          'conditions': [
+            ['_toolset=="target"', {
+              'direct_dependent_settings': {
+                'cflags': [
+                  '<!@(<(pkg-config) --cflags libudev)'
+                ],
+              },
+              'link_settings': {
+                'ldflags': [
+                  '<!@(<(pkg-config) --libs-only-L --libs-only-other libudev)',
+                ],
+                'libraries': [
+                  '<!@(<(pkg-config) --libs-only-l libudev)',
+                ],
+              },
+            }],
+          ],
+        },
+      ],
+    }],
+    ['use_libpci==1', {
+      'targets': [
+        {
+          'target_name': 'libpci',
+          'type': 'static_library',
+          'cflags': [
+            '<!@(<(pkg-config) --cflags libpci)',
+          ],
+          'direct_dependent_settings': {
+            'include_dirs': [
+              '<(SHARED_INTERMEDIATE_DIR)',
+            ],
+            'conditions': [
+              ['linux_link_libpci==1', {
+                'link_settings': {
+                  'ldflags': [
+                    '<!@(<(pkg-config) --libs-only-L --libs-only-other libpci)',
+                  ],
+                  'libraries': [
+                    '<!@(<(pkg-config) --libs-only-l libpci)',
+                  ],
+                }
+              }],
+            ],
+          },
+          'include_dirs': [
+            '../..',
+          ],
+          'hard_dependency': 1,
+          'actions': [
+            {
+              'variables': {
+                'output_h': '<(SHARED_INTERMEDIATE_DIR)/library_loaders/libpci.h',
+                'output_cc': '<(INTERMEDIATE_DIR)/libpci_loader.cc',
+                'generator': '../../tools/generate_library_loader/generate_library_loader.py',
+              },
+              'action_name': 'generate_libpci_loader',
+              'inputs': [
+                '<(generator)',
+              ],
+              'outputs': [
+                '<(output_h)',
+                '<(output_cc)',
+              ],
+              'action': ['python',
+                         '<(generator)',
+                         '--name', 'LibPciLoader',
+                         '--output-h', '<(output_h)',
+                         '--output-cc', '<(output_cc)',
+                         '--header', '<pci/pci.h>',
+                         # TODO(phajdan.jr): Report problem to pciutils project
+                         # and get it fixed so that we don't need --use-extern-c.
+                         '--use-extern-c',
+                         '--link-directly=<(linux_link_libpci)',
+                         'pci_alloc',
+                         'pci_init',
+                         'pci_cleanup',
+                         'pci_scan_bus',
+                         'pci_fill_info',
+                         'pci_lookup_name',
+              ],
+              'message': 'Generating libpci library loader',
+              'process_outputs_as_sources': 1,
+            },
+          ],
         },
       ],
     }],
@@ -542,12 +638,28 @@
           'cflags': [
             '<!@(<(pkg-config) --cflags gio-2.0)',
           ],
+          'variables': {
+            'gio_warning_define': [
+              # glib >=2.40 deprecate g_settings_list_schemas in favor of
+              # g_settings_schema_source_list_schemas. This function is not
+              # available on earlier versions that we still need to support
+              # (specifically, 2.32), so disable the warning.
+              # TODO(mgiuca): Remove this suppression (and variable) when we
+              # drop support for Ubuntu 13.10 (saucy) and earlier. Update the
+              # code to use g_settings_schema_source_list_schemas instead.
+              'GLIB_DISABLE_DEPRECATION_WARNINGS',
+            ],
+          },
+          'defines': [
+            '<(gio_warning_define)',
+          ],
           'direct_dependent_settings': {
             'cflags': [
               '<!@(<(pkg-config) --cflags gio-2.0)',
             ],
             'defines': [
               'USE_GIO',
+              '<(gio_warning_define)',
             ],
             'include_dirs': [
               '<(SHARED_INTERMEDIATE_DIR)',
@@ -797,70 +909,6 @@
       },
     },
     {
-      'target_name': 'libpci',
-      'type': 'static_library',
-      'cflags': [
-        '<!@(<(pkg-config) --cflags libpci)',
-      ],
-      'direct_dependent_settings': {
-        'include_dirs': [
-          '<(SHARED_INTERMEDIATE_DIR)',
-        ],
-        'conditions': [
-          ['linux_link_libpci==1', {
-            'link_settings': {
-              'ldflags': [
-                '<!@(<(pkg-config) --libs-only-L --libs-only-other libpci)',
-              ],
-              'libraries': [
-                '<!@(<(pkg-config) --libs-only-l libpci)',
-              ],
-            }
-          }],
-        ],
-      },
-      'include_dirs': [
-        '../..',
-      ],
-      'hard_dependency': 1,
-      'actions': [
-        {
-          'variables': {
-            'output_h': '<(SHARED_INTERMEDIATE_DIR)/library_loaders/libpci.h',
-            'output_cc': '<(INTERMEDIATE_DIR)/libpci_loader.cc',
-            'generator': '../../tools/generate_library_loader/generate_library_loader.py',
-          },
-          'action_name': 'generate_libpci_loader',
-          'inputs': [
-            '<(generator)',
-          ],
-          'outputs': [
-            '<(output_h)',
-            '<(output_cc)',
-          ],
-          'action': ['python',
-                     '<(generator)',
-                     '--name', 'LibPciLoader',
-                     '--output-h', '<(output_h)',
-                     '--output-cc', '<(output_cc)',
-                     '--header', '<pci/pci.h>',
-                     # TODO(phajdan.jr): Report problem to pciutils project
-                     # and get it fixed so that we don't need --use-extern-c.
-                     '--use-extern-c',
-                     '--link-directly=<(linux_link_libpci)',
-                     'pci_alloc',
-                     'pci_init',
-                     'pci_cleanup',
-                     'pci_scan_bus',
-                     'pci_fill_info',
-                     'pci_lookup_name',
-          ],
-          'message': 'Generating libpci library loader',
-          'process_outputs_as_sources': 1,
-        },
-      ],
-    },
-    {
       'target_name': 'libresolv',
       'type': 'none',
       'link_settings': {
@@ -1029,28 +1077,6 @@
               },
             }],
           ]
-        }],
-      ],
-    },
-    {
-      'target_name': 'udev',
-      'type': 'none',
-      'conditions': [
-        # libudev is not available on *BSD
-        ['_toolset=="target" and os_bsd!=1', {
-          'direct_dependent_settings': {
-            'cflags': [
-              '<!@(<(pkg-config) --cflags libudev)'
-            ],
-          },
-          'link_settings': {
-            'ldflags': [
-              '<!@(<(pkg-config) --libs-only-L --libs-only-other libudev)',
-            ],
-            'libraries': [
-              '<!@(<(pkg-config) --libs-only-l libudev)',
-            ],
-          },
         }],
       ],
     },

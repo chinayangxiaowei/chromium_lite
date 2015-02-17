@@ -21,15 +21,51 @@ namespace {
 
 using net::IOBufferWithSize;
 
-class TestCompletionCallback {
+class TestConnectCallback {
  public:
-  TestCompletionCallback()
-    : callback_(base::Bind(&TestCompletionCallback::SetResult,
-                base::Unretained(this))) {}
+  TestConnectCallback()
+      : callback_(base::Bind(&TestConnectCallback::SetConnection,
+                             base::Unretained(this))) {}
+  ~TestConnectCallback() {}
 
-  void SetResult(bool success, size_t size) {
+  void SetConnection(scoped_refptr<HidConnection> connection) {
+    connection_ = connection;
+    run_loop_.Quit();
+  }
+
+  scoped_refptr<HidConnection> WaitForConnection() {
+    run_loop_.Run();
+    return connection_;
+  }
+
+  const HidService::ConnectCallback& callback() { return callback_; }
+
+ private:
+  HidService::ConnectCallback callback_;
+  base::RunLoop run_loop_;
+  scoped_refptr<HidConnection> connection_;
+};
+
+class TestIoCallback {
+ public:
+  TestIoCallback()
+      : read_callback_(
+            base::Bind(&TestIoCallback::SetReadResult, base::Unretained(this))),
+        write_callback_(base::Bind(&TestIoCallback::SetWriteResult,
+                                   base::Unretained(this))) {}
+  ~TestIoCallback() {}
+
+  void SetReadResult(bool success,
+                     scoped_refptr<net::IOBuffer> buffer,
+                     size_t size) {
     result_ = success;
-    transferred_ = size;
+    buffer_ = buffer;
+    size_ = size;
+    run_loop_.Quit();
+  }
+
+  void SetWriteResult(bool success) {
+    result_ = success;
     run_loop_.Quit();
   }
 
@@ -38,25 +74,33 @@ class TestCompletionCallback {
     return result_;
   }
 
-  const HidConnection::IOCallback& callback() const { return callback_; }
-  size_t transferred() const { return transferred_; }
+  const HidConnection::ReadCallback& read_callback() { return read_callback_; }
+  const HidConnection::WriteCallback write_callback() {
+    return write_callback_;
+  }
+  scoped_refptr<net::IOBuffer> buffer() const { return buffer_; }
+  size_t size() const { return size_; }
 
  private:
-  const HidConnection::IOCallback callback_;
   base::RunLoop run_loop_;
   bool result_;
-  size_t transferred_;
+  size_t size_;
+  scoped_refptr<net::IOBuffer> buffer_;
+  HidConnection::ReadCallback read_callback_;
+  HidConnection::WriteCallback write_callback_;
 };
 
 }  // namespace
 
 class HidConnectionTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     if (!UsbTestGadget::IsTestEnabled()) return;
 
     message_loop_.reset(new base::MessageLoopForIO());
-    service_.reset(HidService::Create(message_loop_->message_loop_proxy()));
+    service_ = HidService::GetInstance(
+        message_loop_->message_loop_proxy(),
+        message_loop_->message_loop_proxy());
     ASSERT_TRUE(service_);
 
     test_gadget_ = UsbTestGadget::Claim();
@@ -83,7 +127,7 @@ class HidConnectionTest : public testing::Test {
     for (std::vector<HidDeviceInfo>::iterator it = devices.begin();
          it != devices.end();
          ++it) {
-      if (it->serial_number == test_gadget_->GetSerial()) {
+      if (it->serial_number == test_gadget_->GetSerialNumber()) {
         device_id_ = it->device_id;
         break;
       }
@@ -101,7 +145,7 @@ class HidConnectionTest : public testing::Test {
   }
 
   scoped_ptr<base::MessageLoopForIO> message_loop_;
-  scoped_ptr<HidService> service_;
+  HidService* service_;
   scoped_ptr<UsbTestGadget> test_gadget_;
   HidDeviceId device_id_;
 };
@@ -109,25 +153,34 @@ class HidConnectionTest : public testing::Test {
 TEST_F(HidConnectionTest, ReadWrite) {
   if (!UsbTestGadget::IsTestEnabled()) return;
 
-  scoped_refptr<HidConnection> conn = service_->Connect(device_id_);
-  ASSERT_TRUE(conn);
+  TestConnectCallback connect_callback;
+  service_->Connect(device_id_, connect_callback.callback());
+  scoped_refptr<HidConnection> conn = connect_callback.WaitForConnection();
+  ASSERT_TRUE(conn.get());
 
-  for (int i = 0; i < 8; ++i) {
-    scoped_refptr<IOBufferWithSize> write_buffer(new IOBufferWithSize(8));
-    *(int64_t*)write_buffer->data() = i;
+  const char kBufferSize = 9;
+  for (char i = 0; i < 8; ++i) {
+    scoped_refptr<IOBufferWithSize> buffer(new IOBufferWithSize(kBufferSize));
+    buffer->data()[0] = 0;
+    for (unsigned char j = 1; j < kBufferSize; ++j) {
+      buffer->data()[j] = i + j - 1;
+    }
 
-    TestCompletionCallback write_callback;
-    conn->Write(0, write_buffer, write_callback.callback());
+    TestIoCallback write_callback;
+    conn->Write(buffer, buffer->size(), write_callback.write_callback());
     ASSERT_TRUE(write_callback.WaitForResult());
-    ASSERT_EQ(8UL, write_callback.transferred());
 
-    scoped_refptr<IOBufferWithSize> read_buffer(new IOBufferWithSize(8));
-    TestCompletionCallback read_callback;
-    conn->Read(read_buffer, read_callback.callback());
+    TestIoCallback read_callback;
+    conn->Read(read_callback.read_callback());
     ASSERT_TRUE(read_callback.WaitForResult());
-    ASSERT_EQ(8UL, read_callback.transferred());
-    ASSERT_EQ(i, *(int64_t*)read_buffer->data());
+    ASSERT_EQ(9UL, read_callback.size());
+    ASSERT_EQ(0, read_callback.buffer()->data()[0]);
+    for (unsigned char j = 1; j < kBufferSize; ++j) {
+      ASSERT_EQ(i + j - 1, read_callback.buffer()->data()[j]);
+    }
   }
+
+  conn->Close();
 }
 
 }  // namespace device

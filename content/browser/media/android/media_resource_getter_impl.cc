@@ -12,6 +12,7 @@
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/fileapi/browser_file_system_helper.h"
 #include "content/browser/fileapi/chrome_blob_storage_context.h"
+#include "content/browser/resource_context_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -26,9 +27,9 @@
 #include "net/http/http_transaction_factory.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "storage/browser/blob/blob_data_handle.h"
+#include "storage/browser/blob/blob_storage_context.h"
 #include "url/gurl.h"
-#include "webkit/browser/blob/blob_data_handle.h"
-#include "webkit/browser/blob/blob_storage_context.h"
 
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
@@ -44,15 +45,27 @@ static void ReturnResultOnUIThread(
 
 static void RequestPlatformPathFromBlobURL(
     const GURL& url,
-    BrowserContext* browser_context,
+    ResourceContext* resource_context,
     const base::Callback<void(const std::string&)>& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  ChromeBlobStorageContext* context =
-      ChromeBlobStorageContext::GetFor(browser_context);
-  scoped_ptr<webkit_blob::BlobDataHandle> handle =
-      context->context()->GetBlobDataFromPublicURL(url);
-  const std::vector<webkit_blob::BlobData::Item> items =
-      handle->data()->items();
+  ChromeBlobStorageContext* blob_storage_context =
+      GetChromeBlobStorageContextForResourceContext(resource_context);
+
+  scoped_ptr<storage::BlobDataHandle> handle =
+      blob_storage_context->context()->GetBlobDataFromPublicURL(url);
+  if (!handle) {
+    // There are plenty of cases where handle can be empty. The most trivial is
+    // when JS has aready revoked the given blob URL via URL.revokeObjectURL
+    ReturnResultOnUIThread(callback, std::string());
+    return;
+  }
+  storage::BlobData* data = handle->data();
+  if (!data) {
+    ReturnResultOnUIThread(callback, std::string());
+    NOTREACHED();
+    return;
+  }
+  const std::vector<storage::BlobData::Item> items = data->items();
 
   // TODO(qinmin): handle the case when the blob data is not a single file.
   DLOG_IF(WARNING, items.size() != 1u)
@@ -63,7 +76,7 @@ static void RequestPlatformPathFromBlobURL(
 static void RequestPlaformPathFromFileSystemURL(
     const GURL& url,
     int render_process_id,
-    scoped_refptr<fileapi::FileSystemContext> file_system_context,
+    scoped_refptr<storage::FileSystemContext> file_system_context,
     const base::Callback<void(const std::string&)>& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   base::FilePath platform_path;
@@ -253,14 +266,15 @@ void MediaResourceGetterTask::CheckPolicyForCookies(
 
 MediaResourceGetterImpl::MediaResourceGetterImpl(
     BrowserContext* browser_context,
-    fileapi::FileSystemContext* file_system_context,
+    storage::FileSystemContext* file_system_context,
     int render_process_id,
     int render_frame_id)
     : browser_context_(browser_context),
       file_system_context_(file_system_context),
       render_process_id_(render_process_id),
       render_frame_id_(render_frame_id),
-      weak_factory_(this) {}
+      weak_factory_(this) {
+}
 
 MediaResourceGetterImpl::~MediaResourceGetterImpl() {}
 
@@ -323,11 +337,12 @@ void MediaResourceGetterImpl::GetPlatformPathFromURL(
     BrowserThread::PostTask(
         BrowserThread::IO,
         FROM_HERE,
-        base::Bind(&RequestPlatformPathFromBlobURL, url, browser_context_, cb));
+        base::Bind(&RequestPlatformPathFromBlobURL, url,
+                   browser_context_->GetResourceContext(), cb));
     return;
   }
 
-  scoped_refptr<fileapi::FileSystemContext> context(file_system_context_);
+  scoped_refptr<storage::FileSystemContext> context(file_system_context_);
   BrowserThread::PostTask(
       BrowserThread::FILE,
       FROM_HERE,

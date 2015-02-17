@@ -87,20 +87,24 @@ class SSLClientSocketPoolTest
             HttpAuthHandlerFactory::CreateDefault(&host_resolver_)),
         session_(CreateNetworkSession()),
         direct_transport_socket_params_(
-            new TransportSocketParams(HostPortPair("host", 443),
-                                      false,
-                                      false,
-                                      OnHostResolutionCallback())),
+            new TransportSocketParams(
+                HostPortPair("host", 443),
+                false,
+                false,
+                OnHostResolutionCallback(),
+                TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT)),
         transport_histograms_("MockTCP"),
         transport_socket_pool_(kMaxSockets,
                                kMaxSocketsPerGroup,
                                &transport_histograms_,
                                &socket_factory_),
         proxy_transport_socket_params_(
-            new TransportSocketParams(HostPortPair("proxy", 443),
-                                      false,
-                                      false,
-                                      OnHostResolutionCallback())),
+            new TransportSocketParams(
+                HostPortPair("proxy", 443),
+                false,
+                false,
+                OnHostResolutionCallback(),
+                TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT)),
         socks_socket_params_(
             new SOCKSSocketParams(proxy_transport_socket_params_,
                                   true,
@@ -119,13 +123,15 @@ class SSLClientSocketPoolTest
                                       session_->http_auth_cache(),
                                       session_->http_auth_handler_factory(),
                                       session_->spdy_session_pool(),
-                                      true)),
+                                      true,
+                                      NULL)),
         http_proxy_histograms_("MockHttpProxy"),
         http_proxy_socket_pool_(kMaxSockets,
                                 kMaxSocketsPerGroup,
                                 &http_proxy_histograms_,
                                 &host_resolver_,
                                 &transport_socket_pool_,
+                                NULL,
                                 NULL,
                                 NULL),
         enable_ssl_connect_job_waiting_(false) {
@@ -1273,7 +1279,7 @@ TEST_P(SSLClientSocketPoolTest, IPPooling) {
   };
 
   host_resolver_.set_synchronous_mode(true);
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_hosts); i++) {
+  for (size_t i = 0; i < arraysize(test_hosts); i++) {
     host_resolver_.rules()->AddIPLiteralRule(
         test_hosts[i].name, test_hosts[i].iplist, std::string());
 
@@ -1333,7 +1339,7 @@ void SSLClientSocketPoolTest::TestIPPoolingDisabled(
 
   TestCompletionCallback callback;
   int rv;
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_hosts); i++) {
+  for (size_t i = 0; i < arraysize(test_hosts); i++) {
     host_resolver_.rules()->AddIPLiteralRule(
         test_hosts[i].name, test_hosts[i].iplist, std::string());
 

@@ -22,6 +22,7 @@ class WebFrame;
 }
 
 namespace content {
+class RenderFrame;
 class RenderView;
 }
 
@@ -34,8 +35,10 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
   ScriptContext(const v8::Handle<v8::Context>& context,
                 blink::WebFrame* frame,
                 const Extension* extension,
-                Feature::Context context_type);
-  virtual ~ScriptContext();
+                Feature::Context context_type,
+                const Extension* effective_extension,
+                Feature::Context effective_context_type);
+  ~ScriptContext() override;
 
   // Clears the WebFrame for this contexts and invalidates the associated
   // ModuleSystem.
@@ -51,9 +54,17 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
 
   const Extension* extension() const { return extension_.get(); }
 
+  const Extension* effective_extension() const {
+    return effective_extension_.get();
+  }
+
   blink::WebFrame* web_frame() const { return web_frame_; }
 
   Feature::Context context_type() const { return context_type_; }
+
+  Feature::Context effective_context_type() const {
+    return effective_context_type_;
+  }
 
   void set_module_system(scoped_ptr<ModuleSystem> module_system) {
     module_system_ = module_system.Pass();
@@ -73,6 +84,10 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
   // context is in the process of being destroyed.
   content::RenderView* GetRenderView() const;
 
+  // Returns the RenderFrame associated with this context. Can return NULL if
+  // the context is in the process of being destroyed.
+  content::RenderFrame* GetRenderFrame() const;
+
   // Runs |function| with appropriate scopes. Doesn't catch exceptions, callers
   // must do that if they want.
   //
@@ -91,6 +106,9 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
 
   // Returns a string description of the type of context this is.
   std::string GetContextTypeDescription();
+
+  // Returns a string description of the effective type of context this is.
+  std::string GetEffectiveContextTypeDescription();
 
   v8::Isolate* isolate() const { return isolate_; }
 
@@ -115,21 +133,21 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
                                       bool match_about_blank);
 
   // RequestSender::Source implementation.
-  virtual ScriptContext* GetContext() OVERRIDE;
-  virtual void OnResponseReceived(const std::string& name,
-                                  int request_id,
-                                  bool success,
-                                  const base::ListValue& response,
-                                  const std::string& error) OVERRIDE;
+  ScriptContext* GetContext() override;
+  void OnResponseReceived(const std::string& name,
+                          int request_id,
+                          bool success,
+                          const base::ListValue& response,
+                          const std::string& error) override;
 
   // gin::Runner overrides.
-  virtual void Run(const std::string& source,
-                   const std::string& resource_name) OVERRIDE;
-  virtual v8::Handle<v8::Value> Call(v8::Handle<v8::Function> function,
-                                     v8::Handle<v8::Value> receiver,
-                                     int argc,
-                                     v8::Handle<v8::Value> argv[]) OVERRIDE;
-  virtual gin::ContextHolder* GetContextHolder() OVERRIDE;
+  void Run(const std::string& source,
+           const std::string& resource_name) override;
+  v8::Handle<v8::Value> Call(v8::Handle<v8::Function> function,
+                             v8::Handle<v8::Value> receiver,
+                             int argc,
+                             v8::Handle<v8::Value> argv[]) override;
+  gin::ContextHolder* GetContextHolder() override;
 
  protected:
   // The v8 context the bindings are accessible to.
@@ -146,6 +164,14 @@ class ScriptContext : public RequestSender::Source, public gin::Runner {
 
   // The type of context.
   Feature::Context context_type_;
+
+  // The effective extension associated with this context, or NULL if there is
+  // none. This is different from the above extension if this context is in an
+  // about:blank iframe for example.
+  scoped_refptr<const Extension> effective_extension_;
+
+  // The type of context.
+  Feature::Context effective_context_type_;
 
   // Owns and structures the JS that is injected to set up extension bindings.
   scoped_ptr<ModuleSystem> module_system_;

@@ -17,10 +17,7 @@ namespace test {
 
 class DragDropTrackerTest : public test::AshTestBase {
  public:
-  virtual void SetUp() OVERRIDE {
-    AshTestBase::SetUp();
-    UpdateDisplay("200x200,300x300");
-  }
+  void SetUp() override { AshTestBase::SetUp(); }
 
   aura::Window* CreateTestWindow(const gfx::Rect& bounds) {
     static int window_id = 0;
@@ -51,15 +48,11 @@ class DragDropTrackerTest : public test::AshTestBase {
   }
 };
 
-// TODO(mazda): Remove this once ash/wm/coordinate_conversion.h supports
-// non-X11 platforms.
-#if defined(USE_X11)
-#define MAYBE_GetTarget GetTarget
-#else
-#define MAYBE_GetTarget DISABLED_GetTarget
-#endif
+TEST_F(DragDropTrackerTest, GetTarget) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-TEST_F(DragDropTrackerTest, MAYBE_GetTarget) {
+  UpdateDisplay("200x200,300x300");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   EXPECT_EQ(2U, root_windows.size());
 
@@ -118,15 +111,11 @@ TEST_F(DragDropTrackerTest, MAYBE_GetTarget) {
   EXPECT_NE(window1.get(), GetTarget(gfx::Point(50, 50)));
 }
 
-// TODO(mazda): Remove this once ash/wm/coordinate_conversion.h supports
-// non-X11 platforms.
-#if defined(USE_X11)
-#define MAYBE_ConvertEvent ConvertEvent
-#else
-#define MAYBE_ConvertEvent DISABLED_ConvertEvent
-#endif
+TEST_F(DragDropTrackerTest, ConvertEvent) {
+  if (!SupportsMultipleDisplays())
+    return;
 
-TEST_F(DragDropTrackerTest, MAYBE_ConvertEvent) {
+  UpdateDisplay("200x200,300x300");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   EXPECT_EQ(2U, root_windows.size());
 

@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "apps/app_lifetime_monitor.h"
-#include "apps/app_window_registry.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 
 namespace extensions {
 class Extension;
@@ -42,16 +42,14 @@ class AppRestoreService : public KeyedService,
 
  private:
   // AppLifetimeMonitor::Observer.
-  virtual void OnAppStart(Profile* profile, const std::string& app_id) OVERRIDE;
-  virtual void OnAppActivated(Profile* profile,
-                              const std::string& app_id) OVERRIDE;
-  virtual void OnAppDeactivated(Profile* profile,
-                                const std::string& app_id) OVERRIDE;
-  virtual void OnAppStop(Profile* profile, const std::string& app_id) OVERRIDE;
-  virtual void OnChromeTerminating() OVERRIDE;
+  void OnAppStart(Profile* profile, const std::string& app_id) override;
+  void OnAppActivated(Profile* profile, const std::string& app_id) override;
+  void OnAppDeactivated(Profile* profile, const std::string& app_id) override;
+  void OnAppStop(Profile* profile, const std::string& app_id) override;
+  void OnChromeTerminating() override;
 
   // KeyedService.
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   void RecordAppStart(const std::string& extension_id);
   void RecordAppStop(const std::string& extension_id);

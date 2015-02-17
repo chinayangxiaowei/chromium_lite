@@ -6,11 +6,11 @@
 
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/content_settings/permission_request_id.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/permission_request_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +21,7 @@
 class PermissionQueueControllerTests : public ChromeRenderViewHostTestHarness {
  protected:
   PermissionQueueControllerTests() {}
-  virtual ~PermissionQueueControllerTests() {}
+  ~PermissionQueueControllerTests() override {}
 
   PermissionRequestID RequestID(int bridge_id) {
     return PermissionRequestID(
@@ -33,7 +33,7 @@ class PermissionQueueControllerTests : public ChromeRenderViewHostTestHarness {
 
  private:
   // ChromeRenderViewHostTestHarness:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     InfoBarService::CreateForWebContents(web_contents());
   }
@@ -47,7 +47,7 @@ class PermissionQueueControllerTests : public ChromeRenderViewHostTestHarness {
 class ObservationCountingQueueController : public PermissionQueueController {
  public:
   explicit ObservationCountingQueueController(Profile* profile);
-  virtual ~ObservationCountingQueueController();
+  ~ObservationCountingQueueController() override;
 
   int call_count() const { return call_count_; }
 
@@ -55,9 +55,9 @@ class ObservationCountingQueueController : public PermissionQueueController {
   int call_count_;
 
   // PermissionQueueController:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   DISALLOW_COPY_AND_ASSIGN(ObservationCountingQueueController);
 };

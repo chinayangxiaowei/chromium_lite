@@ -11,7 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/prefs/pref_member.h"
 #include "chrome/browser/net/dns_probe_service.h"
-#include "chrome/common/net/net_error_info.h"
+#include "components/error_page/common/net_error_info.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -33,7 +33,7 @@ class NetErrorTabHelper
   typedef base::Callback<void(chrome_common_net::DnsProbeStatus)>
       DnsProbeStatusSnoopCallback;
 
-  virtual ~NetErrorTabHelper();
+  ~NetErrorTabHelper() override;
 
   static void set_state_for_testing(TestingState testing_state);
 
@@ -46,26 +46,25 @@ class NetErrorTabHelper
   }
 
   // content::WebContentsObserver implementation.
-  virtual void DidStartNavigationToPendingEntry(
+  void DidStartNavigationToPendingEntry(
       const GURL& url,
-      content::NavigationController::ReloadType reload_type) OVERRIDE;
+      content::NavigationController::ReloadType reload_type) override;
 
-  virtual void DidStartProvisionalLoadForFrame(
+  void DidStartProvisionalLoadForFrame(
       content::RenderFrameHost* render_frame_host,
       const GURL& validated_url,
       bool is_error_page,
-      bool is_iframe_srcdoc) OVERRIDE;
+      bool is_iframe_srcdoc) override;
 
-  virtual void DidCommitProvisionalLoadForFrame(
+  void DidCommitProvisionalLoadForFrame(
       content::RenderFrameHost* render_frame_host,
       const GURL& url,
-      content::PageTransition transition_type) OVERRIDE;
+      ui::PageTransition transition_type) override;
 
-  virtual void DidFailProvisionalLoad(
-      content::RenderFrameHost* render_frame_host,
-      const GURL& validated_url,
-      int error_code,
-      const base::string16& error_description) OVERRIDE;
+  void DidFailProvisionalLoad(content::RenderFrameHost* render_frame_host,
+                              const GURL& validated_url,
+                              int error_code,
+                              const base::string16& error_description) override;
 
  protected:
   // |contents| is the WebContents of the tab this NetErrorTabHelper is
@@ -86,8 +85,6 @@ class NetErrorTabHelper
 
   void InitializePref(content::WebContents* contents);
   bool ProbesAllowed() const;
-
-  base::WeakPtrFactory<NetErrorTabHelper> weak_factory_;
 
   // True if the last provisional load that started was for an error page.
   bool is_error_page_;
@@ -111,6 +108,8 @@ class NetErrorTabHelper
   // "Use a web service to resolve navigation errors" preference is required
   // to allow probes.
   BooleanPrefMember resolve_errors_with_web_service_;
+
+  base::WeakPtrFactory<NetErrorTabHelper> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(NetErrorTabHelper);
 };

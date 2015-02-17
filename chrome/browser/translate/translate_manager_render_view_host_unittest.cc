@@ -28,6 +28,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/infobars/core/infobar.h"
+#include "components/translate/content/browser/content_translate_driver.h"
 #include "components/translate/content/common/translate_messages.h"
 #include "components/translate/core/browser/translate_accept_languages.h"
 #include "components/translate/core/browser/translate_download_manager.h"
@@ -62,9 +63,9 @@ class NavEntryCommittedObserver : public content::NotificationObserver {
                        &web_contents->GetController()));
   }
 
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     DCHECK(type == content::NOTIFICATION_NAV_ENTRY_COMMITTED);
     details_ =
         *(content::Details<content::LoadCommittedDetails>(details).ptr());
@@ -259,7 +260,8 @@ class TranslateManagerRenderViewHostTest
     InfoBarService::CreateForWebContents(web_contents());
     ChromeTranslateClient::CreateForWebContents(web_contents());
     ChromeTranslateClient::FromWebContents(web_contents())
-        ->set_translate_max_reload_attempts(0);
+        ->translate_driver()
+        .set_translate_max_reload_attempts(0);
 
     notification_registrar_.Add(
         this,
@@ -367,11 +369,11 @@ class MockTranslateBubbleFactory : public TranslateBubbleFactory {
  public:
   MockTranslateBubbleFactory() {}
 
-  virtual void ShowImplementation(
+  void ShowImplementation(
       BrowserWindow* window,
       content::WebContents* web_contents,
       translate::TranslateStep step,
-      translate::TranslateErrors::Type error_type) OVERRIDE {
+      translate::TranslateErrors::Type error_type) override {
     if (model_) {
       model_->SetViewState(
           TranslateBubbleModelImpl::TranslateStepToViewState(step));
@@ -815,7 +817,8 @@ TEST_F(TranslateManagerRenderViewHostTest, Reload) {
   // If we set reload attempts to a high value, we will not see the infobar
   // immediately.
   ChromeTranslateClient::FromWebContents(web_contents())
-      ->set_translate_max_reload_attempts(100);
+      ->translate_driver()
+      .set_translate_max_reload_attempts(100);
   ReloadAndWait(true);
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 }
@@ -836,9 +839,9 @@ TEST_F(TranslateManagerRenderViewHostTest, ReloadFromLocationBar) {
   // equivalent of typing the URL again in the location bar.
   NavEntryCommittedObserver nav_observer(web_contents());
   web_contents()->GetController().LoadURL(
-      url, content::Referrer(), content::PAGE_TRANSITION_TYPED, std::string());
-  rvh_tester()->SendNavigateWithTransition(
-      0, url, content::PAGE_TRANSITION_TYPED);
+      url, content::Referrer(), ui::PAGE_TRANSITION_TYPED, std::string());
+  content::RenderFrameHostTester::For(web_contents()->GetMainFrame())
+      ->SendNavigateWithTransition(0, url, ui::PAGE_TRANSITION_TYPED);
 
   // Test that we are really getting a same page navigation, the test would be
   // useless if it was not the case.
@@ -891,12 +894,12 @@ TEST_F(TranslateManagerRenderViewHostTest, CloseInfoBarInSubframeNavigation) {
 
   // Simulate a sub-frame auto-navigating.
   subframe_tester->SendNavigateWithTransition(
-      1, GURL("http://pub.com"), content::PAGE_TRANSITION_AUTO_SUBFRAME);
+      1, GURL("http://pub.com"), ui::PAGE_TRANSITION_AUTO_SUBFRAME);
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 
   // Simulate the user navigating in a sub-frame.
   subframe_tester->SendNavigateWithTransition(
-      2, GURL("http://pub.com"), content::PAGE_TRANSITION_MANUAL_SUBFRAME);
+      2, GURL("http://pub.com"), ui::PAGE_TRANSITION_MANUAL_SUBFRAME);
   EXPECT_TRUE(GetTranslateInfoBar() == NULL);
 
   // Navigate out of page, a new infobar should show.
@@ -1445,8 +1448,6 @@ TEST_F(TranslateManagerRenderViewHostTest, BeforeTranslateExtraButtons) {
   translate::TranslateInfoBarDelegate* infobar;
   TestingProfile* test_profile =
       static_cast<TestingProfile*>(web_contents()->GetBrowserContext());
-  static_cast<extensions::TestExtensionSystem*>(
-      extensions::ExtensionSystem::Get(test_profile))->CreateProcessManager();
   test_profile->ForceIncognito(true);
   for (int i = 0; i < 8; ++i) {
     SCOPED_TRACE(::testing::Message() << "Iteration " << i << " incognito mode="

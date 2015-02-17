@@ -32,15 +32,12 @@ class ExperienceSamplingEvent;
 }
 #endif
 
+class SSLErrorClassification;
+
 // This class is responsible for showing/hiding the interstitial page that is
 // shown when a certificate error happens.
 // It deletes itself when the interstitial page is closed.
-//
-// This class should only be used on the UI thread because its implementation
-// uses captive_portal::CaptivePortalService which can only be accessed on the
-// UI thread.
-class SSLBlockingPage : public content::InterstitialPageDelegate,
-                        public content::NotificationObserver {
+class SSLBlockingPage : public content::InterstitialPageDelegate {
  public:
   // These represent the commands sent from the interstitial JavaScript. They
   // are defined in chrome/browser/resources/ssl/ssl_errors_common.js.
@@ -60,7 +57,7 @@ class SSLBlockingPage : public content::InterstitialPageDelegate,
     EXPIRED_BUT_PREVIOUSLY_ALLOWED = 1 << 2
   };
 
-  virtual ~SSLBlockingPage();
+  ~SSLBlockingPage() override;
 
   // Create an interstitial and show it.
   void Show();
@@ -85,13 +82,12 @@ class SSLBlockingPage : public content::InterstitialPageDelegate,
 
  protected:
   // InterstitialPageDelegate implementation.
-  virtual std::string GetHTMLContents() OVERRIDE;
-  virtual void CommandReceived(const std::string& command) OVERRIDE;
-  virtual void OverrideEntry(content::NavigationEntry* entry) OVERRIDE;
-  virtual void OverrideRendererPrefs(
-      content::RendererPreferences* prefs) OVERRIDE;
-  virtual void OnProceed() OVERRIDE;
-  virtual void OnDontProceed() OVERRIDE;
+  std::string GetHTMLContents() override;
+  void CommandReceived(const std::string& command) override;
+  void OverrideEntry(content::NavigationEntry* entry) override;
+  void OverrideRendererPrefs(content::RendererPreferences* prefs) override;
+  void OnProceed() override;
+  void OnDontProceed() override;
 
  private:
   void NotifyDenyCertificate();
@@ -100,21 +96,21 @@ class SSLBlockingPage : public content::InterstitialPageDelegate,
   // Used to query the HistoryService to see if the URL is in history. For UMA.
   void OnGotHistoryCount(bool success, int num_visits, base::Time first_visit);
 
-  // content::NotificationObserver:
-  virtual void Observe(
-      int type,
-      const content::NotificationSource& source,
-      const content::NotificationDetails& details) OVERRIDE;
-
   base::Callback<void(bool)> callback_;
 
   content::WebContents* web_contents_;
   const int cert_error_;
   const net::SSLInfo ssl_info_;
   const GURL request_url_;
-  // Could the user successfully override the error?
-  // overridable_ will be set to false if strict_enforcement_ is true.
+  // There are two ways for the user to override an interstitial:
+  //
+  // overridable_) By clicking on "Advanced" and then "Proceed".
+  //   - This corresponds to "the user can override using the UI".
+  // danger_overridable_) By typing the word "danger".
+  //   - This is an undocumented workaround.
+  //   - This can be set to "false" dynamically to prevent the behaviour.
   const bool overridable_;
+  bool danger_overridable_;
   // Has the site requested strict enforcement of certificate errors?
   const bool strict_enforcement_;
   content::InterstitialPage* interstitial_page_;  // Owns us.
@@ -124,20 +120,10 @@ class SSLBlockingPage : public content::InterstitialPageDelegate,
   int num_visits_;
   // Used for getting num_visits_.
   base::CancelableTaskTracker request_tracker_;
-  // Is captive portal detection enabled?
-  bool captive_portal_detection_enabled_;
-  // Did the probe complete before the interstitial was closed?
-  bool captive_portal_probe_completed_;
-  // Did the captive portal probe receive an error or get a non-HTTP response?
-  bool captive_portal_no_response_;
-  // Was a captive portal detected?
-  bool captive_portal_detected_;
   // Did the user previously allow a bad certificate but the decision has now
   // expired?
   const bool expired_but_previously_allowed_;
-
-  // For the FieldTrial: this contains the name of the condition.
-  std::string trial_condition_;
+  scoped_ptr<SSLErrorClassification> ssl_error_classification_;
 
 #if defined(ENABLE_EXTENSIONS)
   // For Chrome Experience Sampling Platform: this maintains event state.

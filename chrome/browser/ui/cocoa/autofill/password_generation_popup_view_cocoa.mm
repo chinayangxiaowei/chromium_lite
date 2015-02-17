@@ -13,11 +13,11 @@
 #include "chrome/browser/ui/autofill/popup_constants.h"
 #include "chrome/browser/ui/chrome_style.h"
 #include "chrome/browser/ui/cocoa/autofill/password_generation_popup_view_bridge.h"
-#import "chrome/browser/ui/cocoa/hyperlink_text_view.h"
 #import "chrome/browser/ui/cocoa/l10n_util.h"
 #include "components/autofill/core/browser/popup_item_ids.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/skia_utils_mac.h"
+#import "ui/base/cocoa/controls/hyperlink_text_view.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/image/image.h"
@@ -164,11 +164,12 @@ NSColor* HelpLinkColor() {
       autofill::kPopupBorderThickness;
 
   width = std::max(width, (CGFloat)controller_->GetMinimumWidth());
+  CGFloat contentWidth = width - (2 * controller_->kHorizontalPadding);
 
   CGFloat height =
       autofill::kPopupBorderThickness +
       controller_->kHelpVerticalPadding +
-      [self helpSizeForPopupWidth:width].height +
+      [self helpSizeForPopupWidth:contentWidth].height +
       controller_->kHelpVerticalPadding +
       autofill::kPopupBorderThickness;
 

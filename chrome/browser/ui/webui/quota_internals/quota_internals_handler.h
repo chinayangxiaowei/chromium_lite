@@ -11,7 +11,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "content/public/browser/web_ui_message_handler.h"
-#include "webkit/common/quota/quota_types.h"
+#include "storage/common/quota/quota_types.h"
 
 namespace base {
 class Value;
@@ -31,8 +31,8 @@ typedef std::map<std::string, std::string> Statistics;
 class QuotaInternalsHandler : public content::WebUIMessageHandler {
  public:
   QuotaInternalsHandler();
-  virtual ~QuotaInternalsHandler();
-  virtual void RegisterMessages() OVERRIDE;
+  ~QuotaInternalsHandler() override;
+  void RegisterMessages() override;
 
   // Called by QuotaInternalsProxy to report information to WebUI page.
   void ReportAvailableSpace(int64 available_space);
@@ -49,6 +49,6 @@ class QuotaInternalsHandler : public content::WebUIMessageHandler {
 
   DISALLOW_COPY_AND_ASSIGN(QuotaInternalsHandler);
 };
-}  // quota_internals
+}  // namespace quota_internals
 
 #endif  // CHROME_BROWSER_UI_WEBUI_QUOTA_INTERNALS_QUOTA_INTERNALS_HANDLER_H_

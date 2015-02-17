@@ -20,7 +20,6 @@
 #include "net/quic/crypto/quic_decrypter.h"
 #include "net/quic/crypto/quic_encrypter.h"
 #include "net/quic/crypto/quic_server_info.h"
-#include "net/quic/quic_default_packet_writer.h"
 #include "net/quic/test_tools/crypto_test_utils.h"
 #include "net/quic/test_tools/quic_client_session_peer.h"
 #include "net/quic/test_tools/quic_test_utils.h"
@@ -39,58 +38,24 @@ namespace {
 const char kServerHostname[] = "www.example.org";
 const uint16 kServerPort = 80;
 
-class TestPacketWriter : public QuicDefaultPacketWriter {
- public:
-  TestPacketWriter(QuicVersion version) : version_(version) {}
-
-  // QuicPacketWriter
-  virtual WriteResult WritePacket(
-      const char* buffer, size_t buf_len,
-      const IPAddressNumber& self_address,
-      const IPEndPoint& peer_address) OVERRIDE {
-    SimpleQuicFramer framer(SupportedVersions(version_));
-    QuicEncryptedPacket packet(buffer, buf_len);
-    EXPECT_TRUE(framer.ProcessPacket(packet));
-    header_ = framer.header();
-    return WriteResult(WRITE_STATUS_OK, packet.length());
-  }
-
-  virtual bool IsWriteBlockedDataBuffered() const OVERRIDE {
-    // Chrome sockets' Write() methods buffer the data until the Write is
-    // permitted.
-    return true;
-  }
-
-  // Returns the header from the last packet written.
-  const QuicPacketHeader& header() { return header_; }
-
- private:
-  QuicVersion version_;
-  QuicPacketHeader header_;
-};
-
 class QuicClientSessionTest : public ::testing::TestWithParam<QuicVersion> {
  protected:
   QuicClientSessionTest()
-      : writer_(new TestPacketWriter(GetParam())),
-        connection_(
+      : connection_(
             new PacketSavingConnection(false, SupportedVersions(GetParam()))),
-        session_(connection_, GetSocket().Pass(), writer_.Pass(), NULL, NULL,
+        session_(connection_, GetSocket().Pass(), nullptr,
                  &transport_security_state_,
-                 make_scoped_ptr((QuicServerInfo*)NULL),
-                 QuicServerId(kServerHostname, kServerPort, false,
-                              PRIVACY_MODE_DISABLED),
-                 DefaultQuicConfig(), &crypto_config_,
+                 make_scoped_ptr((QuicServerInfo*)nullptr), DefaultQuicConfig(),
+                 /*is_secure=*/false,
                  base::MessageLoop::current()->message_loop_proxy().get(),
                  &net_log_) {
-    session_.InitializeSession();
-    session_.config()->SetDefaults();
-    crypto_config_.SetDefaults();
+    session_.InitializeSession(QuicServerId(kServerHostname, kServerPort,
+                                            /*is_secure=*/false,
+                                            PRIVACY_MODE_DISABLED),
+        &crypto_config_, nullptr);
   }
 
-  virtual void TearDown() OVERRIDE {
-    session_.CloseSessionOnError(ERR_ABORTED);
-  }
+  void TearDown() override { session_.CloseSessionOnError(ERR_ABORTED); }
 
   scoped_ptr<DatagramClientSocket> GetSocket() {
     socket_factory_.AddSocketDataProvider(&socket_data_);
@@ -107,7 +72,6 @@ class QuicClientSessionTest : public ::testing::TestWithParam<QuicVersion> {
     ASSERT_EQ(OK, callback_.WaitForResult());
   }
 
-  scoped_ptr<QuicDefaultPacketWriter> writer_;
   PacketSavingConnection* connection_;
   CapturingNetLog net_log_;
   MockClientSocketFactory socket_factory_;
@@ -165,7 +129,7 @@ TEST_P(QuicClientSessionTest, MaxNumStreamsViaRequest) {
   session_.CloseStream(streams[0]->id());
   ASSERT_TRUE(callback.have_result());
   EXPECT_EQ(OK, callback.WaitForResult());
-  EXPECT_TRUE(stream != NULL);
+  EXPECT_TRUE(stream != nullptr);
 }
 
 TEST_P(QuicClientSessionTest, GoAwayReceived) {
@@ -174,7 +138,7 @@ TEST_P(QuicClientSessionTest, GoAwayReceived) {
   // After receiving a GoAway, I should no longer be able to create outgoing
   // streams.
   session_.OnGoAway(QuicGoAwayFrame(QUIC_PEER_GOING_AWAY, 1u, "Going away."));
-  EXPECT_EQ(NULL, session_.CreateOutgoingDataStream());
+  EXPECT_EQ(nullptr, session_.CreateOutgoingDataStream());
 }
 
 TEST_P(QuicClientSessionTest, CanPool) {
@@ -186,7 +150,7 @@ TEST_P(QuicClientSessionTest, CanPool) {
   ProofVerifyDetailsChromium details;
   details.cert_verify_result.verified_cert =
       ImportCertFromFile(GetTestCertsDirectory(), "spdy_pooling.pem");
-  ASSERT_TRUE(details.cert_verify_result.verified_cert);
+  ASSERT_TRUE(details.cert_verify_result.verified_cert.get());
 
   session_.OnProofVerifyDetailsAvailable(details);
   CompleteCryptoHandshake();
@@ -207,7 +171,7 @@ TEST_P(QuicClientSessionTest, ConnectionPooledWithTlsChannelId) {
   ProofVerifyDetailsChromium details;
   details.cert_verify_result.verified_cert =
       ImportCertFromFile(GetTestCertsDirectory(), "spdy_pooling.pem");
-  ASSERT_TRUE(details.cert_verify_result.verified_cert);
+  ASSERT_TRUE(details.cert_verify_result.verified_cert.get());
 
   session_.OnProofVerifyDetailsAvailable(details);
   CompleteCryptoHandshake();
@@ -233,7 +197,7 @@ TEST_P(QuicClientSessionTest, ConnectionNotPooledWithDifferentPin) {
   details.cert_verify_result.public_key_hashes.push_back(
       GetTestHashValue(bad_pin));
 
-  ASSERT_TRUE(details.cert_verify_result.verified_cert);
+  ASSERT_TRUE(details.cert_verify_result.verified_cert.get());
 
   session_.OnProofVerifyDetailsAvailable(details);
   CompleteCryptoHandshake();
@@ -255,7 +219,7 @@ TEST_P(QuicClientSessionTest, ConnectionPooledWithMatchingPin) {
   details.cert_verify_result.public_key_hashes.push_back(
       GetTestHashValue(primary_pin));
 
-  ASSERT_TRUE(details.cert_verify_result.verified_cert);
+  ASSERT_TRUE(details.cert_verify_result.verified_cert.get());
 
   session_.OnProofVerifyDetailsAvailable(details);
   CompleteCryptoHandshake();

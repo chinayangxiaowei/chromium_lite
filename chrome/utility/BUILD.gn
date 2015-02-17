@@ -15,6 +15,7 @@ static_library("utility") {
   sources = rebase_path(gypi_values.chrome_utility_sources, ".", "..")
   defines = []
 
+  public_deps = []
   deps = [
     "//base",
     "//components/strings",
@@ -34,13 +35,14 @@ static_library("utility") {
                            ".", "..")
   }
 
-  if (enable_extensions == 1) {
+  if (enable_extensions) {
     deps += [
       "//chrome/common/extensions/api",
+      "//extensions/utility",
       #"//third_party/libexif",  TODO(GYP)
     ]
 
-    forward_dependent_configs_from = [
+    public_deps += [
       "//chrome/common/extensions/api",
     ]
 
@@ -63,8 +65,11 @@ static_library("utility") {
     }
   }
 
-  if (!use_openssl) {
-    sources -= [ "importer/nss_decryptor.cc" ]
+  if (use_openssl) {
+    if (!is_win && !is_mac && !is_android) {
+      sources -= [ "importer/nss_decryptor.cc" ]
+    }
+  } else {  # !use_openssl
     if (!is_win && !is_mac) {
       sources += [
         "importer/nss_decryptor_system_nss.cc",
@@ -77,7 +82,7 @@ static_library("utility") {
     }
   }
 
-  if (printing_mode != 1) {
+  if (!enable_print_preview) {
     sources -= [
       "printing_handler.cc",
       "printing_handler.h",

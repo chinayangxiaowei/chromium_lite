@@ -4,8 +4,14 @@
 
 #include "sync/internal_api/public/attachments/attachment_uploader_impl.h"
 
+#include "base/base64.h"
 #include "base/bind.h"
+#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/stringprintf.h"
+#include "base/sys_byteorder.h"
 #include "base/threading/non_thread_safe.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
@@ -14,6 +20,7 @@
 #include "net/url_request/url_fetcher_delegate.h"
 #include "sync/api/attachments/attachment.h"
 #include "sync/protocol/sync.pb.h"
+#include "third_party/leveldatabase/src/util/crc32c.h"
 
 namespace {
 
@@ -31,8 +38,12 @@ class AttachmentUploaderImpl::UploadState : public net::URLFetcherDelegate,
  public:
   // Construct an UploadState.
   //
-  // |owner| is a pointer to the object that will own (and must outlive!) this
-  // |UploadState.
+  // UploadState encapsulates the state associated with a single upload.  When
+  // the upload completes, the UploadState object becomes "stopped".
+  //
+  // |owner| is a pointer to the object that owns this UploadState.  Upon
+  // completion this object will PostTask to owner's OnUploadStateStopped
+  // method.
   UploadState(
       const GURL& upload_url,
       const scoped_refptr<net::URLRequestContextGetter>&
@@ -42,35 +53,43 @@ class AttachmentUploaderImpl::UploadState : public net::URLFetcherDelegate,
       const std::string& account_id,
       const OAuth2TokenService::ScopeSet& scopes,
       OAuth2TokenServiceRequest::TokenServiceProvider* token_service_provider,
-      AttachmentUploaderImpl* owner);
+      const base::WeakPtr<AttachmentUploaderImpl>& owner);
 
-  virtual ~UploadState();
+  ~UploadState() override;
+
+  // Returns true if this object is stopped.  Once stopped, this object is
+  // effectively dead and can be destroyed.
+  bool IsStopped() const;
 
   // Add |user_callback| to the list of callbacks to be invoked when this upload
   // completed.
+  //
+  // It is an error to call |AddUserCallback| on a stopped UploadState (see
+  // |IsStopped|).
   void AddUserCallback(const UploadCallback& user_callback);
 
   // Return the Attachment this object is uploading.
   const Attachment& GetAttachment();
 
   // URLFetcher implementation.
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE;
+  void OnURLFetchComplete(const net::URLFetcher* source) override;
 
   // OAuth2TokenService::Consumer.
-  virtual void OnGetTokenSuccess(const OAuth2TokenService::Request* request,
-                                 const std::string& access_token,
-                                 const base::Time& expiration_time) OVERRIDE;
-  virtual void OnGetTokenFailure(const OAuth2TokenService::Request* request,
-                                 const GoogleServiceAuthError& error) OVERRIDE;
+  void OnGetTokenSuccess(const OAuth2TokenService::Request* request,
+                         const std::string& access_token,
+                         const base::Time& expiration_time) override;
+  void OnGetTokenFailure(const OAuth2TokenService::Request* request,
+                         const GoogleServiceAuthError& error) override;
 
  private:
   typedef std::vector<UploadCallback> UploadCallbackList;
 
   void GetToken();
 
-  void ReportResult(const UploadResult& result,
-                    const AttachmentId& attachment_id);
+  void StopAndReportResult(const UploadResult& result,
+                           const AttachmentId& attachment_id);
 
+  bool is_stopped_;
   GURL upload_url_;
   const scoped_refptr<net::URLRequestContextGetter>&
       url_request_context_getter_;
@@ -82,7 +101,7 @@ class AttachmentUploaderImpl::UploadState : public net::URLFetcherDelegate,
   std::string access_token_;
   OAuth2TokenServiceRequest::TokenServiceProvider* token_service_provider_;
   // Pointer to the AttachmentUploaderImpl that owns this object.
-  AttachmentUploaderImpl* owner_;
+  base::WeakPtr<AttachmentUploaderImpl> owner_;
   scoped_ptr<OAuth2TokenServiceRequest> access_token_request_;
 
   DISALLOW_COPY_AND_ASSIGN(UploadState);
@@ -97,8 +116,9 @@ AttachmentUploaderImpl::UploadState::UploadState(
     const std::string& account_id,
     const OAuth2TokenService::ScopeSet& scopes,
     OAuth2TokenServiceRequest::TokenServiceProvider* token_service_provider,
-    AttachmentUploaderImpl* owner)
+    const base::WeakPtr<AttachmentUploaderImpl>& owner)
     : OAuth2TokenService::Consumer("attachment-uploader-impl"),
+      is_stopped_(false),
       upload_url_(upload_url),
       url_request_context_getter_(url_request_context_getter),
       attachment_(attachment),
@@ -108,20 +128,25 @@ AttachmentUploaderImpl::UploadState::UploadState(
       token_service_provider_(token_service_provider),
       owner_(owner) {
   DCHECK(upload_url_.is_valid());
-  DCHECK(url_request_context_getter_);
+  DCHECK(url_request_context_getter_.get());
   DCHECK(!account_id_.empty());
   DCHECK(!scopes_.empty());
   DCHECK(token_service_provider_);
-  DCHECK(owner_);
   GetToken();
 }
 
 AttachmentUploaderImpl::UploadState::~UploadState() {
 }
 
+bool AttachmentUploaderImpl::UploadState::IsStopped() const {
+  DCHECK(CalledOnValidThread());
+  return is_stopped_;
+}
+
 void AttachmentUploaderImpl::UploadState::AddUserCallback(
     const UploadCallback& user_callback) {
   DCHECK(CalledOnValidThread());
+  DCHECK(!is_stopped_);
   user_callbacks_.push_back(user_callback);
 }
 
@@ -133,33 +158,45 @@ const Attachment& AttachmentUploaderImpl::UploadState::GetAttachment() {
 void AttachmentUploaderImpl::UploadState::OnURLFetchComplete(
     const net::URLFetcher* source) {
   DCHECK(CalledOnValidThread());
-  UploadResult result = UPLOAD_UNSPECIFIED_ERROR;
+  if (is_stopped_) {
+    return;
+  }
+
+  UploadResult result = UPLOAD_TRANSIENT_ERROR;
   AttachmentId attachment_id = attachment_.GetId();
-  if (source->GetResponseCode() == net::HTTP_OK) {
+  const int response_code = source->GetResponseCode();
+  if (response_code == net::HTTP_OK) {
     result = UPLOAD_SUCCESS;
-  } else if (source->GetResponseCode() == net::HTTP_UNAUTHORIZED) {
-    // TODO(maniscalco): One possibility is that we received a 401 because our
-    // access token has expired.  We should probably fetch a new access token
-    // and retry this upload before giving up and reporting failure to our
-    // caller (bug 380437).
+  } else if (response_code == net::HTTP_UNAUTHORIZED) {
+    // Server tells us we've got a bad token so invalidate it.
     OAuth2TokenServiceRequest::InvalidateToken(
         token_service_provider_, account_id_, scopes_, access_token_);
-  } else {
-    // TODO(maniscalco): Once the protocol is better defined, deal with the
-    // various HTTP response codes we may encounter.
+    // Fail the request, but indicate that it may be successful if retried.
+    result = UPLOAD_TRANSIENT_ERROR;
+  } else if (response_code == net::HTTP_FORBIDDEN) {
+    // User is not allowed to use attachments.  Retrying won't help.
+    result = UPLOAD_UNSPECIFIED_ERROR;
+  } else if (response_code == net::URLFetcher::RESPONSE_CODE_INVALID) {
+    result = UPLOAD_TRANSIENT_ERROR;
   }
-  ReportResult(result, attachment_id);
+  StopAndReportResult(result, attachment_id);
 }
 
 void AttachmentUploaderImpl::UploadState::OnGetTokenSuccess(
     const OAuth2TokenService::Request* request,
     const std::string& access_token,
     const base::Time& expiration_time) {
+  DCHECK(CalledOnValidThread());
+  if (is_stopped_) {
+    return;
+  }
+
   DCHECK_EQ(access_token_request_.get(), request);
   access_token_request_.reset();
   access_token_ = access_token;
   fetcher_.reset(
       net::URLFetcher::Create(upload_url_, net::URLFetcher::POST, this));
+  fetcher_->SetAutomaticallyRetryOn5xx(false);
   fetcher_->SetRequestContext(url_request_context_getter_.get());
   // TODO(maniscalco): Is there a better way?  Copying the attachment data into
   // a string feels wrong given how large attachments may be (several MBs).  If
@@ -170,21 +207,35 @@ void AttachmentUploaderImpl::UploadState::OnGetTokenSuccess(
   fetcher_->SetUploadData(kContentType, upload_content);
   const std::string auth_header("Authorization: Bearer " + access_token_);
   fetcher_->AddExtraRequestHeader(auth_header);
+  // TODO(maniscalco): Consider computing the hash once and storing the value as
+  // a new field in the Attachment object to avoid recomputing when an upload
+  // fails and is retried (bug 417794).
+  fetcher_->AddExtraRequestHeader(base::StringPrintf(
+      "X-Goog-Hash: crc32c=%s",
+      ComputeCrc32cHash(memory->front_as<char>(), memory->size()).c_str()));
   fetcher_->SetLoadFlags(net::LOAD_DO_NOT_SAVE_COOKIES |
                          net::LOAD_DO_NOT_SEND_COOKIES |
                          net::LOAD_DISABLE_CACHE);
-  // TODO(maniscalco): Set an appropriate headers (User-Agent, Content-type, and
-  // Content-length) on the request and include the content's MD5,
-  // AttachmentId's unique_id and the "sync birthday" (bug 371521).
+  // TODO(maniscalco): Set appropriate headers (e.g. User-Agent) on the request
+  // and include the "sync birthday" (bug 371521).
   fetcher_->Start();
 }
 
 void AttachmentUploaderImpl::UploadState::OnGetTokenFailure(
     const OAuth2TokenService::Request* request,
     const GoogleServiceAuthError& error) {
+  DCHECK(CalledOnValidThread());
+  if (is_stopped_) {
+    return;
+  }
+
   DCHECK_EQ(access_token_request_.get(), request);
   access_token_request_.reset();
-  ReportResult(UPLOAD_UNSPECIFIED_ERROR, attachment_.GetId());
+  // TODO(maniscalco): We treat this as a transient error, but it may in fact be
+  // a very long lived error and require user action.  Consider differentiating
+  // between the causes of GetToken failure and act accordingly.  Think about
+  // the causes of GetToken failure. Are there (bug 412802).
+  StopAndReportResult(UPLOAD_TRANSIENT_ERROR, attachment_.GetId());
 }
 
 void AttachmentUploaderImpl::UploadState::GetToken() {
@@ -192,18 +243,22 @@ void AttachmentUploaderImpl::UploadState::GetToken() {
       token_service_provider_, account_id_, scopes_, this);
 }
 
-void AttachmentUploaderImpl::UploadState::ReportResult(
+void AttachmentUploaderImpl::UploadState::StopAndReportResult(
     const UploadResult& result,
     const AttachmentId& attachment_id) {
+  DCHECK(!is_stopped_);
+  is_stopped_ = true;
   UploadCallbackList::const_iterator iter = user_callbacks_.begin();
   UploadCallbackList::const_iterator end = user_callbacks_.end();
   for (; iter != end; ++iter) {
     base::MessageLoop::current()->PostTask(
         FROM_HERE, base::Bind(*iter, result, attachment_id));
   }
-  // Destroy this object and return immediately.
-  owner_->DeleteUploadStateFor(attachment_.GetId().GetProto().unique_id());
-  return;
+  base::MessageLoop::current()->PostTask(
+      FROM_HERE,
+      base::Bind(&AttachmentUploaderImpl::OnUploadStateStopped,
+                 owner_,
+                 attachment_id.GetProto().unique_id()));
 }
 
 AttachmentUploaderImpl::AttachmentUploaderImpl(
@@ -218,11 +273,12 @@ AttachmentUploaderImpl::AttachmentUploaderImpl(
       url_request_context_getter_(url_request_context_getter),
       account_id_(account_id),
       scopes_(scopes),
-      token_service_provider_(token_service_provider) {
+      token_service_provider_(token_service_provider),
+      weak_ptr_factory_(this) {
   DCHECK(CalledOnValidThread());
   DCHECK(!account_id.empty());
   DCHECK(!scopes.empty());
-  DCHECK(token_service_provider_);
+  DCHECK(token_service_provider_.get());
 }
 
 AttachmentUploaderImpl::~AttachmentUploaderImpl() {
@@ -236,24 +292,31 @@ void AttachmentUploaderImpl::UploadAttachment(const Attachment& attachment,
   const std::string unique_id = attachment_id.GetProto().unique_id();
   DCHECK(!unique_id.empty());
   StateMap::iterator iter = state_map_.find(unique_id);
-  if (iter == state_map_.end()) {
-    const GURL url = GetURLForAttachmentId(sync_service_url_, attachment_id);
-    scoped_ptr<UploadState> upload_state(
-        new UploadState(url,
-                        url_request_context_getter_,
-                        attachment,
-                        callback,
-                        account_id_,
-                        scopes_,
-                        token_service_provider_.get(),
-                        this));
-    state_map_.add(unique_id, upload_state.Pass());
-  } else {
-    DCHECK(
-        attachment.GetData()->Equals(iter->second->GetAttachment().GetData()));
-    // We already have an upload for this attachment.  "Join" it.
-    iter->second->AddUserCallback(callback);
+  if (iter != state_map_.end()) {
+    // We have an old upload request for this attachment...
+    if (!iter->second->IsStopped()) {
+      // "join" to it.
+      DCHECK(attachment.GetData()
+                 ->Equals(iter->second->GetAttachment().GetData()));
+      iter->second->AddUserCallback(callback);
+      return;
+    } else {
+      // It's stopped so we can't use it.  Delete it.
+      state_map_.erase(iter);
+    }
   }
+
+  const GURL url = GetURLForAttachmentId(sync_service_url_, attachment_id);
+  scoped_ptr<UploadState> upload_state(
+      new UploadState(url,
+                      url_request_context_getter_,
+                      attachment,
+                      callback,
+                      account_id_,
+                      scopes_,
+                      token_service_provider_.get(),
+                      weak_ptr_factory_.GetWeakPtr()));
+  state_map_.add(unique_id, upload_state.Pass());
 }
 
 // Static.
@@ -271,8 +334,26 @@ GURL AttachmentUploaderImpl::GetURLForAttachmentId(
   return sync_service_url.ReplaceComponents(replacements);
 }
 
-void AttachmentUploaderImpl::DeleteUploadStateFor(const UniqueId& unique_id) {
-  state_map_.erase(unique_id);
+void AttachmentUploaderImpl::OnUploadStateStopped(const UniqueId& unique_id) {
+  StateMap::iterator iter = state_map_.find(unique_id);
+  // Only erase if stopped.  Because this method is called asynchronously, it's
+  // possible that a new request for this same id arrived after the UploadState
+  // stopped, but before this method was invoked.  In that case the UploadState
+  // in the map might be a new one.
+  if (iter != state_map_.end() && iter->second->IsStopped()) {
+    state_map_.erase(iter);
+  }
+}
+
+std::string AttachmentUploaderImpl::ComputeCrc32cHash(const char* data,
+                                                      size_t size) {
+  const uint32_t crc32c_big_endian =
+      base::HostToNet32(leveldb::crc32c::Value(data, size));
+  const base::StringPiece raw(reinterpret_cast<const char*>(&crc32c_big_endian),
+                        sizeof(crc32c_big_endian));
+  std::string encoded;
+  base::Base64Encode(raw, &encoded);
+  return encoded;
 }
 
 }  // namespace syncer

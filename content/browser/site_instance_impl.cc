@@ -25,7 +25,7 @@ int32 SiteInstanceImpl::next_site_instance_id_ = 1;
 
 SiteInstanceImpl::SiteInstanceImpl(BrowsingInstance* browsing_instance)
     : id_(next_site_instance_id_++),
-      active_view_count_(0),
+      active_frame_count_(0),
       browsing_instance_(browsing_instance),
       process_(NULL),
       has_site_(false) {
@@ -120,6 +120,8 @@ RenderProcessHost* SiteInstanceImpl::GetProcess() {
                                                         process_, site_);
     }
 
+    TRACE_EVENT2("navigation", "SiteInstanceImpl::GetProcess",
+                 "site id", id_, "process id", process_->GetID());
     GetContentClient()->browser()->SiteInstanceGotProcess(this);
 
     if (has_site_)
@@ -131,6 +133,8 @@ RenderProcessHost* SiteInstanceImpl::GetProcess() {
 }
 
 void SiteInstanceImpl::SetSite(const GURL& url) {
+  TRACE_EVENT2("navigation", "SiteInstanceImpl::SetSite",
+               "site id", id_, "url", url.possibly_invalid_spec());
   // A SiteInstance's site should not change.
   // TODO(creis): When following links or script navigations, we can currently
   // render pages from other sites in this SiteInstance.  This will eventually

@@ -8,7 +8,6 @@ import android.view.KeyEvent;
 
 import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
-import org.chromium.content.browser.ContentViewCore;
 
 /**
  * Java peer of the native class of the same name.
@@ -33,10 +32,8 @@ public class WebContentsDelegateAndroid {
     public static final int INVALIDATE_TYPE_TAB = 1 << 1;
     // Equivalent of InvalidateTypes::INVALIDATE_TYPE_LOAD.
     public static final int INVALIDATE_TYPE_LOAD = 1 << 2;
-    // Equivalent of InvalidateTypes::INVALIDATE_TYPE_PAGE_ACTIONS.
-    public static final int INVALIDATE_TYPE_PAGE_ACTIONS = 1 << 3;
     // Equivalent of InvalidateTypes::INVALIDATE_TYPE_TITLE.
-    public static final int INVALIDATE_TYPE_TITLE = 1 << 4;
+    public static final int INVALIDATE_TYPE_TITLE = 1 << 3;
 
     // The most recent load progress callback received from WebContents, as a percentage.
     // Initialize to 100 to indicate that we're not in a loading state.
@@ -109,6 +106,25 @@ public class WebContentsDelegateAndroid {
     }
 
     @CalledByNative
+    public void didNavigateToPendingEntry() {
+    }
+
+    @CalledByNative
+    public void webContentsCreated(long sourceWebContents, long openerRenderFrameId,
+            String frameName, String targetUrl, long newWebContents) {
+    }
+
+    @CalledByNative
+    public boolean shouldCreateWebContents(String targetUrl) {
+        return true;
+    }
+
+    @CalledByNative
+    public boolean onGoToEntryOffset(int offset) {
+        return true;
+    }
+
+    @CalledByNative
     public void onUpdateUrl(String url) {
     }
 
@@ -140,10 +156,11 @@ public class WebContentsDelegateAndroid {
 
     /**
      * Report a form resubmission. The overwriter of this function should eventually call
-     * either of ContentViewCore.ContinuePendingReload or ContentViewCore.CancelPendingReload.
+     * either of NavigationController.ContinuePendingReload or
+     * NavigationController.CancelPendingReload.
      */
     @CalledByNative
-    public void showRepostFormWarningDialog(ContentViewCore contentViewCore) {
+    public void showRepostFormWarningDialog() {
     }
 
     @CalledByNative

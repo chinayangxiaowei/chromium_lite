@@ -10,8 +10,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
 
+import org.chromium.base.CommandLine;
 import org.chromium.base.PathUtils;
 import org.chromium.base.PowerMonitor;
+import org.chromium.base.ResourceExtractor;
 import org.chromium.base.library_loader.NativeLibraries;
 
 /**
@@ -28,8 +30,15 @@ public class ChromeNativeTestActivity extends Activity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CommandLine.init(new String[]{});
+
         // Needed by path_utils_unittest.cc
         PathUtils.setPrivateDataDirectorySuffix("chrome");
+
+        ResourceExtractor resourceExtractor = ResourceExtractor.get(getApplicationContext());
+        resourceExtractor.setExtractAllPaksAndV8SnapshotForTesting();
+        resourceExtractor.startExtractingResources();
+        resourceExtractor.waitForCompletion();
 
         // Needed by system_monitor_unittest.cc
         PowerMonitor.createForTests(this);
@@ -48,11 +57,11 @@ public class ChromeNativeTestActivity extends Activity {
             // Post a task to run the tests. This allows us to not block
             // onCreate and still run tests on the main thread.
             new Handler().postDelayed(new Runnable() {
-                  @Override
-                  public void run() {
-                      runTests();
-                  }
-              }, RUN_TESTS_DELAY_IN_MS);
+                @Override
+                public void run() {
+                    runTests();
+                }
+            }, RUN_TESTS_DELAY_IN_MS);
         }
     }
 

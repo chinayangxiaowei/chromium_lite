@@ -14,7 +14,7 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "base/time/time.h"
-#include "media/base/cdm_promise.h"
+#include "media/base/cdm_callback_promise.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/decrypt_config.h"
 #include "media/cdm/json_web_key.h"
@@ -220,8 +220,10 @@ namespace media {
 
 ClearKeyCdm::ClearKeyCdm(ClearKeyCdmHost* host, const std::string& key_system)
     : decryptor_(
-        base::Bind(&ClearKeyCdm::OnSessionMessage, base::Unretained(this)),
-        base::Bind(&ClearKeyCdm::OnSessionClosed, base::Unretained(this))),
+          base::Bind(&ClearKeyCdm::OnSessionMessage, base::Unretained(this)),
+          base::Bind(&ClearKeyCdm::OnSessionClosed, base::Unretained(this)),
+          base::Bind(&ClearKeyCdm::OnSessionKeysChange,
+                     base::Unretained(this))),
       host_(host),
       key_system_(key_system),
       timer_delay_ms_(kInitialTimerDelayMs),
@@ -246,12 +248,13 @@ void ClearKeyCdm::CreateSession(uint32 promise_id,
   DVLOG(1) << __FUNCTION__;
 
   scoped_ptr<media::NewSessionCdmPromise> promise(
-      new media::NewSessionCdmPromise(base::Bind(&ClearKeyCdm::OnSessionCreated,
-                                                 base::Unretained(this),
-                                                 promise_id),
-                                      base::Bind(&ClearKeyCdm::OnPromiseFailed,
-                                                 base::Unretained(this),
-                                                 promise_id)));
+      new media::CdmCallbackPromise<std::string>(
+          base::Bind(&ClearKeyCdm::OnSessionCreated,
+                     base::Unretained(this),
+                     promise_id),
+          base::Bind(&ClearKeyCdm::OnPromiseFailed,
+                     base::Unretained(this),
+                     promise_id)));
   decryptor_.CreateSession(std::string(init_data_type, init_data_type_size),
                            init_data,
                            init_data_size,
@@ -283,12 +286,13 @@ void ClearKeyCdm::LoadSession(uint32 promise_id,
   }
 
   scoped_ptr<media::NewSessionCdmPromise> promise(
-      new media::NewSessionCdmPromise(base::Bind(&ClearKeyCdm::OnSessionLoaded,
-                                                 base::Unretained(this),
-                                                 promise_id),
-                                      base::Bind(&ClearKeyCdm::OnPromiseFailed,
-                                                 base::Unretained(this),
-                                                 promise_id)));
+      new media::CdmCallbackPromise<std::string>(
+          base::Bind(&ClearKeyCdm::OnSessionLoaded,
+                     base::Unretained(this),
+                     promise_id),
+          base::Bind(&ClearKeyCdm::OnPromiseFailed,
+                     base::Unretained(this),
+                     promise_id)));
   decryptor_.CreateSession(std::string(kLoadableSessionContentType),
                            NULL,
                            0,
@@ -304,7 +308,7 @@ void ClearKeyCdm::UpdateSession(uint32 promise_id,
   DVLOG(1) << __FUNCTION__;
   std::string web_session_str(web_session_id, web_session_id_length);
 
-  scoped_ptr<media::SimpleCdmPromise> promise(new media::SimpleCdmPromise(
+  scoped_ptr<media::SimpleCdmPromise> promise(new media::CdmCallbackPromise<>(
       base::Bind(&ClearKeyCdm::OnSessionUpdated,
                  base::Unretained(this),
                  promise_id,
@@ -326,14 +330,12 @@ void ClearKeyCdm::CloseSession(uint32 promise_id,
   DVLOG(1) << __FUNCTION__;
   std::string web_session_str(web_session_id, web_session_id_length);
 
-  scoped_ptr<media::SimpleCdmPromise> promise(new media::SimpleCdmPromise(
-      base::Bind(&ClearKeyCdm::OnSessionReleased,
-                 base::Unretained(this),
-                 promise_id,
-                 web_session_str),
+  scoped_ptr<media::SimpleCdmPromise> promise(new media::CdmCallbackPromise<>(
+      base::Bind(
+          &ClearKeyCdm::OnPromiseResolved, base::Unretained(this), promise_id),
       base::Bind(
           &ClearKeyCdm::OnPromiseFailed, base::Unretained(this), promise_id)));
-  decryptor_.ReleaseSession(web_session_str, promise.Pass());
+  decryptor_.CloseSession(web_session_str, promise.Pass());
 }
 
 void ClearKeyCdm::RemoveSession(uint32 promise_id,
@@ -345,8 +347,19 @@ void ClearKeyCdm::RemoveSession(uint32 promise_id,
       std::string(kLoadableWebSessionId) ==
       std::string(web_session_id, web_session_id_length);
   if (is_persistent_session) {
-    host_->OnResolvePromise(promise_id);
+    std::string web_session_str(web_session_id, web_session_id_length);
+
+    scoped_ptr<media::SimpleCdmPromise> promise(new media::CdmCallbackPromise<>(
+        base::Bind(&ClearKeyCdm::OnPromiseResolved,
+                   base::Unretained(this),
+                   promise_id),
+        base::Bind(&ClearKeyCdm::OnPromiseFailed,
+                   base::Unretained(this),
+                   promise_id)));
+    decryptor_.RemoveSession(web_session_str, promise.Pass());
   } else {
+    // TODO(jrummell): This should be a DCHECK once blink does the proper
+    // checks.
     std::string message("Not supported for non-persistent sessions.");
     host_->OnRejectPromise(promise_id,
                            cdm::kInvalidAccessError,
@@ -367,12 +380,14 @@ void ClearKeyCdm::GetUsableKeyIds(uint32_t promise_id,
                                   const char* web_session_id,
                                   uint32_t web_session_id_length) {
   std::string web_session_str(web_session_id, web_session_id_length);
-  scoped_ptr<media::KeyIdsPromise> promise(new media::KeyIdsPromise(
-      base::Bind(&ClearKeyCdm::OnUsableKeyIdsObtained,
-                 base::Unretained(this),
-                 promise_id),
-      base::Bind(
-          &ClearKeyCdm::OnPromiseFailed, base::Unretained(this), promise_id)));
+  scoped_ptr<media::KeyIdsPromise> promise(
+      new media::CdmCallbackPromise<KeyIdsVector>(
+          base::Bind(&ClearKeyCdm::OnUsableKeyIdsObtained,
+                     base::Unretained(this),
+                     promise_id),
+          base::Bind(&ClearKeyCdm::OnPromiseFailed,
+                     base::Unretained(this),
+                     promise_id)));
   decryptor_.GetUsableKeyIds(web_session_str, promise.Pass());
 }
 
@@ -649,7 +664,7 @@ void ClearKeyCdm::LoadLoadableSession() {
                                        sizeof(kLoadableSessionKeyId) - 1);
   // TODO(xhwang): This triggers OnSessionUpdated(). For prefixed EME support,
   // this is okay. Check WD EME support.
-  scoped_ptr<media::SimpleCdmPromise> promise(new media::SimpleCdmPromise(
+  scoped_ptr<media::SimpleCdmPromise> promise(new media::CdmCallbackPromise<>(
       base::Bind(&ClearKeyCdm::OnSessionUpdated,
                  base::Unretained(this),
                  promise_id_for_emulated_loadsession_,
@@ -681,6 +696,17 @@ void ClearKeyCdm::OnSessionMessage(const std::string& web_session_id,
                           message.size(),
                           destination_url.spec().data(),
                           destination_url.spec().size());
+}
+
+void ClearKeyCdm::OnSessionKeysChange(const std::string& web_session_id,
+                                      bool has_additional_usable_key) {
+  // Ignore the message when we are waiting to update the loadable session.
+  if (web_session_id == session_id_for_emulated_loadsession_)
+    return;
+
+  host_->OnSessionUsableKeysChange(web_session_id.data(),
+                                   web_session_id.length(),
+                                   has_additional_usable_key);
 }
 
 void ClearKeyCdm::OnSessionClosed(const std::string& web_session_id) {
@@ -727,14 +753,12 @@ void ClearKeyCdm::OnSessionUpdated(uint32 promise_id,
     // |promise_id| is the LoadSession() promise, so resolve appropriately.
     host_->OnResolveNewSessionPromise(
         promise_id, kLoadableWebSessionId, strlen(kLoadableWebSessionId));
+    // Generate the UsableKeys event now that the session is "loaded".
+    host_->OnSessionUsableKeysChange(
+        kLoadableWebSessionId, strlen(kLoadableWebSessionId), true);
     return;
   }
 
-  host_->OnResolvePromise(promise_id);
-}
-
-void ClearKeyCdm::OnSessionReleased(uint32 promise_id,
-                                    const std::string& web_session_id) {
   host_->OnResolvePromise(promise_id);
 }
 
@@ -746,6 +770,10 @@ void ClearKeyCdm::OnUsableKeyIdsObtained(uint32 promise_id,
     result[i].length = key_ids[i].size();
   }
   host_->OnResolveKeyIdsPromise(promise_id, result.get(), key_ids.size());
+}
+
+void ClearKeyCdm::OnPromiseResolved(uint32 promise_id) {
+  host_->OnResolvePromise(promise_id);
 }
 
 void ClearKeyCdm::OnPromiseFailed(uint32 promise_id,

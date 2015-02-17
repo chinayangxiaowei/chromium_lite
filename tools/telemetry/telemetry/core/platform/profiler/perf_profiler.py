@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+from pylib.device import device_errors  # pylint: disable=F0401
+
 from telemetry.core import platform
 from telemetry.core import util
 from telemetry.core.platform import profiler
@@ -48,14 +50,15 @@ def _PrepareHostForPerf():
       with tempfile.NamedTemporaryFile() as zero:
         zero.write('0')
         zero.flush()
-        subprocess.call(['sudo', 'cp', zero.name, kptr_file])
+        subprocess.call(['/usr/bin/sudo', 'cp', zero.name, kptr_file])
 
 
 def _InstallPerfHost():
+  perfhost_name = android_profiling_helper.GetPerfhostName()
   host = platform.GetHostPlatform()
-  if not host.CanLaunchApplication('perfhost'):
-    host.InstallApplication('perfhost')
-  return support_binaries.FindPath('perfhost', host.GetOSName())
+  if not host.CanLaunchApplication(perfhost_name):
+    host.InstallApplication(perfhost_name)
+  return support_binaries.FindPath(perfhost_name, 'x86_64', 'linux')
 
 
 class _SingleProcessPerfProfiler(object):
@@ -72,6 +75,7 @@ class _SingleProcessPerfProfiler(object):
     self._output_file = output_file
     self._tmp_output_file = tempfile.NamedTemporaryFile('w', 0)
     self._is_android = platform_backend.GetOSName() == 'android'
+    self._perf_binary = perf_binary
     self._perfhost_binary = perfhost_binary
     cmd_prefix = []
     perf_args = ['record', '--pid', str(pid)]
@@ -100,7 +104,11 @@ class _SingleProcessPerfProfiler(object):
                       '"--extra-browser-args=--single-process"')
     if self._is_android:
       device = self._browser_backend.adb.device()
-      device.KillAll('perf', signum=signal.SIGINT, blocking=True)
+      try:
+        binary_name = os.path.basename(self._perf_binary)
+        device.KillAll(binary_name, signum=signal.SIGINT, blocking=True)
+      except device_errors.CommandFailedError:
+        logging.warning('The perf process could not be killed on the device.')
     self._proc.send_signal(signal.SIGINT)
     exit_code = self._proc.wait()
     try:
@@ -193,7 +201,7 @@ class PerfProfiler(profiler.Profiler):
   def is_supported(cls, browser_type):
     if sys.platform != 'linux2':
       return False
-    if browser_type.startswith('cros'):
+    if platform.GetHostPlatform().GetOSName() == 'chromeos':
       return False
     return True
 
@@ -221,8 +229,8 @@ class PerfProfiler(profiler.Profiler):
     with open(os.devnull, 'w') as devnull:
       _InstallPerfHost()
       report = subprocess.Popen(
-          ['perfhost', 'report', '--show-total-period', '-U', '-t', '^', '-i',
-           file_name],
+          [android_profiling_helper.GetPerfhostName(),
+           'report', '--show-total-period', '-U', '-t', '^', '-i', file_name],
           stdout=subprocess.PIPE, stderr=devnull).communicate()[0]
     period_by_function = {}
     for line in report.split('\n'):

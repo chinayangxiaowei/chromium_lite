@@ -18,10 +18,7 @@ GetWebServiceWorkerState(ServiceWorkerVersion* version) {
   DCHECK(version);
   switch (version->status()) {
     case ServiceWorkerVersion::NEW:
-      if (version->running_status() == ServiceWorkerVersion::RUNNING)
-        return blink::WebServiceWorkerStateParsed;
-      else
-        return blink::WebServiceWorkerStateUnknown;
+      return blink::WebServiceWorkerStateUnknown;
     case ServiceWorkerVersion::INSTALLING:
       return blink::WebServiceWorkerStateInstalling;
     case ServiceWorkerVersion::INSTALLED:
@@ -110,8 +107,9 @@ ServiceWorkerObjectInfo ServiceWorkerHandle::GetObjectInfo() {
   ServiceWorkerObjectInfo info;
   info.handle_id = handle_id_;
   info.scope = registration_->pattern();
-  info.url = registration_->script_url();
-  info.state = GetWebServiceWorkerState(version_);
+  info.url = version_->script_url();
+  info.state = GetWebServiceWorkerState(version_.get());
+  info.version_id = version_->version_id();
   return info;
 }
 

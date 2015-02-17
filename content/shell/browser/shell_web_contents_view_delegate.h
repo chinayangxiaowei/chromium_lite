@@ -14,24 +14,15 @@ namespace content {
 class ShellWebContentsViewDelegate : public WebContentsViewDelegate {
  public:
   explicit ShellWebContentsViewDelegate(WebContents* web_contents);
-  virtual ~ShellWebContentsViewDelegate();
+  ~ShellWebContentsViewDelegate() override;
 
   // Overridden from WebContentsViewDelegate:
-  virtual void ShowContextMenu(RenderFrameHost* render_frame_host,
-                               const ContextMenuParams& params) OVERRIDE;
-  virtual WebDragDestDelegate* GetDragDestDelegate() OVERRIDE;
+  void ShowContextMenu(RenderFrameHost* render_frame_host,
+                       const ContextMenuParams& params) override;
 
 #if defined(OS_MACOSX)
-  virtual NSObject<RenderWidgetHostViewMacDelegate>*
-      CreateRenderWidgetHostViewDelegate(
-          RenderWidgetHost* render_widget_host) OVERRIDE;
   void ActionPerformed(int id);
 #elif defined(OS_WIN)
-  virtual void StoreFocus() OVERRIDE;
-  virtual void RestoreFocus() OVERRIDE;
-  virtual bool Focus() OVERRIDE;
-  virtual void TakeFocus(bool reverse) OVERRIDE;
-  virtual void SizeChanged(const gfx::Size& size) OVERRIDE;
   void MenuItemSelected(int selection);
 #endif
 

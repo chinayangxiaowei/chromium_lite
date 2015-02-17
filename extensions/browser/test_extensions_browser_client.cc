@@ -8,6 +8,7 @@
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_host_delegate.h"
 #include "extensions/browser/test_runtime_api_delegate.h"
+#include "extensions/browser/updater/null_extension_cache.h"
 
 using content::BrowserContext;
 
@@ -17,7 +18,9 @@ TestExtensionsBrowserClient::TestExtensionsBrowserClient(
     BrowserContext* main_context)
     : main_context_(main_context),
       incognito_context_(NULL),
-      process_manager_delegate_(NULL) {
+      process_manager_delegate_(NULL),
+      extension_system_factory_(NULL),
+      extension_cache_(new NullExtensionCache) {
   DCHECK(main_context_);
   DCHECK(!main_context_->IsOffTheRecord());
 }
@@ -83,11 +86,6 @@ bool TestExtensionsBrowserClient::IsExtensionIncognitoEnabled(
 bool TestExtensionsBrowserClient::CanExtensionCrossIncognito(
     const extensions::Extension* extension,
     content::BrowserContext* context) const {
-  return false;
-}
-
-bool TestExtensionsBrowserClient::IsWebViewRequest(
-    net::URLRequest* request) const {
   return false;
 }
 
@@ -166,8 +164,26 @@ TestExtensionsBrowserClient::GetComponentExtensionResourceManager() {
   return NULL;
 }
 
+void TestExtensionsBrowserClient::BroadcastEventToRenderers(
+    const std::string& event_name,
+    scoped_ptr<base::ListValue> args) {
+}
+
 net::NetLog* TestExtensionsBrowserClient::GetNetLog() {
   return NULL;
+}
+
+ExtensionCache* TestExtensionsBrowserClient::GetExtensionCache() {
+  return extension_cache_.get();
+}
+
+bool TestExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
+  return true;
+}
+
+bool TestExtensionsBrowserClient::IsMinBrowserVersionSupported(
+    const std::string& min_version) {
+  return true;
 }
 
 }  // namespace extensions

@@ -14,11 +14,10 @@
 #include "chrome/browser/ui/sync/sync_promo_ui.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view_observer.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_sync_promo_view.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/generated_resources.h"
-#include "grit/theme_resources.h"
 #include "ui/accessibility/ax_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -46,9 +45,9 @@ const int kControlBorderWidth = 2;
 class UnsizedCombobox : public views::Combobox {
  public:
   explicit UnsizedCombobox(ui::ComboboxModel* model) : views::Combobox(model) {}
-  virtual ~UnsizedCombobox() {}
+  ~UnsizedCombobox() override {}
 
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
+  gfx::Size GetPreferredSize() const override {
     return gfx::Size(0, views::Combobox::GetPreferredSize().height());
   }
 

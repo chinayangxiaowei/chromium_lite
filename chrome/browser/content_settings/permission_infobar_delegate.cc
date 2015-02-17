@@ -6,13 +6,13 @@
 
 #include "chrome/browser/content_settings/permission_context_uma_util.h"
 #include "chrome/browser/content_settings/permission_queue_controller.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/infobar.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 PermissionInfobarDelegate::~PermissionInfobarDelegate() {
   if (!action_taken_)
-    PermissionContextUmaUtil::PermissionIgnored(type_);
+    PermissionContextUmaUtil::PermissionIgnored(type_, requesting_origin_);
 }
 
 PermissionInfobarDelegate::PermissionInfobarDelegate(

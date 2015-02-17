@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Dialog to confirm the share between profiles.
  *
@@ -44,10 +42,10 @@ function MultiProfileShareDialog(parentNode) {
   this.frame_.id = 'multi-profile-share-dialog';
 
   this.currentProfileId_ = new Promise(function(callback) {
-    chrome.fileBrowserPrivate.getProfiles(
+    chrome.fileManagerPrivate.getProfiles(
         function(profiles, currentId, displayedId) {
-      callback(currentId);
-    });
+          callback(currentId);
+        });
   });
 }
 
@@ -56,12 +54,13 @@ function MultiProfileShareDialog(parentNode) {
  * @enum {string}
  * @const
  */
-MultiProfileShareDialog.Result = Object.freeze({
+MultiProfileShareDialog.Result = {
   CAN_EDIT: 'can_edit',
   CAN_COMMET: 'can_comment',
   CAN_VIEW: 'can_view',
   CANCEL: 'cancel'
-});
+};
+Object.freeze(MultiProfileShareDialog.Result);
 
 MultiProfileShareDialog.prototype = {
   __proto__: FileManagerDialogBase.prototype
@@ -74,27 +73,26 @@ MultiProfileShareDialog.prototype = {
  *     is already opened, it returns null.
  */
 MultiProfileShareDialog.prototype.show = function(plural) {
-  return this.currentProfileId_.
-      then(function(currentProfileId) {
-        return new Promise(function(fulfill, reject) {
-          this.shareTypeSelect_.selectedIndex = 0;
-          this.mailLabel_.textContent = currentProfileId;
-          var result = FileManagerDialogBase.prototype.showOkCancelDialog.call(
-              this,
-              str(plural ?
-                  'MULTI_PROFILE_SHARE_DIALOG_TITLE_PLURAL' :
-                  'MULTI_PROFILE_SHARE_DIALOG_TITLE'),
-              str(plural ?
-                  'MULTI_PROFILE_SHARE_DIALOG_MESSAGE_PLURAL' :
-                  'MULTI_PROFILE_SHARE_DIALOG_MESSAGE'),
-              function() {
-                fulfill(this.shareTypeSelect_.value);
-              }.bind(this),
-              function() {
-                fulfill(MultiProfileShareDialog.Result.CANCEL);
-              });
-          if (!result)
-            reject(new Error('Another dialog has already shown.'));
-        }.bind(this));
-      }.bind(this));
+  return this.currentProfileId_.then(function(currentProfileId) {
+    return new Promise(function(fulfill, reject) {
+      this.shareTypeSelect_.selectedIndex = 0;
+      this.mailLabel_.textContent = currentProfileId;
+      var result = FileManagerDialogBase.prototype.showOkCancelDialog.call(
+          this,
+          str(plural ?
+              'MULTI_PROFILE_SHARE_DIALOG_TITLE_PLURAL' :
+              'MULTI_PROFILE_SHARE_DIALOG_TITLE'),
+          str(plural ?
+              'MULTI_PROFILE_SHARE_DIALOG_MESSAGE_PLURAL' :
+              'MULTI_PROFILE_SHARE_DIALOG_MESSAGE'),
+          function() {
+            fulfill(this.shareTypeSelect_.value);
+          }.bind(this),
+          function() {
+            fulfill(MultiProfileShareDialog.Result.CANCEL);
+          });
+      if (!result)
+        reject(new Error('Another dialog has already shown.'));
+    }.bind(this));
+  }.bind(this));
 };

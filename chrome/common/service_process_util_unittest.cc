@@ -61,7 +61,6 @@ TEST(ServiceProcessUtilTest, ScopedVersionedName) {
   std::string test_str = "test";
   std::string scoped_name = GetServiceProcessScopedVersionedName(test_str);
   chrome::VersionInfo version_info;
-  DCHECK(version_info.is_valid());
   EXPECT_TRUE(EndsWith(scoped_name, test_str, true));
   EXPECT_NE(std::string::npos, scoped_name.find(version_info.Version()));
 }
@@ -69,8 +68,8 @@ TEST(ServiceProcessUtilTest, ScopedVersionedName) {
 class ServiceProcessStateTest : public base::MultiProcessTest {
  public:
   ServiceProcessStateTest();
-  virtual ~ServiceProcessStateTest();
-  virtual void SetUp();
+  ~ServiceProcessStateTest() override;
+  void SetUp() override;
   base::MessageLoopProxy* IOMessageLoopProxy() {
     return io_thread_.message_loop_proxy().get();
   }
@@ -244,8 +243,8 @@ MULTIPROCESS_TEST_MAIN(ServiceProcessStateTestShutdown) {
 
 #include <CoreFoundation/CoreFoundation.h>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/mac/mac_util.h"
 #include "base/test/test_timeouts.h"
@@ -345,10 +344,13 @@ TEST_F(ServiceProcessStateFileManipulationTest, VerifyLaunchD) {
   // on Mac and "launch_msg(): Socket is not connected" appears.
   // This test is designed to make sure that launchd is working.
   // http://crbug/75518
+  // Note: This particular problem no longer affects launchd in 10.10+, since
+  // there is no user owned launchd process and sockets are no longer made at
+  // /tmp/launchd*/sock. This test is still useful as a sanity check to make
+  // sure that launchd appears to be working.
 
   CommandLine cl(base::FilePath("/bin/launchctl"));
-  cl.AppendArg("list");
-  cl.AppendArg("com.apple.launchctl.Aqua");
+  cl.AppendArg("limit");
 
   std::string output;
   int exit_code = -1;

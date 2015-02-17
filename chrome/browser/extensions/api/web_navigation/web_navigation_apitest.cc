@@ -42,6 +42,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/switches.h"
+#include "extensions/test/result_catcher.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/WebKit/public/web/WebContextMenuData.h"
@@ -118,11 +119,9 @@ class TestNavigationListener
     }
 
     // content::ResourceThrottle implementation.
-    virtual void WillStartRequest(bool* defer) OVERRIDE {
-      *defer = true;
-    }
+    void WillStartRequest(bool* defer) override { *defer = true; }
 
-    virtual const char* GetNameForLogging() const OVERRIDE {
+    const char* GetNameForLogging() const override {
       return "TestNavigationListener::Throttle";
     }
   };
@@ -162,11 +161,11 @@ class DelayLoadStartAndExecuteJavascript
                    content::NotificationService::AllSources());
     test_navigation_listener_->DelayRequestsForURL(delay_url_);
   }
-  virtual ~DelayLoadStartAndExecuteJavascript() {}
+  ~DelayLoadStartAndExecuteJavascript() override {}
 
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     if (type != chrome::NOTIFICATION_TAB_ADDED) {
       NOTREACHED();
       return;
@@ -176,11 +175,11 @@ class DelayLoadStartAndExecuteJavascript
     registrar_.RemoveAll();
   }
 
-  virtual void DidStartProvisionalLoadForFrame(
+  void DidStartProvisionalLoadForFrame(
       content::RenderFrameHost* render_frame_host,
       const GURL& validated_url,
       bool is_error_page,
-      bool is_iframe_srcdoc) OVERRIDE {
+      bool is_iframe_srcdoc) override {
     if (validated_url != delay_url_ || !rvh_)
       return;
 
@@ -188,10 +187,10 @@ class DelayLoadStartAndExecuteJavascript
     script_was_executed_ = true;
   }
 
-  virtual void DidCommitProvisionalLoadForFrame(
+  void DidCommitProvisionalLoadForFrame(
       content::RenderFrameHost* render_frame_host,
       const GURL& url,
-      content::PageTransition transition_type) OVERRIDE {
+      ui::PageTransition transition_type) override {
     if (script_was_executed_ && EndsWith(url.spec(), until_url_suffix_, true)) {
       content::WebContentsObserver::Observe(NULL);
       test_navigation_listener_->ResumeAll();
@@ -223,23 +222,19 @@ class TestResourceDispatcherHostDelegate
       : ChromeResourceDispatcherHostDelegate(prerender_tracker),
         test_navigation_listener_(test_navigation_listener) {
   }
-  virtual ~TestResourceDispatcherHostDelegate() {}
+  ~TestResourceDispatcherHostDelegate() override {}
 
-  virtual void RequestBeginning(
+  void RequestBeginning(
       net::URLRequest* request,
       content::ResourceContext* resource_context,
       content::AppCacheService* appcache_service,
       ResourceType resource_type,
-      int child_id,
-      int route_id,
-      ScopedVector<content::ResourceThrottle>* throttles) OVERRIDE {
+      ScopedVector<content::ResourceThrottle>* throttles) override {
     ChromeResourceDispatcherHostDelegate::RequestBeginning(
         request,
         resource_context,
         appcache_service,
         resource_type,
-        child_id,
-        route_id,
         throttles);
     content::ResourceThrottle* throttle =
         test_navigation_listener_->CreateResourceThrottle(request->url(),
@@ -259,9 +254,9 @@ class TestResourceDispatcherHostDelegate
 class WebNavigationApiTest : public ExtensionApiTest {
  public:
   WebNavigationApiTest() {}
-  virtual ~WebNavigationApiTest() {}
+  ~WebNavigationApiTest() override {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
 
     FrameNavigationState::set_allow_extension_scheme(true);
@@ -272,7 +267,7 @@ class WebNavigationApiTest : public ExtensionApiTest {
     host_resolver()->AddRule("*", "127.0.0.1");
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
     test_navigation_listener_ = new TestNavigationListener();
     resource_dispatcher_host_delegate_.reset(
@@ -487,7 +482,7 @@ IN_PROC_BROWSER_TEST_F(WebNavigationApiTest, TargetBlank) {
   GURL url = embedded_test_server()->GetURL(
       "/extensions/api_test/webnavigation/targetBlank/a.html");
 
-  chrome::NavigateParams params(browser(), url, content::PAGE_TRANSITION_LINK);
+  chrome::NavigateParams params(browser(), url, ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params);
 
   // There's a link with target=_blank on a.html. Click on it to open it in a

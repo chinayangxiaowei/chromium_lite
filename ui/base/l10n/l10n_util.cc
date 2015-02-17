@@ -11,13 +11,12 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/rtl.h"
 #include "base/i18n/string_compare.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -33,6 +32,7 @@
 #include "ui/base/ui_base_paths.h"
 
 #if defined(OS_ANDROID)
+#include "base/android/locale_utils.h"
 #include "ui/base/l10n/l10n_util_android.h"
 #endif
 
@@ -188,6 +188,7 @@ static const char* const kAcceptLanguageList[] = {
 bool IsDuplicateName(const std::string& locale_name) {
   static const char* const kDuplicateNames[] = {
     "en",
+    "en_001",
     "pt",
     "zh",
     "zh_hans_cn",
@@ -339,10 +340,9 @@ bool CheckAndResolveLocale(const std::string& locale,
   // does not support but available on Windows. We fall
   // back to en-US in GetApplicationLocale so that it's a not critical,
   // but we can do better.
-  std::string::size_type hyphen_pos = locale.find('-');
-  std::string lang(locale, 0, hyphen_pos);
-  if (hyphen_pos != std::string::npos && hyphen_pos > 0) {
-    std::string region(locale, hyphen_pos + 1);
+  const std::string lang(GetLanguage(locale));
+  if (lang.size() < locale.size()) {
+    std::string region(locale, lang.size() + 1);
     std::string tmp_locale(lang);
     // Map es-RR other than es-ES to es-419 (Chrome's Latin American
     // Spanish locale).
@@ -388,7 +388,7 @@ bool CheckAndResolveLocale(const std::string& locale,
       {"en", "en-US"},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(alias_map); ++i) {
+  for (size_t i = 0; i < arraysize(alias_map); ++i) {
     if (LowerCaseEqualsASCII(lang, alias_map[i].source)) {
       std::string tmp_locale(alias_map[i].dest);
       if (IsLocaleAvailable(tmp_locale)) {
@@ -448,7 +448,7 @@ std::string GetApplicationLocaleInternal(const std::string& pref_locale) {
 #elif defined(OS_ANDROID)
 
   // On Android, query java.util.Locale for the default locale.
-  candidates.push_back(GetDefaultLocale());
+  candidates.push_back(base::android::GetDefaultLocale());
 
 #elif defined(USE_GLIB) && !defined(OS_CHROMEOS)
 
@@ -825,18 +825,6 @@ base::string16 GetStringFUTF16Int(int message_id, int64 a) {
   return GetStringFUTF16(message_id, base::UTF8ToUTF16(base::Int64ToString(a)));
 }
 
-// Specialization of operator() method for base::string16 version.
-template <>
-bool StringComparator<base::string16>::operator()(const base::string16& lhs,
-                                                  const base::string16& rhs) {
-  // If we can not get collator instance for specified locale, just do simple
-  // string compare.
-  if (!collator_)
-    return lhs < rhs;
-  return base::i18n::CompareString16WithCollator(collator_, lhs, rhs) ==
-      UCOL_LESS;
-};
-
 base::string16 GetPluralStringFUTF16(const std::vector<int>& message_ids,
                                int number) {
   scoped_ptr<icu::PluralFormat> format = BuildPluralFormat(message_ids);
@@ -884,6 +872,14 @@ int GetLocalizedContentsWidthInPixels(int pixel_resource_id) {
   base::StringToInt(l10n_util::GetStringUTF8(pixel_resource_id), &width);
   DCHECK_GT(width, 0);
   return width;
+}
+
+const char* const* GetAcceptLanguageListForTesting() {
+  return kAcceptLanguageList;
+}
+
+size_t GetAcceptLanguageListSizeForTesting() {
+  return arraysize(kAcceptLanguageList);
 }
 
 }  // namespace l10n_util

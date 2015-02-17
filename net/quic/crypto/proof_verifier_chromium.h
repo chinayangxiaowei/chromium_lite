@@ -30,7 +30,7 @@ class NET_EXPORT_PRIVATE ProofVerifyDetailsChromium
  public:
 
   // ProofVerifyDetails implementation
-  virtual ProofVerifyDetails* Clone() const OVERRIDE;
+  ProofVerifyDetails* Clone() const override;
 
   CertVerifyResult cert_verify_result;
 
@@ -56,18 +56,17 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public ProofVerifier {
  public:
   ProofVerifierChromium(CertVerifier* cert_verifier,
                         TransportSecurityState* transport_security_state);
-  virtual ~ProofVerifierChromium();
+  ~ProofVerifierChromium() override;
 
   // ProofVerifier interface
-  virtual QuicAsyncStatus VerifyProof(
-      const std::string& hostname,
-      const std::string& server_config,
-      const std::vector<std::string>& certs,
-      const std::string& signature,
-      const ProofVerifyContext* verify_context,
-      std::string* error_details,
-      scoped_ptr<ProofVerifyDetails>* verify_details,
-      ProofVerifierCallback* callback) OVERRIDE;
+  QuicAsyncStatus VerifyProof(const std::string& hostname,
+                              const std::string& server_config,
+                              const std::vector<std::string>& certs,
+                              const std::string& signature,
+                              const ProofVerifyContext* verify_context,
+                              std::string* error_details,
+                              scoped_ptr<ProofVerifyDetails>* verify_details,
+                              ProofVerifierCallback* callback) override;
 
  private:
   class Job;
@@ -81,7 +80,7 @@ class NET_EXPORT_PRIVATE ProofVerifierChromium : public ProofVerifier {
   // Underlying verifier used to verify certificates.
   CertVerifier* const cert_verifier_;
 
-  TransportSecurityState* transport_security_state_;
+  TransportSecurityState* const transport_security_state_;
 
   DISALLOW_COPY_AND_ASSIGN(ProofVerifierChromium);
 };

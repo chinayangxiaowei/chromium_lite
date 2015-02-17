@@ -2,10 +2,25 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("client_channel") {
+  sources = [
+    "client_channel.mojom",
+  ]
+}
+
 component("mojo") {
   sources = [
+    "client_channel.mojom",
     "ipc_channel_mojo.cc",
     "ipc_channel_mojo.h",
+    "ipc_channel_mojo_host.cc",
+    "ipc_channel_mojo_host.h",
+    "ipc_channel_mojo_readers.cc",
+    "ipc_channel_mojo_readers.h",
+    "ipc_mojo_bootstrap.cc",
+    "ipc_mojo_bootstrap.h",
     "ipc_message_pipe_reader.cc",
     "ipc_message_pipe_reader.h",
   ]
@@ -18,13 +33,15 @@ component("mojo") {
     "//ipc",
     "//mojo/environment:chromium",
     "//mojo/public/cpp/bindings",
-    "//mojo/system",
+    "//mojo/edk/system",
+    ":client_channel",
   ]
 }
 
 test("ipc_mojo_unittests") {
   sources = [
     "ipc_channel_mojo_unittest.cc",
+    "ipc_mojo_bootstrap_unittest.cc",
     "run_all_unittests.cc",
   ]
 
@@ -35,8 +52,27 @@ test("ipc_mojo_unittests") {
     "//ipc",
     "//ipc:test_support",
     "//ipc/mojo",
+    "//mojo/edk/system",
     "//mojo/environment:chromium",
-    "//mojo/system",
+    "//url",
+  ]
+}
+
+test("ipc_mojo_perftests") {
+  sources = [
+    "ipc_mojo_perftest.cc",
+  ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//base/test:test_support_perf",
+    "//base/third_party/dynamic_annotations",
+    "//ipc",
+    "//ipc:test_support",
+    "//ipc/mojo",
+    "//mojo/edk/system",
+    "//mojo/environment:chromium",
     "//url",
   ]
 }

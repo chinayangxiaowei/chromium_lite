@@ -26,24 +26,17 @@
 #include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/browser/gpu/gpu_feature_checker.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
-#include "chrome/browser/signin/signin_promo.h"
-#include "chrome/browser/signin/signin_tracker_factory.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/app_list/app_list_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
-#include "components/signin/core/browser/signin_manager.h"
-#include "components/signin/core/common/profile_management_switches.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/page_transition_types.h"
-#include "content/public/common/referrer.h"
 #include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -51,9 +44,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
-#include "google_apis/gaia/google_service_auth_error.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "url/gurl.h"
 
 using content::GpuDataManager;
 
@@ -68,11 +59,9 @@ namespace GetBrowserLogin = api::webstore_private::GetBrowserLogin;
 namespace GetIsLauncherEnabled = api::webstore_private::GetIsLauncherEnabled;
 namespace GetStoreLogin = api::webstore_private::GetStoreLogin;
 namespace GetWebGLStatus = api::webstore_private::GetWebGLStatus;
-namespace InstallBundle = api::webstore_private::InstallBundle;
 namespace IsInIncognitoMode = api::webstore_private::IsInIncognitoMode;
 namespace LaunchEphemeralApp = api::webstore_private::LaunchEphemeralApp;
 namespace LaunchEphemeralAppResult = LaunchEphemeralApp::Results;
-namespace SignIn = api::webstore_private::SignIn;
 namespace SetStoreLogin = api::webstore_private::SetStoreLogin;
 
 namespace {
@@ -113,6 +102,12 @@ scoped_ptr<WebstoreInstaller::Approval> PendingApprovals::PopApproval(
     }
   }
   return scoped_ptr<WebstoreInstaller::Approval>();
+}
+
+chrome::HostDesktopType GetHostDesktopTypeForWebContents(
+    content::WebContents* contents) {
+  return chrome::GetHostDesktopTypeForNativeWindow(
+      contents->GetTopLevelNativeWindow());
 }
 
 static base::LazyInstance<PendingApprovals> g_pending_approvals =
@@ -167,64 +162,6 @@ WebstorePrivateApi::PopApprovalForTesting(
   return g_pending_approvals.Get().PopApproval(profile, extension_id);
 }
 
-WebstorePrivateInstallBundleFunction::WebstorePrivateInstallBundleFunction() {}
-WebstorePrivateInstallBundleFunction::~WebstorePrivateInstallBundleFunction() {}
-
-bool WebstorePrivateInstallBundleFunction::RunAsync() {
-  scoped_ptr<InstallBundle::Params> params(
-      InstallBundle::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params);
-
-  BundleInstaller::ItemList items;
-  if (!ReadBundleInfo(*params, &items))
-    return false;
-
-  bundle_ = new BundleInstaller(GetCurrentBrowser(), items);
-
-  AddRef();  // Balanced in OnBundleInstallCompleted / OnBundleInstallCanceled.
-
-  bundle_->PromptForApproval(this);
-  return true;
-}
-
-bool WebstorePrivateInstallBundleFunction::
-    ReadBundleInfo(const InstallBundle::Params& params,
-    BundleInstaller::ItemList* items) {
-  for (size_t i = 0; i < params.details.size(); ++i) {
-    BundleInstaller::Item item;
-    item.id = params.details[i]->id;
-    item.manifest = params.details[i]->manifest;
-    item.localized_name = params.details[i]->localized_name;
-    items->push_back(item);
-  }
-
-  return true;
-}
-
-void WebstorePrivateInstallBundleFunction::OnBundleInstallApproved() {
-  bundle_->CompleteInstall(
-      dispatcher()->delegate()->GetAssociatedWebContents(),
-      this);
-}
-
-void WebstorePrivateInstallBundleFunction::OnBundleInstallCanceled(
-    bool user_initiated) {
-  if (user_initiated)
-    error_ = "user_canceled";
-  else
-    error_ = "unknown_error";
-
-  SendResponse(false);
-
-  Release();  // Balanced in RunAsync().
-}
-
-void WebstorePrivateInstallBundleFunction::OnBundleInstallCompleted() {
-  SendResponse(true);
-
-  Release();  // Balanced in RunAsync().
-}
-
 WebstorePrivateBeginInstallWithManifest3Function::
     WebstorePrivateBeginInstallWithManifest3Function() {
 }
@@ -237,7 +174,7 @@ bool WebstorePrivateBeginInstallWithManifest3Function::RunAsync() {
   params_ = BeginInstallWithManifest3::Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params_);
 
-  if (!extensions::Extension::IdIsValid(params_->details.id)) {
+  if (!crx_file::id_util::IdIsValid(params_->details.id)) {
     SetResultCode(INVALID_ID);
     error_ = kInvalidIdError;
     return false;
@@ -318,8 +255,6 @@ const char* WebstorePrivateBeginInstallWithManifest3Function::
       return "permission_denied";
     case INVALID_ICON_URL:
       return "invalid_icon_url";
-    case SIGNIN_FAILED:
-      return "signin_failed";
     case ALREADY_INSTALLED:
       return "already_installed";
   }
@@ -361,18 +296,16 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseSuccess(
     return;
   }
 
-  SigninManagerBase* signin_manager =
-      SigninManagerFactory::GetForProfile(GetProfile());
-  if (dummy_extension_->is_platform_app() &&
-      signin_manager &&
-      signin_manager->GetAuthenticatedUsername().empty() &&
-      signin_manager->AuthInProgress()) {
-    signin_tracker_ =
-        SigninTrackerFactory::CreateForProfile(GetProfile(), this);
+  content::WebContents* web_contents = GetAssociatedWebContents();
+  if (!web_contents)  // The browser window has gone away.
     return;
-  }
-
-  SigninCompletedOrNotNeeded();
+  install_prompt_.reset(new ExtensionInstallPrompt(web_contents));
+  install_prompt_->ConfirmWebstoreInstall(
+      this,
+      dummy_extension_.get(),
+      &icon_,
+      ExtensionInstallPrompt::GetDefaultShowDialogCallback());
+  // Control flow finishes up in InstallUIProceed or InstallUIAbort.
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseFailure(
@@ -400,45 +333,6 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseFailure(
 
   // Matches the AddRef in RunAsync().
   Release();
-}
-
-void WebstorePrivateBeginInstallWithManifest3Function::SigninFailed(
-    const GoogleServiceAuthError& error) {
-  signin_tracker_.reset();
-
-  SetResultCode(SIGNIN_FAILED);
-  error_ = error.ToString();
-  SendResponse(false);
-
-  // Matches the AddRef in RunAsync().
-  Release();
-}
-
-void WebstorePrivateBeginInstallWithManifest3Function::SigninSuccess() {
-  signin_tracker_.reset();
-
-  SigninCompletedOrNotNeeded();
-}
-
-void WebstorePrivateBeginInstallWithManifest3Function::MergeSessionComplete(
-    const GoogleServiceAuthError& error) {
-  // TODO(rogerta): once the embeded inline flow is enabled, the code in
-  // WebstorePrivateBeginInstallWithManifest3Function::SigninSuccess()
-  // should move to here.
-}
-
-void WebstorePrivateBeginInstallWithManifest3Function::
-    SigninCompletedOrNotNeeded() {
-  content::WebContents* web_contents = GetAssociatedWebContents();
-  if (!web_contents)  // The browser window has gone away.
-    return;
-  install_prompt_.reset(new ExtensionInstallPrompt(web_contents));
-  install_prompt_->ConfirmWebstoreInstall(
-      this,
-      dummy_extension_.get(),
-      &icon_,
-      ExtensionInstallPrompt::GetDefaultShowDialogCallback());
-  // Control flow finishes up in InstallUIProceed or InstallUIAbort.
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::InstallUIProceed() {
@@ -508,7 +402,7 @@ bool WebstorePrivateCompleteInstallFunction::RunAsync() {
   scoped_ptr<CompleteInstall::Params> params(
       CompleteInstall::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params);
-  if (!extensions::Extension::IdIsValid(params->expected_id)) {
+  if (!crx_file::id_util::IdIsValid(params->expected_id)) {
     error_ = kInvalidIdError;
     return false;
   }
@@ -525,8 +419,8 @@ bool WebstorePrivateCompleteInstallFunction::RunAsync() {
   scoped_active_install_.reset(new ScopedActiveInstall(
       InstallTracker::Get(GetProfile()), params->expected_id));
 
-  AppListService* app_list_service =
-      AppListService::Get(GetCurrentBrowser()->host_desktop_type());
+  AppListService* app_list_service = AppListService::Get(
+      GetHostDesktopTypeForWebContents(GetAssociatedWebContents()));
 
   if (approval_->enable_launcher) {
     app_list_service->EnableAppList(GetProfile(),
@@ -536,10 +430,8 @@ bool WebstorePrivateCompleteInstallFunction::RunAsync() {
   if (IsAppLauncherEnabled() && approval_->manifest->is_app()) {
     // Show the app list to show download is progressing. Don't show the app
     // list on first app install so users can be trained to open it themselves.
-    if (approval_->enable_launcher)
-      app_list_service->CreateForProfile(GetProfile());
-    else
-      app_list_service->AutoShowForProfile(GetProfile());
+    app_list_service->ShowForAppInstall(
+        GetProfile(), params->expected_id, approval_->enable_launcher);
   }
 
   // If the target extension has already been installed ephemerally and is
@@ -547,10 +439,10 @@ bool WebstorePrivateCompleteInstallFunction::RunAsync() {
   // downloading from the Web Store is not necessary.
   const Extension* extension = ExtensionRegistry::Get(GetProfile())->
       GetExtensionById(params->expected_id, ExtensionRegistry::EVERYTHING);
-  if (extension && approval_->dummy_extension &&
+  if (extension && approval_->dummy_extension.get() &&
       util::IsEphemeralApp(extension->id(), GetProfile()) &&
-      extension->version()->CompareTo(
-          *approval_->dummy_extension->version()) >= 0) {
+      extension->version()->CompareTo(*approval_->dummy_extension->version()) >=
+          0) {
     install_ui::ShowPostInstallUIForApproval(
         GetProfile(), *approval_, extension);
 
@@ -622,8 +514,10 @@ WebstorePrivateEnableAppLauncherFunction::
     ~WebstorePrivateEnableAppLauncherFunction() {}
 
 bool WebstorePrivateEnableAppLauncherFunction::RunSync() {
-  AppListService::Get(GetCurrentBrowser()->host_desktop_type())
-      ->EnableAppList(GetProfile(), AppListService::ENABLE_VIA_WEBSTORE_LINK);
+  AppListService* app_list_service = AppListService::Get(
+      GetHostDesktopTypeForWebContents(GetAssociatedWebContents()));
+  app_list_service->EnableAppList(GetProfile(),
+                                  AppListService::ENABLE_VIA_WEBSTORE_LINK);
   return true;
 }
 
@@ -683,103 +577,6 @@ bool WebstorePrivateIsInIncognitoModeFunction::RunSync() {
   results_ = IsInIncognitoMode::Results::Create(
       GetProfile() != GetProfile()->GetOriginalProfile());
   return true;
-}
-
-WebstorePrivateSignInFunction::WebstorePrivateSignInFunction()
-    : signin_manager_(NULL) {}
-WebstorePrivateSignInFunction::~WebstorePrivateSignInFunction() {}
-
-bool WebstorePrivateSignInFunction::RunAsync() {
-  scoped_ptr<SignIn::Params> params = SignIn::Params::Create(*args_);
-  EXTENSION_FUNCTION_VALIDATE(params);
-
-  // This API must be called only in response to a user gesture.
-  if (!user_gesture()) {
-    error_ = "user_gesture_required";
-    SendResponse(false);
-    return false;
-  }
-
-  // The |continue_url| is required, and must be hosted on the same origin as
-  // the calling page.
-  GURL continue_url(params->continue_url);
-  content::WebContents* web_contents = GetAssociatedWebContents();
-  if (!continue_url.is_valid() ||
-      continue_url.GetOrigin() !=
-          web_contents->GetLastCommittedURL().GetOrigin()) {
-    error_ = "invalid_continue_url";
-    SendResponse(false);
-    return false;
-  }
-
-  // If sign-in is disallowed, give up.
-  signin_manager_ = SigninManagerFactory::GetForProfile(GetProfile());
-  if (!signin_manager_ || !signin_manager_->IsSigninAllowed() ||
-      switches::IsEnableWebBasedSignin()) {
-    error_ = "signin_is_disallowed";
-    SendResponse(false);
-    return false;
-  }
-
-  // If the user is already signed in, there's nothing else to do.
-  if (!signin_manager_->GetAuthenticatedUsername().empty()) {
-    SendResponse(true);
-    return true;
-  }
-
-  // If an authentication is currently in progress, wait for it to complete.
-  if (signin_manager_->AuthInProgress()) {
-    SigninManagerFactory::GetInstance()->AddObserver(this);
-    signin_tracker_ =
-        SigninTrackerFactory::CreateForProfile(GetProfile(), this).Pass();
-    AddRef();  // Balanced in the sign-in observer methods below.
-    return true;
-  }
-
-  GURL signin_url =
-      signin::GetPromoURLWithContinueURL(signin::SOURCE_WEBSTORE_INSTALL,
-                                         false /* auto_close */,
-                                         false /* is_constrained */,
-                                         continue_url);
-  web_contents->GetController().LoadURL(signin_url,
-                                        content::Referrer(),
-                                        content::PAGE_TRANSITION_AUTO_TOPLEVEL,
-                                        std::string());
-
-  SendResponse(true);
-  return true;
-}
-
-void WebstorePrivateSignInFunction::SigninManagerShutdown(
-    SigninManagerBase* manager) {
-  if (manager == signin_manager_)
-    SigninFailed(GoogleServiceAuthError::AuthErrorNone());
-}
-
-void WebstorePrivateSignInFunction::SigninFailed(
-    const GoogleServiceAuthError& error) {
-  error_ = "signin_failed";
-  SendResponse(false);
-
-  SigninManagerFactory::GetInstance()->RemoveObserver(this);
-  Release();  // Balanced in RunAsync().
-}
-
-void WebstorePrivateSignInFunction::SigninSuccess() {
-  // Nothing to do yet. Keep waiting until MergeSessionComplete() is called.
-}
-
-void WebstorePrivateSignInFunction::MergeSessionComplete(
-    const GoogleServiceAuthError& error) {
-  if (error.state() == GoogleServiceAuthError::NONE) {
-    SendResponse(true);
-  } else {
-    error_ = "merge_session_failed";
-    SendResponse(false);
-  }
-
-  SigninManagerFactory::GetInstance()->RemoveObserver(this);
-  Release();  // Balanced in RunAsync().
 }
 
 WebstorePrivateLaunchEphemeralAppFunction::

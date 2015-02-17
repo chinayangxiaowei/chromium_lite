@@ -11,7 +11,6 @@
 #include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/infobars/simple_alert_infobar_delegate.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -22,6 +21,8 @@
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/plugin_service.h"
@@ -30,7 +31,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/webplugininfo.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -64,15 +64,15 @@ class ConfirmInstallDialogDelegate : public TabModalConfirmDialogDelegate,
                                scoped_ptr<PluginMetadata> plugin_metadata);
 
   // TabModalConfirmDialogDelegate methods:
-  virtual base::string16 GetTitle() OVERRIDE;
-  virtual base::string16 GetDialogMessage() OVERRIDE;
-  virtual base::string16 GetAcceptButtonTitle() OVERRIDE;
-  virtual void OnAccepted() OVERRIDE;
-  virtual void OnCanceled() OVERRIDE;
+  base::string16 GetTitle() override;
+  base::string16 GetDialogMessage() override;
+  base::string16 GetAcceptButtonTitle() override;
+  void OnAccepted() override;
+  void OnCanceled() override;
 
   // WeakPluginInstallerObserver methods:
-  virtual void DownloadStarted() OVERRIDE;
-  virtual void OnlyWeakObserversLeft() OVERRIDE;
+  void DownloadStarted() override;
+  void OnlyWeakObserversLeft() override;
 
  private:
   content::WebContents* web_contents_;
@@ -131,14 +131,14 @@ class ReloadPluginInfoBarDelegate : public ConfirmInfoBarDelegate {
  private:
   ReloadPluginInfoBarDelegate(content::NavigationController* controller,
                               const base::string16& message);
-  virtual ~ReloadPluginInfoBarDelegate();
+  ~ReloadPluginInfoBarDelegate() override;
 
   // ConfirmInfobarDelegate:
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual int GetButtons() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
+  int GetIconID() const override;
+  base::string16 GetMessageText() const override;
+  int GetButtons() const override;
+  base::string16 GetButtonLabel(InfoBarButton button) const override;
+  bool Accept() override;
 
   content::NavigationController* controller_;
   base::string16 message_;
@@ -214,19 +214,19 @@ class PluginObserver::PluginPlaceholderHost : public PluginInstallerObserver {
   }
 
   // PluginInstallerObserver methods:
-  virtual void DownloadStarted() OVERRIDE {
+  void DownloadStarted() override {
     observer_->Send(new ChromeViewMsg_StartedDownloadingPlugin(routing_id_));
   }
 
-  virtual void DownloadError(const std::string& msg) OVERRIDE {
+  void DownloadError(const std::string& msg) override {
     observer_->Send(new ChromeViewMsg_ErrorDownloadingPlugin(routing_id_, msg));
   }
 
-  virtual void DownloadCancelled() OVERRIDE {
+  void DownloadCancelled() override {
     observer_->Send(new ChromeViewMsg_CancelledDownloadingPlugin(routing_id_));
   }
 
-  virtual void DownloadFinished() OVERRIDE {
+  void DownloadFinished() override {
     observer_->Send(new ChromeViewMsg_FinishedDownloadingPlugin(routing_id_));
   }
 
@@ -335,8 +335,6 @@ bool PluginObserver::OnMessageReceived(
   IPC_BEGIN_MESSAGE_MAP(PluginObserver, message)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_BlockedOutdatedPlugin,
                         OnBlockedOutdatedPlugin)
-    IPC_MESSAGE_HANDLER(ChromeViewHostMsg_BlockedUnauthorizedPlugin,
-                        OnBlockedUnauthorizedPlugin)
     IPC_MESSAGE_HANDLER(ChromeViewHostMsg_NPAPINotSupported,
                         OnNPAPINotSupported)
 #if defined(ENABLE_PLUGIN_INSTALLATION)
@@ -365,16 +363,6 @@ bool PluginObserver::OnMessageReceived(const IPC::Message& message) {
   IPC_END_MESSAGE_MAP()
 
   return true;
-}
-
-void PluginObserver::OnBlockedUnauthorizedPlugin(
-    const base::string16& name,
-    const std::string& identifier) {
-  UnauthorizedPluginInfoBarDelegate::Create(
-      InfoBarService::FromWebContents(web_contents()),
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext())->
-          GetHostContentSettingsMap(),
-      name, identifier);
 }
 
 void PluginObserver::OnBlockedOutdatedPlugin(int placeholder_id,
@@ -454,7 +442,7 @@ void PluginObserver::OnOpenAboutPlugins() {
       GURL(chrome::kChromeUIPluginsURL),
       content::Referrer(web_contents()->GetURL(),
                         blink::WebReferrerPolicyDefault),
-      NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_AUTO_BOOKMARK, false));
+      NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_AUTO_BOOKMARK, false));
 }
 
 void PluginObserver::OnCouldNotLoadPlugin(const base::FilePath& plugin_path) {

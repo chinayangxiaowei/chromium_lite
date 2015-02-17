@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
@@ -21,6 +22,8 @@
 #include "chrome/browser/ui/login/login_prompt_test_utils.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_switches.h"
@@ -37,11 +40,14 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "net/base/filename_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/WebKit/public/web/WebInputEvent.h"
@@ -61,7 +67,7 @@ class NavigationObserver : public content::WebContentsObserver {
       : content::WebContentsObserver(web_contents),
         message_loop_runner_(new content::MessageLoopRunner) {}
 
-  virtual ~NavigationObserver() {}
+  ~NavigationObserver() override {}
 
   // Normally Wait() will not return until a main frame navigation occurs.
   // If a path is set, Wait() will return after this path has been seen,
@@ -71,8 +77,8 @@ class NavigationObserver : public content::WebContentsObserver {
   }
 
   // content::WebContentsObserver:
-  virtual void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                             const GURL& validated_url) OVERRIDE {
+  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                     const GURL& validated_url) override {
     if (!wait_for_path_.empty()) {
       if (validated_url.path() == wait_for_path_)
         message_loop_runner_->Quit();
@@ -132,18 +138,16 @@ class InfoBarObserver : public PromptObserver,
     infobar_service_->AddObserver(this);
   }
 
-  virtual ~InfoBarObserver() {
+  ~InfoBarObserver() override {
     if (infobar_service_)
       infobar_service_->RemoveObserver(this);
   }
 
  private:
   // PromptObserver:
-  virtual bool IsShowingPrompt() const OVERRIDE {
-    return infobar_is_being_shown_;
-  }
+  bool IsShowingPrompt() const override { return infobar_is_being_shown_; }
 
-  virtual void AcceptImpl() const OVERRIDE {
+  void AcceptImpl() const override {
     EXPECT_EQ(1u, infobar_service_->infobar_count());
     if (!infobar_service_->infobar_count())
       return;  // Let the test finish to gather possibly more diagnostics.
@@ -159,17 +163,15 @@ class InfoBarObserver : public PromptObserver,
   }
 
   // infobars::InfoBarManager::Observer:
-  virtual void OnInfoBarAdded(infobars::InfoBar* infobar) OVERRIDE {
+  void OnInfoBarAdded(infobars::InfoBar* infobar) override {
     infobar_is_being_shown_ = true;
   }
 
-  virtual void OnInfoBarRemoved(infobars::InfoBar* infobar,
-                                bool animate) OVERRIDE {
+  void OnInfoBarRemoved(infobars::InfoBar* infobar, bool animate) override {
     infobar_is_being_shown_ = false;
   }
 
-  virtual void OnManagerShuttingDown(
-      infobars::InfoBarManager* manager) OVERRIDE {
+  void OnManagerShuttingDown(infobars::InfoBarManager* manager) override {
     ASSERT_EQ(infobar_service_, manager);
     infobar_service_->RemoveObserver(this);
     infobar_service_ = NULL;
@@ -187,15 +189,15 @@ class BubbleObserver : public PromptObserver {
       : ui_controller_(
             ManagePasswordsUIController::FromWebContents(web_contents)) {}
 
-  virtual ~BubbleObserver() {}
+  ~BubbleObserver() override {}
 
  private:
   // PromptObserver:
-  virtual bool IsShowingPrompt() const OVERRIDE {
+  bool IsShowingPrompt() const override {
     return ui_controller_->PasswordPendingUserDecision();
   }
 
-  virtual void AcceptImpl() const OVERRIDE {
+  void AcceptImpl() const override {
     ui_controller_->SavePassword();
     EXPECT_FALSE(IsShowingPrompt());
   }
@@ -204,6 +206,14 @@ class BubbleObserver : public PromptObserver {
 
   DISALLOW_COPY_AND_ASSIGN(BubbleObserver);
 };
+
+GURL GetFileURL(const char* filename) {
+  base::FilePath path;
+  PathService::Get(chrome::DIR_TEST_DATA, &path);
+  path = path.AppendASCII("password").AppendASCII(filename);
+  CHECK(base::PathExists(path));
+  return net::FilePathToFileURL(path);
+}
 
 // static
 scoped_ptr<PromptObserver> PromptObserver::Create(
@@ -228,14 +238,14 @@ scoped_ptr<net::test_server::HttpResponse> HandleTestAuthRequest(
         new net::test_server::BasicHttpResponse);
     http_response->set_code(net::HTTP_OK);
     http_response->set_content("Success!");
-    return http_response.PassAs<net::test_server::HttpResponse>();
+    return http_response.Pass();
   } else {
     scoped_ptr<net::test_server::BasicHttpResponse> http_response(
         new net::test_server::BasicHttpResponse);
     http_response->set_code(net::HTTP_UNAUTHORIZED);
     http_response->AddCustomHeader("WWW-Authenticate",
                                    "Basic realm=\"test realm\"");
-    return http_response.PassAs<net::test_server::HttpResponse>();
+    return http_response.Pass();
   }
 }
 
@@ -247,10 +257,10 @@ scoped_ptr<net::test_server::HttpResponse> HandleTestAuthRequest(
 class PasswordManagerBrowserTest : public InProcessBrowserTest {
  public:
   PasswordManagerBrowserTest() {}
-  virtual ~PasswordManagerBrowserTest() {}
+  ~PasswordManagerBrowserTest() override {}
 
   // InProcessBrowserTest:
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     // Use TestPasswordStore to remove a possible race. Normally the
     // PasswordStore does its database manipulation on the DB thread, which
     // creates a possible race during navigation. Specifically the
@@ -263,7 +273,7 @@ class PasswordManagerBrowserTest : public InProcessBrowserTest {
         password_manager::switches::kEnableAutomaticPasswordSaving));
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     ASSERT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
   }
 
@@ -655,6 +665,27 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
   EXPECT_TRUE(prompt_observer->IsShowingPrompt());
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
+                       PromptForXHRWithNewPasswordsWithoutOnSubmit) {
+  NavigateToFile("/password/password_xhr_submit.html");
+
+  // Verify that if XHR navigation occurs and the form is properly filled out,
+  // we try and save the password even though onsubmit hasn't been called.
+  // Specifically verify that the password form saving new passwords is treated
+  // the same as a login form.
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  std::string fill_and_navigate =
+      "document.getElementById('signup_username_field').value = 'temp';"
+      "document.getElementById('signup_password_field').value = 'random';"
+      "document.getElementById('confirmation_password_field').value = 'random';"
+      "send_xhr()";
+  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_navigate));
+  observer.Wait();
+  EXPECT_TRUE(prompt_observer->IsShowingPrompt());
+}
+
 IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest, NoPromptIfLinkClicked) {
   NavigateToFile("/password/password_form.html");
 
@@ -817,6 +848,24 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
       "var password = form.children[1];"
       "password.value = 'random';"
       "form.children[2].click()";  // form.children[2] is the submit button.
+  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
+  observer.Wait();
+  EXPECT_FALSE(prompt_observer->IsShowingPrompt());
+}
+
+// Test for checking that no prompt is shown for URLs with file: scheme.
+IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
+                       NoPromptForFileSchemeURLs) {
+  GURL url = GetFileURL("password_form.html");
+  ui_test_utils::NavigateToURL(browser(), url);
+
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  std::string fill_and_submit =
+      "document.getElementById('username_field').value = 'temp';"
+      "document.getElementById('password_field').value = 'random';"
+      "document.getElementById('input_submit_button').click();";
   ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
   observer.Wait();
   EXPECT_FALSE(prompt_observer->IsShowingPrompt());
@@ -1012,7 +1061,7 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest, NoPromptWhenReloading) {
       PromptObserver::Create(WebContents()));
   GURL url = embedded_test_server()->GetURL("/password/password_form.html");
   chrome::NavigateParams params(browser(), url,
-                                content::PAGE_TRANSITION_RELOAD);
+                                ui::PAGE_TRANSITION_RELOAD);
   ui_test_utils::NavigateToURL(&params);
   observer.Wait();
   EXPECT_FALSE(prompt_observer->IsShowingPrompt());
@@ -1120,3 +1169,131 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
   EXPECT_TRUE(prompt_observer->IsShowingPrompt());
 }
 
+// Test that if login fails and content server pushes a different login form
+// with action URL having different schemes. Heuristic shall be able
+// identify such cases and *shall not* prompt to save incorrect password.
+IN_PROC_BROWSER_TEST_F(
+    PasswordManagerBrowserTest,
+    NoPromptForLoginFailedAndServerPushSeperateLoginForm_HttpToHttps) {
+  std::string path =
+      "/password/separate_login_form_with_onload_submit_script.html";
+  GURL http_url(embedded_test_server()->GetURL(path));
+  ASSERT_TRUE(http_url.SchemeIs(url::kHttpScheme));
+
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  ui_test_utils::NavigateToURL(browser(), http_url);
+
+  observer.SetPathToWaitFor("/password/done_and_separate_login_form.html");
+  observer.Wait();
+
+  EXPECT_FALSE(prompt_observer->IsShowingPrompt());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PasswordManagerBrowserTest,
+    NoPromptForLoginFailedAndServerPushSeperateLoginForm_HttpsToHttp) {
+  CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kAllowRunningInsecureContent);
+  CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kIgnoreCertificateErrors);
+  const base::FilePath::CharType kDocRoot[] =
+      FILE_PATH_LITERAL("chrome/test/data");
+  net::SpawnedTestServer https_test_server(
+      net::SpawnedTestServer::TYPE_HTTPS,
+      net::SpawnedTestServer::SSLOptions(
+          net::SpawnedTestServer::SSLOptions::CERT_OK),
+      base::FilePath(kDocRoot));
+  ASSERT_TRUE(https_test_server.Start());
+
+  // This test case cannot inject the scripts via content::ExecuteScript() in
+  // files served through HTTPS. Therefore the scripts are made part of the HTML
+  // site and executed on load.
+  std::string path =
+      "password/separate_login_form_with_onload_submit_script.html";
+  GURL https_url(https_test_server.GetURL(path));
+  ASSERT_TRUE(https_url.SchemeIs(url::kHttpsScheme));
+
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  ui_test_utils::NavigateToURL(browser(), https_url);
+
+  observer.SetPathToWaitFor("/password/done_and_separate_login_form.html");
+  observer.Wait();
+
+  EXPECT_FALSE(prompt_observer->IsShowingPrompt());
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
+                       PromptWhenPasswordFormWithoutUsernameFieldSubmitted) {
+  password_manager::TestPasswordStore* password_store =
+      static_cast<password_manager::TestPasswordStore*>(
+          PasswordStoreFactory::GetForProfile(browser()->profile(),
+                                              Profile::IMPLICIT_ACCESS).get());
+
+  EXPECT_TRUE(password_store->IsEmpty());
+
+  NavigateToFile("/password/form_with_only_password_field.html");
+
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  std::string submit =
+      "document.getElementById('password').value = 'password';"
+      "document.getElementById('submit-button').click();";
+  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), submit));
+  observer.Wait();
+
+  EXPECT_TRUE(prompt_observer->IsShowingPrompt());
+  prompt_observer->Accept();
+
+  // Spin the message loop to make sure the password store had a chance to save
+  // the password.
+  base::RunLoop run_loop;
+  run_loop.RunUntilIdle();
+  EXPECT_FALSE(password_store->IsEmpty());
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerBrowserTest,
+                       AutofillSuggetionsForPasswordFormWithoutUsernameField) {
+  password_manager::TestPasswordStore* password_store =
+      static_cast<password_manager::TestPasswordStore*>(
+          PasswordStoreFactory::GetForProfile(browser()->profile(),
+                                              Profile::IMPLICIT_ACCESS).get());
+
+  EXPECT_TRUE(password_store->IsEmpty());
+
+  // Password form without username-field.
+  NavigateToFile("/password/form_with_only_password_field.html");
+
+  NavigationObserver observer(WebContents());
+  scoped_ptr<PromptObserver> prompt_observer(
+      PromptObserver::Create(WebContents()));
+  std::string submit =
+      "document.getElementById('password').value = 'mypassword';"
+      "document.getElementById('submit-button').click();";
+  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), submit));
+  observer.Wait();
+
+  prompt_observer->Accept();
+
+  // Spin the message loop to make sure the password store had a chance to save
+  // the password.
+  base::RunLoop run_loop;
+  run_loop.RunUntilIdle();
+  EXPECT_FALSE(password_store->IsEmpty());
+
+  // Now, navigate to same html password form and verify whether password is
+  // autofilled.
+  NavigateToFile("/password/form_with_only_password_field.html");
+
+  // Let the user interact with the page, so that DOM gets modification events,
+  // needed for autofilling fields.
+  content::SimulateMouseClickAt(
+      WebContents(), 0, blink::WebMouseEvent::ButtonLeft, gfx::Point(1, 1));
+
+  // Wait until that interaction causes the password value to be revealed.
+  WaitForElementValue("password", "mypassword");
+}

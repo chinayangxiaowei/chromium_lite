@@ -81,6 +81,7 @@ void InProcessReceiver::StartOnMainThread() {
                        cast_environment_->GetTaskRunner(CastEnvironment::MAIN),
                        local_end_point_,
                        remote_end_point_,
+                       65536,
                        base::Bind(&InProcessReceiver::UpdateCastTransportStatus,
                                   base::Unretained(this))));
   cast_receiver_ = CastReceiver::Create(
@@ -107,7 +108,7 @@ void InProcessReceiver::GotVideoFrame(
     const base::TimeTicks& playout_time,
     bool is_continuous) {
   DCHECK(cast_environment_->CurrentlyOn(CastEnvironment::MAIN));
-  if (video_frame)
+  if (video_frame.get())
     OnVideoFrame(video_frame, playout_time, is_continuous);
   PullNextVideoFrame();
 }

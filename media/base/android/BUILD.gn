@@ -45,10 +45,18 @@ source_set("android") {
     "webaudio_media_codec_info.h",
   ]
   configs += [ "//media:media_config" ]
-  deps = [ ":media_jni_headers" ]
+  deps = [
+    ":media_jni_headers",
+    "//media:shared_memory_support",
+    "//media/base",
+    "//third_party/widevine/cdm:version_h",
+    "//ui/gl",
+    "//url",
+  ]
 }
 
 source_set("unittests") {
+  testonly = true
   sources = [
     "media_codec_bridge_unittest.cc",
     "media_drm_bridge_unittest.cc",
@@ -59,6 +67,7 @@ source_set("unittests") {
     "//media/base:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/widevine/cdm:version_h",
   ]
   configs += [ "//media:media_config" ]
 }
@@ -84,4 +93,25 @@ generate_jni("video_capture_jni_headers") {
     "java/src/org/chromium/media/VideoCaptureFactory.java",
   ]
   jni_package = "media"
+}
+
+java_cpp_enum("media_java_enums_srcjar") {
+  sources = [
+    "//media/video/capture/android/video_capture_device_android.h",
+  ]
+  outputs = [
+    "org/chromium/media/AndroidImageFormat.java",
+  ]
+}
+
+android_library("media_java") {
+  deps = [
+    "//base:base_java",
+  ]
+
+  srcjar_deps = [
+    ":media_java_enums_srcjar",
+  ]
+
+  DEPRECATED_java_in_dir = "java/src"
 }

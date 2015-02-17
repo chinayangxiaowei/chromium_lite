@@ -116,6 +116,13 @@ bool ContentBrowserClient::AllowAppCache(const GURL& manifest_url,
   return true;
 }
 
+bool ContentBrowserClient::AllowServiceWorker(
+    const GURL& scope,
+    const GURL& document_url,
+    content::ResourceContext* context) {
+  return true;
+}
+
 bool ContentBrowserClient::AllowGetCookie(const GURL& url,
                                           const GURL& first_party,
                                           const net::CookieList& cookie_list,
@@ -212,31 +219,13 @@ ContentBrowserClient::CheckDesktopNotificationPermission(
   return blink::WebNotificationPermissionAllowed;
 }
 
-void ContentBrowserClient::RequestGeolocationPermission(
+void ContentBrowserClient::RequestPermission(
+    PermissionType permission,
     WebContents* web_contents,
     int bridge_id,
     const GURL& requesting_frame,
     bool user_gesture,
-    base::Callback<void(bool)> result_callback,
-    base::Closure* cancel_callback) {
-  result_callback.Run(true);
-}
-
-void ContentBrowserClient::RequestMidiSysExPermission(
-    WebContents* web_contents,
-    int bridge_id,
-    const GURL& requesting_frame,
-    bool user_gesture,
-    base::Callback<void(bool)> result_callback,
-    base::Closure* cancel_callback) {
-  result_callback.Run(true);
-}
-
-void ContentBrowserClient::RequestProtectedMediaIdentifierPermission(
-    WebContents* web_contents,
-    const GURL& origin,
-    base::Callback<void(bool)> result_callback,
-    base::Closure* cancel_callback) {
+    const base::Callback<void(bool)>& result_callback) {
   result_callback.Run(true);
 }
 
@@ -257,11 +246,6 @@ bool ContentBrowserClient::CanCreateWindow(
     bool* no_javascript_access) {
   *no_javascript_access = false;
   return true;
-}
-
-std::string ContentBrowserClient::GetWorkerProcessTitle(
-    const GURL& url, ResourceContext* context) {
-  return std::string();
 }
 
 SpeechRecognitionManagerDelegate*
@@ -349,5 +333,12 @@ ContentBrowserClient::OverrideCreateExternalVideoSurfaceContainer(
   return NULL;
 }
 #endif
+
+bool ContentBrowserClient::CheckMediaAccessPermission(
+    BrowserContext* browser_context,
+    const GURL& security_origin,
+    MediaStreamType type) {
+  return false;
+}
 
 }  // namespace content

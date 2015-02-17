@@ -5,17 +5,16 @@
 #include "chrome/browser/ui/views/outdated_upgrade_bubble_view.h"
 
 #include "base/metrics/histogram.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/views/elevation_icon_setter.h"
 #include "chrome/browser/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -214,7 +213,7 @@ void OutdatedUpgradeBubbleView::HandleButtonPressed(views::Button* sender) {
       navigator_->OpenURL(content::OpenURLParams(GURL(kDownloadChromeUrl),
                                                  content::Referrer(),
                                                  NEW_FOREGROUND_TAB,
-                                                 content::PAGE_TRANSITION_LINK,
+                                                 ui::PAGE_TRANSITION_LINK,
                                                  false));
 #if defined(OS_WIN)
     } else {

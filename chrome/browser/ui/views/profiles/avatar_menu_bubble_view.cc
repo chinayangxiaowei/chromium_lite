@@ -22,11 +22,11 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/signin/core/browser/signin_manager.h"
 #include "components/signin/core/common/profile_management_switches.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -85,10 +85,10 @@ class BadgeImageSource: public gfx::CanvasImageSource {
                    const gfx::Size& icon_size,
                    const gfx::ImageSkia& badge);
 
-  virtual ~BadgeImageSource();
+  ~BadgeImageSource() override;
 
   // Overridden from CanvasImageSource:
-  virtual void Draw(gfx::Canvas* canvas) OVERRIDE;
+  void Draw(gfx::Canvas* canvas) override;
 
  private:
   gfx::Size ComputeSize(const gfx::ImageSkia& icon,
@@ -152,10 +152,10 @@ class EditProfileLink : public views::Link {
   explicit EditProfileLink(const base::string16& title,
                            HighlightDelegate* delegate);
 
-  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnFocus() OVERRIDE;
-  virtual void OnBlur() OVERRIDE;
+  void OnMouseEntered(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
+  void OnFocus() override;
+  void OnBlur() override;
 
   views::CustomButton::ButtonState state() { return state_; }
 
@@ -207,15 +207,15 @@ class ProfileItemView : public views::CustomButton,
                   AvatarMenuBubbleView* parent,
                   AvatarMenu* menu);
 
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
-  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnFocus() OVERRIDE;
-  virtual void OnBlur() OVERRIDE;
+  gfx::Size GetPreferredSize() const override;
+  void Layout() override;
+  void OnMouseEntered(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
+  void OnFocus() override;
+  void OnBlur() override;
 
-  virtual void OnHighlightStateChanged() OVERRIDE;
-  virtual void OnFocusStateChanged(bool has_focus) OVERRIDE;
+  void OnHighlightStateChanged() override;
+  void OnFocusStateChanged(bool has_focus) override;
 
   const AvatarMenu::Item& item() const { return item_; }
   EditProfileLink* edit_link() { return edit_link_; }
@@ -517,6 +517,7 @@ AvatarMenuBubbleView::AvatarMenuBubbleView(
       buttons_view_(NULL),
       supervised_user_info_(NULL),
       separator_switch_users_(NULL),
+      switch_profile_link_(nullptr),
       expanded_(false) {
   avatar_menu_.reset(new AvatarMenu(
       &g_browser_process->profile_manager()->GetProfileInfoCache(),
@@ -757,6 +758,7 @@ void AvatarMenuBubbleView::InitSupervisedUserContents(
                        ui::ResourceBundle::GetSharedInstance().GetFontList(
                            ui::ResourceBundle::SmallFont));
   supervised_user_info_->SetMultiLine(true);
+  supervised_user_info_->SetAllowCharacterBreak(true);
   supervised_user_info_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   supervised_user_info_->SetBackgroundColor(color());
   AddChildView(supervised_user_info_);

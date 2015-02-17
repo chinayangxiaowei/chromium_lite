@@ -4,6 +4,7 @@
 
 #include "components/autofill/core/browser/autofill_field.h"
 
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/sha1.h"
 #include "base/strings/string_number_conversions.h"
@@ -14,6 +15,7 @@
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/phone_number.h"
 #include "components/autofill/core/browser/state_names.h"
+#include "components/autofill/core/common/autofill_switches.h"
 #include "grit/components_strings.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_data.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_formatter.h"
@@ -280,21 +282,23 @@ bool FillCreditCardTypeSelectControl(const base::string16& value,
 void FillPhoneNumberField(const AutofillField& field,
                           const base::string16& number,
                           FormFieldData* field_data) {
-  // Check to see if the size field matches the "prefix" or "suffix" sizes and
-  // fill accordingly.
+  field_data->value =
+      AutofillField::GetPhoneNumberValue(field, number, *field_data);
+}
+
+// Set |field_data|'s value to |number|, or possibly an appropriate substring
+// of |number| for cases where credit card number splits across multiple HTML
+// form input fields.
+// The |field| specifies the |credit_card_number_offset_| to the substring
+// within credit card number.
+void FillCreditCardNumberField(const AutofillField& field,
+                               const base::string16& number,
+                               FormFieldData* field_data) {
   base::string16 value = number;
-  if (number.length() ==
-          PhoneNumber::kPrefixLength + PhoneNumber::kSuffixLength) {
-    if (field.phone_part() == AutofillField::PHONE_PREFIX ||
-        field_data->max_length == PhoneNumber::kPrefixLength) {
-      value = number.substr(PhoneNumber::kPrefixOffset,
-                            PhoneNumber::kPrefixLength);
-    } else if (field.phone_part() == AutofillField::PHONE_SUFFIX ||
-               field_data->max_length == PhoneNumber::kSuffixLength) {
-      value = number.substr(PhoneNumber::kSuffixOffset,
-                            PhoneNumber::kSuffixLength);
-    }
-  }
+
+  // |field|'s max_length truncates credit card number to fit within.
+  if (field.credit_card_number_offset() < value.length())
+    value = value.substr(field.credit_card_number_offset());
 
   field_data->value = value;
 }
@@ -397,7 +401,8 @@ AutofillField::AutofillField()
       heuristic_type_(UNKNOWN_TYPE),
       html_type_(HTML_TYPE_UNKNOWN),
       html_mode_(HTML_MODE_NONE),
-      phone_part_(IGNORED) {
+      phone_part_(IGNORED),
+      credit_card_number_offset_(0) {
 }
 
 AutofillField::AutofillField(const FormFieldData& field,
@@ -408,7 +413,8 @@ AutofillField::AutofillField(const FormFieldData& field,
       heuristic_type_(UNKNOWN_TYPE),
       html_type_(HTML_TYPE_UNKNOWN),
       html_mode_(HTML_MODE_NONE),
-      phone_part_(IGNORED) {
+      phone_part_(IGNORED),
+      credit_card_number_offset_(0) {
 }
 
 AutofillField::~AutofillField() {}
@@ -466,7 +472,10 @@ std::string AutofillField::FieldSignature() const {
 }
 
 bool AutofillField::IsFieldFillable() const {
-  return should_autocomplete && !Type().IsUnknown();
+  return (should_autocomplete ||
+          base::CommandLine::ForCurrentProcess()->HasSwitch(
+              switches::kIgnoreAutocompleteOffForAutofill)) &&
+         !Type().IsUnknown();
 }
 
 // static
@@ -487,10 +496,39 @@ bool AutofillField::FillFormField(const AutofillField& field,
   } else if (type.GetStorableType() == ADDRESS_HOME_STREET_ADDRESS) {
     FillStreetAddress(value, address_language_code, field_data);
     return true;
+  } else if (type.GetStorableType() == CREDIT_CARD_NUMBER) {
+    FillCreditCardNumberField(field, value, field_data);
+    return true;
   }
 
   field_data->value = value;
   return true;
+}
+
+base::string16 AutofillField::GetPhoneNumberValue(
+    const AutofillField& field,
+    const base::string16& number,
+    const FormFieldData& field_data) {
+  // Check to see if the size field matches the "prefix" or "suffix" size.
+  // If so, return the appropriate substring.
+  if (number.length() !=
+          PhoneNumber::kPrefixLength + PhoneNumber::kSuffixLength) {
+    return number;
+  }
+
+  if (field.phone_part() == AutofillField::PHONE_PREFIX ||
+      field_data.max_length == PhoneNumber::kPrefixLength) {
+    return
+        number.substr(PhoneNumber::kPrefixOffset, PhoneNumber::kPrefixLength);
+  }
+
+  if (field.phone_part() == AutofillField::PHONE_SUFFIX ||
+      field_data.max_length == PhoneNumber::kSuffixLength) {
+    return
+        number.substr(PhoneNumber::kSuffixOffset, PhoneNumber::kSuffixLength);
+  }
+
+  return number;
 }
 
 }  // namespace autofill

@@ -10,8 +10,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/guid.h"
 #include "base/message_loop/message_loop.h"
 #include "base/prefs/testing_pref_service.h"
@@ -59,7 +59,6 @@
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "chromeos/dbus/mock_cryptohome_client.h"
 #endif
 
@@ -134,43 +133,30 @@ struct StoragePartitionRemovalData {
 class TestStoragePartition : public StoragePartition {
  public:
   TestStoragePartition() {}
-  virtual ~TestStoragePartition() {}
+  ~TestStoragePartition() override {}
 
   // content::StoragePartition implementation.
-  virtual base::FilePath GetPath() OVERRIDE { return base::FilePath(); }
-  virtual net::URLRequestContextGetter* GetURLRequestContext() OVERRIDE {
+  base::FilePath GetPath() override { return base::FilePath(); }
+  net::URLRequestContextGetter* GetURLRequestContext() override { return NULL; }
+  net::URLRequestContextGetter* GetMediaURLRequestContext() override {
     return NULL;
   }
-  virtual net::URLRequestContextGetter* GetMediaURLRequestContext() OVERRIDE {
+  storage::QuotaManager* GetQuotaManager() override { return NULL; }
+  content::AppCacheService* GetAppCacheService() override { return NULL; }
+  storage::FileSystemContext* GetFileSystemContext() override { return NULL; }
+  storage::DatabaseTracker* GetDatabaseTracker() override { return NULL; }
+  content::DOMStorageContext* GetDOMStorageContext() override { return NULL; }
+  content::IndexedDBContext* GetIndexedDBContext() override { return NULL; }
+  content::ServiceWorkerContext* GetServiceWorkerContext() override {
     return NULL;
   }
-  virtual quota::QuotaManager* GetQuotaManager() OVERRIDE {
-    return NULL;
-  }
-  virtual content::AppCacheService* GetAppCacheService() OVERRIDE {
-    return NULL;
-  }
-  virtual fileapi::FileSystemContext* GetFileSystemContext() OVERRIDE {
-    return NULL;
-  }
-  virtual webkit_database::DatabaseTracker* GetDatabaseTracker() OVERRIDE {
-    return NULL;
-  }
-  virtual content::DOMStorageContext* GetDOMStorageContext() OVERRIDE {
-    return NULL;
-  }
-  virtual content::IndexedDBContext* GetIndexedDBContext() OVERRIDE {
-    return NULL;
-  }
-  virtual content::ServiceWorkerContext* GetServiceWorkerContext() OVERRIDE {
-    return NULL;
-  }
+  content::GeofencingManager* GetGeofencingManager() override { return NULL; }
 
-  virtual void ClearDataForOrigin(uint32 remove_mask,
-                                  uint32 quota_storage_remove_mask,
-                                  const GURL& storage_origin,
-                                  net::URLRequestContextGetter* rq_context,
-                                  const base::Closure& callback) OVERRIDE {
+  void ClearDataForOrigin(uint32 remove_mask,
+                          uint32 quota_storage_remove_mask,
+                          const GURL& storage_origin,
+                          net::URLRequestContextGetter* rq_context,
+                          const base::Closure& callback) override {
     BrowserThread::PostTask(BrowserThread::UI,
                             FROM_HERE,
                             base::Bind(&TestStoragePartition::AsyncRunCallback,
@@ -178,13 +164,13 @@ class TestStoragePartition : public StoragePartition {
                                        callback));
   }
 
-  virtual void ClearData(uint32 remove_mask,
-                         uint32 quota_storage_remove_mask,
-                         const GURL& storage_origin,
-                         const OriginMatcherFunction& origin_matcher,
-                         const base::Time begin,
-                         const base::Time end,
-                         const base::Closure& callback) OVERRIDE {
+  void ClearData(uint32 remove_mask,
+                 uint32 quota_storage_remove_mask,
+                 const GURL& storage_origin,
+                 const OriginMatcherFunction& origin_matcher,
+                 const base::Time begin,
+                 const base::Time end,
+                 const base::Closure& callback) override {
     // Store stuff to verify parameters' correctness later.
     storage_partition_removal_data_.remove_mask = remove_mask;
     storage_partition_removal_data_.quota_storage_remove_mask =
@@ -320,7 +306,7 @@ class RemoveChannelIDTester : public net::SSLConfigService::Observer {
     ssl_config_service_->AddObserver(this);
   }
 
-  virtual ~RemoveChannelIDTester() {
+  ~RemoveChannelIDTester() override {
     ssl_config_service_->RemoveObserver(this);
   }
 
@@ -364,9 +350,7 @@ class RemoveChannelIDTester : public net::SSLConfigService::Observer {
   }
 
   // net::SSLConfigService::Observer implementation:
-  virtual void OnSSLConfigChanged() OVERRIDE {
-    ssl_config_changed_count_++;
-  }
+  void OnSSLConfigChanged() override { ssl_config_changed_count_++; }
 
  private:
   static void GetAllChannelIDsCallback(
@@ -411,7 +395,7 @@ class RemoveHistoryTester {
 
   void AddHistory(const GURL& url, base::Time time) {
     history_service_->AddPage(url, time, NULL, 0, GURL(),
-        history::RedirectList(), content::PAGE_TRANSITION_LINK,
+        history::RedirectList(), ui::PAGE_TRANSITION_LINK,
         history::SOURCE_BROWSED, false);
   }
 
@@ -444,7 +428,7 @@ class RemoveAutofillTester : public autofill::PersonalDataManagerObserver {
     personal_data_manager_->AddObserver(this);
   }
 
-  virtual ~RemoveAutofillTester() {
+  ~RemoveAutofillTester() override {
     personal_data_manager_->RemoveObserver(this);
   }
 
@@ -515,7 +499,7 @@ class RemoveAutofillTester : public autofill::PersonalDataManagerObserver {
   }
 
  private:
-  virtual void OnPersonalDataChanged() OVERRIDE {
+  void OnPersonalDataChanged() override {
     base::MessageLoop::current()->Quit();
   }
 
@@ -600,24 +584,24 @@ class MockDomainReliabilityService : public DomainReliabilityService {
  public:
   MockDomainReliabilityService() : clear_count_(0) {}
 
-  virtual ~MockDomainReliabilityService() {}
+  ~MockDomainReliabilityService() override {}
 
-  virtual scoped_ptr<DomainReliabilityMonitor> CreateMonitor(
-      scoped_refptr<base::SequencedTaskRunner> network_task_runner) OVERRIDE {
+  scoped_ptr<DomainReliabilityMonitor> CreateMonitor(
+      scoped_refptr<base::SingleThreadTaskRunner> network_task_runner)
+      override {
     NOTREACHED();
     return scoped_ptr<DomainReliabilityMonitor>();
   }
 
-  virtual void ClearBrowsingData(DomainReliabilityClearMode clear_mode,
-                                 const base::Closure& callback) OVERRIDE {
+  void ClearBrowsingData(DomainReliabilityClearMode clear_mode,
+                         const base::Closure& callback) override {
     clear_count_++;
     last_clear_mode_ = clear_mode;
     callback.Run();
   }
 
-  virtual void GetWebUIData(
-      const base::Callback<void(scoped_ptr<base::Value>)>& callback)
-      const OVERRIDE {
+  void GetWebUIData(const base::Callback<void(scoped_ptr<base::Value>)>&
+                        callback) const override {
     NOTREACHED();
   }
 
@@ -640,7 +624,7 @@ struct TestingDomainReliabilityServiceFactoryUserData
       : context(context),
         service(service),
         attached(false) {}
-  virtual ~TestingDomainReliabilityServiceFactoryUserData() {}
+  ~TestingDomainReliabilityServiceFactoryUserData() override {}
 
   content::BrowserContext* const context;
   MockDomainReliabilityService* const service;
@@ -719,10 +703,9 @@ class BrowsingDataRemoverTest : public testing::Test,
                    content::Source<Profile>(profile_.get()));
   }
 
-  virtual ~BrowsingDataRemoverTest() {
-  }
+  ~BrowsingDataRemoverTest() override {}
 
-  virtual void TearDown() {
+  void TearDown() override {
 #if defined(ENABLE_EXTENSIONS)
     mock_policy_ = NULL;
 #endif
@@ -803,9 +786,9 @@ class BrowsingDataRemoverTest : public testing::Test,
   }
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     DCHECK_EQ(type, chrome::NOTIFICATION_BROWSING_DATA_REMOVED);
 
     // We're not taking ownership of the details object, but storing a copy of
@@ -820,16 +803,16 @@ class BrowsingDataRemoverTest : public testing::Test,
   MockExtensionSpecialStoragePolicy* CreateMockPolicy() {
 #if defined(ENABLE_EXTENSIONS)
     mock_policy_ = new MockExtensionSpecialStoragePolicy;
-    return mock_policy_;
+    return mock_policy_.get();
 #else
     NOTREACHED();
     return NULL;
 #endif
   }
 
-  quota::SpecialStoragePolicy* mock_policy() {
+  storage::SpecialStoragePolicy* mock_policy() {
 #if defined(ENABLE_EXTENSIONS)
-    return mock_policy_;
+    return mock_policy_.get();
 #else
     return NULL;
 #endif
@@ -1765,13 +1748,12 @@ TEST_F(BrowsingDataRemoverTest, ContentProtectionPlatformKeysRemoval) {
   mock_user_manager->SetActiveUser("test@example.com");
   chromeos::ScopedUserManagerEnabler user_manager_enabler(mock_user_manager);
 
-  chromeos::FakeDBusThreadManager* fake_dbus_manager =
-      new chromeos::FakeDBusThreadManager;
+  scoped_ptr<chromeos::DBusThreadManagerSetter> dbus_setter =
+      chromeos::DBusThreadManager::GetSetterForTesting();
   chromeos::MockCryptohomeClient* cryptohome_client =
       new chromeos::MockCryptohomeClient;
-  fake_dbus_manager->SetCryptohomeClient(
+  dbus_setter->SetCryptohomeClient(
       scoped_ptr<chromeos::CryptohomeClient>(cryptohome_client));
-  chromeos::DBusThreadManager::InitializeForTesting(fake_dbus_manager);
 
   // Expect exactly one call.  No calls means no attempt to delete keys and more
   // than one call means a significant performance problem.

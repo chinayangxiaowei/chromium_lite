@@ -25,39 +25,36 @@ class UserScriptInjector : public ScriptInjector,
                            public UserScriptSet::Observer {
  public:
   UserScriptInjector(const UserScript* user_script,
-                     UserScriptSet* user_script_set);
-  virtual ~UserScriptInjector();
+                     UserScriptSet* user_script_set,
+                     bool is_declarative);
+  ~UserScriptInjector() override;
 
  private:
   // UserScriptSet::Observer implementation.
-  virtual void OnUserScriptsUpdated(
-      const std::set<std::string>& changed_extensions,
-      const std::vector<UserScript*>& scripts) OVERRIDE;
+  void OnUserScriptsUpdated(const std::set<std::string>& changed_extensions,
+                            const std::vector<UserScript*>& scripts) override;
 
   // ScriptInjector implementation.
-  virtual UserScript::InjectionType script_type() const OVERRIDE;
-  virtual bool ShouldExecuteInChildFrames() const OVERRIDE;
-  virtual bool ShouldExecuteInMainWorld() const OVERRIDE;
-  virtual bool IsUserGesture() const OVERRIDE;
-  virtual bool ExpectsResults() const OVERRIDE;
-  virtual bool ShouldInjectJs(
-      UserScript::RunLocation run_location) const OVERRIDE;
-  virtual bool ShouldInjectCss(
-      UserScript::RunLocation run_location) const OVERRIDE;
-  virtual PermissionsData::AccessType CanExecuteOnFrame(
+  UserScript::InjectionType script_type() const override;
+  bool ShouldExecuteInChildFrames() const override;
+  bool ShouldExecuteInMainWorld() const override;
+  bool IsUserGesture() const override;
+  bool ExpectsResults() const override;
+  bool ShouldInjectJs(UserScript::RunLocation run_location) const override;
+  bool ShouldInjectCss(UserScript::RunLocation run_location) const override;
+  PermissionsData::AccessType CanExecuteOnFrame(
       const Extension* extension,
       blink::WebFrame* web_frame,
       int tab_id,
-      const GURL& top_url) const OVERRIDE;
-  virtual std::vector<blink::WebScriptSource> GetJsSources(
-      UserScript::RunLocation run_location) const OVERRIDE;
-  virtual std::vector<std::string> GetCssSources(
-      UserScript::RunLocation run_location) const OVERRIDE;
-  virtual void OnInjectionComplete(
-      scoped_ptr<base::ListValue> execution_results,
-      ScriptsRunInfo* scripts_run_info,
-      UserScript::RunLocation run_location) OVERRIDE;
-  virtual void OnWillNotInject(InjectFailureReason reason) OVERRIDE;
+      const GURL& top_url) const override;
+  std::vector<blink::WebScriptSource> GetJsSources(
+      UserScript::RunLocation run_location) const override;
+  std::vector<std::string> GetCssSources(
+      UserScript::RunLocation run_location) const override;
+  void OnInjectionComplete(scoped_ptr<base::ListValue> execution_results,
+                           ScriptsRunInfo* scripts_run_info,
+                           UserScript::RunLocation run_location) override;
+  void OnWillNotInject(InjectFailureReason reason) override;
 
   // The associated user script. Owned by the UserScriptInjector that created
   // this object.
@@ -66,10 +63,14 @@ class UserScriptInjector : public ScriptInjector,
   // The id of the associated user script. We cache this because when we update
   // the |script_| associated with this injection, the old referance may be
   // deleted.
-  int64 script_id_;
+  int script_id_;
 
   // The associated extension id, preserved for the same reason as |script_id|.
   std::string extension_id_;
+
+  // Indicates whether or not this script is declarative. This influences which
+  // script permissions are checked before injection.
+  bool is_declarative_;
 
   ScopedObserver<UserScriptSet, UserScriptSet::Observer>
       user_script_set_observer_;

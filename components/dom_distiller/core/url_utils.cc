@@ -8,7 +8,7 @@
 
 #include "base/guid.h"
 #include "components/dom_distiller/core/url_constants.h"
-#include "grit/component_resources.h"
+#include "grit/components_resources.h"
 #include "net/base/url_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/gurl.h"
@@ -33,6 +33,16 @@ const GURL GetDistillerViewUrlFromUrl(const std::string& scheme,
                                       const GURL& view_url) {
   GURL url(scheme + "://" + base::GenerateGUID());
   return net::AppendOrReplaceQueryParameter(url, kUrlKey, view_url.spec());
+}
+
+const GURL GetOriginalUrlFromDistillerUrl(const GURL& url) {
+  if (!dom_distiller::url_utils::IsDistilledPage(url))
+    return url;
+
+  std::string original_url_str;
+  net::GetValueForKeyInQuery(url, kUrlKey, &original_url_str);
+
+  return GURL(original_url_str);
 }
 
 std::string GetValueForKeyInUrl(const GURL& url, const std::string& key) {

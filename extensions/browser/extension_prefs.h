@@ -76,7 +76,6 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
     DELAY_REASON_WAIT_FOR_IMPORTS = 3,
   };
 
-
   // Creates base::Time classes. The default implementation is just to return
   // the current time, but tests can inject alternative implementations.
   class TimeProvider {
@@ -150,7 +149,7 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
       const std::vector<ExtensionPrefsObserver*>& early_observers,
       scoped_ptr<TimeProvider> time_provider);
 
-  virtual ~ExtensionPrefs();
+  ~ExtensionPrefs() override;
 
   // Convenience function to get the ExtensionPrefs for a BrowserContext.
   static ExtensionPrefs* Get(content::BrowserContext* context);
@@ -219,35 +218,34 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
   void GetExtensions(ExtensionIdList* out);
 
   // ExtensionScopedPrefs methods:
-  virtual void UpdateExtensionPref(const std::string& id,
-                                   const std::string& key,
-                                   base::Value* value) OVERRIDE;
+  void UpdateExtensionPref(const std::string& id,
+                           const std::string& key,
+                           base::Value* value) override;
 
-  virtual void DeleteExtensionPrefs(const std::string& id) OVERRIDE;
+  void DeleteExtensionPrefs(const std::string& id) override;
 
-  virtual bool ReadPrefAsBoolean(const std::string& extension_id,
-                                 const std::string& pref_key,
-                                 bool* out_value) const OVERRIDE;
+  bool ReadPrefAsBoolean(const std::string& extension_id,
+                         const std::string& pref_key,
+                         bool* out_value) const override;
 
-  virtual bool ReadPrefAsInteger(const std::string& extension_id,
-                                 const std::string& pref_key,
-                                 int* out_value) const OVERRIDE;
+  bool ReadPrefAsInteger(const std::string& extension_id,
+                         const std::string& pref_key,
+                         int* out_value) const override;
 
-  virtual bool ReadPrefAsString(const std::string& extension_id,
-                                const std::string& pref_key,
-                                std::string* out_value) const OVERRIDE;
+  bool ReadPrefAsString(const std::string& extension_id,
+                        const std::string& pref_key,
+                        std::string* out_value) const override;
 
-  virtual bool ReadPrefAsList(const std::string& extension_id,
-                              const std::string& pref_key,
-                              const base::ListValue** out_value) const OVERRIDE;
+  bool ReadPrefAsList(const std::string& extension_id,
+                      const std::string& pref_key,
+                      const base::ListValue** out_value) const override;
 
-  virtual bool ReadPrefAsDictionary(
+  bool ReadPrefAsDictionary(
       const std::string& extension_id,
       const std::string& pref_key,
-      const base::DictionaryValue** out_value) const OVERRIDE;
+      const base::DictionaryValue** out_value) const override;
 
-  virtual bool HasPrefForExtension(const std::string& extension_id) const
-      OVERRIDE;
+  bool HasPrefForExtension(const std::string& extension_id) const override;
 
   // Did the extension ask to escalate its permission during an upgrade?
   bool DidExtensionEscalatePermissions(const std::string& id);
@@ -314,31 +312,6 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
   bool IsExternalInstallFirstRun(const std::string& extension_id);
   void SetExternalInstallFirstRun(const std::string& extension_id);
 
-  // Whether the user has been notified about extension with |extension_id|
-  // being wiped out.
-  bool HasWipeoutBeenAcknowledged(const std::string& extension_id);
-  void SetWipeoutAcknowledged(const std::string& extension_id, bool value);
-
-  // Whether the user has been notified about extension with |extension_id|
-  // taking over some aspect of the user's settings (homepage, startup pages,
-  // or search engine).
-  bool HasSettingsApiBubbleBeenAcknowledged(const std::string& extension_id);
-  void SetSettingsApiBubbleBeenAcknowledged(const std::string& extension_id,
-                                            bool value);
-
-  // Whether the user has been notified about extension with |extension_id|
-  // overriding the new tab page.
-  bool HasNtpOverriddenBubbleBeenAcknowledged(const std::string& extension_id);
-  void SetNtpOverriddenBubbleBeenAcknowledged(const std::string& extension_id,
-                                              bool value);
-
-  // Whether the user has been notified about extension with |extension_id|
-  // overriding the proxy.
-  bool HasProxyOverriddenBubbleBeenAcknowledged(
-      const std::string& extension_id);
-  void SetProxyOverriddenBubbleBeenAcknowledged(const std::string& extension_id,
-                                                bool value);
-
   // Returns true if the extension notification code has already run for the
   // first time for this profile. Currently we use this flag to mean that any
   // extensions that would trigger notifications should get silently
@@ -346,11 +319,6 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
   // Subsequent calls return true. It's not possible through an API to ever
   // reset it. Don't call it unless you mean it!
   bool SetAlertSystemFirstRun();
-
-  // Checks if extensions are blacklisted by default, by policy.
-  // The ManagementPolicy::Provider methods also take this into account, and
-  // should be used instead when the extension ID is known.
-  bool ExtensionsBlacklistedByDefault() const;
 
   // Returns the last value set via SetLastPingDay. If there isn't such a
   // pref, the returned Time will return true for is_null().
@@ -533,10 +501,6 @@ class ExtensionPrefs : public ExtensionScopedPrefs, public KeyedService {
 
   // The underlying AppSorting.
   AppSorting* app_sorting() const { return app_sorting_.get(); }
-
-  // Describes the URLs that are able to install extensions. See
-  // pref_names::kAllowedInstallSites for more information.
-  URLPatternSet GetAllowedInstallSites();
 
   // Schedules garbage collection of an extension's on-disk data on the next
   // start of this ExtensionService. Applies only to extensions with isolated

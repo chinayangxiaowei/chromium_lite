@@ -160,12 +160,14 @@ scoped_ptr<base::DictionaryValue> Decrypt(const std::string& passphrase,
 
 std::string GetSourceAsString(ONCSource source) {
   switch (source) {
+    case ONC_SOURCE_UNKNOWN:
+      return "unknown";
+    case ONC_SOURCE_NONE:
+      return "none";
     case ONC_SOURCE_DEVICE_POLICY:
       return "device policy";
     case ONC_SOURCE_USER_POLICY:
       return "user policy";
-    case ONC_SOURCE_NONE:
-      return "none";
     case ONC_SOURCE_USER_IMPORT:
       return "user import";
   }
@@ -261,7 +263,7 @@ class OncMaskValues : public Mapper {
       const OncValueSignature& object_signature,
       const base::Value& onc_value,
       bool* found_unknown_field,
-      bool* error) OVERRIDE {
+      bool* error) override {
     if (FieldIsCredential(object_signature, field_name)) {
       return scoped_ptr<base::Value>(new base::StringValue(mask_));
     } else {

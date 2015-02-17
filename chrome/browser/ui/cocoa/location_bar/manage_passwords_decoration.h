@@ -13,6 +13,7 @@
 #include "chrome/browser/ui/passwords/manage_passwords_icon.h"
 
 class CommandUpdater;
+class LocationBarViewMac;
 class ManagePasswordsDecoration;
 
 // Cocoa implementation of ManagePasswordsIcon that delegates to
@@ -21,7 +22,7 @@ class ManagePasswordsIconCocoa : public ManagePasswordsIcon {
  public:
   ManagePasswordsIconCocoa(ManagePasswordsDecoration* decoration);
   virtual ~ManagePasswordsIconCocoa();
-  virtual void UpdateVisibleUI() OVERRIDE;
+  void UpdateVisibleUI() override;
 
   int icon_id() { return icon_id_; }
   int tooltip_text_id() { return tooltip_text_id_; }
@@ -34,14 +35,15 @@ class ManagePasswordsIconCocoa : public ManagePasswordsIcon {
 // password management is available on the current page.
 class ManagePasswordsDecoration : public ImageDecoration {
  public:
-  explicit ManagePasswordsDecoration(CommandUpdater* command_updater);
-  virtual ~ManagePasswordsDecoration();
+  explicit ManagePasswordsDecoration(CommandUpdater* command_updater,
+                                     LocationBarViewMac* location_bar);
+  ~ManagePasswordsDecoration() override;
 
   // Implement |LocationBarDecoration|
-  virtual bool AcceptsMousePress() OVERRIDE;
-  virtual bool OnMousePressed(NSRect frame, NSPoint location) OVERRIDE;
-  virtual NSString* GetToolTip() OVERRIDE;
-  virtual NSPoint GetBubblePointInFrame(NSRect frame) OVERRIDE;
+  bool AcceptsMousePress() override;
+  bool OnMousePressed(NSRect frame, NSPoint location) override;
+  NSString* GetToolTip() override;
+  NSPoint GetBubblePointInFrame(NSRect frame) override;
 
   // Updates the decoration according to icon state changes.
   void UpdateVisibleUI();
@@ -50,8 +52,17 @@ class ManagePasswordsDecoration : public ImageDecoration {
   ManagePasswordsIconCocoa* icon() { return icon_.get(); }
 
  private:
+  // Triggers a redraw after a state change.
+  void OnChange();
+
+  // Updates child view states.
+  void UpdateUIState();
+
   // Shows the manage passwords bubble.
   CommandUpdater* command_updater_;  // Weak, owned by Browser.
+
+  // Displays all the decorations.
+  LocationBarViewMac* location_bar_;  // Weak, owns us.
 
   // The platform-independent interface.
   scoped_ptr<ManagePasswordsIconCocoa> icon_;

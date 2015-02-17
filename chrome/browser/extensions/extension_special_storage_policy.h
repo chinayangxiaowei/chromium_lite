@@ -10,10 +10,14 @@
 
 #include "base/synchronization/lock.h"
 #include "extensions/common/extension_set.h"
+#include "storage/browser/quota/special_storage_policy.h"
 #include "url/gurl.h"
-#include "webkit/browser/quota/special_storage_policy.h"
 
 class CookieSettings;
+
+namespace content {
+class BrowserContext;
+}
 
 namespace extensions {
 class Extension;
@@ -22,22 +26,23 @@ class Extension;
 // Special rights are granted to 'extensions' and 'applications'. The
 // storage subsystems and the browsing data remover query this interface
 // to determine which origins have these rights.
-class ExtensionSpecialStoragePolicy : public quota::SpecialStoragePolicy {
+class ExtensionSpecialStoragePolicy : public storage::SpecialStoragePolicy {
  public:
   explicit ExtensionSpecialStoragePolicy(CookieSettings* cookie_settings);
 
-  // quota::SpecialStoragePolicy methods used by storage subsystems and the
+  // storage::SpecialStoragePolicy methods used by storage subsystems and the
   // browsing data remover. These methods are safe to call on any thread.
-  virtual bool IsStorageProtected(const GURL& origin) OVERRIDE;
-  virtual bool IsStorageUnlimited(const GURL& origin) OVERRIDE;
-  virtual bool IsStorageSessionOnly(const GURL& origin) OVERRIDE;
-  virtual bool CanQueryDiskSize(const GURL& origin) OVERRIDE;
-  virtual bool IsFileHandler(const std::string& extension_id) OVERRIDE;
-  virtual bool HasIsolatedStorage(const GURL& origin) OVERRIDE;
-  virtual bool HasSessionOnlyOrigins() OVERRIDE;
+  bool IsStorageProtected(const GURL& origin) override;
+  bool IsStorageUnlimited(const GURL& origin) override;
+  bool IsStorageSessionOnly(const GURL& origin) override;
+  bool CanQueryDiskSize(const GURL& origin) override;
+  bool IsFileHandler(const std::string& extension_id) override;
+  bool HasIsolatedStorage(const GURL& origin) override;
+  bool HasSessionOnlyOrigins() override;
 
   // Methods used by the ExtensionService to populate this class.
-  void GrantRightsForExtension(const extensions::Extension* extension);
+  void GrantRightsForExtension(const extensions::Extension* extension,
+                               content::BrowserContext* browser_context);
   void RevokeRightsForExtension(const extensions::Extension* extension);
   void RevokeRightsForAllExtensions();
 
@@ -50,7 +55,7 @@ class ExtensionSpecialStoragePolicy : public quota::SpecialStoragePolicy {
       const GURL& origin);
 
  protected:
-  virtual ~ExtensionSpecialStoragePolicy();
+  ~ExtensionSpecialStoragePolicy() override;
 
  private:
   class SpecialCollection {

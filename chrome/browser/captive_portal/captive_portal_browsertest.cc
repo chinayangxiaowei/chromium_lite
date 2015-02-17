@@ -41,10 +41,10 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
-#include "content/test/net/url_request_failed_job.h"
-#include "content/test/net/url_request_mock_http_job.h"
 #include "net/base/net_errors.h"
 #include "net/http/transport_security_state.h"
+#include "net/test/url_request/url_request_failed_job.h"
+#include "net/test/url_request/url_request_mock_http_job.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -55,9 +55,9 @@
 
 using captive_portal::CaptivePortalResult;
 using content::BrowserThread;
-using content::URLRequestFailedJob;
-using content::URLRequestMockHTTPJob;
 using content::WebContents;
+using net::URLRequestFailedJob;
+using net::URLRequestMockHTTPJob;
 
 namespace {
 
@@ -116,7 +116,7 @@ class URLRequestTimeoutOnDemandJob : public net::URLRequestJob,
                                      public base::NonThreadSafe {
  public:
   // net::URLRequestJob:
-  virtual void Start() OVERRIDE;
+  void Start() override;
 
   // All the public static methods below can be called on any thread.
 
@@ -144,7 +144,7 @@ class URLRequestTimeoutOnDemandJob : public net::URLRequestJob,
 
   URLRequestTimeoutOnDemandJob(net::URLRequest* request,
                                net::NetworkDelegate* network_delegate);
-  virtual ~URLRequestTimeoutOnDemandJob();
+  ~URLRequestTimeoutOnDemandJob() override;
 
   // Attempts to removes |this| from |jobs_|.  Returns true if it was removed
   // from the list.
@@ -427,7 +427,9 @@ net::URLRequestJob* URLRequestMockCaptivePortalJobFactory::Factory(
     return new URLRequestMockHTTPJob(
         request,
         network_delegate,
-        root_http.Append(FILE_PATH_LITERAL("title2.html")));
+        root_http.Append(FILE_PATH_LITERAL("title2.html")),
+        BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
+            base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
   } else if (request->url() == GURL(kMockHttpsQuickTimeoutUrl)) {
     if (behind_captive_portal_)
       return new URLRequestFailedJob(
@@ -437,7 +439,9 @@ net::URLRequestJob* URLRequestMockCaptivePortalJobFactory::Factory(
     return new URLRequestMockHTTPJob(
         request,
         network_delegate,
-        root_http.Append(FILE_PATH_LITERAL("title2.html")));
+        root_http.Append(FILE_PATH_LITERAL("title2.html")),
+        BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
+            base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
   } else {
     // The URL should be the captive portal test URL.
     EXPECT_TRUE(GURL(kMockCaptivePortalTestUrl) == request->url() ||
@@ -450,19 +454,25 @@ net::URLRequestJob* URLRequestMockCaptivePortalJobFactory::Factory(
         return new URLRequestMockHTTPJob(
             request,
             network_delegate,
-            root_http.Append(FILE_PATH_LITERAL("captive_portal/page511.html")));
+            root_http.Append(FILE_PATH_LITERAL("captive_portal/page511.html")),
+            BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
+                base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
       }
       return new URLRequestMockHTTPJob(
           request,
           network_delegate,
-          root_http.Append(FILE_PATH_LITERAL("captive_portal/login.html")));
+          root_http.Append(FILE_PATH_LITERAL("captive_portal/login.html")),
+          BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
+              base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
     }
 
     // After logging in to the portal, the test URLs return a 204 response.
     return new URLRequestMockHTTPJob(
         request,
         network_delegate,
-        root_http.Append(FILE_PATH_LITERAL("captive_portal/page204.html")));
+        root_http.Append(FILE_PATH_LITERAL("captive_portal/page204.html")),
+        BrowserThread::GetBlockingPool()->GetTaskRunnerWithShutdownBehavior(
+            base::SequencedWorkerPool::SKIP_ON_SHUTDOWN));
   }
 }
 
@@ -493,7 +503,7 @@ bool IsLoginTab(WebContents* web_contents) {
 class MultiNavigationObserver : public content::NotificationObserver {
  public:
   MultiNavigationObserver();
-  virtual ~MultiNavigationObserver();
+  ~MultiNavigationObserver() override;
 
   // Waits for exactly |num_navigations_to_wait_for| LOAD_STOP
   // notifications to have occurred since the construction of |this|.  More
@@ -511,8 +521,9 @@ class MultiNavigationObserver : public content::NotificationObserver {
   typedef std::map<const WebContents*, int> TabNavigationMap;
 
   // content::NotificationObserver:
-  virtual void Observe(int type, const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   int num_navigations_;
 
@@ -593,7 +604,7 @@ void MultiNavigationObserver::Observe(
 class FailLoadsAfterLoginObserver : public content::NotificationObserver {
  public:
   FailLoadsAfterLoginObserver();
-  virtual ~FailLoadsAfterLoginObserver();
+  ~FailLoadsAfterLoginObserver() override;
 
   void WaitForNavigations();
 
@@ -601,8 +612,9 @@ class FailLoadsAfterLoginObserver : public content::NotificationObserver {
   typedef std::set<const WebContents*> TabSet;
 
   // content::NotificationObserver:
-  virtual void Observe(int type, const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // The set of tabs that need to be navigated.  This is the set of loading
   // tabs when the observer is created.
@@ -690,9 +702,9 @@ class CaptivePortalObserver : public content::NotificationObserver {
 
  private:
   // Records results and exits the message loop, if needed.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Number of times OnPortalResult has been called since construction.
   int num_results_received_;
@@ -789,8 +801,8 @@ class CaptivePortalBrowserTest : public InProcessBrowserTest {
   CaptivePortalBrowserTest();
 
   // InProcessBrowserTest:
-  virtual void SetUpOnMainThread() OVERRIDE;
-  virtual void TearDownOnMainThread() OVERRIDE;
+  void SetUpOnMainThread() override;
+  void TearDownOnMainThread() override;
 
   // Sets the captive portal checking preference.  Does not affect the command
   // line flag, which is set in SetUpCommandLine.
@@ -1505,7 +1517,7 @@ void CaptivePortalBrowserTest::RunNavigateLoadingTabToTimeoutTest(
   browser->OpenURL(content::OpenURLParams(timeout_url,
                                           content::Referrer(),
                                           CURRENT_TAB,
-                                          content::PAGE_TRANSITION_TYPED,
+                                          ui::PAGE_TRANSITION_TYPED,
                                           false));
   portal_observer.WaitForResults(1);
   EXPECT_FALSE(CheckPending(browser));
@@ -2092,7 +2104,7 @@ IN_PROC_BROWSER_TEST_F(CaptivePortalBrowserTest, DISABLED_TwoWindows) {
   // window.
   chrome::NavigateParams params(inactive_browser,
                                 GURL(kMockHttpsQuickTimeoutUrl),
-                                content::PAGE_TRANSITION_TYPED);
+                                ui::PAGE_TRANSITION_TYPED);
   params.disposition = NEW_BACKGROUND_TAB;
   params.window_action = chrome::NavigateParams::NO_ACTION;
   ui_test_utils::NavigateToURL(&params);

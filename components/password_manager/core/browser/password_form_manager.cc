@@ -5,6 +5,7 @@
 #include "components/password_manager/core/browser/password_form_manager.h"
 
 #include <algorithm>
+#include <set>
 
 #include "base/metrics/histogram.h"
 #include "base/metrics/user_metrics.h"
@@ -95,7 +96,7 @@ PasswordFormManager::~PasswordFormManager() {
 int PasswordFormManager::GetActionsTaken() {
   return user_action_ + kUserActionMax * (manager_action_ +
          kManagerActionMax * submit_result_);
-};
+}
 
 // TODO(timsteele): use a hash of some sort in the future?
 PasswordFormManager::MatchResultMask PasswordFormManager::DoesManage(
@@ -194,12 +195,6 @@ void PasswordFormManager::PermanentlyBlacklist() {
   SaveAsNewLogin(false);
 }
 
-void PasswordFormManager::SetUseAdditionalPasswordAuthentication(
-    bool use_additional_authentication) {
-  pending_credentials_.use_additional_authentication =
-      use_additional_authentication;
-}
-
 bool PasswordFormManager::IsNewLogin() {
   DCHECK_EQ(state_, POST_MATCHING_PHASE);
   return is_new_login_;
@@ -226,9 +221,8 @@ bool PasswordFormManager::HasValidPasswordForm() {
   // do not contain username_element and password_element values.
   if (observed_form_.scheme != PasswordForm::SCHEME_HTML)
     return true;
-  return !observed_form_.username_element.empty() &&
-         (!observed_form_.password_element.empty() ||
-          !observed_form_.new_password_element.empty());
+  return !observed_form_.password_element.empty() ||
+         !observed_form_.new_password_element.empty();
 }
 
 void PasswordFormManager::ProvisionallySave(
@@ -263,6 +257,17 @@ void PasswordFormManager::ProvisionallySave(
       is_new_login_ = true;
       user_action_ = password_changed ? kUserActionChoosePslMatch
                                       : kUserActionOverridePassword;
+
+      // Update credential to reflect that it has been used for submission.
+      // If this isn't updated, then password generation uploads are off for
+      // sites where PSL matching is required to fill the login form, as two
+      // PASSWORD votes are uploaded per saved password instead of one.
+      //
+      // TODO(gcasto): It would be nice if other state were shared such that if
+      // say a password was updated on one match it would update on all related
+      // passwords. This is a much larger change.
+      UpdateMetadataForUsage(pending_credentials_);
+
       // Normally, the copy of the PSL matched credentials, adapted for the
       // current domain, is saved automatically without asking the user, because
       // the copy likely represents the same account, i.e., the one for which
@@ -441,7 +446,13 @@ void PasswordFormManager::OnRequestDone(
 
   client_->AutofillResultsComputed();
 
+  // TODO(gcasto): Change this to check that best_matches_ is empty. This should
+  // be equivalent for the moment, but it's less clear and may not be
+  // equivalent in the future.
   if (best_score <= 0) {
+    // If no saved forms can be used, then it isn't blacklisted and generation
+    // should be allowed.
+    driver_->AllowPasswordGenerationForForm(observed_form_);
     return;
   }
 
@@ -543,9 +554,15 @@ void PasswordFormManager::SaveAsNewLogin(bool reset_preferred_login) {
   // Upload credentials the first time they are saved. This data is used
   // by password generation to help determine account creation sites.
   // Blacklisted credentials will never be used, so don't upload a vote for
-  // them.
-  if (!pending_credentials_.blacklisted_by_user)
-    UploadPasswordForm(pending_credentials_.form_data, autofill::PASSWORD);
+  // them. Credentials that have been previously used (e.g. PSL matches) are
+  // checked to see if they are valid account creation forms.
+  if (!pending_credentials_.blacklisted_by_user) {
+    if (pending_credentials_.times_used == 0) {
+      UploadPasswordForm(pending_credentials_.form_data, autofill::PASSWORD);
+    } else {
+      CheckForAccountCreationForm(pending_credentials_, observed_form_);
+    }
+  }
 
   pending_credentials_.date_created = Time::Now();
   SanitizePossibleUsernames(&pending_credentials_);
@@ -604,8 +621,7 @@ void PasswordFormManager::UpdateLogin() {
     return;
   }
 
-  // Update metadata.
-  ++pending_credentials_.times_used;
+  UpdateMetadataForUsage(pending_credentials_);
 
   if (client_->IsSyncAccountCredential(
           base::UTF16ToUTF8(pending_credentials_.username_value),
@@ -618,10 +634,6 @@ void PasswordFormManager::UpdateLogin() {
   CheckForAccountCreationForm(pending_credentials_, observed_form_);
 
   UpdatePreferredLoginState(password_store);
-
-  // Remove alternate usernames. At this point we assume that we have found
-  // the right username.
-  pending_credentials_.other_possible_usernames.clear();
 
   // Update the new preferred login.
   if (!selected_username_.empty()) {
@@ -675,6 +687,15 @@ void PasswordFormManager::UpdateLogin() {
   }
 }
 
+void PasswordFormManager::UpdateMetadataForUsage(
+    const PasswordForm& credential) {
+  ++pending_credentials_.times_used;
+
+  // Remove alternate usernames. At this point we assume that we have found
+  // the right username.
+  pending_credentials_.other_possible_usernames.clear();
+}
+
 bool PasswordFormManager::UpdatePendingCredentialsIfOtherPossibleUsername(
     const base::string16& username) {
   for (PasswordFormMap::const_iterator it = best_matches_.begin();
@@ -724,8 +745,7 @@ void PasswordFormManager::UploadPasswordForm(
   // Note that this doesn't guarantee that the upload succeeded, only that
   // |form_data| is considered uploadable.
   bool success =
-      autofill_manager->UploadPasswordForm(
-          form_data, autofill::ACCOUNT_CREATION_PASSWORD);
+      autofill_manager->UploadPasswordForm(form_data, password_type);
   UMA_HISTOGRAM_BOOLEAN("PasswordGeneration.UploadStarted", success);
 }
 

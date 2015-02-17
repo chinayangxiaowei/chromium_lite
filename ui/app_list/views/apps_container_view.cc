@@ -26,12 +26,17 @@ AppsContainerView::AppsContainerView(AppListMainView* app_list_main_view,
       show_state_(SHOW_NONE),
       top_icon_animation_pending_count_(0) {
   apps_grid_view_ = new AppsGridView(app_list_main_view);
-  int cols = kPreferredCols;
-  int rows = kPreferredRows;
-  // ShouldCenterWindow also implies that it is wide instead of tall.
-  if (app_list_main_view->ShouldCenterWindow()) {
+  int cols;
+  int rows;
+  if (switches::IsExperimentalAppListEnabled()) {
     cols = kExperimentalPreferredCols;
     rows = kExperimentalPreferredRows;
+  } else if (app_list_main_view->ShouldCenterWindow()) {
+    cols = kCenteredPreferredCols;
+    rows = kCenteredPreferredRows;
+  } else {
+    cols = kPreferredCols;
+    rows = kPreferredRows;
   }
   apps_grid_view_->SetLayout(cols, rows);
   AddChildView(apps_grid_view_);
@@ -189,7 +194,7 @@ void AppsContainerView::SetShowState(ShowState show_state,
   Layout();
 }
 
-Rects AppsContainerView::GetTopItemIconBoundsInActiveFolder() {
+std::vector<gfx::Rect> AppsContainerView::GetTopItemIconBoundsInActiveFolder() {
   // Get the active folder's icon bounds relative to AppsContainerView.
   AppListItemView* folder_item_view =
       apps_grid_view_->activated_folder_item_view();
@@ -197,7 +202,7 @@ Rects AppsContainerView::GetTopItemIconBoundsInActiveFolder() {
       folder_item_view->GetIconBounds());
   gfx::Rect to_container = apps_grid_view_->ConvertRectToParent(to_grid_view);
 
-  return AppListFolderItem::GetTopIconsBounds(to_container);
+  return FolderImage::GetTopIconsBounds(to_container);
 }
 
 void AppsContainerView::CreateViewsForFolderTopItemsAnimation(

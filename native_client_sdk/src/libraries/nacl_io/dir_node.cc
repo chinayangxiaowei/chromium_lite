@@ -22,13 +22,12 @@ namespace {
 const ino_t kParentDirIno = -1;
 }
 
-DirNode::DirNode(Filesystem* filesystem)
+DirNode::DirNode(Filesystem* filesystem, mode_t mode)
     : Node(filesystem),
       cache_(stat_.st_ino, kParentDirIno),
       cache_built_(false) {
   SetType(S_IFDIR);
-  // Directories are raadable, writable and executable by default.
-  stat_.st_mode |= S_IRALL | S_IWALL | S_IXALL;
+  SetMode(mode);
 }
 
 DirNode::~DirNode() {
@@ -69,6 +68,12 @@ Error DirNode::GetDents(size_t offs,
   return cache_.GetDents(offs, pdir, size, out_bytes);
 }
 
+Error DirNode::Fchmod(mode_t mode) {
+  AUTO_LOCK(node_lock_);
+  SetMode(mode);
+  return 0;
+}
+
 Error DirNode::AddChild(const std::string& name, const ScopedNode& node) {
   AUTO_LOCK(node_lock_);
 
@@ -86,7 +91,7 @@ Error DirNode::AddChild(const std::string& name, const ScopedNode& node) {
 
   NodeMap_t::iterator it = map_.find(name);
   if (it != map_.end()) {
-    LOG_TRACE("Can't add child \"%s\", it already exists.", name);
+    LOG_TRACE("Can't add child \"%s\", it already exists.", name.c_str());
     return EEXIST;
   }
 

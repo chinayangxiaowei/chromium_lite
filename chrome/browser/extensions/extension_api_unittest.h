@@ -35,10 +35,12 @@ namespace extensions {
 // needed, this could be expanded to allow for alternate WebContents).
 // When calling RunFunction[AndReturn*], |args| should be in JSON format,
 // wrapped in a list. See also RunFunction* in extension_function_test_utils.h.
+// TODO(yoz): Move users of this base class to use the equivalent base class
+// in extensions/browser/api_unittest.h.
 class ExtensionApiUnittest : public BrowserWithTestWindowTest {
  public:
   ExtensionApiUnittest();
-  virtual ~ExtensionApiUnittest();
+  ~ExtensionApiUnittest() override;
 
   content::WebContents* contents() { return contents_; }
 
@@ -50,7 +52,7 @@ class ExtensionApiUnittest : public BrowserWithTestWindowTest {
 
  protected:
   // SetUp creates and loads an empty, unpacked Extension.
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
   // Creates a background page for |extension_|, and sets it for the WebContents
   // to be used in API calls.

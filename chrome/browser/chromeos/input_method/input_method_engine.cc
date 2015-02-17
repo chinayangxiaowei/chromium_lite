@@ -27,18 +27,24 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/ime/candidate_window.h"
 #include "ui/base/ime/chromeos/ime_keymap.h"
+#include "ui/base/ime/text_input_flags.h"
 #include "ui/events/event.h"
 #include "ui/events/event_processor.h"
 #include "ui/events/keycodes/dom4/keycode_converter.h"
 #include "ui/keyboard/keyboard_controller.h"
 #include "ui/keyboard/keyboard_util.h"
 
+#if defined(USE_ATHENA)
+#include "athena/screen/public/screen_manager.h"
+#endif
+
 namespace chromeos {
-const char* kErrorNotActive = "IME is not active";
-const char* kErrorWrongContext = "Context is not active";
-const char* kCandidateNotFound = "Candidate not found";
 
 namespace {
+
+const char kErrorNotActive[] = "IME is not active";
+const char kErrorWrongContext[] = "Context is not active";
+const char kCandidateNotFound[] = "Candidate not found";
 
 // Notifies InputContextHandler that the composition is changed.
 void UpdateComposition(const CompositionText& composition_text,
@@ -137,8 +143,7 @@ void GetExtensionKeyboardEventFromKeyEvent(
   ext_event->type = (event.type() == ui::ET_KEY_RELEASED) ? "keyup" : "keydown";
 
   std::string dom_code = event.code();
-  if (dom_code ==
-      ui::KeycodeConverter::GetInstance()->InvalidKeyboardEventCode())
+  if (dom_code == ui::KeycodeConverter::InvalidKeyboardEventCode())
     dom_code = ui::KeyboardCodeToDomKeycode(event.key_code());
   ext_event->code = dom_code;
   ext_event->key_code = static_cast<int>(event.key_code());
@@ -163,8 +168,6 @@ InputMethodEngine::InputMethodEngine()
 }
 
 InputMethodEngine::~InputMethodEngine() {
-  if (start_time_.ToInternalValue())
-    RecordHistogram("WorkingTime", (end_time_ - start_time_).InSeconds());
 }
 
 void InputMethodEngine::Initialize(
@@ -175,15 +178,6 @@ void InputMethodEngine::Initialize(
   // TODO(komatsu): It is probably better to set observer out of Initialize.
   observer_ = observer.Pass();
   extension_id_ = extension_id;
-}
-
-void InputMethodEngine::RecordHistogram(const char* name, int count) {
-  std::string histo_name = base::StringPrintf(
-      "InputMethod.%s.%s", name, active_component_id_.c_str());
-  base::HistogramBase* counter = base::Histogram::FactoryGet(
-      histo_name, 0, 1000000, 50, base::HistogramBase::kNoFlags);
-  if (counter)
-    counter->Add(count);
 }
 
 const std::string& InputMethodEngine::GetActiveComponentId() const {
@@ -225,6 +219,9 @@ bool InputMethodEngine::SetComposition(
         break;
       case SEGMENT_STYLE_DOUBLE_UNDERLINE:
         underline.type = CompositionText::COMPOSITION_TEXT_UNDERLINE_DOUBLE;
+        break;
+      case SEGMENT_STYLE_NO_UNDERLINE:
+        underline.type = CompositionText::COMPOSITION_TEXT_UNDERLINE_NONE;
         break;
       default:
         continue;
@@ -271,13 +268,12 @@ bool InputMethodEngine::CommitText(int context_id, const char* text,
 
   IMEBridge::Get()->GetInputContextHandler()->CommitText(text);
 
-  // Records times for using input method.
-  if (!start_time_.ToInternalValue())
-    start_time_ = base::Time::Now();
-  end_time_ = base::Time::Now();
-  // Records histograms for counts of commits and committed characters.
-  RecordHistogram("Commit", 1);
-  RecordHistogram("CommitCharacter", GetUtf8StringLength(text));
+  // Records histograms for committed characters.
+  if (!composition_text_->text().empty()) {
+    size_t len = GetUtf8StringLength(text);
+    UMA_HISTOGRAM_CUSTOM_COUNTS("InputMethod.CommitLength",
+                                len, 1, 25, 25);
+  }
   return true;
 }
 
@@ -293,8 +289,18 @@ bool InputMethodEngine::SendKeyEvents(
     return false;
   }
 
-  ui::EventProcessor* dispatcher =
-      ash::Shell::GetPrimaryRootWindow()->GetHost()->event_processor();
+  // TODO(shuchen): remove the ash/athena dependencies by leveraging
+  // aura::EnvObserver.
+  aura::Window* root_window = NULL;
+#if defined(USE_ATHENA)
+  root_window = athena::ScreenManager::Get()->GetContext()->GetRootWindow();
+#elif defined(USE_ASH)
+  root_window = ash::Shell::GetPrimaryRootWindow();
+#endif
+
+  if (!root_window)
+    return false;
+  ui::EventProcessor* dispatcher = root_window->GetHost()->event_processor();
 
   for (size_t i = 0; i < events.size(); ++i) {
     const KeyboardEvent& event = events[i];
@@ -327,6 +333,7 @@ bool InputMethodEngine::SendKeyEvents(
     if (details.dispatcher_destroyed)
       break;
   }
+
   return true;
 }
 
@@ -505,10 +512,24 @@ void InputMethodEngine::HideInputView() {
   }
 }
 
+void InputMethodEngine::SetCompositionBounds(const gfx::Rect& bounds) {
+  observer_->OnCompositionBoundsChanged(bounds);
+}
+
 void InputMethodEngine::EnableInputView() {
+#if defined(USE_ATHENA)
+  // Athena does not currently support an extension-based VK. Blocking the
+  // override forces Athena to use to the system fallback VK, without
+  // interfering with the rest of the IME system.
+  // TODO(shuchen|kevers): Remove override suppression once supported.
+  // See crbug/407579, crbug/414940 and crbug/418078.
+  NOTIMPLEMENTED();
+#else
   keyboard::SetOverrideContentUrl(input_method::InputMethodManager::Get()
+                                      ->GetActiveIMEState()
                                       ->GetCurrentInputMethod()
                                       .input_view_url());
+#endif
   keyboard::KeyboardController* keyboard_controller =
       keyboard::KeyboardController::GetInstance();
   if (keyboard_controller)
@@ -551,6 +572,13 @@ void InputMethodEngine::FocusIn(
       break;
   }
 
+  context.auto_correct =
+      !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCORRECT_OFF);
+  context.auto_complete =
+      !(input_context.flags & ui::TEXT_INPUT_FLAG_AUTOCOMPLETE_OFF);
+  context.spell_check =
+      !(input_context.flags & ui::TEXT_INPUT_FLAG_SPELLCHECK_OFF);
+
   observer_->OnFocus(context);
 }
 
@@ -570,21 +598,15 @@ void InputMethodEngine::Enable(const std::string& component_id) {
   active_component_id_ = component_id;
   observer_->OnActivate(component_id);
   current_input_type_ = IMEBridge::Get()->GetCurrentTextInputType();
-  FocusIn(IMEEngineHandlerInterface::InputContext(
-      current_input_type_, ui::TEXT_INPUT_MODE_DEFAULT));
+  FocusIn(IMEEngineHandlerInterface::InputContext(current_input_type_,
+                                                  ui::TEXT_INPUT_MODE_DEFAULT,
+                                                  ui::TEXT_INPUT_FLAG_NONE));
   EnableInputView();
-
-  start_time_ = base::Time();
-  end_time_ = base::Time();
-  RecordHistogram("Enable", 1);
 }
 
 void InputMethodEngine::Disable() {
   active_component_id_.clear();
   observer_->OnDeactivated(active_component_id_);
-
-  if (start_time_.ToInternalValue())
-    RecordHistogram("WorkingTime", (end_time_ - start_time_).InSeconds());
 }
 
 void InputMethodEngine::PropertyActivate(const std::string& property_name) {
@@ -599,7 +621,7 @@ void InputMethodEngine::ProcessKeyEvent(
     const ui::KeyEvent& key_event,
     const KeyEventDoneCallback& callback) {
 
-  KeyEventDoneCallback *handler = new KeyEventDoneCallback();
+  KeyEventDoneCallback* handler = new KeyEventDoneCallback();
   *handler = callback;
 
   KeyboardEvent ext_event;

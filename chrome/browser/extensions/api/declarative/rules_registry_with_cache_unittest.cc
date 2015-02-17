@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/api/declarative/rules_registry.h"
+#include "extensions/browser/api/declarative/rules_registry.h"
 
 // Here we test the TestRulesRegistry which is the simplest possible
 // implementation of RulesRegistryWithCache as a proxy for
@@ -10,8 +10,6 @@
 
 #include "base/command_line.h"
 #include "base/run_loop.h"
-#include "chrome/browser/extensions/api/declarative/rules_cache_delegate.h"
-#include "chrome/browser/extensions/api/declarative/test_rules_registry.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -19,6 +17,8 @@
 #include "chrome/common/extensions/features/feature_channel.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "extensions/browser/api/declarative/rules_cache_delegate.h"
+#include "extensions/browser/api/declarative/test_rules_registry.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/value_store/testing_value_store.h"
 #include "extensions/common/extension.h"
@@ -45,7 +45,7 @@ class RulesRegistryWithCacheTest : public testing::Test {
                                         &cache_delegate_,
                                         RulesRegistry::WebViewKey(0, 0))) {}
 
-  virtual void SetUp() {
+  void SetUp() override {
     env_.GetExtensionPrefs();  // Force creation before adding extensions.
     // Note that env_.MakeExtension below also forces the creation of
     // ExtensionService.
@@ -65,7 +65,7 @@ class RulesRegistryWithCacheTest : public testing::Test {
     CHECK_NE(extension2_->id(), extension1_->id());
   }
 
-  virtual ~RulesRegistryWithCacheTest() {}
+  ~RulesRegistryWithCacheTest() override {}
 
   std::string AddRule(const std::string& extension_id,
                       const std::string& rule_id,
@@ -254,16 +254,14 @@ TEST_F(RulesRegistryWithCacheTest, DeclarativeRulesStored) {
 
   scoped_ptr<base::ListValue> value(new base::ListValue);
   value->AppendBoolean(true);
-  cache_delegate->WriteToStorage(extension1_->id(),
-                                 value.PassAs<base::Value>());
+  cache_delegate->WriteToStorage(extension1_->id(), value.Pass());
   EXPECT_TRUE(cache_delegate->GetDeclarativeRulesStored(extension1_->id()));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(write_count + 1, store->write_count());
   write_count = store->write_count();
 
   value.reset(new base::ListValue);
-  cache_delegate->WriteToStorage(extension1_->id(),
-                                 value.PassAs<base::Value>());
+  cache_delegate->WriteToStorage(extension1_->id(), value.Pass());
   EXPECT_FALSE(cache_delegate->GetDeclarativeRulesStored(extension1_->id()));
   base::RunLoop().RunUntilIdle();
   // No rules currently, but previously there were, so we expect a write.
@@ -271,8 +269,7 @@ TEST_F(RulesRegistryWithCacheTest, DeclarativeRulesStored) {
   write_count = store->write_count();
 
   value.reset(new base::ListValue);
-  cache_delegate->WriteToStorage(extension1_->id(),
-                                 value.PassAs<base::Value>());
+  cache_delegate->WriteToStorage(extension1_->id(), value.Pass());
   EXPECT_FALSE(cache_delegate->GetDeclarativeRulesStored(extension1_->id()));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(write_count, store->write_count());

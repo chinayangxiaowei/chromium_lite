@@ -18,9 +18,9 @@ namespace content {
 class CONTENT_EXPORT TouchEmulator : public ui::GestureProviderClient {
  public:
   explicit TouchEmulator(TouchEmulatorClient* client);
-  virtual ~TouchEmulator();
+  ~TouchEmulator() override;
 
-  void Enable(bool allow_pinch);
+  void Enable();
   void Disable();
 
   // Note that TouchEmulator should always listen to touch events and their acks
@@ -45,7 +45,7 @@ class CONTENT_EXPORT TouchEmulator : public ui::GestureProviderClient {
 
  private:
   // ui::GestureProviderClient implementation.
-  virtual void OnGestureEvent(const ui::GestureEventData& gesture) OVERRIDE;
+  void OnGestureEvent(const ui::GestureEventData& gesture) override;
 
   // Returns cursor size in DIP.
   gfx::SizeF InitCursorFromResource(
@@ -74,7 +74,6 @@ class CONTENT_EXPORT TouchEmulator : public ui::GestureProviderClient {
   // Disabled emulator does only process touch acks left from previous
   // emulation. It does not intercept any events.
   bool enabled_;
-  bool allow_pinch_;
 
   // While emulation is on, default cursor is touch. Pressing shift changes
   // cursor to the pinch one.

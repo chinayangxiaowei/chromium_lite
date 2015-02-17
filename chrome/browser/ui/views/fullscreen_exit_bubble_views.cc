@@ -12,15 +12,15 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_service.h"
-#include "grit/generated_resources.h"
-#include "grit/ui_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/screen.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/link.h"
@@ -45,10 +45,10 @@ const int kMiddlePaddingPx = 30;
 class ButtonView : public views::View {
  public:
   ButtonView(views::ButtonListener* listener, int between_button_spacing);
-  virtual ~ButtonView();
+  ~ButtonView() override;
 
   // Returns an empty size when the view is not visible.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
+  gfx::Size GetPreferredSize() const override;
 
   views::LabelButton* accept_button() const { return accept_button_; }
   views::LabelButton* deny_button() const { return deny_button_; }
@@ -96,14 +96,13 @@ class FullscreenExitBubbleViews::FullscreenExitView
                      const base::string16& accelerator,
                      const GURL& url,
                      FullscreenExitBubbleType bubble_type);
-  virtual ~FullscreenExitView();
+  ~FullscreenExitView() override;
 
   // views::ButtonListener
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // views::LinkListener
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void LinkClicked(views::Link* source, int event_flags) override;
 
   void UpdateContent(const GURL& url, FullscreenExitBubbleType bubble_type);
 
@@ -138,7 +137,7 @@ FullscreenExitBubbleViews::FullscreenExitView::FullscreenExitView(
                               views::BubbleBorder::BIG_SHADOW,
                               SK_ColorWHITE));
   set_background(new views::BubbleBackground(bubble_border.get()));
-  SetBorder(bubble_border.PassAs<views::Border>());
+  SetBorder(bubble_border.Pass());
   SetFocusable(false);
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();

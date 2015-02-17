@@ -26,7 +26,6 @@ namespace content {
 TestInterfaces::TestInterfaces()
     : accessibility_controller_(new AccessibilityController()),
       event_sender_(new EventSender(this)),
-      gamepad_controller_(new GamepadController()),
       text_input_controller_(new TextInputController()),
       test_runner_(new TestRunner(this)),
       delegate_(0) {
@@ -50,7 +49,7 @@ TestInterfaces::~TestInterfaces() {
 
   accessibility_controller_->SetDelegate(0);
   event_sender_->SetDelegate(0);
-  gamepad_controller_->SetDelegate(0);
+  // gamepad_controller_ ignores SetDelegate(0)
   // text_input_controller_ doesn't depend on WebTestDelegate.
   test_runner_->SetDelegate(0);
 }
@@ -68,7 +67,7 @@ void TestInterfaces::SetWebView(blink::WebView* web_view,
 void TestInterfaces::SetDelegate(WebTestDelegate* delegate) {
   accessibility_controller_->SetDelegate(delegate);
   event_sender_->SetDelegate(delegate);
-  gamepad_controller_->SetDelegate(delegate);
+  gamepad_controller_ = GamepadController::Create(delegate);
   // text_input_controller_ doesn't depend on WebTestDelegate.
   test_runner_->SetDelegate(delegate);
   delegate_ = delegate;
@@ -77,7 +76,8 @@ void TestInterfaces::SetDelegate(WebTestDelegate* delegate) {
 void TestInterfaces::BindTo(blink::WebFrame* frame) {
   accessibility_controller_->Install(frame);
   event_sender_->Install(frame);
-  gamepad_controller_->Install(frame);
+  if (gamepad_controller_)
+    gamepad_controller_->Install(frame);
   text_input_controller_->Install(frame);
   test_runner_->Install(frame);
 }
@@ -85,7 +85,8 @@ void TestInterfaces::BindTo(blink::WebFrame* frame) {
 void TestInterfaces::ResetTestHelperControllers() {
   accessibility_controller_->Reset();
   event_sender_->Reset();
-  gamepad_controller_->Reset();
+  if (gamepad_controller_)
+    gamepad_controller_->Reset();
   // text_input_controller_ doesn't have any state to reset.
   blink::WebCache::clear();
 }
@@ -102,6 +103,9 @@ void TestInterfaces::SetTestIsRunning(bool running) {
 void TestInterfaces::ConfigureForTestWithURL(const blink::WebURL& test_url,
                                              bool generate_pixels) {
   std::string spec = GURL(test_url).spec();
+  size_t path_start = spec.rfind("LayoutTests/");
+  if (path_start != std::string::npos)
+    spec = spec.substr(path_start);
   test_runner_->setShouldGeneratePixelResults(generate_pixels);
   if (spec.find("loading/") != std::string::npos)
     test_runner_->setShouldDumpFrameLoadCallbacks(true);
@@ -111,17 +115,25 @@ void TestInterfaces::ConfigureForTestWithURL(const blink::WebURL& test_url,
   }
   if (spec.find("/inspector/") != std::string::npos ||
       spec.find("/inspector-enabled/") != std::string::npos)
-    test_runner_->clearDevToolsLocalStorage();
+    test_runner_->ClearDevToolsLocalStorage();
   if (spec.find("/inspector/") != std::string::npos) {
     // Subfolder name determines default panel to open.
     std::string settings = "";
     std::string test_path = spec.substr(spec.find("/inspector/") + 11);
     size_t slash_index = test_path.find("/");
+    std::string test_path_setting = base::StringPrintf(
+        "\"testPath\":\"\\\"%s\\\"\"", spec.c_str());
+
+    // TODO(pfeldman): remove once migrated to testPath.
+    std::string last_active_panel;
     if (slash_index != std::string::npos) {
-      settings = base::StringPrintf("{\"lastActivePanel\":\"\\\"%s\\\"\"}",
-                                    test_path.substr(0, slash_index).c_str());
+      last_active_panel = base::StringPrintf(
+          ",\"lastActivePanel\":\"\\\"%s\\\"\"",
+          test_path.substr(0, slash_index).c_str());
     }
-    test_runner_->showDevTools(settings, std::string());
+
+    test_runner_->ShowDevTools(base::StringPrintf("{%s%s}",
+        test_path_setting.c_str(), last_active_panel.c_str()), std::string());
   }
   if (spec.find("/viewsource/") != std::string::npos) {
     test_runner_->setShouldEnableViewSource(true);
@@ -171,13 +183,8 @@ const std::vector<WebTestProxyBase*>& TestInterfaces::GetWindowList() {
 blink::WebThemeEngine* TestInterfaces::GetThemeEngine() {
   if (!test_runner_->UseMockTheme())
     return 0;
-#if defined(OS_MACOSX)
-  if (!theme_engine_.get())
-    theme_engine_.reset(new MockWebThemeEngineMac());
-#else
   if (!theme_engine_.get())
     theme_engine_.reset(new MockWebThemeEngine());
-#endif
   return theme_engine_.get();
 }
 

@@ -21,14 +21,14 @@ class HttpPostProviderFactory;
 class FakeServerNetworkResources : public syncer::NetworkResources {
  public:
   explicit FakeServerNetworkResources(FakeServer* fake_server);
-  virtual ~FakeServerNetworkResources();
+  ~FakeServerNetworkResources() override;
 
   // NetworkResources
-  virtual
   scoped_ptr<syncer::HttpPostProviderFactory> GetHttpPostProviderFactory(
-      net::URLRequestContextGetter* baseline_context_getter,
+      const scoped_refptr<net::URLRequestContextGetter>&
+          baseline_context_getter,
       const syncer::NetworkTimeUpdateCallback& network_time_update_callback,
-      syncer::CancelationSignal* cancelation_signal) OVERRIDE;
+      syncer::CancelationSignal* cancelation_signal) override;
 
  private:
   FakeServer* const fake_server_;

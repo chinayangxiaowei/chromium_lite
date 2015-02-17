@@ -16,7 +16,7 @@
 #include "base/memory/scoped_vector.h"
 #include "base/observer_list.h"
 #include "ui/display/display_export.h"
-#include "ui/display/types/chromeos/native_display_delegate.h"
+#include "ui/display/types/native_display_delegate.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -68,35 +68,36 @@ class DISPLAY_EXPORT NativeDisplayDelegateX11 : public NativeDisplayDelegate {
   virtual ~NativeDisplayDelegateX11();
 
   // NativeDisplayDelegate overrides:
-  virtual void Initialize() OVERRIDE;
-  virtual void GrabServer() OVERRIDE;
-  virtual void UngrabServer() OVERRIDE;
-  virtual void SyncWithServer() OVERRIDE;
-  virtual void SetBackgroundColor(uint32_t color_argb) OVERRIDE;
-  virtual void ForceDPMSOn() OVERRIDE;
-  virtual std::vector<DisplaySnapshot*> GetDisplays() OVERRIDE;
+  virtual void Initialize() override;
+  virtual void GrabServer() override;
+  virtual void UngrabServer() override;
+  virtual bool TakeDisplayControl() override;
+  virtual bool RelinquishDisplayControl() override;
+  virtual void SyncWithServer() override;
+  virtual void SetBackgroundColor(uint32_t color_argb) override;
+  virtual void ForceDPMSOn() override;
+  virtual std::vector<DisplaySnapshot*> GetDisplays() override;
   virtual void AddMode(const DisplaySnapshot& output,
-                       const DisplayMode* mode) OVERRIDE;
+                       const DisplayMode* mode) override;
   virtual bool Configure(const DisplaySnapshot& output,
                          const DisplayMode* mode,
-                         const gfx::Point& origin) OVERRIDE;
-  virtual void CreateFrameBuffer(const gfx::Size& size) OVERRIDE;
+                         const gfx::Point& origin) override;
+  virtual void CreateFrameBuffer(const gfx::Size& size) override;
   virtual bool GetHDCPState(const DisplaySnapshot& output,
-                            HDCPState* state) OVERRIDE;
+                            HDCPState* state) override;
   virtual bool SetHDCPState(const DisplaySnapshot& output,
-                            HDCPState state) OVERRIDE;
+                            HDCPState state) override;
   virtual std::vector<ColorCalibrationProfile>
       GetAvailableColorCalibrationProfiles(
-          const DisplaySnapshot& output) OVERRIDE;
+          const DisplaySnapshot& output) override;
   virtual bool SetColorCalibrationProfile(
       const DisplaySnapshot& output,
-      ColorCalibrationProfile new_profile) OVERRIDE;
-  virtual void AddObserver(NativeDisplayObserver* observer) OVERRIDE;
-  virtual void RemoveObserver(NativeDisplayObserver* observer) OVERRIDE;
+      ColorCalibrationProfile new_profile) override;
+  virtual void AddObserver(NativeDisplayObserver* observer) override;
+  virtual void RemoveObserver(NativeDisplayObserver* observer) override;
 
  private:
   class HelperDelegateX11;
-  class PlatformEventObserverX11;
 
   // Parses all the modes made available by |screen_|.
   void InitModes();
@@ -148,9 +149,6 @@ class DISPLAY_EXPORT NativeDisplayDelegateX11 : public NativeDisplayDelegate {
   // Processes X11 display events associated with the root window and notifies
   // |observers_| when a display change has occurred.
   scoped_ptr<NativeDisplayEventDispatcherX11> platform_event_dispatcher_;
-
-  // Processes X11 display events that have no X11 window associated with it.
-  scoped_ptr<PlatformEventObserverX11> platform_event_observer_;
 
   // List of observers waiting for display configuration change events.
   ObserverList<NativeDisplayObserver> observers_;

@@ -6,7 +6,6 @@
 
 #include <stddef.h>
 
-#include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
@@ -18,6 +17,10 @@
 #include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
+
+// Credit card numbers are at most 19 digits in length.
+// [Ref: http://en.wikipedia.org/wiki/Bank_card_number]
+static const size_t kMaxValidCardNumberSize = 19;
 
 // static
 FormField* CreditCardField::Parse(AutofillScanner* scanner) {
@@ -41,7 +44,7 @@ FormField* CreditCardField::Parse(AutofillScanner* scanner) {
     // we search for "name" only when we've already parsed at least one other
     // credit card field and haven't yet parsed the expiration date (which
     // usually appears at the end).
-    if (credit_card_field->cardholder_ == NULL) {
+    if (!credit_card_field->cardholder_) {
       base::string16 name_pattern;
       if (fields == 0 || credit_card_field->expiration_month_) {
         // at beginning or end
@@ -52,86 +55,103 @@ FormField* CreditCardField::Parse(AutofillScanner* scanner) {
 
       if (ParseField(scanner, name_pattern, &credit_card_field->cardholder_))
         continue;
-
-      // As a hard-coded hack for Expedia's billing pages (expedia_checkout.html
-      // and ExpediaBilling.html in our test suite), recognize separate fields
-      // for the cardholder's first and last name if they have the labels "cfnm"
-      // and "clnm".
-      scanner->SaveCursor();
-      const AutofillField* first;
-      if (ParseField(scanner, base::ASCIIToUTF16("^cfnm"), &first) &&
-          ParseField(scanner, base::ASCIIToUTF16("^clnm"),
-                     &credit_card_field->cardholder_last_)) {
-        credit_card_field->cardholder_ = first;
-        continue;
-      }
-      scanner->Rewind();
     }
 
     // Check for a credit card type (Visa, MasterCard, etc.) field.
-    base::string16 type_pattern = base::UTF8ToUTF16(autofill::kCardTypeRe);
     if (!credit_card_field->type_ &&
-        ParseFieldSpecifics(scanner, type_pattern,
+        ParseFieldSpecifics(scanner,
+                            base::UTF8ToUTF16(autofill::kCardTypeRe),
                             MATCH_DEFAULT | MATCH_SELECT,
                             &credit_card_field->type_)) {
       continue;
     }
 
-    // We look for a card security code before we look for a credit
-    // card number and match the general term "number".  The security code
-    // has a plethora of names; we've seen "verification #",
-    // "verification number", "card identification number" and others listed
-    // in the |pattern| below.
-    base::string16 pattern = base::UTF8ToUTF16(autofill::kCardCvcRe);
+    // We look for a card security code before we look for a credit card number
+    // and match the general term "number". The security code has a plethora of
+    // names; we've seen "verification #", "verification number", "card
+    // identification number", and others listed in the regex pattern used
+    // below.
+    // Note: Some sites use type="tel" for numerical inputs.
     if (!credit_card_field->verification_ &&
-        ParseField(scanner, pattern, &credit_card_field->verification_)) {
+        ParseFieldSpecifics(scanner,
+                            base::UTF8ToUTF16(autofill::kCardCvcRe),
+                            MATCH_DEFAULT | MATCH_TELEPHONE | MATCH_PASSWORD,
+                            &credit_card_field->verification_)) {
       continue;
     }
 
-    pattern = base::UTF8ToUTF16(autofill::kCardNumberRe);
-    if (!credit_card_field->number_ &&
-        ParseField(scanner, pattern, &credit_card_field->number_)) {
+    AutofillField* current_number_field;
+    if (ParseFieldSpecifics(scanner,
+                            base::UTF8ToUTF16(autofill::kCardNumberRe),
+                            MATCH_DEFAULT | MATCH_TELEPHONE,
+                            &current_number_field)) {
+      // Avoid autofilling any credit card number field having very low or high
+      // |start_index| on the HTML form.
+      size_t start_index = 0;
+      if (!credit_card_field->numbers_.empty()) {
+        size_t last_number_field_size =
+            credit_card_field->numbers_.back()->credit_card_number_offset() +
+            credit_card_field->numbers_.back()->max_length;
+
+        // Distinguish between
+        //   (a) one card split across multiple fields
+        //   (b) multiple fields for multiple cards
+        // Treat this field as a part of the same card as the last field, except
+        // when doing so would cause overflow.
+        if (last_number_field_size < kMaxValidCardNumberSize)
+          start_index = last_number_field_size;
+      }
+
+      current_number_field->set_credit_card_number_offset(start_index);
+      credit_card_field->numbers_.push_back(current_number_field);
       continue;
     }
 
-    if (LowerCaseEqualsASCII(scanner->Cursor()->form_control_type, "month")) {
+    if (!credit_card_field->expiration_date_ &&
+        LowerCaseEqualsASCII(scanner->Cursor()->form_control_type, "month")) {
       credit_card_field->expiration_date_ = scanner->Cursor();
+      credit_card_field->expiration_month_ = nullptr;
+      credit_card_field->expiration_year_ = nullptr;
       scanner->Advance();
-    } else {
+      continue;
+    }
+
+    if (!credit_card_field->expiration_month_ &&
+        !credit_card_field->expiration_date_) {
       // First try to parse split month/year expiration fields.
       scanner->SaveCursor();
-      pattern = base::UTF8ToUTF16(autofill::kExpirationMonthRe);
-      if (!credit_card_field->expiration_month_ &&
-          ParseFieldSpecifics(scanner, pattern, MATCH_DEFAULT | MATCH_SELECT,
-                              &credit_card_field->expiration_month_)) {
-        pattern = base::UTF8ToUTF16(autofill::kExpirationYearRe);
-        if (ParseFieldSpecifics(scanner, pattern, MATCH_DEFAULT | MATCH_SELECT,
-                                 &credit_card_field->expiration_year_)) {
-          continue;
-        }
+      if (ParseFieldSpecifics(scanner,
+                              base::UTF8ToUTF16(autofill::kExpirationMonthRe),
+                              MATCH_DEFAULT | MATCH_SELECT,
+                              &credit_card_field->expiration_month_) &&
+          ParseFieldSpecifics(scanner,
+                              base::UTF8ToUTF16(autofill::kExpirationYearRe),
+                              MATCH_DEFAULT | MATCH_SELECT,
+                              &credit_card_field->expiration_year_)) {
+        continue;
       }
 
       // If that fails, try to parse a combined expiration field.
-      if (!credit_card_field->expiration_date_) {
-        // Look for a 2-digit year first.
-        scanner->Rewind();
-        pattern = base::UTF8ToUTF16(autofill::kExpirationDate2DigitYearRe);
-        // We allow <select> fields, because they're used e.g. on qvc.com.
-        if (ParseFieldSpecifics(scanner, pattern,
-                                MATCH_LABEL | MATCH_VALUE | MATCH_TEXT |
-                                    MATCH_SELECT,
-                                &credit_card_field->expiration_date_)) {
-          credit_card_field->is_two_digit_year_ = true;
-          continue;
-        }
+      // Look for a 2-digit year first.
+      // We allow <select> fields, because they're used e.g. on qvc.com.
+      scanner->Rewind();
+      if (ParseFieldSpecifics(
+              scanner,
+              base::UTF8ToUTF16(autofill::kExpirationDate2DigitYearRe),
+              MATCH_LABEL | MATCH_VALUE | MATCH_TEXT | MATCH_SELECT,
+              &credit_card_field->expiration_date_)) {
+        credit_card_field->exp_year_type_ = CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR;
+        credit_card_field->expiration_month_ = nullptr;
+        continue;
+      }
 
-        pattern = base::UTF8ToUTF16(autofill::kExpirationDateRe);
-        if (ParseFieldSpecifics(scanner, pattern,
-                                MATCH_LABEL | MATCH_VALUE | MATCH_TEXT |
-                                    MATCH_SELECT,
-                                &credit_card_field->expiration_date_)) {
-          continue;
-        }
+      if (ParseFieldSpecifics(
+              scanner,
+              base::UTF8ToUTF16(autofill::kExpirationDateRe),
+              MATCH_LABEL | MATCH_VALUE | MATCH_TEXT | MATCH_SELECT,
+              &credit_card_field->expiration_date_)) {
+        credit_card_field->expiration_month_ = nullptr;
+        continue;
       }
 
       if (credit_card_field->expiration_month_ &&
@@ -167,7 +187,8 @@ FormField* CreditCardField::Parse(AutofillScanner* scanner) {
   // a strong enough signal that this is a credit card.  It is possible that
   // the number and name were parsed in a separate part of the form.  So if
   // the cvc and date were found independently they are returned.
-  if ((credit_card_field->number_ || credit_card_field->verification_) &&
+  if ((!credit_card_field->numbers_.empty() ||
+       credit_card_field->verification_) &&
       (credit_card_field->expiration_date_ ||
        (credit_card_field->expiration_month_ &&
         credit_card_field->expiration_year_))) {
@@ -182,19 +203,25 @@ CreditCardField::CreditCardField()
     : cardholder_(NULL),
       cardholder_last_(NULL),
       type_(NULL),
-      number_(NULL),
       verification_(NULL),
       expiration_month_(NULL),
       expiration_year_(NULL),
       expiration_date_(NULL),
-      is_two_digit_year_(false) {
+      exp_year_type_(CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR) {
+}
+
+CreditCardField::~CreditCardField() {
 }
 
 bool CreditCardField::ClassifyField(ServerFieldTypeMap* map) const {
-  bool ok = AddClassification(number_, CREDIT_CARD_NUMBER, map);
+  bool ok = true;
+  for (size_t index = 0; index < numbers_.size(); ++index) {
+    ok = ok && AddClassification(numbers_[index], CREDIT_CARD_NUMBER, map);
+  }
+
   ok = ok && AddClassification(type_, CREDIT_CARD_TYPE, map);
-  ok = ok && AddClassification(verification_, CREDIT_CARD_VERIFICATION_CODE,
-                               map);
+  ok = ok &&
+       AddClassification(verification_, CREDIT_CARD_VERIFICATION_CODE, map);
 
   // If the heuristics detected first and last name in separate fields,
   // then ignore both fields. Putting them into separate fields is probably
@@ -204,27 +231,25 @@ bool CreditCardField::ClassifyField(ServerFieldTypeMap* map) const {
     ok = ok && AddClassification(cardholder_, CREDIT_CARD_NAME, map);
 
   if (expiration_date_) {
-    if (is_two_digit_year_) {
-      ok = ok && AddClassification(expiration_date_,
-                                   CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR, map);
-    } else {
-      ok = ok && AddClassification(expiration_date_,
-                                   CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR, map);
-    }
+    DCHECK(!expiration_month_);
+    DCHECK(!expiration_year_);
+    ok =
+        ok && AddClassification(expiration_date_, GetExpirationYearType(), map);
   } else {
     ok = ok && AddClassification(expiration_month_, CREDIT_CARD_EXP_MONTH, map);
-    if (is_two_digit_year_) {
-      ok = ok && AddClassification(expiration_year_,
-                                   CREDIT_CARD_EXP_2_DIGIT_YEAR,
-                                   map);
-    } else {
-      ok = ok && AddClassification(expiration_year_,
-                                   CREDIT_CARD_EXP_4_DIGIT_YEAR,
-                                   map);
-    }
+    ok =
+        ok && AddClassification(expiration_year_, GetExpirationYearType(), map);
   }
 
   return ok;
+}
+
+ServerFieldType CreditCardField::GetExpirationYearType() const {
+  return (expiration_date_
+              ? exp_year_type_
+              : ((expiration_year_ && expiration_year_->max_length == 2)
+                     ? CREDIT_CARD_EXP_2_DIGIT_YEAR
+                     : CREDIT_CARD_EXP_4_DIGIT_YEAR));
 }
 
 }  // namespace autofill

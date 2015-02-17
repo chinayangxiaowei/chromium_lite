@@ -11,7 +11,7 @@
 #include "chrome/browser/chromeos/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/chromeos/file_system_provider/provided_file_system_interface.h"
 #include "chrome/browser/chromeos/file_system_provider/request_value.h"
-#include "webkit/browser/fileapi/async_file_util.h"
+#include "storage/browser/fileapi/async_file_util.h"
 
 namespace base {
 class FilePath;
@@ -26,33 +26,31 @@ namespace file_system_provider {
 namespace operations {
 
 // Creates a directory. If |recursive| is set to true, then creates also all
-// non-existing directories on the path. If |exclusive| is true, then the
-// operation will fail if the directory already exists. Created per request.
+// non-existing directories on the path. The operation will fail if the
+// directory already exists. Created per request.
 class CreateDirectory : public Operation {
  public:
   CreateDirectory(extensions::EventRouter* event_router,
                   const ProvidedFileSystemInfo& file_system_info,
                   const base::FilePath& directory_path,
-                  bool exclusive,
                   bool recursive,
-                  const fileapi::AsyncFileUtil::StatusCallback& callback);
+                  const storage::AsyncFileUtil::StatusCallback& callback);
   virtual ~CreateDirectory();
 
   // Operation overrides.
-  virtual bool Execute(int request_id) OVERRIDE;
+  virtual bool Execute(int request_id) override;
   virtual void OnSuccess(int request_id,
                          scoped_ptr<RequestValue> result,
-                         bool has_more) OVERRIDE;
+                         bool has_more) override;
   virtual void OnError(int request_id,
                        scoped_ptr<RequestValue> result,
-                       base::File::Error error) OVERRIDE;
+                       base::File::Error error) override;
 
  private:
   base::FilePath directory_path_;
   ProvidedFileSystemInterface::OpenFileMode mode_;
-  bool exclusive_;
   bool recursive_;
-  const fileapi::AsyncFileUtil::StatusCallback callback_;
+  const storage::AsyncFileUtil::StatusCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(CreateDirectory);
 };

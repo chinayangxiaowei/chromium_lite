@@ -11,6 +11,7 @@
 #include "base/sha1.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "crypto/rsa_private_key.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_data_directory.h"
@@ -91,7 +92,7 @@ const double kGoogleParseValidTo = 1324252799;
 void CheckGoogleCert(const scoped_refptr<X509Certificate>& google_cert,
                      uint8* expected_fingerprint,
                      double valid_from, double valid_to) {
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_cert.get());
 
   const CertPrincipal& subject = google_cert->subject();
   EXPECT_EQ("www.google.com", subject.common_name);
@@ -146,7 +147,7 @@ TEST(X509CertificateTest, WebkitCertParsing) {
   scoped_refptr<X509Certificate> webkit_cert(X509Certificate::CreateFromBytes(
       reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der)));
 
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), webkit_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), webkit_cert.get());
 
   const CertPrincipal& subject = webkit_cert->subject();
   EXPECT_EQ("Cupertino", subject.locality_name);
@@ -202,7 +203,7 @@ TEST(X509CertificateTest, ThawteCertParsing) {
   scoped_refptr<X509Certificate> thawte_cert(X509Certificate::CreateFromBytes(
       reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der)));
 
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), thawte_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), thawte_cert.get());
 
   const CertPrincipal& subject = thawte_cert->subject();
   EXPECT_EQ("www.thawte.com", subject.common_name);
@@ -254,7 +255,7 @@ TEST(X509CertificateTest, MultivalueRDN) {
 
   scoped_refptr<X509Certificate> multivalue_rdn_cert =
       ImportCertFromFile(certs_dir, "multivalue_rdn.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), multivalue_rdn_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), multivalue_rdn_cert.get());
 
   const CertPrincipal& subject = multivalue_rdn_cert->subject();
   EXPECT_EQ("Multivalue RDN Test", subject.common_name);
@@ -278,7 +279,7 @@ TEST(X509CertificateTest, UnescapedSpecialCharacters) {
 
   scoped_refptr<X509Certificate> unescaped_cert =
       ImportCertFromFile(certs_dir, "unescaped.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), unescaped_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), unescaped_cert.get());
 
   const CertPrincipal& subject = unescaped_cert->subject();
   EXPECT_EQ("127.0.0.1", subject.common_name);
@@ -323,20 +324,36 @@ TEST(X509CertificateTest, SerialNumbers) {
                      paypal_null_serial, sizeof(paypal_null_serial)) == 0);
 }
 
+TEST(X509CertificateTest, SHA256FingerprintsCorrectly) {
+  scoped_refptr<X509Certificate> google_cert(X509Certificate::CreateFromBytes(
+      reinterpret_cast<const char*>(google_der), sizeof(google_der)));
+
+  static const uint8 google_sha256_fingerprint[32] = {
+      0x21, 0xaf, 0x58, 0x74, 0xea, 0x6b, 0xad, 0xbd, 0xe4, 0xb3, 0xb1,
+      0xaa, 0x53, 0x32, 0x80, 0x8f, 0xbf, 0x8a, 0x24, 0x7d, 0x98, 0xec,
+      0x7f, 0x77, 0x49, 0x38, 0x42, 0x81, 0x26, 0x7f, 0xed, 0x38};
+
+  SHA256HashValue fingerprint =
+      X509Certificate::CalculateFingerprint256(google_cert->os_cert_handle());
+
+  for (size_t i = 0; i < 32; ++i)
+    EXPECT_EQ(google_sha256_fingerprint[i], fingerprint.data[i]);
+}
+
 TEST(X509CertificateTest, CAFingerprints) {
   base::FilePath certs_dir = GetTestCertsDirectory();
 
   scoped_refptr<X509Certificate> server_cert =
       ImportCertFromFile(certs_dir, "salesforce_com_test.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), server_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), server_cert.get());
 
   scoped_refptr<X509Certificate> intermediate_cert1 =
       ImportCertFromFile(certs_dir, "verisign_intermediate_ca_2011.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert1);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert1.get());
 
   scoped_refptr<X509Certificate> intermediate_cert2 =
       ImportCertFromFile(certs_dir, "verisign_intermediate_ca_2016.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert2);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert2.get());
 
   X509Certificate::OSCertHandles intermediates;
   intermediates.push_back(intermediate_cert1->os_cert_handle());
@@ -456,7 +473,7 @@ TEST(X509CertificateTest, ParseSubjectAltNames) {
 
   scoped_refptr<X509Certificate> san_cert =
       ImportCertFromFile(certs_dir, "subjectAltName_sanity_check.pem");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), san_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), san_cert.get());
 
   std::vector<std::string> dns_names;
   std::vector<std::string> ip_addresses;
@@ -493,7 +510,7 @@ TEST(X509CertificateTest, ExtractSPKIFromDERCert) {
   base::FilePath certs_dir = GetTestCertsDirectory();
   scoped_refptr<X509Certificate> cert =
       ImportCertFromFile(certs_dir, "nist.der");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert.get());
 
   std::string derBytes;
   EXPECT_TRUE(X509Certificate::GetDEREncoded(cert->os_cert_handle(),
@@ -513,7 +530,7 @@ TEST(X509CertificateTest, ExtractCRLURLsFromDERCert) {
   base::FilePath certs_dir = GetTestCertsDirectory();
   scoped_refptr<X509Certificate> cert =
       ImportCertFromFile(certs_dir, "nist.der");
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert.get());
 
   std::string derBytes;
   EXPECT_TRUE(X509Certificate::GetDEREncoded(cert->os_cert_handle(),
@@ -603,7 +620,7 @@ TEST(X509CertificateTest, Pickle) {
   scoped_refptr<X509Certificate> cert_from_pickle =
       X509Certificate::CreateFromPickle(
           pickle, &iter, X509Certificate::PICKLETYPE_CERTIFICATE_CHAIN_V3);
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert_from_pickle);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert_from_pickle.get());
   EXPECT_TRUE(X509Certificate::IsSameOSCert(
       cert->os_cert_handle(), cert_from_pickle->os_cert_handle()));
   const X509Certificate::OSCertHandles& cert_intermediates =
@@ -615,111 +632,6 @@ TEST(X509CertificateTest, Pickle) {
     EXPECT_TRUE(X509Certificate::IsSameOSCert(cert_intermediates[i],
                                               pickle_intermediates[i]));
   }
-}
-
-TEST(X509CertificateTest, Policy) {
-  scoped_refptr<X509Certificate> google_cert(X509Certificate::CreateFromBytes(
-      reinterpret_cast<const char*>(google_der), sizeof(google_der)));
-
-  scoped_refptr<X509Certificate> webkit_cert(X509Certificate::CreateFromBytes(
-      reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der)));
-
-  CertPolicy policy;
-
-  // To begin with, everything should be unknown.
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_FALSE(policy.HasAllowedCert());
-  EXPECT_FALSE(policy.HasDeniedCert());
-
-  // Test adding one certificate with one error.
-  policy.Allow(google_cert.get(), CERT_STATUS_DATE_INVALID);
-  EXPECT_EQ(CertPolicy::ALLOWED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(),
-                CERT_STATUS_DATE_INVALID | CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_TRUE(policy.HasAllowedCert());
-  EXPECT_FALSE(policy.HasDeniedCert());
-
-  // Test saving the same certificate with a new error.
-  policy.Allow(google_cert.get(), CERT_STATUS_AUTHORITY_INVALID);
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::ALLOWED,
-            policy.Check(google_cert.get(), CERT_STATUS_AUTHORITY_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_TRUE(policy.HasAllowedCert());
-  EXPECT_FALSE(policy.HasDeniedCert());
-
-  // Test adding one certificate with two errors.
-  policy.Allow(google_cert.get(),
-               CERT_STATUS_DATE_INVALID | CERT_STATUS_AUTHORITY_INVALID);
-  EXPECT_EQ(CertPolicy::ALLOWED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::ALLOWED,
-            policy.Check(google_cert.get(), CERT_STATUS_AUTHORITY_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_TRUE(policy.HasAllowedCert());
-  EXPECT_FALSE(policy.HasDeniedCert());
-
-  // Test removing a certificate that was previously allowed.
-  policy.Deny(google_cert.get(), CERT_STATUS_DATE_INVALID);
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_FALSE(policy.HasAllowedCert());
-  EXPECT_TRUE(policy.HasDeniedCert());
-
-  // Test removing a certificate that was previously unknown.
-  policy.Deny(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID);
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_FALSE(policy.HasAllowedCert());
-  EXPECT_TRUE(policy.HasDeniedCert());
-
-  // Test saving a certificate that was previously denied.
-  policy.Allow(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID);
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::ALLOWED,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_TRUE(policy.HasAllowedCert());
-  EXPECT_TRUE(policy.HasDeniedCert());
-
-  // Test denying an overlapping certificate.
-  policy.Allow(google_cert.get(),
-               CERT_STATUS_COMMON_NAME_INVALID | CERT_STATUS_DATE_INVALID);
-  policy.Deny(google_cert.get(), CERT_STATUS_DATE_INVALID);
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(google_cert.get(), CERT_STATUS_DATE_INVALID));
-  EXPECT_EQ(CertPolicy::UNKNOWN,
-            policy.Check(google_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(google_cert.get(),
-                CERT_STATUS_COMMON_NAME_INVALID | CERT_STATUS_DATE_INVALID));
-
-  // Test denying an overlapping certificate (other direction).
-  policy.Allow(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID);
-  policy.Deny(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID);
-  policy.Deny(webkit_cert.get(), CERT_STATUS_DATE_INVALID);
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(webkit_cert.get(), CERT_STATUS_COMMON_NAME_INVALID));
-  EXPECT_EQ(CertPolicy::DENIED,
-            policy.Check(webkit_cert.get(), CERT_STATUS_DATE_INVALID));
 }
 
 TEST(X509CertificateTest, IntermediateCertificates) {
@@ -766,7 +678,7 @@ TEST(X509CertificateTest, IsIssuedByEncoded) {
   // Test a client certificate from MIT.
   scoped_refptr<X509Certificate> mit_davidben_cert(
       ImportCertFromFile(certs_dir, "mit.davidben.der"));
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), mit_davidben_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), mit_davidben_cert.get());
 
   std::string mit_issuer(reinterpret_cast<const char*>(MITDN),
                          sizeof(MITDN));
@@ -774,7 +686,7 @@ TEST(X509CertificateTest, IsIssuedByEncoded) {
   // Test a certificate from Google, issued by Thawte
   scoped_refptr<X509Certificate> google_cert(
       ImportCertFromFile(certs_dir, "google.single.der"));
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_cert.get());
 
   std::string thawte_issuer(reinterpret_cast<const char*>(ThawteDN),
                             sizeof(ThawteDN));
@@ -800,6 +712,20 @@ TEST(X509CertificateTest, IsIssuedByEncoded) {
   issuers.push_back(thawte_issuer);
   EXPECT_TRUE(mit_davidben_cert->IsIssuedByEncoded(issuers));
   EXPECT_TRUE(google_cert->IsIssuedByEncoded(issuers));
+}
+
+TEST(X509CertificateTest, IsSelfSigned) {
+  base::FilePath certs_dir = GetTestCertsDirectory();
+
+  scoped_refptr<X509Certificate> cert(
+      ImportCertFromFile(certs_dir, "mit.davidben.der"));
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), cert.get());
+  EXPECT_FALSE(X509Certificate::IsSelfSigned(cert->os_cert_handle()));
+
+  scoped_refptr<X509Certificate> self_signed(
+      ImportCertFromFile(certs_dir, "aia-root.pem"));
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), self_signed.get());
+  EXPECT_TRUE(X509Certificate::IsSelfSigned(self_signed->os_cert_handle()));
 }
 
 TEST(X509CertificateTest, IsIssuedByEncodedWithIntermediates) {
@@ -876,7 +802,7 @@ TEST(X509CertificateTest, GetDefaultNickname) {
 
   scoped_refptr<X509Certificate> test_cert(
       ImportCertFromFile(certs_dir, "no_subject_common_name_cert.pem"));
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), test_cert);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), test_cert.get());
 
   std::string nickname = test_cert->GetDefaultNickname(USER_CERT);
   EXPECT_EQ("wtc@google.com's COMODO Client Authentication and "
@@ -955,10 +881,8 @@ class X509CertificateParseTest
     : public testing::TestWithParam<CertificateFormatTestData> {
  public:
   virtual ~X509CertificateParseTest() {}
-  virtual void SetUp() {
-    test_data_ = GetParam();
-  }
-  virtual void TearDown() {}
+  void SetUp() override { test_data_ = GetParam(); }
+  void TearDown() override {}
 
  protected:
   CertificateFormatTestData test_data_;

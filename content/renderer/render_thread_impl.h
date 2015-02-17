@@ -36,7 +36,6 @@ struct WorkerProcessMsg_CreateWorker_Params;
 
 namespace blink {
 class WebGamepads;
-class WebGamepadListener;
 class WebGraphicsContext3D;
 class WebMediaStreamCenter;
 class WebMediaStreamCenterClient;
@@ -44,6 +43,7 @@ class WebMediaStreamCenterClient;
 
 namespace base {
 class MessageLoopProxy;
+class SingleThreadTaskRunner;
 class Thread;
 }
 
@@ -84,7 +84,6 @@ class DBMessageFilter;
 class DevToolsAgentFilter;
 class DomStorageDispatcher;
 class EmbeddedWorkerDispatcher;
-class GamepadSharedMemoryReader;
 class GpuChannelHost;
 class IndexedDBDispatcher;
 class InputEventFilter;
@@ -96,9 +95,10 @@ class MidiMessageFilter;
 class NetInfoDispatcher;
 class P2PSocketDispatcher;
 class PeerConnectionTracker;
-class RendererDemuxerAndroid;
-class RendererWebKitPlatformSupportImpl;
 class RenderProcessObserver;
+class RendererBlinkPlatformImpl;
+class RendererDemuxerAndroid;
+class RendererScheduler;
 class VideoCaptureImplManager;
 class WebGraphicsContext3DCommandBufferImpl;
 class WebRTCIdentityService;
@@ -121,8 +121,8 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   RenderThreadImpl();
   // Constructor that's used when running in single process mode.
   explicit RenderThreadImpl(const std::string& channel_name);
-  virtual ~RenderThreadImpl();
-  virtual void Shutdown() OVERRIDE;
+  ~RenderThreadImpl() override;
+  void Shutdown() override;
 
   // When initializing WebKit, ensure that any schemes needed for the content
   // module are registered properly.  Static to allow sharing with tests.
@@ -133,42 +133,41 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   static void NotifyTimezoneChange();
 
   // RenderThread implementation:
-  virtual bool Send(IPC::Message* msg) OVERRIDE;
-  virtual base::MessageLoop* GetMessageLoop() OVERRIDE;
-  virtual IPC::SyncChannel* GetChannel() OVERRIDE;
-  virtual std::string GetLocale() OVERRIDE;
-  virtual IPC::SyncMessageFilter* GetSyncMessageFilter() OVERRIDE;
-  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy()
-      OVERRIDE;
-  virtual void AddRoute(int32 routing_id, IPC::Listener* listener) OVERRIDE;
-  virtual void RemoveRoute(int32 routing_id) OVERRIDE;
-  virtual int GenerateRoutingID() OVERRIDE;
-  virtual void AddFilter(IPC::MessageFilter* filter) OVERRIDE;
-  virtual void RemoveFilter(IPC::MessageFilter* filter) OVERRIDE;
-  virtual void AddObserver(RenderProcessObserver* observer) OVERRIDE;
-  virtual void RemoveObserver(RenderProcessObserver* observer) OVERRIDE;
-  virtual void SetResourceDispatcherDelegate(
-      ResourceDispatcherDelegate* delegate) OVERRIDE;
-  virtual void EnsureWebKitInitialized() OVERRIDE;
-  virtual void RecordAction(const base::UserMetricsAction& action) OVERRIDE;
-  virtual void RecordComputedAction(const std::string& action) OVERRIDE;
-  virtual scoped_ptr<base::SharedMemory> HostAllocateSharedMemoryBuffer(
-      size_t buffer_size) OVERRIDE;
-  virtual void RegisterExtension(v8::Extension* extension) OVERRIDE;
-  virtual void ScheduleIdleHandler(int64 initial_delay_ms) OVERRIDE;
-  virtual void IdleHandler() OVERRIDE;
-  virtual int64 GetIdleNotificationDelayInMs() const OVERRIDE;
-  virtual void SetIdleNotificationDelayInMs(
-      int64 idle_notification_delay_in_ms) OVERRIDE;
-  virtual void UpdateHistograms(int sequence_number) OVERRIDE;
-  virtual int PostTaskToAllWebWorkers(const base::Closure& closure) OVERRIDE;
-  virtual bool ResolveProxy(const GURL& url, std::string* proxy_list) OVERRIDE;
-  virtual base::WaitableEvent* GetShutdownEvent() OVERRIDE;
+  bool Send(IPC::Message* msg) override;
+  base::MessageLoop* GetMessageLoop() override;
+  IPC::SyncChannel* GetChannel() override;
+  std::string GetLocale() override;
+  IPC::SyncMessageFilter* GetSyncMessageFilter() override;
+  scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() override;
+  void AddRoute(int32 routing_id, IPC::Listener* listener) override;
+  void RemoveRoute(int32 routing_id) override;
+  int GenerateRoutingID() override;
+  void AddFilter(IPC::MessageFilter* filter) override;
+  void RemoveFilter(IPC::MessageFilter* filter) override;
+  void AddObserver(RenderProcessObserver* observer) override;
+  void RemoveObserver(RenderProcessObserver* observer) override;
+  void SetResourceDispatcherDelegate(
+      ResourceDispatcherDelegate* delegate) override;
+  void EnsureWebKitInitialized() override;
+  void RecordAction(const base::UserMetricsAction& action) override;
+  void RecordComputedAction(const std::string& action) override;
+  scoped_ptr<base::SharedMemory> HostAllocateSharedMemoryBuffer(
+      size_t buffer_size) override;
+  void RegisterExtension(v8::Extension* extension) override;
+  void ScheduleIdleHandler(int64 initial_delay_ms) override;
+  void IdleHandler() override;
+  int64 GetIdleNotificationDelayInMs() const override;
+  void SetIdleNotificationDelayInMs(
+      int64 idle_notification_delay_in_ms) override;
+  void UpdateHistograms(int sequence_number) override;
+  int PostTaskToAllWebWorkers(const base::Closure& closure) override;
+  bool ResolveProxy(const GURL& url, std::string* proxy_list) override;
+  base::WaitableEvent* GetShutdownEvent() override;
 #if defined(OS_WIN)
-  virtual void PreCacheFont(const LOGFONT& log_font) OVERRIDE;
-  virtual void ReleaseCachedFonts() OVERRIDE;
+  virtual void PreCacheFont(const LOGFONT& log_font) override;
+  virtual void ReleaseCachedFonts() override;
 #endif
-  virtual ServiceRegistry* GetServiceRegistry() OVERRIDE;
+  ServiceRegistry* GetServiceRegistry() override;
 
   // Synchronously establish a channel to the GPU plugin if not previously
   // established or if it has been lost (for example if the GPU plugin crashed).
@@ -195,9 +194,19 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
     layout_test_mode_ = layout_test_mode;
   }
 
-  RendererWebKitPlatformSupportImpl* webkit_platform_support() const {
-    DCHECK(webkit_platform_support_);
-    return webkit_platform_support_.get();
+  RendererScheduler* renderer_scheduler() const {
+    DCHECK(renderer_scheduler_);
+    return renderer_scheduler_.get();
+  }
+
+  RendererBlinkPlatformImpl* blink_platform_impl() const {
+    DCHECK(blink_platform_impl_);
+    return blink_platform_impl_.get();
+  }
+
+  scoped_refptr<base::SingleThreadTaskRunner>
+  main_thread_compositor_task_runner() const {
+    return main_thread_compositor_task_runner_;
   }
 
   IPC::ForwardingMessageFilter* compositor_output_surface_filter() const {
@@ -224,8 +233,6 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   bool is_impl_side_painting_enabled() const {
     return is_impl_side_painting_enabled_;
   }
-
-  bool is_low_res_tiling_enabled() const { return is_low_res_tiling_enabled_; }
 
   bool is_lcd_text_enabled() const { return is_lcd_text_enabled_; }
 
@@ -290,10 +297,6 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
     return vc_manager_.get();
   }
 
-  GamepadSharedMemoryReader* gamepad_shared_memory_reader() const {
-    return gamepad_shared_memory_reader_.get();
-  }
-
   // Get the GPU channel. Returns NULL if the channel is not established or
   // has been lost.
   GpuChannelHost* GetGpuChannel();
@@ -303,10 +306,10 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   // on the renderer's main thread.
   scoped_refptr<base::MessageLoopProxy> GetFileThreadMessageLoopProxy();
 
-  // Returns a MessageLoopProxy instance corresponding to the message loop
+  // Returns a SingleThreadTaskRunner instance corresponding to the message loop
   // of the thread on which media operations should be run. Must be called
   // on the renderer's main thread.
-  scoped_refptr<base::MessageLoopProxy> GetMediaThreadMessageLoopProxy();
+  scoped_refptr<base::SingleThreadTaskRunner> GetMediaThreadTaskRunner();
 
   // Causes the idle handler to skip sending idle notifications
   // on the two next scheduled calls, so idle notifications are
@@ -385,15 +388,8 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
     return &histogram_customizer_;
   }
 
-  void SetFlingCurveParameters(const std::vector<float>& new_touchpad,
-                               const std::vector<float>& new_touchscreen);
-
   // Retrieve current gamepad data.
   void SampleGamepads(blink::WebGamepads* data);
-
-  // Set a listener for gamepad connected/disconnected events.
-  // A non-null listener must be set first before calling SampleGamepads.
-  void SetGamepadListener(blink::WebGamepadListener* listener);
 
   // Called by a RenderWidget when it is created or destroyed. This
   // allows the process to know when there are no visible widgets.
@@ -410,29 +406,23 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
 
  private:
   // ChildThread
-  virtual bool OnControlMessageReceived(const IPC::Message& msg) OVERRIDE;
+  bool OnControlMessageReceived(const IPC::Message& msg) override;
 
   // GpuChannelHostFactory implementation:
-  virtual bool IsMainThread() OVERRIDE;
-  virtual base::MessageLoop* GetMainLoop() OVERRIDE;
-  virtual scoped_refptr<base::MessageLoopProxy> GetIOLoopProxy() OVERRIDE;
-  virtual scoped_ptr<base::SharedMemory> AllocateSharedMemory(
-      size_t size) OVERRIDE;
-  virtual CreateCommandBufferResult CreateViewCommandBuffer(
+  bool IsMainThread() override;
+  base::MessageLoop* GetMainLoop() override;
+  scoped_refptr<base::MessageLoopProxy> GetIOLoopProxy() override;
+  scoped_ptr<base::SharedMemory> AllocateSharedMemory(size_t size) override;
+  CreateCommandBufferResult CreateViewCommandBuffer(
       int32 surface_id,
       const GPUCreateCommandBufferConfig& init_params,
-      int32 route_id) OVERRIDE;
-  virtual scoped_ptr<gfx::GpuMemoryBuffer> AllocateGpuMemoryBuffer(
-      size_t width,
-      size_t height,
-      unsigned internalformat,
-      unsigned usage) OVERRIDE;
-  virtual void DeleteGpuMemoryBuffer(
-      scoped_ptr<gfx::GpuMemoryBuffer> buffer) OVERRIDE;
+      int32 route_id) override;
 
   void Init();
 
-  void OnCreateNewFrame(int routing_id, int parent_routing_id);
+  void OnCreateNewFrame(int routing_id,
+                        int parent_routing_id,
+                        int proxy_routing_id);
   void OnCreateNewFrameProxy(int routing_id,
                              int parent_routing_id,
                              int render_view_routing_id);
@@ -441,7 +431,9 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
                                    double zoom_level);
   void OnCreateNewView(const ViewMsg_New_Params& params);
   void OnTransferBitmap(const SkBitmap& bitmap, int resource_id);
+#if defined(ENABLE_PLUGINS)
   void OnPurgePluginListCache(bool reload_pages);
+#endif
   void OnNetworkTypeChanged(net::NetworkChangeNotifier::ConnectionType type);
   void OnGetAccessibilityTree();
   void OnTempCrashWithData(const GURL& data);
@@ -461,15 +453,14 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   void OnCreateNewSharedWorker(
       const WorkerProcessMsg_CreateWorker_Params& params);
 
-  void IdleHandlerInForegroundTab();
-
   scoped_ptr<WebGraphicsContext3DCommandBufferImpl> CreateOffscreenContext3d();
 
   // These objects live solely on the render thread.
   scoped_ptr<AppCacheDispatcher> appcache_dispatcher_;
   scoped_ptr<DomStorageDispatcher> dom_storage_dispatcher_;
   scoped_ptr<IndexedDBDispatcher> main_thread_indexed_db_dispatcher_;
-  scoped_ptr<RendererWebKitPlatformSupportImpl> webkit_platform_support_;
+  scoped_ptr<RendererScheduler> renderer_scheduler_;
+  scoped_ptr<RendererBlinkPlatformImpl> blink_platform_impl_;
   scoped_ptr<EmbeddedWorkerDispatcher> embedded_worker_dispatcher_;
 
   // Used on the render thread and deleted by WebKit at shutdown.
@@ -570,20 +561,15 @@ class CONTENT_EXPORT RenderThreadImpl : public RenderThread,
   scoped_ptr<WebRTCIdentityService> webrtc_identity_service_;
 #endif
 
-  scoped_ptr<GamepadSharedMemoryReader> gamepad_shared_memory_reader_;
-
-  // TODO(reveman): Allow AllocateGpuMemoryBuffer to be called from
-  // multiple threads. Current allocation mechanism for IOSurface
-  // backed GpuMemoryBuffers prevent this. crbug.com/325045
-  base::ThreadChecker allocate_gpu_memory_buffer_thread_checker_;
-
   scoped_ptr<MemoryObserver> memory_observer_;
+
+  scoped_refptr<base::SingleThreadTaskRunner>
+      main_thread_compositor_task_runner_;
 
   // Compositor settings
   bool is_gpu_rasterization_enabled_;
   bool is_gpu_rasterization_forced_;
   bool is_impl_side_painting_enabled_;
-  bool is_low_res_tiling_enabled_;
   bool is_lcd_text_enabled_;
   bool is_distance_field_text_enabled_;
   bool is_zero_copy_enabled_;

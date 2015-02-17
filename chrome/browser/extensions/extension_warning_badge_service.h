@@ -7,8 +7,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/threading/non_thread_safe.h"
-#include "chrome/browser/extensions/extension_warning_service.h"
-#include "chrome/browser/extensions/extension_warning_set.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "extensions/browser/warning_service.h"
+#include "extensions/browser/warning_set.h"
 
 // TODO(battre): Rename ExtensionWarningBadgeService to WarningBadgeService.
 
@@ -18,11 +19,14 @@ namespace extensions {
 
 // A service that is responsible for showing an extension warning badge on the
 // wrench menu.
-class ExtensionWarningBadgeService : public ExtensionWarningService::Observer,
+class ExtensionWarningBadgeService : public KeyedService,
+                                     public WarningService::Observer,
                                      public base::NonThreadSafe {
  public:
   explicit ExtensionWarningBadgeService(Profile* profile);
   virtual ~ExtensionWarningBadgeService();
+
+  static ExtensionWarningBadgeService* Get(content::BrowserContext* context);
 
   // Black lists all currently active extension warnings, so that they do not
   // trigger a warning badge again for the life-time of the browsing session.
@@ -30,19 +34,22 @@ class ExtensionWarningBadgeService : public ExtensionWarningService::Observer,
 
  protected:
   // Virtual for testing.
-  virtual const std::set<ExtensionWarning>& GetCurrentWarnings() const;
+  virtual const std::set<Warning>& GetCurrentWarnings() const;
 
  private:
-  // Implementation of ExtensionWarningService::Observer.
-  virtual void ExtensionWarningsChanged() OVERRIDE;
+  // Implementation of WarningService::Observer.
+  void ExtensionWarningsChanged() override;
 
   void UpdateBadgeStatus();
   virtual void ShowBadge(bool show);
 
   Profile* profile_;
 
+  ScopedObserver<WarningService, WarningService::Observer>
+      warning_service_observer_;
+
   // Warnings that do not trigger a badge on the wrench menu.
-  ExtensionWarningSet suppressed_warnings_;
+  WarningSet suppressed_warnings_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionWarningBadgeService);
 };

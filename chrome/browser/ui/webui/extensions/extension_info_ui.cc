@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "extensions/browser/extension_prefs.h"
@@ -21,7 +22,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_icon_set.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 
 namespace extensions {
 
@@ -35,7 +35,6 @@ ExtensionInfoUI::ExtensionInfoUI(content::WebUI* web_ui, const GURL& url)
                               IDS_EXTENSION_SCRIPT_POPUP_IS_RUNNING);
   source_->AddLocalizedString("lastUpdated",
                               IDS_EXTENSION_SCRIPT_POPUP_LAST_UPDATED);
-  source_->SetUseJsonJSFormatV2();
   source_->SetJsonPath("strings.js");
 
   source_->AddResourcePath("extension_info.css", IDR_EXTENSION_INFO_CSS);

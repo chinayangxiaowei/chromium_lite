@@ -12,6 +12,7 @@
 #include "net/quic/quic_blocked_writer_interface.h"
 #include "net/quic/quic_connection_helper.h"
 #include "net/quic/quic_flags.h"
+#include "net/quic/quic_per_connection_packet_writer.h"
 #include "net/quic/quic_time_wait_list_manager.h"
 #include "net/quic/quic_utils.h"
 
@@ -27,7 +28,7 @@ class DeleteSessionsAlarm : public QuicAlarm::Delegate {
       : dispatcher_(dispatcher) {
   }
 
-  virtual QuicTime OnAlarm() OVERRIDE {
+  QuicTime OnAlarm() override {
     dispatcher_->DeleteSessions();
     return QuicTime::Zero();
   }
@@ -43,23 +44,21 @@ class QuicDispatcher::QuicFramerVisitor : public QuicFramerVisitorInterface {
         connection_id_(0) {}
 
   // QuicFramerVisitorInterface implementation
-  virtual void OnPacket() OVERRIDE {}
-  virtual bool OnUnauthenticatedPublicHeader(
-      const QuicPacketPublicHeader& header) OVERRIDE {
+  void OnPacket() override {}
+  bool OnUnauthenticatedPublicHeader(
+      const QuicPacketPublicHeader& header) override {
     connection_id_ = header.connection_id;
     return dispatcher_->OnUnauthenticatedPublicHeader(header);
   }
-  virtual bool OnUnauthenticatedHeader(
-      const QuicPacketHeader& header) OVERRIDE {
+  bool OnUnauthenticatedHeader(const QuicPacketHeader& header) override {
     dispatcher_->OnUnauthenticatedHeader(header);
     return false;
   }
-  virtual void OnError(QuicFramer* framer) OVERRIDE {
+  void OnError(QuicFramer* framer) override {
     DVLOG(1) << QuicUtils::ErrorToString(framer->error());
   }
 
-  virtual bool OnProtocolVersionMismatch(
-      QuicVersion /*received_version*/) OVERRIDE {
+  bool OnProtocolVersionMismatch(QuicVersion /*received_version*/) override {
     if (dispatcher_->time_wait_list_manager()->IsConnectionIdInTimeWait(
             connection_id_)) {
       // Keep processing after protocol mismatch - this will be dealt with by
@@ -75,77 +74,66 @@ class QuicDispatcher::QuicFramerVisitor : public QuicFramerVisitorInterface {
   // The following methods should never get called because we always return
   // false from OnUnauthenticatedHeader().  As a result, we never process the
   // payload of the packet.
-  virtual void OnPublicResetPacket(
-      const QuicPublicResetPacket& /*packet*/) OVERRIDE {
+  void OnPublicResetPacket(const QuicPublicResetPacket& /*packet*/) override {
     DCHECK(false);
   }
-  virtual void OnVersionNegotiationPacket(
-      const QuicVersionNegotiationPacket& /*packet*/) OVERRIDE {
+  void OnVersionNegotiationPacket(
+      const QuicVersionNegotiationPacket& /*packet*/) override {
     DCHECK(false);
   }
-  virtual void OnDecryptedPacket(EncryptionLevel level) OVERRIDE {
-    DCHECK(false);
-  }
-  virtual bool OnPacketHeader(const QuicPacketHeader& /*header*/) OVERRIDE {
+  void OnDecryptedPacket(EncryptionLevel level) override { DCHECK(false); }
+  bool OnPacketHeader(const QuicPacketHeader& /*header*/) override {
     DCHECK(false);
     return false;
   }
-  virtual void OnRevivedPacket() OVERRIDE {
+  void OnRevivedPacket() override { DCHECK(false); }
+  void OnFecProtectedPayload(StringPiece /*payload*/) override {
     DCHECK(false);
   }
-  virtual void OnFecProtectedPayload(StringPiece /*payload*/) OVERRIDE {
-    DCHECK(false);
-  }
-  virtual bool OnStreamFrame(const QuicStreamFrame& /*frame*/) OVERRIDE {
+  bool OnStreamFrame(const QuicStreamFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnAckFrame(const QuicAckFrame& /*frame*/) OVERRIDE {
+  bool OnAckFrame(const QuicAckFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnCongestionFeedbackFrame(
-      const QuicCongestionFeedbackFrame& /*frame*/) OVERRIDE {
+  bool OnCongestionFeedbackFrame(
+      const QuicCongestionFeedbackFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnStopWaitingFrame(
-      const QuicStopWaitingFrame& /*frame*/) OVERRIDE {
+  bool OnStopWaitingFrame(const QuicStopWaitingFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnPingFrame(const QuicPingFrame& /*frame*/) OVERRIDE {
+  bool OnPingFrame(const QuicPingFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnRstStreamFrame(const QuicRstStreamFrame& /*frame*/) OVERRIDE {
+  bool OnRstStreamFrame(const QuicRstStreamFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnConnectionCloseFrame(
-      const QuicConnectionCloseFrame & /*frame*/) OVERRIDE {
+  bool OnConnectionCloseFrame(
+      const QuicConnectionCloseFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnGoAwayFrame(const QuicGoAwayFrame& /*frame*/) OVERRIDE {
+  bool OnGoAwayFrame(const QuicGoAwayFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnWindowUpdateFrame(const QuicWindowUpdateFrame& /*frame*/)
-      OVERRIDE {
+  bool OnWindowUpdateFrame(const QuicWindowUpdateFrame& /*frame*/) override {
     DCHECK(false);
     return false;
   }
-  virtual bool OnBlockedFrame(const QuicBlockedFrame& frame) OVERRIDE {
+  bool OnBlockedFrame(const QuicBlockedFrame& frame) override {
     DCHECK(false);
     return false;
   }
-  virtual void OnFecData(const QuicFecData& /*fec*/) OVERRIDE {
-    DCHECK(false);
-  }
-  virtual void OnPacketComplete() OVERRIDE {
-    DCHECK(false);
-  }
+  void OnFecData(const QuicFecData& /*fec*/) override { DCHECK(false); }
+  void OnPacketComplete() override { DCHECK(false); }
 
  private:
   QuicDispatcher* dispatcher_;
@@ -154,17 +142,39 @@ class QuicDispatcher::QuicFramerVisitor : public QuicFramerVisitorInterface {
   QuicConnectionId connection_id_;
 };
 
+QuicPacketWriter* QuicDispatcher::DefaultPacketWriterFactory::Create(
+    QuicServerPacketWriter* writer,
+    QuicConnection* connection) {
+  return new QuicPerConnectionPacketWriter(writer, connection);
+}
+
+QuicDispatcher::PacketWriterFactoryAdapter::PacketWriterFactoryAdapter(
+    QuicDispatcher* dispatcher)
+    : dispatcher_(dispatcher) {}
+
+QuicDispatcher::PacketWriterFactoryAdapter::~PacketWriterFactoryAdapter() {}
+
+QuicPacketWriter* QuicDispatcher::PacketWriterFactoryAdapter::Create(
+    QuicConnection* connection) const {
+  return dispatcher_->packet_writer_factory_->Create(
+      dispatcher_->writer_.get(),
+      connection);
+}
+
 QuicDispatcher::QuicDispatcher(const QuicConfig& config,
                                const QuicCryptoServerConfig& crypto_config,
                                const QuicVersionVector& supported_versions,
+                               PacketWriterFactory* packet_writer_factory,
                                QuicConnectionHelperInterface* helper)
     : config_(config),
       crypto_config_(crypto_config),
       helper_(helper),
       delete_sessions_alarm_(
           helper_->CreateAlarm(new DeleteSessionsAlarm(this))),
+      packet_writer_factory_(packet_writer_factory),
+      connection_writer_factory_(this),
       supported_versions_(supported_versions),
-      current_packet_(NULL),
+      current_packet_(nullptr),
       framer_(supported_versions, /*unused*/ QuicTime::Zero(), true),
       framer_visitor_(new QuicFramerVisitor(this)) {
   framer_.set_visitor(framer_visitor_.get());
@@ -176,7 +186,7 @@ QuicDispatcher::~QuicDispatcher() {
 }
 
 void QuicDispatcher::Initialize(QuicServerPacketWriter* writer) {
-  DCHECK(writer_ == NULL);
+  DCHECK(writer_ == nullptr);
   writer_.reset(writer);
   time_wait_list_manager_.reset(CreateQuicTimeWaitListManager());
 }
@@ -197,7 +207,7 @@ void QuicDispatcher::ProcessPacket(const IPEndPoint& server_address,
 
 bool QuicDispatcher::OnUnauthenticatedPublicHeader(
     const QuicPacketPublicHeader& header) {
-  QuicSession* session = NULL;
+  QuicSession* session = nullptr;
 
   QuicConnectionId connection_id = header.connection_id;
   SessionMap::iterator it = session_map_.find(connection_id);
@@ -217,7 +227,7 @@ bool QuicDispatcher::OnUnauthenticatedPublicHeader(
                                   current_client_address_);
     }
 
-    if (session == NULL) {
+    if (session == nullptr) {
       DVLOG(1) << "Failed to create session for " << connection_id;
       // Add this connection_id fo the time-wait state, to safely reject future
       // packets.
@@ -231,8 +241,8 @@ bool QuicDispatcher::OnUnauthenticatedPublicHeader(
       // Use the version in the packet if possible, otherwise assume the latest.
       QuicVersion version = header.version_flag ? header.versions.front() :
           supported_versions_.front();
-      time_wait_list_manager_->AddConnectionIdToTimeWait(
-          connection_id, version, NULL);
+      time_wait_list_manager_->AddConnectionIdToTimeWait(connection_id, version,
+                                                         nullptr);
       DCHECK(time_wait_list_manager_->IsConnectionIdInTimeWait(connection_id));
       return HandlePacketForTimeWait(header);
     }
@@ -339,18 +349,11 @@ QuicSession* QuicDispatcher::CreateQuicSession(
     QuicConnectionId connection_id,
     const IPEndPoint& server_address,
     const IPEndPoint& client_address) {
-  QuicPerConnectionPacketWriter* per_connection_packet_writer =
-      new QuicPerConnectionPacketWriter(writer_.get());
-  QuicConnection* connection =
-      CreateQuicConnection(connection_id,
-                           server_address,
-                           client_address,
-                           per_connection_packet_writer);
   QuicServerSession* session = new QuicServerSession(
       config_,
-      connection,
-      per_connection_packet_writer,
-      this);
+      CreateQuicConnection(connection_id, server_address, client_address),
+      this,
+      crypto_config_.HasProofSource());
   session->InitializeSession(crypto_config_);
   return session;
 }
@@ -358,19 +361,14 @@ QuicSession* QuicDispatcher::CreateQuicSession(
 QuicConnection* QuicDispatcher::CreateQuicConnection(
     QuicConnectionId connection_id,
     const IPEndPoint& server_address,
-    const IPEndPoint& client_address,
-    QuicPerConnectionPacketWriter* writer) {
-  QuicConnection* connection;
-  connection = new QuicConnection(
-      connection_id,
-      client_address,
-      helper_,
-      writer,
-      false  /* owns_writer */,
-      true   /* is_server */,
-      supported_versions_);
-  writer->set_connection(connection);
-  return connection;
+    const IPEndPoint& client_address) {
+  return new QuicConnection(connection_id,
+                            client_address,
+                            helper_,
+                            connection_writer_factory_,
+                            /* owns_writer= */ true,
+                            /* is_server= */ true,
+                            supported_versions_);
 }
 
 QuicTimeWaitListManager* QuicDispatcher::CreateQuicTimeWaitListManager() {

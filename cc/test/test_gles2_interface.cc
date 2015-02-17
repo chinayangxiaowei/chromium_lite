@@ -34,6 +34,12 @@ void TestGLES2Interface::GenFramebuffers(GLsizei n, GLuint* framebuffers) {
   }
 }
 
+void TestGLES2Interface::GenRenderbuffers(GLsizei n, GLuint* renderbuffers) {
+  for (GLsizei i = 0; i < n; ++i) {
+    renderbuffers[i] = test_context_->createRenderbuffer();
+  }
+}
+
 void TestGLES2Interface::GenQueriesEXT(GLsizei n, GLuint* queries) {
   for (GLsizei i = 0; i < n; ++i) {
     queries[i] = test_context_->createQueryEXT();
@@ -160,6 +166,10 @@ void TestGLES2Interface::Enable(GLenum cap) { test_context_->enable(cap); }
 
 void TestGLES2Interface::Disable(GLenum cap) { test_context_->disable(cap); }
 
+void TestGLES2Interface::BindRenderbuffer(GLenum target, GLuint buffer) {
+  test_context_->bindRenderbuffer(target, buffer);
+}
+
 void TestGLES2Interface::BindFramebuffer(GLenum target, GLuint buffer) {
   test_context_->bindFramebuffer(target, buffer);
 }
@@ -224,6 +234,29 @@ void TestGLES2Interface::TexParameteri(GLenum target,
   test_context_->texParameteri(target, pname, param);
 }
 
+void TestGLES2Interface::FramebufferRenderbuffer(GLenum target,
+                                                 GLenum attachment,
+                                                 GLenum renderbuffertarget,
+                                                 GLuint renderbuffer) {
+  test_context_->framebufferRenderbuffer(
+      target, attachment, renderbuffertarget, renderbuffer);
+}
+void TestGLES2Interface::FramebufferTexture2D(GLenum target,
+                                              GLenum attachment,
+                                              GLenum textarget,
+                                              GLuint texture,
+                                              GLint level) {
+  test_context_->framebufferTexture2D(
+      target, attachment, textarget, texture, level);
+}
+
+void TestGLES2Interface::RenderbufferStorage(GLenum target,
+                                             GLenum internalformat,
+                                             GLsizei width,
+                                             GLsizei height) {
+  test_context_->renderbufferStorage(target, internalformat, width, height);
+}
+
 void TestGLES2Interface::AsyncTexImage2DCHROMIUM(GLenum target,
                                                  GLint level,
                                                  GLenum internalformat,
@@ -273,30 +306,25 @@ void TestGLES2Interface::WaitAsyncTexImage2DCHROMIUM(GLenum target) {
   test_context_->waitAsyncTexImage2DCHROMIUM(target);
 }
 
-GLuint TestGLES2Interface::CreateImageCHROMIUM(GLsizei width,
+GLuint TestGLES2Interface::CreateImageCHROMIUM(ClientBuffer buffer,
+                                               GLsizei width,
                                                GLsizei height,
-                                               GLenum internalformat,
-                                               GLenum usage) {
+                                               GLenum internalformat) {
   return test_context_->createImageCHROMIUM(
-      width, height, internalformat, usage);
+      buffer, width, height, internalformat);
 }
 
 void TestGLES2Interface::DestroyImageCHROMIUM(GLuint image_id) {
   test_context_->destroyImageCHROMIUM(image_id);
 }
 
-void* TestGLES2Interface::MapImageCHROMIUM(GLuint image_id) {
-  return test_context_->mapImageCHROMIUM(image_id);
-}
-
-void TestGLES2Interface::GetImageParameterivCHROMIUM(GLuint image_id,
-                                                     GLenum pname,
-                                                     GLint* params) {
-  test_context_->getImageParameterivCHROMIUM(image_id, pname, params);
-}
-
-void TestGLES2Interface::UnmapImageCHROMIUM(GLuint image_id) {
-  test_context_->unmapImageCHROMIUM(image_id);
+GLuint TestGLES2Interface::CreateGpuMemoryBufferImageCHROMIUM(
+    GLsizei width,
+    GLsizei height,
+    GLenum internalformat,
+    GLenum usage) {
+  return test_context_->createGpuMemoryBufferImageCHROMIUM(
+      width, height, internalformat, usage);
 }
 
 void TestGLES2Interface::BindTexImage2DCHROMIUM(GLenum target, GLint image_id) {

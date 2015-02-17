@@ -5,19 +5,20 @@
 #include "chrome/browser/extensions/external_registry_loader_win.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/browser/browser_thread.h"
-#include "extensions/common/extension.h"
 
 using content::BrowserThread;
 
@@ -43,6 +44,11 @@ bool CanOpenFileForReading(const base::FilePath& path) {
   return file_handle.get() != NULL;
 }
 
+std::string MakePrefName(const std::string& extension_id,
+                         const std::string& pref_name) {
+  return base::StringPrintf("%s.%s", extension_id.c_str(), pref_name.c_str());
+}
+
 }  // namespace
 
 namespace extensions {
@@ -62,7 +68,9 @@ void ExternalRegistryLoader::LoadOnFileThread() {
   // A map of IDs, to weed out duplicates between HKCU and HKLM.
   std::set<base::string16> keys;
   base::win::RegistryKeyIterator iterator_machine_key(
-      HKEY_LOCAL_MACHINE, base::ASCIIToWide(kRegistryExtensions).c_str());
+      HKEY_LOCAL_MACHINE,
+      base::ASCIIToWide(kRegistryExtensions).c_str(),
+      KEY_WOW64_32KEY);
   for (; iterator_machine_key.Valid(); ++iterator_machine_key)
     keys.insert(iterator_machine_key.Name());
   base::win::RegistryKeyIterator iterator_user_key(
@@ -80,18 +88,18 @@ void ExternalRegistryLoader::LoadOnFileThread() {
     key_path.append(L"\\");
     key_path.append(*it);
     if (key.Open(HKEY_LOCAL_MACHINE,
-                 key_path.c_str(), KEY_READ) != ERROR_SUCCESS) {
-      if (key.Open(HKEY_CURRENT_USER,
-                   key_path.c_str(), KEY_READ) != ERROR_SUCCESS) {
-        LOG(ERROR) << "Unable to read registry key at path (HKLM & HKCU): "
-                   << key_path << ".";
-        continue;
-      }
+                 key_path.c_str(),
+                 KEY_READ | KEY_WOW64_32KEY) != ERROR_SUCCESS &&
+        key.Open(HKEY_CURRENT_USER, key_path.c_str(), KEY_READ) !=
+            ERROR_SUCCESS) {
+      LOG(ERROR) << "Unable to read registry key at path (HKLM & HKCU): "
+                 << key_path << ".";
+      continue;
     }
 
     std::string id = base::UTF16ToASCII(*it);
     base::StringToLowerASCII(&id);
-    if (!Extension::IdIsValid(id)) {
+    if (!crx_file::id_util::IdIsValid(id)) {
       LOG(ERROR) << "Invalid id value " << id
                  << " for key " << key_path << ".";
       continue;
@@ -100,7 +108,7 @@ void ExternalRegistryLoader::LoadOnFileThread() {
     base::string16 extension_dist_id;
     if (key.ReadValue(kRegistryExtensionInstallParam, &extension_dist_id) ==
         ERROR_SUCCESS) {
-      prefs->SetString(id + "." + ExternalProviderImpl::kInstallParam,
+      prefs->SetString(MakePrefName(id, ExternalProviderImpl::kInstallParam),
                        base::UTF16ToASCII(extension_dist_id));
     }
 
@@ -110,7 +118,7 @@ void ExternalRegistryLoader::LoadOnFileThread() {
     if (key.ReadValue(kRegistryExtensionUpdateUrl, &extension_update_url)
         == ERROR_SUCCESS) {
       prefs->SetString(
-          id + "." + ExternalProviderImpl::kExternalUpdateUrl,
+          MakePrefName(id, ExternalProviderImpl::kExternalUpdateUrl),
           base::UTF16ToASCII(extension_update_url));
       continue;
     }
@@ -164,16 +172,19 @@ void ExternalRegistryLoader::LoadOnFileThread() {
     }
 
     prefs->SetString(
-        id + "." + ExternalProviderImpl::kExternalVersion,
+        MakePrefName(id, ExternalProviderImpl::kExternalVersion),
         base::UTF16ToASCII(extension_version));
     prefs->SetString(
-        id + "." + ExternalProviderImpl::kExternalCrx,
+        MakePrefName(id, ExternalProviderImpl::kExternalCrx),
         extension_path_str);
+    prefs->SetBoolean(
+        MakePrefName(id, ExternalProviderImpl::kMayBeUntrusted),
+        true);
   }
 
   prefs_.reset(prefs.release());
-  HISTOGRAM_TIMES("Extensions.ExternalRegistryLoaderWin",
-                  base::TimeTicks::Now() - start_time);
+  LOCAL_HISTOGRAM_TIMES("Extensions.ExternalRegistryLoaderWin",
+                        base::TimeTicks::Now() - start_time);
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&ExternalRegistryLoader::LoadFinished, this));

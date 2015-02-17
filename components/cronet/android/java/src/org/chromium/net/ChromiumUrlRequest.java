@@ -42,7 +42,7 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     private String mMethod;
     private byte[] mUploadData;
     private ReadableByteChannel mUploadChannel;
-    private WritableByteChannel mOutputChannel;
+    private boolean mChunkedUpload;
     private IOException mSinkException;
     private volatile boolean mStarted;
     private volatile boolean mCanceled;
@@ -60,6 +60,8 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     private boolean mContentLengthOverLimit;
     private boolean mSkippingToOffset;
     private long mSize;
+    // Indicates whether redirects have been disabled.
+    private boolean mDisableRedirects;
     private final Object mLock = new Object();
 
     public ChromiumUrlRequest(ChromiumUrlRequestContext requestContext,
@@ -141,6 +143,11 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
         return httpStatusCode;
     }
 
+    @Override
+    public String getHttpStatusText() {
+        return nativeGetHttpStatusText(mUrlRequestAdapter);
+    }
+
     /**
      * Returns an exception if any, or null if the request was completed
      * successfully.
@@ -175,6 +182,9 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
                     host = mUrl;
                 }
                 return new UnknownHostException("Unknown host: " + host);
+            case ChromiumUrlRequestError.TOO_MANY_REDIRECTS:
+                return new IOException("Request failed because there were too "
+                        + "many redirects or redirects have been disabled");
             default:
                 throw new IllegalStateException(
                         "Unrecognized error code: " + errorCode);
@@ -183,12 +193,12 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
 
     @Override
     public ByteBuffer getByteBuffer() {
-        return ((ChunkedWritableByteChannel)getSink()).getByteBuffer();
+        return ((ChunkedWritableByteChannel) getSink()).getByteBuffer();
     }
 
     @Override
     public byte[] getResponseAsBytes() {
-        return ((ChunkedWritableByteChannel)getSink()).getBytes();
+        return ((ChunkedWritableByteChannel) getSink()).getBytes();
     }
 
     /**
@@ -211,12 +221,15 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
      *            an upload.
      * @param data The content that needs to be uploaded.
      */
+    @Override
     public void setUploadData(String contentType, byte[] data) {
         synchronized (mLock) {
             validateNotStarted();
+            validateContentType(contentType);
             mUploadContentType = contentType;
             mUploadData = data;
             mUploadChannel = null;
+            mChunkedUpload = false;
         }
     }
 
@@ -229,32 +242,89 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
      *            upload request.
      * @param contentLength The length of data to upload.
      */
+    @Override
     public void setUploadChannel(String contentType,
             ReadableByteChannel channel, long contentLength) {
         synchronized (mLock) {
             validateNotStarted();
+            validateContentType(contentType);
             mUploadContentType = contentType;
             mUploadChannel = channel;
             mUploadContentLength = contentLength;
             mUploadData = null;
+            mChunkedUpload = false;
         }
     }
 
     /**
-     * Sets HTTP method for upload request. Only PUT or POST are allowed.
+     * Sets this request up for chunked uploading. To upload data call
+     * {@link #appendChunk(ByteBuffer, boolean)} after {@link #start()}.
+     *
+     * @param contentType MIME type of the post content or null if this is not a
+     *            POST request.
      */
+    public void setChunkedUpload(String contentType) {
+        synchronized (mLock) {
+            validateNotStarted();
+            validateContentType(contentType);
+            mUploadContentType = contentType;
+            mChunkedUpload = true;
+            mUploadData = null;
+            mUploadChannel = null;
+        }
+    }
+
+    /**
+     * Uploads a new chunk. Must have called {@link #setChunkedUpload(String)}
+     * and {@link #start()}.
+     *
+     * @param chunk The data, which will not be modified. It must not be empty
+     *            and its current position must be zero.
+     * @param isLastChunk Whether this chunk is the last one.
+     */
+    public void appendChunk(ByteBuffer chunk, boolean isLastChunk)
+            throws IOException {
+        if (!chunk.hasRemaining()) {
+            throw new IllegalArgumentException(
+                    "Attempted to write empty buffer.");
+        }
+        if (chunk.position() != 0) {
+            throw new IllegalArgumentException("The position must be zero.");
+        }
+        synchronized (mLock) {
+            if (!mStarted) {
+                throw new IllegalStateException("Request not yet started.");
+            }
+            if (!mChunkedUpload) {
+                throw new IllegalStateException(
+                        "Request not set for chunked uploadind.");
+            }
+            if (mUrlRequestAdapter == 0) {
+                throw new IOException("Native peer destroyed.");
+            }
+            nativeAppendChunk(mUrlRequestAdapter, chunk, chunk.limit(),
+                    isLastChunk);
+        }
+    }
+
+    @Override
     public void setHttpMethod(String method) {
         validateNotStarted();
-        if (!("PUT".equals(method) || "POST".equals(method))) {
-            throw new IllegalArgumentException("Only PUT or POST are allowed.");
-        }
         mMethod = method;
+    }
+
+    @Override
+    public void disableRedirects() {
+        mDisableRedirects = true;
+        validateNotStarted();
+        nativeDisableRedirects(mUrlRequestAdapter);
     }
 
     public WritableByteChannel getSink() {
         return mSink;
     }
 
+    @Override
     public void start() {
         synchronized (mLock) {
             if (mCanceled) {
@@ -265,19 +335,6 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
             validateNotRecycled();
 
             mStarted = true;
-
-            String method = mMethod;
-            if (method == null &&
-                    ((mUploadData != null && mUploadData.length > 0) ||
-                      mUploadChannel != null)) {
-                // Default to POST if there is data to upload but no method was
-                // specified.
-                method = "POST";
-            }
-
-            if (method != null) {
-                nativeSetMethod(mUrlRequestAdapter, method);
-            }
 
             if (mHeaders != null && !mHeaders.isEmpty()) {
                 for (Entry<String, String> entry : mHeaders.entrySet()) {
@@ -300,12 +357,23 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
             } else if (mUploadChannel != null) {
                 nativeSetUploadChannel(mUrlRequestAdapter, mUploadContentType,
                                        mUploadContentLength);
+            } else if (mChunkedUpload) {
+                nativeEnableChunkedUpload(mUrlRequestAdapter,
+                                          mUploadContentType);
+            }
+
+            // Note:  The above functions to set the upload body also set the
+            // method to POST, behind the scenes, so if mMethod is null but
+            // there's an upload body, the method will default to POST.
+            if (mMethod != null) {
+                nativeSetMethod(mUrlRequestAdapter, mMethod);
             }
 
             nativeStart(mUrlRequestAdapter);
-          }
+        }
     }
 
+    @Override
     public void cancel() {
         synchronized (mLock) {
             if (mCanceled) {
@@ -320,6 +388,7 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
         }
     }
 
+    @Override
     public boolean isCanceled() {
         synchronized (mLock) {
             return mCanceled;
@@ -332,23 +401,36 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
         }
     }
 
+    @Override
+    public String getNegotiatedProtocol() {
+        validateNotRecycled();
+        validateHeadersAvailable();
+        return nativeGetNegotiatedProtocol(mUrlRequestAdapter);
+    }
+
+    @Override
     public String getContentType() {
         return mContentType;
     }
 
+    @Override
     public String getHeader(String name) {
+        validateNotRecycled();
         validateHeadersAvailable();
         return nativeGetHeader(mUrlRequestAdapter, name);
     }
 
     // All response headers.
+    @Override
     public Map<String, List<String>> getAllHeaders() {
+        validateNotRecycled();
         validateHeadersAvailable();
         ResponseHeadersMap result = new ResponseHeadersMap();
         nativeGetAllHeaders(mUrlRequestAdapter, result);
         return result;
     }
 
+    @Override
     public String getUrl() {
         return mUrl;
     }
@@ -400,6 +482,12 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
         }
     }
 
+    private void validateContentType(String contentType) {
+        if (contentType == null) {
+            throw new NullPointerException("contentType is required");
+        }
+    }
+
     // Private methods called by native library.
 
     /**
@@ -429,17 +517,17 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
             mContentLength = nativeGetContentLength(mUrlRequestAdapter);
             mHeadersAvailable = true;
 
-            if (mContentLengthLimit > 0 &&
-                    mContentLength > mContentLengthLimit &&
-                    mCancelIfContentLengthOverLimit) {
+            if (mContentLengthLimit > 0
+                    && mContentLength > mContentLengthLimit
+                    && mCancelIfContentLengthOverLimit) {
                 onContentLengthOverLimit();
-                    return;
+                return;
             }
 
-            if (mBufferFullResponse && mContentLength != -1 &&
-                    !mContentLengthOverLimit) {
-                ((ChunkedWritableByteChannel)getSink()).setCapacity(
-                        (int)mContentLength);
+            if (mBufferFullResponse && mContentLength != -1
+                    && !mContentLengthOverLimit) {
+                ((ChunkedWritableByteChannel) getSink()).setCapacity(
+                        (int) mContentLength);
             }
 
             if (mOffset != 0) {
@@ -483,14 +571,14 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
                     return;
                 } else {
                     mSkippingToOffset = false;
-                    buffer.position((int)(mOffset - (mSize - size)));
+                    buffer.position((int) (mOffset - (mSize - size)));
                 }
             }
 
             boolean contentLengthOverLimit =
                     (mContentLengthLimit != 0 && mSize > mContentLengthLimit);
             if (contentLengthOverLimit) {
-                buffer.limit(size - (int)(mSize - mContentLengthLimit));
+                buffer.limit(size - (int) (mSize - mContentLengthLimit));
             }
 
             while (buffer.hasRemaining()) {
@@ -512,6 +600,9 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     private void finish() {
         try {
             synchronized (mLock) {
+                if (mDisableRedirects) {
+                    mHeadersAvailable = true;
+                }
                 mFinished = true;
 
                 if (mRecycled) {
@@ -583,7 +674,7 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     // Native methods are implemented in chromium_url_request.cc.
 
     private native long nativeCreateRequestAdapter(
-            long ChromiumUrlRequestContextAdapter, String url, int priority);
+            long urlRequestContextAdapter, String url, int priority);
 
     private native void nativeAddHeader(long urlRequestAdapter, String name,
             String value);
@@ -596,6 +687,14 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     private native void nativeSetUploadChannel(long urlRequestAdapter,
             String contentType, long contentLength);
 
+    private native void nativeEnableChunkedUpload(long urlRequestAdapter,
+            String contentType);
+
+    private native void nativeDisableRedirects(long urlRequestAdapter);
+
+    private native void nativeAppendChunk(long urlRequestAdapter,
+            ByteBuffer chunk, int chunkSize, boolean isLastChunk);
+
     private native void nativeStart(long urlRequestAdapter);
 
     private native void nativeCancel(long urlRequestAdapter);
@@ -605,6 +704,8 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
     private native int nativeGetErrorCode(long urlRequestAdapter);
 
     private native int nativeGetHttpStatusCode(long urlRequestAdapter);
+
+    private native String nativeGetHttpStatusText(long urlRequestAdapter);
 
     private native String nativeGetErrorString(long urlRequestAdapter);
 
@@ -616,6 +717,8 @@ public class ChromiumUrlRequest implements HttpUrlRequest {
 
     private native void nativeGetAllHeaders(long urlRequestAdapter,
             ResponseHeadersMap headers);
+
+    private native String nativeGetNegotiatedProtocol(long urlRequestAdapter);
 
     // Explicit class to work around JNI-generator generics confusion.
     private class ResponseHeadersMap extends HashMap<String, List<String>> {

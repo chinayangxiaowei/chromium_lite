@@ -12,6 +12,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "url/gurl.h"
 
@@ -89,7 +90,6 @@ bool PendingExtensionManager::AddFromSync(
     const std::string& id,
     const GURL& update_url,
     PendingExtensionInfo::ShouldAllowInstallPredicate should_allow_install,
-    bool install_silently,
     bool remote_install,
     bool installed_by_custodian) {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -104,7 +104,7 @@ bool PendingExtensionManager::AddFromSync(
   // Make sure we don't ever try to install the CWS app, because even though
   // it is listed as a syncable app (because its values need to be synced) it
   // should already be installed on every instance.
-  if (id == extension_misc::kWebStoreAppId) {
+  if (id == extensions::kWebStoreAppId) {
     NOTREACHED();
     return false;
   }
@@ -124,7 +124,6 @@ bool PendingExtensionManager::AddFromSync(
                           Version(),
                           should_allow_install,
                           kIsFromSync,
-                          install_silently,
                           kSyncLocation,
                           creation_flags,
                           kMarkAcknowledged,
@@ -145,7 +144,6 @@ bool PendingExtensionManager::AddFromExtensionImport(
   }
 
   static const bool kIsFromSync = false;
-  static const bool kInstallSilently = true;
   static const Manifest::Location kManifestLocation = Manifest::INTERNAL;
   static const bool kMarkAcknowledged = false;
   static const bool kRemoteInstall = false;
@@ -156,7 +154,6 @@ bool PendingExtensionManager::AddFromExtensionImport(
                           Version(),
                           should_allow_install,
                           kIsFromSync,
-                          kInstallSilently,
                           kManifestLocation,
                           Extension::NO_FLAGS,
                           kMarkAcknowledged,
@@ -173,7 +170,6 @@ bool PendingExtensionManager::AddFromExternalUpdateUrl(
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   static const bool kIsFromSync = false;
-  static const bool kInstallSilently = true;
   static const bool kRemoteInstall = false;
 
   const Extension* extension = ExtensionRegistry::Get(context_)
@@ -199,7 +195,6 @@ bool PendingExtensionManager::AddFromExternalUpdateUrl(
                           Version(),
                           &AlwaysInstall,
                           kIsFromSync,
-                          kInstallSilently,
                           location,
                           creation_flags,
                           mark_acknowledged,
@@ -219,7 +214,6 @@ bool PendingExtensionManager::AddFromExternalFile(
   // consistent.
   const GURL& kUpdateUrl = GURL::EmptyGURL();
   static const bool kIsFromSync = false;
-  static const bool kInstallSilently = true;
   static const bool kRemoteInstall = false;
 
   return AddExtensionImpl(id,
@@ -228,7 +222,6 @@ bool PendingExtensionManager::AddFromExternalFile(
                           version,
                           &AlwaysInstall,
                           kIsFromSync,
-                          kInstallSilently,
                           install_source,
                           creation_flags,
                           mark_acknowledged,
@@ -261,7 +254,6 @@ bool PendingExtensionManager::AddExtensionImpl(
     const Version& version,
     PendingExtensionInfo::ShouldAllowInstallPredicate should_allow_install,
     bool is_from_sync,
-    bool install_silently,
     Manifest::Location install_source,
     int creation_flags,
     bool mark_acknowledged,
@@ -274,7 +266,6 @@ bool PendingExtensionManager::AddExtensionImpl(
                             version,
                             should_allow_install,
                             is_from_sync,
-                            install_silently,
                             install_source,
                             creation_flags,
                             mark_acknowledged,

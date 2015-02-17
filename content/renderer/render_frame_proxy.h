@@ -11,11 +11,15 @@
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
 
-#include "third_party/WebKit/public/web/WebFrameClient.h"
 #include "third_party/WebKit/public/web/WebRemoteFrame.h"
+#include "third_party/WebKit/public/web/WebRemoteFrameClient.h"
 
 struct FrameMsg_BuffersSwapped_Params;
 struct FrameMsg_CompositorFrameSwapped_Params;
+
+namespace blink {
+class WebInputEvent;
+}
 
 namespace content {
 
@@ -46,7 +50,7 @@ class RenderViewImpl;
 class CONTENT_EXPORT RenderFrameProxy
     : public IPC::Listener,
       public IPC::Sender,
-      NON_EXPORTED_BASE(public blink::WebFrameClient) {
+      NON_EXPORTED_BASE(public blink::WebRemoteFrameClient) {
  public:
   // This method should be used to create a RenderFrameProxy, which will replace
   // an existing RenderFrame during its cross-process navigation from the
@@ -80,10 +84,10 @@ class CONTENT_EXPORT RenderFrameProxy
   // Returns the RenderFrameProxy given a WebFrame.
   static RenderFrameProxy* FromWebFrame(blink::WebFrame* web_frame);
 
-  virtual ~RenderFrameProxy();
+  ~RenderFrameProxy() override;
 
   // IPC::Sender
-  virtual bool Send(IPC::Message* msg) OVERRIDE;
+  bool Send(IPC::Message* msg) override;
 
   // Out-of-process child frames receive a signal from RenderWidgetCompositor
   // when a compositor frame has committed.
@@ -93,19 +97,33 @@ class CONTENT_EXPORT RenderFrameProxy
   RenderViewImpl* render_view() { return render_view_; }
   blink::WebRemoteFrame* web_frame() { return web_frame_; }
 
+  // blink::WebRemoteFrameClient implementation:
+  virtual void frameDetached();
+  virtual void postMessageEvent(
+      blink::WebLocalFrame* sourceFrame,
+      blink::WebRemoteFrame* targetFrame,
+      blink::WebSecurityOrigin target,
+      blink::WebDOMMessageEvent event);
+  virtual void initializeChildFrame(
+      const blink::WebRect& frame_rect,
+      float scale_factor);
+  virtual void navigate(const blink::WebURLRequest& request,
+                        bool should_replace_current_entry);
+  virtual void forwardInputEvent(const blink::WebInputEvent* event);
+
  private:
   RenderFrameProxy(int routing_id, int frame_routing_id);
 
   void Init(blink::WebRemoteFrame* frame, RenderViewImpl* render_view);
 
   // IPC::Listener
-  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& msg) override;
 
   // IPC handlers
   void OnDeleteProxy();
   void OnChildFrameProcessGone();
-  void OnBuffersSwapped(const FrameMsg_BuffersSwapped_Params& params);
   void OnCompositorFrameSwapped(const IPC::Message& message);
+  void OnDisownOpener();
 
   // The routing ID by which this RenderFrameProxy is known.
   const int routing_id_;

@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Scanner of the entries.
  * @constructor
@@ -22,7 +20,7 @@ function ContentScanner() {
  *     completion.
  * @param {function()} successCallback Called when the scan is completed
  *     successfully.
- * @param {function(FileError)} errorCallback Called an error occurs.
+ * @param {function(DOMError)} errorCallback Called an error occurs.
  */
 ContentScanner.prototype.scan = function(
     entriesCallback, successCallback, errorCallback) {
@@ -131,7 +129,7 @@ DriveSearchContentScanner.prototype.scan = function(
     entriesCallback, successCallback, errorCallback) {
   var numReadEntries = 0;
   var readEntries = function(nextFeed) {
-    chrome.fileBrowserPrivate.searchDrive(
+    chrome.fileManagerPrivate.searchDrive(
         {query: this.query_, nextFeed: nextFeed},
         function(entries, nextFeed) {
           if (this.cancelled_) {
@@ -259,7 +257,7 @@ LocalSearchContentScanner.prototype.scan = function(
 
 /**
  * Scanner of the entries for the metadata search on Drive File System.
- * @param {DriveMetadataSearchContentScanner.SearchType} searchType The option
+ * @param {!DriveMetadataSearchContentScanner.SearchType} searchType The option
  *     of the search.
  * @constructor
  * @extends {ContentScanner}
@@ -279,12 +277,13 @@ DriveMetadataSearchContentScanner.prototype.__proto__ =
  * The search types on the Drive File System.
  * @enum {string}
  */
-DriveMetadataSearchContentScanner.SearchType = Object.freeze({
+DriveMetadataSearchContentScanner.SearchType = {
   SEARCH_ALL: 'ALL',
   SEARCH_SHARED_WITH_ME: 'SHARED_WITH_ME',
   SEARCH_RECENT_FILES: 'EXCLUDE_DIRECTORIES',
   SEARCH_OFFLINE: 'OFFLINE'
-});
+};
+Object.freeze(DriveMetadataSearchContentScanner.SearchType);
 
 /**
  * Starts to metadata-search on Drive File System.
@@ -292,7 +291,7 @@ DriveMetadataSearchContentScanner.SearchType = Object.freeze({
  */
 DriveMetadataSearchContentScanner.prototype.scan = function(
     entriesCallback, successCallback, errorCallback) {
-  chrome.fileBrowserPrivate.searchDriveMetadata(
+  chrome.fileManagerPrivate.searchDriveMetadata(
       {query: '', types: this.searchType_, maxResults: 500},
       function(results) {
         if (this.cancelled_) {
@@ -319,7 +318,8 @@ DriveMetadataSearchContentScanner.prototype.scan = function(
  * When filters are changed, a 'changed' event is fired.
  *
  * @param {MetadataCache} metadataCache Metadata cache service.
- * @param {boolean} showHidden If files starting with '.' are shown.
+ * @param {boolean} showHidden If files starting with '.' or ending with
+ *     '.crdownlaod' are shown.
  * @constructor
  * @extends {cr.EventTarget}
  */
@@ -331,7 +331,7 @@ function FileFilter(metadataCache, showHidden) {
   this.metadataCache_ = metadataCache;
 
   /**
-   * @type Object.<string, Function>
+   * @type {Object.<string, Function>}
    * @private
    */
   this.filters_ = {};
@@ -339,7 +339,8 @@ function FileFilter(metadataCache, showHidden) {
 
   // Do not show entries marked as 'deleted'.
   this.addFilter('deleted', function(entry) {
-    var internal = this.metadataCache_.getCached(entry, 'internal');
+    var internal = /** @type {{deleted}} */
+        (this.metadataCache_.getCached(entry, 'internal'));
     return !(internal && internal.deleted);
   }.bind(this));
 }
@@ -371,10 +372,14 @@ FileFilter.prototype.removeFilter = function(name) {
  * @param {boolean} value If do not show hidden files.
  */
 FileFilter.prototype.setFilterHidden = function(value) {
+  var regexpCrdownloadExtension = /\.crdownload$/i;
   if (value) {
     this.addFilter(
         'hidden',
-        function(entry) { return entry.name.substr(0, 1) !== '.'; }
+        function(entry) {
+          return entry.name.substr(0, 1) !== '.' &&
+                 !regexpCrdownloadExtension.test(entry.name);
+        }
     );
   } else {
     this.removeFilter('hidden');
@@ -412,14 +417,19 @@ function FileListModel(metadataCache) {
   /**
    * Metadata cache.
    * @type {MetadataCache}
+   * @private
    */
   this.metadataCache_ = metadataCache;
 
   // Initialize compare functions.
-  this.setCompareFunction('name', util.compareName);
-  this.setCompareFunction('modificationTime', this.compareMtime_.bind(this));
-  this.setCompareFunction('size', this.compareSize_.bind(this));
-  this.setCompareFunction('type', this.compareType_.bind(this));
+  this.setCompareFunction('name',
+      /** @type {function(*, *): number} */ (util.compareName));
+  this.setCompareFunction('modificationTime',
+      /** @type {function(*, *): number} */ (this.compareMtime_.bind(this)));
+  this.setCompareFunction('size',
+      /** @type {function(*, *): number} */ (this.compareSize_.bind(this)));
+  this.setCompareFunction('type',
+      /** @type {function(*, *): number} */ (this.compareType_.bind(this)));
 }
 
 FileListModel.prototype = {
@@ -566,6 +576,9 @@ DirectoryContents.prototype.clone = function() {
  */
 DirectoryContents.prototype.dispose = function() {
   this.context_.metadataCache.resizeBy(-this.lastSpaceInMetadataCache_);
+  // Though the lastSpaceInMetadataCache_ is not supposed to be referred after
+  // dispose(), keep it synced with requested cache size just in case.
+  this.lastSpaceInMetadataCache_ = 0;
 };
 
 /**
@@ -581,7 +594,7 @@ DirectoryContents.prototype.makeSpaceInMetadataCache_ = function(size) {
 
 /**
  * Use a given fileList instead of the fileList from the context.
- * @param {Array|cr.ui.ArrayDataModel} fileList The new file list.
+ * @param {(!Array|!cr.ui.ArrayDataModel)} fileList The new file list.
  */
 DirectoryContents.prototype.setFileList = function(fileList) {
   if (fileList instanceof cr.ui.ArrayDataModel)
@@ -660,6 +673,53 @@ DirectoryContents.prototype.scan = function(refresh) {
   this.scanner_.scan(this.onNewEntries_.bind(this, refresh),
                      completionCallback.bind(this),
                      errorCallback.bind(this));
+};
+
+/**
+ * Adds/removes/updates items of file list.
+ * @param {Array.<Entry>} updatedEntries Entries of updated/added files.
+ * @param {Array.<string>} removedUrls URLs of removed files.
+ */
+DirectoryContents.prototype.update = function(updatedEntries, removedUrls) {
+  var removedMap = {};
+  for (var i = 0; i < removedUrls.length; i++) {
+    removedMap[removedUrls[i]] = true;
+  }
+
+  var updatedMap = {};
+  for (var i = 0; i < updatedEntries.length; i++) {
+    updatedMap[updatedEntries[i].toURL()] = updatedEntries[i];
+  }
+
+  var updatedList = [];
+  for (var i = 0; i < this.fileList_.length; i++) {
+    var url = this.fileList_.item(i).toURL();
+
+    if (url in removedMap) {
+      this.fileList_.splice(i, 1);
+      i--;
+      continue;
+    }
+
+    if (url in updatedMap) {
+      updatedList.push(updatedMap[url]);
+      delete updatedMap[url];
+    }
+  }
+
+  var addedList = [];
+  for (var url in updatedMap) {
+    addedList.push(updatedMap[url]);
+  }
+
+  if (removedUrls.length > 0)
+    this.fileList_.metadataCache_.clearByUrl(removedUrls, '*');
+
+  this.prefetchMetadata(updatedList, true, function() {
+    this.onNewEntries_(true, addedList);
+    this.onScanFinished_();
+    this.onScanCompleted_();
+  }.bind(this));
 };
 
 /**
@@ -764,6 +824,14 @@ DirectoryContents.prototype.onNewEntries_ = function(refresh, entries) {
   this.processNewEntriesQueue_.run(function(callbackOuter) {
     var finish = function() {
       if (!this.scanCancelled_) {
+        // Just before inserting entries into the file list, check and avoid
+        // duplication.
+        var currentURLs = {};
+        for (var i = 0; i < this.fileList_.length; i++)
+          currentURLs[this.fileList_.item(i).toURL()] = true;
+        entriesFiltered = entriesFiltered.filter(function(entry) {
+          return !currentURLs[entry.toURL()];
+        });
         // Update the filelist without waiting the metadata.
         this.fileList_.push.apply(this.fileList_, entriesFiltered);
         cr.dispatchSimpleEvent(this, 'scan-updated');
@@ -810,7 +878,7 @@ DirectoryContents.prototype.onNewEntries_ = function(refresh, entries) {
  */
 DirectoryContents.prototype.prefetchMetadata =
     function(entries, refresh, callback) {
-  var TYPES = 'filesystem|drive';
+  var TYPES = 'filesystem|external';
   if (refresh)
     this.context_.metadataCache.getLatest(entries, TYPES, callback);
   else
@@ -882,7 +950,7 @@ DirectoryContents.createForLocalSearch = function(
  * @param {DirectoryEntry} fakeDirectoryEntry Fake directory entry representing
  *     the set of result entries. This serves as a top directory for the
  *     search.
- * @param {DriveMetadataSearchContentScanner.SearchType} searchType The type of
+ * @param {!DriveMetadataSearchContentScanner.SearchType} searchType The type of
  *     the search. The scanner will restricts the entries based on the given
  *     type.
  * @return {DirectoryContents} Created DirectoryContents instance.

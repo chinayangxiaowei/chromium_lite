@@ -26,7 +26,7 @@ class QuicServerPacketWriter : public QuicPacketWriter {
 
   QuicServerPacketWriter(UDPServerSocket* socket,
                          QuicBlockedWriterInterface* blocked_writer);
-  virtual ~QuicServerPacketWriter();
+  ~QuicServerPacketWriter() override;
 
   // Use this method to write packets rather than WritePacket:
   // QuicServerPacketWriter requires a callback to exist for every write, which
@@ -41,18 +41,18 @@ class QuicServerPacketWriter : public QuicPacketWriter {
   void OnWriteComplete(int rv);
 
   // QuicPacketWriter implementation:
-  virtual bool IsWriteBlockedDataBuffered() const OVERRIDE;
-  virtual bool IsWriteBlocked() const OVERRIDE;
-  virtual void SetWritable() OVERRIDE;
+  bool IsWriteBlockedDataBuffered() const override;
+  bool IsWriteBlocked() const override;
+  void SetWritable() override;
 
  protected:
   // Do not call WritePacket on its own -- use WritePacketWithCallback
-  virtual WriteResult WritePacket(const char* buffer,
-                                  size_t buf_len,
-                                  const IPAddressNumber& self_address,
-                                  const IPEndPoint& peer_address) OVERRIDE;
+  WriteResult WritePacket(const char* buffer,
+                          size_t buf_len,
+                          const IPAddressNumber& self_address,
+                          const IPEndPoint& peer_address) override;
+
  private:
-  base::WeakPtrFactory<QuicServerPacketWriter> weak_factory_;
   UDPServerSocket* socket_;
 
   // To be notified after every successful asynchronous write.
@@ -63,6 +63,8 @@ class QuicServerPacketWriter : public QuicPacketWriter {
 
   // Whether a write is currently in flight.
   bool write_blocked_;
+
+  base::WeakPtrFactory<QuicServerPacketWriter> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicServerPacketWriter);
 };

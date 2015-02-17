@@ -16,7 +16,6 @@
 #include "base/win/windows_version.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/fullscreen/fullscreen_controller.h"
@@ -34,6 +33,7 @@
 #include "extensions/common/features/feature.h"
 #include "extensions/common/features/simple_feature.h"
 #include "extensions/common/switches.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "media/base/audio_bus.h"
 #include "media/base/video_frame.h"
 #include "media/cast/cast_config.h"
@@ -72,7 +72,7 @@ enum TestFlags {
   k30fps               = 1 << 4, // use 30 fps video
   k60fps               = 1 << 5, // use 60 fps video
   kProxyWifi           = 1 << 6, // Run UDP through UDPProxy wifi profile
-  kProxyEvil           = 1 << 7, // Run UDP through UDPProxy evil profile
+  kProxyBad            = 1 << 7, // Run UDP through UDPProxy bad profile
   kSlowClock           = 1 << 8, // Receiver clock is 10 seconds slow
   kFastClock           = 1 << 9, // Receiver clock is 10 seconds fast
 };
@@ -81,7 +81,7 @@ class SkewedTickClock : public base::DefaultTickClock {
  public:
   explicit SkewedTickClock(const base::TimeDelta& delta) : delta_(delta) {
   }
-  virtual base::TimeTicks NowTicks() OVERRIDE {
+  base::TimeTicks NowTicks() override {
     return DefaultTickClock::NowTicks() + delta_;
   }
  private:
@@ -96,7 +96,7 @@ class SkewedCastEnvironment : public media::cast::StandaloneCastEnvironment {
   }
 
  protected:
-  virtual ~SkewedCastEnvironment() {}
+  ~SkewedCastEnvironment() override {}
 };
 
 // We log one of these for each call to OnAudioFrame/OnVideoFrame.
@@ -239,9 +239,9 @@ class TestPatternReceiver : public media::cast::InProcessReceiver {
 
  private:
   // Invoked by InProcessReceiver for each received audio frame.
-  virtual void OnAudioFrame(scoped_ptr<media::AudioBus> audio_frame,
-                            const base::TimeTicks& playout_time,
-                            bool is_continuous) OVERRIDE {
+  void OnAudioFrame(scoped_ptr<media::AudioBus> audio_frame,
+                    const base::TimeTicks& playout_time,
+                    bool is_continuous) override {
     CHECK(cast_env()->CurrentlyOn(media::cast::CastEnvironment::MAIN));
 
     if (audio_frame->frames() <= 0) {
@@ -260,9 +260,9 @@ class TestPatternReceiver : public media::cast::InProcessReceiver {
     }
   }
 
-  virtual void OnVideoFrame(const scoped_refptr<media::VideoFrame>& video_frame,
-                            const base::TimeTicks& render_time,
-                            bool is_continuous) OVERRIDE {
+  void OnVideoFrame(const scoped_refptr<media::VideoFrame>& video_frame,
+                    const base::TimeTicks& render_time,
+                    bool is_continuous) override {
     CHECK(cast_env()->CurrentlyOn(media::cast::CastEnvironment::MAIN));
 
     TRACE_EVENT_INSTANT1(
@@ -314,8 +314,8 @@ class CastV2PerformanceTest
       suffix += "_60fps";
     if (HasFlag(kProxyWifi))
       suffix += "_wifi";
-    if (HasFlag(kProxyEvil))
-      suffix += "_evil";
+    if (HasFlag(kProxyBad))
+      suffix += "_bad";
     if (HasFlag(kSlowClock))
       suffix += "_slow";
     if (HasFlag(kFastClock))
@@ -355,12 +355,12 @@ class CastV2PerformanceTest
     return endpoint;
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     EnablePixelOutput();
     ExtensionApiTest::SetUp();
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     // Some of the tests may launch http requests through JSON or AJAX
     // which causes a security error (cross domain request) when the page
     // is loaded from the local file system ( file:// ). The following switch
@@ -595,7 +595,7 @@ class CastV2PerformanceTest
     receiver->Start();
 
     scoped_ptr<media::cast::test::UDPProxy> udp_proxy;
-    if (HasFlag(kProxyWifi) || HasFlag(kProxyEvil)) {
+    if (HasFlag(kProxyWifi) || HasFlag(kProxyBad)) {
       net::IPEndPoint proxy_end_point = GetFreeLocalPort();
       if (HasFlag(kProxyWifi)) {
         udp_proxy = media::cast::test::UDPProxy::Create(
@@ -604,12 +604,12 @@ class CastV2PerformanceTest
             media::cast::test::WifiNetwork().Pass(),
             media::cast::test::WifiNetwork().Pass(),
             NULL);
-      } else if (HasFlag(kProxyEvil)) {
+      } else if (HasFlag(kProxyBad)) {
         udp_proxy = media::cast::test::UDPProxy::Create(
             proxy_end_point,
             receiver_end_point,
-            media::cast::test::EvilNetwork().Pass(),
-            media::cast::test::EvilNetwork().Pass(),
+            media::cast::test::BadNetwork().Pass(),
+            media::cast::test::BadNetwork().Pass(),
             NULL);
       }
       receiver_end_point = proxy_end_point;
@@ -635,6 +635,7 @@ class CastV2PerformanceTest
     MeanAndError frame_data = AnalyzeTraceDistance(
         analyzer.get(),
         TRACE_DISABLED_BY_DEFAULT("OnSwapCompositorFrame"));
+
     EXPECT_GT(frame_data.num_values, 0UL);
     // Lower is better.
     frame_data.Print(test_name,
@@ -675,6 +676,6 @@ INSTANTIATE_TEST_CASE_P(
         kUseGpu | k60fps,
         kUseGpu | k24fps | kDisableVsync,
         kUseGpu | k30fps | kProxyWifi,
-        kUseGpu | k30fps | kProxyEvil,
+        kUseGpu | k30fps | kProxyBad,
         kUseGpu | k30fps | kSlowClock,
         kUseGpu | k30fps | kFastClock));

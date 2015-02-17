@@ -11,7 +11,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/history/history_service.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/public/common/signed_certificate_timestamp_id_and_status.h"
 #include "ui/gfx/native_widget_types.h"
@@ -66,6 +66,24 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
     // The profile has accessed data using an administrator-provided
     // certificate, so the site might be able to intercept data.
     SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT,
+    // The website provided a valid certificate, but the certificate or chain
+    // is using a deprecated signature algorithm.
+    SITE_IDENTITY_STATUS_DEPRECATED_SIGNATURE_ALGORITHM,
+  };
+
+  // UMA statistics for WebsiteSettings. Do not reorder or remove existing
+  // fields.
+  enum WebsiteSettingsAction {
+    WEBSITE_SETTINGS_OPENED = 0,
+    WEBSITE_SETTINGS_PERMISSIONS_TAB_SELECTED,
+    WEBSITE_SETTINGS_CONNECTION_TAB_SELECTED,
+    WEBSITE_SETTINGS_CONNECTION_TAB_SHOWN_IMMEDIATELY,
+    WEBSITE_SETTINGS_COOKIES_DIALOG_OPENED,
+    WEBSITE_SETTINGS_CHANGED_PERMISSION,
+    WEBSITE_SETTINGS_CERTIFICATE_DIALOG_OPENED,
+    WEBSITE_SETTINGS_TRANSPARENCY_VIEWER_OPENED,
+    WEBSITE_SETTINGS_CONNECTION_HELP_OPENED,
+    WEBSITE_SETTINGS_COUNT
   };
 
   // Creates a WebsiteSettings for the passed |url| using the given |ssl| status
@@ -78,7 +96,9 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
                   const GURL& url,
                   const content::SSLStatus& ssl,
                   content::CertStore* cert_store);
-  virtual ~WebsiteSettings();
+  ~WebsiteSettings() override;
+
+  void RecordWebsiteSettingsAction(WebsiteSettingsAction action);
 
   // This method is called when ever a permission setting is changed.
   void OnSitePermissionChanged(ContentSettingsType type,
@@ -92,6 +112,9 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
 
   // This method is called by the UI when the UI is closing.
   void OnUIClosing();
+
+  // This method is called when the revoke SSL error bypass button is pressed.
+  void OnRevokeSSLErrorBypassButtonPressed();
 
   // Accessors.
   SiteConnectionStatus site_connection_status() const {
@@ -116,12 +139,8 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
     return organization_name_;
   }
 
-  ChromeSSLHostStateDelegate* chrome_ssl_host_state_delegate() {
-    return chrome_ssl_host_state_delegate_;
-  }
-
   // SiteDataObserver implementation.
-  virtual void OnSiteDataAccessed() OVERRIDE;
+  void OnSiteDataAccessed() override;
 
  private:
   // Initializes the |WebsiteSettings|.
@@ -218,6 +237,8 @@ class WebsiteSettings : public TabSpecificContentSettings::SiteDataObserver {
   // Service for managing SSL error page bypasses. Used to revoke bypass
   // decisions by users.
   ChromeSSLHostStateDelegate* chrome_ssl_host_state_delegate_;
+
+  bool did_revoke_user_ssl_decisions_;
 
   DISALLOW_COPY_AND_ASSIGN(WebsiteSettings);
 };

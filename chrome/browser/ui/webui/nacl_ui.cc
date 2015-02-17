@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
@@ -25,6 +25,8 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/user_metrics.h"
@@ -33,9 +35,6 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/webplugininfo.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_WIN)
@@ -54,7 +53,6 @@ content::WebUIDataSource* CreateNaClUIHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUINaClHost);
 
-  source->SetUseJsonJSFormatV2();
   source->AddLocalizedString("loadingMessage", IDS_NACL_LOADING_MESSAGE);
   source->AddLocalizedString("naclLongTitle", IDS_NACL_TITLE_MESSAGE);
   source->SetJsonPath("strings.js");
@@ -74,10 +72,10 @@ content::WebUIDataSource* CreateNaClUIHTMLSource() {
 class NaClDomHandler : public WebUIMessageHandler {
  public:
   NaClDomHandler();
-  virtual ~NaClDomHandler();
+  ~NaClDomHandler() override;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
  private:
   // Callback for the "requestNaClInfo" message.

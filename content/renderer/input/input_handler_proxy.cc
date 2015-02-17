@@ -70,7 +70,7 @@ bool ShouldSuppressScrollForFlingBoosting(
 
   gfx::Vector2dF dx(scroll_update_event.data.scrollUpdate.deltaX,
                     scroll_update_event.data.scrollUpdate.deltaY);
-  if (gfx::DotProduct(current_fling_velocity, dx) < 0)
+  if (gfx::DotProduct(current_fling_velocity, dx) <= 0)
     return false;
 
   if (time_since_last_boost_event < 0.001)
@@ -94,7 +94,7 @@ bool ShouldBoostFling(const gfx::Vector2dF& current_fling_velocity,
       fling_start_event.data.flingStart.velocityX,
       fling_start_event.data.flingStart.velocityY);
 
-  if (gfx::DotProduct(current_fling_velocity, new_fling_velocity) < 0)
+  if (gfx::DotProduct(current_fling_velocity, new_fling_velocity) <= 0)
     return false;
 
   if (current_fling_velocity.LengthSquared() < kMinBoostFlingSpeedSquare)
@@ -195,6 +195,7 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleInputEvent(
   TRACE_EVENT1("input", "InputHandlerProxy::HandleInputEvent",
                "type", WebInputEventTraits::GetName(event.type));
 
+  client_->DidReceiveInputEvent();
   if (FilterInputEventForFlingBoosting(event))
     return DID_HANDLE;
 
@@ -237,11 +238,13 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleInputEvent(
             -wheel_event.deltaX,
             "deltaY",
             -wheel_event.deltaY);
-        bool did_scroll = input_handler_->ScrollBy(
-            gfx::Point(wheel_event.x, wheel_event.y),
-            gfx::Vector2dF(-wheel_event.deltaX, -wheel_event.deltaY));
+        gfx::Point scroll_point(wheel_event.x, wheel_event.y);
+        gfx::Vector2dF scroll_delta(-wheel_event.deltaX, -wheel_event.deltaY);
+        cc::InputHandlerScrollResult scroll_result = input_handler_->ScrollBy(
+            scroll_point, scroll_delta);
+        HandleOverscroll(scroll_point, scroll_result);
         input_handler_->ScrollEnd();
-        return did_scroll ? DID_HANDLE : DROP_EVENT;
+        return scroll_result.did_scroll ? DID_HANDLE : DROP_EVENT;
       }
       case cc::InputHandler::ScrollIgnored:
         // TODO(jamesr): This should be DROP_EVENT, but in cases where we fail
@@ -296,11 +299,13 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleInputEvent(
 
     const WebGestureEvent& gesture_event =
         *static_cast<const WebGestureEvent*>(&event);
-    bool did_scroll = input_handler_->ScrollBy(
-        gfx::Point(gesture_event.x, gesture_event.y),
-        gfx::Vector2dF(-gesture_event.data.scrollUpdate.deltaX,
-                       -gesture_event.data.scrollUpdate.deltaY));
-    return did_scroll ? DID_HANDLE : DROP_EVENT;
+    gfx::Point scroll_point(gesture_event.x, gesture_event.y);
+    gfx::Vector2dF scroll_delta(-gesture_event.data.scrollUpdate.deltaX,
+                                -gesture_event.data.scrollUpdate.deltaY);
+    cc::InputHandlerScrollResult scroll_result = input_handler_->ScrollBy(
+        scroll_point, scroll_delta);
+    HandleOverscroll(scroll_point, scroll_result);
+    return scroll_result.did_scroll ? DID_HANDLE : DROP_EVENT;
   } else if (event.type == WebInputEvent::GestureScrollEnd) {
 #ifndef NDEBUG
     DCHECK(expect_scroll_update_end_);
@@ -549,6 +554,8 @@ bool InputHandlerProxy::FilterInputEventForFlingBoosting(
       WebFloatPoint velocity(current_fling_velocity_.x(),
                              current_fling_velocity_.y());
       deferred_fling_cancel_time_seconds_ = 0;
+      disallow_horizontal_fling_scroll_ = !velocity.x;
+      disallow_vertical_fling_scroll_ = !velocity.y;
       last_fling_boost_event_ = WebGestureEvent();
       fling_curve_.reset(client_->CreateFlingAnimationCurve(
           gesture_event.sourceDevice,
@@ -642,22 +649,23 @@ void InputHandlerProxy::MainThreadHasStoppedFlinging() {
   client_->DidStopFlinging();
 }
 
-void InputHandlerProxy::DidOverscroll(
-    const gfx::PointF& causal_event_viewport_point,
-    const gfx::Vector2dF& accumulated_overscroll,
-    const gfx::Vector2dF& latest_overscroll_delta) {
+void InputHandlerProxy::HandleOverscroll(
+    const gfx::Point& causal_event_viewport_point,
+    const cc::InputHandlerScrollResult& scroll_result) {
   DCHECK(client_);
+  if (!scroll_result.did_overscroll_root)
+    return;
 
   TRACE_EVENT2("input",
                "InputHandlerProxy::DidOverscroll",
                "dx",
-               latest_overscroll_delta.x(),
+               scroll_result.unused_scroll_delta.x(),
                "dy",
-               latest_overscroll_delta.y());
+               scroll_result.unused_scroll_delta.y());
 
   DidOverscrollParams params;
-  params.accumulated_overscroll = accumulated_overscroll;
-  params.latest_overscroll_delta = latest_overscroll_delta;
+  params.accumulated_overscroll = scroll_result.accumulated_root_overscroll;
+  params.latest_overscroll_delta = scroll_result.unused_scroll_delta;
   params.current_fling_velocity =
       ToClientScrollIncrement(current_fling_velocity_);
   params.causal_event_viewport_point = causal_event_viewport_point;
@@ -792,11 +800,13 @@ bool InputHandlerProxy::scrollBy(const WebFloatSize& increment,
     case blink::WebGestureDeviceTouchpad:
       did_scroll = TouchpadFlingScroll(clipped_increment);
       break;
-    case blink::WebGestureDeviceTouchscreen:
+    case blink::WebGestureDeviceTouchscreen: {
       clipped_increment = ToClientScrollIncrement(clipped_increment);
-      did_scroll = input_handler_->ScrollBy(fling_parameters_.point,
-                                            clipped_increment);
-      break;
+      cc::InputHandlerScrollResult scroll_result = input_handler_->ScrollBy(
+          fling_parameters_.point, clipped_increment);
+      HandleOverscroll(fling_parameters_.point, scroll_result);
+      did_scroll = scroll_result.did_scroll;
+    } break;
   }
 
   if (did_scroll) {

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/lib/fixed_buffer.h"
+#include "mojo/public/cpp/environment/environment.h"
 #include "mojo/public/interfaces/bindings/tests/test_structs.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,9 +27,17 @@ void CheckRect(const Rect& rect, int32_t factor = 1) {
   EXPECT_EQ(20 * factor, rect.height);
 }
 
+class StructTest : public testing::Test {
+ public:
+  ~StructTest() override {}
+
+ private:
+  Environment env_;
+};
+
 }  // namespace
 
-TEST(StructTest, Rect) {
+TEST_F(StructTest, Rect) {
   RectPtr rect;
   EXPECT_TRUE(rect.is_null());
   EXPECT_TRUE(!rect);
@@ -42,8 +51,36 @@ TEST(StructTest, Rect) {
   CheckRect(*rect);
 }
 
+TEST_F(StructTest, Clone) {
+  NamedRegionPtr region;
+
+  NamedRegionPtr clone_region = region.Clone();
+  EXPECT_TRUE(clone_region.is_null());
+
+  region = NamedRegion::New();
+  clone_region = region.Clone();
+  EXPECT_TRUE(clone_region->name.is_null());
+  EXPECT_TRUE(clone_region->rects.is_null());
+
+  region->name = "hello world";
+  clone_region = region.Clone();
+  EXPECT_EQ(region->name, clone_region->name);
+
+  region->rects = Array<RectPtr>(2);
+  region->rects[1] = MakeRect();
+  clone_region = region.Clone();
+  EXPECT_EQ(2u, clone_region->rects.size());
+  EXPECT_TRUE(clone_region->rects[0].is_null());
+  CheckRect(*clone_region->rects[1]);
+
+  // NoDefaultFieldValues contains handles, so Clone() is not available, but
+  // NoDefaultFieldValuesPtr should still compile.
+  NoDefaultFieldValuesPtr no_default_field_values(NoDefaultFieldValues::New());
+  EXPECT_FALSE(no_default_field_values->f13.is_valid());
+}
+
 // Serialization test of a struct with no pointer or handle members.
-TEST(StructTest, Serialization_Basic) {
+TEST_F(StructTest, Serialization_Basic) {
   RectPtr rect(MakeRect());
 
   size_t size = GetSerializedSize_(rect);
@@ -60,13 +97,13 @@ TEST(StructTest, Serialization_Basic) {
 }
 
 // Serialization test of a struct with struct pointers.
-TEST(StructTest, Serialization_StructPointers) {
+TEST_F(StructTest, Serialization_StructPointers) {
   RectPairPtr pair(RectPair::New());
   pair->first = MakeRect();
   pair->second = MakeRect();
 
   size_t size = GetSerializedSize_(pair);
-  EXPECT_EQ(8U + 16U + 2*(8U + 16U), size);
+  EXPECT_EQ(8U + 16U + 2 * (8U + 16U), size);
 
   mojo::internal::FixedBuffer buf(size);
   internal::RectPair_Data* data;
@@ -80,7 +117,7 @@ TEST(StructTest, Serialization_StructPointers) {
 }
 
 // Serialization test of a struct with an array member.
-TEST(StructTest, Serialization_ArrayPointers) {
+TEST_F(StructTest, Serialization_ArrayPointers) {
   NamedRegionPtr region(NamedRegion::New());
   region->name = "region";
   region->rects = Array<RectPtr>::New(4);
@@ -88,15 +125,15 @@ TEST(StructTest, Serialization_ArrayPointers) {
     region->rects[i] = MakeRect(static_cast<int32_t>(i) + 1);
 
   size_t size = GetSerializedSize_(region);
-  EXPECT_EQ(8U +  // header
-            8U +  // name pointer
-            8U +  // rects pointer
-            8U +  // name header
-            8U +  // name payload (rounded up)
-            8U +    // rects header
-            4*8U +  // rects payload (four pointers)
-            4*(8U +   // rect header
-               16U),  // rect payload (four ints)
+  EXPECT_EQ(8U +            // header
+                8U +        // name pointer
+                8U +        // rects pointer
+                8U +        // name header
+                8U +        // name payload (rounded up)
+                8U +        // rects header
+                4 * 8U +    // rects payload (four pointers)
+                4 * (8U +   // rect header
+                     16U),  // rect payload (four ints)
             size);
 
   mojo::internal::FixedBuffer buf(size);
@@ -114,15 +151,15 @@ TEST(StructTest, Serialization_ArrayPointers) {
 }
 
 // Serialization test of a struct with null array pointers.
-TEST(StructTest, Serialization_NullArrayPointers) {
+TEST_F(StructTest, Serialization_NullArrayPointers) {
   NamedRegionPtr region(NamedRegion::New());
   EXPECT_TRUE(region->name.is_null());
   EXPECT_TRUE(region->rects.is_null());
 
   size_t size = GetSerializedSize_(region);
-  EXPECT_EQ(8U +  // header
-            8U +  // name pointer
-            8U,   // rects pointer
+  EXPECT_EQ(8U +      // header
+                8U +  // name pointer
+                8U,   // rects pointer
             size);
 
   mojo::internal::FixedBuffer buf(size);

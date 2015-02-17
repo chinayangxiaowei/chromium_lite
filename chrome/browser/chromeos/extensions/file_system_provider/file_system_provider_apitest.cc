@@ -8,22 +8,16 @@ namespace extensions {
 
 class FileSystemProviderApiTest : public ExtensionApiTest {
  public:
-  FileSystemProviderApiTest()
-      // Set the channel to "trunk" since this API is restricted to trunk.
-      : current_channel_(chrome::VersionInfo::CHANNEL_UNKNOWN) {
-  }
+  FileSystemProviderApiTest() {}
 
   // Loads a helper testing extension.
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
     const extensions::Extension* extension = LoadExtensionWithFlags(
         test_data_dir_.AppendASCII("file_system_provider/test_util"),
         kFlagEnableIncognito);
     ASSERT_TRUE(extension);
   }
-
- private:
-  extensions::ScopedCurrentChannel current_channel_;
 };
 
 IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Mount) {
@@ -34,6 +28,12 @@ IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Mount) {
 
 IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Unmount) {
   ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/unmount",
+                                          kFlagLoadAsComponent))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, GetAll) {
+  ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/get_all",
                                           kFlagLoadAsComponent))
       << message_;
 }
@@ -115,5 +115,37 @@ IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, WriteFile) {
                                           kFlagLoadAsComponent))
       << message_;
 }
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Extension) {
+  ASSERT_TRUE(RunComponentExtensionTest("file_system_provider/extension"))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Thumbnail) {
+  ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/thumbnail",
+                                          kFlagLoadAsComponent))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, AddWatcher) {
+  ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/add_watcher",
+                                          kFlagLoadAsComponent))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, RemoveWatcher) {
+  ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/remove_watcher",
+                                          kFlagLoadAsComponent))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemProviderApiTest, Notify) {
+  ASSERT_TRUE(RunPlatformAppTestWithFlags("file_system_provider/notify",
+                                          kFlagLoadAsComponent))
+      << message_;
+}
+
+// TODO(mtomasz): Add a test for Notify() once it's wired to
+// chrome.fileManagerPrivate.
 
 }  // namespace extensions

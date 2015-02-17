@@ -19,12 +19,14 @@
 #include "chrome/browser/chromeos/login/ui/webui_login_display.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
+#include "chrome/browser/media/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/media_stream_infobar_delegate.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/renderer_preferences_util.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "chrome/common/render_messages.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/session_manager_client.h"
@@ -38,6 +40,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "content/public/common/renderer_preferences.h"
 #include "third_party/WebKit/public/web/WebInputEvent.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
@@ -65,6 +68,7 @@ const char kAccelNameDeviceRequisitionRemora[] = "device_requisition_remora";
 const char kAccelNameDeviceRequisitionShark[] = "device_requisition_shark";
 const char kAccelNameAppLaunchBailout[] = "app_launch_bailout";
 const char kAccelNameAppLaunchNetworkConfig[] = "app_launch_network_config";
+const char kAccelNameEmbeddedSignin[] = "embedded_signin";
 
 // A class to change arrow key traversal behavior when it's alive.
 class ScopedArrowKeyTraversal {
@@ -113,6 +117,9 @@ WebUILoginView::WebUILoginView()
   accel_map_[ui::Accelerator(ui::VKEY_E,
                              ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN)] =
       kAccelNameEnrollment;
+  accel_map_[ui::Accelerator(
+      ui::VKEY_G, ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN)] =
+      kAccelNameEmbeddedSignin;
   accel_map_[ui::Accelerator(ui::VKEY_K,
                              ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN)] =
       kAccelNameKioskEnable;
@@ -163,10 +170,12 @@ WebUILoginView::~WebUILoginView() {
                     observer_list_,
                     OnHostDestroying());
 
+#if !defined(USE_ATHENA)
   if (ash::Shell::GetInstance()->HasPrimaryStatusArea()) {
     ash::Shell::GetInstance()->GetPrimarySystemTray()->
         SetNextFocusableView(NULL);
   }
+#endif
 }
 
 void WebUILoginView::Init() {
@@ -192,14 +201,17 @@ void WebUILoginView::Init() {
   WebContentsModalDialogManager::CreateForWebContents(web_contents);
   WebContentsModalDialogManager::FromWebContents(web_contents)->
       SetDelegate(this);
+  if (!popup_manager_.get())
+    popup_manager_.reset(new web_modal::PopupManager(this));
+  popup_manager_->RegisterWith(web_contents);
 
   web_contents->SetDelegate(this);
   extensions::ChromeExtensionWebContentsObserver::CreateForWebContents(
       web_contents);
   WebContentsObserver::Observe(web_contents);
+  content::RendererPreferences* prefs = web_contents->GetMutableRendererPrefs();
   renderer_preferences_util::UpdateFromSystemSettings(
-      web_contents->GetMutableRendererPrefs(),
-      signin_profile);
+      prefs, signin_profile, web_contents);
 }
 
 const char* WebUILoginView::GetClassName() const {
@@ -270,7 +282,8 @@ void WebUILoginView::LoadURL(const GURL & url) {
 
   // TODO(nkostylev): Use WebContentsObserver::RenderViewCreated to track
   // when RenderView is created.
-  GetWebContents()->GetRenderViewHost()->GetView()->SetBackgroundOpaque(false);
+  GetWebContents()->GetRenderViewHost()->GetView()->SetBackgroundColor(
+      SK_ColorTRANSPARENT);
 }
 
 content::WebUI* WebUILoginView::GetWebUI() {
@@ -300,6 +313,7 @@ void WebUILoginView::OnPostponedShow() {
 }
 
 void WebUILoginView::SetStatusAreaVisible(bool visible) {
+#if !defined(USE_ATHENA)
   if (ash::Shell::GetInstance()->HasPrimaryStatusArea()) {
     ash::SystemTray* tray = ash::Shell::GetInstance()->GetPrimarySystemTray();
     if (visible) {
@@ -310,11 +324,14 @@ void WebUILoginView::SetStatusAreaVisible(bool visible) {
       tray->GetWidget()->Hide();
     }
   }
+#endif
 }
 
 void WebUILoginView::SetUIEnabled(bool enabled) {
   forward_keyboard_event_ = enabled;
+#if !defined(USE_ATHENA)
   ash::Shell::GetInstance()->GetPrimarySystemTray()->SetEnabled(enabled);
+#endif
 }
 
 void WebUILoginView::AddFrameObserver(FrameObserver* frame_observer) {
@@ -413,12 +430,14 @@ bool WebUILoginView::TakeFocus(content::WebContents* source, bool reverse) {
   if (!forward_keyboard_event_)
     return false;
 
+#if !defined(USE_ATHENA)
   ash::SystemTray* tray = ash::Shell::GetInstance()->GetPrimarySystemTray();
   if (tray && tray->GetWidget()->IsVisible()) {
     tray->SetNextFocusableView(this);
     ash::Shell::GetInstance()->RotateFocus(reverse ? ash::Shell::BACKWARD :
-                                                     ash::Shell::FORWARD);
+                                                    ash::Shell::FORWARD);
   }
+#endif
 
   return true;
 }
@@ -429,6 +448,14 @@ void WebUILoginView::RequestMediaAccessPermission(
     const content::MediaResponseCallback& callback) {
   if (MediaStreamInfoBarDelegate::Create(web_contents, request, callback))
     NOTREACHED() << "Media stream not allowed for WebUI";
+}
+
+bool WebUILoginView::CheckMediaAccessPermission(
+    content::WebContents* web_contents,
+    const GURL& security_origin,
+    content::MediaStreamType type) {
+  return MediaCaptureDevicesDispatcher::GetInstance()
+      ->CheckMediaAccessPermission(web_contents, security_origin, type);
 }
 
 bool WebUILoginView::PreHandleGestureEvent(

@@ -89,11 +89,6 @@ class ASH_EXPORT DisplayInfo {
   DisplayInfo(int64 id, const std::string& name, bool has_overscan);
   ~DisplayInfo();
 
-  // When this is set to true, Chrome switches High DPI when lower UI scale
-  // (<1.0f) is specified on 1x device to make UI sharp, e.g, upgrade 0.6
-  // scale on 1x DSF to 1.2 scale on 2x DSF.
-  static void SetAllowUpgradeToHighDPI(bool enable);
-
   // When this is set to true on the device whose internal display has
   // 1.25 dsf, Chrome uses 1.0f as a default scale factor, and uses
   // dsf 1.25 when UI scaling is set to 0.8f.
@@ -116,8 +111,8 @@ class ASH_EXPORT DisplayInfo {
   }
   gfx::Display::TouchSupport touch_support() const { return touch_support_; }
 
-  void set_touch_device_id(int id) { touch_device_id_ = id; }
-  int touch_device_id() const { return touch_device_id_; }
+  void set_touch_device_id(unsigned int id) { touch_device_id_ = id; }
+  unsigned int touch_device_id() const { return touch_device_id_; }
 
   // Gets/Sets the device scale factor of the display.
   float device_scale_factor() const { return device_scale_factor_; }
@@ -148,10 +143,12 @@ class ASH_EXPORT DisplayInfo {
   // display that chrome sees. This can be different from one obtained
   // from dispaly or one specified by a user in following situation.
   // 1) DSF is 2.0f and UI scale is 2.0f. (Returns 1.0f and 1.0f respectiely)
-  // 2) Lower UI scale (< 1.0) is specified on 1.0f DSF device
-  // when 2x resources is available. (Returns 2.0f DSF + 1.2f UI scale
-  // for 1.0DSF + 0.6 UI scale).
+  // 2) A user specified 0.8x on the device that has 1.25 DSF. 1.25 DSF device
+  //    uses 1.0f DFS unless 0.8x UI scaling is specified.
   float GetEffectiveDeviceScaleFactor() const;
+
+  // Returns the ui scale used for the device scale factor. This
+  // return 1.0f if the ui scale and dsf are both set to 2.0.
   float GetEffectiveUIScale() const;
 
   // Copy the display info except for fields that can be modified by a
@@ -180,6 +177,10 @@ class ASH_EXPORT DisplayInfo {
   void set_display_modes(std::vector<DisplayMode>& display_modes) {
     display_modes_.swap(display_modes);
   }
+
+  // Returns the native mode size. If a native mode is not present, return an
+  // empty size.
+  gfx::Size GetNativeModeSize() const;
 
   ui::ColorCalibrationProfile color_profile() const {
     return color_profile_;
@@ -227,7 +228,7 @@ class ASH_EXPORT DisplayInfo {
 
   // If the display is also a touch device, it will have a positive
   // |touch_device_id_|. Otherwise |touch_device_id_| is 0.
-  int touch_device_id_;
+  unsigned int touch_device_id_;
 
   // This specifies the device's pixel density. (For example, a
   // display whose DPI is higher than the threshold is considered to have

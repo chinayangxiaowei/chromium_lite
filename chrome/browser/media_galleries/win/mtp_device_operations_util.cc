@@ -9,8 +9,8 @@
 #include <algorithm>
 
 #include "base/basictypes.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
@@ -392,9 +392,8 @@ DWORD CopyDataChunkToLocalFile(IStream* stream,
       base::checked_cast<int>(
           std::min(bytes_read,
                    base::checked_cast<DWORD>(buffer.length())));
-  if (base::AppendToFile(local_path, buffer.c_str(), data_len) != data_len)
-    return 0U;
-  return data_len;
+  return base::AppendToFile(local_path, buffer.c_str(), data_len) ? data_len
+                                                                  : 0;
 }
 
 base::string16 GetObjectIdFromName(IPortableDevice* device,

@@ -8,11 +8,12 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "chrome/browser/net/packed_ct_ev_whitelist.h"
 #include "components/component_updater/component_updater_paths.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/ssl/ssl_config_service.h"
@@ -28,7 +29,7 @@ namespace component_updater {
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the extension.
 // The extension id is: oafdbfcohdcjandcenmccfopbeklnicp
-const uint8 kPublicKeySHA256[32] = {
+const uint8_t kPublicKeySHA256[32] = {
     0xe0, 0x53, 0x15, 0x2e, 0x73, 0x29, 0x0d, 0x32, 0x4d, 0xc2, 0x25,
     0xef, 0x14, 0xab, 0xd8, 0x2f, 0x84, 0xf5, 0x85, 0x9e, 0xc0, 0xfa,
     0x94, 0xbc, 0x99, 0xc9, 0x5a, 0x27, 0x55, 0x19, 0x83, 0xef};
@@ -65,19 +66,13 @@ void EVWhitelistComponentInstallerTraits::ComponentReady(
   VLOG(1) << "Component ready, version " << version.GetString() << " in "
           << path.value();
 
-  // TODO(eranm): Uncomment once https://codereview.chromium.org/462543002/
-  // is in.
-  /*
   const base::FilePath whitelist_file = GetInstalledPath(path);
-  base::Callback<void(void)> set_cb =
-      base::Bind(&net::ct::SetEVWhitelistFromFile, whitelist_file);
   content::BrowserThread::PostBlockingPoolTask(
-      FROM_HERE,
-      set_cb);
-      */
+      FROM_HERE, base::Bind(&SetEVWhitelistFromFile, whitelist_file));
 }
 
 bool EVWhitelistComponentInstallerTraits::VerifyInstallation(
+    const base::DictionaryValue& manifest,
     const base::FilePath& install_dir) const {
   const base::FilePath expected_file = GetInstalledPath(install_dir);
   VLOG(1) << "Verifying install: " << expected_file.value();
@@ -104,7 +99,7 @@ base::FilePath EVWhitelistComponentInstallerTraits::GetBaseDirectory() const {
 }
 
 void EVWhitelistComponentInstallerTraits::GetHash(
-    std::vector<uint8>* hash) const {
+    std::vector<uint8_t>* hash) const {
   hash->assign(kPublicKeySHA256,
                kPublicKeySHA256 + arraysize(kPublicKeySHA256));
 }

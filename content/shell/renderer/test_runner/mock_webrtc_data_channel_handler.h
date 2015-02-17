@@ -6,7 +6,7 @@
 #define CONTENT_SHELL_RENDERER_TEST_RUNNER_MOCKWEBRTCDATACHANNELHANDLER_H_
 
 #include "base/basictypes.h"
-#include "content/shell/renderer/test_runner/WebTask.h"
+#include "content/shell/renderer/test_runner/web_task.h"
 #include "third_party/WebKit/public/platform/WebRTCDataChannelHandler.h"
 #include "third_party/WebKit/public/platform/WebRTCDataChannelInit.h"
 #include "third_party/WebKit/public/platform/WebString.h"
@@ -23,19 +23,19 @@ class MockWebRTCDataChannelHandler : public blink::WebRTCDataChannelHandler {
 
   // WebRTCDataChannelHandler related methods
   virtual void setClient(
-      blink::WebRTCDataChannelHandlerClient* client) OVERRIDE;
-  virtual blink::WebString label() OVERRIDE;
-  virtual bool isReliable() OVERRIDE;
-  virtual bool ordered() const OVERRIDE;
-  virtual unsigned short maxRetransmitTime() const OVERRIDE;
-  virtual unsigned short maxRetransmits() const OVERRIDE;
-  virtual blink::WebString protocol() const OVERRIDE;
-  virtual bool negotiated() const OVERRIDE;
-  virtual unsigned short id() const OVERRIDE;
-  virtual unsigned long bufferedAmount() OVERRIDE;
-  virtual bool sendStringData(const blink::WebString& data) OVERRIDE;
-  virtual bool sendRawData(const char* data, size_t size) OVERRIDE;
-  virtual void close() OVERRIDE;
+      blink::WebRTCDataChannelHandlerClient* client) override;
+  virtual blink::WebString label() override;
+  virtual bool isReliable() override;
+  virtual bool ordered() const override;
+  virtual unsigned short maxRetransmitTime() const override;
+  virtual unsigned short maxRetransmits() const override;
+  virtual blink::WebString protocol() const override;
+  virtual bool negotiated() const override;
+  virtual unsigned short id() const override;
+  virtual unsigned long bufferedAmount() override;
+  virtual bool sendStringData(const blink::WebString& data) override;
+  virtual bool sendRawData(const char* data, size_t size) override;
+  virtual void close() override;
 
   // WebTask related methods
   WebTaskList* mutable_task_list() { return &task_list_; }

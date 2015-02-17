@@ -4,9 +4,9 @@
 
 #include "content/public/test/browser_test_utils.h"
 
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
-#include "base/path_service.h"
 #include "base/process/kill.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -19,6 +19,7 @@
 #include "content/common/input/synthetic_web_input_event_builders.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/dom_operation_notification_details.h"
+#include "content/public/browser/histogram_fetcher.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_frame_host.h"
@@ -27,17 +28,20 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/test_utils.h"
-#include "grit/webui_resources.h"
 #include "net/base/filename_util.h"
 #include "net/cookies/cookie_store.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "net/test/python_utils.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
-#include "ui/events/gestures/gesture_configuration.h"
+#include "ui/events/gesture_detection/gesture_configuration.h"
 #include "ui/events/keycodes/dom4/keycode_converter.h"
+#include "ui/resources/grit/webui_resources.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/test/window_event_dispatcher_test_api.h"
@@ -60,9 +64,9 @@ class DOMOperationObserver : public NotificationObserver,
     message_loop_runner_ = new MessageLoopRunner;
   }
 
-  virtual void Observe(int type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const NotificationSource& source,
+               const NotificationDetails& details) override {
     DCHECK(type == NOTIFICATION_DOM_OPERATION_RESPONSE);
     Details<DomOperationNotificationDetails> dom_op_details(details);
     response_ = dom_op_details->json;
@@ -71,7 +75,7 @@ class DOMOperationObserver : public NotificationObserver,
   }
 
   // Overridden from WebContentsObserver:
-  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE {
+  void RenderProcessGone(base::TerminationStatus status) override {
     message_loop_runner_->Quit();
   }
 
@@ -88,6 +92,28 @@ class DOMOperationObserver : public NotificationObserver,
   scoped_refptr<MessageLoopRunner> message_loop_runner_;
 
   DISALLOW_COPY_AND_ASSIGN(DOMOperationObserver);
+};
+
+class InterstitialObserver : public content::WebContentsObserver {
+ public:
+  InterstitialObserver(content::WebContents* web_contents,
+                       const base::Closure& attach_callback,
+                       const base::Closure& detach_callback)
+      : WebContentsObserver(web_contents),
+        attach_callback_(attach_callback),
+        detach_callback_(detach_callback) {
+  }
+  ~InterstitialObserver() override {}
+
+  // WebContentsObserver methods:
+  void DidAttachInterstitialPage() override { attach_callback_.Run(); }
+  void DidDetachInterstitialPage() override { detach_callback_.Run(); }
+
+ private:
+  base::Closure attach_callback_;
+  base::Closure detach_callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(InterstitialObserver);
 };
 
 // Specifying a prototype so that we can add the WARN_UNUSED_RESULT attribute.
@@ -107,7 +133,7 @@ bool ExecuteScriptHelper(RenderFrameHost* render_frame_host,
   std::string script =
       "window.domAutomationController.setAutomationId(0);" + original_script;
   DOMOperationObserver dom_op_observer(render_frame_host->GetRenderViewHost());
-  render_frame_host->ExecuteJavaScript(base::UTF8ToUTF16(script));
+  render_frame_host->ExecuteJavaScriptForTests(base::UTF8ToUTF16(script));
   std::string json;
   if (!dom_op_observer.WaitAndGetResponse(&json)) {
     DLOG(ERROR) << "Cannot communicate with DOMOperationObserver.";
@@ -194,6 +220,39 @@ void SetCookieOnIOThread(const GURL& url,
   cookie_store->SetCookieWithOptionsAsync(
       url, value, net::CookieOptions(),
       base::Bind(&SetCookieCallback, result, event));
+}
+
+scoped_ptr<net::test_server::HttpResponse> CrossSiteRedirectResponseHandler(
+    const GURL& server_base_url,
+    const net::test_server::HttpRequest& request) {
+  std::string prefix("/cross-site/");
+  if (!StartsWithASCII(request.relative_url, prefix, true))
+    return scoped_ptr<net::test_server::HttpResponse>();
+
+  std::string params = request.relative_url.substr(prefix.length());
+
+  // A hostname to redirect to must be included in the URL, therefore at least
+  // one '/' character is expected.
+  size_t slash = params.find('/');
+  if (slash == std::string::npos)
+    return scoped_ptr<net::test_server::HttpResponse>();
+
+  // Replace the host of the URL with the one passed in the URL.
+  std::string host = params.substr(0, slash);
+  GURL::Replacements replace_host;
+  replace_host.SetHostStr(host);
+  GURL redirect_server = server_base_url.ReplaceComponents(replace_host);
+
+  // Append the real part of the path to the new URL.
+  std::string path = params.substr(slash + 1);
+  GURL redirect_target(redirect_server.Resolve(path));
+  DCHECK(redirect_target.is_valid());
+
+  scoped_ptr<net::test_server::BasicHttpResponse> http_response(
+      new net::test_server::BasicHttpResponse);
+  http_response->set_code(net::HTTP_MOVED_PERMANENTLY);
+  http_response->AddCustomHeader("Location", redirect_target.spec());
+  return http_response.Pass();
 }
 
 }  // namespace
@@ -320,8 +379,7 @@ void SimulateKeyPressWithCode(WebContents* web_contents,
                               bool shift,
                               bool alt,
                               bool command) {
-  ui::KeycodeConverter* key_converter = ui::KeycodeConverter::GetInstance();
-  int native_key_code = key_converter->CodeToNativeKeycode(code);
+  int native_key_code = ui::KeycodeConverter::CodeToNativeKeycode(code);
 
   int modifiers = 0;
 
@@ -329,42 +387,38 @@ void SimulateKeyPressWithCode(WebContents* web_contents,
   // For our simulation we can use either the left keys or the right keys.
   if (control) {
     modifiers |= blink::WebInputEvent::ControlKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::RawKeyDown,
-        ui::VKEY_CONTROL,
-        key_converter->CodeToNativeKeycode("ControlLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::RawKeyDown,
+                      ui::VKEY_CONTROL,
+                      ui::KeycodeConverter::CodeToNativeKeycode("ControlLeft"),
+                      modifiers);
   }
 
   if (shift) {
     modifiers |= blink::WebInputEvent::ShiftKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::RawKeyDown,
-        ui::VKEY_SHIFT,
-        key_converter->CodeToNativeKeycode("ShiftLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::RawKeyDown,
+                      ui::VKEY_SHIFT,
+                      ui::KeycodeConverter::CodeToNativeKeycode("ShiftLeft"),
+                      modifiers);
   }
 
   if (alt) {
     modifiers |= blink::WebInputEvent::AltKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::RawKeyDown,
-        ui::VKEY_MENU,
-        key_converter->CodeToNativeKeycode("AltLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::RawKeyDown,
+                      ui::VKEY_MENU,
+                      ui::KeycodeConverter::CodeToNativeKeycode("AltLeft"),
+                      modifiers);
   }
 
   if (command) {
     modifiers |= blink::WebInputEvent::MetaKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::RawKeyDown,
-        ui::VKEY_COMMAND,
-        key_converter->CodeToNativeKeycode("OSLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::RawKeyDown,
+                      ui::VKEY_COMMAND,
+                      ui::KeycodeConverter::CodeToNativeKeycode("OSLeft"),
+                      modifiers);
   }
 
   InjectRawKeyEvent(
@@ -391,42 +445,38 @@ void SimulateKeyPressWithCode(WebContents* web_contents,
   // The order of these key releases shouldn't matter for our simulation.
   if (control) {
     modifiers &= ~blink::WebInputEvent::ControlKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::KeyUp,
-        ui::VKEY_CONTROL,
-        key_converter->CodeToNativeKeycode("ControlLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::KeyUp,
+                      ui::VKEY_CONTROL,
+                      ui::KeycodeConverter::CodeToNativeKeycode("ControlLeft"),
+                      modifiers);
   }
 
   if (shift) {
     modifiers &= ~blink::WebInputEvent::ShiftKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::KeyUp,
-        ui::VKEY_SHIFT,
-        key_converter->CodeToNativeKeycode("ShiftLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::KeyUp,
+                      ui::VKEY_SHIFT,
+                      ui::KeycodeConverter::CodeToNativeKeycode("ShiftLeft"),
+                      modifiers);
   }
 
   if (alt) {
     modifiers &= ~blink::WebInputEvent::AltKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::KeyUp,
-        ui::VKEY_MENU,
-        key_converter->CodeToNativeKeycode("AltLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::KeyUp,
+                      ui::VKEY_MENU,
+                      ui::KeycodeConverter::CodeToNativeKeycode("AltLeft"),
+                      modifiers);
   }
 
   if (command) {
     modifiers &= ~blink::WebInputEvent::MetaKey;
-    InjectRawKeyEvent(
-        web_contents,
-        blink::WebInputEvent::KeyUp,
-        ui::VKEY_COMMAND,
-        key_converter->CodeToNativeKeycode("OSLeft"),
-        modifiers);
+    InjectRawKeyEvent(web_contents,
+                      blink::WebInputEvent::KeyUp,
+                      ui::VKEY_COMMAND,
+                      ui::KeycodeConverter::CodeToNativeKeycode("OSLeft"),
+                      modifiers);
   }
 
   ASSERT_EQ(modifiers, 0);
@@ -586,6 +636,57 @@ bool SetCookie(BrowserContext* browser_context,
   return result;
 }
 
+void FetchHistogramsFromChildProcesses() {
+  scoped_refptr<content::MessageLoopRunner> runner = new MessageLoopRunner;
+
+  FetchHistogramsAsynchronously(
+      base::MessageLoop::current(),
+      runner->QuitClosure(),
+      // If this call times out, it means that a child process is not
+      // responding, which is something we should not ignore.  The timeout is
+      // set to be longer than the normal browser test timeout so that it will
+      // be prempted by the normal timeout.
+      TestTimeouts::action_max_timeout());
+  runner->Run();
+}
+
+void SetupCrossSiteRedirector(
+    net::test_server::EmbeddedTestServer* embedded_test_server) {
+   embedded_test_server->RegisterRequestHandler(
+       base::Bind(&CrossSiteRedirectResponseHandler,
+                  embedded_test_server->base_url()));
+}
+
+void WaitForInterstitialAttach(content::WebContents* web_contents) {
+  if (web_contents->ShowingInterstitialPage())
+    return;
+  scoped_refptr<content::MessageLoopRunner> loop_runner(
+      new content::MessageLoopRunner);
+  InterstitialObserver observer(web_contents,
+                                loop_runner->QuitClosure(),
+                                base::Closure());
+  loop_runner->Run();
+}
+
+void WaitForInterstitialDetach(content::WebContents* web_contents) {
+  RunTaskAndWaitForInterstitialDetach(web_contents, base::Closure());
+}
+
+void RunTaskAndWaitForInterstitialDetach(content::WebContents* web_contents,
+                                         const base::Closure& task) {
+  if (!web_contents || !web_contents->ShowingInterstitialPage())
+    return;
+  scoped_refptr<content::MessageLoopRunner> loop_runner(
+      new content::MessageLoopRunner);
+  InterstitialObserver observer(web_contents,
+                                base::Closure(),
+                                loop_runner->QuitClosure());
+  if (!task.is_null())
+    task.Run();
+  // At this point, web_contents may have been deleted.
+  loop_runner->Run();
+}
+
 TitleWatcher::TitleWatcher(WebContents* web_contents,
                            const base::string16& expected_title)
     : WebContentsObserver(web_contents),
@@ -676,7 +777,6 @@ void RenderProcessHostWatcher::Wait() {
 
 void RenderProcessHostWatcher::RenderProcessExited(
     RenderProcessHost* host,
-    base::ProcessHandle handle,
     base::TerminationStatus status,
     int exit_code) {
   if (type_ == WATCH_FOR_PROCESS_EXIT)
@@ -702,7 +802,7 @@ void DOMMessageQueue::Observe(int type,
                               const NotificationDetails& details) {
   Details<DomOperationNotificationDetails> dom_op_details(details);
   message_queue_.push(dom_op_details->json);
-  if (message_loop_runner_)
+  if (message_loop_runner_.get())
     message_loop_runner_->Quit();
 }
 

@@ -14,11 +14,10 @@
 #include "chrome/browser/sync/test/integration/sync_extension_helper.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
+#include "components/crx_file/id_util.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/id_util.h"
 #include "extensions/common/manifest.h"
 
 using sync_datatype_helper::test;
@@ -39,7 +38,7 @@ ThemeService* GetThemeService(Profile* profile) {
 namespace themes_helper {
 
 std::string GetCustomTheme(int index) {
-  return extensions::id_util::GenerateId(MakeName(index));
+  return crx_file::id_util::GenerateId(MakeName(index));
 }
 
 std::string GetThemeID(Profile* profile) {
@@ -88,16 +87,16 @@ class ThemePendingInstallChecker : public StatusChangeChecker,
                                    public content::NotificationObserver {
  public:
   ThemePendingInstallChecker(Profile* profile, const std::string& theme);
-  virtual ~ThemePendingInstallChecker();
+  ~ThemePendingInstallChecker() override;
 
   // Implementation of StatusChangeChecker.
-  virtual std::string GetDebugMessage() const OVERRIDE;
-  virtual bool IsExitConditionSatisfied() OVERRIDE;
+  std::string GetDebugMessage() const override;
+  bool IsExitConditionSatisfied() override;
 
   // Implementation of content::NotificationObserver.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Waits until the condition to be met or a timeout occurs.
   void Wait();
@@ -168,16 +167,16 @@ class ThemeConditionChecker : public StatusChangeChecker,
   ThemeConditionChecker(Profile* profile,
                         const std::string& debug_message_,
                         base::Callback<bool(ThemeService*)> exit_condition);
-  virtual ~ThemeConditionChecker();
+  ~ThemeConditionChecker() override;
 
   // Implementation of StatusChangeChecker.
-  virtual std::string GetDebugMessage() const OVERRIDE;
-  virtual bool IsExitConditionSatisfied() OVERRIDE;
+  std::string GetDebugMessage() const override;
+  bool IsExitConditionSatisfied() override;
 
   // Implementation of content::NotificationObserver.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Waits until the condition to be met or a timeout occurs.
   void Wait();

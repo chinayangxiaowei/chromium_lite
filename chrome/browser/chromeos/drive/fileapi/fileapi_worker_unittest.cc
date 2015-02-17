@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/drive/dummy_file_system.h"
 #include "content/public/test/test_browser_thread_bundle.h"
@@ -43,7 +43,7 @@ class TestFileSystemForOpenFile : public DummyFileSystem {
   virtual void OpenFile(const base::FilePath& file_path,
                         OpenMode open_mode,
                         const std::string& mime_type,
-                        const drive::OpenFileCallback& callback) OVERRIDE {
+                        const drive::OpenFileCallback& callback) override {
     EXPECT_EQ(expected_open_mode_, open_mode);
 
     callback.Run(

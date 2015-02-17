@@ -20,11 +20,9 @@ namespace content {
 class ServiceWorkerRegistrationInfo;
 class ServiceWorkerVersion;
 
-// This class represents a service worker registration. The
-// scope and script url are constant for the life of the persistent
-// registration. It's refcounted to facillitate multiple controllees
-// being associated with the same registration. The class roughly
-// corresponds to navigator.serviceWorker.registgration.
+// This class represents a Service Worker registration. The scope is constant
+// for the life of the persistent registration. It's refcounted to facilitate
+// multiple controllees being associated with the same registration.
 class CONTENT_EXPORT ServiceWorkerRegistration
     : NON_EXPORTED_BASE(public base::RefCounted<ServiceWorkerRegistration>),
       public ServiceWorkerVersion::Listener {
@@ -36,24 +34,35 @@ class CONTENT_EXPORT ServiceWorkerRegistration
     virtual void OnVersionAttributesChanged(
         ServiceWorkerRegistration* registration,
         ChangedVersionAttributesMask changed_mask,
-        const ServiceWorkerRegistrationInfo& info) = 0;
+        const ServiceWorkerRegistrationInfo& info) {}
     virtual void OnRegistrationFailed(
-        ServiceWorkerRegistration* registration) = 0;
+        ServiceWorkerRegistration* registration) {}
+    virtual void OnRegistrationFinishedUninstalling(
+        ServiceWorkerRegistration* registration) {}
+    virtual void OnUpdateFound(
+        ServiceWorkerRegistration* registration) {}
   };
 
   ServiceWorkerRegistration(const GURL& pattern,
-                            const GURL& script_url,
                             int64 registration_id,
                             base::WeakPtr<ServiceWorkerContextCore> context);
 
   int64 id() const { return registration_id_; }
-  const GURL& script_url() const { return script_url_; }
   const GURL& pattern() const { return pattern_; }
 
   bool is_deleted() const { return is_deleted_; }
   void set_is_deleted(bool deleted) { is_deleted_ = deleted; }
 
   bool is_uninstalling() const { return is_uninstalling_; }
+  bool is_uninstalled() const { return is_uninstalled_; }
+
+  int64_t resources_total_size_bytes() const {
+    return resources_total_size_bytes_;
+  }
+
+  void set_resources_total_size_bytes(int64_t resources_total_size_bytes) {
+    resources_total_size_bytes_ = resources_total_size_bytes;
+  }
 
   ServiceWorkerVersion* active_version() const {
     return active_version_.get();
@@ -67,9 +76,12 @@ class CONTENT_EXPORT ServiceWorkerRegistration
     return installing_version_.get();
   }
 
+  ServiceWorkerVersion* GetNewestVersion() const;
+
   void AddListener(Listener* listener);
   void RemoveListener(Listener* listener);
   void NotifyRegistrationFailed();
+  void NotifyUpdateFound();
 
   ServiceWorkerRegistrationInfo GetInfo();
 
@@ -96,9 +108,8 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   void ClearWhenReady();
 
   // Restores this registration in storage and cancels the pending
-  // [[ClearRegistration]] algorithm. If the algorithm was already triggered,
-  // does nothing.
-  void AbortPendingClear();
+  // [[ClearRegistration]] algorithm.
+  void AbortPendingClear(const StatusCallback& callback);
 
   // The time of the most recent update check.
   base::Time last_update_check() const { return last_update_check_; }
@@ -107,7 +118,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
  private:
   friend class base::RefCounted<ServiceWorkerRegistration>;
 
-  virtual ~ServiceWorkerRegistration();
+  ~ServiceWorkerRegistration() override;
 
   void SetVersionInternal(
       ServiceWorkerVersion* version,
@@ -118,7 +129,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
       ChangedVersionAttributesMask* mask);
 
   // ServiceWorkerVersion::Listener override.
-  virtual void OnNoControllees(ServiceWorkerVersion* version) OVERRIDE;
+  void OnNoControllees(ServiceWorkerVersion* version) override;
 
   // This method corresponds to the [[Activate]] algorithm.
   void ActivateWaitingVersion();
@@ -129,16 +140,19 @@ class CONTENT_EXPORT ServiceWorkerRegistration
 
   // This method corresponds to the [[ClearRegistration]] algorithm.
   void Clear();
-  void OnStoreFinished(scoped_refptr<ServiceWorkerVersion> version,
-                       ServiceWorkerStatusCode status);
+
+  void OnRestoreFinished(const StatusCallback& callback,
+                         scoped_refptr<ServiceWorkerVersion> version,
+                         ServiceWorkerStatusCode status);
 
   const GURL pattern_;
-  const GURL script_url_;
   const int64 registration_id_;
   bool is_deleted_;
   bool is_uninstalling_;
+  bool is_uninstalled_;
   bool should_activate_when_ready_;
   base::Time last_update_check_;
+  int64_t resources_total_size_bytes_;
   scoped_refptr<ServiceWorkerVersion> active_version_;
   scoped_refptr<ServiceWorkerVersion> waiting_version_;
   scoped_refptr<ServiceWorkerVersion> installing_version_;

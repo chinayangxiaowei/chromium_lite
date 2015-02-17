@@ -26,7 +26,7 @@ class ViewEventTestPlatformPartChromeOS : public ViewEventTestPlatformPart {
   virtual ~ViewEventTestPlatformPartChromeOS();
 
   // Overridden from ViewEventTestPlatformPart:
-  virtual gfx::NativeWindow GetContext() OVERRIDE {
+  virtual gfx::NativeWindow GetContext() override {
     return ash::Shell::GetPrimaryRootWindow();
   }
 
@@ -41,7 +41,7 @@ ViewEventTestPlatformPartChromeOS::ViewEventTestPlatformPartChromeOS(
   // Ash Shell can't just live on its own without a browser process, we need to
   // also create the message center.
   message_center::MessageCenter::Initialize();
-  chromeos::DBusThreadManager::InitializeWithStub();
+  chromeos::DBusThreadManager::Initialize();
   chromeos::CrasAudioHandler::InitializeForTesting();
   chromeos::NetworkHandler::Initialize();
   ash::test::TestShellDelegate* shell_delegate =

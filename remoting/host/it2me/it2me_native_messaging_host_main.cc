@@ -9,17 +9,20 @@
 #include "base/i18n/icu_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
-#include "media/base/media.h"
 #include "net/socket/ssl_server_socket.h"
 #include "remoting/base/breakpad.h"
 #include "remoting/base/resources.h"
+#include "remoting/host/chromoting_host_context.h"
 #include "remoting/host/host_exit_codes.h"
 #include "remoting/host/it2me/it2me_native_messaging_host.h"
 #include "remoting/host/logging.h"
+#include "remoting/host/native_messaging/native_messaging_pipe.h"
+#include "remoting/host/native_messaging/pipe_messaging_channel.h"
 #include "remoting/host/usage_stats_consent.h"
 
 #if defined(OS_LINUX)
 #include <gtk/gtk.h>
+#include <X11/Xlib.h>
 #endif  // defined(OS_LINUX)
 
 #if defined(OS_MACOSX)
@@ -64,6 +67,9 @@ int StartIt2MeNativeMessagingHost() {
 
   // Cannot use TOOLKIT_GTK because it is not defined when aura is enabled.
 #if defined(OS_LINUX)
+  // Required in order for us to run multiple X11 threads.
+  XInitThreads();
+
   // Required for any calls into GTK functions, such as the Disconnect and
   // Continue windows. Calling with NULL arguments because we don't have
   // any command line arguments for gtk to consume.
@@ -73,9 +79,6 @@ int StartIt2MeNativeMessagingHost() {
   // Enable support for SSL server sockets, which must be done while still
   // single-threaded.
   net::EnableSSLServerSockets();
-
-  // Ensures runtime specific CPU features are initialized.
-  media::InitializeCPUSpecificMediaFeatures();
 
 #if defined(OS_WIN)
   // GetStdHandle() returns pseudo-handles for stdin and stdout even if
@@ -112,14 +115,20 @@ int StartIt2MeNativeMessagingHost() {
 
   scoped_ptr<It2MeHostFactory> factory(new It2MeHostFactory());
 
-  // Set up the native messaging channel.
-  scoped_ptr<NativeMessagingChannel> channel(
-      new NativeMessagingChannel(read_file.Pass(), write_file.Pass()));
+  scoped_ptr<NativeMessagingPipe> native_messaging_pipe(
+      new NativeMessagingPipe());
 
-  scoped_ptr<It2MeNativeMessagingHost> host(
-      new It2MeNativeMessagingHost(
-          task_runner, channel.Pass(), factory.Pass()));
-  host->Start(run_loop.QuitClosure());
+  // Set up the native messaging channel.
+  scoped_ptr<extensions::NativeMessagingChannel> channel(
+      new PipeMessagingChannel(read_file.Pass(), write_file.Pass()));
+
+  scoped_ptr<extensions::NativeMessageHost> host(new It2MeNativeMessagingHost(
+      ChromotingHostContext::Create(task_runner), factory.Pass()));
+
+  host->Start(native_messaging_pipe.get());
+
+  native_messaging_pipe->Start(
+      host.Pass(), channel.Pass(), run_loop.QuitClosure());
 
   // Run the loop until channel is alive.
   run_loop.Run();

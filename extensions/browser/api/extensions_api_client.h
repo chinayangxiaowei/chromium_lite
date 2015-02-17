@@ -8,6 +8,8 @@
 #include <map>
 
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
+#include "extensions/browser/api/declarative_content/content_rules_registry.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
 
 class GURL;
@@ -17,17 +19,29 @@ class ObserverListThreadSafe;
 
 namespace content {
 class BrowserContext;
-}
-
-namespace device {
-class HidService;
+class WebContents;
 }
 
 namespace extensions {
 
+class AppViewGuestDelegate;
+class ContentRulesRegistry;
+class DevicePermissionsPrompt;
+class ExtensionOptionsGuest;
+class ExtensionOptionsGuestDelegate;
+class ManagementAPIDelegate;
+class MimeHandlerViewGuest;
+class MimeHandlerViewGuestDelegate;
+class WebViewGuest;
+class WebViewGuestDelegate;
+class WebViewPermissionHelper;
+class WebViewPermissionHelperDelegate;
+class WebRequestEventRouterDelegate;
+class RulesCacheDelegate;
 class SettingsObserver;
 class SettingsStorageFactory;
 class ValueStoreCache;
+class VirtualKeyboardDelegate;
 
 // Allows the embedder of the extensions module to customize its support for
 // API features. The embedder must create a single instance in the browser
@@ -53,25 +67,49 @@ class ExtensionsAPIClient {
       const scoped_refptr<ObserverListThreadSafe<SettingsObserver> >& observers,
       std::map<settings_namespace::Namespace, ValueStoreCache*>* caches);
 
-  // Attaches a frame |url| inside the <appview> specified by
-  // |guest_instance_id|. Returns true if the operation completes succcessfully.
-  virtual bool AppViewInternalAttachFrame(
+  // Creates the AppViewGuestDelegate.
+  virtual AppViewGuestDelegate* CreateAppViewGuestDelegate() const;
+
+  // Returns a delegate for ExtensionOptionsGuest. The caller owns the returned
+  // ExtensionOptionsGuestDelegate.
+  virtual ExtensionOptionsGuestDelegate* CreateExtensionOptionsGuestDelegate(
+      ExtensionOptionsGuest* guest) const;
+
+  // Creates a delegate for MimeHandlerViewGuest.
+  virtual scoped_ptr<MimeHandlerViewGuestDelegate>
+      CreateMimeHandlerViewGuestDelegate(MimeHandlerViewGuest* guest) const;
+
+  // Returns a delegate for some of WebViewGuest's behavior. The caller owns the
+  // returned WebViewGuestDelegate.
+  virtual WebViewGuestDelegate* CreateWebViewGuestDelegate (
+      WebViewGuest* web_view_guest) const;
+
+  // Returns a delegate for some of WebViewPermissionHelper's behavior. The
+  // caller owns the returned WebViewPermissionHelperDelegate.
+  virtual WebViewPermissionHelperDelegate*
+      CreateWebViewPermissionHelperDelegate (
+          WebViewPermissionHelper* web_view_permission_helper) const;
+
+  // Creates a delegate for WebRequestEventRouter.
+  virtual WebRequestEventRouterDelegate* CreateWebRequestEventRouterDelegate()
+      const;
+
+  // TODO(wjmaclean): Remove this when (if) ContentRulesRegistry code moves
+  // to extensions/browser/api.
+  virtual scoped_refptr<ContentRulesRegistry> CreateContentRulesRegistry(
       content::BrowserContext* browser_context,
-      const GURL& url,
-      int guest_instance_id,
-      const std::string& guest_extension_id);
+      RulesCacheDelegate* cache_delegate) const;
 
-  // Denies the embedding requested by the <appview> specified by
-  // |guest_instance_id|. Returns true if the operation completes successfully.
-  virtual bool AppViewInternalDenyRequest(
-      content::BrowserContext* browser_context,
-      int guest_instance_id,
-      const std::string& guest_extension_id);
+  // Creates a DevicePermissionsPrompt appropriate for the embedder.
+  virtual scoped_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
+      content::WebContents* web_contents) const;
 
-  // Returns the HidService instance for this embedder.
-  virtual device::HidService* GetHidService();
+  // Returns a delegate for some of VirtualKeyboardAPI's behavior.
+  virtual scoped_ptr<VirtualKeyboardDelegate> CreateVirtualKeyboardDelegate()
+      const;
 
-  virtual void RegisterGuestViewTypes() {}
+  // Creates a delegate for handling the management extension api.
+  virtual ManagementAPIDelegate* CreateManagementAPIDelegate() const;
 
   // NOTE: If this interface gains too many methods (perhaps more than 20) it
   // should be split into one interface per API.

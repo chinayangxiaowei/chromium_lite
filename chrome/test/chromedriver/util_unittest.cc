@@ -5,8 +5,8 @@
 #include <string>
 
 #include "base/base64.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/util.h"
@@ -18,7 +18,7 @@ TEST(UnzipSoleFile, Entry) {
   std::string data;
   // A zip entry sent from a Java WebDriver client (v2.20) that contains a
   // file with the contents "COW\n".
-  const char* kBase64ZipEntry =
+  const char kBase64ZipEntry[] =
       "UEsDBBQACAAIAJpyXEAAAAAAAAAAAAAAAAAEAAAAdGVzdHP2D+"
       "cCAFBLBwi/wAzGBgAAAAQAAAA=";
   ASSERT_TRUE(base::Base64Decode(kBase64ZipEntry, &data));
@@ -36,7 +36,7 @@ TEST(UnzipSoleFile, Archive) {
   std::string data;
   // A zip archive sent from a Python WebDriver client that contains a
   // file with the contents "COW\n".
-  const char* kBase64ZipArchive =
+  const char kBase64ZipArchive[] =
       "UEsDBBQAAAAAAMROi0K/wAzGBAAAAAQAAAADAAAAbW9vQ09XClBLAQIUAxQAAAAAAMROi0K/"
       "wAzGBAAAAAQAAAADAAAAAAAAAAAAAACggQAAAABtb29QSwUGAAAAAAEAAQAxAAAAJQAAAAA"
       "A";

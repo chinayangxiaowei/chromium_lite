@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/file_version_info.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string_util.h"
@@ -630,7 +630,6 @@ bool InstallerState::AnyExistsAndIsInUse(
   // Check only for the current version (i.e., the version we are upgrading
   // _from_). Later versions from pending in-use updates need not be checked
   // since the current version is guaranteed to be in use if any such are.
-  bool in_use = false;
   scoped_ptr<Version> current_version(GetCurrentVersion(machine_state));
   if (!current_version)
     return false;

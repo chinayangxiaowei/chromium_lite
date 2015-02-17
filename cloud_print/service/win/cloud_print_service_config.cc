@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/message_loop/message_pump_dispatcher.h"
 #include "base/run_loop.h"
@@ -37,7 +37,7 @@ class SetupDialog : public base::RefCounted<SetupDialog>,
     virtual ~Dispatcher() {};
 
     // MessagePumpDispatcher:
-    virtual uint32_t Dispatch(const MSG& msg) OVERRIDE {
+    virtual uint32_t Dispatch(const MSG& msg) override {
       MSG msg2 = msg;
       uint32_t action = POST_DISPATCH_NONE;
       if (!dialog_->IsDialogMessage(&msg2))

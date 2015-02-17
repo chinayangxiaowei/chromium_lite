@@ -28,6 +28,9 @@
         'url_fixer',
         'webdata_common',
       ],
+      'export_dependent_settings': [
+        'component_metrics_proto',
+      ],
       'include_dirs': [
         '..',
       ],
@@ -81,6 +84,7 @@
       ],
     },
     {
+      # GN version: //components/search_engines:test_support
       'target_name': 'search_engines_test_support',
       'type': 'static_library',
       'dependencies': [
@@ -93,6 +97,8 @@
       'sources': [
         'search_engines/default_search_pref_test_util.cc',
         'search_engines/default_search_pref_test_util.h',
+        'search_engines/testing_search_terms_data.cc',
+        'search_engines/testing_search_terms_data.h',
       ],
     },
   ],

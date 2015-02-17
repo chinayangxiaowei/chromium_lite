@@ -8,7 +8,7 @@
 #include "base/files/file.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/file_system_provider/operations/operation.h"
-#include "webkit/browser/fileapi/async_file_util.h"
+#include "storage/browser/fileapi/async_file_util.h"
 
 namespace base {
 class DictionaryValue;
@@ -25,26 +25,26 @@ class ProvidedFileSystemInfo;
 
 namespace operations {
 
-// Bridge between fileBrowserPrivate's unmount operation and providing
+// Bridge between fileManagerPrivate's unmount operation and providing
 // extension's unmount request. Created per request.
 class Unmount : public Operation {
  public:
   Unmount(extensions::EventRouter* event_router,
           const ProvidedFileSystemInfo& file_system_info,
-          const fileapi::AsyncFileUtil::StatusCallback& callback);
+          const storage::AsyncFileUtil::StatusCallback& callback);
   virtual ~Unmount();
 
   // Operation overrides.
-  virtual bool Execute(int request_id) OVERRIDE;
+  virtual bool Execute(int request_id) override;
   virtual void OnSuccess(int request_id,
                          scoped_ptr<RequestValue> result,
-                         bool has_more) OVERRIDE;
+                         bool has_more) override;
   virtual void OnError(int request_id,
                        scoped_ptr<RequestValue> result,
-                       base::File::Error error) OVERRIDE;
+                       base::File::Error error) override;
 
  private:
-  const fileapi::AsyncFileUtil::StatusCallback callback_;
+  const storage::AsyncFileUtil::StatusCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(Unmount);
 };

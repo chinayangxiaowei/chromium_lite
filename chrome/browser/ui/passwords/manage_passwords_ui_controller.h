@@ -29,7 +29,7 @@ class ManagePasswordsUIController
       public content::WebContentsUserData<ManagePasswordsUIController>,
       public password_manager::PasswordStore::Observer {
  public:
-  virtual ~ManagePasswordsUIController();
+  ~ManagePasswordsUIController() override;
 
   // Called when the user submits a form containing login information, so we
   // can handle later requests to save or blacklist that login information.
@@ -56,8 +56,8 @@ class ManagePasswordsUIController
       const autofill::PasswordFormMap& password_form_map);
 
   // PasswordStore::Observer implementation.
-  virtual void OnLoginsChanged(
-      const password_manager::PasswordStoreChangeList& changes) OVERRIDE;
+  void OnLoginsChanged(
+      const password_manager::PasswordStoreChangeList& changes) override;
 
   // Called from the model when the user chooses to save a password; passes the
   // action off to the FormManager. The controller MUST be in a pending state,
@@ -76,11 +76,6 @@ class ManagePasswordsUIController
 
   // Open a new tab, pointing to the password manager settings page.
   virtual void NavigateToPasswordManagerSettingsPage();
-
-  // Open a new tab, pointing to the Google manage passwords website.
-  // TODO(gcasto): Change this to navigate to account central once passwords
-  // are visible there. Currently goes to the Chrome support page.
-  virtual void NavigateToAccountCentralManagementPage();
 
   virtual const autofill::PasswordForm& PendingCredentials() const;
 
@@ -110,9 +105,10 @@ class ManagePasswordsUIController
   virtual void NeverSavePasswordInternal();
 
   // content::WebContentsObserver:
-  virtual void DidNavigateMainFrame(
+  void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) OVERRIDE;
+      const content::FrameNavigateParams& params) override;
+  void WasHidden() override;
 
   // We create copies of PasswordForm objects that come in with unclear lifetime
   // and store them in this vector as well as in |password_form_map_| to ensure
@@ -147,7 +143,7 @@ class ManagePasswordsUIController
   void UpdateBubbleAndIconVisibility();
 
   // content::WebContentsObserver:
-  virtual void WebContentsDestroyed() OVERRIDE;
+  void WebContentsDestroyed() override;
 
   // Set by OnPasswordSubmitted() when the user submits a form containing login
   // information.  If the user responds to a subsequent "Do you want to save

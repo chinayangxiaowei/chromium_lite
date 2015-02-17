@@ -6,7 +6,6 @@
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/fullscreen/fullscreen_controller.h"
@@ -15,6 +14,8 @@
 #include "content/public/browser/render_process_host.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/switches.h"
+#include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/result_catcher.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
@@ -40,7 +41,7 @@ class TabCaptureApiTest : public ExtensionApiTest {
 
 class TabCaptureApiPixelTest : public TabCaptureApiTest {
  public:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     EnablePixelOutput();
     TabCaptureApiTest::SetUp();
   }
@@ -77,13 +78,10 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, ApiTestsAudio) {
       << message_;
 }
 
-// http://crbug.com/177163
-#if !defined(NDEBUG)
-#define MAYBE_EndToEnd DISABLED_EndToEnd
-#else
-#define MAYBE_EndToEnd EndToEnd
-#endif
-IN_PROC_BROWSER_TEST_F(TabCaptureApiPixelTest, MAYBE_EndToEnd) {
+// Disabled on ChromeOS for http://crbug.com/406051
+// Disabled on other platforms for http://crbug.com/177163
+// Disabled http://crbug.com/367349
+IN_PROC_BROWSER_TEST_F(TabCaptureApiPixelTest, DISABLED_EndToEnd) {
 #if defined(OS_WIN)
   // TODO(justinlin): Disabled for WinXP due to timeout issues.
   if (base::win::GetVersion() < base::win::VERSION_VISTA) {
@@ -116,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GetUserMediaTest) {
 
   content::OpenURLParams params(GURL("about:blank"), content::Referrer(),
                                 NEW_FOREGROUND_TAB,
-                                content::PAGE_TRANSITION_LINK, false);
+                                ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
 
   content::RenderFrameHost* const main_frame = web_contents->GetMainFrame();
@@ -126,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GetUserMediaTest) {
                                     main_frame->GetRoutingID()));
 
   ResultCatcher catcher;
-  catcher.RestrictToProfile(browser()->profile());
+  catcher.RestrictToBrowserContext(browser()->profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
@@ -152,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ActiveTabPermission) {
   EXPECT_TRUE(before_open_tab.WaitUntilSatisfied());
   content::OpenURLParams params(GURL("http://google.com"), content::Referrer(),
                                 NEW_FOREGROUND_TAB,
-                                content::PAGE_TRANSITION_LINK, false);
+                                ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
   before_open_tab.Reply("");
 
@@ -176,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_ActiveTabPermission) {
   before_whitelist_extension.Reply("");
 
   ResultCatcher catcher;
-  catcher.RestrictToProfile(browser()->profile());
+  catcher.RestrictToBrowserContext(browser()->profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
@@ -205,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
   content::OpenURLParams params(GURL("chrome://version"),
                                 content::Referrer(),
                                 CURRENT_TAB,
-                                content::PAGE_TRANSITION_LINK, false);
+                                ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
 
   ExtensionTestMessageListener listeners_setup("ready1", true);
@@ -227,14 +225,14 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_FullscreenEvents) {
   fullscreen_entered.Reply("");
 
   ResultCatcher catcher;
-  catcher.RestrictToProfile(browser()->profile());
+  catcher.RestrictToBrowserContext(browser()->profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
 // Times out on Win dbg bots: http://crbug.com/177163
 // #if defined(OS_WIN) && !defined(NDEBUG)
-// Times out on all Win bots: http://crbug.com/294431
-#if defined(OS_WIN)
+// Times out on all Win bots, flaky on MSan bots: http://crbug.com/294431
+#if defined(OS_WIN) || defined(MEMORY_SANITIZER)
 #define MAYBE_GrantForChromePages DISABLED_GrantForChromePages
 #else
 #define MAYBE_GrantForChromePages GrantForChromePages
@@ -250,7 +248,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GrantForChromePages) {
   // Open a tab on a chrome:// page and make sure we can capture.
   content::OpenURLParams params(GURL("chrome://version"), content::Referrer(),
                                 NEW_FOREGROUND_TAB,
-                                content::PAGE_TRANSITION_LINK, false);
+                                ui::PAGE_TRANSITION_LINK, false);
   content::WebContents* web_contents = browser()->OpenURL(params);
   const Extension* extension = ExtensionRegistry::Get(
       web_contents->GetBrowserContext())->enabled_extensions().GetByID(
@@ -260,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(TabCaptureApiTest, MAYBE_GrantForChromePages) {
   before_open_tab.Reply("");
 
   ResultCatcher catcher;
-  catcher.RestrictToProfile(browser()->profile());
+  catcher.RestrictToBrowserContext(browser()->profile());
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 

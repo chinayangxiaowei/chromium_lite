@@ -6,7 +6,7 @@
 #include "remoting/signaling/iq_sender.h"
 #include "remoting/signaling/signal_strategy.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 namespace remoting {
 
@@ -27,7 +27,7 @@ class MockSignalStrategy : public SignalStrategy {
   // GMock currently doesn't support move-only arguments, so we have
   // to use this hack here.
   MOCK_METHOD1(SendStanzaPtr, bool(buzz::XmlElement* stanza));
-  virtual bool SendStanza(scoped_ptr<buzz::XmlElement> stanza) OVERRIDE {
+  virtual bool SendStanza(scoped_ptr<buzz::XmlElement> stanza) override {
     return SendStanzaPtr(stanza.release());
   }
 };

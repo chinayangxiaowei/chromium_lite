@@ -17,7 +17,7 @@
 #include "base/threading/thread.h"
 #include "content/browser/geolocation/location_provider_base.h"
 #include "content/browser/geolocation/network_location_request.h"
-#include "content/browser/geolocation/wifi_data_provider.h"
+#include "content/browser/geolocation/wifi_data_provider_manager.h"
 #include "content/common/content_export.h"
 #include "content/public/common/geoposition.h"
 
@@ -69,21 +69,21 @@ class NetworkLocationProvider
                           net::URLRequestContextGetter* context,
                           const GURL& url,
                           const base::string16& access_token);
-  virtual ~NetworkLocationProvider();
+  ~NetworkLocationProvider() override;
 
   // LocationProvider implementation
-  virtual bool StartProvider(bool high_accuracy) OVERRIDE;
-  virtual void StopProvider() OVERRIDE;
-  virtual void GetPosition(Geoposition *position) OVERRIDE;
-  virtual void RequestRefresh() OVERRIDE;
-  virtual void OnPermissionGranted() OVERRIDE;
+  bool StartProvider(bool high_accuracy) override;
+  void StopProvider() override;
+  void GetPosition(Geoposition* position) override;
+  void RequestRefresh() override;
+  void OnPermissionGranted() override;
 
  private:
   // Satisfies a position request from cache or network.
   void RequestPosition();
 
   // Gets called when new wifi data is available.
-  void OnWifiDataUpdate(WifiDataProvider* provider);
+  void OnWifiDataUpdate();
 
   // Internal helper used by OnWifiDataUpdate.
   void OnWifiDataUpdated();
@@ -98,9 +98,9 @@ class NetworkLocationProvider
   scoped_refptr<AccessTokenStore> access_token_store_;
 
   // The wifi data provider, acquired via global factories.
-  WifiDataProvider* wifi_data_provider_;
+  WifiDataProviderManager* wifi_data_provider_manager_;
 
-  WifiDataProvider::WifiDataUpdateCallback wifi_data_update_callback_;
+  WifiDataProviderManager::WifiDataUpdateCallback wifi_data_update_callback_;
 
   // The  wifi data and a flag to indicate if the data set is complete.
   WifiData wifi_data_;

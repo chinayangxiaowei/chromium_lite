@@ -25,20 +25,16 @@ class ShellExtensionSystem;
 class AppShellTest : public content::BrowserTestBase {
  public:
   AppShellTest();
-  virtual ~AppShellTest();
+  ~AppShellTest() override;
 
   // content::BrowserTestBase implementation.
-  virtual void SetUp() OVERRIDE;
-  virtual void SetUpOnMainThread() OVERRIDE;
-  virtual void RunTestOnMainThreadLoop() OVERRIDE;
-
-  // Loads an unpacked application from a directory using |extension_system_|
-  // and attempts to launch it. Returns true on success.
-  bool LoadAndLaunchApp(const base::FilePath& app_dir);
+  void SetUp() override;
+  void SetUpOnMainThread() override;
+  void RunTestOnMainThreadLoop() override;
 
   content::BrowserContext* browser_context() { return browser_context_; }
 
- private:
+ protected:
   content::BrowserContext* browser_context_;
   ShellExtensionSystem* extension_system_;
 };

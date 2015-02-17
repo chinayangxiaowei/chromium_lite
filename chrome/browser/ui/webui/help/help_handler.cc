@@ -10,8 +10,11 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
+#include "base/files/file_util.h"
+#include "base/location.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -24,14 +27,15 @@
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/google_chrome_strings.h"
 #include "components/google/core/browser/google_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/user_agent.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/google_chrome_strings.h"
+#include "grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "v8/include/v8.h"
 
@@ -44,10 +48,13 @@
 #include "base/i18n/time_formatting.h"
 #include "base/prefs/pref_service.h"
 #include "base/sys_info.h"
+#include "base/task_runner_util.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/chromeos/image_source.h"
 #include "chrome/browser/ui/webui/help/help_utils_chromeos.h"
+#include "chrome/browser/ui/webui/help/version_updater_chromeos.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power_manager_client.h"
@@ -60,6 +67,8 @@ using content::BrowserThread;
 namespace {
 
 #if defined(OS_CHROMEOS)
+
+const char kFCCLabelTextPath[] = "fcc/label.txt";
 
 // Returns message that informs user that for update it's better to
 // connect to a network of one of the allowed types.
@@ -108,6 +117,19 @@ bool CanChangeChannel() {
   return false;
 }
 
+// Reads the file containing the FCC label text, if found. Must be called from
+// the blocking pool.
+std::string ReadFCCLabelText() {
+  const base::FilePath asset_dir(FILE_PATH_LITERAL(chrome::kChromeOSAssetPath));
+  const base::FilePath label_file_path =
+      asset_dir.AppendASCII(kFCCLabelTextPath);
+
+  std::string contents;
+  if (base::ReadFileToString(label_file_path, &contents))
+    return contents;
+  return std::string();
+}
+
 #endif  // defined(OS_CHROMEOS)
 
 }  // namespace
@@ -143,6 +165,7 @@ void HelpHandler::GetLocalizedValues(base::DictionaryValue* localized_strings) {
     { "upToDate", IDS_UPGRADE_UP_TO_DATE },
     { "updating", IDS_UPGRADE_UPDATING },
 #if defined(OS_CHROMEOS)
+    { "updateButton", IDS_UPGRADE_BUTTON },
     { "updatingChannelSwitch", IDS_UPGRADE_UPDATING_CHANNEL_SWITCH },
 #endif
     { "updateAlmostDone", IDS_UPGRADE_SUCCESSFUL_RELAUNCH },
@@ -194,7 +217,7 @@ void HelpHandler::GetLocalizedValues(base::DictionaryValue* localized_strings) {
 #endif
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(resources); ++i) {
+  for (size_t i = 0; i < arraysize(resources); ++i) {
     localized_strings->SetString(resources[i].name,
                                  l10n_util::GetStringUTF16(resources[i].ids));
   }
@@ -283,10 +306,18 @@ void HelpHandler::RegisterMessages() {
       base::Bind(&HelpHandler::SetChannel, base::Unretained(this)));
   web_ui()->RegisterMessageCallback("relaunchAndPowerwash",
       base::Bind(&HelpHandler::RelaunchAndPowerwash, base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("requestUpdate",
+      base::Bind(&HelpHandler::RequestUpdate, base::Unretained(this)));
 #endif
 #if defined(OS_MACOSX)
   web_ui()->RegisterMessageCallback("promoteUpdater",
       base::Bind(&HelpHandler::PromoteUpdater, base::Unretained(this)));
+#endif
+
+#if defined(OS_CHROMEOS)
+  // Handler for the product label image, which will be shown if available.
+  content::URLDataSource::Add(Profile::FromWebUI(web_ui()),
+                              new chromeos::ImageSource());
 #endif
 }
 
@@ -296,12 +327,7 @@ void HelpHandler::Observe(int type, const content::NotificationSource& source,
     case chrome::NOTIFICATION_UPGRADE_RECOMMENDED: {
       // A version update is installed and ready to go. Refresh the UI so the
       // correct state will be shown.
-      version_updater_->CheckForUpdate(
-          base::Bind(&HelpHandler::SetUpdateStatus, base::Unretained(this))
-#if defined(OS_MACOSX)
-          , base::Bind(&HelpHandler::SetPromotionState, base::Unretained(this))
-#endif
-          );
+      RequestUpdate(NULL);
       break;
     }
     default:
@@ -312,25 +338,18 @@ void HelpHandler::Observe(int type, const content::NotificationSource& source,
 // static
 base::string16 HelpHandler::BuildBrowserVersionString() {
   chrome::VersionInfo version_info;
-  DCHECK(version_info.is_valid());
 
-  std::string browser_version = version_info.Version();
-  std::string version_modifier =
-      chrome::VersionInfo::GetVersionStringModifier();
-  if (!version_modifier.empty())
-    browser_version += " " + version_modifier;
+  std::string version = version_info.Version();
 
-#if !defined(GOOGLE_CHROME_BUILD)
-  browser_version += " (";
-  browser_version += version_info.LastChange();
-  browser_version += ")";
-#endif
+  std::string modifier = chrome::VersionInfo::GetVersionStringModifier();
+  if (!modifier.empty())
+    version += " " + modifier;
 
 #if defined(ARCH_CPU_64_BITS)
-  browser_version += " (64-bit)";
+  version += " (64-bit)";
 #endif
 
-  return base::UTF8ToUTF16(browser_version);
+  return base::UTF8ToUTF16(version);
 }
 
 void HelpHandler::OnPageLoaded(const base::ListValue* args) {
@@ -354,12 +373,13 @@ void HelpHandler::OnPageLoaded(const base::ListValue* args) {
                                    base::StringValue(build_date));
 #endif  // defined(OS_CHROMEOS)
 
-  version_updater_->CheckForUpdate(
-      base::Bind(&HelpHandler::SetUpdateStatus, base::Unretained(this))
-#if defined(OS_MACOSX)
-      , base::Bind(&HelpHandler::SetPromotionState, base::Unretained(this))
+  // On Chrome OS, do not check for an update automatically.
+#if defined(OS_CHROMEOS)
+  static_cast<VersionUpdaterCros*>(version_updater_.get())->GetUpdateStatus(
+      base::Bind(&HelpHandler::SetUpdateStatus, base::Unretained(this)));
+#else
+  RequestUpdate(NULL);
 #endif
-      );
 
 #if defined(OS_MACOSX)
   web_ui()->CallJavascriptFunction(
@@ -383,6 +403,13 @@ void HelpHandler::OnPageLoaded(const base::ListValue* args) {
       base::Bind(&HelpHandler::OnCurrentChannel, weak_factory_.GetWeakPtr()));
   version_updater_->GetChannel(false,
       base::Bind(&HelpHandler::OnTargetChannel, weak_factory_.GetWeakPtr()));
+
+  base::PostTaskAndReplyWithResult(
+      content::BrowserThread::GetBlockingPool(),
+      FROM_HERE,
+      base::Bind(&ReadFCCLabelText),
+      base::Bind(&HelpHandler::OnFCCLabelTextRead,
+                 weak_factory_.GetWeakPtr()));
 #endif
 }
 
@@ -454,6 +481,15 @@ void HelpHandler::RelaunchAndPowerwash(const base::ListValue* args) {
 }
 
 #endif  // defined(OS_CHROMEOS)
+
+void HelpHandler::RequestUpdate(const base::ListValue* args) {
+  version_updater_->CheckForUpdate(
+      base::Bind(&HelpHandler::SetUpdateStatus, base::Unretained(this))
+#if defined(OS_MACOSX)
+      , base::Bind(&HelpHandler::SetPromotionState, base::Unretained(this))
+#endif
+      );
+}
 
 void HelpHandler::SetUpdateStatus(VersionUpdater::Status status,
                                   int progress, const base::string16& message) {
@@ -553,6 +589,13 @@ void HelpHandler::OnCurrentChannel(const std::string& channel) {
 void HelpHandler::OnTargetChannel(const std::string& channel) {
   web_ui()->CallJavascriptFunction(
       "help.HelpPage.updateTargetChannel", base::StringValue(channel));
+}
+
+void HelpHandler::OnFCCLabelTextRead(const std::string& text) {
+  // Remove unnecessary whitespace.
+  web_ui()->CallJavascriptFunction(
+      "help.HelpPage.setProductLabelText",
+      base::StringValue(base::CollapseWhitespaceASCII(text, true)));
 }
 
 #endif // defined(OS_CHROMEOS)

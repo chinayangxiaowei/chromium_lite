@@ -7,7 +7,7 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/metrics/proto/omnibox_event.pb.h"
-
+#include "extensions/test/result_catcher.h"
 
 // Tests that the autocomplete popup doesn't reopen after accepting input for
 // a given query.
@@ -38,15 +38,15 @@ IN_PROC_BROWSER_TEST_F(OmniboxApiTest, PopupStaysClosed) {
   // Quickly type another query and accept it before getting suggestions back
   // for the query. The popup will close after accepting input - ensure that it
   // does not reopen when the extension returns its suggestions.
-  ResultCatcher catcher;
+  extensions::ResultCatcher catcher;
 
   // TODO: Rather than send this second request by talking to the controller
   // directly, figure out how to send it via the proper calls to
   // location_bar or location_bar->().
   autocomplete_controller->Start(AutocompleteInput(
       base::ASCIIToUTF16("keyword command"), base::string16::npos,
-      base::string16(), GURL(), metrics::OmniboxEventProto::NTP, true, false,
-      true, true, ChromeAutocompleteSchemeClassifier(profile)));
+      std::string(), GURL(), metrics::OmniboxEventProto::NTP, true, false, true,
+      true, ChromeAutocompleteSchemeClassifier(profile)));
   location_bar->AcceptInput();
   WaitForAutocompleteDone(autocomplete_controller);
   EXPECT_TRUE(autocomplete_controller->done());

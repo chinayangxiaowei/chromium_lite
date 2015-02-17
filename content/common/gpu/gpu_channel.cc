@@ -25,7 +25,7 @@
 #include "content/public/common/content_switches.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/service/gpu_scheduler.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
+#include "gpu/command_buffer/service/mailbox_manager_impl.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/message_filter.h"
 #include "ui/gl/gl_context.h"
@@ -83,17 +83,17 @@ class GpuChannelMessageFilter : public IPC::MessageFilter {
         a_stub_is_descheduled_(false),
         future_sync_points_(future_sync_points) {}
 
-  virtual void OnFilterAdded(IPC::Sender* sender) OVERRIDE {
+  void OnFilterAdded(IPC::Sender* sender) override {
     DCHECK(!sender_);
     sender_ = sender;
   }
 
-  virtual void OnFilterRemoved() OVERRIDE {
+  void OnFilterRemoved() override {
     DCHECK(sender_);
     sender_ = NULL;
   }
 
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE {
+  bool OnMessageReceived(const IPC::Message& message) override {
     DCHECK(sender_);
 
     bool handled = false;
@@ -166,7 +166,7 @@ class GpuChannelMessageFilter : public IPC::MessageFilter {
   }
 
  protected:
-  virtual ~GpuChannelMessageFilter() {}
+  ~GpuChannelMessageFilter() override {}
 
  private:
   enum PreemptionState {
@@ -405,14 +405,14 @@ GpuChannel::GpuChannel(GpuChannelManager* gpu_channel_manager,
       messages_processed_(0),
       client_id_(client_id),
       share_group_(share_group ? share_group : new gfx::GLShareGroup),
-      mailbox_manager_(mailbox ? mailbox : new gpu::gles2::MailboxManager),
+      mailbox_manager_(mailbox ? mailbox : new gpu::gles2::MailboxManagerImpl),
       watchdog_(watchdog),
       software_(software),
       handle_messages_scheduled_(false),
       currently_processing_message_(NULL),
-      weak_factory_(this),
       num_stubs_descheduled_(0),
-      allow_future_sync_points_(allow_future_sync_points) {
+      allow_future_sync_points_(allow_future_sync_points),
+      weak_factory_(this) {
   DCHECK(gpu_channel_manager);
   DCHECK(client_id);
 
@@ -456,10 +456,10 @@ std::string GpuChannel::GetChannelName() {
 }
 
 #if defined(OS_POSIX)
-int GpuChannel::TakeRendererFileDescriptor() {
+base::ScopedFD GpuChannel::TakeRendererFileDescriptor() {
   if (!channel_) {
     NOTREACHED();
-    return -1;
+    return base::ScopedFD();
   }
   return channel_->TakeClientFileDescriptor();
 }
@@ -667,65 +667,53 @@ void GpuChannel::HandleMessage() {
   if (deferred_messages_.empty())
     return;
 
-  bool should_fast_track_ack = false;
-  IPC::Message* m = deferred_messages_.front();
-  GpuCommandBufferStub* stub = stubs_.Lookup(m->routing_id());
+  IPC::Message* m = NULL;
+  GpuCommandBufferStub* stub = NULL;
 
-  do {
+  m = deferred_messages_.front();
+  stub = stubs_.Lookup(m->routing_id());
+  if (stub) {
+    if (!stub->IsScheduled())
+      return;
+    if (stub->IsPreempted()) {
+      OnScheduled();
+      return;
+    }
+  }
+
+  scoped_ptr<IPC::Message> message(m);
+  deferred_messages_.pop_front();
+  bool message_processed = true;
+
+  currently_processing_message_ = message.get();
+  bool result;
+  if (message->routing_id() == MSG_ROUTING_CONTROL)
+    result = OnControlMessageReceived(*message);
+  else
+    result = router_.RouteMessage(*message);
+  currently_processing_message_ = NULL;
+
+  if (!result) {
+    // Respond to sync messages even if router failed to route.
+    if (message->is_sync()) {
+      IPC::Message* reply = IPC::SyncMessage::GenerateReply(&*message);
+      reply->set_reply_error();
+      Send(reply);
+    }
+  } else {
+    // If the command buffer becomes unscheduled as a result of handling the
+    // message but still has more commands to process, synthesize an IPC
+    // message to flush that command buffer.
     if (stub) {
-      if (!stub->IsScheduled())
-        return;
-      if (stub->IsPreempted()) {
-        OnScheduled();
-        return;
+      if (stub->HasUnprocessedCommands()) {
+        deferred_messages_.push_front(new GpuCommandBufferMsg_Rescheduled(
+            stub->route_id()));
+        message_processed = false;
       }
     }
-
-    scoped_ptr<IPC::Message> message(m);
-    deferred_messages_.pop_front();
-    bool message_processed = true;
-
-    currently_processing_message_ = message.get();
-    bool result;
-    if (message->routing_id() == MSG_ROUTING_CONTROL)
-      result = OnControlMessageReceived(*message);
-    else
-      result = router_.RouteMessage(*message);
-    currently_processing_message_ = NULL;
-
-    if (!result) {
-      // Respond to sync messages even if router failed to route.
-      if (message->is_sync()) {
-        IPC::Message* reply = IPC::SyncMessage::GenerateReply(&*message);
-        reply->set_reply_error();
-        Send(reply);
-      }
-    } else {
-      // If the command buffer becomes unscheduled as a result of handling the
-      // message but still has more commands to process, synthesize an IPC
-      // message to flush that command buffer.
-      if (stub) {
-        if (stub->HasUnprocessedCommands()) {
-          deferred_messages_.push_front(new GpuCommandBufferMsg_Rescheduled(
-              stub->route_id()));
-          message_processed = false;
-        }
-      }
-    }
-    if (message_processed)
-      MessageProcessed();
-
-    // We want the EchoACK following the SwapBuffers to be sent as close as
-    // possible, avoiding scheduling other channels in the meantime.
-    should_fast_track_ack = false;
-    if (!deferred_messages_.empty()) {
-      m = deferred_messages_.front();
-      stub = stubs_.Lookup(m->routing_id());
-      should_fast_track_ack =
-          (m->type() == GpuCommandBufferMsg_Echo::ID) &&
-          stub && stub->IsScheduled();
-    }
-  } while (should_fast_track_ack);
+  }
+  if (message_processed)
+    MessageProcessed();
 
   if (!deferred_messages_.empty()) {
     OnScheduled();

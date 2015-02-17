@@ -31,13 +31,13 @@ const char kUnknownUSBDiskModel[] = "USB Drive";
 
 class RemovableStorageProviderChromeOsUnitTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     disk_mount_manager_mock_ = new MockDiskMountManager();
     DiskMountManager::InitializeForTesting(disk_mount_manager_mock_);
     disk_mount_manager_mock_->SetupDefaultReplies();
   }
 
-  virtual void TearDown() OVERRIDE { DiskMountManager::Shutdown(); }
+  virtual void TearDown() override { DiskMountManager::Shutdown(); }
 
   void DevicesCallback(scoped_refptr<StorageDeviceList> devices, bool success) {
     devices_ = devices;
@@ -101,7 +101,7 @@ class RemovableStorageProviderChromeOsUnitTest : public testing::Test {
                     const std::string& vendor,
                     const std::string& model,
                     uint64 capacity) {
-    RemovableStorageDevice* device = FindDevice(devices_, device_path);
+    RemovableStorageDevice* device = FindDevice(devices_.get(), device_path);
 
     ASSERT_TRUE(device != NULL);
 
@@ -139,8 +139,9 @@ TEST_F(RemovableStorageProviderChromeOsUnitTest, GetAllDevices) {
   ASSERT_EQ(2U, devices_->data.size());
 
   ExpectDevice(
-      devices_, kDevicePathUSB, kVendorName, kProductName, kDeviceSize);
-  ExpectDevice(devices_, kDevicePathSD, kVendorName, kProductName, kDeviceSize);
+      devices_.get(), kDevicePathUSB, kVendorName, kProductName, kDeviceSize);
+  ExpectDevice(
+      devices_.get(), kDevicePathSD, kVendorName, kProductName, kDeviceSize);
 }
 
 // Tests that a USB drive with an empty vendor and product gets a generic name.
@@ -158,8 +159,10 @@ TEST_F(RemovableStorageProviderChromeOsUnitTest, EmptyProductAndModel) {
 
   ASSERT_EQ(2U, devices_->data.size());
 
-  ExpectDevice(devices_, kDevicePathUSB, "", kUnknownUSBDiskModel, kDeviceSize);
-  ExpectDevice(devices_, kDevicePathSD, "", kUnknownSDDiskModel, kDeviceSize);
+  ExpectDevice(
+      devices_.get(), kDevicePathUSB, "", kUnknownUSBDiskModel, kDeviceSize);
+  ExpectDevice(
+      devices_.get(), kDevicePathSD, "", kUnknownSDDiskModel, kDeviceSize);
 }
 
 }  // namespace extensions

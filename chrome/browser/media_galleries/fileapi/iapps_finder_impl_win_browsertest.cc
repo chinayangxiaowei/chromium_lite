@@ -5,12 +5,11 @@
 #include "base/base64.h"
 #include "base/base_paths_win.h"
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_path_override.h"
@@ -40,7 +39,7 @@ class ITunesFinderWinTest : public InProcessBrowserTest {
 
   virtual ~ITunesFinderWinTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(app_data_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(music_dir_.CreateUniqueTempDir());
     app_data_dir_override_.reset(

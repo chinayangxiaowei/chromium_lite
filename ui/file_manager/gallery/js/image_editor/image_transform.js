@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Crop mode.
  *
@@ -205,7 +203,7 @@ ImageEditor.Mode.Crop.prototype.getCommand = function() {
  */
 ImageEditor.Mode.Crop.prototype.createDefaultCrop = function() {
   var rect = this.getViewport().screenToImageRect(
-      new Rect(this.getViewport().getImageBoundsOnScreenClipped()));
+      new ImageRect(this.getViewport().getImageBoundsOnScreenClipped()));
   rect = rect.inflate(
       -Math.round(rect.width / 6), -Math.round(rect.height / 6));
   this.cropRect_ = new DraggableRect(rect, this.getViewport());
@@ -262,7 +260,7 @@ ImageEditor.Mode.Crop.prototype.getDoubleTapAction = function(x, y) {
 /**
  * A draggable rectangle over the image.
  *
- * @param {Rect} rect Initial size of the image.
+ * @param {ImageRect} rect Initial size of the image.
  * @param {Viewport} viewport Viewport.
  * @constructor
  */
@@ -283,7 +281,7 @@ function DraggableRect(rect, viewport) {
   /**
    * Viewport.
    *
-   * @param {Viewport}
+   * @type {Viewport}
    * @private
    */
   this.viewport_ = viewport;
@@ -371,10 +369,10 @@ DraggableRect.prototype.getBottom = function() {
 
 /**
  * Obtains the geometry of the rectangle.
- * @return {Rect} Geometry of the rectangle.
+ * @return {ImageRect} Geometry of the rectangle.
  */
 DraggableRect.prototype.getRect = function() {
-  return new Rect(this.bounds_);
+  return new ImageRect(this.bounds_);
 };
 
 /**
@@ -469,8 +467,8 @@ DraggableRect.prototype.getCursorStyle = function(x, y, mouseDown) {
 /**
  * Obtains the drag handler depending on the coordinate.
  *
- * @param {number} startScreenX X coordinate for cursor in the screen.
- * @param {number} startScreenY Y coordinate for cursor in the screen.
+ * @param {number} initialScreenX X coordinate for cursor in the screen.
+ * @param {number} initialScreenY Y coordinate for cursor in the screen.
  * @param {boolean} touch Whether the operation is done by touch or not.
  * @return {function(number,number,boolean)} Drag handler that takes x
  *     coordinate value, y coordinate value, and shift key flag.
@@ -523,8 +521,8 @@ DraggableRect.prototype.getDragHandler = function(
       // Check new crop.
       if (this.dragMode_.newcrop) {
         this.dragMode_.newcrop = false;
-        this.bounds_.left = this.bounds_.right = newX;
-        this.bounds_.top = this.bounds_.bottom = newY;
+        this.bounds_.left = this.bounds_.right = initialX;
+        this.bounds_.top = this.bounds_.bottom = initialY;
         mouseBiasX = 0;
         mouseBiasY = 0;
       }

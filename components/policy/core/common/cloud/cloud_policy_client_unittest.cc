@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
@@ -96,7 +97,7 @@ class CloudPolicyClientTest : public testing::Test {
     upload_certificate_response_.mutable_cert_upload_response();
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     EXPECT_CALL(status_provider_, GetDeviceStatus(_))
         .WillRepeatedly(Return(false));
     EXPECT_CALL(status_provider_, GetSessionStatus(_))
@@ -104,7 +105,7 @@ class CloudPolicyClientTest : public testing::Test {
     CreateClient(USER_AFFILIATION_NONE);
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     client_->RemoveObserver(&observer_);
   }
 
@@ -204,8 +205,8 @@ class CloudPolicyClientTest : public testing::Test {
   StrictMock<MockCloudPolicyClientObserver> observer_;
   StrictMock<MockUploadCertificateObserver> upload_certificate_observer_;
   scoped_ptr<CloudPolicyClient> client_;
-  // Cached weak pointer to the client's request context.
-  net::URLRequestContextGetter* request_context_;
+  // Pointer to the client's request context.
+  scoped_refptr<net::URLRequestContextGetter> request_context_;
 };
 
 TEST_F(CloudPolicyClientTest, Init) {

@@ -5,7 +5,7 @@
 #include "content/browser/renderer_host/input/touch_handle.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/events/test/mock_motion_event.h"
+#include "ui/events/test/motion_event_test_utils.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 using ui::test::MockMotionEvent;
@@ -13,6 +13,8 @@ using ui::test::MockMotionEvent;
 namespace content {
 namespace {
 
+const int kDefaultTapTimeoutMs = 200;
+const float kDefaultTapSlop = 10.f;
 const float kDefaultDrawableSize = 10.f;
 
 struct MockDrawableData {
@@ -32,24 +34,24 @@ struct MockDrawableData {
 class MockTouchHandleDrawable : public TouchHandleDrawable {
  public:
   explicit MockTouchHandleDrawable(MockDrawableData* data) : data_(data) {}
-  virtual ~MockTouchHandleDrawable() {}
+  ~MockTouchHandleDrawable() override {}
 
-  virtual void SetEnabled(bool enabled) OVERRIDE { data_->enabled = enabled; }
+  void SetEnabled(bool enabled) override { data_->enabled = enabled; }
 
-  virtual void SetOrientation(TouchHandleOrientation orientation) OVERRIDE {
+  void SetOrientation(TouchHandleOrientation orientation) override {
     data_->orientation = orientation;
   }
 
-  virtual void SetAlpha(float alpha) OVERRIDE { data_->alpha = alpha; }
+  void SetAlpha(float alpha) override { data_->alpha = alpha; }
 
-  virtual void SetFocus(const gfx::PointF& position) OVERRIDE {
+  void SetFocus(const gfx::PointF& position) override {
     // Anchor focus to the top left of the rect (regardless of orientation).
     data_->rect.set_origin(position);
   }
 
-  virtual void SetVisible(bool visible) OVERRIDE { data_->visible = visible; }
+  void SetVisible(bool visible) override { data_->visible = visible; }
 
-  virtual bool IntersectsWith(const gfx::RectF& rect) const OVERRIDE {
+  bool IntersectsWith(const gfx::RectF& rect) const override {
     return data_->rect.Intersects(rect);
   }
 
@@ -67,33 +69,37 @@ class TouchHandleTest : public testing::Test, public TouchHandleClient {
         tapped_(false),
         needs_animate_(false) {}
 
-  virtual ~TouchHandleTest() {}
+  ~TouchHandleTest() override {}
 
   // TouchHandleClient implementation.
-  virtual void OnHandleDragBegin(const TouchHandle& handle) OVERRIDE {
+  void OnHandleDragBegin(const TouchHandle& handle) override {
     dragging_ = true;
   }
 
-  virtual void OnHandleDragUpdate(const TouchHandle& handle,
-                                  const gfx::PointF& new_position) OVERRIDE {
+  void OnHandleDragUpdate(const TouchHandle& handle,
+                          const gfx::PointF& new_position) override {
     dragged_ = true;
     drag_position_ = new_position;
   }
 
-  virtual void OnHandleDragEnd(const TouchHandle& handle) OVERRIDE {
+  void OnHandleDragEnd(const TouchHandle& handle) override {
     dragging_ = false;
   }
 
-  virtual void OnHandleTapped(const TouchHandle& handle) OVERRIDE {
-    tapped_ = true;
-  }
+  void OnHandleTapped(const TouchHandle& handle) override { tapped_ = true; }
 
-  virtual void SetNeedsAnimate() OVERRIDE { needs_animate_ = true; }
+  void SetNeedsAnimate() override { needs_animate_ = true; }
 
-  virtual scoped_ptr<TouchHandleDrawable> CreateDrawable() OVERRIDE {
+  scoped_ptr<TouchHandleDrawable> CreateDrawable() override {
     return scoped_ptr<TouchHandleDrawable>(
         new MockTouchHandleDrawable(&drawable_data_));
   }
+
+  base::TimeDelta GetTapTimeout() const override {
+    return base::TimeDelta::FromMilliseconds(kDefaultTapTimeoutMs);
+  }
+
+  float GetTapSlop() const override { return kDefaultTapSlop; }
 
   void Animate(TouchHandle& handle) {
     needs_animate_ = false;
@@ -452,18 +458,34 @@ TEST_F(TouchHandleTest, Tap) {
   // Long press shouldn't trigger a tap.
   event = MockMotionEvent(MockMotionEvent::ACTION_DOWN, event_time, 0, 0);
   EXPECT_TRUE(handle.WillHandleTouchEvent(event));
-  event_time += base::TimeDelta::FromMilliseconds(500);
+  event_time += 2 * GetTapTimeout();
   event = MockMotionEvent(MockMotionEvent::ACTION_UP, event_time, 0, 0);
   EXPECT_TRUE(handle.WillHandleTouchEvent(event));
   EXPECT_FALSE(GetAndResetHandleTapped());
 
-  // Only a brief tap should trigger a tap.
+  // Only a brief tap within the slop region should trigger a tap.
   event = MockMotionEvent(MockMotionEvent::ACTION_DOWN, event_time, 0, 0);
   EXPECT_TRUE(handle.WillHandleTouchEvent(event));
-  event_time += base::TimeDelta::FromMilliseconds(50);
-  event = MockMotionEvent(MockMotionEvent::ACTION_UP, event_time, 0, 0);
+  event_time += GetTapTimeout() / 2;
+  event = MockMotionEvent(
+      MockMotionEvent::ACTION_MOVE, event_time, kDefaultTapSlop / 2.f, 0);
+  EXPECT_TRUE(handle.WillHandleTouchEvent(event));
+  event = MockMotionEvent(
+      MockMotionEvent::ACTION_UP, event_time, kDefaultTapSlop / 2.f, 0);
   EXPECT_TRUE(handle.WillHandleTouchEvent(event));
   EXPECT_TRUE(GetAndResetHandleTapped());
+
+  // Moving beyond the slop region shouldn't trigger a tap.
+  event = MockMotionEvent(MockMotionEvent::ACTION_DOWN, event_time, 0, 0);
+  EXPECT_TRUE(handle.WillHandleTouchEvent(event));
+  event_time += GetTapTimeout() / 2;
+  event = MockMotionEvent(
+      MockMotionEvent::ACTION_MOVE, event_time, kDefaultTapSlop * 2.f, 0);
+  EXPECT_TRUE(handle.WillHandleTouchEvent(event));
+  event = MockMotionEvent(
+      MockMotionEvent::ACTION_UP, event_time, kDefaultTapSlop * 2.f, 0);
+  EXPECT_TRUE(handle.WillHandleTouchEvent(event));
+  EXPECT_FALSE(GetAndResetHandleTapped());
 }
 
 }  // namespace content

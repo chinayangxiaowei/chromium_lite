@@ -82,11 +82,9 @@ void FakeControllerPairingController::ApplyConfig(const std::string& config) {
       base::SplitStringIntoKeyValuePairs(dict["discovery"], '-', '~', &events))
       << "Wrong 'discovery' format.";
   DiscoveryScenario scenario;
-  for (base::StringPairs::const_iterator event = events.begin();
-       event != events.end();
-       ++event) {
-    std::string type = event->first;
-    std::string device_id = event->second;
+  for (const auto& event : events) {
+    const std::string& type = event.first;
+    const std::string& device_id = event.second;
     CHECK(type == "F" || type == "L" || type == "N")
         << "Wrong discovery event type.";
     CHECK(!device_id.empty() || type == "N") << "Empty device ID.";
@@ -205,15 +203,23 @@ void FakeControllerPairingController::SetConfirmationCodeIsCorrect(
     ChangeStage(STAGE_DEVICES_DISCOVERY);
 }
 
+void FakeControllerPairingController::SetHostConfiguration(
+    bool accepted_eula,
+    const std::string& lang,
+    const std::string& timezone,
+    bool send_reports,
+    const std::string& keyboard_layout) {
+}
+
 void FakeControllerPairingController::OnAuthenticationDone(
-    const chromeos::UserContext& user_context,
-    content::BrowserContext* browser_context) {
+    const std::string& domain,
+    const std::string& auth_token) {
   CHECK(current_stage_ == STAGE_WAITING_FOR_CREDENTIALS);
   ChangeStage(STAGE_HOST_ENROLLMENT_IN_PROGRESS);
 }
 
 void FakeControllerPairingController::StartSession() {
-  CHECK(current_stage_ == STAGE_PAIRING_DONE);
+  CHECK(current_stage_ == STAGE_HOST_ENROLLMENT_SUCCESS);
   ChangeStage(STAGE_FINISHED);
 }
 
@@ -309,7 +315,7 @@ void FakeControllerPairingController::PairingStageChanged(Stage new_stage) {
         enrollment_should_fail_ = false;
         next_stage = STAGE_HOST_ENROLLMENT_ERROR;
       } else {
-        next_stage = STAGE_PAIRING_DONE;
+        next_stage = STAGE_HOST_ENROLLMENT_SUCCESS;
       }
       break;
     }

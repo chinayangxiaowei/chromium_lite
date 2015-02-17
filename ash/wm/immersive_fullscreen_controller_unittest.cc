@@ -39,24 +39,22 @@ class MockImmersiveFullscreenControllerDelegate
         enabled_(false),
         visible_fraction_(1) {
   }
-  virtual ~MockImmersiveFullscreenControllerDelegate() {}
+  ~MockImmersiveFullscreenControllerDelegate() override {}
 
   // ImmersiveFullscreenController::Delegate overrides:
-  virtual void OnImmersiveRevealStarted() OVERRIDE {
+  void OnImmersiveRevealStarted() override {
     enabled_ = true;
     visible_fraction_ = 0;
   }
-  virtual void OnImmersiveRevealEnded() OVERRIDE {
-    visible_fraction_ = 0;
-  }
-  virtual void OnImmersiveFullscreenExited() OVERRIDE {
+  void OnImmersiveRevealEnded() override { visible_fraction_ = 0; }
+  void OnImmersiveFullscreenExited() override {
     enabled_ = false;
     visible_fraction_ = 1;
   }
-  virtual void SetVisibleFraction(double visible_fraction) OVERRIDE {
+  void SetVisibleFraction(double visible_fraction) override {
     visible_fraction_ = visible_fraction;
   }
-  virtual std::vector<gfx::Rect> GetVisibleBoundsInScreen() const OVERRIDE {
+  std::vector<gfx::Rect> GetVisibleBoundsInScreen() const override {
     std::vector<gfx::Rect> bounds_in_screen;
     bounds_in_screen.push_back(top_container_view_->GetBoundsInScreen());
     return bounds_in_screen;
@@ -81,10 +79,10 @@ class MockImmersiveFullscreenControllerDelegate
 class ConsumeEventHandler : public ui::test::TestEventHandler {
  public:
   ConsumeEventHandler() {}
-  virtual ~ConsumeEventHandler() {}
+  ~ConsumeEventHandler() override {}
 
  private:
-  virtual void OnEvent(ui::Event* event) OVERRIDE {
+  void OnEvent(ui::Event* event) override {
     ui::test::TestEventHandler::OnEvent(event);
     if (event->cancelable())
       event->SetHandled();
@@ -109,7 +107,7 @@ class ImmersiveFullscreenControllerTest : public ash::test::AshTestBase {
       : widget_(NULL),
         top_container_(NULL),
         content_view_(NULL) {}
-  virtual ~ImmersiveFullscreenControllerTest() {}
+  ~ImmersiveFullscreenControllerTest() override {}
 
   ImmersiveFullscreenController* controller() {
     return controller_.get();
@@ -142,7 +140,7 @@ class ImmersiveFullscreenControllerTest : public ash::test::AshTestBase {
   }
 
   // ash::test::AshTestBase overrides:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ash::test::AshTestBase::SetUp();
 
     widget_ = new views::Widget();
@@ -542,11 +540,6 @@ TEST_F(ImmersiveFullscreenControllerTest, MouseEventsVerticalDisplayLayout) {
   // edge even though the mouse is warped to the secondary display.
   event_generator.MoveMouseTo(x, y_top_edge);
   EXPECT_TRUE(top_edge_hover_timer_running());
-
-  // TODO(oshima): Provide a test API to handle mouse warp more easily.
-#if defined(USE_OZONE)
-  EXPECT_NE(y_top_edge, aura::Env::GetInstance()->last_mouse_location().y());
-#endif
 
   // The timer should continue running if the user overshoots the top edge
   // a bit.

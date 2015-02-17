@@ -27,21 +27,21 @@ class ResetScreenHandler : public ResetScreenActor,
   virtual ~ResetScreenHandler();
 
   // ResetScreenActor implementation:
-  virtual void PrepareToShow() OVERRIDE;
-  virtual void Show() OVERRIDE;
-  virtual void Hide() OVERRIDE;
-  virtual void SetDelegate(Delegate* delegate) OVERRIDE;
+  virtual void PrepareToShow() override;
+  virtual void Show() override;
+  virtual void Hide() override;
+  virtual void SetDelegate(Delegate* delegate) override;
 
   // BaseScreenHandler implementation:
-  virtual void DeclareLocalizedValues(LocalizedValuesBuilder* builder) OVERRIDE;
-  virtual void Initialize() OVERRIDE;
+  virtual void DeclareLocalizedValues(LocalizedValuesBuilder* builder) override;
+  virtual void Initialize() override;
 
   // WebUIMessageHandler implementation:
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
   // UpdateEngineClient::Observer implementation:
   virtual void UpdateStatusChanged(
-      const UpdateEngineClient::Status& status) OVERRIDE;
+      const UpdateEngineClient::Status& status) override;
 
   void OnRollbackCheck(bool can_rollback);
 
@@ -51,9 +51,11 @@ class ResetScreenHandler : public ResetScreenActor,
  private:
   // JS messages handlers.
   void HandleOnCancel();
-  void HandleOnRestart(bool should_rollback);
+  void HandleOnRestart();
   void HandleOnPowerwash(bool rollback_checked);
   void HandleOnLearnMore();
+  void HandleOnToggleRollback();
+  void HandleOnShowConfirm();
 
   void ChooseAndApplyShowScenario();
   void ShowWithParams();
@@ -74,10 +76,13 @@ class ResetScreenHandler : public ResetScreenActor,
   // for first exec after boot situation.
   bool reboot_was_requested_;
 
-  // Keeps whether rollback option is available fo.
+  // Keeps whether rollback option is available.
   bool rollback_available_;
 
-  // Whether rollback is initiated.
+  // Keeps whether rollback option is active at the screen.
+  bool rollback_checked_;
+
+  // Whether rollback is initiated. Prevents screen-hide.
   bool preparing_for_rollback_;
 
   base::WeakPtrFactory<ResetScreenHandler> weak_ptr_factory_;

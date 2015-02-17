@@ -129,8 +129,8 @@ TargetPolicy* TestRunner::GetPolicy() {
 }
 
 TestRunner::~TestRunner() {
-  if (target_process_ && kill_on_destruction_)
-    ::TerminateProcess(target_process_, 0);
+  if (target_process_.IsValid() && kill_on_destruction_)
+    ::TerminateProcess(target_process_.Get(), 0);
 
   if (policy_)
     policy_->Release();
@@ -181,7 +181,7 @@ int TestRunner::RunTest(const wchar_t* command) {
     return SBOX_TEST_INVALID_PARAMETER;
 
   wchar_t state_number[2];
-  state_number[0] = L'0' + state_;
+  state_number[0] = static_cast<wchar_t>(L'0' + state_);
   state_number[1] = L'\0';
   base::string16 full_command(state_number);
   full_command += L" ";
@@ -195,8 +195,8 @@ int TestRunner::InternalRunTest(const wchar_t* command) {
     return SBOX_TEST_FAILED_TO_RUN_TEST;
 
   // For simplicity TestRunner supports only one process per instance.
-  if (target_process_) {
-    if (IsProcessRunning(target_process_))
+  if (target_process_.IsValid()) {
+    if (IsProcessRunning(target_process_.Get()))
       return SBOX_TEST_FAILED_TO_RUN_TEST;
     target_process_.Close();
     target_process_id_ = 0;

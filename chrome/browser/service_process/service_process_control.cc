@@ -41,7 +41,7 @@ void ServiceProcessControl::ConnectInternal() {
   }
 
   // Actually going to connect.
-  VLOG(1) << "Connecting to Service Process IPC Server";
+  DVLOG(1) << "Connecting to Service Process IPC Server";
 
   // TODO(hclam): Handle error connecting to channel.
   const IPC::ChannelHandle channel_id = GetServiceProcessChannel();
@@ -262,6 +262,11 @@ bool ServiceProcessControl::GetHistograms(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!histograms_callback.is_null());
   histograms_callback_.Reset();
+
+#if defined(OS_MACOSX)
+  // TODO(vitalybuka): Investigate why it crashes MAC http://crbug.com/406227.
+  return false;
+#endif  // OS_MACOSX
 
   // If the service process is already running then connect to it.
   if (!CheckServiceProcessReady())

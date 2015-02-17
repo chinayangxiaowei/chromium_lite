@@ -14,14 +14,14 @@
 #include "chrome/browser/ui/search_engines/keyword_editor_controller.h"
 #include "chrome/browser/ui/search_engines/template_url_table_model.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -129,7 +129,7 @@ void SearchEngineManagerHandler::OnModelChanged() {
   for (int i = 0; i < last_default_engine_index; ++i) {
     // Third argument is false, as the engine is not from an extension.
     defaults_list.Append(CreateDictionaryForEngine(
-        i, i == default_index, false));
+        i, i == default_index));
   }
 
   // Build the second list (other search templates).
@@ -139,7 +139,7 @@ void SearchEngineManagerHandler::OnModelChanged() {
   if (last_default_engine_index < 0)
     last_default_engine_index = 0;
   for (int i = last_default_engine_index; i < last_other_engine_index; ++i) {
-    others_list.Append(CreateDictionaryForEngine(i, i == default_index, false));
+    others_list.Append(CreateDictionaryForEngine(i, i == default_index));
   }
 
   // Build the extension keywords list.
@@ -148,7 +148,7 @@ void SearchEngineManagerHandler::OnModelChanged() {
     last_other_engine_index = 0;
   int engine_count = list_controller_->table_model()->RowCount();
   for (int i = last_other_engine_index; i < engine_count; ++i) {
-    keyword_list.Append(CreateDictionaryForEngine(i, i == default_index, true));
+    keyword_list.Append(CreateDictionaryForEngine(i, i == default_index));
   }
 
   web_ui()->CallJavascriptFunction("SearchEngineManager.updateSearchEngineList",
@@ -168,10 +168,14 @@ void SearchEngineManagerHandler::OnItemsRemoved(int start, int length) {
 }
 
 base::DictionaryValue* SearchEngineManagerHandler::CreateDictionaryForEngine(
-    int index, bool is_default, bool is_extension) {
+    int index, bool is_default) {
   TemplateURLTableModel* table_model = list_controller_->table_model();
   const TemplateURL* template_url = list_controller_->GetTemplateURL(index);
 
+  // The items which are to be written into |dict| are also described in
+  // chrome/browser/resources/options/search_engine_manager_engine_list.js
+  // in @typedef for SearchEngine. Please update it whenever you add or remove
+  // any keys here.
   base::DictionaryValue* dict = new base::DictionaryValue();
   dict->SetString("name",  template_url->short_name());
   dict->SetString("displayName", table_model->GetText(
@@ -187,13 +191,16 @@ base::DictionaryValue* SearchEngineManagerHandler::CreateDictionaryForEngine(
   dict->SetString("modelIndex", base::IntToString(index));
 
   dict->SetBoolean("canBeRemoved",
-      list_controller_->CanRemove(template_url) && !is_extension);
+                   list_controller_->CanRemove(template_url));
   dict->SetBoolean("canBeDefault",
-      list_controller_->CanMakeDefault(template_url) && !is_extension);
+                   list_controller_->CanMakeDefault(template_url));
   dict->SetBoolean("default", is_default);
   dict->SetBoolean("canBeEdited", list_controller_->CanEdit(template_url));
-  dict->SetBoolean("isExtension", is_extension);
-  if (template_url->GetType() == TemplateURL::NORMAL_CONTROLLED_BY_EXTENSION) {
+  TemplateURL::Type type = template_url->GetType();
+  dict->SetBoolean("isOmniboxExtension",
+                   type == TemplateURL::OMNIBOX_API_EXTENSION);
+  if (type == TemplateURL::NORMAL_CONTROLLED_BY_EXTENSION ||
+      type == TemplateURL::OMNIBOX_API_EXTENSION) {
     const extensions::Extension* extension =
         extensions::ExtensionRegistry::Get(Profile::FromWebUI(web_ui()))
             ->GetExtensionById(template_url->GetExtensionId(),
@@ -269,8 +276,7 @@ void SearchEngineManagerHandler::OnEditedKeyword(
 }
 
 void SearchEngineManagerHandler::CheckSearchEngineInfoValidity(
-    const base::ListValue* args)
-{
+    const base::ListValue* args) {
   if (!edit_controller_.get())
     return;
   base::string16 name;

@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "content/child/webcrypto/crypto_data.h"
+#include "content/child/webcrypto/generate_key_result.h"
 #include "content/child/webcrypto/jwk.h"
 #include "content/child/webcrypto/nss/key_nss.h"
 #include "content/child/webcrypto/nss/util_nss.h"
@@ -21,58 +22,25 @@ namespace webcrypto {
 
 namespace {
 
-bool CreatePublicKeyAlgorithm(const blink::WebCryptoAlgorithm& algorithm,
-                              SECKEYPublicKey* key,
-                              blink::WebCryptoKeyAlgorithm* key_algorithm) {
-  // TODO(eroman): What about other key types rsaPss, rsaOaep.
-  if (!key || key->keyType != rsaKey)
-    return false;
-
-  unsigned int modulus_length_bits = SECKEY_PublicKeyStrength(key) * 8;
-  CryptoData public_exponent(key->u.rsa.publicExponent.data,
-                             key->u.rsa.publicExponent.len);
-
-  switch (algorithm.paramsType()) {
-    case blink::WebCryptoAlgorithmParamsTypeRsaHashedImportParams:
-    case blink::WebCryptoAlgorithmParamsTypeRsaHashedKeyGenParams:
-      *key_algorithm = blink::WebCryptoKeyAlgorithm::createRsaHashed(
-          algorithm.id(),
-          modulus_length_bits,
-          public_exponent.bytes(),
-          public_exponent.byte_length(),
-          GetInnerHashAlgorithm(algorithm).id());
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool CreatePrivateKeyAlgorithm(const blink::WebCryptoAlgorithm& algorithm,
-                               SECKEYPrivateKey* key,
-                               blink::WebCryptoKeyAlgorithm* key_algorithm) {
-  crypto::ScopedSECKEYPublicKey public_key(SECKEY_ConvertToPublicKey(key));
-  return CreatePublicKeyAlgorithm(algorithm, public_key.get(), key_algorithm);
-}
-
 #if defined(USE_NSS) && !defined(OS_CHROMEOS)
-Status ErrorRsaKeyImportNotSupported() {
+Status ErrorRsaPrivateKeyImportNotSupported() {
   return Status::ErrorUnsupported(
-      "NSS version must be at least 3.16.2 for RSA key import. See "
+      "NSS version must be at least 3.16.2 for RSA private key import. See "
       "http://crbug.com/380424");
 }
 
 // Prior to NSS 3.16.2 RSA key parameters were not validated. This is
 // a security problem for RSA private key import from JWK which uses a
 // CKA_ID based on the public modulus to retrieve the private key.
-Status NssSupportsRsaKeyImport() {
+Status NssSupportsRsaPrivateKeyImport() {
   if (!NSS_VersionCheck("3.16.2"))
-    return ErrorRsaKeyImportNotSupported();
+    return ErrorRsaPrivateKeyImportNotSupported();
 
   // Also ensure that the version of Softoken is 3.16.2 or later.
   crypto::ScopedPK11Slot slot(PK11_GetInternalSlot());
   CK_SLOT_INFO info = {};
   if (PK11_GetSlotInfo(slot.get(), &info) != SECSuccess)
-    return ErrorRsaKeyImportNotSupported();
+    return ErrorRsaPrivateKeyImportNotSupported();
 
   // CK_SLOT_INFO.hardwareVersion contains the major.minor
   // version info for Softoken in the corresponding .major/.minor
@@ -86,16 +54,17 @@ Status NssSupportsRsaKeyImport() {
     return Status::Success();
   }
 
-  return ErrorRsaKeyImportNotSupported();
+  return ErrorRsaPrivateKeyImportNotSupported();
 }
 #else
-Status NssSupportsRsaKeyImport() {
+Status NssSupportsRsaPrivateKeyImport() {
   return Status::Success();
 }
 #endif
 
 bool CreateRsaHashedPublicKeyAlgorithm(
-    const blink::WebCryptoAlgorithm& algorithm,
+    blink::WebCryptoAlgorithmId rsa_algorithm,
+    blink::WebCryptoAlgorithmId hash_algorithm,
     SECKEYPublicKey* key,
     blink::WebCryptoKeyAlgorithm* key_algorithm) {
   // TODO(eroman): What about other key types rsaPss, rsaOaep.
@@ -106,30 +75,25 @@ bool CreateRsaHashedPublicKeyAlgorithm(
   CryptoData public_exponent(key->u.rsa.publicExponent.data,
                              key->u.rsa.publicExponent.len);
 
-  switch (algorithm.paramsType()) {
-    case blink::WebCryptoAlgorithmParamsTypeRsaHashedImportParams:
-    case blink::WebCryptoAlgorithmParamsTypeRsaHashedKeyGenParams:
-      *key_algorithm = blink::WebCryptoKeyAlgorithm::createRsaHashed(
-          algorithm.id(),
-          modulus_length_bits,
-          public_exponent.bytes(),
-          public_exponent.byte_length(),
-          GetInnerHashAlgorithm(algorithm).id());
-      return true;
-    default:
-      return false;
-  }
+  *key_algorithm = blink::WebCryptoKeyAlgorithm::createRsaHashed(
+      rsa_algorithm,
+      modulus_length_bits,
+      public_exponent.bytes(),
+      public_exponent.byte_length(),
+      hash_algorithm);
+  return true;
 }
 
 bool CreateRsaHashedPrivateKeyAlgorithm(
-    const blink::WebCryptoAlgorithm& algorithm,
+    blink::WebCryptoAlgorithmId rsa_algorithm,
+    blink::WebCryptoAlgorithmId hash_algorithm,
     SECKEYPrivateKey* key,
     blink::WebCryptoKeyAlgorithm* key_algorithm) {
   crypto::ScopedSECKEYPublicKey public_key(SECKEY_ConvertToPublicKey(key));
   if (!public_key)
     return false;
   return CreateRsaHashedPublicKeyAlgorithm(
-      algorithm, public_key.get(), key_algorithm);
+      rsa_algorithm, hash_algorithm, public_key.get(), key_algorithm);
 }
 
 // From PKCS#1 [http://tools.ietf.org/html/rfc3447]:
@@ -343,10 +307,10 @@ Status ExportKeyPkcs8Nss(SECKEYPrivateKey* key, std::vector<uint8_t>* buffer) {
 
 Status ImportRsaPrivateKey(const blink::WebCryptoAlgorithm& algorithm,
                            bool extractable,
-                           blink::WebCryptoKeyUsageMask usage_mask,
+                           blink::WebCryptoKeyUsageMask usages,
                            const JwkRsaInfo& params,
                            blink::WebCryptoKey* key) {
-  Status status = NssSupportsRsaKeyImport();
+  Status status = NssSupportsRsaPrivateKeyImport();
   if (status.IsError())
     return status;
 
@@ -425,8 +389,13 @@ Status ImportRsaPrivateKey(const blink::WebCryptoAlgorithm& algorithm,
     return Status::OperationError();
 
   blink::WebCryptoKeyAlgorithm key_algorithm;
-  if (!CreatePrivateKeyAlgorithm(algorithm, private_key.get(), &key_algorithm))
+  if (!CreateRsaHashedPrivateKeyAlgorithm(
+          algorithm.id(),
+          algorithm.rsaHashedImportParams()->hash().id(),
+          private_key.get(),
+          &key_algorithm)) {
     return Status::ErrorUnexpected();
+  }
 
   std::vector<uint8_t> pkcs8_data;
   status = ExportKeyPkcs8Nss(private_key.get(), &pkcs8_data);
@@ -440,7 +409,7 @@ Status ImportRsaPrivateKey(const blink::WebCryptoAlgorithm& algorithm,
                                      blink::WebCryptoKeyTypePrivate,
                                      extractable,
                                      key_algorithm,
-                                     usage_mask);
+                                     usages);
   return Status::Success();
 }
 
@@ -456,7 +425,7 @@ Status ExportKeySpkiNss(SECKEYPublicKey* key, std::vector<uint8_t>* buffer) {
 
 Status ImportRsaPublicKey(const blink::WebCryptoAlgorithm& algorithm,
                           bool extractable,
-                          blink::WebCryptoKeyUsageMask usage_mask,
+                          blink::WebCryptoKeyUsageMask usages,
                           const CryptoData& modulus_data,
                           const CryptoData& exponent_data,
                           blink::WebCryptoKey* key) {
@@ -511,8 +480,13 @@ Status ImportRsaPublicKey(const blink::WebCryptoAlgorithm& algorithm,
     return Status::OperationError();
 
   blink::WebCryptoKeyAlgorithm key_algorithm;
-  if (!CreatePublicKeyAlgorithm(algorithm, pubkey.get(), &key_algorithm))
+  if (!CreateRsaHashedPublicKeyAlgorithm(
+          algorithm.id(),
+          algorithm.rsaHashedImportParams()->hash().id(),
+          pubkey.get(),
+          &key_algorithm)) {
     return Status::ErrorUnexpected();
+  }
 
   std::vector<uint8_t> spki_data;
   Status status = ExportKeySpkiNss(pubkey.get(), &spki_data);
@@ -526,39 +500,32 @@ Status ImportRsaPublicKey(const blink::WebCryptoAlgorithm& algorithm,
                                      blink::WebCryptoKeyTypePublic,
                                      extractable,
                                      key_algorithm,
-                                     usage_mask);
+                                     usages);
   return Status::Success();
 }
 
 }  // namespace
 
-Status RsaHashedAlgorithm::VerifyKeyUsagesBeforeGenerateKeyPair(
-    blink::WebCryptoKeyUsageMask combined_usage_mask,
-    blink::WebCryptoKeyUsageMask* public_usage_mask,
-    blink::WebCryptoKeyUsageMask* private_usage_mask) const {
+Status RsaHashedAlgorithm::GenerateKey(
+    const blink::WebCryptoAlgorithm& algorithm,
+    bool extractable,
+    blink::WebCryptoKeyUsageMask combined_usages,
+    GenerateKeyResult* result) const {
   Status status = CheckKeyCreationUsages(
-      all_public_key_usages_ | all_private_key_usages_, combined_usage_mask);
+      all_public_key_usages_ | all_private_key_usages_, combined_usages);
   if (status.IsError())
     return status;
 
-  *public_usage_mask = combined_usage_mask & all_public_key_usages_;
-  *private_usage_mask = combined_usage_mask & all_private_key_usages_;
+  const blink::WebCryptoKeyUsageMask public_usages =
+      combined_usages & all_public_key_usages_;
+  const blink::WebCryptoKeyUsageMask private_usages =
+      combined_usages & all_private_key_usages_;
 
-  return Status::Success();
-}
-
-Status RsaHashedAlgorithm::GenerateKeyPair(
-    const blink::WebCryptoAlgorithm& algorithm,
-    bool extractable,
-    blink::WebCryptoKeyUsageMask public_usage_mask,
-    blink::WebCryptoKeyUsageMask private_usage_mask,
-    blink::WebCryptoKey* public_key,
-    blink::WebCryptoKey* private_key) const {
   unsigned int public_exponent = 0;
   unsigned int modulus_length_bits = 0;
-  Status status = GetRsaKeyGenParameters(algorithm.rsaHashedKeyGenParams(),
-                                         &public_exponent,
-                                         &modulus_length_bits);
+  status = GetRsaKeyGenParameters(algorithm.rsaHashedKeyGenParams(),
+                                  &public_exponent,
+                                  &modulus_length_bits);
   if (status.IsError())
     return status;
 
@@ -594,8 +561,13 @@ Status RsaHashedAlgorithm::GenerateKeyPair(
     return Status::OperationError();
 
   blink::WebCryptoKeyAlgorithm key_algorithm;
-  if (!CreatePublicKeyAlgorithm(algorithm, sec_public_key, &key_algorithm))
+  if (!CreateRsaHashedPublicKeyAlgorithm(
+          algorithm.id(),
+          algorithm.rsaHashedKeyGenParams()->hash().id(),
+          sec_public_key,
+          &key_algorithm)) {
     return Status::ErrorUnexpected();
+  }
 
   std::vector<uint8_t> spki_data;
   status = ExportKeySpkiNss(sec_public_key, &spki_data);
@@ -613,31 +585,43 @@ Status RsaHashedAlgorithm::GenerateKeyPair(
   scoped_ptr<PrivateKeyNss> private_key_handle(
       new PrivateKeyNss(scoped_sec_private_key.Pass(), CryptoData(pkcs8_data)));
 
-  *public_key = blink::WebCryptoKey::create(public_key_handle.release(),
-                                            blink::WebCryptoKeyTypePublic,
-                                            true,
-                                            key_algorithm,
-                                            public_usage_mask);
-  *private_key = blink::WebCryptoKey::create(private_key_handle.release(),
-                                             blink::WebCryptoKeyTypePrivate,
-                                             extractable,
-                                             key_algorithm,
-                                             private_usage_mask);
+  blink::WebCryptoKey public_key =
+      blink::WebCryptoKey::create(public_key_handle.release(),
+                                  blink::WebCryptoKeyTypePublic,
+                                  true,
+                                  key_algorithm,
+                                  public_usages);
 
+  blink::WebCryptoKey private_key =
+      blink::WebCryptoKey::create(private_key_handle.release(),
+                                  blink::WebCryptoKeyTypePrivate,
+                                  extractable,
+                                  key_algorithm,
+                                  private_usages);
+
+  result->AssignKeyPair(public_key, private_key);
   return Status::Success();
 }
 
 Status RsaHashedAlgorithm::VerifyKeyUsagesBeforeImportKey(
     blink::WebCryptoKeyFormat format,
-    blink::WebCryptoKeyUsageMask usage_mask) const {
+    blink::WebCryptoKeyUsageMask usages) const {
   switch (format) {
     case blink::WebCryptoKeyFormatSpki:
-      return CheckKeyCreationUsages(all_public_key_usages_, usage_mask);
+      return CheckKeyCreationUsages(all_public_key_usages_, usages);
     case blink::WebCryptoKeyFormatPkcs8:
-      return CheckKeyCreationUsages(all_private_key_usages_, usage_mask);
+      return CheckKeyCreationUsages(all_private_key_usages_, usages);
     case blink::WebCryptoKeyFormatJwk:
-      return CheckKeyCreationUsages(
-          all_public_key_usages_ | all_private_key_usages_, usage_mask);
+      // The JWK could represent either a public key or private key. The usages
+      // must make sense for one of the two. The usages will be checked again by
+      // ImportKeyJwk() once the key type has been determined.
+      if (CheckKeyCreationUsages(all_private_key_usages_, usages)
+              .IsSuccess() ||
+          CheckKeyCreationUsages(all_public_key_usages_, usages)
+              .IsSuccess()) {
+        return Status::Success();
+      }
+      return Status::ErrorCreateKeyBadUsages();
     default:
       return Status::ErrorUnsupportedImportKeyFormat();
   }
@@ -647,9 +631,9 @@ Status RsaHashedAlgorithm::ImportKeyPkcs8(
     const CryptoData& key_data,
     const blink::WebCryptoAlgorithm& algorithm,
     bool extractable,
-    blink::WebCryptoKeyUsageMask usage_mask,
+    blink::WebCryptoKeyUsageMask usages,
     blink::WebCryptoKey* key) const {
-  Status status = NssSupportsRsaKeyImport();
+  Status status = NssSupportsRsaPrivateKeyImport();
   if (status.IsError())
     return status;
 
@@ -682,8 +666,12 @@ Status RsaHashedAlgorithm::ImportKeyPkcs8(
 
   blink::WebCryptoKeyAlgorithm key_algorithm;
   if (!CreateRsaHashedPrivateKeyAlgorithm(
-          algorithm, private_key.get(), &key_algorithm))
+          algorithm.id(),
+          algorithm.rsaHashedImportParams()->hash().id(),
+          private_key.get(),
+          &key_algorithm)) {
     return Status::ErrorUnexpected();
+  }
 
   // TODO(eroman): This is probably going to be the same as the input.
   std::vector<uint8_t> pkcs8_data;
@@ -698,7 +686,7 @@ Status RsaHashedAlgorithm::ImportKeyPkcs8(
                                      blink::WebCryptoKeyTypePrivate,
                                      extractable,
                                      key_algorithm,
-                                     usage_mask);
+                                     usages);
 
   return Status::Success();
 }
@@ -707,12 +695,8 @@ Status RsaHashedAlgorithm::ImportKeySpki(
     const CryptoData& key_data,
     const blink::WebCryptoAlgorithm& algorithm,
     bool extractable,
-    blink::WebCryptoKeyUsageMask usage_mask,
+    blink::WebCryptoKeyUsageMask usages,
     blink::WebCryptoKey* key) const {
-  Status status = NssSupportsRsaKeyImport();
-  if (status.IsError())
-    return status;
-
   if (!key_data.byte_length())
     return Status::ErrorImportEmptyKeyData();
 
@@ -735,12 +719,16 @@ Status RsaHashedAlgorithm::ImportKeySpki(
 
   blink::WebCryptoKeyAlgorithm key_algorithm;
   if (!CreateRsaHashedPublicKeyAlgorithm(
-          algorithm, sec_public_key.get(), &key_algorithm))
+          algorithm.id(),
+          algorithm.rsaHashedImportParams()->hash().id(),
+          sec_public_key.get(),
+          &key_algorithm)) {
     return Status::ErrorUnexpected();
+  }
 
   // TODO(eroman): This is probably going to be the same as the input.
   std::vector<uint8_t> spki_data;
-  status = ExportKeySpkiNss(sec_public_key.get(), &spki_data);
+  Status status = ExportKeySpkiNss(sec_public_key.get(), &spki_data);
   if (status.IsError())
     return status;
 
@@ -751,7 +739,7 @@ Status RsaHashedAlgorithm::ImportKeySpki(
                                      blink::WebCryptoKeyTypePublic,
                                      extractable,
                                      key_algorithm,
-                                     usage_mask);
+                                     usages);
 
   return Status::Success();
 }
@@ -776,7 +764,7 @@ Status RsaHashedAlgorithm::ImportKeyJwk(
     const CryptoData& key_data,
     const blink::WebCryptoAlgorithm& algorithm,
     bool extractable,
-    blink::WebCryptoKeyUsageMask usage_mask,
+    blink::WebCryptoKeyUsageMask usages,
     blink::WebCryptoKey* key) const {
   const char* jwk_algorithm =
       GetJwkAlgorithm(algorithm.rsaHashedImportParams()->hash().id());
@@ -786,22 +774,22 @@ Status RsaHashedAlgorithm::ImportKeyJwk(
 
   JwkRsaInfo jwk;
   Status status =
-      ReadRsaKeyJwk(key_data, jwk_algorithm, extractable, usage_mask, &jwk);
+      ReadRsaKeyJwk(key_data, jwk_algorithm, extractable, usages, &jwk);
   if (status.IsError())
     return status;
 
   // Once the key type is known, verify the usages.
   status = CheckKeyCreationUsages(
       jwk.is_private_key ? all_private_key_usages_ : all_public_key_usages_,
-      usage_mask);
+      usages);
   if (status.IsError())
     return Status::ErrorCreateKeyBadUsages();
 
   return jwk.is_private_key
-             ? ImportRsaPrivateKey(algorithm, extractable, usage_mask, jwk, key)
+             ? ImportRsaPrivateKey(algorithm, extractable, usages, jwk, key)
              : ImportRsaPublicKey(algorithm,
                                   extractable,
-                                  usage_mask,
+                                  usages,
                                   CryptoData(jwk.n),
                                   CryptoData(jwk.e),
                                   key);

@@ -7,6 +7,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -21,13 +22,11 @@
 #include "chrome/browser/chromeos/file_manager/volume_manager.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_observer.h"
 #include "chrome/browser/drive/drive_service_interface.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
-#include "chrome/common/extensions/api/file_browser_private.h"
+#include "chrome/common/extensions/api/file_manager_private.h"
 #include "chromeos/disks/disk_mount_manager.h"
 #include "chromeos/network/network_state_handler_observer.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
-#include "webkit/browser/fileapi/file_system_operation.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "storage/browser/fileapi/file_system_operation.h"
 
 class PrefChangeRegistrar;
 class Profile;
@@ -47,25 +46,29 @@ class FileChange;
 }
 
 namespace file_manager {
+class DeviceEventRouter;
 
 // Monitors changes in disk mounts, network connection state and preferences
 // affecting File Manager. Dispatches appropriate File Browser events.
-class EventRouter
-    : public chromeos::NetworkStateHandlerObserver,
-      public drive::FileSystemObserver,
-      public drive::JobListObserver,
-      public drive::DriveServiceObserver,
-      public VolumeManagerObserver,
-      public content::NotificationObserver,
-      public chrome::MultiUserWindowManager::Observer {
+class EventRouter : public KeyedService,
+                    public chromeos::NetworkStateHandlerObserver,
+                    public drive::FileSystemObserver,
+                    public drive::JobListObserver,
+                    public drive::DriveServiceObserver,
+                    public VolumeManagerObserver,
+                    public content::NotificationObserver {
  public:
+  typedef base::Callback<void(const base::FilePath& virtual_path,
+                              const drive::FileChange* list,
+                              bool got_error,
+                              const std::vector<std::string>& extension_ids)>
+      DispatchDirectoryChangeEventImplCallback;
+
   explicit EventRouter(Profile* profile);
   virtual ~EventRouter();
 
-  void Shutdown();
-
-  // Starts observing file system change events.
-  void ObserveEvents();
+  // KeyedService overrides.
+  virtual void Shutdown() override;
 
   typedef base::Callback<void(bool success)> BoolCallback;
 
@@ -74,12 +77,18 @@ class EventRouter
   //
   // |callback| will be called with true on success, or false on failure.
   // |callback| must not be null.
+  //
+  // Obsolete. Used as fallback for files which backends do not implement the
+  // storage::WatcherManager interface.
   void AddFileWatch(const base::FilePath& local_path,
                     const base::FilePath& virtual_path,
                     const std::string& extension_id,
                     const BoolCallback& callback);
 
   // Removes a file watch at |local_path| for an extension with |extension_id|.
+  //
+  // Obsolete. Used as fallback for files which backends do not implement the
+  // storage::WatcherManager interface.
   void RemoveFileWatch(const base::FilePath& local_path,
                        const std::string& extension_id);
 
@@ -90,62 +99,70 @@ class EventRouter
 
   // Called when a copy task progress is updated.
   void OnCopyProgress(int copy_id,
-                      fileapi::FileSystemOperation::CopyProgressType type,
+                      storage::FileSystemOperation::CopyProgressType type,
                       const GURL& source_url,
                       const GURL& destination_url,
                       int64 size);
 
-  // Register observer to the multi user window manager.
-  void RegisterMultiUserWindowManagerObserver();
+  // Called when a notification from a watcher manager arrives.
+  void OnWatcherManagerNotification(
+      const storage::FileSystemURL& file_system_url,
+      const std::string& extension_id,
+      storage::WatcherManager::ChangeType change_type);
 
   // chromeos::NetworkStateHandlerObserver overrides.
   virtual void DefaultNetworkChanged(
-      const chromeos::NetworkState* network) OVERRIDE;
+      const chromeos::NetworkState* network) override;
 
   // drive::JobListObserver overrides.
-  virtual void OnJobAdded(const drive::JobInfo& job_info) OVERRIDE;
-  virtual void OnJobUpdated(const drive::JobInfo& job_info) OVERRIDE;
+  virtual void OnJobAdded(const drive::JobInfo& job_info) override;
+  virtual void OnJobUpdated(const drive::JobInfo& job_info) override;
   virtual void OnJobDone(const drive::JobInfo& job_info,
-                         drive::FileError error) OVERRIDE;
+                         drive::FileError error) override;
 
   // drive::DriveServiceObserver overrides.
-  virtual void OnRefreshTokenInvalid() OVERRIDE;
+  virtual void OnRefreshTokenInvalid() override;
 
   // drive::FileSystemObserver overrides.
-  virtual void OnDirectoryChanged(const base::FilePath& drive_path) OVERRIDE;
-  virtual void OnFileChanged(const drive::FileChange& changed_files) OVERRIDE;
+  virtual void OnDirectoryChanged(const base::FilePath& drive_path) override;
+  virtual void OnFileChanged(const drive::FileChange& changed_files) override;
   virtual void OnDriveSyncError(drive::file_system::DriveSyncErrorType type,
-                                const base::FilePath& drive_path) OVERRIDE;
+                                const base::FilePath& drive_path) override;
 
   // VolumeManagerObserver overrides.
   virtual void OnDiskAdded(
       const chromeos::disks::DiskMountManager::Disk& disk,
-      bool mounting) OVERRIDE;
+      bool mounting) override;
   virtual void OnDiskRemoved(
-      const chromeos::disks::DiskMountManager::Disk& disk) OVERRIDE;
-  virtual void OnDeviceAdded(const std::string& device_path) OVERRIDE;
-  virtual void OnDeviceRemoved(const std::string& device_path) OVERRIDE;
+      const chromeos::disks::DiskMountManager::Disk& disk) override;
+  virtual void OnDeviceAdded(const std::string& device_path) override;
+  virtual void OnDeviceRemoved(const std::string& device_path) override;
   virtual void OnVolumeMounted(chromeos::MountError error_code,
-                               const VolumeInfo& volume_info,
-                               bool is_remounting) OVERRIDE;
+                               const VolumeInfo& volume_info) override;
   virtual void OnVolumeUnmounted(chromeos::MountError error_code,
-                                 const VolumeInfo& volume_info) OVERRIDE;
-  virtual void OnHardUnplugged(const std::string& device_path) OVERRIDE;
+                                 const VolumeInfo& volume_info) override;
   virtual void OnFormatStarted(
-      const std::string& device_path, bool success) OVERRIDE;
+      const std::string& device_path, bool success) override;
   virtual void OnFormatCompleted(
-      const std::string& device_path, bool success) OVERRIDE;
+      const std::string& device_path, bool success) override;
 
   // content::NotificationObserver overrides.
   virtual void Observe(int type,
                        const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+                       const content::NotificationDetails& details) override;
 
-  // chrome::MultiUserWindowManager::Observer overrides:
-  virtual void OnOwnerEntryChanged(aura::Window* window) OVERRIDE;
+  // Set custom dispatch directory change event implementation for testing.
+  void SetDispatchDirectoryChangeEventImplForTesting(
+      const DispatchDirectoryChangeEventImplCallback& callback);
+
+  // Returns a weak pointer for the event router.
+  base::WeakPtr<EventRouter> GetWeakPtr();
 
  private:
   typedef std::map<base::FilePath, FileWatcher*> WatcherMap;
+
+  // Starts observing file system change events.
+  void ObserveEvents();
 
   // Called when prefs related to file manager change.
   void OnFileManagerPrefsChanged();
@@ -162,6 +179,13 @@ class EventRouter
       bool got_error,
       const std::vector<std::string>& extension_ids);
 
+  // Default implementation of DispatchDirectoryChangeEvent.
+  void DispatchDirectoryChangeEventImpl(
+      const base::FilePath& path,
+      const drive::FileChange* list,
+      bool got_error,
+      const std::vector<std::string>& extension_ids);
+
   // Sends directory change event, after converting the file definition to entry
   // definition.
   void DispatchDirectoryChangeEventWithEntryDefinition(
@@ -172,27 +196,15 @@ class EventRouter
 
   // Dispatches the mount completed event.
   void DispatchMountCompletedEvent(
-      extensions::api::file_browser_private::MountCompletedEventType event_type,
+      extensions::api::file_manager_private::MountCompletedEventType event_type,
       chromeos::MountError error,
-      const VolumeInfo& volume_info,
-      bool is_remounting);
+      const VolumeInfo& volume_info);
 
   // If needed, opens a file manager window for the removable device mounted at
   // |mount_path|. Disk.mount_path() is empty, since it is being filled out
   // after calling notifying observers by DiskMountManager.
   void ShowRemovableDeviceInFileManager(VolumeType type,
                                         const base::FilePath& mount_path);
-
-  // Dispatches an onDeviceChanged event containing |type| and |path| to
-  // extensions.
-  void DispatchDeviceEvent(
-      extensions::api::file_browser_private::DeviceEventType type,
-      const std::string& path);
-
-  // Sends onFileTranferUpdated to extensions if needed. If |always| is true,
-  // it sends the event always. Otherwise, it sends the event if enough time has
-  // passed from the previous event so as not to make extension busy.
-  void SendDriveFileTransferEvent(bool always);
 
   // Manages the list of currently active Drive file transfer jobs.
   struct DriveJobInfoWithStatus {
@@ -202,20 +214,42 @@ class EventRouter
     drive::JobInfo job_info;
     std::string status;
   };
+
+  // Sends onFileTransferUpdate event right now if |immediate| is set. Otherwise
+  // it refrains from sending for a short while, and after that it sends the
+  // most recently scheduled event once.
+  // The delay is for waiting subsequent 'added' events to come after the first
+  // one when multiple tasks are added. This way, we can avoid frequent UI
+  // update caused by differences between singular and plural cases.
+  void ScheduleDriveFileTransferEvent(const drive::JobInfo& job_info,
+                                      const std::string& status,
+                                      bool immediate);
+
+  // Sends the most recently scheduled onFileTransferUpdated event to
+  // extensions.
+  // This is used for implementing ScheduledDriveFileTransferEvent().
+  void SendDriveFileTransferEvent();
+
   std::map<drive::JobID, DriveJobInfoWithStatus> drive_jobs_;
-  base::Time last_file_transfer_event_;
+  scoped_ptr<DriveJobInfoWithStatus> drive_job_info_for_scheduled_event_;
   base::Time last_copy_progress_event_;
+  base::Time next_send_file_transfer_event_;
 
   WatcherMap file_watchers_;
   scoped_ptr<PrefChangeRegistrar> pref_change_registrar_;
   Profile* profile_;
 
   content::NotificationRegistrar notification_registrar_;
-  bool multi_user_window_manager_observer_registered_;
+
+  scoped_ptr<DeviceEventRouter> device_event_router_;
+
+  DispatchDirectoryChangeEventImplCallback
+      dispatch_directory_change_event_impl_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate the weak pointers before any other members are destroyed.
   base::WeakPtrFactory<EventRouter> weak_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(EventRouter);
 };
 

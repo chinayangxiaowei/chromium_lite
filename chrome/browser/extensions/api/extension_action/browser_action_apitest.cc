@@ -3,14 +3,15 @@
 // found in the LICENSE file.
 
 #include "build/build_config.h"
+#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/browser_action_test_util.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_icon_factory.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_toolbar_model.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -21,9 +22,13 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/notification_types.h"
+#include "extensions/browser/process_manager.h"
+#include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/feature_switch.h"
+#include "extensions/test/result_catcher.h"
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_skia.h"
@@ -65,7 +70,7 @@ bool ImagesAreEqualAtScale(const gfx::ImageSkia& i1,
 class BrowserActionApiTest : public ExtensionApiTest {
  public:
   BrowserActionApiTest() {}
-  virtual ~BrowserActionApiTest() {}
+  ~BrowserActionApiTest() override {}
 
  protected:
   BrowserActionTestUtil GetBrowserActionsBar() {
@@ -115,9 +120,8 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, Basic) {
   ui_test_utils::NavigateToURL(browser(),
       test_server()->GetURL("files/extensions/test_file.txt"));
 
-  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(
-      browser()->profile());
-  toolbar_model->ExecuteBrowserAction(extension, browser(), NULL, true);
+  ExtensionActionAPI::Get(browser()->profile())->ExecuteExtensionAction(
+      extension, browser(), true);
 
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
@@ -353,16 +357,16 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DISABLED_BrowserActionPopup) {
   // Simulate a click on the browser action and verify the size of the resulting
   // popup.  The first one tries to be 0x0, so it should be the min values.
   ASSERT_TRUE(OpenPopup(0));
-  EXPECT_EQ(minSize, actions_bar.GetPopupBounds().size());
+  EXPECT_EQ(minSize, actions_bar.GetPopupSize());
   EXPECT_TRUE(actions_bar.HidePopup());
 
   ASSERT_TRUE(OpenPopup(0));
-  EXPECT_EQ(middleSize, actions_bar.GetPopupBounds().size());
+  EXPECT_EQ(middleSize, actions_bar.GetPopupSize());
   EXPECT_TRUE(actions_bar.HidePopup());
 
   // One more time, but this time it should be constrained by the max values.
   ASSERT_TRUE(OpenPopup(0));
-  EXPECT_EQ(maxSize, actions_bar.GetPopupBounds().size());
+  EXPECT_EQ(maxSize, actions_bar.GetPopupSize());
   EXPECT_TRUE(actions_bar.HidePopup());
 }
 
@@ -470,6 +474,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, IncognitoBasic) {
   // Open an incognito window and test that the browser action isn't there by
   // default.
   Profile* incognito_profile = browser()->profile()->GetOffTheRecordProfile();
+  base::RunLoop().RunUntilIdle();  // Wait for profile initialization.
   Browser* incognito_browser =
       new Browser(Browser::CreateParams(incognito_profile,
                                         browser()->host_desktop_type()));
@@ -478,98 +483,20 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, IncognitoBasic) {
             BrowserActionTestUtil(incognito_browser).NumberOfBrowserActions());
 
   // Now enable the extension in incognito mode, and test that the browser
-  // action shows up. Note that we don't update the existing window at the
-  // moment, so we just create a new one.
-  extensions::ExtensionPrefs::Get(browser()->profile())
-      ->SetIsIncognitoEnabled(extension->id(), true);
+  // action shows up.
+  // SetIsIncognitoEnabled() requires a reload of the extension, so we have to
+  // wait for it.
+  TestExtensionRegistryObserver registry_observer(
+      ExtensionRegistry::Get(profile()), extension->id());
+  extensions::util::SetIsIncognitoEnabled(
+      extension->id(), browser()->profile(), true);
+  registry_observer.WaitForExtensionLoaded();
 
-  chrome::CloseWindow(incognito_browser);
-  incognito_browser =
-      new Browser(Browser::CreateParams(incognito_profile,
-                                        browser()->host_desktop_type()));
   ASSERT_EQ(1,
             BrowserActionTestUtil(incognito_browser).NumberOfBrowserActions());
 
   // TODO(mpcomplete): simulate a click and have it do the right thing in
   // incognito.
-}
-
-IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, IncognitoDragging) {
-  ExtensionService* service = extensions::ExtensionSystem::Get(
-      browser()->profile())->extension_service();
-
-  // The tooltips for each respective browser action.
-  const char kTooltipA[] = "Alpha";
-  const char kTooltipB[] = "Beta";
-  const char kTooltipC[] = "Gamma";
-
-  const size_t size_before = service->extensions()->size();
-
-  base::FilePath test_dir = test_data_dir_.AppendASCII("browser_action");
-  const Extension* extension_a = InstallExtension(
-      test_dir.AppendASCII("empty_browser_action_alpha.crx"), 1);
-  const Extension* extension_b = InstallExtension(
-      test_dir.AppendASCII("empty_browser_action_beta.crx"), 1);
-  const Extension* extension_c = InstallExtension(
-      test_dir.AppendASCII("empty_browser_action_gamma.crx"), 1);
-  ASSERT_TRUE(extension_a);
-  ASSERT_TRUE(extension_b);
-  ASSERT_TRUE(extension_c);
-
-  // Test that there are 3 browser actions in the toolbar.
-  ASSERT_EQ(size_before + 3, service->extensions()->size());
-  ASSERT_EQ(3, GetBrowserActionsBar().NumberOfBrowserActions());
-
-  // Now enable 2 of the extensions in incognito mode, and test that the browser
-  // actions show up.
-  extensions::ExtensionPrefs* prefs =
-      extensions::ExtensionPrefs::Get(browser()->profile());
-  prefs->SetIsIncognitoEnabled(extension_a->id(), true);
-  prefs->SetIsIncognitoEnabled(extension_c->id(), true);
-
-  Profile* incognito_profile = browser()->profile()->GetOffTheRecordProfile();
-  Browser* incognito_browser =
-      new Browser(Browser::CreateParams(incognito_profile,
-                                        browser()->host_desktop_type()));
-  BrowserActionTestUtil incognito_bar(incognito_browser);
-
-  // Navigate just to have a tab in this window, otherwise wonky things happen.
-  ui_test_utils::OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
-
-  ASSERT_EQ(2, incognito_bar.NumberOfBrowserActions());
-
-  // Ensure that the browser actions are in the right order (ABC).
-  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(0));
-  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(1));
-  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(2));
-
-  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(0));
-  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(1));
-
-  // Now rearrange them and ensure that they are rearranged correctly in both
-  // regular and incognito mode.
-
-  // ABC -> CAB
-  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(
-      browser()->profile());
-  toolbar_model->MoveBrowserAction(extension_c, 0);
-
-  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(0));
-  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(1));
-  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(2));
-
-  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(0));
-  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(1));
-
-  // CAB -> CBA
-  toolbar_model->MoveBrowserAction(extension_b, 1);
-
-  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(0));
-  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(1));
-  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(2));
-
-  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(0));
-  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(1));
 }
 
 // Tests that events are dispatched to the correct profile for split mode
@@ -586,20 +513,23 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, IncognitoSplit) {
   Browser* incognito_browser =
       new Browser(Browser::CreateParams(incognito_profile,
                                         browser()->host_desktop_type()));
+  base::RunLoop().RunUntilIdle();  // Wait for profile initialization.
   // Navigate just to have a tab in this window, otherwise wonky things happen.
   ui_test_utils::OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
   ASSERT_EQ(1,
             BrowserActionTestUtil(incognito_browser).NumberOfBrowserActions());
 
   // A click in the regular profile should open a tab in the regular profile.
-  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(
-      browser()->profile());
-  toolbar_model->ExecuteBrowserAction(extension, browser(), NULL, true);
+  ExtensionActionAPI* extension_action_api =
+      ExtensionActionAPI::Get(browser()->profile());
+  extension_action_api->ExecuteExtensionAction(
+      extension, browser(), true);
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 
   // A click in the incognito profile should open a tab in the
   // incognito profile.
-  toolbar_model->ExecuteBrowserAction(extension, incognito_browser, NULL, true);
+  extension_action_api->ExecuteExtensionAction(
+      extension, incognito_browser, true);
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
@@ -612,7 +542,7 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DISABLED_CloseBackgroundPage) {
 
   // There is a background page and a browser action with no badge text.
   extensions::ProcessManager* manager =
-      extensions::ExtensionSystem::Get(browser()->profile())->process_manager();
+      extensions::ProcessManager::Get(browser()->profile());
   ASSERT_TRUE(manager->GetBackgroundHostForExtension(extension->id()));
   ExtensionAction* action = GetBrowserAction(*extension);
   ASSERT_EQ("", action->GetBadgeText(ExtensionAction::kDefaultTabId));
@@ -622,9 +552,8 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DISABLED_CloseBackgroundPage) {
       content::NotificationService::AllSources());
 
   // Click the browser action.
-  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(
-      browser()->profile());
-  toolbar_model->ExecuteBrowserAction(extension, browser(), NULL, true);
+  ExtensionActionAPI::Get(browser()->profile())->ExecuteExtensionAction(
+      extension, browser(), true);
 
   // It can take a moment for the background page to actually get destroyed
   // so we wait for the notification before checking that it's really gone

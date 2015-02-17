@@ -11,6 +11,7 @@
 #include "base/threading/non_thread_safe.h"
 #include "components/gcm_driver/gcm_app_handler.h"
 #include "components/gcm_driver/gcm_client.h"
+#include "components/gcm_driver/gcm_connection_observer.h"
 #include "components/invalidation/gcm_network_channel_delegate.h"
 #include "google_apis/gaia/oauth2_token_service.h"
 
@@ -32,6 +33,7 @@ namespace invalidation {
 // all function calls to GCMInvalidationBridge which does actual work to perform
 // them.
 class GCMInvalidationBridge : public gcm::GCMAppHandler,
+                              public gcm::GCMConnectionObserver,
                               public OAuth2TokenService::Consumer,
                               public base::NonThreadSafe {
  public:
@@ -39,28 +41,29 @@ class GCMInvalidationBridge : public gcm::GCMAppHandler,
 
   GCMInvalidationBridge(gcm::GCMDriver* gcm_driver,
                         IdentityProvider* identity_provider);
-  virtual ~GCMInvalidationBridge();
+  ~GCMInvalidationBridge() override;
 
   // OAuth2TokenService::Consumer implementation.
-  virtual void OnGetTokenSuccess(const OAuth2TokenService::Request* request,
-                                 const std::string& access_token,
-                                 const base::Time& expiration_time) OVERRIDE;
-  virtual void OnGetTokenFailure(const OAuth2TokenService::Request* request,
-                                 const GoogleServiceAuthError& error) OVERRIDE;
+  void OnGetTokenSuccess(const OAuth2TokenService::Request* request,
+                         const std::string& access_token,
+                         const base::Time& expiration_time) override;
+  void OnGetTokenFailure(const OAuth2TokenService::Request* request,
+                         const GoogleServiceAuthError& error) override;
 
   // gcm::GCMAppHandler implementation.
-  virtual void ShutdownHandler() OVERRIDE;
-  virtual void OnMessage(
+  void ShutdownHandler() override;
+  void OnMessage(const std::string& app_id,
+                 const gcm::GCMClient::IncomingMessage& message) override;
+  void OnMessagesDeleted(const std::string& app_id) override;
+  void OnSendError(
       const std::string& app_id,
-      const gcm::GCMClient::IncomingMessage& message) OVERRIDE;
-  virtual void OnMessagesDeleted(const std::string& app_id) OVERRIDE;
-  virtual void OnSendError(
-      const std::string& app_id,
-      const gcm::GCMClient::SendErrorDetails& send_error_details) OVERRIDE;
-  virtual void OnSendAcknowledged(const std::string& app_id,
-                                  const std::string& message_id) OVERRIDE;
-  virtual void OnConnected(const net::IPEndPoint& ip_endpoint) OVERRIDE;
-  virtual void OnDisconnected() OVERRIDE;
+      const gcm::GCMClient::SendErrorDetails& send_error_details) override;
+  void OnSendAcknowledged(const std::string& app_id,
+                          const std::string& message_id) override;
+
+  // gcm::GCMConnectionObserver implementation.
+  void OnConnected(const net::IPEndPoint& ip_endpoint) override;
+  void OnDisconnected() override;
 
   scoped_ptr<syncer::GCMNetworkChannelDelegate> CreateDelegate();
 

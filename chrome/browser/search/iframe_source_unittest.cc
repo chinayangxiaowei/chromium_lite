@@ -38,27 +38,23 @@ class TestIframeSource : public IframeSource {
   using IframeSource::SendJSWithOrigin;
 
  protected:
-  virtual std::string GetSource() const OVERRIDE {
-    return "test";
-  }
+  std::string GetSource() const override { return "test"; }
 
-  virtual bool ServesPath(const std::string& path) const OVERRIDE {
+  bool ServesPath(const std::string& path) const override {
     return path == "/valid.html" || path == "/valid.js";
   }
 
-  virtual void StartDataRequest(
+  void StartDataRequest(
       const std::string& path,
       int render_process_id,
       int render_frame_id,
-      const content::URLDataSource::GotDataCallback& callback) OVERRIDE {
-  }
+      const content::URLDataSource::GotDataCallback& callback) override {}
 
   // RenderFrameHost is hard to mock in concert with everything else, so stub
   // this method out for testing.
-  virtual bool GetOrigin(
-      int process_id,
-      int render_frame_id,
-      std::string* origin) const OVERRIDE {
+  bool GetOrigin(int process_id,
+                 int render_frame_id,
+                 std::string* origin) const override {
     if (process_id == kInstantRendererPID) {
       *origin = kInstantOrigin;
       return true;
@@ -93,19 +89,20 @@ class IframeSourceTest : public testing::Test {
     return "";
   }
 
-  net::URLRequest* MockRequest(
+  scoped_ptr<net::URLRequest> MockRequest(
       const std::string& url,
       bool allocate_info,
       int render_process_id,
       int render_frame_id) {
-    net::URLRequest* request =
-        new net::URLRequest(GURL(url),
-                            net::DEFAULT_PRIORITY,
-                            NULL,
-                            resource_context_.GetRequestContext());
+    scoped_ptr<net::URLRequest> request(
+        resource_context_.GetRequestContext()->CreateRequest(
+            GURL(url),
+            net::DEFAULT_PRIORITY,
+            NULL,
+            NULL));
     if (allocate_info) {
       content::ResourceRequestInfo::AllocateForTesting(
-          request,
+          request.get(),
           content::RESOURCE_TYPE_SUB_FRAME,
           &resource_context_,
           render_process_id,
@@ -113,7 +110,7 @@ class IframeSourceTest : public testing::Test {
           MSG_ROUTING_NONE,
           false);
     }
-    return request;
+    return request.Pass();
   }
 
   void SendResource(int resource_id) {
@@ -129,7 +126,7 @@ class IframeSourceTest : public testing::Test {
   }
 
  private:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     source_.reset(new TestIframeSource());
     callback_ = base::Bind(&IframeSourceTest::SaveResponse,
                            base::Unretained(this));
@@ -140,9 +137,7 @@ class IframeSourceTest : public testing::Test {
     response_ = NULL;
   }
 
-  virtual void TearDown() {
-    source_.reset();
-  }
+  void TearDown() override { source_.reset(); }
 
   void SaveResponse(base::RefCountedMemory* data) {
     response_ = data;
@@ -160,23 +155,23 @@ class IframeSourceTest : public testing::Test {
 
 TEST_F(IframeSourceTest, ShouldServiceRequest) {
   scoped_ptr<net::URLRequest> request;
-  request.reset(MockRequest("http://test/loader.js", true,
-                            kNonInstantRendererPID, 0));
+  request = MockRequest("http://test/loader.js", true,
+                        kNonInstantRendererPID, 0);
   EXPECT_FALSE(source()->ShouldServiceRequest(request.get()));
-  request.reset(MockRequest("chrome-search://bogus/valid.js", true,
-                            kInstantRendererPID, 0));
+  request = MockRequest("chrome-search://bogus/valid.js", true,
+                        kInstantRendererPID, 0);
   EXPECT_FALSE(source()->ShouldServiceRequest(request.get()));
-  request.reset(MockRequest("chrome-search://test/bogus.js", true,
-                            kInstantRendererPID, 0));
+  request = MockRequest("chrome-search://test/bogus.js", true,
+                        kInstantRendererPID, 0);
   EXPECT_FALSE(source()->ShouldServiceRequest(request.get()));
-  request.reset(MockRequest("chrome-search://test/valid.js", true,
-                            kInstantRendererPID, 0));
+  request = MockRequest("chrome-search://test/valid.js", true,
+                        kInstantRendererPID, 0);
   EXPECT_TRUE(source()->ShouldServiceRequest(request.get()));
-  request.reset(MockRequest("chrome-search://test/valid.js", true,
-                            kNonInstantRendererPID, 0));
+  request = MockRequest("chrome-search://test/valid.js", true,
+                        kNonInstantRendererPID, 0);
   EXPECT_FALSE(source()->ShouldServiceRequest(request.get()));
-  request.reset(MockRequest("chrome-search://test/valid.js", true,
-                            kInvalidRendererPID, 0));
+  request = MockRequest("chrome-search://test/valid.js", true,
+                        kInvalidRendererPID, 0);
   EXPECT_FALSE(source()->ShouldServiceRequest(request.get()));
 }
 

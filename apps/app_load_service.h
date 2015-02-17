@@ -13,6 +13,7 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "extensions/browser/extension_registry_observer.h"
 
 class Profile;
 
@@ -25,12 +26,13 @@ namespace apps {
 // Monitors apps being reloaded and performs app specific actions (like launch
 // or restart) on them. Also provides an interface to schedule these actions.
 class AppLoadService : public KeyedService,
-                       public content::NotificationObserver {
+                       public content::NotificationObserver,
+                       public extensions::ExtensionRegistryObserver {
  public:
   enum PostReloadActionType {
-    LAUNCH,
+    LAUNCH_FOR_RELOAD,
     RESTART,
-    LAUNCH_WITH_COMMAND_LINE,
+    LAUNCH_FOR_LOAD_AND_LAUNCH,
   };
 
   struct PostReloadAction {
@@ -42,7 +44,7 @@ class AppLoadService : public KeyedService,
   };
 
   explicit AppLoadService(Profile* profile);
-  virtual ~AppLoadService();
+  ~AppLoadService() override;
 
   // Reload the application with the given id and then send it the OnRestarted
   // event.
@@ -63,12 +65,19 @@ class AppLoadService : public KeyedService,
 
  private:
   // content::NotificationObserver.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
+
+  // extensions::ExtensionRegistryObserver.
+  void OnExtensionUnloaded(
+      content::BrowserContext* browser_context,
+      const extensions::Extension* extension,
+      extensions::UnloadedExtensionInfo::Reason reason) override;
 
   bool WasUnloadedForReload(
-      const extensions::UnloadedExtensionInfo& unload_info);
+      const extensions::ExtensionId& extension_id,
+      const extensions::UnloadedExtensionInfo::Reason reason);
   bool HasPostReloadAction(const std::string& extension_id);
 
   // Map of extension id to reload action. Absence from the map implies

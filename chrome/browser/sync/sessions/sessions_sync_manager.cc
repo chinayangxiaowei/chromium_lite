@@ -6,12 +6,13 @@
 
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/glue/local_device_info_provider.h"
 #include "chrome/browser/sync/glue/synced_tab_delegate.h"
 #include "chrome/browser/sync/glue/synced_window_delegate.h"
 #include "chrome/browser/sync/sessions/sessions_util.h"
 #include "chrome/browser/sync/sessions/synced_window_delegates_getter.h"
 #include "chrome/common/url_constants.h"
+#include "components/sessions/content/content_serialized_navigation_builder.h"
+#include "components/sync_driver/local_device_info_provider.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_details.h"
@@ -24,7 +25,10 @@
 #include "sync/api/time.h"
 
 using content::NavigationEntry;
+using sessions::ContentSerializedNavigationBuilder;
 using sessions::SerializedNavigationEntry;
+using sync_driver::DeviceInfo;
+using sync_driver::LocalDeviceInfoProvider;
 using syncer::SyncChange;
 using syncer::SyncData;
 
@@ -122,7 +126,7 @@ syncer::SyncMergeResult SessionsSyncManager::MergeDataAndStartSyncing(
     base_specifics->set_session_tag(current_machine_tag());
     sync_pb::SessionHeader* header_s = base_specifics->mutable_header();
     header_s->set_client_name(current_session_name_);
-    header_s->set_device_type(DeviceInfo::GetLocalDeviceType());
+    header_s->set_device_type(local_device_info->device_type());
     syncer::SyncData data = syncer::SyncData::CreateLocalData(
         current_machine_tag(), current_session_name_, specifics);
     new_changes.push_back(syncer::SyncChange(
@@ -158,7 +162,11 @@ void SessionsSyncManager::AssociateWindows(
   SyncedSession* current_session = session_tracker_.GetSession(local_tag);
   current_session->modified_time = base::Time::Now();
   header_s->set_client_name(current_session_name_);
-  header_s->set_device_type(DeviceInfo::GetLocalDeviceType());
+  // SessionDataTypeController ensures that the local device info
+  // is available before activating this datatype.
+  DCHECK(local_device_);
+  const DeviceInfo* local_device_info = local_device_->GetLocalDeviceInfo();
+  header_s->set_device_type(local_device_info->device_type());
 
   session_tracker_.ResetSessionTracking(local_tag);
   std::set<SyncedWindowDelegate*> windows =
@@ -336,6 +344,24 @@ void SessionsSyncManager::RebuildAssociations() {
   StopSyncing(syncer::SESSIONS);
   MergeDataAndStartSyncing(
       syncer::SESSIONS, data, processor.Pass(), error_handler.Pass());
+}
+
+bool SessionsSyncManager::IsValidSessionHeader(
+    const sync_pb::SessionHeader& header) {
+  // Verify that tab IDs appear only once within a session.
+  // Intended to prevent http://crbug.com/360822.
+  std::set<int> session_tab_ids;
+  for (int i = 0; i < header.window_size(); ++i) {
+    const sync_pb::SessionWindow& window = header.window(i);
+    for (int j = 0; j < window.tab_size(); ++j) {
+      const int tab_id = window.tab(j);
+      bool success = session_tab_ids.insert(tab_id).second;
+      if (!success)
+        return false;
+    }
+  }
+
+  return true;
 }
 
 void SessionsSyncManager::OnLocalTabModified(SyncedTabDelegate* modified_tab) {
@@ -589,6 +615,12 @@ void SessionsSyncManager::UpdateTrackerWithForeignSession(
     // Header data contains window information and ordered tab id's for each
     // window.
 
+    if (!IsValidSessionHeader(specifics.header())) {
+      LOG(WARNING) << "Ignoring foreign session node with invalid header "
+                   << "and tag " << foreign_session_tag << ".";
+      return;
+    }
+
     // Load (or create) the SyncedSession object for this client.
     const sync_pb::SessionHeader& header = specifics.header();
     PopulateSessionHeaderFromSpecifics(header,
@@ -620,6 +652,16 @@ void SessionsSyncManager::UpdateTrackerWithForeignSession(
   } else if (specifics.has_tab()) {
     const sync_pb::SessionTab& tab_s = specifics.tab();
     SessionID::id_type tab_id = tab_s.tab_id();
+
+    const SessionTab* existing_tab;
+    if (session_tracker_.LookupSessionTab(
+            foreign_session_tag, tab_id, &existing_tab) &&
+        existing_tab->timestamp > modification_time) {
+      DVLOG(1) << "Ignoring " << foreign_session_tag << "'s session tab "
+               << tab_id << " with earlier modification time";
+      return;
+    }
+
     SessionTab* tab =
         session_tracker_.GetTab(foreign_session_tag,
                                 tab_id,
@@ -708,11 +750,13 @@ void SessionsSyncManager::BuildSyncedSessionFromSpecifics(
   if (specifics.has_selected_tab_index())
     session_window->selected_tab_index = specifics.selected_tab_index();
   if (specifics.has_browser_type()) {
+    // TODO(skuhne): Sync data writes |BrowserType| not
+    // |SessionWindow::WindowType|. This should get changed.
     if (specifics.browser_type() ==
         sync_pb::SessionWindow_BrowserType_TYPE_TABBED) {
-      session_window->type = 1;
+      session_window->type = SessionWindow::TYPE_TABBED;
     } else {
-      session_window->type = 2;
+      session_window->type = SessionWindow::TYPE_POPUP;
     }
   }
   session_window->timestamp = mtime;
@@ -945,7 +989,7 @@ void SessionsSyncManager::SetSessionTabFromDelegate(
       session_tab->current_navigation_index = session_tab->navigations.size();
 
     session_tab->navigations.push_back(
-        SerializedNavigationEntry::FromNavigationEntry(i, *entry));
+        ContentSerializedNavigationBuilder::FromNavigationEntry(i, *entry));
     if (is_supervised) {
       session_tab->navigations.back().set_blocked_state(
           SerializedNavigationEntry::STATE_ALLOWED);
@@ -965,7 +1009,7 @@ void SessionsSyncManager::SetSessionTabFromDelegate(
     int offset = session_tab->navigations.size();
     for (size_t i = 0; i < blocked_navigations.size(); ++i) {
       session_tab->navigations.push_back(
-          SerializedNavigationEntry::FromNavigationEntry(
+          ContentSerializedNavigationBuilder::FromNavigationEntry(
               i + offset, *blocked_navigations[i]));
       session_tab->navigations.back().set_blocked_state(
           SerializedNavigationEntry::STATE_BLOCKED);

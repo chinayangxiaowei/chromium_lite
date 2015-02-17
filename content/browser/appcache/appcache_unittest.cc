@@ -13,23 +13,21 @@ namespace {
 
 class MockAppCacheFrontend : public AppCacheFrontend {
  public:
-  virtual void OnCacheSelected(int host_id, const AppCacheInfo& info) OVERRIDE {
-  }
-  virtual void OnStatusChanged(const std::vector<int>& host_ids,
-                               AppCacheStatus status) OVERRIDE {}
-  virtual void OnEventRaised(const std::vector<int>& host_ids,
-                             AppCacheEventID event_id) OVERRIDE {}
-  virtual void OnProgressEventRaised(
-      const std::vector<int>& host_ids,
-      const GURL& url,
-      int num_total, int num_complete) OVERRIDE {}
-  virtual void OnErrorEventRaised(
-      const std::vector<int>& host_ids,
-      const AppCacheErrorDetails& details) OVERRIDE {}
-  virtual void OnLogMessage(int host_id, AppCacheLogLevel log_level,
-                            const std::string& message) OVERRIDE {}
-  virtual void OnContentBlocked(
-      int host_id, const GURL& manifest_url) OVERRIDE {}
+  void OnCacheSelected(int host_id, const AppCacheInfo& info) override {}
+  void OnStatusChanged(const std::vector<int>& host_ids,
+                       AppCacheStatus status) override {}
+  void OnEventRaised(const std::vector<int>& host_ids,
+                     AppCacheEventID event_id) override {}
+  void OnProgressEventRaised(const std::vector<int>& host_ids,
+                             const GURL& url,
+                             int num_total,
+                             int num_complete) override {}
+  void OnErrorEventRaised(const std::vector<int>& host_ids,
+                          const AppCacheErrorDetails& details) override {}
+  void OnLogMessage(int host_id,
+                    AppCacheLogLevel log_level,
+                    const std::string& message) override {}
+  void OnContentBlocked(int host_id, const GURL& manifest_url) override {}
 };
 
 }  // namespace
@@ -108,7 +106,7 @@ TEST(AppCacheTest, InitializeWithManifest) {
   EXPECT_TRUE(cache->online_whitelist_namespaces_.empty());
   EXPECT_FALSE(cache->online_whitelist_all_);
 
-  Manifest manifest;
+  AppCacheManifest manifest;
   manifest.explicit_urls.insert("http://one.com");
   manifest.explicit_urls.insert("http://two.com");
   manifest.fallback_namespaces.push_back(
@@ -174,7 +172,7 @@ TEST(AppCacheTest, FindResponseForRequest) {
   const int64 kExplicitInOnlineNamespaceResponseId = 5;
   const int64 kInterceptResponseId = 6;
 
-  Manifest manifest;
+  AppCacheManifest manifest;
   manifest.online_whitelist_namespaces.push_back(
       AppCacheNamespace(APPCACHE_NETWORK_NAMESPACE, kOnlineNamespaceUrl,
           GURL(), false));
@@ -365,7 +363,7 @@ TEST(AppCacheTest, FindInterceptPatternResponseForRequest) {
       kInterceptNamespaceBase.Resolve("*.hit*"));
   const GURL kInterceptNamespaceEntry("http://blah/intercept_resource");
   const int64 kInterceptResponseId = 1;
-  Manifest manifest;
+  AppCacheManifest manifest;
   manifest.intercept_namespaces.push_back(
       AppCacheNamespace(APPCACHE_INTERCEPT_NAMESPACE,
           kInterceptPatternNamespace, kInterceptNamespaceEntry, true));
@@ -436,7 +434,7 @@ TEST(AppCacheTest, FindFallbackPatternResponseForRequest) {
       kFallbackNamespaceBase.Resolve("*.hit*"));
   const GURL kFallbackNamespaceEntry("http://blah/fallback_resource");
   const int64 kFallbackResponseId = 1;
-  Manifest manifest;
+  AppCacheManifest manifest;
   manifest.fallback_namespaces.push_back(
       AppCacheNamespace(APPCACHE_FALLBACK_NAMESPACE, kFallbackPatternNamespace,
                 kFallbackNamespaceEntry, true));
@@ -506,7 +504,7 @@ TEST(AppCacheTest, FindNetworkNamespacePatternResponseForRequest) {
   const GURL kNetworkNamespaceBase("http://blah/network_namespace/");
   const GURL kNetworkPatternNamespace(
       kNetworkNamespaceBase.Resolve("*.hit*"));
-  Manifest manifest;
+  AppCacheManifest manifest;
   manifest.online_whitelist_namespaces.push_back(
       AppCacheNamespace(APPCACHE_NETWORK_NAMESPACE, kNetworkPatternNamespace,
                 GURL(), true));
@@ -562,7 +560,7 @@ TEST(AppCacheTest, ToFromDatabaseRecords) {
   scoped_refptr<AppCacheGroup> group =
       new AppCacheGroup(service.storage(), kManifestUrl, kGroupId);
   scoped_refptr<AppCache> cache(new AppCache(service.storage(), kCacheId));
-  Manifest manifest;
+  AppCacheManifest manifest;
   EXPECT_TRUE(ParseManifest(kManifestUrl, kData.c_str(), kData.length(),
                             PARSE_MANIFEST_ALLOWING_INTERCEPTS, manifest));
   cache->InitializeWithManifest(&manifest);

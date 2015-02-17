@@ -28,7 +28,9 @@ class WindowAndroid;
 }
 
 namespace content {
+
 class GinJavaBridgeDispatcherHost;
+class RenderFrameHost;
 class RenderWidgetHostViewAndroid;
 struct MenuItem;
 
@@ -45,27 +47,25 @@ class ContentViewCoreImpl : public ContentViewCore,
                       jobject java_bridge_retained_object_set);
 
   // ContentViewCore implementation.
-  virtual base::android::ScopedJavaLocalRef<jobject> GetJavaObject() OVERRIDE;
-  virtual WebContents* GetWebContents() const OVERRIDE;
-  virtual ui::ViewAndroid* GetViewAndroid() const OVERRIDE;
-  virtual ui::WindowAndroid* GetWindowAndroid() const OVERRIDE;
-  virtual scoped_refptr<cc::Layer> GetLayer() const OVERRIDE;
-  virtual void LoadUrl(NavigationController::LoadURLParams& params) OVERRIDE;
-  virtual void ShowPastePopup(int x, int y) OVERRIDE;
+  virtual base::android::ScopedJavaLocalRef<jobject> GetJavaObject() override;
+  virtual WebContents* GetWebContents() const override;
+  virtual ui::ViewAndroid* GetViewAndroid() const override;
+  virtual ui::WindowAndroid* GetWindowAndroid() const override;
+  virtual scoped_refptr<cc::Layer> GetLayer() const override;
+  virtual void ShowPastePopup(int x, int y) override;
   virtual void GetScaledContentBitmap(
       float scale,
       SkColorType color_type,
       gfx::Rect src_subrect,
       const base::Callback<void(bool, const SkBitmap&)>& result_callback)
-      OVERRIDE;
-  virtual float GetDpiScale() const OVERRIDE;
-  virtual void PauseVideo() OVERRIDE;
-  virtual void PauseOrResumeGeolocation(bool should_pause) OVERRIDE;
+      override;
+  virtual float GetDpiScale() const override;
+  virtual void PauseOrResumeGeolocation(bool should_pause) override;
   virtual void RequestTextSurroundingSelection(
       int max_length,
       const base::Callback<void(const base::string16& content,
                                 int start_offset,
-                                int end_offset)>& callback) OVERRIDE;
+                                int end_offset)>& callback) override;
 
   // --------------------------------------------------------------------------
   // Methods called from Java via JNI
@@ -78,22 +78,10 @@ class ContentViewCoreImpl : public ContentViewCore,
 
   // Notifies the ContentViewCore that items were selected in the currently
   // showing select popup.
-  void SelectPopupMenuItems(JNIEnv* env, jobject obj, jintArray indices);
+  void SelectPopupMenuItems(JNIEnv* env, jobject obj,
+                            jlong selectPopupSourceFrame,
+                            jintArray indices);
 
-  void LoadUrl(
-      JNIEnv* env, jobject obj,
-      jstring url,
-      jint load_url_type,
-      jint transition_type,
-      jstring j_referrer_url,
-      jint referrer_policy,
-      jint ua_override_option,
-      jstring extra_headers,
-      jbyteArray post_data,
-      jstring base_url_for_data_url,
-      jstring virtual_url_for_data_url,
-      jboolean can_load_local_resources,
-      jboolean is_renderer_initiated);
   void SendOrientationChangeEvent(JNIEnv* env, jobject obj, jint orientation);
   jboolean OnTouchEvent(JNIEnv* env,
                         jobject obj,
@@ -111,11 +99,16 @@ class ContentViewCoreImpl : public ContentViewCore,
                         jint pointer_id_1,
                         jfloat touch_major_0,
                         jfloat touch_major_1,
+                        jfloat touch_minor_0,
+                        jfloat touch_minor_1,
+                        jfloat orientation_0,
+                        jfloat orientation_1,
                         jfloat raw_pos_x,
                         jfloat raw_pos_y,
                         jint android_tool_type_0,
                         jint android_tool_type_1,
                         jint android_button_state,
+                        jint android_meta_state,
                         jboolean is_touch_handle_event);
   jboolean SendMouseMoveEvent(JNIEnv* env,
                               jobject obj,
@@ -150,7 +143,10 @@ class ContentViewCoreImpl : public ContentViewCore,
                                 jfloat x1, jfloat y1,
                                 jfloat x2, jfloat y2);
   void MoveCaret(JNIEnv* env, jobject obj, jfloat x, jfloat y);
-  void HideTextHandles(JNIEnv* env, jobject obj);
+  void DismissTextHandles(JNIEnv* env, jobject obj);
+  void SetTextHandlesTemporarilyHidden(JNIEnv* env,
+                                       jobject obj,
+                                       jboolean hidden);
 
   void ResetGestureDetection(JNIEnv* env, jobject obj);
   void SetDoubleTapSupportEnabled(JNIEnv* env, jobject obj, jboolean enabled);
@@ -158,20 +154,11 @@ class ContentViewCoreImpl : public ContentViewCore,
                                        jobject obj,
                                        jboolean enabled);
 
-  void ClearHistory(JNIEnv* env, jobject obj);
-  void PostMessageToFrame(JNIEnv* env, jobject obj, jstring frame_id,
-      jstring message, jstring source_origin, jstring target_origin);
   long GetNativeImeAdapter(JNIEnv* env, jobject obj);
   void SetFocus(JNIEnv* env, jobject obj, jboolean focused);
 
   jint GetBackgroundColor(JNIEnv* env, jobject obj);
   void SetBackgroundColor(JNIEnv* env, jobject obj, jint color);
-  void ClearSslPreferences(JNIEnv* env, jobject /* obj */);
-  void SetUseDesktopUserAgent(JNIEnv* env,
-                              jobject /* obj */,
-                              jboolean state,
-                              jboolean reload_on_state_change);
-  bool GetUseDesktopUserAgent(JNIEnv* env, jobject /* obj */);
   void SetAllowJavascriptInterfacesInspection(JNIEnv* env,
                                               jobject obj,
                                               jboolean allow);
@@ -181,14 +168,6 @@ class ContentViewCoreImpl : public ContentViewCore,
                               jstring name,
                               jclass safe_annotation_clazz);
   void RemoveJavascriptInterface(JNIEnv* env, jobject obj, jstring name);
-  int GetNavigationHistory(JNIEnv* env, jobject obj, jobject history);
-  void GetDirectedNavigationHistory(JNIEnv* env,
-                                    jobject obj,
-                                    jobject history,
-                                    jboolean is_forward,
-                                    jint max_entries);
-  base::android::ScopedJavaLocalRef<jstring>
-      GetOriginalUrlForActiveNavigationEntry(JNIEnv* env, jobject obj);
   void WasResized(JNIEnv* env, jobject obj);
 
   void SetAccessibilityEnabled(JNIEnv* env, jobject obj, bool enabled);
@@ -216,7 +195,8 @@ class ContentViewCoreImpl : public ContentViewCore,
   // |multiple| defines if it should support multi-select.
   // If not |multiple|, |selected_item| sets the initially selected item.
   // Otherwise, item's "checked" flag selects it.
-  void ShowSelectPopupMenu(const gfx::Rect& bounds,
+  void ShowSelectPopupMenu(RenderFrameHost* frame,
+                           const gfx::Rect& bounds,
                            const std::vector<MenuItem>& items,
                            int selected_item,
                            bool multiple);
@@ -230,8 +210,7 @@ class ContentViewCoreImpl : public ContentViewCore,
                        const gfx::SizeF& content_size,
                        const gfx::SizeF& viewport_size,
                        const gfx::Vector2dF& controls_offset,
-                       const gfx::Vector2dF& content_offset,
-                       float overdraw_bottom_height);
+                       const gfx::Vector2dF& content_offset);
 
   void UpdateImeAdapter(long native_ime_adapter,
                         int text_input_type,
@@ -258,25 +237,23 @@ class ContentViewCoreImpl : public ContentViewCore,
   void StartContentIntent(const GURL& content_url);
 
   // Shows the disambiguation popup
-  // |target_rect|   --> window coordinates which |zoomed_bitmap| represents
+  // |rect_pixels|   --> window coordinates which |zoomed_bitmap| represents
   // |zoomed_bitmap| --> magnified image of potential touch targets
   void ShowDisambiguationPopup(
-      const gfx::Rect& target_rect, const SkBitmap& zoomed_bitmap);
+      const gfx::Rect& rect_pixels, const SkBitmap& zoomed_bitmap);
 
   // Creates a java-side touch event, used for injecting touch event for
   // testing/benchmarking purposes
   base::android::ScopedJavaLocalRef<jobject> CreateTouchEventSynthesizer();
 
-  base::android::ScopedJavaLocalRef<jobject> GetContentVideoViewClient();
-
-  // Returns the context that the ContentViewCore was created with, it would
-  // typically be an Activity context for an on screen view.
-  base::android::ScopedJavaLocalRef<jobject> GetContext();
-
   // Returns True if the given media should be blocked to load.
   bool ShouldBlockMediaRequest(const GURL& url);
 
   void DidStopFlinging();
+
+  // Returns the context with which the ContentViewCore was created, typically
+  // the Activity context.
+  base::android::ScopedJavaLocalRef<jobject> GetContext() const;
 
   // Returns the viewport size after accounting for the viewport offset.
   gfx::Size GetViewSize() const;
@@ -291,14 +268,15 @@ class ContentViewCoreImpl : public ContentViewCore,
 
   gfx::Size GetPhysicalBackingSize() const;
   gfx::Size GetViewportSizeDip() const;
-  gfx::Size GetViewportSizeOffsetDip() const;
-  float GetOverdrawBottomHeightDip() const;
+  float GetTopControlsLayoutHeightDip() const;
 
   void AttachLayer(scoped_refptr<cc::Layer> layer);
   void RemoveLayer(scoped_refptr<cc::Layer> layer);
 
-  void SelectBetweenCoordinates(const gfx::PointF& start,
-                                const gfx::PointF& end);
+  void MoveRangeSelectionExtent(const gfx::PointF& extent);
+
+  void SelectBetweenCoordinates(const gfx::PointF& base,
+                                const gfx::PointF& extent);
 
  private:
   class ContentViewUserData;
@@ -307,10 +285,10 @@ class ContentViewCoreImpl : public ContentViewCore,
   virtual ~ContentViewCoreImpl();
 
   // WebContentsObserver implementation.
-  virtual void RenderViewReady() OVERRIDE;
+  virtual void RenderViewReady() override;
   virtual void RenderViewHostChanged(RenderViewHost* old_host,
-                                     RenderViewHost* new_host) OVERRIDE;
-  virtual void WebContentsDestroyed() OVERRIDE;
+                                     RenderViewHost* new_host) override;
+  virtual void WebContentsDestroyed() override;
 
   // --------------------------------------------------------------------------
   // Other private methods and data
@@ -324,11 +302,8 @@ class ContentViewCoreImpl : public ContentViewCore,
       blink::WebInputEvent::Type type, int64 time_ms, float x, float y) const;
 
   gfx::Size GetViewportSizePix() const;
-  gfx::Size GetViewportSizeOffsetPix() const;
+  int GetTopControlsLayoutHeightPix() const;
 
-  void DeleteScaledSnapshotTexture();
-
-  bool OnMotionEvent(const ui::MotionEvent& event);
   void SendGestureEvent(const blink::WebGestureEvent& event);
 
   // Update focus state of the RenderWidgetHostView.
@@ -366,8 +341,7 @@ class ContentViewCoreImpl : public ContentViewCore,
   bool accessibility_enabled_;
 
   // Manages injecting Java objects.
-  scoped_ptr<GinJavaBridgeDispatcherHost>
-      java_bridge_dispatcher_host_;
+  scoped_refptr<GinJavaBridgeDispatcherHost> java_bridge_dispatcher_host_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentViewCoreImpl);
 };

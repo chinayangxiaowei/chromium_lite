@@ -20,6 +20,10 @@ class WindowController;
 
 // A chrome specific analog to AsyncExtensionFunction. This has access to a
 // chrome Profile.
+//
+// DEPRECATED: Please consider inherting UIThreadExtensionFunction directly.
+// Then if you need access to Chrome details, you can construct a
+// ChromeExtensionFunctionDetails object within your function implementation.
 class ChromeUIThreadExtensionFunction : public UIThreadExtensionFunction {
  public:
   ChromeUIThreadExtensionFunction();
@@ -56,20 +60,25 @@ class ChromeUIThreadExtensionFunction : public UIThreadExtensionFunction {
 
   // Gets the "current" web contents if any. If there is no associated web
   // contents then defaults to the foremost one.
-  virtual content::WebContents* GetAssociatedWebContents() OVERRIDE;
+  content::WebContents* GetAssociatedWebContents() override;
 
  protected:
-  virtual ~ChromeUIThreadExtensionFunction();
+  ~ChromeUIThreadExtensionFunction() override;
 };
 
 // A chrome specific analog to AsyncExtensionFunction. This has access to a
 // chrome Profile.
+//
+// DEPRECATED: Please consider inherting UIThreadExtensionFunction or
+// AsyncExtensionFunction directly. Then if you need access to Chrome details,
+// you can construct a ChromeExtensionFunctionDetails object within your
+// function implementation.
 class ChromeAsyncExtensionFunction : public ChromeUIThreadExtensionFunction {
  public:
   ChromeAsyncExtensionFunction();
 
  protected:
-  virtual ~ChromeAsyncExtensionFunction();
+  ~ChromeAsyncExtensionFunction() override;
 
   // Deprecated, see AsyncExtensionFunction::RunAsync.
   virtual bool RunAsync() = 0;
@@ -78,17 +87,22 @@ class ChromeAsyncExtensionFunction : public ChromeUIThreadExtensionFunction {
   static bool ValidationFailure(ChromeAsyncExtensionFunction* function);
 
  private:
-  virtual ResponseAction Run() OVERRIDE;
+  ResponseAction Run() override;
 };
 
 // A chrome specific analog to SyncExtensionFunction. This has access to a
 // chrome Profile.
+//
+// DEPRECATED: Please consider inherting UIThreadExtensionFunction or
+// SyncExtensionFunction directly. Then if you need access to Chrome details,
+// you can construct a ChromeExtensionFunctionDetails object within your
+// function implementation.
 class ChromeSyncExtensionFunction : public ChromeUIThreadExtensionFunction {
  public:
   ChromeSyncExtensionFunction();
 
  protected:
-  virtual ~ChromeSyncExtensionFunction();
+  ~ChromeSyncExtensionFunction() override;
 
   // Deprecated, see SyncExtensionFunction::RunSync.
   virtual bool RunSync() = 0;
@@ -97,7 +111,7 @@ class ChromeSyncExtensionFunction : public ChromeUIThreadExtensionFunction {
   static bool ValidationFailure(ChromeSyncExtensionFunction* function);
 
  private:
-  virtual ResponseAction Run() OVERRIDE;
+  ResponseAction Run() override;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_CHROME_EXTENSION_FUNCTION_H_

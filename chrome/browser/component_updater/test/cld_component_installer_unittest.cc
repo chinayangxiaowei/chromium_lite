@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <stdint.h>
 #include <vector>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/macros.h"
 #include "base/memory/scoped_ptr.h"
@@ -32,7 +33,7 @@ namespace component_updater {
 class CldComponentInstallerTest : public PlatformTest {
  public:
   CldComponentInstallerTest() {}
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     PlatformTest::SetUp();
 
     // ScopedTempDir automatically does a recursive delete on the entire
@@ -69,7 +70,8 @@ TEST_F(CldComponentInstallerTest, SetLatestCldDataFile) {
 TEST_F(CldComponentInstallerTest, VerifyInstallation) {
   // All files are created within a ScopedTempDir, which deletes all
   // children when its destructor is called (at the end of each test).
-  ASSERT_FALSE(traits_.VerifyInstallation(temp_dir_.path()));
+  const base::DictionaryValue manifest;
+  ASSERT_FALSE(traits_.VerifyInstallation(manifest, temp_dir_.path()));
   const base::FilePath data_file_dir =
       temp_dir_.path().Append(FILE_PATH_LITERAL("_platform_specific")).Append(
           FILE_PATH_LITERAL("all"));
@@ -78,7 +80,7 @@ TEST_F(CldComponentInstallerTest, VerifyInstallation) {
   const std::string test_data("fake cld2 data file content here :)");
   ASSERT_EQ(static_cast<int32>(test_data.length()),
             base::WriteFile(data_file, test_data.c_str(), test_data.length()));
-  ASSERT_TRUE(traits_.VerifyInstallation(temp_dir_.path()));
+  ASSERT_TRUE(traits_.VerifyInstallation(manifest, temp_dir_.path()));
 }
 
 TEST_F(CldComponentInstallerTest, OnCustomInstall) {
@@ -101,7 +103,7 @@ TEST_F(CldComponentInstallerTest, GetBaseDirectory) {
 }
 
 TEST_F(CldComponentInstallerTest, GetHash) {
-  std::vector<uint8> hash;
+  std::vector<uint8_t> hash;
   traits_.GetHash(&hash);
   ASSERT_EQ(static_cast<size_t>(32), hash.size());
 }

@@ -5,8 +5,7 @@
 #ifndef UI_OZONE_PLATFORM_DRI_DRI_SURFACE_H_
 #define UI_OZONE_PLATFORM_DRI_DRI_SURFACE_H_
 
-#include "base/memory/scoped_ptr.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/skia_util.h"
@@ -18,23 +17,25 @@ class SkSurface;
 namespace ui {
 
 class DriBuffer;
+class DriWindowDelegate;
 class DriWrapper;
 class HardwareDisplayController;
 
 class DriSurface : public SurfaceOzoneCanvas {
  public:
-  DriSurface(DriWrapper* dri,
-             const base::WeakPtr<HardwareDisplayController>& controller);
-  virtual ~DriSurface();
+  DriSurface(DriWindowDelegate* window_delegate, DriWrapper* dri);
+  ~DriSurface() override;
 
   // SurfaceOzoneCanvas:
-  virtual skia::RefPtr<SkCanvas> GetCanvas() OVERRIDE;
-  virtual void ResizeCanvas(const gfx::Size& viewport_size) OVERRIDE;
-  virtual void PresentCanvas(const gfx::Rect& damage) OVERRIDE;
-  virtual scoped_ptr<gfx::VSyncProvider> CreateVSyncProvider() OVERRIDE;
+  skia::RefPtr<SkCanvas> GetCanvas() override;
+  void ResizeCanvas(const gfx::Size& viewport_size) override;
+  void PresentCanvas(const gfx::Rect& damage) override;
+  scoped_ptr<gfx::VSyncProvider> CreateVSyncProvider() override;
 
  private:
   void UpdateNativeSurface(const gfx::Rect& damage);
+
+  DriWindowDelegate* window_delegate_;
 
   // Stores the connection to the graphics card. Pointer not owned by this
   // class.
@@ -48,7 +49,6 @@ class DriSurface : public SurfaceOzoneCanvas {
 
   skia::RefPtr<SkSurface> surface_;
   gfx::Rect last_damage_;
-  base::WeakPtr<HardwareDisplayController> controller_;
 
   DISALLOW_COPY_AND_ASSIGN(DriSurface);
 };

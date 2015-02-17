@@ -22,17 +22,8 @@ class NotificationDelegate : public message_center::NotificationDelegate {
   // Returns unique id of the notification.
   virtual std::string id() const = 0;
 
-  // Returns the id of renderer process which creates the notification, or -1.
-  virtual int process_id() const;
-
-  // Returns the WebContents that generated the notification, or NULL.
-  virtual content::WebContents* GetWebContents() const = 0;
-
-  // Lets the delegate know that no more rendering will be necessary.
-  virtual void ReleaseRenderViewHost();
-
  protected:
-  virtual ~NotificationDelegate() {}
+  ~NotificationDelegate() override {}
 };
 
 #endif  // CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_DELEGATE_H_

@@ -9,14 +9,20 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/passwords/manage_passwords_icon.h"
+#include "chrome/browser/ui/passwords/password_bubble_experiment.h"
 #include "chrome/common/url_constants.h"
 #include "components/password_manager/core/browser/password_store.h"
 #include "content/public/browser/notification_service.h"
+
+#if defined(OS_ANDROID)
+#include "chrome/browser/android/chromium_application.h"
+#endif
 
 using autofill::PasswordFormMap;
 using password_manager::PasswordFormManager;
@@ -157,24 +163,12 @@ void ManagePasswordsUIController::OnLoginsChanged(
 
 void ManagePasswordsUIController::
     NavigateToPasswordManagerSettingsPage() {
-// TODO(mkwst): chrome_pages.h is compiled out of Android. Need to figure out
-// how this navigation should work there.
-#if !defined(OS_ANDROID)
+#if defined(OS_ANDROID)
+  chrome::android::ChromiumApplication::ShowPasswordSettings();
+#else
   chrome::ShowSettingsSubPage(
       chrome::FindBrowserWithWebContents(web_contents()),
       chrome::kPasswordManagerSubPage);
-#endif
-}
-
-void ManagePasswordsUIController::NavigateToAccountCentralManagementPage() {
-  // TODO(gcasto): FindBowserWithWebContents() doesn't exist on Android.
-  // Need to determine how this should work there.
-#if !defined(OS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  content::OpenURLParams params(
-      GURL(chrome::kAutoPasswordGenerationLearnMoreURL), content::Referrer(),
-      NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK, false);
-  browser->OpenURL(params);
 #endif
 }
 
@@ -239,6 +233,12 @@ void ManagePasswordsUIController::DidNavigateMainFrame(
   timer_.reset(new base::ElapsedTimer());
 }
 
+void ManagePasswordsUIController::WasHidden() {
+#if !defined(OS_ANDROID)
+  chrome::CloseManagePasswordsBubble(web_contents());
+#endif
+}
+
 const autofill::PasswordForm& ManagePasswordsUIController::
     PendingCredentials() const {
   DCHECK(form_manager_);
@@ -268,6 +268,10 @@ void ManagePasswordsUIController::ShowBubbleWithoutUserInteraction() {
 #if !defined(OS_ANDROID)
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
   if (!browser || browser->toolbar_model()->input_in_progress())
+    return;
+  if (state_ == password_manager::ui::PENDING_PASSWORD_AND_BUBBLE_STATE &&
+      !password_bubble_experiment::ShouldShowBubble(
+          browser->profile()->GetPrefs()))
     return;
   CommandUpdater* updater = browser->command_controller()->command_updater();
   updater->ExecuteCommand(IDC_MANAGE_PASSWORDS_FOR_PAGE);

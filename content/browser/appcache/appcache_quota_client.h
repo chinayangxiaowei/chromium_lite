@@ -15,9 +15,9 @@
 #include "content/browser/appcache/appcache_storage.h"
 #include "content/common/content_export.h"
 #include "net/base/completion_callback.h"
-#include "webkit/browser/quota/quota_client.h"
-#include "webkit/browser/quota/quota_task.h"
-#include "webkit/common/quota/quota_types.h"
+#include "storage/browser/quota/quota_client.h"
+#include "storage/browser/quota/quota_task.h"
+#include "storage/common/quota/quota_types.h"
 
 namespace content {
 class AppCacheQuotaClientTest;
@@ -29,27 +29,27 @@ class AppCacheStorageImpl;
 // used on the IO thread by the quota manager. This class deletes
 // itself when both the quota manager and the appcache service have
 // been destroyed.
-class AppCacheQuotaClient : public quota::QuotaClient {
+class AppCacheQuotaClient : public storage::QuotaClient {
  public:
   typedef std::deque<base::Closure> RequestQueue;
 
-  virtual ~AppCacheQuotaClient();
+  ~AppCacheQuotaClient() override;
 
   // QuotaClient method overrides
-  virtual ID id() const OVERRIDE;
-  virtual void OnQuotaManagerDestroyed() OVERRIDE;
-  virtual void GetOriginUsage(const GURL& origin,
-                              quota::StorageType type,
-                              const GetUsageCallback& callback) OVERRIDE;
-  virtual void GetOriginsForType(quota::StorageType type,
-                                 const GetOriginsCallback& callback) OVERRIDE;
-  virtual void GetOriginsForHost(quota::StorageType type,
-                                 const std::string& host,
-                                 const GetOriginsCallback& callback) OVERRIDE;
-  virtual void DeleteOriginData(const GURL& origin,
-                                quota::StorageType type,
-                                const DeletionCallback& callback) OVERRIDE;
-  virtual bool DoesSupport(quota::StorageType type) const OVERRIDE;
+  ID id() const override;
+  void OnQuotaManagerDestroyed() override;
+  void GetOriginUsage(const GURL& origin,
+                      storage::StorageType type,
+                      const GetUsageCallback& callback) override;
+  void GetOriginsForType(storage::StorageType type,
+                         const GetOriginsCallback& callback) override;
+  void GetOriginsForHost(storage::StorageType type,
+                         const std::string& host,
+                         const GetOriginsCallback& callback) override;
+  void DeleteOriginData(const GURL& origin,
+                        storage::StorageType type,
+                        const DeletionCallback& callback) override;
+  bool DoesSupport(storage::StorageType type) const override;
 
  private:
   friend class content::AppCacheQuotaClientTest;
@@ -60,7 +60,7 @@ class AppCacheQuotaClient : public quota::QuotaClient {
       explicit AppCacheQuotaClient(AppCacheServiceImpl* service);
 
   void DidDeleteAppCachesForOrigin(int rv);
-  void GetOriginsHelper(quota::StorageType type,
+  void GetOriginsHelper(storage::StorageType type,
                         const std::string& opt_host,
                         const GetOriginsCallback& callback);
   void ProcessPendingRequests();

@@ -68,10 +68,13 @@ def GetNameForKind(kind, internal = False):
   return "::".join(parts)
 
 def GetCppType(kind):
+  if mojom.IsArrayKind(kind):
+    return "mojo::internal::Array_Data<%s>*" % GetCppType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return "mojo::internal::Map_Data<%s, %s>*" % (
+      GetCppType(kind.key_kind), GetCppType(kind.value_kind))
   if mojom.IsStructKind(kind):
     return "%s_Data*" % GetNameForKind(kind, internal=True)
-  if mojom.IsAnyArrayKind(kind):
-    return "mojo::internal::Array_Data<%s>*" % GetCppType(kind.kind)
   if mojom.IsInterfaceKind(kind) or mojom.IsInterfaceRequestKind(kind):
     return "mojo::MessagePipeHandle"
   if mojom.IsEnumKind(kind):
@@ -90,8 +93,11 @@ def GetCppArrayArgWrapperType(kind):
     return GetNameForKind(kind)
   if mojom.IsStructKind(kind):
     return "%sPtr" % GetNameForKind(kind)
-  if mojom.IsAnyArrayKind(kind):
+  if mojom.IsArrayKind(kind):
     return "mojo::Array<%s> " % GetCppArrayArgWrapperType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return "mojo::Map<%s, %s> " % (GetCppArrayArgWrapperType(kind.key_kind),
+                                   GetCppArrayArgWrapperType(kind.value_kind))
   if mojom.IsInterfaceKind(kind):
     raise Exception("Arrays of interfaces not yet supported!")
   if mojom.IsInterfaceRequestKind(kind):
@@ -115,8 +121,11 @@ def GetCppResultWrapperType(kind):
     return GetNameForKind(kind)
   if mojom.IsStructKind(kind):
     return "%sPtr" % GetNameForKind(kind)
-  if mojom.IsAnyArrayKind(kind):
+  if mojom.IsArrayKind(kind):
     return "mojo::Array<%s>" % GetCppArrayArgWrapperType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return "mojo::Map<%s, %s>" % (GetCppArrayArgWrapperType(kind.key_kind),
+                                  GetCppArrayArgWrapperType(kind.value_kind))
   if mojom.IsInterfaceKind(kind):
     return "%sPtr" % GetNameForKind(kind)
   if mojom.IsInterfaceRequestKind(kind):
@@ -140,8 +149,11 @@ def GetCppWrapperType(kind):
     return GetNameForKind(kind)
   if mojom.IsStructKind(kind):
     return "%sPtr" % GetNameForKind(kind)
-  if mojom.IsAnyArrayKind(kind):
+  if mojom.IsArrayKind(kind):
     return "mojo::Array<%s>" % GetCppArrayArgWrapperType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return "mojo::Map<%s, %s>" % (GetCppArrayArgWrapperType(kind.key_kind),
+                                  GetCppArrayArgWrapperType(kind.value_kind))
   if mojom.IsInterfaceKind(kind):
     return "%sPtr" % GetNameForKind(kind)
   if mojom.IsInterfaceRequestKind(kind):
@@ -163,8 +175,11 @@ def GetCppWrapperType(kind):
 def GetCppConstWrapperType(kind):
   if mojom.IsStructKind(kind):
     return "%sPtr" % GetNameForKind(kind)
-  if mojom.IsAnyArrayKind(kind):
+  if mojom.IsArrayKind(kind):
     return "mojo::Array<%s>" % GetCppArrayArgWrapperType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return "mojo::Map<%s, %s>" % (GetCppArrayArgWrapperType(kind.key_kind),
+                                  GetCppArrayArgWrapperType(kind.value_kind))
   if mojom.IsInterfaceKind(kind):
     return "%sPtr" % GetNameForKind(kind)
   if mojom.IsInterfaceRequestKind(kind):
@@ -191,8 +206,11 @@ def GetCppFieldType(kind):
   if mojom.IsStructKind(kind):
     return ("mojo::internal::StructPointer<%s_Data>" %
         GetNameForKind(kind, internal=True))
-  if mojom.IsAnyArrayKind(kind):
+  if mojom.IsArrayKind(kind):
     return "mojo::internal::ArrayPointer<%s>" % GetCppType(kind.kind)
+  if mojom.IsMapKind(kind):
+    return ("mojo::internal::StructPointer<mojo::internal::Map_Data<%s, %s>>" %
+            (GetCppType(kind.key_kind), GetCppType(kind.value_kind)))
   if mojom.IsInterfaceKind(kind) or mojom.IsInterfaceRequestKind(kind):
     return "mojo::MessagePipeHandle"
   if mojom.IsEnumKind(kind):
@@ -219,20 +237,27 @@ def TranslateConstants(token, kind):
       name.append(token.parent_kind.name)
     if isinstance(token, mojom.EnumValue):
       name.append(
-          "%s_%s" % (generator.CamelCaseToAllCaps(token.enum_name), token.name))
+          "%s_%s" % (generator.CamelCaseToAllCaps(token.enum.name), token.name))
     else:
       name.append(token.name)
     return "::".join(name)
+
+  if isinstance(token, mojom.BuiltinValue):
+    if token.value == "double.INFINITY" or token.value == "float.INFINITY":
+      return "INFINITY";
+    if token.value == "double.NEGATIVE_INFINITY" or \
+       token.value == "float.NEGATIVE_INFINITY":
+      return "-INFINITY";
+    if token.value == "double.NAN" or token.value == "float.NAN":
+      return "NAN";
+
+  if (kind is not None and mojom.IsFloatKind(kind)):
+      return token if token.isdigit() else token + "f";
+
   return '%s%s' % (token, _kind_to_cpp_literal_suffix.get(kind, ''))
 
 def ExpressionToText(value, kind=None):
   return TranslateConstants(value, kind)
-
-def HasCallbacks(interface):
-  for method in interface.methods:
-    if method.response_parameters != None:
-      return True
-  return False
 
 def ShouldInlineStruct(struct):
   # TODO(darin): Base this on the size of the wrapper class.
@@ -244,22 +269,35 @@ def ShouldInlineStruct(struct):
   return True
 
 def GetArrayValidateParams(kind):
-  if not mojom.IsAnyArrayKind(kind) and not mojom.IsStringKind(kind):
+  if (not mojom.IsArrayKind(kind) and not mojom.IsMapKind(kind) and
+      not mojom.IsStringKind(kind)):
     return "mojo::internal::NoValidateParams"
 
   if mojom.IsStringKind(kind):
     expected_num_elements = 0
-    element_nullable = False
+    element_is_nullable = False
     element_validate_params = "mojo::internal::NoValidateParams"
+  elif mojom.IsMapKind(kind):
+    expected_num_elements = 0
+    element_is_nullable = mojom.IsNullableKind(kind.value_kind)
+    element_validate_params = GetArrayValidateParams(kind.value_kind)
   else:
-    expected_num_elements = generator.ExpectedArraySize(kind)
-    element_nullable = mojom.IsNullableKind(kind.kind)
+    expected_num_elements = generator.ExpectedArraySize(kind) or 0
+    element_is_nullable = mojom.IsNullableKind(kind.kind)
     element_validate_params = GetArrayValidateParams(kind.kind)
 
   return "mojo::internal::ArrayValidateParams<%d, %s,\n%s> " % (
       expected_num_elements,
-      'true' if element_nullable else 'false',
+      'true' if element_is_nullable else 'false',
       element_validate_params)
+
+def GetMapValidateParams(value_kind):
+  # Unlike GetArrayValidateParams, we are given the wrapped kind, instead of
+  # the raw array kind. So we wrap the return value of GetArrayValidateParams.
+  element_is_nullable = mojom.IsNullableKind(value_kind)
+  return "mojo::internal::ArrayValidateParams<0, %s,\n%s> " % (
+      'true' if element_is_nullable else 'false',
+      GetArrayValidateParams(value_kind))
 
 _HEADER_SIZE = 8
 
@@ -274,22 +312,25 @@ class Generator(generator.Generator):
     "cpp_type": GetCppType,
     "cpp_wrapper_type": GetCppWrapperType,
     "default_value": DefaultValue,
-    "expected_array_size": generator.ExpectedArraySize,
     "expression_to_text": ExpressionToText,
     "get_array_validate_params": GetArrayValidateParams,
+    "get_map_validate_params": GetMapValidateParams,
     "get_name_for_kind": GetNameForKind,
     "get_pad": pack.GetPad,
-    "has_callbacks": HasCallbacks,
+    "has_callbacks": mojom.HasCallbacks,
     "should_inline": ShouldInlineStruct,
-    "is_any_array_kind": mojom.IsAnyArrayKind,
+    "is_array_kind": mojom.IsArrayKind,
+    "is_cloneable_kind": mojom.IsCloneableKind,
     "is_enum_kind": mojom.IsEnumKind,
     "is_move_only_kind": mojom.IsMoveOnlyKind,
     "is_any_handle_kind": mojom.IsAnyHandleKind,
     "is_interface_kind": mojom.IsInterfaceKind,
     "is_interface_request_kind": mojom.IsInterfaceRequestKind,
+    "is_map_kind": mojom.IsMapKind,
     "is_nullable_kind": mojom.IsNullableKind,
     "is_object_kind": mojom.IsObjectKind,
     "is_string_kind": mojom.IsStringKind,
+    "is_struct_kind": mojom.IsStructKind,
     "is_struct_with_handles": IsStructWithHandles,
     "struct_size": lambda ps: ps.GetTotalSize() + _HEADER_SIZE,
     "struct_from_method": generator.GetStructFromMethod,
@@ -323,7 +364,9 @@ class Generator(generator.Generator):
     return self.GetJinjaExports()
 
   def GenerateFiles(self, args):
-    self.Write(self.GenerateModuleHeader(), "%s.h" % self.module.name)
+    self.Write(self.GenerateModuleHeader(),
+        self.MatchMojomFilePath("%s.h" % self.module.name))
     self.Write(self.GenerateModuleInternalHeader(),
-        "%s-internal.h" % self.module.name)
-    self.Write(self.GenerateModuleSource(), "%s.cc" % self.module.name)
+        self.MatchMojomFilePath("%s-internal.h" % self.module.name))
+    self.Write(self.GenerateModuleSource(),
+        self.MatchMojomFilePath("%s.cc" % self.module.name))

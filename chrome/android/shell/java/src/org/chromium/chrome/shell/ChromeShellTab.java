@@ -12,10 +12,12 @@ import org.chromium.chrome.browser.UrlUtilities;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator;
 import org.chromium.chrome.browser.contextmenu.ContextMenuPopulator;
 import org.chromium.chrome.browser.infobar.AutoLoginProcessor;
+import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.content.browser.ContentViewClient;
-import org.chromium.content.browser.ContentViewCore;
-import org.chromium.content.browser.LoadUrlParams;
-import org.chromium.content_public.Referrer;
+import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.common.Referrer;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
@@ -25,6 +27,8 @@ import org.chromium.ui.base.WindowAndroid;
 public class ChromeShellTab extends Tab {
     // Tab state
     private boolean mIsLoading;
+    private boolean mIsFullscreen = false;
+    private TabManager mTabManager;
 
     /**
      * @param context           The Context the view is running in.
@@ -33,12 +37,13 @@ public class ChromeShellTab extends Tab {
      * @param contentViewClient The client for the {@link ContentViewCore}s of this Tab.
      */
     public ChromeShellTab(Context context, String url, WindowAndroid window,
-            ContentViewClient contentViewClient) {
+            ContentViewClient contentViewClient, TabManager tabManager) {
         super(false, context, window);
         initialize();
         initContentViewCore();
         setContentViewClient(contentViewClient);
         loadUrlWithSanitization(url);
+        mTabManager = tabManager;
     }
 
     /**
@@ -62,14 +67,15 @@ public class ChromeShellTab extends Tab {
         // Invalid URLs will just return empty.
         if (TextUtils.isEmpty(url)) return;
 
-        ContentViewCore contentViewCore = getContentViewCore();
-        if (TextUtils.equals(url, contentViewCore.getUrl())) {
-            contentViewCore.reload(true);
+        WebContents webContents = getWebContents();
+        NavigationController navigationController = webContents.getNavigationController();
+        if (TextUtils.equals(url, webContents.getUrl())) {
+            navigationController.reload(true);
         } else {
             if (postData == null) {
-                contentViewCore.loadUrl(new LoadUrlParams(url));
+                navigationController.loadUrl(new LoadUrlParams(url));
             } else {
-                contentViewCore.loadUrl(LoadUrlParams.createLoadHttpPostParams(url, postData));
+                navigationController.loadUrl(LoadUrlParams.createLoadHttpPostParams(url, postData));
             }
         }
     }
@@ -106,6 +112,16 @@ public class ChromeShellTab extends Tab {
             public void onOpenImageUrl(String url, Referrer referrer) {
                 loadUrlWithSanitization(url);
             }
+
+            @Override
+            public void onOpenInNewTab(String url, Referrer referrer) {
+                mTabManager.createTab(url, TabLaunchType.FROM_LINK);
+            }
+
+            @Override
+            public void onOpenImageInNewTab(String url, Referrer referrer) {
+                mTabManager.createTab(url, TabLaunchType.FROM_LINK);
+            }
         });
     }
 
@@ -119,6 +135,17 @@ public class ChromeShellTab extends Tab {
         @Override
         public void onLoadStopped() {
             mIsLoading = false;
+        }
+
+        @Override
+        public void toggleFullscreenModeForTab(boolean enterFullscreen) {
+            mIsFullscreen = enterFullscreen;
+            super.toggleFullscreenModeForTab(enterFullscreen);
+        }
+
+        @Override
+        public boolean isFullscreenForTabOrPending() {
+            return mIsFullscreen;
         }
     }
 }

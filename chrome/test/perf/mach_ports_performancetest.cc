@@ -30,13 +30,13 @@ class MachPortsTest : public InProcessBrowserTest {
                 base::FilePath(FILE_PATH_LITERAL("data/mach_ports/moz"))) {
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     InProcessBrowserTest::SetUp();
 
     ASSERT_TRUE(server_.Start());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     std::string ports;
     for (std::vector<int>::iterator it = port_counts_.begin();
          it != port_counts_.end(); ++it) {
@@ -75,7 +75,7 @@ class MachPortsTest : public InProcessBrowserTest {
   // Adds a tab from the page cycler data at the specified domain.
   void AddTab(const std::string& domain) {
     GURL url = server_.GetURL("files/" + domain + "/").Resolve("?skip");
-    AddTabAtIndex(0, url, content::PageTransition::PAGE_TRANSITION_TYPED);
+    AddTabAtIndex(0, url, ui::PAGE_TRANSITION_TYPED);
   }
 
  private:

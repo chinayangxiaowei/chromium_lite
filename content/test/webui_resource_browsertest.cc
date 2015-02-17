@@ -2,25 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
+#include "content/grit/content_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "grit/content_resources.h"
-#include "grit/webui_resources.h"
 #include "net/base/filename_util.h"
+#include "ui/resources/grit/webui_resources.h"
 
 namespace content {
 
 class WebUIResourceBrowserTest : public ContentBrowserTest {
  public:
   WebUIResourceBrowserTest() {}
-  virtual ~WebUIResourceBrowserTest() {}
+  ~WebUIResourceBrowserTest() override {}
 
   // Runs all test functions in |file|, waiting for them to complete.
   void RunTest(const base::FilePath& file) {

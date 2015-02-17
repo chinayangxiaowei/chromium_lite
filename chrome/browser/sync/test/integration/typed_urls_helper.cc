@@ -13,11 +13,11 @@
 #include "chrome/browser/history/history_db_task.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/multi_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "components/history/core/browser/history_types.h"
 
 using sync_datatype_helper::test;
 
@@ -27,16 +27,16 @@ class FlushHistoryDBQueueTask : public history::HistoryDBTask {
  public:
   explicit FlushHistoryDBQueueTask(base::WaitableEvent* event)
       : wait_event_(event) {}
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     wait_event_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~FlushHistoryDBQueueTask() {}
+  ~FlushHistoryDBQueueTask() override {}
 
   base::WaitableEvent* wait_event_;
 };
@@ -46,18 +46,18 @@ class GetTypedUrlsTask : public history::HistoryDBTask {
   GetTypedUrlsTask(history::URLRows* rows, base::WaitableEvent* event)
       : rows_(rows), wait_event_(event) {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     // Fetch the typed URLs.
     backend->GetAllTypedURLs(rows_);
     wait_event_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~GetTypedUrlsTask() {}
+  ~GetTypedUrlsTask() override {}
 
   history::URLRows* rows_;
   base::WaitableEvent* wait_event_;
@@ -71,18 +71,18 @@ class GetUrlTask : public history::HistoryDBTask {
              base::WaitableEvent* event)
       : url_(url), row_(row), wait_event_(event), found_(found) {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     // Fetch the typed URLs.
     *found_ = backend->GetURL(url_, row_);
     wait_event_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~GetUrlTask() {}
+  ~GetUrlTask() override {}
 
   GURL url_;
   history::URLRow* row_;
@@ -97,18 +97,18 @@ class GetVisitsTask : public history::HistoryDBTask {
                 base::WaitableEvent* event)
       : id_(id), visits_(visits), wait_event_(event) {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     // Fetch the visits.
     backend->GetVisitsForURL(id_, visits_);
     wait_event_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~GetVisitsTask() {}
+  ~GetVisitsTask() override {}
 
   history::URLID id_;
   history::VisitVector* visits_;
@@ -121,18 +121,18 @@ class RemoveVisitsTask : public history::HistoryDBTask {
                    base::WaitableEvent* event)
       : visits_(visits), wait_event_(event) {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     // Fetch the visits.
     backend->RemoveVisits(visits_);
     wait_event_->Signal();
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {}
+  void DoneRunOnMainThread() override {}
 
  private:
-  virtual ~RemoveVisitsTask() {}
+  ~RemoveVisitsTask() override {}
 
   const history::VisitVector& visits_;
   base::WaitableEvent* wait_event_;
@@ -156,7 +156,7 @@ void WaitForHistoryDBThread(int index) {
 // type.
 void AddToHistory(HistoryService* service,
                   const GURL& url,
-                  content::PageTransition transition,
+                  ui::PageTransition transition,
                   history::VisitSource source,
                   const base::Time& timestamp) {
   service->AddPage(url,
@@ -263,19 +263,19 @@ base::Time GetTimestamp() {
 }
 
 void AddUrlToHistory(int index, const GURL& url) {
-  AddUrlToHistoryWithTransition(index, url, content::PAGE_TRANSITION_TYPED,
+  AddUrlToHistoryWithTransition(index, url, ui::PAGE_TRANSITION_TYPED,
                                 history::SOURCE_BROWSED);
 }
 void AddUrlToHistoryWithTransition(int index,
                                    const GURL& url,
-                                   content::PageTransition transition,
+                                   ui::PageTransition transition,
                                    history::VisitSource source) {
   base::Time timestamp = GetTimestamp();
   AddUrlToHistoryWithTimestamp(index, url, transition, source, timestamp);
 }
 void AddUrlToHistoryWithTimestamp(int index,
                                   const GURL& url,
-                                  content::PageTransition transition,
+                                  ui::PageTransition transition,
                                   history::VisitSource source,
                                   const base::Time& timestamp) {
   AddToHistory(HistoryServiceFactory::GetForProfileWithoutCreating(
@@ -395,10 +395,10 @@ namespace {
 class ProfilesHaveSameURLsChecker : public MultiClientStatusChangeChecker {
  public:
   ProfilesHaveSameURLsChecker();
-  virtual ~ProfilesHaveSameURLsChecker();
+  ~ProfilesHaveSameURLsChecker() override;
 
-  virtual bool IsExitConditionSatisfied() OVERRIDE;
-  virtual std::string GetDebugMessage() const OVERRIDE;
+  bool IsExitConditionSatisfied() override;
+  std::string GetDebugMessage() const override;
 };
 
 ProfilesHaveSameURLsChecker::ProfilesHaveSameURLsChecker()

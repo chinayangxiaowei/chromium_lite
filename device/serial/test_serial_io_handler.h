@@ -20,18 +20,17 @@ class TestSerialIoHandler : public SerialIoHandler {
   static scoped_refptr<SerialIoHandler> Create();
 
   // SerialIoHandler overrides.
-  virtual void Open(const std::string& port,
-                    const OpenCompleteCallback& callback) OVERRIDE;
-  virtual bool ConfigurePort(const serial::ConnectionOptions& options) OVERRIDE;
-  virtual void ReadImpl() OVERRIDE;
-  virtual void CancelReadImpl() OVERRIDE;
-  virtual void WriteImpl() OVERRIDE;
-  virtual void CancelWriteImpl() OVERRIDE;
-  virtual serial::DeviceControlSignalsPtr GetControlSignals() const OVERRIDE;
-  virtual serial::ConnectionInfoPtr GetPortInfo() const OVERRIDE;
-  virtual bool Flush() const OVERRIDE;
-  virtual bool SetControlSignals(
-      const serial::HostControlSignals& signals) OVERRIDE;
+  void Open(const std::string& port,
+            const OpenCompleteCallback& callback) override;
+  bool ConfigurePort(const serial::ConnectionOptions& options) override;
+  void ReadImpl() override;
+  void CancelReadImpl() override;
+  void WriteImpl() override;
+  void CancelWriteImpl() override;
+  serial::DeviceControlSignalsPtr GetControlSignals() const override;
+  serial::ConnectionInfoPtr GetPortInfo() const override;
+  bool Flush() const override;
+  bool SetControlSignals(const serial::HostControlSignals& signals) override;
 
   serial::ConnectionInfo* connection_info() { return &info_; }
   serial::DeviceControlSignals* device_control_signals() {
@@ -40,9 +39,14 @@ class TestSerialIoHandler : public SerialIoHandler {
   bool dtr() { return dtr_; }
   bool rts() { return rts_; }
   int flushes() { return flushes_; }
+  // This callback will be called when this IoHandler processes its next write,
+  // instead of the normal behavior of echoing the data to reads.
+  void set_send_callback(const base::Closure& callback) {
+    send_callback_ = callback;
+  }
 
  protected:
-  virtual ~TestSerialIoHandler();
+  ~TestSerialIoHandler() override;
 
  private:
   bool opened_;
@@ -51,6 +55,8 @@ class TestSerialIoHandler : public SerialIoHandler {
   bool dtr_;
   bool rts_;
   mutable int flushes_;
+  std::string buffer_;
+  base::Closure send_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(TestSerialIoHandler);
 };

@@ -36,15 +36,15 @@ scoped_ptr<PrefService> PrefServiceForTesting() {
 class BookmarkExpandedStateTrackerTest : public testing::Test {
  public:
   BookmarkExpandedStateTrackerTest();
-  virtual ~BookmarkExpandedStateTrackerTest();
+  ~BookmarkExpandedStateTrackerTest() override;
 
  protected:
   // testing::Test:
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  void SetUp() override;
+  void TearDown() override;
 
   base::MessageLoop message_loop_;
-  test::TestBookmarkClient client_;
+  TestBookmarkClient client_;
   scoped_ptr<PrefService> prefs_;
   scoped_ptr<BookmarkModel> model_;
 
@@ -57,7 +57,7 @@ BookmarkExpandedStateTrackerTest::~BookmarkExpandedStateTrackerTest() {}
 
 void BookmarkExpandedStateTrackerTest::SetUp() {
   prefs_ = PrefServiceForTesting();
-  model_.reset(new BookmarkModel(&client_, false));
+  model_.reset(new BookmarkModel(&client_));
   model_->Load(prefs_.get(),
                std::string(),
                base::FilePath(),

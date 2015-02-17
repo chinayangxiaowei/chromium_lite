@@ -38,6 +38,10 @@
 class DownloadShelfView;
 class DownloadShelfContextMenuView;
 
+namespace extensions {
+class ExperienceSamplingEvent;
+}
+
 namespace gfx {
 class Image;
 class ImageSkia;
@@ -56,7 +60,7 @@ class DownloadItemView : public views::ButtonListener,
                          public gfx::AnimationDelegate {
  public:
   DownloadItemView(content::DownloadItem* download, DownloadShelfView* parent);
-  virtual ~DownloadItemView();
+  ~DownloadItemView() override;
 
   // Timer callback for handling animations
   void UpdateDownloadProgress();
@@ -70,46 +74,45 @@ class DownloadItemView : public views::ButtonListener,
   content::DownloadItem* download() { return model_.download(); }
 
   // DownloadItem::Observer methods
-  virtual void OnDownloadUpdated(content::DownloadItem* download) OVERRIDE;
-  virtual void OnDownloadOpened(content::DownloadItem* download) OVERRIDE;
-  virtual void OnDownloadDestroyed(content::DownloadItem* download) OVERRIDE;
+  void OnDownloadUpdated(content::DownloadItem* download) override;
+  void OnDownloadOpened(content::DownloadItem* download) override;
+  void OnDownloadDestroyed(content::DownloadItem* download) override;
 
   // Overridden from views::View:
-  virtual void Layout() OVERRIDE;
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseCaptureLost() OVERRIDE;
-  virtual void OnMouseMoved(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
-  virtual bool OnKeyPressed(const ui::KeyEvent& event) OVERRIDE;
-  virtual bool GetTooltipText(const gfx::Point& p,
-                              base::string16* tooltip) const OVERRIDE;
-  virtual void GetAccessibleState(ui::AXViewState* state) OVERRIDE;
-  virtual void OnThemeChanged() OVERRIDE;
+  void Layout() override;
+  gfx::Size GetPreferredSize() const override;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  bool OnMouseDragged(const ui::MouseEvent& event) override;
+  void OnMouseReleased(const ui::MouseEvent& event) override;
+  void OnMouseCaptureLost() override;
+  void OnMouseMoved(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
+  bool GetTooltipText(const gfx::Point& p,
+                      base::string16* tooltip) const override;
+  void GetAccessibleState(ui::AXViewState* state) override;
+  void OnThemeChanged() override;
 
   // Overridden from ui::EventHandler:
-  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
+  void OnGestureEvent(ui::GestureEvent* event) override;
 
   // Overridden from views::ContextMenuController.
-  virtual void ShowContextMenuForView(View* source,
-                                      const gfx::Point& point,
-                                      ui::MenuSourceType source_type) OVERRIDE;
+  void ShowContextMenuForView(View* source,
+                              const gfx::Point& point,
+                              ui::MenuSourceType source_type) override;
 
   // ButtonListener implementation.
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // gfx::AnimationDelegate implementation.
-  virtual void AnimationProgressed(const gfx::Animation* animation) OVERRIDE;
+  void AnimationProgressed(const gfx::Animation* animation) override;
 
  protected:
   // Overridden from views::View:
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
-  virtual void OnPaintBackground(gfx::Canvas* canvas) OVERRIDE;
-  virtual void OnFocus() OVERRIDE;
-  virtual void OnBlur() OVERRIDE;
+  void OnPaint(gfx::Canvas* canvas) override;
+  void OnPaintBackground(gfx::Canvas* canvas) override;
+  void OnFocus() override;
+  void OnBlur() override;
 
  private:
   enum State {
@@ -324,10 +327,6 @@ class DownloadItemView : public views::ButtonListener,
   // The time at which a dangerous download warning was displayed.
   base::Time time_download_warning_shown_;
 
-  // Method factory used to delay reenabling of the item when opening the
-  // downloaded file.
-  base::WeakPtrFactory<DownloadItemView> weak_ptr_factory_;
-
   // The currently running download context menu.
   scoped_ptr<DownloadShelfContextMenuView> context_menu_;
 
@@ -338,6 +337,14 @@ class DownloadItemView : public views::ButtonListener,
   // item.  Store the path used, so that we can detect a change in the path
   // and reload the icon.
   base::FilePath last_download_item_path_;
+
+  // ExperienceSampling: This tracks dangerous/malicious downloads warning UI
+  // and the user's decisions about it.
+  scoped_ptr<extensions::ExperienceSamplingEvent> sampling_event_;
+
+  // Method factory used to delay reenabling of the item when opening the
+  // downloaded file.
+  base::WeakPtrFactory<DownloadItemView> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadItemView);
 };

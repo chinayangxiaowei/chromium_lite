@@ -120,7 +120,8 @@ void NonSfiListener::OnStart(const nacl::NaClStartParams& params) {
   // hangs, so we'll keep it.
   trusted_listener_ = new NaClTrustedListener(
       IPC::Channel::GenerateVerifiedChannelID("nacl"),
-      io_thread_.message_loop_proxy().get());
+      io_thread_.message_loop_proxy().get(),
+      &shutdown_event_);
   if (!Send(new NaClProcessHostMsg_PpapiChannelsCreated(
           browser_handle,
           ppapi_renderer_handle,
@@ -137,8 +138,10 @@ void NonSfiListener::OnStart(const nacl::NaClStartParams& params) {
   CHECK(!params.enable_debug_stub);
   CHECK(params.debug_stub_server_bound_socket.fd == -1);
 
-  CHECK(!params.uses_irt);
   CHECK(params.handles.empty());
+  // We are only expecting non-SFI mode to be used with NaCl for now,
+  // not PNaCl processes.
+  CHECK(params.process_type == kNativeNaClProcessType);
 
   CHECK(params.nexe_file != IPC::InvalidPlatformFileForTransit());
   CHECK(params.nexe_token_lo == 0);

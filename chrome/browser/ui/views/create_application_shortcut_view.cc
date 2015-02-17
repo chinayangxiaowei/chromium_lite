@@ -17,20 +17,18 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "components/favicon_base/select_favicon_frames.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/extension.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
-#include "grit/theme_resources.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_request.h"
 #include "skia/ext/image_operations.h"
@@ -72,7 +70,7 @@ class AppInfoView : public views::View {
   void UpdateIcon(const gfx::ImageFamily& image);
 
   // Overridden from views::View:
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  void OnPaint(gfx::Canvas* canvas) override;
 
  private:
   // Initializes the controls
@@ -432,7 +430,6 @@ CreateUrlApplicationShortcutView::CreateUrlApplicationShortcutView(
       web_contents_(web_contents),
       pending_download_id_(-1),
       weak_ptr_factory_(this)  {
-
   web_app::GetShortcutInfoForTab(web_contents_, &shortcut_info_);
   const WebApplicationInfo& app_info =
       extensions::TabHelper::FromWebContents(web_contents_)->web_app_info();

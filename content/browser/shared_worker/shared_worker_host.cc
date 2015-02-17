@@ -31,16 +31,17 @@ void WorkerCrashCallback(int render_process_unique_id, int render_frame_id) {
     host->delegate()->WorkerCrashed(host);
 }
 
-void NotifyWorkerContextStarted(int worker_process_id, int worker_route_id) {
+void NotifyWorkerReadyForInspection(int worker_process_id,
+                                    int worker_route_id) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    BrowserThread::PostTask(
-        BrowserThread::UI,
-        FROM_HERE,
-        base::Bind(
-            NotifyWorkerContextStarted, worker_process_id, worker_route_id));
+    BrowserThread::PostTask(BrowserThread::UI,
+                            FROM_HERE,
+                            base::Bind(NotifyWorkerReadyForInspection,
+                                       worker_process_id,
+                                       worker_route_id));
     return;
   }
-  EmbeddedWorkerDevToolsManager::GetInstance()->WorkerContextStarted(
+  EmbeddedWorkerDevToolsManager::GetInstance()->WorkerReadyForInspection(
       worker_process_id, worker_route_id);
 }
 
@@ -63,13 +64,13 @@ SharedWorkerHost::SharedWorkerHost(SharedWorkerInstance* instance,
                                    int worker_route_id)
     : instance_(instance),
       worker_document_set_(new WorkerDocumentSet()),
-      weak_factory_(this),
       container_render_filter_(filter),
       worker_process_id_(filter->render_process_id()),
       worker_route_id_(worker_route_id),
       load_failed_(false),
       closed_(false),
-      creation_time_(base::TimeTicks::Now()) {
+      creation_time_(base::TimeTicks::Now()),
+      weak_factory_(this) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 }
 
@@ -175,10 +176,13 @@ void SharedWorkerHost::WorkerContextDestroyed() {
   worker_document_set_ = NULL;
 }
 
+void SharedWorkerHost::WorkerReadyForInspection() {
+  NotifyWorkerReadyForInspection(worker_process_id_, worker_route_id_);
+}
+
 void SharedWorkerHost::WorkerScriptLoaded() {
   UMA_HISTOGRAM_TIMES("SharedWorker.TimeToScriptLoaded",
                       base::TimeTicks::Now() - creation_time_);
-  NotifyWorkerContextStarted(worker_process_id_, worker_route_id_);
 }
 
 void SharedWorkerHost::WorkerScriptLoadFailed() {

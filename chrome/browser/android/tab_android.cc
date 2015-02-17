@@ -13,7 +13,6 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
-#include "chrome/browser/google/google_url_tracker_factory.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_manager.h"
@@ -21,6 +20,8 @@
 #include "chrome/browser/printing/print_view_manager_basic.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_android.h"
+#include "chrome/browser/search/instant_service.h"
+#include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
@@ -36,15 +37,14 @@
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_helpers.h"
-#include "chrome/browser/ui/toolbar/toolbar_model_impl.h"
+#include "chrome/common/instant_types.h"
 #include "chrome/common/url_constants.h"
-#include "components/google/core/browser/google_url_tracker.h"
-#include "components/google/core/browser/google_util.h"
 #include "components/infobars/core/infobar_container.h"
 #include "components/url_fixer/url_fixer.h"
 #include "content/public/browser/android/content_view_core.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "jni/Tab_jni.h"
@@ -232,11 +232,6 @@ void TabAndroid::HandlePopupNavigation(chrome::NavigateParams* params) {
   }
 }
 
-bool TabAndroid::ShouldWelcomePageLinkToTermsOfService() {
-  NOTIMPLEMENTED();
-  return false;
-}
-
 bool TabAndroid::HasPrerenderedUrl(GURL gurl) {
   prerender::PrerenderManager* prerender_manager = GetPrerenderManager();
   if (!prerender_manager)
@@ -306,6 +301,34 @@ void TabAndroid::SwapTabContents(content::WebContents* old_contents,
       did_finish_load);
 }
 
+void TabAndroid::DefaultSearchProviderChanged() {
+  // TODO(kmadhusu): Move this function definition to a common place and update
+  // BrowserInstantController::DefaultSearchProviderChanged to use the same.
+  if (!web_contents())
+    return;
+
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(GetProfile());
+  if (!instant_service)
+    return;
+
+  // Send new search URLs to the renderer.
+  content::RenderProcessHost* rph = web_contents()->GetRenderProcessHost();
+  instant_service->SendSearchURLsToRenderer(rph);
+
+  // Reload the contents to ensure that it gets assigned to a non-previledged
+  // renderer.
+  if (!instant_service->IsInstantProcess(rph->GetID()))
+    return;
+  web_contents()->GetController().Reload(false);
+
+  // As the reload was not triggered by the user we don't want to close any
+  // infobars. We have to tell the InfoBarService after the reload, otherwise it
+  // would ignore this call when
+  // WebContentsObserver::DidStartNavigationToPendingEntry is invoked.
+  InfoBarService::FromWebContents(web_contents())->set_ignore_next_reload();
+}
+
 void TabAndroid::OnWebContentsInstantSupportDisabled(
     const content::WebContents* contents) {
   DCHECK(contents);
@@ -342,9 +365,6 @@ void TabAndroid::Observe(int type,
       }
       break;
     }
-    case chrome::NOTIFICATION_FAVICON_UPDATED:
-      Java_Tab_onFaviconUpdated(env, weak_java_tab_.get(env).obj());
-      break;
     case content::NOTIFICATION_NAV_ENTRY_CHANGED:
       Java_Tab_onNavEntryChanged(env, weak_java_tab_.get(env).obj());
       break;
@@ -352,6 +372,16 @@ void TabAndroid::Observe(int type,
       NOTREACHED() << "Unexpected notification " << type;
       break;
   }
+}
+
+void TabAndroid::OnFaviconAvailable(const gfx::Image& image) {
+  SkBitmap favicon = image.AsImageSkia().GetRepresentation(1.0f).sk_bitmap();
+  if (favicon.empty())
+    return;
+
+  JNIEnv *env = base::android::AttachCurrentThread();
+  Java_Tab_onFaviconAvailable(env, weak_java_tab_.get(env).obj(),
+                              gfx::ConvertToJavaBitmap(&favicon).obj());
 }
 
 void TabAndroid::Destroy(JNIEnv* env, jobject obj) {
@@ -395,19 +425,26 @@ void TabAndroid::InitWebContents(JNIEnv* env,
       content::Source<content::WebContents>(web_contents()));
   notification_registrar_.Add(
       this,
-      chrome::NOTIFICATION_FAVICON_UPDATED,
-      content::Source<content::WebContents>(web_contents()));
-  notification_registrar_.Add(
-      this,
       content::NOTIFICATION_NAV_ENTRY_CHANGED,
       content::Source<content::NavigationController>(
            &web_contents()->GetController()));
+
+  FaviconTabHelper* favicon_tab_helper =
+      FaviconTabHelper::FromWebContents(web_contents_.get());
+
+  if (favicon_tab_helper)
+    favicon_tab_helper->AddObserver(this);
 
   synced_tab_delegate_->SetWebContents(web_contents());
 
   // Verify that the WebContents this tab represents matches the expected
   // off the record state.
   CHECK_EQ(GetProfile()->IsOffTheRecord(), incognito);
+
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(GetProfile());
+  if (instant_service)
+    instant_service->AddObserver(this);
 }
 
 void TabAndroid::DestroyWebContents(JNIEnv* env,
@@ -421,13 +458,20 @@ void TabAndroid::DestroyWebContents(JNIEnv* env,
       content::Source<content::WebContents>(web_contents()));
   notification_registrar_.Remove(
       this,
-      chrome::NOTIFICATION_FAVICON_UPDATED,
-      content::Source<content::WebContents>(web_contents()));
-  notification_registrar_.Remove(
-      this,
       content::NOTIFICATION_NAV_ENTRY_CHANGED,
       content::Source<content::NavigationController>(
            &web_contents()->GetController()));
+
+  FaviconTabHelper* favicon_tab_helper =
+      FaviconTabHelper::FromWebContents(web_contents_.get());
+
+  if (favicon_tab_helper)
+    favicon_tab_helper->RemoveObserver(this);
+
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(GetProfile());
+  if (instant_service)
+    instant_service->RemoveObserver(this);
 
   web_contents()->SetDelegate(NULL);
 
@@ -438,14 +482,6 @@ void TabAndroid::DestroyWebContents(JNIEnv* env,
     // Release the WebContents so it does not get deleted by the scoped_ptr.
     ignore_result(web_contents_.release());
   }
-}
-
-base::android::ScopedJavaLocalRef<jobject> TabAndroid::GetWebContents(
-    JNIEnv* env,
-    jobject obj) {
-  if (!web_contents_.get())
-    return base::android::ScopedJavaLocalRef<jobject>();
-  return web_contents_->GetJavaWebContents();
 }
 
 base::android::ScopedJavaLocalRef<jobject> TabAndroid::GetProfileAndroid(
@@ -470,8 +506,7 @@ TabAndroid::TabLoadStatus TabAndroid::LoadUrl(JNIEnv* env,
                                               jstring j_referrer_url,
                                               jint referrer_policy,
                                               jboolean is_renderer_initiated) {
-  content::ContentViewCore* content_view = GetContentViewCore();
-  if (!content_view)
+  if (!web_contents())
     return PAGE_LOAD_FAILED;
 
   GURL gurl(base::android::ConvertJavaStringToUTF8(env, url));
@@ -494,7 +529,8 @@ TabAndroid::TabLoadStatus TabAndroid::LoadUrl(JNIEnv* env,
           chrome::ExtractSearchTermsFromURL(GetProfile(), gurl);
       if (!search_terms.empty() &&
           prerenderer->CanCommitQuery(web_contents_.get(), search_terms)) {
-        prerenderer->Commit(search_terms);
+        EmbeddedSearchRequestParams request_params(gurl);
+        prerenderer->Commit(search_terms, request_params);
 
         if (prerenderer->UsePrerenderedPage(gurl, &params))
           return FULL_PRERENDERED_PAGE_LOAD;
@@ -513,20 +549,6 @@ TabAndroid::TabLoadStatus TabAndroid::LoadUrl(JNIEnv* env,
     return PAGE_LOAD_FAILED;
 
   if (!HandleNonNavigationAboutURL(fixed_url)) {
-    // Notify the GoogleURLTracker of searches, it might want to change the
-    // actual Google site used (for instance when in the UK, google.co.uk, when
-    // in the US google.com).
-    // Note that this needs to happen before we initiate the navigation as the
-    // GoogleURLTracker uses the navigation pending notification to trigger the
-    // infobar.
-    if (google_util::IsGoogleSearchUrl(fixed_url) &&
-        (page_transition & content::PAGE_TRANSITION_GENERATED)) {
-      GoogleURLTracker* tracker =
-          GoogleURLTrackerFactory::GetForProfile(GetProfile());
-      if (tracker)
-        tracker->SearchCommitted();
-    }
-
     // Record UMA "ShowHistory" here. That way it'll pick up both user
     // typing chrome://history as well as selecting from the drop down menu.
     if (fixed_url.spec() == chrome::kChromeUIHistoryURL) {
@@ -548,7 +570,7 @@ TabAndroid::TabLoadStatus TabAndroid::LoadUrl(JNIEnv* env,
           base::RefCountedBytes::TakeVector(&post_data);
     }
     load_params.transition_type =
-        content::PageTransitionFromInt(page_transition);
+        ui::PageTransitionFromInt(page_transition);
     if (j_referrer_url) {
       load_params.referrer = content::Referrer(
           GURL(base::android::ConvertJavaStringToUTF8(env, j_referrer_url)),
@@ -560,18 +582,14 @@ TabAndroid::TabLoadStatus TabAndroid::LoadUrl(JNIEnv* env,
         SearchTabHelper::FromWebContents(web_contents_.get());
     if (!search_terms.empty() && search_tab_helper &&
         search_tab_helper->SupportsInstant()) {
-      search_tab_helper->Submit(search_terms);
+      EmbeddedSearchRequestParams request_params(gurl);
+      search_tab_helper->Submit(search_terms, request_params);
       return DEFAULT_PAGE_LOAD;
     }
     load_params.is_renderer_initiated = is_renderer_initiated;
-    content_view->LoadUrl(load_params);
+    web_contents()->GetController().LoadURLWithParams(load_params);
   }
   return DEFAULT_PAGE_LOAD;
-}
-
-ToolbarModel::SecurityLevel TabAndroid::GetSecurityLevel(JNIEnv* env,
-                                                         jobject obj) {
-  return ToolbarModelImpl::GetSecurityLevelForWebContents(web_contents());
 }
 
 void TabAndroid::SetActiveNavigationEntryTitleForUrl(JNIEnv* env,
@@ -608,27 +626,17 @@ bool TabAndroid::Print(JNIEnv* env, jobject obj) {
   return true;
 }
 
-ScopedJavaLocalRef<jobject> TabAndroid::GetFavicon(JNIEnv* env, jobject obj) {
+ScopedJavaLocalRef<jobject> TabAndroid::GetFavicon(JNIEnv* env,
+                                                   jobject obj) {
   ScopedJavaLocalRef<jobject> bitmap;
   FaviconTabHelper* favicon_tab_helper =
       FaviconTabHelper::FromWebContents(web_contents_.get());
 
   if (!favicon_tab_helper)
     return bitmap;
-  if (!favicon_tab_helper->FaviconIsValid())
-    return bitmap;
 
-  SkBitmap favicon =
-      favicon_tab_helper->GetFavicon()
-          .AsImageSkia()
-          .GetRepresentation(
-               ResourceBundle::GetSharedInstance().GetMaxScaleFactor())
-          .sk_bitmap();
-
-  if (favicon.empty()) {
-    favicon = favicon_tab_helper->GetFavicon().AsBitmap();
-  }
-
+  // Always return the default favicon in Android.
+  SkBitmap favicon = favicon_tab_helper->GetFavicon().AsBitmap();
   if (!favicon.empty()) {
     gfx::DeviceDisplayInfo device_info;
     const float device_scale_factor = device_info.GetDIPScale();
@@ -645,6 +653,11 @@ ScopedJavaLocalRef<jobject> TabAndroid::GetFavicon(JNIEnv* env, jobject obj) {
     bitmap = gfx::ConvertToJavaBitmap(&favicon);
   }
   return bitmap;
+}
+
+jboolean TabAndroid::IsFaviconValid(JNIEnv* env, jobject jobj) {
+  return web_contents() &&
+      FaviconTabHelper::FromWebContents(web_contents())->FaviconIsValid();
 }
 
 prerender::PrerenderManager* TabAndroid::GetPrerenderManager() const {

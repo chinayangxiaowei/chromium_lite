@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/atomicops.h"
+#include "base/base_export.h"
 #include "base/callback.h"
 #include "base/containers/hash_tables.h"
 #include "base/gtest_prod_util.h"
@@ -22,7 +23,6 @@
 #include "base/synchronization/lock.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_local.h"
-#include "base/timer/timer.h"
 
 // Older style trace macros with explicit id and extra data
 // Only these macros result in publishing data to ETW as currently implemented.
@@ -43,17 +43,6 @@
 
 template <typename Type>
 struct DefaultSingletonTraits;
-
-#if defined(COMPILER_GCC)
-namespace BASE_HASH_NAMESPACE {
-template <>
-struct hash<base::MessageLoop*> {
-  std::size_t operator()(base::MessageLoop* value) const {
-    return reinterpret_cast<std::size_t>(value);
-  }
-};
-}  // BASE_HASH_NAMESPACE
-#endif
 
 namespace base {
 
@@ -189,7 +178,7 @@ class BASE_EXPORT TraceEvent {
 // TraceBufferChunk is the basic unit of TraceBuffer.
 class BASE_EXPORT TraceBufferChunk {
  public:
-  TraceBufferChunk(uint32 seq)
+  explicit TraceBufferChunk(uint32 seq)
       : next_free_(0),
         seq_(seq) {
   }
@@ -291,7 +280,7 @@ class BASE_EXPORT CategoryFilter {
   // The default category filter, used when none is provided.
   // Allows all categories through, except if they end in the suffix 'Debug' or
   // 'Test'.
-  static const char* kDefaultCategoryFilterString;
+  static const char kDefaultCategoryFilterString[];
 
   // |filter_string| is a comma-delimited list of category wildcards.
   // A category can have an optional '-' prefix to make it an excluded category.
@@ -390,13 +379,12 @@ enum TraceRecordMode {
 };
 
 struct BASE_EXPORT TraceOptions {
-
   TraceOptions()
       : record_mode(RECORD_UNTIL_FULL),
         enable_sampling(false),
         enable_systrace(false) {}
 
-  TraceOptions(TraceRecordMode record_mode)
+  explicit TraceOptions(TraceRecordMode record_mode)
       : record_mode(record_mode),
         enable_sampling(false),
         enable_systrace(false) {}
@@ -493,7 +481,7 @@ class BASE_EXPORT TraceLog {
   // Enabled state listeners give a callback when tracing is enabled or
   // disabled. This can be used to tie into other library's tracing systems
   // on-demand.
-  class EnabledStateObserver {
+  class BASE_EXPORT EnabledStateObserver {
    public:
     // Called just after the tracing system becomes enabled, outside of the
     // |lock_|. TraceLog::IsEnabled() is true at this point.

@@ -73,15 +73,19 @@ public interface HttpUrlRequest {
                           long contentLength);
 
     /**
-     * Sets the HTTP method verb to use for this request. Currently can only be
-     * "POST" or "PUT".
+     * Sets the HTTP method verb to use for this request.
      *
      * <p>The default when this method is not called is "GET" if the request has
      * no body or "POST" if it does.
      *
-     * @param method Either "POST" or "PUT".
+     * @param method "GET", "POST", etc. Must be all uppercase.
      */
     void setHttpMethod(String method);
+
+    /**
+     * Disables redirect for this request.
+     */
+    void disableRedirects();
 
     /**
      * Start executing the request.
@@ -100,6 +104,14 @@ public interface HttpUrlRequest {
      * Returns {@code true} if the request has been canceled.
      */
     boolean isCanceled();
+
+    /**
+     * Returns protocol (e.g. "quic/1+spdy/3") negotiated with server. Returns
+     * empty string if no protocol was negotiated, or the protocol is not known.
+     * Returns empty when using plain http or https. Must be called after
+     * onResponseStarted but before request is recycled.
+     */
+    String getNegotiatedProtocol();
 
     /**
      * Returns the entire response as a ByteBuffer.
@@ -129,6 +141,12 @@ public interface HttpUrlRequest {
      * method returns 200.
      */
     int getHttpStatusCode();
+
+    /**
+     * Returns the HTTP status text of the status line. For example, if the
+     * request has a "HTTP/1.1 200 OK" response, this method returns "OK".
+     */
+    String getHttpStatusText();
 
     /**
      * Returns the response header value for the given name or {@code null} if

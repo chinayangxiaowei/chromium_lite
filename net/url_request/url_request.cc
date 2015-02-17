@@ -13,12 +13,13 @@
 #include "base/memory/singleton.h"
 #include "base/message_loop/message_loop.h"
 #include "base/metrics/stats_counters.h"
-#include "base/metrics/user_metrics.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/values.h"
 #include "net/base/auth.h"
+#include "net/base/chunked_upload_data_stream.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
 #include "net/base/load_timing_info.h"
@@ -198,23 +199,6 @@ void URLRequest::Delegate::OnBeforeNetworkStart(URLRequest* request,
 ///////////////////////////////////////////////////////////////////////////////
 // URLRequest
 
-URLRequest::URLRequest(const GURL& url,
-                       RequestPriority priority,
-                       Delegate* delegate,
-                       const URLRequestContext* context)
-    : identifier_(GenerateURLRequestIdentifier()) {
-  Init(url, priority, delegate, context, NULL);
-}
-
-URLRequest::URLRequest(const GURL& url,
-                       RequestPriority priority,
-                       Delegate* delegate,
-                       const URLRequestContext* context,
-                       CookieStore* cookie_store)
-    : identifier_(GenerateURLRequestIdentifier()) {
-  Init(url, priority, delegate, context, cookie_store);
-}
-
 URLRequest::~URLRequest() {
   Cancel();
 
@@ -238,64 +222,11 @@ URLRequest::~URLRequest() {
   net_log_.EndEventWithNetErrorCode(NetLog::TYPE_REQUEST_ALIVE, net_error);
 }
 
-// static
-void URLRequest::RegisterRequestInterceptor(Interceptor* interceptor) {
-  URLRequestJobManager::GetInstance()->RegisterRequestInterceptor(interceptor);
-}
-
-// static
-void URLRequest::UnregisterRequestInterceptor(Interceptor* interceptor) {
-  URLRequestJobManager::GetInstance()->UnregisterRequestInterceptor(
-      interceptor);
-}
-
-void URLRequest::Init(const GURL& url,
-                      RequestPriority priority,
-                      Delegate* delegate,
-                      const URLRequestContext* context,
-                      CookieStore* cookie_store) {
-  context_ = context;
-  network_delegate_ = context->network_delegate();
-  net_log_ = BoundNetLog::Make(context->net_log(), NetLog::SOURCE_URL_REQUEST);
-  url_chain_.push_back(url);
-  method_ = "GET";
-  referrer_policy_ = CLEAR_REFERRER_ON_TRANSITION_FROM_SECURE_TO_INSECURE;
-  first_party_url_policy_ = NEVER_CHANGE_FIRST_PARTY_URL;
-  load_flags_ = LOAD_NORMAL;
-  delegate_ = delegate;
-  is_pending_ = false;
-  is_redirecting_ = false;
-  redirect_limit_ = kMaxRedirects;
-  priority_ = priority;
-  calling_delegate_ = false;
-  use_blocked_by_as_load_param_ =false;
-  before_request_callback_ = base::Bind(&URLRequest::BeforeRequestComplete,
-                                        base::Unretained(this));
-  has_notified_completion_ = false;
-  received_response_content_length_ = 0;
-  creation_time_ = base::TimeTicks::Now();
-  notified_before_network_start_ = false;
-
-  SIMPLE_STATS_COUNTER("URLRequestCount");
-
-  // Sanity check out environment.
-  DCHECK(base::MessageLoop::current())
-      << "The current base::MessageLoop must exist";
-
-  CHECK(context);
-  context->url_requests()->insert(this);
-  cookie_store_ = cookie_store;
-  if (cookie_store_ == NULL)
-    cookie_store_ = context->cookie_store();
-
-  net_log_.BeginEvent(NetLog::TYPE_REQUEST_ALIVE);
-}
-
 void URLRequest::EnableChunkedUpload() {
   DCHECK(!upload_data_stream_ || upload_data_stream_->is_chunked());
   if (!upload_data_stream_) {
-    upload_data_stream_.reset(
-        new UploadDataStream(UploadDataStream::CHUNKED, 0));
+    upload_chunked_data_stream_ = new ChunkedUploadDataStream(0);
+    upload_data_stream_.reset(upload_chunked_data_stream_);
   }
 }
 
@@ -305,7 +236,7 @@ void URLRequest::AppendChunkToUpload(const char* bytes,
   DCHECK(upload_data_stream_);
   DCHECK(upload_data_stream_->is_chunked());
   DCHECK_GT(bytes_len, 0);
-  upload_data_stream_->AppendChunk(bytes, bytes_len, is_last_chunk);
+  upload_chunked_data_stream_->AppendData(bytes, bytes_len, is_last_chunk);
 }
 
 void URLRequest::set_upload(scoped_ptr<UploadDataStream> upload) {
@@ -530,7 +461,7 @@ int URLRequest::GetResponseCode() const {
 
 void URLRequest::SetLoadFlags(int flags) {
   if ((load_flags_ & LOAD_IGNORE_LIMITS) != (flags & LOAD_IGNORE_LIMITS)) {
-    DCHECK(!job_);
+    DCHECK(!job_.get());
     DCHECK(flags & LOAD_IGNORE_LIMITS);
     DCHECK_EQ(priority_, MAXIMUM_PRIORITY);
   }
@@ -623,7 +554,6 @@ void URLRequest::Start() {
   // Some values can be NULL, but the job factory must not be.
   DCHECK(context_->job_factory());
 
-  DCHECK_EQ(network_delegate_, context_->network_delegate());
   // Anything that sets |blocked_by_| before start should have cleaned up after
   // itself.
   DCHECK(blocked_by_.empty());
@@ -653,10 +583,61 @@ void URLRequest::Start() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+URLRequest::URLRequest(const GURL& url,
+                       RequestPriority priority,
+                       Delegate* delegate,
+                       const URLRequestContext* context,
+                       CookieStore* cookie_store,
+                       NetworkDelegate* network_delegate)
+    : context_(context),
+      network_delegate_(network_delegate ? network_delegate
+                                         : context->network_delegate()),
+      net_log_(BoundNetLog::Make(context->net_log(),
+                                 NetLog::SOURCE_URL_REQUEST)),
+      url_chain_(1, url),
+      method_("GET"),
+      referrer_policy_(CLEAR_REFERRER_ON_TRANSITION_FROM_SECURE_TO_INSECURE),
+      first_party_url_policy_(NEVER_CHANGE_FIRST_PARTY_URL),
+      load_flags_(LOAD_NORMAL),
+      delegate_(delegate),
+      is_pending_(false),
+      is_redirecting_(false),
+      redirect_limit_(kMaxRedirects),
+      priority_(priority),
+      identifier_(GenerateURLRequestIdentifier()),
+      calling_delegate_(false),
+      use_blocked_by_as_load_param_(false),
+      before_request_callback_(base::Bind(&URLRequest::BeforeRequestComplete,
+                                          base::Unretained(this))),
+      has_notified_completion_(false),
+      received_response_content_length_(0),
+      creation_time_(base::TimeTicks::Now()),
+      notified_before_network_start_(false),
+      cookie_store_(cookie_store ? cookie_store : context->cookie_store()) {
+  SIMPLE_STATS_COUNTER("URLRequestCount");
+
+  // Sanity check out environment.
+  DCHECK(base::MessageLoop::current())
+      << "The current base::MessageLoop must exist";
+
+  context->url_requests()->insert(this);
+  net_log_.BeginEvent(NetLog::TYPE_REQUEST_ALIVE);
+}
+
+// static
+void URLRequest::RegisterRequestInterceptor(Interceptor* interceptor) {
+  URLRequestJobManager::GetInstance()->RegisterRequestInterceptor(interceptor);
+}
+
+// static
+void URLRequest::UnregisterRequestInterceptor(Interceptor* interceptor) {
+  URLRequestJobManager::GetInstance()->UnregisterRequestInterceptor(
+      interceptor);
+}
+
 void URLRequest::BeforeRequestComplete(int error) {
   DCHECK(!job_.get());
   DCHECK_NE(ERR_IO_PENDING, error);
-  DCHECK_EQ(network_delegate_, context_->network_delegate());
 
   // Check that there are no callbacks to already canceled requests.
   DCHECK_NE(URLRequestStatus::CANCELED, status_.status());
@@ -711,12 +692,21 @@ void URLRequest::StartJob(URLRequestJob* job) {
   if (referrer_policy_ ==
           CLEAR_REFERRER_ON_TRANSITION_FROM_SECURE_TO_INSECURE &&
       GURL(referrer_).SchemeIsSecure() && !url().SchemeIsSecure()) {
-#if !defined(OFFICIAL_BUILD)
-    LOG(FATAL) << "Trying to send secure referrer for insecure load";
-#endif
-    referrer_.clear();
-    base::RecordAction(
-        base::UserMetricsAction("Net.URLRequest_StartJob_InvalidReferrer"));
+    if (!network_delegate_ ||
+        !network_delegate_->CancelURLRequestWithPolicyViolatingReferrerHeader(
+            *this, url(), GURL(referrer_))) {
+      referrer_.clear();
+    } else {
+      // We need to clear the referrer anyway to avoid an infinite recursion
+      // when starting the error job.
+      referrer_.clear();
+      std::string source("delegate");
+      net_log_.AddEvent(NetLog::TYPE_CANCELLED,
+                        NetLog::StringCallback("source", &source));
+      RestartWithJob(new URLRequestErrorJob(
+          this, network_delegate_, ERR_BLOCKED_BY_CLIENT));
+      return;
+    }
   }
 
   // Don't allow errors to be sent from within Start().
@@ -843,6 +833,11 @@ void URLRequest::NotifyReceivedRedirect(const RedirectInfo& redirect_info,
     RestartWithJob(job);
   } else if (delegate_) {
     OnCallToDelegate();
+
+    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION(
+            "423948 URLRequest::Delegate::OnReceivedRedirect"));
     delegate_->OnReceivedRedirect(this, redirect_info, defer_redirect);
     // |this| may be have been destroyed here.
   }
@@ -851,7 +846,14 @@ void URLRequest::NotifyReceivedRedirect(const RedirectInfo& redirect_info,
 void URLRequest::NotifyBeforeNetworkStart(bool* defer) {
   if (delegate_ && !notified_before_network_start_) {
     OnCallToDelegate();
-    delegate_->OnBeforeNetworkStart(this, defer);
+    {
+      // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is
+      // fixed.
+      tracked_objects::ScopedTracker tracking_profile(
+          FROM_HERE_WITH_EXPLICIT_FUNCTION(
+              "423948 URLRequest::Delegate::OnBeforeNetworkStart"));
+      delegate_->OnBeforeNetworkStart(this, defer);
+    }
     if (!*defer)
       OnCallToDelegateComplete();
     notified_before_network_start_ = true;
@@ -859,7 +861,7 @@ void URLRequest::NotifyBeforeNetworkStart(bool* defer) {
 }
 
 void URLRequest::ResumeNetworkStart() {
-  DCHECK(job_);
+  DCHECK(job_.get());
   DCHECK(notified_before_network_start_);
 
   OnCallToDelegateComplete();
@@ -892,6 +894,11 @@ void URLRequest::NotifyResponseStarted() {
         NotifyRequestCompleted();
 
       OnCallToDelegate();
+      // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is
+      // fixed.
+      tracked_objects::ScopedTracker tracking_profile(
+          FROM_HERE_WITH_EXPLICIT_FUNCTION(
+              "423948 URLRequest::Delegate::OnResponseStarted"));
       delegate_->OnResponseStarted(this);
       // Nothing may appear below this line as OnResponseStarted may delete
       // |this|.
@@ -1060,10 +1067,7 @@ bool URLRequest::GetHSTSRedirect(GURL* redirect_url) const {
   if (!url.SchemeIs("http"))
     return false;
   TransportSecurityState* state = context()->transport_security_state();
-  if (state &&
-      state->ShouldUpgradeToSSL(
-          url.host(),
-          SSLConfigService::IsSNIAvailable(context()->ssl_config_service()))) {
+  if (state && state->ShouldUpgradeToSSL(url.host())) {
     url::Replacements<char> replacements;
     const char kNewScheme[] = "https";
     replacements.SetScheme(kNewScheme, url::Component(0, strlen(kNewScheme)));
@@ -1111,8 +1115,14 @@ void URLRequest::NotifyAuthRequiredComplete(
     case NetworkDelegate::AUTH_REQUIRED_RESPONSE_NO_ACTION:
       // Defer to the URLRequest::Delegate, since the NetworkDelegate
       // didn't take an action.
-      if (delegate_)
+      if (delegate_) {
+        // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is
+        // fixed.
+        tracked_objects::ScopedTracker tracking_profile(
+            FROM_HERE_WITH_EXPLICIT_FUNCTION(
+                "423948 URLRequest::Delegate::OnAuthRequired"));
         delegate_->OnAuthRequired(this, auth_info.get());
+      }
       break;
 
     case NetworkDelegate::AUTH_REQUIRED_RESPONSE_SET_AUTH:
@@ -1131,14 +1141,24 @@ void URLRequest::NotifyAuthRequiredComplete(
 
 void URLRequest::NotifyCertificateRequested(
     SSLCertRequestInfo* cert_request_info) {
-  if (delegate_)
+  if (delegate_) {
+    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION(
+            "423948 URLRequest::Delegate::OnCertificateRequested"));
     delegate_->OnCertificateRequested(this, cert_request_info);
+  }
 }
 
 void URLRequest::NotifySSLCertificateError(const SSLInfo& ssl_info,
                                            bool fatal) {
-  if (delegate_)
+  if (delegate_) {
+    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION(
+            "423948 URLRequest::Delegate::OnSSLCertificateError"));
     delegate_->OnSSLCertificateError(this, ssl_info, fatal);
+  }
 }
 
 bool URLRequest::CanGetCookies(const CookieList& cookie_list) const {
@@ -1179,8 +1199,13 @@ void URLRequest::NotifyReadCompleted(int bytes_read) {
   if (bytes_read > 0 && !was_cached())
     NetworkChangeNotifier::NotifyDataReceived(*this, bytes_read);
 
-  if (delegate_)
+  if (delegate_) {
+    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION(
+            "423948 URLRequest::Delegate::OnReadCompleted"));
     delegate_->OnReadCompleted(this, bytes_read);
+  }
 
   // Nothing below this line as OnReadCompleted may delete |this|.
 }

@@ -11,8 +11,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -145,8 +145,8 @@ NSString* EscapeForStringsFileValue(NSString* str) {
 }
 
 // The valid types for the -t arg
-const char* kAppType_Main = "main";  // Main app
-const char* kAppType_Helper = "helper";  // Helper app
+const char kAppType_Main[] = "main";  // Main app
+const char kAppType_Helper[] = "helper";  // Helper app
 
 }  // namespace
 

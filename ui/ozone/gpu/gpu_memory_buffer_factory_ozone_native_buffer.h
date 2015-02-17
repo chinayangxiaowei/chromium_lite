@@ -5,6 +5,8 @@
 #ifndef UI_OZONE_GPU_GPU_MEMORY_BUFFER_FACTORY_OZONE_NATIVE_BUFFER_H_
 #define UI_OZONE_GPU_GPU_MEMORY_BUFFER_FACTORY_OZONE_NATIVE_BUFFER_H_
 
+#include <map>
+
 #include "base/memory/ref_counted.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_memory_buffer.h"
@@ -15,29 +17,36 @@ class GLImage;
 }
 
 namespace ui {
+class NativePixmap;
 
 class OZONE_GPU_EXPORT GpuMemoryBufferFactoryOzoneNativeBuffer {
+  typedef std::map<std::pair<uint32_t, uint32_t>, scoped_refptr<NativePixmap> >
+      BufferToPixmapMap;
+
  public:
   GpuMemoryBufferFactoryOzoneNativeBuffer();
   virtual ~GpuMemoryBufferFactoryOzoneNativeBuffer();
 
-  // Returns the singleton instance.
-  static GpuMemoryBufferFactoryOzoneNativeBuffer* GetInstance();
-
   // Creates a GPU memory buffer identified by |id|.
-  bool CreateGpuMemoryBuffer(const gfx::GpuMemoryBufferId& id,
+  bool CreateGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
                              const gfx::Size& size,
-                             unsigned internalformat,
-                             unsigned usage);
+                             gfx::GpuMemoryBuffer::Format format,
+                             gfx::GpuMemoryBuffer::Usage usage,
+                             int client_id);
 
   // Destroys GPU memory buffer identified by |id|.
-  void DestroyGpuMemoryBuffer(const gfx::GpuMemoryBufferId& id);
+  void DestroyGpuMemoryBuffer(gfx::GpuMemoryBufferId id, int client_id);
 
   // Creates a GLImage instance for GPU memory buffer identified by |id|.
   scoped_refptr<gfx::GLImage> CreateImageForGpuMemoryBuffer(
-      const gfx::GpuMemoryBufferId& id,
+      gfx::GpuMemoryBufferId id,
       const gfx::Size& size,
-      unsigned internalformat);
+      gfx::GpuMemoryBuffer::Format format,
+      unsigned internalformat,
+      int client_id);
+
+ private:
+  BufferToPixmapMap native_pixmap_map_;
 };
 
 }  // namespace ui

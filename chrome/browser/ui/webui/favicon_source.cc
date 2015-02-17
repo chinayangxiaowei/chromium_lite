@@ -18,13 +18,13 @@
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/common/favicon/favicon_url_parser.h"
 #include "chrome/common/url_constants.h"
-#include "grit/locale_settings.h"
-#include "grit/ui_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "net/url_request/url_request.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/layout.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/resources/grit/ui_resources.h"
 
 FaviconSource::IconRequest::IconRequest()
     : size_in_dip(gfx::kFaviconSize), device_scale_factor(1.0f) {
@@ -97,7 +97,7 @@ void FaviconSource::StartDataRequest(
         &cancelable_task_tracker_);
   } else {
     // Intercept requests for prepopulated pages.
-    for (size_t i = 0; i < arraysize(history::kPrepopulatedPages); i++) {
+    for (int i = 0; i < history::kPrepopulatedPagesCount; i++) {
       if (url.spec() ==
           l10n_util::GetStringUTF8(history::kPrepopulatedPages[i].url_id)) {
         ui::ScaleFactor resource_scale_factor =

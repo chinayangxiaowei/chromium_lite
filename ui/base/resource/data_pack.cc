@@ -6,7 +6,7 @@
 
 #include <errno.h>
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
@@ -262,7 +262,7 @@ bool DataPack::WritePack(const base::FilePath& path,
     return false;
   }
 
-  uint8 write_buffer = textEncodingType;
+  uint8 write_buffer = static_cast<uint8>(textEncodingType);
   if (fwrite(&write_buffer, sizeof(uint8), 1, file) != 1) {
     LOG(ERROR) << "Failed to write file text resources encoding";
     base::CloseFile(file);

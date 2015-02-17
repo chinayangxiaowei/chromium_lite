@@ -17,9 +17,9 @@
 #include "chrome/browser/ui/views/location_bar/zoom_view.h"
 #include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "chrome/common/extensions/api/extension_action/action_info.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_source.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -69,6 +69,7 @@ void ZoomBubbleView::ShowBubble(content::WebContents* web_contents,
   if (zoom_bubble_ &&
       zoom_bubble_->GetAnchorView() == anchor_view &&
       !extension) {
+    DCHECK_EQ(web_contents, zoom_bubble_->web_contents_);
     zoom_bubble_->Refresh();
     return;
   }
@@ -112,8 +113,9 @@ void ZoomBubbleView::CloseBubble() {
 
 // static
 bool ZoomBubbleView::IsShowing() {
-  // The bubble may be in the process of closing.
-  return zoom_bubble_ != NULL && zoom_bubble_->GetWidget()->IsVisible();
+  // The bubble is considered showing while closing.
+  return zoom_bubble_ != NULL && (zoom_bubble_->GetWidget()->IsVisible() ||
+                                  zoom_bubble_->GetWidget()->IsClosed());
 }
 
 // static
@@ -173,6 +175,10 @@ void ZoomBubbleView::Refresh() {
 }
 
 void ZoomBubbleView::Close() {
+  // Widget's Close() is async, but we don't want to use zoom_bubble_ after
+  // this. Additionally web_contents_ may have been destroyed.
+  zoom_bubble_ = NULL;
+  web_contents_ = NULL;
   GetWidget()->Close();
 }
 
@@ -273,7 +279,7 @@ void ZoomBubbleView::ButtonPressed(views::Button* sender,
         browser,
         GURL(base::StringPrintf("chrome://extensions?id=%s",
                                 extension_info_.id.c_str())),
-        content::PAGE_TRANSITION_FROM_API);
+        ui::PAGE_TRANSITION_FROM_API);
   } else {
     chrome_page_zoom::Zoom(web_contents_, content::PAGE_ZOOM_RESET);
   }

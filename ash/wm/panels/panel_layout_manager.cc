@@ -63,7 +63,7 @@ class CalloutWidgetBackground : public views::Background {
   CalloutWidgetBackground() : alignment_(SHELF_ALIGNMENT_BOTTOM) {
   }
 
-  virtual void Paint(gfx::Canvas* canvas, views::View* view) const OVERRIDE {
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
     SkPath path;
     switch (alignment_) {
       case SHELF_ALIGNMENT_BOTTOM:
@@ -551,10 +551,14 @@ void PanelLayoutManager::WillChangeVisibilityState(
     return;
   scoped_ptr<aura::WindowTracker> minimized_windows(new aura::WindowTracker);
   for (PanelList::iterator iter = panel_windows_.begin();
-       iter != panel_windows_.end(); ++iter) {
-    if (iter->window->IsVisible()) {
-      minimized_windows->Add(iter->window);
-      wm::GetWindowState(iter->window)->Minimize();
+       iter != panel_windows_.end();) {
+    aura::Window* window = iter->window;
+    // Minimizing a panel window may remove it from the panel_windows_ list.
+    // Advance the iterator before minimizing it: http://crbug.com/393047.
+    ++iter;
+    if (window != dragged_panel_ && window->IsVisible()) {
+      minimized_windows->Add(window);
+      wm::GetWindowState(window)->Minimize();
     }
   }
   restore_windows_on_shelf_visible_ = minimized_windows.Pass();

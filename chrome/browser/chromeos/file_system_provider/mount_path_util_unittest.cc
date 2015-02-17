@@ -22,9 +22,9 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "extensions/browser/extension_registry.h"
+#include "storage/browser/fileapi/external_mount_points.h"
+#include "storage/browser/fileapi/isolated_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/browser/fileapi/external_mount_points.h"
-#include "webkit/browser/fileapi/isolated_context.h"
 
 namespace chromeos {
 namespace file_system_provider {
@@ -37,21 +37,21 @@ const char kFileSystemId[] = "File/System/Id";
 const char kDisplayName[] = "Camera Pictures";
 
 // Creates a FileSystemURL for tests.
-fileapi::FileSystemURL CreateFileSystemURL(
+storage::FileSystemURL CreateFileSystemURL(
     Profile* profile,
     const ProvidedFileSystemInfo& file_system_info,
     const base::FilePath& file_path) {
   const std::string origin =
       std::string("chrome-extension://") + file_system_info.extension_id();
   const base::FilePath mount_path = file_system_info.mount_path();
-  const fileapi::ExternalMountPoints* const mount_points =
-      fileapi::ExternalMountPoints::GetSystemInstance();
+  const storage::ExternalMountPoints* const mount_points =
+      storage::ExternalMountPoints::GetSystemInstance();
   DCHECK(mount_points);
   DCHECK(file_path.IsAbsolute());
   base::FilePath relative_path(file_path.value().substr(1));
   return mount_points->CreateCrackedFileSystemURL(
       GURL(origin),
-      fileapi::kFileSystemTypeExternal,
+      storage::kFileSystemTypeExternal,
       base::FilePath(mount_path.BaseName().Append(relative_path)));
 }
 
@@ -69,7 +69,7 @@ class FileSystemProviderMountPathUtilTest : public testing::Test {
   FileSystemProviderMountPathUtilTest() {}
   virtual ~FileSystemProviderMountPathUtilTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     profile_manager_.reset(
         new TestingProfileManager(TestingBrowserProcess::GetGlobal()));
     ASSERT_TRUE(profile_manager_->SetUp());
@@ -83,7 +83,7 @@ class FileSystemProviderMountPathUtilTest : public testing::Test {
         base::Bind(&FakeProvidedFileSystem::Create));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     // Setting the testing factory to NULL will destroy the created service
     // associated with the testing profile.
     ServiceFactory::GetInstance()->SetTestingFactory(profile_, NULL);
@@ -128,7 +128,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, IsFileSystemProviderLocalPath) {
 
 TEST_F(FileSystemProviderMountPathUtilTest, Parser) {
   const bool result = file_system_provider_service_->MountFileSystem(
-      kExtensionId, kFileSystemId, kDisplayName, false /* writable */);
+      kExtensionId, MountOptions(kFileSystemId, kDisplayName));
   ASSERT_TRUE(result);
   const ProvidedFileSystemInfo file_system_info =
       file_system_provider_service_->GetProvidedFileSystem(kExtensionId,
@@ -137,7 +137,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser) {
 
   const base::FilePath kFilePath =
       base::FilePath::FromUTF8Unsafe("/hello/world.txt");
-  const fileapi::FileSystemURL url =
+  const storage::FileSystemURL url =
       CreateFileSystemURL(profile_, file_system_info, kFilePath);
   EXPECT_TRUE(url.is_valid());
 
@@ -152,7 +152,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser) {
 
 TEST_F(FileSystemProviderMountPathUtilTest, Parser_RootPath) {
   const bool result = file_system_provider_service_->MountFileSystem(
-      kExtensionId, kFileSystemId, kDisplayName, false /* writable */);
+      kExtensionId, MountOptions(kFileSystemId, kDisplayName));
   ASSERT_TRUE(result);
   const ProvidedFileSystemInfo file_system_info =
       file_system_provider_service_->GetProvidedFileSystem(kExtensionId,
@@ -160,7 +160,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_RootPath) {
           ->GetFileSystemInfo();
 
   const base::FilePath kFilePath = base::FilePath::FromUTF8Unsafe("/");
-  const fileapi::FileSystemURL url =
+  const storage::FileSystemURL url =
       CreateFileSystemURL(profile_, file_system_info, kFilePath);
   EXPECT_TRUE(url.is_valid());
 
@@ -176,13 +176,11 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_RootPath) {
 TEST_F(FileSystemProviderMountPathUtilTest, Parser_WrongUrl) {
   const ProvidedFileSystemInfo file_system_info(
       kExtensionId,
-      kFileSystemId,
-      kDisplayName,
-      false /* writable */,
+      MountOptions(kFileSystemId, kDisplayName),
       GetMountPath(profile_, kExtensionId, kFileSystemId));
 
   const base::FilePath kFilePath = base::FilePath::FromUTF8Unsafe("/hello");
-  const fileapi::FileSystemURL url =
+  const storage::FileSystemURL url =
       CreateFileSystemURL(profile_, file_system_info, kFilePath);
   // It is impossible to create a cracked URL for a mount point which doesn't
   // exist, therefore is will always be invalid, and empty.
@@ -194,7 +192,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_WrongUrl) {
 
 TEST_F(FileSystemProviderMountPathUtilTest, Parser_IsolatedURL) {
   const bool result = file_system_provider_service_->MountFileSystem(
-      kExtensionId, kFileSystemId, kDisplayName, false /* writable */);
+      kExtensionId, MountOptions(kFileSystemId, kDisplayName));
   ASSERT_TRUE(result);
   const ProvidedFileSystemInfo file_system_info =
       file_system_provider_service_->GetProvidedFileSystem(kExtensionId,
@@ -203,16 +201,16 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_IsolatedURL) {
 
   const base::FilePath kFilePath =
       base::FilePath::FromUTF8Unsafe("/hello/world.txt");
-  const fileapi::FileSystemURL url =
+  const storage::FileSystemURL url =
       CreateFileSystemURL(profile_, file_system_info, kFilePath);
   EXPECT_TRUE(url.is_valid());
 
   // Create an isolated URL for the original one.
-  fileapi::IsolatedContext* const isolated_context =
-      fileapi::IsolatedContext::GetInstance();
+  storage::IsolatedContext* const isolated_context =
+      storage::IsolatedContext::GetInstance();
   const std::string isolated_file_system_id =
       isolated_context->RegisterFileSystemForPath(
-          fileapi::kFileSystemTypeProvided,
+          storage::kFileSystemTypeProvided,
           url.filesystem_id(),
           url.path(),
           NULL);
@@ -221,10 +219,10 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_IsolatedURL) {
       isolated_context->CreateVirtualRootPath(isolated_file_system_id)
           .Append(kFilePath.BaseName().value());
 
-  const fileapi::FileSystemURL isolated_url =
+  const storage::FileSystemURL isolated_url =
       isolated_context->CreateCrackedFileSystemURL(
           url.origin(),
-          fileapi::kFileSystemTypeIsolated,
+          storage::kFileSystemTypeIsolated,
           isolated_virtual_path);
 
   EXPECT_TRUE(isolated_url.is_valid());
@@ -240,7 +238,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, Parser_IsolatedURL) {
 
 TEST_F(FileSystemProviderMountPathUtilTest, LocalPathParser) {
   const bool result = file_system_provider_service_->MountFileSystem(
-      kExtensionId, kFileSystemId, kDisplayName, false /* writable */);
+      kExtensionId, MountOptions(kFileSystemId, kDisplayName));
   ASSERT_TRUE(result);
   const ProvidedFileSystemInfo file_system_info =
       file_system_provider_service_->GetProvidedFileSystem(kExtensionId,
@@ -264,7 +262,7 @@ TEST_F(FileSystemProviderMountPathUtilTest, LocalPathParser) {
 
 TEST_F(FileSystemProviderMountPathUtilTest, LocalPathParser_RootPath) {
   const bool result = file_system_provider_service_->MountFileSystem(
-      kExtensionId, kFileSystemId, kDisplayName, false /* writable */);
+      kExtensionId, MountOptions(kFileSystemId, kDisplayName));
   ASSERT_TRUE(result);
   const ProvidedFileSystemInfo file_system_info =
       file_system_provider_service_->GetProvidedFileSystem(kExtensionId,

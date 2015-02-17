@@ -14,10 +14,10 @@
 #include "base/stl_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/extensions/blacklist_factory.h"
 #include "chrome/browser/extensions/blacklist_state_fetcher.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "extensions/browser/extension_prefs.h"
@@ -84,7 +84,7 @@ class SafeBrowsingClientImpl
 
  private:
   friend class base::RefCountedThreadSafe<SafeBrowsingClientImpl>;
-  virtual ~SafeBrowsingClientImpl() {}
+  ~SafeBrowsingClientImpl() override {}
 
   // Pass |database_manager| as a parameter to avoid touching
   // SafeBrowsingService on the IO thread.
@@ -103,8 +103,7 @@ class SafeBrowsingClientImpl
     AddRef();  // Balanced in OnCheckExtensionsResult
   }
 
-  virtual void OnCheckExtensionsResult(
-      const std::set<std::string>& hits) OVERRIDE {
+  void OnCheckExtensionsResult(const std::set<std::string>& hits) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
     callback_message_loop_->PostTask(FROM_HERE, base::Bind(callback_, hits));
     Release();  // Balanced in StartCheck.
@@ -160,7 +159,7 @@ Blacklist::ScopedDatabaseManagerForTest::~ScopedDatabaseManagerForTest() {
 Blacklist::Blacklist(ExtensionPrefs* prefs) {
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager =
       g_database_manager.Get().get();
-  if (database_manager) {
+  if (database_manager.get()) {
     registrar_.Add(
         this,
         chrome::NOTIFICATION_SAFE_BROWSING_UPDATE_COMPLETE,
@@ -180,6 +179,11 @@ Blacklist::Blacklist(ExtensionPrefs* prefs) {
 }
 
 Blacklist::~Blacklist() {
+}
+
+// static
+Blacklist* Blacklist::Get(content::BrowserContext* context) {
+  return BlacklistFactory::GetForBrowserContext(context);
 }
 
 void Blacklist::GetBlacklistedIDs(const std::set<std::string>& ids,

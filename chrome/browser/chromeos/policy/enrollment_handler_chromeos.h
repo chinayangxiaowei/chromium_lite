@@ -83,23 +83,23 @@ class EnrollmentHandlerChromeOS : public CloudPolicyClient::Observer,
   scoped_ptr<CloudPolicyClient> ReleaseClient();
 
   // CloudPolicyClient::Observer:
-  virtual void OnPolicyFetched(CloudPolicyClient* client) OVERRIDE;
-  virtual void OnRegistrationStateChanged(CloudPolicyClient* client) OVERRIDE;
-  virtual void OnRobotAuthCodesFetched(CloudPolicyClient* client) OVERRIDE;
-  virtual void OnClientError(CloudPolicyClient* client) OVERRIDE;
+  virtual void OnPolicyFetched(CloudPolicyClient* client) override;
+  virtual void OnRegistrationStateChanged(CloudPolicyClient* client) override;
+  virtual void OnRobotAuthCodesFetched(CloudPolicyClient* client) override;
+  virtual void OnClientError(CloudPolicyClient* client) override;
 
   // CloudPolicyStore::Observer:
-  virtual void OnStoreLoaded(CloudPolicyStore* store) OVERRIDE;
-  virtual void OnStoreError(CloudPolicyStore* store) OVERRIDE;
+  virtual void OnStoreLoaded(CloudPolicyStore* store) override;
+  virtual void OnStoreError(CloudPolicyStore* store) override;
 
   // GaiaOAuthClient::Delegate:
   virtual void OnGetTokensResponse(const std::string& refresh_token,
                                    const std::string& access_token,
-                                   int expires_in_seconds) OVERRIDE;
+                                   int expires_in_seconds) override;
   virtual void OnRefreshTokenResponse(const std::string& access_token,
-                                      int expires_in_seconds) OVERRIDE;
-  virtual void OnOAuthError() OVERRIDE;
-  virtual void OnNetworkError(int response_code) OVERRIDE;
+                                      int expires_in_seconds) override;
+  virtual void OnOAuthError() override;
+  virtual void OnNetworkError(int response_code) override;
 
  private:
   // Indicates what step of the process is currently pending. These steps need
@@ -121,35 +121,33 @@ class EnrollmentHandlerChromeOS : public CloudPolicyClient::Observer,
   };
 
   // Handles the response to a request for server-backed state keys.
-  void CheckStateKeys(const std::vector<std::string>& state_keys,
-                      bool first_boot);
+  void HandleStateKeysResult(const std::vector<std::string>& state_keys);
 
   // Starts registration if the store is initialized.
-  void AttemptRegistration();
+  void StartRegistration();
 
-  // Handles the policy validation result, proceeding with installation-time
-  // attributes locking if successful.
-  void PolicyValidated(DeviceCloudPolicyValidator* validator);
+  // Handles the policy validation result, proceeding with device lock if
+  // successful.
+  void HandlePolicyValidationResult(DeviceCloudPolicyValidator* validator);
 
-  // Calls LockDevice() and proceeds to policy installation. If unsuccessful,
-  // reports the result. Actual installation or error report will be done in
-  // HandleLockDeviceResult().
+  // Calls InstallAttributes::LockDevice() for enterprise enrollment and
+  // DeviceSettingsService::SetManagementSettings() for consumer
+  // enrollment.
   void StartLockDevice();
 
   // Checks the status after SetManagementSettings() is done. Proceeds to
   // robot auth code storing if successful.
-  void OnSetManagementSettingsDone();
+  void HandleSetManagementSettingsDone();
 
-  // Helper for StartLockDevice(). It performs the actual action based on
-  // the result of LockDevice.
+  // Handle callback from InstallAttributes::LockDevice() and retry on failure.
   void HandleLockDeviceResult(
       EnterpriseInstallAttributes::LockResult lock_result);
 
-  // Stores robot auth token.
-  void StoreRobotAuth();
+  // Initiates storing of robot auth token.
+  void StartStoreRobotAuth();
 
   // Handles completion of the robot token store operation.
-  void HandleRobotAuthTokenStored(bool result);
+  void HandleStoreRobotAuthTokenResult(bool result);
 
   // Drops any ongoing actions.
   void Stop();

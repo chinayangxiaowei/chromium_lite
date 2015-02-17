@@ -22,16 +22,14 @@
 #include "base/metrics/histogram_snapshot_manager.h"
 #include "base/metrics/user_metrics.h"
 #include "base/observer_list.h"
-#include "base/strings/string16.h"
-#include "base/threading/thread_checker.h"
 #include "base/time/time.h"
+#include "components/metrics/clean_exit_beacon.h"
 #include "components/metrics/metrics_log.h"
 #include "components/metrics/metrics_log_manager.h"
 #include "components/metrics/metrics_provider.h"
-#include "components/metrics/metrics_service_observer.h"
 #include "components/variations/active_field_trials.h"
 
-class MetricsReportingScheduler;
+class MetricsServiceAccessor;
 class PrefService;
 class PrefRegistrySimple;
 
@@ -46,15 +44,16 @@ namespace variations {
 struct ActiveGroupId;
 }
 
-namespace metrics {
-class MetricsLogUploader;
-class MetricsServiceClient;
-class MetricsStateManager;
-}
-
 namespace net {
 class URLFetcher;
 }
+
+namespace metrics {
+
+class MetricsLogUploader;
+class MetricsReportingScheduler;
+class MetricsServiceClient;
+class MetricsStateManager;
 
 // A Field Trial and its selected group, which represent a particular
 // Chrome configuration state. For example, the trial name could map to
@@ -68,7 +67,7 @@ struct SyntheticTrialGroup {
 
  private:
   // Synthetic field trial users:
-  friend class MetricsServiceAccessor;
+  friend class ::MetricsServiceAccessor;
   friend class MetricsService;
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, RegisterSyntheticTrial);
 
@@ -76,6 +75,17 @@ struct SyntheticTrialGroup {
   // able to access it. New code that wishes to use it should be added as a
   // friend class.
   SyntheticTrialGroup(uint32 trial, uint32 group);
+};
+
+// Interface class to observe changes to synthetic trials in MetricsService.
+class SyntheticTrialObserver {
+ public:
+  // Called when the list of synthetic field trial groups has changed.
+  virtual void OnSyntheticTrialsChanged(
+      const std::vector<SyntheticTrialGroup>& groups) = 0;
+
+ protected:
+  virtual ~SyntheticTrialObserver() {}
 };
 
 // See metrics_service.cc for a detailed description.
@@ -97,10 +107,10 @@ class MetricsService : public base::HistogramFlattener {
   // |local_state|.  Does not take ownership of the paramaters; instead stores
   // a weak pointer to each. Caller should ensure that the parameters are valid
   // for the lifetime of this class.
-  MetricsService(metrics::MetricsStateManager* state_manager,
-                 metrics::MetricsServiceClient* client,
+  MetricsService(MetricsStateManager* state_manager,
+                 MetricsServiceClient* client,
                  PrefService* local_state);
-  virtual ~MetricsService();
+  ~MetricsService() override;
 
   // Initializes metrics recording state. Updates various bookkeeping values in
   // prefs and sets up the scheduler. This is a separate function rather than
@@ -154,13 +164,13 @@ class MetricsService : public base::HistogramFlattener {
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // HistogramFlattener:
-  virtual void RecordDelta(const base::HistogramBase& histogram,
-                           const base::HistogramSamples& snapshot) OVERRIDE;
-  virtual void InconsistencyDetected(
-      base::HistogramBase::Inconsistency problem) OVERRIDE;
-  virtual void UniqueInconsistencyDetected(
-      base::HistogramBase::Inconsistency problem) OVERRIDE;
-  virtual void InconsistencyDetectedInLoggedCount(int amount) OVERRIDE;
+  void RecordDelta(const base::HistogramBase& histogram,
+                   const base::HistogramSamples& snapshot) override;
+  void InconsistencyDetected(
+      base::HistogramBase::Inconsistency problem) override;
+  void UniqueInconsistencyDetected(
+      base::HistogramBase::Inconsistency problem) override;
+  void InconsistencyDetectedInLoggedCount(int amount) override;
 
   // This should be called when the application is not idle, i.e. the user seems
   // to be interacting with the application.
@@ -182,7 +192,7 @@ class MetricsService : public base::HistogramFlattener {
   void OnAppEnterForeground();
 #else
   // Set the dirty flag, which will require a later call to LogCleanShutdown().
-  static void LogNeedForCleanShutdown(PrefService* local_state);
+  void LogNeedForCleanShutdown();
 #endif  // defined(OS_ANDROID) || defined(OS_IOS)
 
   static void SetExecutionPhase(ExecutionPhase execution_phase,
@@ -213,9 +223,15 @@ class MetricsService : public base::HistogramFlattener {
   // To use this method, SyntheticTrialGroup should friend your class.
   void RegisterSyntheticFieldTrial(const SyntheticTrialGroup& trial_group);
 
+  // Adds an observer to be notified when the synthetic trials list changes.
+  void AddSyntheticTrialObserver(SyntheticTrialObserver* observer);
+
+  // Removes an existing observer of synthetic trials list changes.
+  void RemoveSyntheticTrialObserver(SyntheticTrialObserver* observer);
+
   // Register the specified |provider| to provide additional metrics into the
   // UMA log. Should be called during MetricsService initialization only.
-  void RegisterMetricsProvider(scoped_ptr<metrics::MetricsProvider> provider);
+  void RegisterMetricsProvider(scoped_ptr<MetricsProvider> provider);
 
   // Check if this install was cloned or imaged from another machine. If a
   // clone is detected, reset the client id and low entropy source. This
@@ -223,9 +239,12 @@ class MetricsService : public base::HistogramFlattener {
   void CheckForClonedInstall(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
+  // Clears the stability metrics that are saved in local state.
+  void ClearSavedStabilityMetrics();
+
  protected:
   // Exposed for testing.
-  metrics::MetricsLogManager* log_manager() { return &log_manager_; }
+  MetricsLogManager* log_manager() { return &log_manager_; }
 
  private:
   // The MetricsService has a lifecycle that is stored as a state.
@@ -245,6 +264,8 @@ class MetricsService : public base::HistogramFlattener {
     CLEANLY_SHUTDOWN = 0xdeadbeef,
     NEED_TO_SHUTDOWN = ~CLEANLY_SHUTDOWN
   };
+
+  friend class ::MetricsServiceAccessor;
 
   typedef std::vector<SyntheticTrialGroup> SyntheticTrialGroups;
 
@@ -282,9 +303,7 @@ class MetricsService : public base::HistogramFlattener {
   // Set up client ID, session ID, etc.
   void InitializeMetricsState();
 
-  // Registers/unregisters |observer| to receive MetricsLog notifications.
-  void AddObserver(MetricsServiceObserver* observer);
-  void RemoveObserver(MetricsServiceObserver* observer);
+  // Notifies providers when a new metrics log is created.
   void NotifyOnDidCreateMetricsLog();
 
   // Schedule the next save of LocalState information.  This is called
@@ -319,6 +338,10 @@ class MetricsService : public base::HistogramFlattener {
   // Either closes the current log or creates and closes the initial log
   // (depending on |state_|), and stages it for upload.
   void StageNewLog();
+
+  // Returns true if any of the registered metrics providers have stability
+  // metrics to report.
+  bool ProvidersHaveStabilityMetrics();
 
   // Prepares the initial stability log, which is only logged when the previous
   // run of Chrome crashed.  This log contains any stability metrics left over
@@ -356,6 +379,9 @@ class MetricsService : public base::HistogramFlattener {
   // Sets the value of the specified path in prefs and schedules a save.
   void RecordBooleanPrefValue(const char* path, bool value);
 
+  // Notifies observers on a synthetic trial list change.
+  void NotifySyntheticTrialObservers();
+
   // Returns a list of synthetic field trials that were active for the entire
   // duration of the current log.
   void GetCurrentSyntheticFieldTrials(
@@ -363,6 +389,9 @@ class MetricsService : public base::HistogramFlattener {
 
   // Creates a new MetricsLog instance with the given |log_type|.
   scoped_ptr<MetricsLog> CreateLog(MetricsLog::LogType log_type);
+
+  // Records the current environment (system profile) in |log|.
+  void RecordCurrentEnvironment(MetricsLog* log);
 
   // Record complete list of histograms into the current log.
   // Called when we close a log.
@@ -373,23 +402,25 @@ class MetricsService : public base::HistogramFlattener {
   void RecordCurrentStabilityHistograms();
 
   // Manager for the various in-flight logs.
-  metrics::MetricsLogManager log_manager_;
+  MetricsLogManager log_manager_;
 
   // |histogram_snapshot_manager_| prepares histogram deltas for transmission.
   base::HistogramSnapshotManager histogram_snapshot_manager_;
 
   // Used to manage various metrics reporting state prefs, such as client id,
   // low entropy source and whether metrics reporting is enabled. Weak pointer.
-  metrics::MetricsStateManager* const state_manager_;
+  MetricsStateManager* const state_manager_;
 
   // Used to interact with the embedder. Weak pointer; must outlive |this|
   // instance.
-  metrics::MetricsServiceClient* const client_;
+  MetricsServiceClient* const client_;
 
   // Registered metrics providers.
-  ScopedVector<metrics::MetricsProvider> metrics_providers_;
+  ScopedVector<MetricsProvider> metrics_providers_;
 
   PrefService* local_state_;
+
+  CleanExitBeacon clean_exit_beacon_;
 
   base::ActionCallback action_callback_;
 
@@ -416,7 +447,7 @@ class MetricsService : public base::HistogramFlattener {
   scoped_ptr<MetricsLog> initial_metrics_log_;
 
   // Instance of the helper class for uploading logs.
-  scoped_ptr<metrics::MetricsLogUploader> log_uploader_;
+  scoped_ptr<MetricsLogUploader> log_uploader_;
 
   // Whether there is a current log upload in progress.
   bool log_upload_in_progress_;
@@ -428,14 +459,6 @@ class MetricsService : public base::HistogramFlattener {
   // A number that identifies the how many times the app has been launched.
   int session_id_;
 
-  // Weak pointers factory used to post task on different threads. All weak
-  // pointers managed by this factory have the same lifetime as MetricsService.
-  base::WeakPtrFactory<MetricsService> self_ptr_factory_;
-
-  // Weak pointers factory used for saving state. All weak pointers managed by
-  // this factory are invalidated in ScheduleNextStateSave.
-  base::WeakPtrFactory<MetricsService> state_saver_factory_;
-
   // The scheduler for determining when uploads should happen.
   scoped_ptr<MetricsReportingScheduler> scheduler_;
 
@@ -445,6 +468,12 @@ class MetricsService : public base::HistogramFlattener {
   // Stores the time of the last call to |GetUptimes()|.
   base::TimeTicks last_updated_time_;
 
+  // Field trial groups that map to Chrome configuration states.
+  SyntheticTrialGroups synthetic_trial_groups_;
+
+  // List of observers of |synthetic_trial_groups_| changes.
+  ObserverList<SyntheticTrialObserver> synthetic_trial_observer_list_;
+
   // Execution phase the browser is in.
   static ExecutionPhase execution_phase_;
 
@@ -452,23 +481,22 @@ class MetricsService : public base::HistogramFlattener {
   // exited-cleanly bit in the prefs.
   static ShutdownCleanliness clean_shutdown_status_;
 
-  // Field trial groups that map to Chrome configuration states.
-  SyntheticTrialGroups synthetic_trial_groups_;
-
-  ObserverList<MetricsServiceObserver> observers_;
-
-  // Confirms single-threaded access to |observers_| in debug builds.
-  base::ThreadChecker thread_checker_;
-
-  friend class MetricsServiceAccessor;
-
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, IsPluginProcess);
-  FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, MetricsServiceObserver);
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest,
                            PermutedEntropyCacheClearedWhenLowEntropyReset);
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, RegisterSyntheticTrial);
 
+  // Weak pointers factory used to post task on different threads. All weak
+  // pointers managed by this factory have the same lifetime as MetricsService.
+  base::WeakPtrFactory<MetricsService> self_ptr_factory_;
+
+  // Weak pointers factory used for saving state. All weak pointers managed by
+  // this factory are invalidated in ScheduleNextStateSave.
+  base::WeakPtrFactory<MetricsService> state_saver_factory_;
+
   DISALLOW_COPY_AND_ASSIGN(MetricsService);
 };
+
+}  // namespace metrics
 
 #endif  // COMPONENTS_METRICS_METRICS_SERVICE_H_

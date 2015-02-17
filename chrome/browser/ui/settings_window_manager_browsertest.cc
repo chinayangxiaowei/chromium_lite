@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/settings_window_manager.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -29,9 +29,9 @@ class SettingsWindowTestObserver
     : public chrome::SettingsWindowManagerObserver {
  public:
   SettingsWindowTestObserver() : browser_(NULL), new_settings_count_(0) {}
-  virtual ~SettingsWindowTestObserver() {}
+  ~SettingsWindowTestObserver() override {}
 
-  virtual void OnNewSettingsWindow(Browser* settings_browser) OVERRIDE {
+  void OnNewSettingsWindow(Browser* settings_browser) override {
     browser_ = settings_browser;
     ++new_settings_count_;
   }
@@ -55,11 +55,11 @@ class SettingsWindowManagerTest : public InProcessBrowserTest {
         test_profile_(NULL) {
     settings_manager_->AddObserver(&observer_);
   }
-  virtual ~SettingsWindowManagerTest() {
+  ~SettingsWindowManagerTest() override {
     settings_manager_->RemoveObserver(&observer_);
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(::switches::kEnableSettingsWindow);
   }
 

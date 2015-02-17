@@ -17,18 +17,14 @@ class MockLoader : public Loader {
   }
 
   // Loader implementation:
-  virtual void Load(const SourceFile& file,
-                    const LocationRange& origin,
-                    const Label& toolchain_name) OVERRIDE {
+  void Load(const SourceFile& file,
+            const LocationRange& origin,
+            const Label& toolchain_name) override {
     files_.push_back(file);
   }
-  virtual void ToolchainLoaded(const Toolchain* toolchain) OVERRIDE {
-  }
-  virtual Label GetDefaultToolchain() const OVERRIDE {
-    return Label();
-  }
-  virtual const Settings* GetToolchainSettings(
-      const Label& label) const OVERRIDE {
+  void ToolchainLoaded(const Toolchain* toolchain) override {}
+  Label GetDefaultToolchain() const override { return Label(); }
+  const Settings* GetToolchainSettings(const Label& label) const override {
     return NULL;
   }
 
@@ -52,7 +48,7 @@ class MockLoader : public Loader {
   }
 
  private:
-  virtual ~MockLoader() {}
+  ~MockLoader() override {}
 
   std::vector<SourceFile> files_;
 };
@@ -71,6 +67,7 @@ class BuilderTest : public testing::Test {
 
   Toolchain* DefineToolchain() {
     Toolchain* tc = new Toolchain(&settings_, settings_.toolchain_label());
+    TestWithScope::SetupToolchain(tc);
     builder_->ItemDefined(scoped_ptr<Item>(tc));
     return tc;
   }
@@ -98,7 +95,7 @@ TEST_F(BuilderTest, BasicDeps) {
 
   // The builder will take ownership of the pointers.
   Target* a = new Target(&settings_, a_label);
-  a->deps().push_back(LabelTargetPair(b_label));
+  a->public_deps().push_back(LabelTargetPair(b_label));
   a->set_output_type(Target::EXECUTABLE);
   builder_->ItemDefined(scoped_ptr<Item>(a));
 
@@ -144,6 +141,7 @@ TEST_F(BuilderTest, BasicDeps) {
   // Add the C target.
   Target* c = new Target(&settings_, c_label);
   c->set_output_type(Target::STATIC_LIBRARY);
+  c->visibility().SetPublic();
   builder_->ItemDefined(scoped_ptr<Item>(c));
 
   // C only depends on the already-loaded toolchain so we shouldn't have
@@ -152,8 +150,9 @@ TEST_F(BuilderTest, BasicDeps) {
 
   // Add the B target.
   Target* b = new Target(&settings_, b_label);
-  a->deps().push_back(LabelTargetPair(c_label));
+  a->public_deps().push_back(LabelTargetPair(c_label));
   b->set_output_type(Target::SHARED_LIBRARY);
+  b->visibility().SetPublic();
   builder_->ItemDefined(scoped_ptr<Item>(b));
 
   // B depends only on the already-loaded C and toolchain so we shouldn't have
@@ -184,6 +183,7 @@ TEST_F(BuilderTest, ShouldGenerate) {
   Label toolchain_label2(SourceDir("//tc/"), "secondary");
   settings2.set_toolchain_label(toolchain_label2);
   Toolchain* tc2 = new Toolchain(&settings2, toolchain_label2);
+  TestWithScope::SetupToolchain(tc2);
   builder_->ItemDefined(scoped_ptr<Item>(tc2));
 
   // Construct a dependency chain: A -> B. A is in the default toolchain, B
@@ -195,6 +195,7 @@ TEST_F(BuilderTest, ShouldGenerate) {
 
   // First define B.
   Target* b = new Target(&settings2, b_label);
+  b->visibility().SetPublic();
   b->set_output_type(Target::EXECUTABLE);
   builder_->ItemDefined(scoped_ptr<Item>(b));
 
@@ -204,7 +205,7 @@ TEST_F(BuilderTest, ShouldGenerate) {
 
   // Define A with a dependency on B.
   Target* a = new Target(&settings_, a_label);
-  a->deps().push_back(LabelTargetPair(b_label));
+  a->public_deps().push_back(LabelTargetPair(b_label));
   a->set_output_type(Target::EXECUTABLE);
   builder_->ItemDefined(scoped_ptr<Item>(a));
 

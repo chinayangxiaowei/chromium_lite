@@ -6,6 +6,7 @@
 
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_util.h"
+#include "base/message_loop/message_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "ui/app_list/app_list_constants.h"

@@ -9,9 +9,11 @@
 #include <vector>
 
 #include "base/base_paths.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/user_metrics.h"
 #include "base/path_service.h"
 #include "base/prefs/pref_member.h"
 #include "base/prefs/pref_service.h"
@@ -25,16 +27,15 @@
 #include "chrome/browser/net/client_hints.h"
 #include "chrome/browser/net/connect_interceptor.h"
 #include "chrome/browser/net/safe_search_util.h"
-#include "chrome/browser/performance_monitor/performance_monitor.h"
 #include "chrome/browser/prerender/prerender_tracker.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/common/pref_names.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_auth_request_handler.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_metrics.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_params.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_protocol.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_usage_stats.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_auth_request_handler.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_metrics.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_statistics_prefs.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_usage_stats.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/domain_reliability/monitor.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -51,7 +52,6 @@
 #include "net/proxy/proxy_info.h"
 #include "net/proxy/proxy_retry_info.h"
 #include "net/proxy/proxy_server.h"
-#include "net/socket_stream/socket_stream.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 
@@ -116,7 +116,8 @@ void UpdateContentLengthPrefs(
     int received_content_length,
     int original_content_length,
     data_reduction_proxy::DataReductionProxyRequestType request_type,
-    Profile* profile) {
+    Profile* profile,
+    data_reduction_proxy::DataReductionProxyStatisticsPrefs* statistics_prefs) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK_GE(received_content_length, 0);
   DCHECK_GE(original_content_length, 0);
@@ -125,40 +126,31 @@ void UpdateContentLengthPrefs(
   if (!g_browser_process)
     return;
 
-  PrefService* prefs = g_browser_process->local_state();
-  if (!prefs)
-    return;
-
   // Ignore off-the-record data.
   if (!g_browser_process->profile_manager()->IsValidProfile(profile) ||
       profile->IsOffTheRecord()) {
     return;
   }
-#if defined(OS_ANDROID) && defined(SPDY_PROXY_AUTH_ORIGIN)
-  // If Android ever goes multi profile, the profile should be passed so that
-  // the browser preference will be taken.
-  bool with_data_reduction_proxy_enabled =
-      ProfileManager::GetActiveUserProfile()->GetPrefs()->GetBoolean(
-          data_reduction_proxy::prefs::kDataReductionProxyEnabled);
-#else
-  bool with_data_reduction_proxy_enabled = false;
-#endif
-
-  data_reduction_proxy::UpdateContentLengthPrefs(received_content_length,
-                                         original_content_length,
-                                         with_data_reduction_proxy_enabled,
-                                         request_type, prefs);
+  data_reduction_proxy::UpdateContentLengthPrefs(
+      received_content_length,
+      original_content_length,
+      profile->GetPrefs(),
+      request_type, statistics_prefs);
 }
 
 void StoreAccumulatedContentLength(
     int received_content_length,
     int original_content_length,
     data_reduction_proxy::DataReductionProxyRequestType request_type,
-    Profile* profile) {
+    Profile* profile,
+    data_reduction_proxy::DataReductionProxyStatisticsPrefs* statistics_prefs) {
   BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
       base::Bind(&UpdateContentLengthPrefs,
-                 received_content_length, original_content_length,
-                 request_type, profile));
+                 received_content_length,
+                 original_content_length,
+                 request_type,
+                 profile,
+                 statistics_prefs));
 }
 
 void RecordContentLengthHistograms(
@@ -217,8 +209,8 @@ void RecordPrecacheStatsOnUIThread(const GURL& url,
 
   precache::PrecacheManager* precache_manager =
       precache::PrecacheManagerFactory::GetForBrowserContext(profile);
-  if (!precache_manager) {
-    // This could be NULL if the profile is off the record.
+  if (!precache_manager || !precache_manager->IsPrecachingAllowed()) {
+    // |precache_manager| could be NULL if the profile is off the record.
     return;
   }
 
@@ -233,6 +225,14 @@ void RecordIOThreadToRequestStartOnUIThread(
   UMA_HISTOGRAM_TIMES("Net.IOThreadCreationToHTTPRequestStart", request_lag);
 }
 #endif  // defined(OS_ANDROID)
+
+void ReportInvalidReferrerSend(const GURL& target_url,
+                               const GURL& referrer_url) {
+  base::RecordAction(
+      base::UserMetricsAction("Net.URLRequest_StartJob_InvalidReferrer"));
+  base::debug::DumpWithoutCrashing();
+  NOTREACHED();
+}
 
 }  // namespace
 
@@ -254,7 +254,8 @@ ChromeNetworkDelegate::ChromeNetworkDelegate(
       prerender_tracker_(NULL),
       data_reduction_proxy_params_(NULL),
       data_reduction_proxy_usage_stats_(NULL),
-      data_reduction_proxy_auth_request_handler_(NULL) {
+      data_reduction_proxy_auth_request_handler_(NULL),
+      data_reduction_proxy_statistics_prefs_(NULL) {
   DCHECK(enable_referrers);
   extensions_delegate_.reset(
       ChromeExtensionsNetworkDelegate::Create(event_router));
@@ -323,9 +324,11 @@ void ChromeNetworkDelegate::AllowAccessToAllFiles() {
 }
 
 // static
-base::Value* ChromeNetworkDelegate::HistoricNetworkStatsInfoToValue() {
+// TODO(megjablon): Use data_reduction_proxy_delayed_pref_service to read prefs.
+// Until updated the pref values may be up to an hour behind on desktop.
+base::Value* ChromeNetworkDelegate::HistoricNetworkStatsInfoToValue(
+    PrefService* prefs) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  PrefService* prefs = g_browser_process->local_state();
   int64 total_received = prefs->GetInt64(
       data_reduction_proxy::prefs::kHttpReceivedContentLength);
   int64 total_original = prefs->GetInt64(
@@ -437,6 +440,7 @@ void ChromeNetworkDelegate::OnResolveProxy(
       !proxy_config_getter_.is_null()) {
     on_resolve_proxy_handler_.Run(url, load_flags,
                                   proxy_config_getter_.Run(),
+                                  proxy_service.config(),
                                   proxy_service.proxy_retry_info(),
                                   data_reduction_proxy_params_, result);
   }
@@ -485,18 +489,6 @@ int ChromeNetworkDelegate::OnHeadersReceived(
     const net::HttpResponseHeaders* original_response_headers,
     scoped_refptr<net::HttpResponseHeaders>* override_response_headers,
     GURL* allowed_unsafe_redirect_url) {
-  data_reduction_proxy::DataReductionProxyBypassType bypass_type;
-  if (data_reduction_proxy::MaybeBypassProxyAndPrepareToRetry(
-      data_reduction_proxy_params_,
-      request,
-      original_response_headers,
-      override_response_headers,
-      &bypass_type)) {
-    if (data_reduction_proxy_usage_stats_)
-      data_reduction_proxy_usage_stats_->SetBypassType(bypass_type);
-    return net::OK;
-  }
-
   return extensions_delegate_->OnHeadersReceived(
       request,
       callback,
@@ -522,9 +514,6 @@ void ChromeNetworkDelegate::OnRawBytesRead(const net::URLRequest& request,
                                            int bytes_read) {
   TRACE_EVENT_ASYNC_STEP_PAST1("net", "URLRequest", &request, "DidRead",
                                "bytes_read", bytes_read);
-  performance_monitor::PerformanceMonitor::GetInstance()->BytesReadOnIOThread(
-      request, bytes_read);
-
 #if defined(ENABLE_TASK_MANAGER)
   // This is not completely accurate, but as a first approximation ignore
   // requests that are served from the cache. See bug 330931 for more info.
@@ -571,8 +560,8 @@ void ChromeNetworkDelegate::OnCompleted(net::URLRequest* request,
           data_reduction_proxy::GetDataReductionProxyRequestType(request);
 
       base::TimeDelta freshness_lifetime =
-          request->response_info().headers->GetFreshnessLifetime(
-              request->response_info().response_time);
+          request->response_info().headers->GetFreshnessLifetimes(
+              request->response_info().response_time).freshness;
       int64 adjusted_original_content_length =
           data_reduction_proxy::GetAdjustedOriginalContentLength(
               request_type, original_content_length,
@@ -583,11 +572,12 @@ void ChromeNetworkDelegate::OnCompleted(net::URLRequest* request,
       RecordContentLengthHistograms(received_content_length,
                                     original_content_length,
                                     freshness_lifetime);
+
       if (data_reduction_proxy_enabled_ &&
           data_reduction_proxy_usage_stats_ &&
           !proxy_config_getter_.is_null()) {
-        data_reduction_proxy_usage_stats_->RecordBypassedBytesHistograms(
-            *request,
+        data_reduction_proxy_usage_stats_->RecordBytesHistograms(
+            request,
             *data_reduction_proxy_enabled_,
             proxy_config_getter_.Run());
       }
@@ -798,21 +788,13 @@ bool ChromeNetworkDelegate::OnCanEnablePrivacyMode(
   return privacy_mode;
 }
 
-int ChromeNetworkDelegate::OnBeforeSocketStreamConnect(
-    net::SocketStream* socket,
-    const net::CompletionCallback& callback) {
-#if defined(ENABLE_CONFIGURATION_POLICY)
-  if (url_blacklist_manager_ &&
-      url_blacklist_manager_->IsURLBlocked(socket->url())) {
-    // URL access blocked by policy.
-    socket->net_log()->AddEvent(
-        net::NetLog::TYPE_CHROME_POLICY_ABORTED_REQUEST,
-        net::NetLog::StringCallback("url",
-                                    &socket->url().possibly_invalid_spec()));
-    return net::ERR_BLOCKED_BY_ADMINISTRATOR;
-  }
-#endif
-  return net::OK;
+bool ChromeNetworkDelegate::OnCancelURLRequestWithPolicyViolatingReferrerHeader(
+    const net::URLRequest& request,
+    const GURL& target_url,
+    const GURL& referrer_url) const {
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
+      base::Bind(&ReportInvalidReferrerSend, target_url, referrer_url));
+  return true;
 }
 
 void ChromeNetworkDelegate::AccumulateContentLength(
@@ -821,10 +803,13 @@ void ChromeNetworkDelegate::AccumulateContentLength(
     data_reduction_proxy::DataReductionProxyRequestType request_type) {
   DCHECK_GE(received_content_length, 0);
   DCHECK_GE(original_content_length, 0);
-  StoreAccumulatedContentLength(received_content_length,
-                                original_content_length,
-                                request_type,
-                                reinterpret_cast<Profile*>(profile_));
+  if (data_reduction_proxy_statistics_prefs_) {
+    StoreAccumulatedContentLength(received_content_length,
+                                  original_content_length,
+                                  request_type,
+                                  reinterpret_cast<Profile*>(profile_),
+                                  data_reduction_proxy_statistics_prefs_);
+  }
   received_content_length_ += received_content_length;
   original_content_length_ += original_content_length;
 }

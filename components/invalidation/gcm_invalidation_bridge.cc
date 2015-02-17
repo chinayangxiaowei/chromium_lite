@@ -38,14 +38,14 @@ class GCMInvalidationBridge::Core : public syncer::GCMNetworkChannelDelegate,
  public:
   Core(base::WeakPtr<GCMInvalidationBridge> bridge,
        scoped_refptr<base::SingleThreadTaskRunner> ui_thread_task_runner);
-  virtual ~Core();
+  ~Core() override;
 
   // syncer::GCMNetworkChannelDelegate implementation.
-  virtual void Initialize(ConnectionStateCallback callback) OVERRIDE;
-  virtual void RequestToken(RequestTokenCallback callback) OVERRIDE;
-  virtual void InvalidateToken(const std::string& token) OVERRIDE;
-  virtual void Register(RegisterCallback callback) OVERRIDE;
-  virtual void SetMessageReceiver(MessageCallback callback) OVERRIDE;
+  void Initialize(ConnectionStateCallback callback) override;
+  void RequestToken(RequestTokenCallback callback) override;
+  void InvalidateToken(const std::string& token) override;
+  void Register(RegisterCallback callback) override;
+  void SetMessageReceiver(MessageCallback callback) override;
 
   void RequestTokenFinished(RequestTokenCallback callback,
                             const GoogleServiceAuthError& error,
@@ -165,8 +165,10 @@ GCMInvalidationBridge::GCMInvalidationBridge(
       weak_factory_(this) {}
 
 GCMInvalidationBridge::~GCMInvalidationBridge() {
-  if (subscribed_for_incoming_messages_)
+  if (subscribed_for_incoming_messages_) {
     gcm_driver_->RemoveAppHandler(kInvalidationsAppId);
+    gcm_driver_->RemoveConnectionObserver(this);
+  }
 }
 
 scoped_ptr<syncer::GCMNetworkChannelDelegate>
@@ -285,6 +287,7 @@ void GCMInvalidationBridge::SubscribeForIncomingMessages() {
 
   DCHECK(!subscribed_for_incoming_messages_);
   gcm_driver_->AddAppHandler(kInvalidationsAppId, this);
+  gcm_driver_->AddConnectionObserver(this);
   core_thread_task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&GCMInvalidationBridge::Core::OnConnectionStateChanged,

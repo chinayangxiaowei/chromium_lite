@@ -7,7 +7,7 @@
 #include <map>
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/threading/thread.h"
@@ -83,13 +83,13 @@ void ExpectEntryPointersEquals(EntryMap expected,
 
 class ProtoDatabaseImplTest : public testing::Test {
  public:
-  virtual void SetUp() {
+  void SetUp() override {
     main_loop_.reset(new MessageLoop());
     db_.reset(
         new ProtoDatabaseImpl<TestProto>(main_loop_->message_loop_proxy()));
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     db_.reset();
     base::RunLoop().RunUntilIdle();
     main_loop_.reset();

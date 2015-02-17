@@ -4,8 +4,7 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
-import com.google.common.annotations.VisibleForTesting;
-
+import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.browser.Tab;
 import org.chromium.chrome.browser.profiles.Profile;
 
@@ -56,6 +55,10 @@ public class EmptyTabModel implements TabModel {
 
     @Override
     public void closeAllTabs() {
+    }
+
+    @Override
+    public void closeAllTabs(boolean allowDelegation, boolean uponExit) {
     }
 
     @Override

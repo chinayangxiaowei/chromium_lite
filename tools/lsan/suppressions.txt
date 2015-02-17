@@ -56,6 +56,8 @@ leak:blink::WindowProxy::initializeIfNeeded
 leak:blink::*::*GetterCallback
 leak:blink::CSSComputedStyleDeclaration::create
 leak:blink::V8PerIsolateData::ensureDomInJSContext
+leak:gin/object_template_builder.h
+leak:gin::internal::Dispatcher
 
 # http://crbug.com/356785
 leak:content::RenderViewImplTest_DecideNavigationPolicyForWebUI_Test::TestBody
@@ -84,10 +86,5 @@ leak:CertificateViewerUITest::ShowModalCertificateViewer
 
 # http://crbug.com/356306
 leak:content::SetProcessTitleFromCommandLine
-
-# http://crbug.com/354881
-leak:LoginUtilsBlockingLoginTest_LoginBlocksForUser
-leak:LoginUtilsTest::SetUp
-leak:LoginUtilsTest::PrepareProfile
 
 # PLEASE READ ABOVE BEFORE ADDING NEW SUPPRESSIONS.

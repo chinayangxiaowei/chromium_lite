@@ -6,8 +6,8 @@
 
 #include <cert.h>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "chromeos/cert_loader.h"
@@ -26,6 +26,9 @@
 #include "net/test/cert_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
+
+// http://crbug.com/418369
+#ifdef NDEBUG
 
 namespace chromeos {
 
@@ -47,7 +50,7 @@ class NetworkCertMigratorTest : public testing::Test {
   }
   virtual ~NetworkCertMigratorTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Initialize NSS db for the user.
     ASSERT_TRUE(user_.constructed_successfully());
     user_.FinishInit();
@@ -58,7 +61,7 @@ class NetworkCertMigratorTest : public testing::Test {
             base::Callback<void(crypto::ScopedPK11Slot)>())));
     test_nssdb_->SetSlowTaskRunnerForTest(message_loop_.message_loop_proxy());
 
-    DBusThreadManager::InitializeWithStub();
+    DBusThreadManager::Initialize();
     service_test_ =
         DBusThreadManager::Get()->GetShillServiceClient()->GetTestInterface();
     DBusThreadManager::Get()
@@ -74,7 +77,7 @@ class NetworkCertMigratorTest : public testing::Test {
     cert_loader_->StartWithNSSDB(test_nssdb_.get());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     network_cert_migrator_.reset();
     network_state_handler_.reset();
     CertLoader::Shutdown();
@@ -115,10 +118,12 @@ class NetworkCertMigratorTest : public testing::Test {
     net::CertificateList client_cert_list;
     scoped_refptr<net::CryptoModule> module(net::CryptoModule::CreateFromHandle(
         test_nssdb_->GetPrivateSlot().get()));
-    ASSERT_EQ(
-        net::OK,
-        test_nssdb_->ImportFromPKCS12(
-            module, pkcs12_data, base::string16(), false, &client_cert_list));
+    ASSERT_EQ(net::OK,
+              test_nssdb_->ImportFromPKCS12(module.get(),
+                                            pkcs12_data,
+                                            base::string16(),
+                                            false,
+                                            &client_cert_list));
     ASSERT_TRUE(!client_cert_list.empty());
     test_client_cert_ = client_cert_list[0];
 
@@ -290,10 +295,10 @@ class NetworkCertMigratorTest : public testing::Test {
 
  private:
   void CleanupTestCert() {
-    if (test_ca_cert_)
+    if (test_ca_cert_.get())
       ASSERT_TRUE(test_nssdb_->DeleteCertAndKey(test_ca_cert_.get()));
 
-    if (test_client_cert_)
+    if (test_client_cert_.get())
       ASSERT_TRUE(test_nssdb_->DeleteCertAndKey(test_client_cert_.get()));
   }
 
@@ -503,3 +508,5 @@ TEST_F(NetworkCertMigratorTest, MigrateIpsecCertIdWrongSlotId) {
 }
 
 }  // namespace chromeos
+
+#endif

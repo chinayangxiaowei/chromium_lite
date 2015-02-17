@@ -82,7 +82,7 @@ class UserCloudPolicyManagerChromeOSTest : public testing::Test {
         profile_(NULL),
         signin_profile_(NULL) {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // The initialization path that blocks on the initial policy fetch requires
     // a signin Profile to use its URLRequestContext.
     profile_manager_.reset(
@@ -93,15 +93,16 @@ class UserCloudPolicyManagerChromeOSTest : public testing::Test {
         std::make_pair(ProfileOAuth2TokenServiceFactory::GetInstance(),
                        BuildFakeProfileOAuth2TokenService));
     profile_ = profile_manager_->CreateTestingProfile(
-        chrome::kInitialProfile, scoped_ptr<PrefServiceSyncable>(),
-        base::UTF8ToUTF16("testing_profile"), 0, std::string(), factories);
-    signin_profile_ = profile_manager_->CreateTestingProfile(kSigninProfile);
-    signin_profile_->ForceIncognito(true);
+        chrome::kInitialProfile,
+        scoped_ptr<PrefServiceSyncable>(),
+        base::UTF8ToUTF16(""),
+        0,
+        std::string(),
+        factories);
     // Usually the signin Profile and the main Profile are separate, but since
     // the signin Profile is an OTR Profile then for this test it suffices to
     // attach it to the main Profile.
-    profile_->SetOffTheRecordProfile(scoped_ptr<Profile>(signin_profile_));
-    signin_profile_->SetOriginalProfile(profile_);
+    signin_profile_ = TestingProfile::Builder().BuildIncognito(profile_);
     ASSERT_EQ(signin_profile_, chromeos::ProfileHelper::GetSigninProfile());
 
     chrome::RegisterLocalState(prefs_.registry());
@@ -143,7 +144,7 @@ class UserCloudPolicyManagerChromeOSTest : public testing::Test {
         .Times(AnyNumber());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     if (token_forwarder_)
       token_forwarder_->Shutdown();
     if (manager_) {
@@ -152,7 +153,6 @@ class UserCloudPolicyManagerChromeOSTest : public testing::Test {
     }
     signin_profile_ = NULL;
     profile_ = NULL;
-    profile_manager_->DeleteTestingProfile(kSigninProfile);
     profile_manager_->DeleteTestingProfile(chrome::kInitialProfile);
   }
 

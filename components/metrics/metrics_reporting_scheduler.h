@@ -11,6 +11,8 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 
+namespace metrics {
+
 // Scheduler task to drive a MetricsService object's uploading.
 class MetricsReportingScheduler {
  public:
@@ -49,6 +51,12 @@ class MetricsReportingScheduler {
   // where the server is having issues.
   void BackOffUploadInterval();
 
+  // Returns upload interval based on the system and experiment that the user is
+  // assigned to.
+  // TODO(gayane): Only for experimenting with upload interval for Android
+  // (bug: 17391128). Should be removed once the experiments are done.
+  base::TimeDelta GetStandardUploadInterval();
+
   // The MetricsService method to call when uploading should happen.
   const base::Closure upload_callback_;
 
@@ -57,6 +65,10 @@ class MetricsReportingScheduler {
   // The interval between being told an upload is done and starting the next
   // upload.
   base::TimeDelta upload_interval_;
+
+  // The tick count of the last time log upload has been finished and null if no
+  // upload has been done yet.
+  base::TimeTicks last_upload_finish_time_;
 
   // Indicates that the scheduler is running (i.e., that Start has been called
   // more recently than Stop).
@@ -74,5 +86,7 @@ class MetricsReportingScheduler {
 
   DISALLOW_COPY_AND_ASSIGN(MetricsReportingScheduler);
 };
+
+}  // namespace metrics
 
 #endif  // COMPONENTS_METRICS_METRICS_REPORTING_SCHEDULER_H_

@@ -4,6 +4,8 @@
 
 import weakref
 
+from telemetry.core.platform import network_controller_backend
+from telemetry.core.platform import profiling_controller_backend
 from telemetry.core.platform import tracing_controller_backend
 
 
@@ -34,19 +36,42 @@ VISTA =        OSVersion('vista',         6.0)
 WIN7 =         OSVersion('win7',          6.1)
 WIN8 =         OSVersion('win8',          6.2)
 
-LEOPARD =      OSVersion('leopard',      10.5)
-SNOWLEOPARD =  OSVersion('snowleopard',  10.6)
-LION =         OSVersion('lion',         10.7)
-MOUNTAINLION = OSVersion('mountainlion', 10.8)
-MAVERICKS =    OSVersion('mavericks',    10.9)
+LEOPARD =      OSVersion('leopard',      105)
+SNOWLEOPARD =  OSVersion('snowleopard',  106)
+LION =         OSVersion('lion',         107)
+MOUNTAINLION = OSVersion('mountainlion', 108)
+MAVERICKS =    OSVersion('mavericks',    109)
+YOSEMITE =     OSVersion('yosemite',     1010)
 
 
 class PlatformBackend(object):
-  def __init__(self):
+
+  def __init__(self, device=None):
+    """ Initalize an instance of PlatformBackend from a device optionally.
+      Call sites need to use SupportsDevice before intialization to check
+      whether this platform backend supports the device.
+      If device is None, this constructor returns the host platform backend
+      which telemetry is running on.
+
+      Args:
+        device: an instance of telemetry.core.platform.device.Device.
+    """
+    if device and not self.SupportsDevice(device):
+      raise ValueError('Unsupported device: %s' % device.name)
     self._platform = None
     self._running_browser_backends = weakref.WeakSet()
-    self._tracing_controller_backend = \
-        tracing_controller_backend.TracingControllerBackend(self)
+    self._network_controller_backend = (
+        network_controller_backend.NetworkControllerBackend(self))
+    self._tracing_controller_backend = (
+        tracing_controller_backend.TracingControllerBackend(self))
+    self._profiling_controller_backend = (
+        profiling_controller_backend.ProfilingControllerBackend(self))
+
+  @classmethod
+  def SupportsDevice(cls, device):
+    """ Returns whether this platform backend supports intialization from the
+    device. """
+    return False
 
   def SetPlatform(self, platform):
     assert self._platform == None
@@ -61,11 +86,23 @@ class PlatformBackend(object):
     return list(self._running_browser_backends)
 
   @property
+  def network_controller_backend(self):
+    return self._network_controller_backend
+
+  @property
   def tracing_controller_backend(self):
     return self._tracing_controller_backend
 
+  @property
+  def profiling_controller_backend(self):
+    return self._profiling_controller_backend
+
   def DidCreateBrowser(self, browser, browser_backend):
     self.SetFullPerformanceModeEnabled(True)
+
+    # TODO(slamm): Remove this call when replay browser_backend dependencies
+    # get moved to platform. https://crbug.com/423962
+    self._network_controller_backend.UpdateReplay(browser_backend)
 
   def DidStartBrowser(self, browser, browser_backend):
     assert browser not in self._running_browser_backends
@@ -76,6 +113,11 @@ class PlatformBackend(object):
   def WillCloseBrowser(self, browser, browser_backend):
     self._tracing_controller_backend.WillCloseBrowser(
         browser, browser_backend)
+    self._profiling_controller_backend.WillCloseBrowser(
+        browser_backend)
+    # TODO(slamm): Move this call when replay's life cycle is no longer
+    # tied to the browser. https://crbug.com/424777
+    self._network_controller_backend.StopReplay()
 
     is_last_browser = len(self._running_browser_backends) == 1
     if is_last_browser:
@@ -142,6 +184,9 @@ class PlatformBackend(object):
   def GetCommandLine(self, pid):
     raise NotImplementedError()
 
+  def GetArchName(self):
+    raise NotImplementedError()
+
   def GetOSName(self):
     raise NotImplementedError()
 
@@ -196,4 +241,18 @@ class PlatformBackend(object):
     raise NotImplementedError()
 
   def StopMonitoringPower(self):
+    raise NotImplementedError()
+
+  def ReadMsr(self, msr_number, start=0, length=64):
+    """Read a CPU model-specific register (MSR).
+
+    Which MSRs are available depends on the CPU model.
+    On systems with multiple CPUs, this function may run on any CPU.
+
+    Args:
+      msr_number: The number of the register to read.
+      start: The least significant bit to read, zero-indexed.
+          (Said another way, the number of bits to right-shift the MSR value.)
+      length: The number of bits to read. MSRs are 64 bits, even on 32-bit CPUs.
+    """
     raise NotImplementedError()

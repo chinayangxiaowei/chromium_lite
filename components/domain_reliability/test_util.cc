@@ -24,12 +24,12 @@ class MockTimer : public MockableTime::Timer {
     DCHECK(time);
   }
 
-  virtual ~MockTimer() {}
+  ~MockTimer() override {}
 
   // MockableTime::Timer implementation:
-  virtual void Start(const tracked_objects::Location& posted_from,
-                     base::TimeDelta delay,
-                     const base::Closure& user_task) OVERRIDE {
+  void Start(const tracked_objects::Location& posted_from,
+             base::TimeDelta delay,
+             const base::Closure& user_task) override {
     DCHECK(!user_task.is_null());
 
     if (running_)
@@ -42,14 +42,14 @@ class MockTimer : public MockableTime::Timer {
                    callback_sequence_number_));
   }
 
-  virtual void Stop() OVERRIDE {
+  void Stop() override {
     if (running_) {
       ++callback_sequence_number_;
       running_ = false;
     }
   }
 
-  virtual bool IsRunning() OVERRIDE { return running_; }
+  bool IsRunning() override { return running_; }
 
  private:
   void OnDelayPassed(int expected_callback_sequence_number) {
@@ -87,14 +87,21 @@ void TestCallback::OnCalled() {
 }
 
 MockUploader::MockUploader(const UploadRequestCallback& callback)
-    : callback_(callback) {}
+    : callback_(callback),
+      discard_uploads_(true) {}
 
 MockUploader::~MockUploader() {}
+
+bool MockUploader::discard_uploads() const { return discard_uploads_; }
 
 void MockUploader::UploadReport(const std::string& report_json,
                                 const GURL& upload_url,
                                 const UploadCallback& callback) {
   callback_.Run(report_json, upload_url, callback);
+}
+
+void MockUploader::set_discard_uploads(bool discard_uploads) {
+  discard_uploads_ = discard_uploads;
 }
 
 MockTime::MockTime()

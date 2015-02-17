@@ -17,14 +17,14 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/installer/util/auto_launch_util.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -47,13 +47,13 @@ class AutolaunchInfoBarDelegate : public ConfirmInfoBarDelegate {
   void set_should_expire() { should_expire_ = true; }
 
   // ConfirmInfoBarDelegate:
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
+  virtual int GetIconID() const override;
+  virtual base::string16 GetMessageText() const override;
+  virtual base::string16 GetButtonLabel(InfoBarButton button) const override;
+  virtual bool Accept() override;
+  virtual bool Cancel() override;
   virtual bool ShouldExpireInternal(
-      const NavigationDetails& details) const OVERRIDE;
+      const NavigationDetails& details) const override;
 
   // Weak pointer to the profile, not owned by us.
   Profile* profile_;

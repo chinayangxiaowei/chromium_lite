@@ -21,9 +21,9 @@
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/environment.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/memory/ref_counted_memory.h"
@@ -163,18 +163,16 @@ bool CreateShortcutOnDesktop(const base::FilePath& shortcut_filename,
     return false;
   }
 
-  ssize_t bytes_written = base::WriteFileDescriptor(fd, contents.data(),
-                                                    contents.length());
-  if (IGNORE_EINTR(close(fd)) < 0)
-    PLOG(ERROR) << "close";
-
-  if (bytes_written != static_cast<ssize_t>(contents.length())) {
+  if (!base::WriteFileDescriptor(fd, contents.c_str(), contents.size())) {
     // Delete the file. No shortuct is better than corrupted one. Use unlinkat
     // to make sure we're deleting the file in the directory we think we are.
     // Even if an attacker manager to put something other at
     // |shortcut_filename| we'll just undo his action.
     unlinkat(desktop_fd, shortcut_filename.value().c_str(), 0);
   }
+
+  if (IGNORE_EINTR(close(fd)) < 0)
+    PLOG(ERROR) << "close";
 
   if (IGNORE_EINTR(close(desktop_fd)) < 0)
     PLOG(ERROR) << "close";
@@ -260,6 +258,7 @@ void DeleteShortcutInApplicationsMenu(
   LaunchXdgUtility(argv, &exit_code);
 }
 
+#if defined(USE_GLIB)
 // Quote a string such that it appears as one verbatim argument for the Exec
 // key in a desktop file.
 std::string QuoteArgForDesktopFileExec(const std::string& arg) {
@@ -310,6 +309,7 @@ std::string QuoteCommandLineForDesktopFileExec(
 const char kDesktopEntry[] = "Desktop Entry";
 
 const char kXdgOpenShebang[] = "#!/usr/bin/env xdg-open";
+#endif
 
 const char kXdgSettings[] = "xdg-settings";
 const char kXdgSettingsDefaultBrowser[] = "default-web-browser";

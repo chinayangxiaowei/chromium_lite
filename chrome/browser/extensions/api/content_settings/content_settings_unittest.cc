@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "testing/gtest/include/gtest/gtest.h"
-
+#include "base/macros.h"
 #include "chrome/browser/extensions/api/content_settings/content_settings_helpers.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
 namespace helpers = content_settings_helpers;
@@ -22,7 +22,7 @@ TEST(ExtensionContentSettingsHelpersTest, ParseExtensionPattern) {
     { "https://*/*", "https://*" },
     { "file:///foo/bar/baz", "file:///foo/bar/baz" },
   };
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTestPatterns); ++i) {
+  for (size_t i = 0; i < arraysize(kTestPatterns); ++i) {
     std::string error;
     std::string pattern_str = helpers::ParseExtensionPattern(
         kTestPatterns[i].extension_pattern, &error).ToString();
@@ -39,7 +39,7 @@ TEST(ExtensionContentSettingsHelpersTest, ParseExtensionPattern) {
     { "file:///foo/bar/*",
       "Path wildcards in file URL patterns are not allowed." },
   };
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kInvalidTestPatterns); ++i) {
+  for (size_t i = 0; i < arraysize(kInvalidTestPatterns); ++i) {
     std::string error;
     ContentSettingsPattern pattern = helpers::ParseExtensionPattern(
         kInvalidTestPatterns[i].extension_pattern, &error);

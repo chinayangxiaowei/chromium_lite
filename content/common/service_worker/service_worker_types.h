@@ -9,7 +9,11 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/strings/string_util.h"
 #include "content/common/content_export.h"
+#include "content/public/common/request_context_frame_type.h"
+#include "content/public/common/request_context_type.h"
+#include "third_party/WebKit/public/platform/WebServiceWorkerResponseType.h"
 #include "third_party/WebKit/public/platform/WebServiceWorkerState.h"
 #include "url/gurl.h"
 
@@ -23,6 +27,11 @@ namespace content {
 // and embedded worker.
 static const int kInvalidServiceWorkerRequestId = -1;
 
+// Constants for error messages.
+extern const char kServiceWorkerRegisterErrorPrefix[];
+extern const char kServiceWorkerUnregisterErrorPrefix[];
+extern const char kServiceWorkerGetRegistrationErrorPrefix[];
+
 // Constants for invalid identifiers.
 static const int kInvalidServiceWorkerHandleId = -1;
 static const int kInvalidServiceWorkerRegistrationHandleId = -1;
@@ -31,6 +40,22 @@ static const int64 kInvalidServiceWorkerRegistrationId = -1;
 static const int64 kInvalidServiceWorkerVersionId = -1;
 static const int64 kInvalidServiceWorkerResourceId = -1;
 static const int64 kInvalidServiceWorkerResponseId = -1;
+static const int kInvalidEmbeddedWorkerThreadId = -1;
+
+enum FetchRequestMode {
+  FETCH_REQUEST_MODE_SAME_ORIGIN,
+  FETCH_REQUEST_MODE_NO_CORS,
+  FETCH_REQUEST_MODE_CORS,
+  FETCH_REQUEST_MODE_CORS_WITH_FORCED_PREFLIGHT,
+  FETCH_REQUEST_MODE_LAST = FETCH_REQUEST_MODE_CORS_WITH_FORCED_PREFLIGHT
+};
+
+enum FetchCredentialsMode {
+  FETCH_CREDENTIALS_MODE_OMIT,
+  FETCH_CREDENTIALS_MODE_SAME_ORIGIN,
+  FETCH_CREDENTIALS_MODE_INCLUDE,
+  FETCH_CREDENTIALS_MODE_LAST = FETCH_CREDENTIALS_MODE_INCLUDE
+};
 
 // Indicates how the service worker handled a fetch event.
 enum ServiceWorkerFetchEventResult {
@@ -41,22 +66,35 @@ enum ServiceWorkerFetchEventResult {
   SERVICE_WORKER_FETCH_EVENT_LAST = SERVICE_WORKER_FETCH_EVENT_RESULT_RESPONSE
 };
 
+struct ServiceWorkerCaseInsensitiveCompare {
+  bool operator()(const std::string& lhs, const std::string& rhs) const {
+    return base::strcasecmp(lhs.c_str(), rhs.c_str()) < 0;
+  }
+};
+
+typedef std::map<std::string, std::string, ServiceWorkerCaseInsensitiveCompare>
+    ServiceWorkerHeaderMap;
+
 // To dispatch fetch request from browser to child process.
-// TODO(kinuko): This struct will definitely need more fields and
-// we'll probably want to have response struct/class too.
 struct CONTENT_EXPORT ServiceWorkerFetchRequest {
   ServiceWorkerFetchRequest();
   ServiceWorkerFetchRequest(const GURL& url,
                             const std::string& method,
-                            const std::map<std::string, std::string>& headers,
+                            const ServiceWorkerHeaderMap& headers,
                             const GURL& referrer,
                             bool is_reload);
   ~ServiceWorkerFetchRequest();
 
+  FetchRequestMode mode;
+  RequestContextType request_context_type;
+  RequestContextFrameType frame_type;
   GURL url;
   std::string method;
-  std::map<std::string, std::string> headers;
+  ServiceWorkerHeaderMap headers;
+  std::string blob_uuid;
+  uint64 blob_size;
   GURL referrer;
+  FetchCredentialsMode credentials_mode;
   bool is_reload;
 };
 
@@ -66,15 +104,48 @@ struct CONTENT_EXPORT ServiceWorkerResponse {
   ServiceWorkerResponse(const GURL& url,
                         int status_code,
                         const std::string& status_text,
-                        const std::map<std::string, std::string>& headers,
-                        const std::string& blob_uuid);
+                        blink::WebServiceWorkerResponseType response_type,
+                        const ServiceWorkerHeaderMap& headers,
+                        const std::string& blob_uuid,
+                        uint64 blob_size);
   ~ServiceWorkerResponse();
 
   GURL url;
   int status_code;
   std::string status_text;
-  std::map<std::string, std::string> headers;
+  blink::WebServiceWorkerResponseType response_type;
+  ServiceWorkerHeaderMap headers;
   std::string blob_uuid;
+  uint64 blob_size;
+};
+
+// Controls how requests are matched in the Cache API.
+struct CONTENT_EXPORT ServiceWorkerCacheQueryParams {
+  ServiceWorkerCacheQueryParams();
+
+  bool ignore_search;
+  bool ignore_method;
+  bool ignore_vary;
+  bool prefix_match;
+};
+
+// The type of a single batch operation in the Cache API.
+enum ServiceWorkerCacheOperationType {
+  SERVICE_WORKER_CACHE_OPERATION_TYPE_UNDEFINED,
+  SERVICE_WORKER_CACHE_OPERATION_TYPE_PUT,
+  SERVICE_WORKER_CACHE_OPERATION_TYPE_DELETE,
+  SERVICE_WORKER_CACHE_OPERATION_TYPE_LAST =
+      SERVICE_WORKER_CACHE_OPERATION_TYPE_DELETE
+};
+
+// A single batch operation for the Cache API.
+struct CONTENT_EXPORT ServiceWorkerBatchOperation {
+  ServiceWorkerBatchOperation();
+
+  ServiceWorkerCacheOperationType operation_type;
+  ServiceWorkerFetchRequest request;
+  ServiceWorkerResponse response;
+  ServiceWorkerCacheQueryParams match_params;
 };
 
 // Represents initialization info for a WebServiceWorker object.
@@ -84,6 +155,14 @@ struct CONTENT_EXPORT ServiceWorkerObjectInfo {
   GURL scope;
   GURL url;
   blink::WebServiceWorkerState state;
+  int64 version_id;
+};
+
+struct ServiceWorkerRegistrationObjectInfo {
+  ServiceWorkerRegistrationObjectInfo();
+  int handle_id;
+  GURL scope;
+  int64 registration_id;
 };
 
 struct ServiceWorkerVersionAttributes {

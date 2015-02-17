@@ -13,6 +13,7 @@
 #include "base/message_loop/message_loop.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -55,20 +56,20 @@ namespace net {
 class URLRequestHttpJob::HttpFilterContext : public FilterContext {
  public:
   explicit HttpFilterContext(URLRequestHttpJob* job);
-  virtual ~HttpFilterContext();
+  ~HttpFilterContext() override;
 
   // FilterContext implementation.
-  virtual bool GetMimeType(std::string* mime_type) const OVERRIDE;
-  virtual bool GetURL(GURL* gurl) const OVERRIDE;
-  virtual bool GetContentDisposition(std::string* disposition) const OVERRIDE;
-  virtual base::Time GetRequestTime() const OVERRIDE;
-  virtual bool IsCachedContent() const OVERRIDE;
-  virtual bool IsDownload() const OVERRIDE;
-  virtual bool IsSdchResponse() const OVERRIDE;
-  virtual int64 GetByteReadCount() const OVERRIDE;
-  virtual int GetResponseCode() const OVERRIDE;
-  virtual const URLRequestContext* GetURLRequestContext() const OVERRIDE;
-  virtual void RecordPacketStats(StatisticSelector statistic) const OVERRIDE;
+  bool GetMimeType(std::string* mime_type) const override;
+  bool GetURL(GURL* gurl) const override;
+  bool GetContentDisposition(std::string* disposition) const override;
+  base::Time GetRequestTime() const override;
+  bool IsCachedContent() const override;
+  bool IsDownload() const override;
+  bool SdchResponseExpected() const override;
+  int64 GetByteReadCount() const override;
+  int GetResponseCode() const override;
+  const URLRequestContext* GetURLRequestContext() const override;
+  void RecordPacketStats(StatisticSelector statistic) const override;
 
   // Method to allow us to reset filter context for a response that should have
   // been SDCH encoded when there is an update due to an explicit HTTP header.
@@ -124,7 +125,7 @@ void URLRequestHttpJob::HttpFilterContext::ResetSdchResponseToFalse() {
   job_->sdch_dictionary_advertised_ = false;
 }
 
-bool URLRequestHttpJob::HttpFilterContext::IsSdchResponse() const {
+bool URLRequestHttpJob::HttpFilterContext::SdchResponseExpected() const {
   return job_->sdch_dictionary_advertised_;
 }
 
@@ -334,7 +335,7 @@ void URLRequestHttpJob::NotifyHeadersComplete() {
       // Resolve suggested URL relative to request url.
       GURL sdch_dictionary_url = request_->url().Resolve(url_text);
       if (sdch_dictionary_url.is_valid()) {
-        sdch_manager->FetchDictionary(request_->url(), sdch_dictionary_url);
+        sdch_manager->OnGetDictionary(request_->url(), sdch_dictionary_url);
       }
     }
   }
@@ -447,7 +448,8 @@ void URLRequestHttpJob::StartTransactionInternal() {
                      base::Unretained(this)));
 
       if (!throttling_entry_.get() ||
-          !throttling_entry_->ShouldRejectRequest(*request_)) {
+          !throttling_entry_->ShouldRejectRequest(*request_,
+                                                  network_delegate())) {
         rv = transaction_->Start(
             &request_info_, start_callback_, request_->net_log());
         start_time_ = base::TimeTicks::Now();
@@ -520,11 +522,11 @@ void URLRequestHttpJob::AddExtraHeaders() {
     if (!advertise_sdch) {
       // Tell the server what compression formats we support (other than SDCH).
       request_info_.extra_headers.SetHeader(
-          HttpRequestHeaders::kAcceptEncoding, "gzip,deflate");
+          HttpRequestHeaders::kAcceptEncoding, "gzip, deflate");
     } else {
       // Include SDCH in acceptable list.
       request_info_.extra_headers.SetHeader(
-          HttpRequestHeaders::kAcceptEncoding, "gzip,deflate,sdch");
+          HttpRequestHeaders::kAcceptEncoding, "gzip, deflate, sdch");
       if (!avail_dictionaries.empty()) {
         request_info_.extra_headers.SetHeader(
             kAvailDictionaryHeader,
@@ -782,6 +784,11 @@ void URLRequestHttpJob::ProcessPublicKeyPinsHeader() {
 }
 
 void URLRequestHttpJob::OnStartCompleted(int result) {
+  // TODO(vadimt): Remove ScopedTracker below once crbug.com/424359 is fixed.
+  tracked_objects::ScopedTracker tracking_profile(
+      FROM_HERE_WITH_EXPLICIT_FUNCTION(
+          "424359 URLRequestHttpJob::OnStartCompleted"));
+
   RecordTimer();
 
   // If the request was destroyed, then there is no more work to do.
@@ -806,11 +813,9 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
       context->fraudulent_certificate_reporter();
     if (reporter != NULL) {
       const SSLInfo& ssl_info = transaction_->GetResponseInfo()->ssl_info;
-      bool sni_available = SSLConfigService::IsSNIAvailable(
-          context->ssl_config_service());
       const std::string& host = request_->url().host();
 
-      reporter->SendReport(host, ssl_info, sni_available);
+      reporter->SendReport(host, ssl_info);
     }
   }
 
@@ -861,10 +866,7 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
       const URLRequestContext* context = request_->context();
       TransportSecurityState* state = context->transport_security_state();
       const bool fatal =
-          state &&
-          state->ShouldSSLErrorsBeFatal(
-              request_info_.url.host(),
-              SSLConfigService::IsSNIAvailable(context->ssl_config_service()));
+          state && state->ShouldSSLErrorsBeFatal(request_info_.url.host());
       NotifySSLCertificateError(
           transaction_->GetResponseInfo()->ssl_info, fatal);
     }
@@ -890,6 +892,11 @@ void URLRequestHttpJob::OnHeadersReceivedCallback(int result) {
 }
 
 void URLRequestHttpJob::OnReadCompleted(int result) {
+  // TODO(vadimt): Remove ScopedTracker below once crbug.com/424359 is fixed.
+  tracked_objects::ScopedTracker tracking_profile(
+      FROM_HERE_WITH_EXPLICIT_FUNCTION(
+          "424359 URLRequestHttpJob::OnReadCompleted"));
+
   read_in_progress_ = false;
 
   if (ShouldFixMismatchedContentLength(result))
@@ -1023,7 +1030,7 @@ Filter* URLRequestHttpJob::SetupFilter() const {
     encoding_types.push_back(Filter::ConvertEncodingToType(encoding_type));
   }
 
-  if (filter_context_->IsSdchResponse()) {
+  if (filter_context_->SdchResponseExpected()) {
     // We are wary of proxies that discard or damage SDCH encoding.  If a server
     // explicitly states that this is not SDCH content, then we can correct our
     // assumption that this is an SDCH response, and avoid the need to recover
@@ -1305,7 +1312,7 @@ void URLRequestHttpJob::DoneReadingRedirectResponse() {
     } else {
       // Otherwise, |override_response_headers_| must be non-NULL and contain
       // bogus headers indicating a redirect.
-      DCHECK(override_response_headers_);
+      DCHECK(override_response_headers_.get());
       DCHECK(override_response_headers_->IsRedirect(NULL));
       transaction_->StopCaching();
     }

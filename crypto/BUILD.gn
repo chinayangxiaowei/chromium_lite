@@ -49,6 +49,8 @@ component("crypto") {
     "nss_util.cc",
     "nss_util.h",
     "nss_util_internal.h",
+    "openssl_bio_string.cc",
+    "openssl_bio_string.h",
     "openssl_util.cc",
     "openssl_util.h",
     "p224.cc",
@@ -151,6 +153,8 @@ component("crypto") {
       "ec_signature_creator_openssl.cc",
       "encryptor_openssl.cc",
       "hmac_openssl.cc",
+      "openssl_bio_string.cc",
+      "openssl_bio_string.h",
       "openssl_util.cc",
       "openssl_util.h",
       "rsa_private_key_openssl.cc",
@@ -205,6 +209,7 @@ test("crypto_unittests") {
     "hkdf_unittest.cc",
     "hmac_unittest.cc",
     "nss_util_unittest.cc",
+    "openssl_bio_string_unittest.cc",
     "p224_unittest.cc",
     "p224_spake_unittest.cc",
     "random_unittest.cc",
@@ -225,6 +230,8 @@ test("crypto_unittests") {
 
   if (use_openssl) {
     sources -= [ "nss_util_unittest.cc" ]
+  } else {
+    sources -= [ "openssl_bio_string_unittest.cc" ]
   }
 
   deps = [
@@ -285,11 +292,11 @@ group("platform") {
       #
       # We always need our SSL header search path to come before the system one
       # so our versions are used. The libssl target will add the search path we
-      # want, but according to GN's ordering rules, direct_dependent_configs'
-      # search path will get applied before ones inherited from our
-      # dependencies. Therefore, we need to explicitly list our custom libssl's
-      # config here before the system one.
-      direct_dependent_configs = [
+      # want, but according to GN's ordering rules, public_configs' search path
+      # will get applied before ones inherited from our dependencies.
+      # Therefore, we need to explicitly list our custom libssl's config here
+      # before the system one.
+      public_configs = [
         "//net/third_party/nss/ssl:ssl_config",
         "//third_party/nss:system_nss_no_ssl_config",
       ]

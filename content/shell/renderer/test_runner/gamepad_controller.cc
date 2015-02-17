@@ -4,7 +4,7 @@
 
 #include "content/shell/renderer/test_runner/gamepad_controller.h"
 
-#include "content/shell/renderer/test_runner/WebTestDelegate.h"
+#include "content/shell/renderer/test_runner/web_test_delegate.h"
 #include "gin/arguments.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
@@ -31,11 +31,11 @@ class GamepadControllerBindings
  private:
   explicit GamepadControllerBindings(
       base::WeakPtr<GamepadController> controller);
-  virtual ~GamepadControllerBindings();
+  ~GamepadControllerBindings() override;
 
   // gin::Wrappable.
-  virtual gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) OVERRIDE;
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) override;
 
   void Connect(int index);
   void DispatchConnected(int index);
@@ -136,13 +136,24 @@ void GamepadControllerBindings::SetAxisData(int index, int axis, double data) {
     controller_->SetAxisData(index, axis, data);
 }
 
+// static
+base::WeakPtr<GamepadController> GamepadController::Create(WebTestDelegate* delegate) {
+  CHECK(delegate);
+
+  GamepadController* controller = new GamepadController();
+  delegate->SetGamepadProvider(scoped_ptr<RendererGamepadProvider>(controller));
+  return controller->weak_factory_.GetWeakPtr();
+}
+
 GamepadController::GamepadController()
-    : listener_(NULL),
+    : RendererGamepadProvider(0),
       weak_factory_(this) {
   Reset();
 }
 
-GamepadController::~GamepadController() {}
+GamepadController::~GamepadController() {
+  StopIfObserving();
+}
 
 void GamepadController::Reset() {
   memset(&gamepads_, 0, sizeof(gamepads_));
@@ -152,19 +163,19 @@ void GamepadController::Install(WebFrame* frame) {
   GamepadControllerBindings::Install(weak_factory_.GetWeakPtr(), frame);
 }
 
-void GamepadController::SetDelegate(WebTestDelegate* delegate) {
-  if (!delegate)
-    return;
-  delegate->setGamepadProvider(this);
-}
 
 void GamepadController::SampleGamepads(blink::WebGamepads& gamepads) {
   memcpy(&gamepads, &gamepads_, sizeof(blink::WebGamepads));
 }
 
-void GamepadController::SetGamepadListener(
-    blink::WebGamepadListener* listener) {
-  listener_ = listener;
+bool GamepadController::OnControlMessageReceived(const IPC::Message& msg) {
+  return false;
+}
+
+void GamepadController::SendStartMessage() {
+}
+
+void GamepadController::SendStopMessage() {
 }
 
 void GamepadController::Connect(int index) {
@@ -183,8 +194,8 @@ void GamepadController::DispatchConnected(int index) {
       || !gamepads_.items[index].connected)
     return;
   const WebGamepad& pad = gamepads_.items[index];
-  if (listener_)
-    listener_->didConnectGamepad(index, pad);
+  if (listener())
+    listener()->didConnectGamepad(index, pad);
 }
 
 void GamepadController::Disconnect(int index) {
@@ -197,8 +208,8 @@ void GamepadController::Disconnect(int index) {
     if (gamepads_.items[i].connected)
       gamepads_.length = i + 1;
   }
-  if (listener_)
-    listener_->didDisconnectGamepad(index, pad);
+  if (listener())
+    listener()->didDisconnectGamepad(index, pad);
 }
 
 void GamepadController::SetId(int index, const std::string& src) {

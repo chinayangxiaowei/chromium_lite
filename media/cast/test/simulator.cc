@@ -11,6 +11,17 @@
 //   File path to writing out the raw event log of the simulation session.
 // --sim-id=
 //   Unique simulation ID.
+// --target-delay-ms=
+//   Target playout delay to configure (integer number of milliseconds).
+//   Optional; default is 400.
+// --max-frame-rate=
+//   The maximum frame rate allowed at any time during the Cast session.
+//   Optional; default is 30.
+// --source-frame-rate=
+//   Overrides the playback rate; the source video will play faster/slower.
+// --run-time=
+//   In seconds, how long the Cast session runs for.
+//   Optional; default is 180.
 //
 // Output:
 // - Raw event log of the simulation session tagged with the unique test ID,
@@ -19,13 +30,14 @@
 #include "base/at_exit.h"
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/files/scoped_file.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/thread_task_runner_handle.h"
 #include "base/time/tick_clock.h"
@@ -65,12 +77,26 @@ using media::cast::proto::NetworkSimulationModelType;
 namespace media {
 namespace cast {
 namespace {
-const int kTargetDelay = 300;
 const char kSourcePath[] = "source";
 const char kModelPath[] = "model";
 const char kOutputPath[] = "output";
 const char kSimulationId[] = "sim-id";
 const char kLibDir[] = "lib-dir";
+const char kTargetDelay[] = "target-delay-ms";
+const char kMaxFrameRate[] = "max-frame-rate";
+const char kSourceFrameRate[] = "source-frame-rate";
+const char kRunTime[] = "run-time";
+
+int GetIntegerSwitchValue(const char* switch_name, int default_value) {
+  const std::string as_str =
+      CommandLine::ForCurrentProcess()->GetSwitchValueASCII(switch_name);
+  if (as_str.empty())
+    return default_value;
+  int as_int;
+  CHECK(base::StringToInt(as_str, &as_int));
+  CHECK_GT(as_int, 0);
+  return as_int;
+}
 
 void UpdateCastTransportStatus(CastTransportStatus status) {
   LOG(INFO) << "Cast transport status: " << status;
@@ -171,7 +197,7 @@ void AppendLogToFile(media::cast::proto::LogMetadata* metadata,
     return;
   }
 
-  if (AppendToFile(output_path, serialized_log.get(), output_bytes) == -1) {
+  if (!AppendToFile(output_path, serialized_log.get(), output_bytes)) {
     LOG(ERROR) << "Failed to append to log.";
   }
 }
@@ -219,28 +245,31 @@ void RunSimulation(const base::FilePath& source_path,
 
   // Audio sender config.
   AudioSenderConfig audio_sender_config = GetDefaultAudioSenderConfig();
-  audio_sender_config.target_playout_delay =
-      base::TimeDelta::FromMilliseconds(kTargetDelay);
+  audio_sender_config.min_playout_delay =
+      audio_sender_config.max_playout_delay = base::TimeDelta::FromMilliseconds(
+          GetIntegerSwitchValue(kTargetDelay, 400));
 
   // Audio receiver config.
   FrameReceiverConfig audio_receiver_config =
       GetDefaultAudioReceiverConfig();
   audio_receiver_config.rtp_max_delay_ms =
-      audio_sender_config.target_playout_delay.InMilliseconds();
+      audio_sender_config.max_playout_delay.InMilliseconds();
 
   // Video sender config.
   VideoSenderConfig video_sender_config = GetDefaultVideoSenderConfig();
-  video_sender_config.max_bitrate = 4000000;
+  video_sender_config.max_bitrate = 2500000;
   video_sender_config.min_bitrate = 2000000;
-  video_sender_config.start_bitrate = 4000000;
-  video_sender_config.target_playout_delay =
-      base::TimeDelta::FromMilliseconds(kTargetDelay);
+  video_sender_config.start_bitrate = 2000000;
+  video_sender_config.min_playout_delay =
+      video_sender_config.max_playout_delay =
+          audio_sender_config.max_playout_delay;
+  video_sender_config.max_frame_rate = GetIntegerSwitchValue(kMaxFrameRate, 30);
 
   // Video receiver config.
   FrameReceiverConfig video_receiver_config =
       GetDefaultVideoReceiverConfig();
   video_receiver_config.rtp_max_delay_ms =
-      video_sender_config.target_playout_delay.InMilliseconds();
+      video_sender_config.max_playout_delay.InMilliseconds();
 
   // Loopback transport.
   LoopBackTransport receiver_to_sender(receiver_env);
@@ -259,6 +288,7 @@ void RunSimulation(const base::FilePath& source_path,
           NULL,
           &testing_clock,
           net::IPEndPoint(),
+          make_scoped_ptr(new base::DictionaryValue),
           base::Bind(&UpdateCastTransportStatus),
           base::Bind(&LogTransportEvents, sender_env),
           base::TimeDelta::FromSeconds(1),
@@ -310,18 +340,22 @@ void RunSimulation(const base::FilePath& source_path,
                                base::Bind(&VideoInitializationStatus),
                                CreateDefaultVideoEncodeAcceleratorCallback(),
                                CreateDefaultVideoEncodeMemoryCallback());
+  task_runner->RunTasks();
 
   // Start sending.
   if (!source_path.empty()) {
     // 0 means using the FPS from the file.
-    media_source.SetSourceFile(source_path, 0);
+    media_source.SetSourceFile(source_path,
+                               GetIntegerSwitchValue(kSourceFrameRate, 0));
   }
   media_source.Start(cast_sender->audio_frame_input(),
                      cast_sender->video_frame_input());
 
   // Run for 3 minutes.
   base::TimeDelta elapsed_time;
-  while (elapsed_time.InMinutes() < 3) {
+  const base::TimeDelta desired_run_time =
+      base::TimeDelta::FromSeconds(GetIntegerSwitchValue(kRunTime, 180));
+  while (elapsed_time < desired_run_time) {
     // Each step is 100us.
     base::TimeDelta step = base::TimeDelta::FromMicroseconds(100);
     task_runner->Sleep(step);
@@ -353,6 +387,7 @@ void RunSimulation(const base::FilePath& source_path,
   int encoded_video_frames = 0;
   int dropped_video_frames = 0;
   int late_video_frames = 0;
+  int64 total_delay_of_late_frames_ms = 0;
   int64 encoded_size = 0;
   int64 target_bitrate = 0;
   for (size_t i = 0; i < video_frame_events.size(); ++i) {
@@ -366,21 +401,36 @@ void RunSimulation(const base::FilePath& source_path,
     } else {
       ++dropped_video_frames;
     }
-    if (event.has_delay_millis() && event.delay_millis() < 0)
+    if (event.has_delay_millis() && event.delay_millis() < 0) {
       ++late_video_frames;
+      total_delay_of_late_frames_ms += -event.delay_millis();
+    }
   }
 
-  double avg_encoded_bitrate =
-      !encoded_video_frames ? 0 :
-      8.0 * encoded_size * video_sender_config.max_frame_rate /
-      encoded_video_frames / 1000;
+  // Subtract fraction of dropped frames from |elapsed_time| before estimating
+  // the average encoded bitrate.
+  const base::TimeDelta elapsed_time_undropped =
+      total_video_frames <= 0 ? base::TimeDelta() :
+      (elapsed_time * (total_video_frames - dropped_video_frames) /
+           total_video_frames);
+  const double avg_encoded_bitrate =
+      elapsed_time_undropped <= base::TimeDelta() ? 0 :
+      8.0 * encoded_size / elapsed_time_undropped.InSecondsF() / 1000;
   double avg_target_bitrate =
       !encoded_video_frames ? 0 : target_bitrate / encoded_video_frames / 1000;
 
+  LOG(INFO) << "Configured target playout delay (ms): "
+            << video_receiver_config.rtp_max_delay_ms;
   LOG(INFO) << "Audio frame count: " << audio_frame_count;
   LOG(INFO) << "Total video frames: " << total_video_frames;
   LOG(INFO) << "Dropped video frames " << dropped_video_frames;
-  LOG(INFO) << "Late video frames: " << late_video_frames;
+  LOG(INFO) << "Late video frames: " << late_video_frames
+            << " (average lateness: "
+            << (late_video_frames > 0 ?
+                    static_cast<double>(total_delay_of_late_frames_ms) /
+                        late_video_frames :
+                    0)
+            << " ms)";
   LOG(INFO) << "Average encoded bitrate (kbps): " << avg_encoded_bitrate;
   LOG(INFO) << "Average target bitrate (kbps): " << avg_target_bitrate;
   LOG(INFO) << "Writing log: " << output_path.value();

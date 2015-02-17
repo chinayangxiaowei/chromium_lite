@@ -9,6 +9,7 @@
 #include "tools/gn/location.h"
 #include "tools/gn/ninja_build_writer.h"
 #include "tools/gn/ninja_toolchain_writer.h"
+#include "tools/gn/settings.h"
 
 NinjaWriter::NinjaWriter(const BuildSettings* build_settings,
                          Builder* builder)
@@ -21,28 +22,31 @@ NinjaWriter::~NinjaWriter() {
 
 // static
 bool NinjaWriter::RunAndWriteFiles(const BuildSettings* build_settings,
-                                   Builder* builder) {
+                                   Builder* builder,
+                                   Err* err) {
   NinjaWriter writer(build_settings, builder);
 
   std::vector<const Settings*> all_settings;
   std::vector<const Target*> default_targets;
-  if (!writer.WriteToolchains(&all_settings, &default_targets))
+  if (!writer.WriteToolchains(&all_settings, &default_targets, err))
     return false;
-  return writer.WriteRootBuildfiles(all_settings, default_targets);
+  return writer.WriteRootBuildfiles(all_settings, default_targets, err);
 }
 
 // static
 bool NinjaWriter::RunAndWriteToolchainFiles(
     const BuildSettings* build_settings,
     Builder* builder,
-    std::vector<const Settings*>* all_settings) {
+    std::vector<const Settings*>* all_settings,
+    Err* err) {
   NinjaWriter writer(build_settings, builder);
   std::vector<const Target*> default_targets;
-  return writer.WriteToolchains(all_settings, &default_targets);
+  return writer.WriteToolchains(all_settings, &default_targets, err);
 }
 
 bool NinjaWriter::WriteToolchains(std::vector<const Settings*>* all_settings,
-                                  std::vector<const Target*>* default_targets) {
+                                  std::vector<const Target*>* default_targets,
+                                  Err* err) {
   // Categorize all targets by toolchain.
   typedef std::map<Label, std::vector<const Target*> > CategorizedMap;
   CategorizedMap categorized;
@@ -87,13 +91,16 @@ bool NinjaWriter::WriteToolchains(std::vector<const Settings*>* all_settings,
 
 bool NinjaWriter::WriteRootBuildfiles(
     const std::vector<const Settings*>& all_settings,
-    const std::vector<const Target*>& default_targets) {
+    const std::vector<const Target*>& default_targets,
+    Err* err) {
+  // All Settings objects should have the same default toolchain, and there
+  // should always be at least one settings object in the build.
+  CHECK(!all_settings.empty());
+  const Toolchain* default_toolchain =
+      builder_->GetToolchain(all_settings[0]->default_toolchain_label());
+
   // Write the root buildfile.
-  if (!NinjaBuildWriter::RunAndWriteFile(build_settings_, all_settings,
-                                         default_targets)) {
-    Err(Location(),
-        "Couldn't open toolchain buildfile(s) for writing").PrintToStdout();
-    return false;
-  }
-  return true;
+  return NinjaBuildWriter::RunAndWriteFile(build_settings_, all_settings,
+                                           default_toolchain, default_targets,
+                                           err);
 }

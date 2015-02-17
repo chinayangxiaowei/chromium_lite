@@ -11,7 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "webkit/browser/fileapi/file_stream_writer.h"
+#include "storage/browser/fileapi/file_stream_writer.h"
 
 namespace base {
 class TaskRunner;
@@ -27,8 +27,8 @@ class FileSystemInterface;
 
 namespace internal {
 
-// The implementation of fileapi::FileStreamWriter for the Drive File System.
-class WebkitFileStreamWriterImpl : public fileapi::FileStreamWriter {
+// The implementation of storage::FileStreamWriter for the Drive File System.
+class WebkitFileStreamWriterImpl : public storage::FileStreamWriter {
  public:
   // Callback to return the FileSystemInterface instance. This is an
   // injecting point for testing.
@@ -48,9 +48,9 @@ class WebkitFileStreamWriterImpl : public fileapi::FileStreamWriter {
 
   // FileWriter override.
   virtual int Write(net::IOBuffer* buf, int buf_len,
-                    const net::CompletionCallback& callback) OVERRIDE;
-  virtual int Cancel(const net::CompletionCallback& callback) OVERRIDE;
-  virtual int Flush(const net::CompletionCallback& callback) OVERRIDE;
+                    const net::CompletionCallback& callback) override;
+  virtual int Cancel(const net::CompletionCallback& callback) override;
+  virtual int Flush(const net::CompletionCallback& callback) override;
 
  private:
   // Part of Write(). Called after CreateWritableSnapshotFile is completed.
@@ -66,7 +66,7 @@ class WebkitFileStreamWriterImpl : public fileapi::FileStreamWriter {
   const base::FilePath file_path_;
   const int64 offset_;
 
-  scoped_ptr<fileapi::FileStreamWriter> local_file_writer_;
+  scoped_ptr<storage::FileStreamWriter> local_file_writer_;
   base::Closure close_callback_on_ui_thread_;
   net::CompletionCallback pending_write_callback_;
   net::CompletionCallback pending_cancel_callback_;

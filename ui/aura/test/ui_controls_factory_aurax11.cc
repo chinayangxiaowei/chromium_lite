@@ -11,6 +11,7 @@
 #include "ui/aura/env.h"
 #include "ui/aura/test/aura_test_utils.h"
 #include "ui/aura/test/ui_controls_factory_aura.h"
+#include "ui/aura/test/x11_event_sender.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/test/ui_controls_aura.h"
@@ -50,25 +51,22 @@ class UIControlsX11 : public UIControlsAura {
   UIControlsX11(WindowTreeHost* host) : host_(host) {
   }
 
-  virtual bool SendKeyPress(gfx::NativeWindow window,
-                            ui::KeyboardCode key,
-                            bool control,
-                            bool shift,
-                            bool alt,
-                            bool command) OVERRIDE {
-    DCHECK(!command);  // No command key on Aura
+  bool SendKeyPress(gfx::NativeWindow window,
+                    ui::KeyboardCode key,
+                    bool control,
+                    bool shift,
+                    bool alt,
+                    bool command) override {
     return SendKeyPressNotifyWhenDone(
         window, key, control, shift, alt, command, base::Closure());
   }
-  virtual bool SendKeyPressNotifyWhenDone(
-      gfx::NativeWindow window,
-      ui::KeyboardCode key,
-      bool control,
-      bool shift,
-      bool alt,
-      bool command,
-      const base::Closure& closure) OVERRIDE {
-    DCHECK(!command);  // No command key on Aura
+  bool SendKeyPressNotifyWhenDone(gfx::NativeWindow window,
+                                  ui::KeyboardCode key,
+                                  bool control,
+                                  bool shift,
+                                  bool alt,
+                                  bool command,
+                                  const base::Closure& closure) override {
     XEvent xevent = {0};
     xevent.xkey.type = KeyPress;
     if (control)
@@ -77,32 +75,35 @@ class UIControlsX11 : public UIControlsAura {
       SetKeycodeAndSendThenMask(&xevent, XK_Shift_L, ShiftMask);
     if (alt)
       SetKeycodeAndSendThenMask(&xevent, XK_Alt_L, Mod1Mask);
+    if (command)
+      SetKeycodeAndSendThenMask(&xevent, XK_Meta_L, Mod4Mask);
     xevent.xkey.keycode =
         XKeysymToKeycode(gfx::GetXDisplay(),
                          ui::XKeysymForWindowsKeyCode(key, shift));
-    host_->PostNativeEvent(&xevent);
+    PostEventToWindowTreeHost(xevent, host_);
 
     // Send key release events.
     xevent.xkey.type = KeyRelease;
-    host_->PostNativeEvent(&xevent);
+    PostEventToWindowTreeHost(xevent, host_);
     if (alt)
       UnmaskAndSetKeycodeThenSend(&xevent, Mod1Mask, XK_Alt_L);
     if (shift)
       UnmaskAndSetKeycodeThenSend(&xevent, ShiftMask, XK_Shift_L);
     if (control)
       UnmaskAndSetKeycodeThenSend(&xevent, ControlMask, XK_Control_L);
+    if (command)
+      UnmaskAndSetKeycodeThenSend(&xevent, Mod4Mask, XK_Meta_L);
     DCHECK(!xevent.xkey.state);
     RunClosureAfterAllPendingUIEvents(closure);
     return true;
   }
 
-  virtual bool SendMouseMove(long screen_x, long screen_y) OVERRIDE {
+  bool SendMouseMove(long screen_x, long screen_y) override {
     return SendMouseMoveNotifyWhenDone(screen_x, screen_y, base::Closure());
   }
-  virtual bool SendMouseMoveNotifyWhenDone(
-      long screen_x,
-      long screen_y,
-      const base::Closure& closure) OVERRIDE {
+  bool SendMouseMoveNotifyWhenDone(long screen_x,
+                                   long screen_y,
+                                   const base::Closure& closure) override {
     gfx::Point root_location(screen_x, screen_y);
     aura::client::ScreenPositionClient* screen_position_client =
         aura::client::GetScreenPositionClient(host_->window());
@@ -127,18 +128,17 @@ class UIControlsX11 : public UIControlsAura {
       xmotion->state = button_down_mask;
       xmotion->same_screen = True;
       // WindowTreeHost will take care of other necessary fields.
-      host_->PostNativeEvent(&xevent);
+      PostEventToWindowTreeHost(xevent, host_);
     }
     RunClosureAfterAllPendingUIEvents(closure);
     return true;
   }
-  virtual bool SendMouseEvents(MouseButton type, int state) OVERRIDE {
+  bool SendMouseEvents(MouseButton type, int state) override {
     return SendMouseEventsNotifyWhenDone(type, state, base::Closure());
   }
-  virtual bool SendMouseEventsNotifyWhenDone(
-      MouseButton type,
-      int state,
-      const base::Closure& closure) OVERRIDE {
+  bool SendMouseEventsNotifyWhenDone(MouseButton type,
+                                     int state,
+                                     const base::Closure& closure) override {
     XEvent xevent = {0};
     XButtonEvent* xbutton = &xevent.xbutton;
     gfx::Point mouse_loc = aura::Env::GetInstance()->last_mouse_location();
@@ -168,22 +168,22 @@ class UIControlsX11 : public UIControlsAura {
     // WindowEventDispatcher will take care of other necessary fields.
     if (state & DOWN) {
       xevent.xbutton.type = ButtonPress;
-      host_->PostNativeEvent(&xevent);
+      PostEventToWindowTreeHost(xevent, host_);
       button_down_mask |= xbutton->state;
     }
     if (state & UP) {
       xevent.xbutton.type = ButtonRelease;
-      host_->PostNativeEvent(&xevent);
+      PostEventToWindowTreeHost(xevent, host_);
       button_down_mask = (button_down_mask | xbutton->state) ^ xbutton->state;
     }
     RunClosureAfterAllPendingUIEvents(closure);
     return true;
   }
-  virtual bool SendMouseClick(MouseButton type) OVERRIDE {
+  bool SendMouseClick(MouseButton type) override {
     return SendMouseEvents(type, UP | DOWN);
   }
-  virtual void RunClosureAfterAllPendingUIEvents(
-      const base::Closure& closure) OVERRIDE {
+  void RunClosureAfterAllPendingUIEvents(
+      const base::Closure& closure) override {
     if (closure.is_null())
       return;
     static XEvent* marker_event = NULL;
@@ -195,7 +195,7 @@ class UIControlsX11 : public UIControlsAura {
       marker_event->xclient.format = 8;
     }
     marker_event->xclient.message_type = MarkerEventAtom();
-    host_->PostNativeEvent(marker_event);
+    PostEventToWindowTreeHost(*marker_event, host_);
     ui::PlatformEventWaiter::Create(closure, base::Bind(&Matcher));
   }
  private:
@@ -204,7 +204,7 @@ class UIControlsX11 : public UIControlsAura {
                                  unsigned int mask) {
     xevent->xkey.keycode =
         XKeysymToKeycode(gfx::GetXDisplay(), keysym);
-    host_->PostNativeEvent(xevent);
+    PostEventToWindowTreeHost(*xevent, host_);
     xevent->xkey.state |= mask;
   }
 
@@ -214,7 +214,7 @@ class UIControlsX11 : public UIControlsAura {
     xevent->xkey.state ^= mask;
     xevent->xkey.keycode =
         XKeysymToKeycode(gfx::GetXDisplay(), keysym);
-    host_->PostNativeEvent(xevent);
+    PostEventToWindowTreeHost(*xevent, host_);
   }
 
   WindowTreeHost* host_;

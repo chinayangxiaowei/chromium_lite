@@ -116,6 +116,12 @@ Status Status::ErrorJwkBigIntegerHasLeadingZero(const std::string& property) {
       "The JWK \"" + property + "\" property contained a leading zero.");
 }
 
+Status Status::ErrorJwkDuplicateKeyOps() {
+  return Status(blink::WebCryptoErrorTypeData,
+                "The \"key_ops\" property of the JWK dictionary contains "
+                "duplicate usages.");
+}
+
 Status Status::ErrorImportEmptyKeyData() {
   return Status(blink::WebCryptoErrorTypeData, "No key data was provided");
 }
@@ -148,6 +154,21 @@ Status Status::ErrorUnexpectedKeyType() {
 Status Status::ErrorIncorrectSizeAesCbcIv() {
   return Status(blink::WebCryptoErrorTypeData,
                 "The \"iv\" has an unexpected length -- must be 16 bytes");
+}
+
+Status Status::ErrorIncorrectSizeAesCtrCounter() {
+  return Status(blink::WebCryptoErrorTypeData,
+                "The \"counter\" has an unexpected length -- must be 16 bytes");
+}
+
+Status Status::ErrorInvalidAesCtrCounterLength() {
+  return Status(blink::WebCryptoErrorTypeData,
+                "The \"length\" property must be >= 1 and <= 128");
+}
+
+Status Status::ErrorAesCtrInputTooLongCounterRepeated() {
+  return Status(blink::WebCryptoErrorTypeData,
+                "The input is too large for the counter length.");
 }
 
 Status Status::ErrorDataTooLarge() {
@@ -218,7 +239,7 @@ Status Status::ErrorGenerateKeyLength() {
 }
 
 Status Status::ErrorCreateKeyBadUsages() {
-  return Status(blink::WebCryptoErrorTypeData,
+  return Status(blink::WebCryptoErrorTypeSyntax,
                 "Cannot create a key using the specified key usages.");
 }
 

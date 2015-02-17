@@ -10,7 +10,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/task/cancelable_task_tracker.h"
-#include "chrome/browser/history/history_types.h"
+#include "components/history/core/browser/history_types.h"
 #include "ui/base/models/table_model.h"
 
 class GURL;
@@ -31,7 +31,7 @@ class TableModelObserver;
 class CustomHomePagesTableModel : public ui::TableModel {
  public:
   explicit CustomHomePagesTableModel(Profile* profile);
-  virtual ~CustomHomePagesTableModel();
+  ~CustomHomePagesTableModel() override;
 
   // Sets the set of urls that this model contains.
   void SetURLs(const std::vector<GURL>& urls);
@@ -55,10 +55,10 @@ class CustomHomePagesTableModel : public ui::TableModel {
   std::vector<GURL> GetURLs();
 
   // TableModel overrides:
-  virtual int RowCount() OVERRIDE;
-  virtual base::string16 GetText(int row, int column_id) OVERRIDE;
-  virtual base::string16 GetTooltip(int row) OVERRIDE;
-  virtual void SetObserver(ui::TableModelObserver* observer) OVERRIDE;
+  int RowCount() override;
+  base::string16 GetText(int row, int column_id) override;
+  base::string16 GetTooltip(int row) override;
+  void SetObserver(ui::TableModelObserver* observer) override;
 
  private:
   // Each item in the model is represented as an Entry. Entry stores the URL

@@ -5,13 +5,17 @@
 #ifndef EXTENSIONS_SHELL_BROWSER_SHELL_DESKTOP_CONTROLLER_H_
 #define EXTENSIONS_SHELL_BROWSER_SHELL_DESKTOP_CONTROLLER_H_
 
+#include <vector>
+
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
+#include "extensions/shell/browser/desktop_controller.h"
 #include "ui/aura/client/window_tree_client.h"
 #include "ui/aura/window_tree_host_observer.h"
 
 #if defined(OS_CHROMEOS)
+#include "chromeos/dbus/power_manager_client.h"
 #include "ui/display/chromeos/display_configurator.h"
 #endif
 
@@ -42,72 +46,62 @@ class UserActivityPowerManagerNotifier;
 namespace wm {
 class CompoundEventFilter;
 class CursorManager;
-class FocusRules;
 class InputMethodEventFilter;
 class UserActivityDetector;
 }
 
 namespace extensions {
-
-class ShellAppWindow;
-class ShellAppWindowController;
+class AppWindowClient;
+class Extension;
 
 // Handles desktop-related tasks for app_shell.
-class ShellDesktopController : public aura::client::WindowTreeClient,
-                               public aura::WindowTreeHostObserver
+class ShellDesktopController : public DesktopController,
+                               public aura::client::WindowTreeClient,
 #if defined(OS_CHROMEOS)
-                               ,
-                               public ui::DisplayConfigurator::Observer
+                               public chromeos::PowerManagerClient::Observer,
+                               public ui::DisplayConfigurator::Observer,
 #endif
-                               {
+                               public aura::WindowTreeHostObserver {
  public:
   ShellDesktopController();
-  virtual ~ShellDesktopController();
+  ~ShellDesktopController() override;
 
-  // Returns the single instance of the desktop. (Stateless functions like
-  // ShellAppWindowCreateFunction need to be able to access the desktop, so
-  // we need a singleton somewhere).
-  static ShellDesktopController* instance();
+  // DesktopController:
+  aura::WindowTreeHost* GetHost() override;
+  AppWindow* CreateAppWindow(content::BrowserContext* context,
+                             const Extension* extension) override;
+  void AddAppWindow(aura::Window* window) override;
+  void RemoveAppWindow(AppWindow* window) override;
+  void CloseAppWindows() override;
 
-  aura::WindowTreeHost* host() { return host_.get(); }
-
-  // Creates the window that hosts the app.
-  void CreateRootWindow();
-
-  // Sets the controller to create/close the app windows. Takes the ownership of
-  // |app_window_controller|.
-  void SetAppWindowController(ShellAppWindowController* app_window_controller);
-
-  // Creates a new app window and adds it to the desktop. The desktop maintains
-  // ownership of the window.
-  ShellAppWindow* CreateAppWindow(content::BrowserContext* context);
-
-  // Closes and destroys the app windows.
-  void CloseAppWindows();
-
-  // Overridden from aura::client::WindowTreeClient:
-  virtual aura::Window* GetDefaultParent(aura::Window* context,
-                                         aura::Window* window,
-                                         const gfx::Rect& bounds) OVERRIDE;
+  // aura::client::WindowTreeClient overrides:
+  aura::Window* GetDefaultParent(aura::Window* context,
+                                 aura::Window* window,
+                                 const gfx::Rect& bounds) override;
 
 #if defined(OS_CHROMEOS)
+  // chromeos::PowerManagerClient::Observer overrides:
+  virtual void PowerButtonEventReceived(bool down,
+                                        const base::TimeTicks& timestamp)
+      override;
+
   // ui::DisplayConfigurator::Observer overrides.
   virtual void OnDisplayModeChanged(const std::vector<
-      ui::DisplayConfigurator::DisplayState>& displays) OVERRIDE;
+      ui::DisplayConfigurator::DisplayState>& displays) override;
 #endif
 
   // aura::WindowTreeHostObserver overrides:
-  virtual void OnHostCloseRequested(const aura::WindowTreeHost* host) OVERRIDE;
+  void OnHostCloseRequested(const aura::WindowTreeHost* host) override;
 
  protected:
   // Creates and sets the aura clients and window manager stuff. Subclass may
   // initialize different sets of the clients.
   virtual void InitWindowManager();
 
-  // Creates a focus rule that is to be used in the InitWindowManager.
-  virtual wm::FocusRules* CreateFocusRules();
-
  private:
+  // Creates the window that hosts the app.
+  void CreateRootWindow();
+
   // Closes and destroys the root window hosting the app.
   void DestroyRootWindow();
 
@@ -138,8 +132,10 @@ class ShellDesktopController : public aura::client::WindowTreeClient,
   scoped_ptr<ui::UserActivityPowerManagerNotifier> user_activity_notifier_;
 #endif
 
-  // The desktop supports a single app window.
-  scoped_ptr<ShellAppWindowController> app_window_controller_;
+  scoped_ptr<AppWindowClient> app_window_client_;
+
+  // NativeAppWindow::Close() deletes the AppWindow.
+  std::vector<AppWindow*> app_windows_;
 
   DISALLOW_COPY_AND_ASSIGN(ShellDesktopController);
 };

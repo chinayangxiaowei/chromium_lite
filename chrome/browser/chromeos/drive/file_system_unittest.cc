@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop_proxy.h"
@@ -62,11 +62,11 @@ class MockDirectoryChangeObserver : public FileSystemObserver {
 
   // FileSystemObserver overrides.
   virtual void OnDirectoryChanged(
-      const base::FilePath& directory_path) OVERRIDE {
+      const base::FilePath& directory_path) override {
     changed_directories_.push_back(directory_path);
   }
 
-  virtual void OnFileChanged(const FileChange& new_file_change) OVERRIDE {
+  virtual void OnFileChanged(const FileChange& new_file_change) override {
     changed_files_.Apply(new_file_change);
   }
 
@@ -86,7 +86,7 @@ class MockDirectoryChangeObserver : public FileSystemObserver {
 
 class FileSystemTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     pref_service_.reset(new TestingPrefServiceSimple);
     test_util::RegisterDrivePrefs(pref_service_->registry());

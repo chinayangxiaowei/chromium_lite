@@ -30,6 +30,8 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_pref_service_syncable.h"
@@ -47,8 +49,6 @@
 #include "content/public/common/frame_navigate_params.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/mock_render_process_host.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -63,9 +63,9 @@ namespace {
 // a pending navigation.
 class MockWebContentsDelegate : public content::WebContentsDelegate {
  public:
-   MOCK_METHOD2(OpenURLFromTab,
-                content::WebContents*(content::WebContents* source,
-                                      const content::OpenURLParams& params));
+  MOCK_METHOD2(OpenURLFromTab,
+               content::WebContents*(content::WebContents* source,
+                                     const content::OpenURLParams& params));
 };
 
 class SigninManagerMock : public FakeSigninManager {
@@ -106,74 +106,70 @@ class TestProfileIOData : public ProfileIOData {
     SetCookieSettingsForTesting(cookie_settings);
   }
 
-  virtual ~TestProfileIOData() {
+  ~TestProfileIOData() override {
     signin_names()->ReleaseResourcesOnUIThread();
   }
 
   // ProfileIOData overrides:
-  virtual void InitializeInternal(
-      ProfileParams* profile_params,
-      content::ProtocolHandlerMap* protocol_handlers,
-      content::URLRequestInterceptorScopedVector request_interceptors)
-      const OVERRIDE {
+  void InitializeInternal(ProfileParams* profile_params,
+                          content::ProtocolHandlerMap* protocol_handlers,
+                          content::URLRequestInterceptorScopedVector
+                              request_interceptors) const override {
     NOTREACHED();
   }
-  virtual void InitializeExtensionsRequestContext(
-      ProfileParams* profile_params) const OVERRIDE {
+  void InitializeExtensionsRequestContext(
+      ProfileParams* profile_params) const override {
     NOTREACHED();
   }
-  virtual net::URLRequestContext* InitializeAppRequestContext(
+  net::URLRequestContext* InitializeAppRequestContext(
       net::URLRequestContext* main_context,
       const StoragePartitionDescriptor& details,
       scoped_ptr<ProtocolHandlerRegistry::JobInterceptorFactory>
           protocol_handler_interceptor,
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors)
-      const OVERRIDE {
+      const override {
     NOTREACHED();
     return NULL;
   }
-  virtual net::URLRequestContext* InitializeMediaRequestContext(
+  net::URLRequestContext* InitializeMediaRequestContext(
       net::URLRequestContext* original_context,
-      const StoragePartitionDescriptor& details) const OVERRIDE {
+      const StoragePartitionDescriptor& details) const override {
     NOTREACHED();
     return NULL;
   }
-  virtual net::URLRequestContext*
-      AcquireMediaRequestContext() const OVERRIDE {
+  net::URLRequestContext* AcquireMediaRequestContext() const override {
     NOTREACHED();
     return NULL;
   }
-  virtual net::URLRequestContext* AcquireIsolatedAppRequestContext(
+  net::URLRequestContext* AcquireIsolatedAppRequestContext(
       net::URLRequestContext* main_context,
       const StoragePartitionDescriptor& partition_descriptor,
       scoped_ptr<ProtocolHandlerRegistry::JobInterceptorFactory>
           protocol_handler_interceptor,
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors)
-      const OVERRIDE {
+      const override {
     NOTREACHED();
     return NULL;
   }
-  virtual net::URLRequestContext*
-      AcquireIsolatedMediaRequestContext(
-          net::URLRequestContext* app_context,
-          const StoragePartitionDescriptor& partition_descriptor)
-          const OVERRIDE {
+  net::URLRequestContext* AcquireIsolatedMediaRequestContext(
+      net::URLRequestContext* app_context,
+      const StoragePartitionDescriptor& partition_descriptor) const override {
     NOTREACHED();
     return NULL;
   }
 };
 
 class TestURLRequest : public base::SupportsUserData {
-public:
+ public:
   TestURLRequest() {}
-  virtual ~TestURLRequest() {}
+  ~TestURLRequest() override {}
 };
 
 class OneClickTestProfileSyncService : public TestProfileSyncService {
  public:
-  virtual ~OneClickTestProfileSyncService() {}
+  ~OneClickTestProfileSyncService() override {}
 
   // Helper routine to be used in conjunction with
   // BrowserContextKeyedServiceFactory::SetTestingFactory().
@@ -182,11 +178,11 @@ class OneClickTestProfileSyncService : public TestProfileSyncService {
   }
 
   // Need to control this for certain tests.
-  virtual bool FirstSetupInProgress() const OVERRIDE {
+  bool FirstSetupInProgress() const override {
     return first_setup_in_progress_;
   }
 
-  virtual bool sync_initialized() const OVERRIDE { return sync_initialized_; }
+  bool SyncActive() const override { return sync_active_; }
 
   // Controls return value of FirstSetupInProgress. Because some bits
   // of UI depend on that value, it's useful to control it separately
@@ -196,8 +192,8 @@ class OneClickTestProfileSyncService : public TestProfileSyncService {
     first_setup_in_progress_ = in_progress;
   }
 
-  void set_sync_initialized(bool initialized) {
-    sync_initialized_ = initialized;
+  void set_sync_active(bool active) {
+    sync_active_ = active;
   }
 
  private:
@@ -210,10 +206,10 @@ class OneClickTestProfileSyncService : public TestProfileSyncService {
           ProfileOAuth2TokenServiceFactory::GetForProfile(profile),
           browser_sync::MANUAL_START),
         first_setup_in_progress_(false),
-        sync_initialized_(false) {}
+        sync_active_(false) {}
 
   bool first_setup_in_progress_;
-  bool sync_initialized_;
+  bool sync_active_;
 };
 
 }  // namespace
@@ -222,8 +218,8 @@ class OneClickSigninHelperTest : public ChromeRenderViewHostTestHarness {
  public:
   OneClickSigninHelperTest();
 
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  void SetUp() override;
+  void TearDown() override;
 
   // Sets up the sign-in manager for tests.  If |username| is
   // is not empty, the profile of the mock WebContents will be connected to
@@ -248,7 +244,7 @@ class OneClickSigninHelperTest : public ChromeRenderViewHostTestHarness {
 
  private:
   // ChromeRenderViewHostTestHarness overrides:
-  virtual content::BrowserContext* CreateBrowserContext() OVERRIDE;
+  content::BrowserContext* CreateBrowserContext() override;
 
   // The ID of the signin process the test will assume to be trusted.
   // By default, set to the test RenderProcessHost's process ID, but
@@ -348,7 +344,7 @@ class OneClickSigninHelperIOTest : public OneClickSigninHelperTest {
  public:
   OneClickSigninHelperIOTest();
 
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
   TestProfileIOData* CreateTestProfileIOData(Profile::ProfileType profile_type);
 
@@ -387,15 +383,17 @@ TestProfileIOData* OneClickSigninHelperIOTest::CreateTestProfileIOData(
 class OneClickSigninHelperIncognitoTest : public OneClickSigninHelperTest {
  protected:
   // content::RenderViewHostTestHarness.
-  virtual content::BrowserContext* CreateBrowserContext() OVERRIDE;
+  content::BrowserContext* CreateBrowserContext() override;
 };
 
 content::BrowserContext*
 OneClickSigninHelperIncognitoTest::CreateBrowserContext() {
-  // Builds an incognito profile to run this test.
-  TestingProfile::Builder builder;
-  builder.SetIncognito();
-  return builder.Build().release();
+  // Simulate an incognito profile to run this test. RenderViewHostTestHarness
+  // takes ownership of the return value, so it can't be a "proper" incognito
+  // profile, since they are owned by their parent, non-incognito profile.
+  scoped_ptr<TestingProfile> profile = TestingProfile::Builder().Build();
+  profile->ForceIncognito(true);
+  return profile.release();
 }
 
 TEST_F(OneClickSigninHelperTest, CanOfferNoContents) {
@@ -465,9 +463,9 @@ TEST_F(OneClickSigninHelperTest, CanOfferFirstSetup) {
       static_cast<OneClickTestProfileSyncService*>(
           ProfileSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
               profile(), OneClickTestProfileSyncService::Build));
-  sync->set_sync_initialized(false);
+  sync->set_sync_active(false);
   sync->Initialize();
-  sync->set_sync_initialized(true);
+  sync->set_sync_active(true);
   sync->set_first_setup_in_progress(true);
 
   EXPECT_TRUE(OneClickSigninHelper::CanOffer(
@@ -669,43 +667,6 @@ TEST_F(OneClickSigninHelperIncognitoTest, ShowInfoBarUIThreadIncognito) {
       rvh()->GetRoutingID());
 }
 
-// If Chrome signin is triggered from a webstore install, and user chooses to
-// config sync, then Chrome should redirect immediately to sync settings page,
-// and upon successful setup, redirect back to webstore.
-TEST_F(OneClickSigninHelperTest, SigninFromWebstoreWithConfigSyncfirst) {
-  SetUpSigninManager(std::string());
-  EXPECT_CALL(*signin_manager_, IsAllowedUsername(_))
-      .WillRepeatedly(Return(true));
-
-  OneClickTestProfileSyncService* sync_service =
-      static_cast<OneClickTestProfileSyncService*>(
-          ProfileSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-              profile(), OneClickTestProfileSyncService::Build));
-  sync_service->set_sync_initialized(true);
-
-  content::WebContents* contents = web_contents();
-
-  OneClickSigninHelper::CreateForWebContentsWithPasswordManager(contents, NULL);
-  OneClickSigninHelper* helper =
-      OneClickSigninHelper::FromWebContents(contents);
-  helper->SetDoNotClearPendingEmailForTesting();
-  helper->set_do_not_start_sync_for_testing();
-
-  GURL continueUrl("https://chrome.google.com/webstore?source=5");
-  OneClickSigninHelper::ShowInfoBarUIThread(
-      "session_index", "user@gmail.com",
-      OneClickSigninHelper::AUTO_ACCEPT_EXPLICIT,
-      signin::SOURCE_WEBSTORE_INSTALL,
-      continueUrl, process()->GetID(), rvh()->GetRoutingID());
-
-  SubmitGAIAPassword(helper);
-
-  NavigateAndCommit(GURL("https://chrome.google.com/webstore?source=3"));
-  helper->DidStopLoading(rvh());
-  sync_service->NotifyObservers();
-  EXPECT_EQ(GURL(continueUrl), contents->GetVisibleURL());
-}
-
 // Checks that the state of OneClickSigninHelper is cleaned when there is a
 // navigation away from the sign in flow that is not triggered by the
 // web contents.
@@ -721,7 +682,7 @@ TEST_F(OneClickSigninHelperTest, CleanTransientStateOnNavigate) {
   content::LoadCommittedDetails details;
   content::FrameNavigateParams params;
   params.url = GURL("http://crbug.com");
-  params.transition = content::PAGE_TRANSITION_TYPED;
+  params.transition = ui::PAGE_TRANSITION_TYPED;
   helper->DidNavigateMainFrame(details, params);
 
   EXPECT_EQ(OneClickSigninHelper::AUTO_ACCEPT_NONE, helper->auto_accept_);
@@ -733,7 +694,7 @@ TEST_F(OneClickSigninHelperTest, NoRedirectToNTPWithPendingEntry) {
 
   const GURL fooWebUIURL("chrome://foo");
   controller.LoadURL(fooWebUIURL, content::Referrer(),
-                     content::PAGE_TRANSITION_TYPED, std::string());
+                     ui::PAGE_TRANSITION_TYPED, std::string());
   EXPECT_EQ(fooWebUIURL, controller.GetPendingEntry()->GetURL());
 
   MockWebContentsDelegate delegate;
@@ -897,12 +858,12 @@ MockStarterWrapper::MockStarterWrapper(
 
 class OneClickSyncStarterWrapperTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     TestingProfile::Builder builder;
     profile_ = builder.Build();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     // Let the SyncStarterWrapper delete itself.
     base::RunLoop().RunUntilIdle();
   }

@@ -4,9 +4,10 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
+import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.browser.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
-import org.chromium.content.browser.LoadUrlParams;
+import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.util.List;
 
@@ -51,6 +52,7 @@ public interface TabModelSelector {
     /**
      * @return the model at {@code index} or null if no model exist for that index.
      */
+    @VisibleForTesting
     TabModel getModelAt(int index);
 
     /**
@@ -112,6 +114,13 @@ public interface TabModelSelector {
      * Close all tabs across all tab models
      */
     void closeAllTabs();
+
+    /**
+     * Close all tabs across all tab models
+     * @param uponExit true iff the tabs are being closed upon application exit (after user presses
+     *                 the system back button)
+     */
+    void closeAllTabs(boolean uponExit);
 
     /**
      * Get total tab count across all tab models

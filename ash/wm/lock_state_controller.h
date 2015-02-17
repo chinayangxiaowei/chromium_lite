@@ -52,8 +52,8 @@ class ASH_EXPORT LockStateControllerDelegate {
 // Entry points:
 //  * StartLockAnimation (bool shutdown after lock) - starts lock that can be
 //    cancelled.
-//  * StartLockAnimationAndLockImmediately - starts uninterruptible lock
-//    animation.
+//  * StartLockAnimationAndLockImmediately (bool shutdown after lock) - starts
+//    uninterruptible lock animation.
 // This leads to call of either StartImmediatePreLockAnimation or
 // StartCancellablePreLockAnimation. Once they complete
 // PreLockAnimationFinished is called, and system lock is requested.
@@ -135,6 +135,7 @@ class ASH_EXPORT LockStateController : public aura::WindowTreeHostObserver,
       controller_->OnRealShutdownTimeout();
       controller_->real_shutdown_timer_.Stop();
     }
+
    private:
     LockStateController* controller_;  // not owned
 
@@ -142,10 +143,9 @@ class ASH_EXPORT LockStateController : public aura::WindowTreeHostObserver,
   };
 
   LockStateController();
-  virtual ~LockStateController();
+  ~LockStateController() override;
 
-  // Takes ownership of |delegate|.
-  void SetDelegate(LockStateControllerDelegate* delegate);
+  void SetDelegate(scoped_ptr<LockStateControllerDelegate> delegate);
 
   void AddObserver(LockStateObserver* observer);
   void RemoveObserver(LockStateObserver* observer);
@@ -160,9 +160,10 @@ class ASH_EXPORT LockStateController : public aura::WindowTreeHostObserver,
   // Starts shutting down (with slow animation) that can be cancelled.
   void StartShutdownAnimation();
 
-  // Starts usual lock animation, but locks immediately.
-  // Unlike StartLockAnimation it does no lead to StartShutdownAnimation.
-  void StartLockAnimationAndLockImmediately();
+  // Starts usual lock animation, but locks immediately.  After locking and
+  // |kLockToShutdownTimeoutMs| StartShutdownAnimation() will be called unless
+  // CancelShutdownAnimation() is called, if  |shutdown_after_lock| is true.
+  void StartLockAnimationAndLockImmediately(bool shutdown_after_lock);
 
   // Returns true if we have requested system to lock, but haven't received
   // confirmation yet.
@@ -199,12 +200,16 @@ class ASH_EXPORT LockStateController : public aura::WindowTreeHostObserver,
   void SetLockScreenDisplayedCallback(const base::Closure& callback);
 
   // aura::WindowTreeHostObserver override:
-  virtual void OnHostCloseRequested(const aura::WindowTreeHost* host) OVERRIDE;
+  void OnHostCloseRequested(const aura::WindowTreeHost* host) override;
 
   // ShellObserver overrides:
-  virtual void OnLoginStateChanged(user::LoginStatus status) OVERRIDE;
-  virtual void OnAppTerminating() OVERRIDE;
-  virtual void OnLockStateChanged(bool locked) OVERRIDE;
+  void OnLoginStateChanged(user::LoginStatus status) override;
+  void OnAppTerminating() override;
+  void OnLockStateChanged(bool locked) override;
+
+  void set_animator_for_test(SessionStateAnimator* animator) {
+    animator_.reset(animator);
+  }
 
  private:
   friend class test::PowerButtonControllerTest;
@@ -266,12 +271,12 @@ class ASH_EXPORT LockStateController : public aura::WindowTreeHostObserver,
   // Fades in background layer with |speed| if it was hidden in unlocked state.
   void AnimateBackgroundAppearanceIfNecessary(
       ash::SessionStateAnimator::AnimationSpeed speed,
-      ui::LayerAnimationObserver* observer);
+      SessionStateAnimator::AnimationSequence* animation_sequence);
 
   // Fades out background layer with |speed| if it was hidden in unlocked state.
   void AnimateBackgroundHidingIfNecessary(
       ash::SessionStateAnimator::AnimationSpeed speed,
-      ui::LayerAnimationObserver* observer);
+      SessionStateAnimator::AnimationSequence* animation_sequence);
 
   scoped_ptr<SessionStateAnimator> animator_;
 

@@ -28,6 +28,8 @@
          disable_depth_texture)                              \
   GPU_OP(DISABLE_EGL_KHR_FENCE_SYNC,                         \
          disable_egl_khr_fence_sync)                         \
+  GPU_OP(DISABLE_EGL_KHR_WAIT_SYNC,                          \
+         disable_egl_khr_wait_sync)                          \
   GPU_OP(DISABLE_EXT_DISCARD_FRAMEBUFFER,                    \
          disable_ext_discard_framebuffer)                    \
   GPU_OP(DISABLE_EXT_DRAW_BUFFERS,                           \
@@ -42,6 +44,8 @@
          disable_oes_standard_derivatives)                   \
   GPU_OP(DISABLE_POST_SUB_BUFFERS_FOR_ONSCREEN_SURFACES,     \
          disable_post_sub_buffers_for_onscreen_surfaces)     \
+  GPU_OP(ETC1_POWER_OF_TWO_ONLY,                             \
+         etc1_power_of_two_only)                             \
   GPU_OP(EXIT_ON_CONTEXT_LOST,                               \
          exit_on_context_lost)                               \
   GPU_OP(FORCE_DISCRETE_GPU,                                 \
@@ -50,6 +54,8 @@
          force_gl_finish_after_compositing)                  \
   GPU_OP(FORCE_INTEGRATED_GPU,                               \
          force_integrated_gpu)                               \
+  GPU_OP(GL_BEGIN_GL_END_ON_FBO_CHANGE_TO_BACKBUFFER,        \
+         gl_begin_gl_end_on_fbo_change_to_backbuffer)        \
   GPU_OP(INIT_GL_POSITION_IN_VERTEX_SHADER,                  \
          init_gl_position_in_vertex_shader)                  \
   GPU_OP(INIT_TEXTURE_MAX_ANISOTROPY,                        \
@@ -76,8 +82,8 @@
          needs_glsl_built_in_function_emulation)             \
   GPU_OP(NEEDS_OFFSCREEN_BUFFER_WORKAROUND,                  \
          needs_offscreen_buffer_workaround)                  \
-  GPU_OP(RELEASE_IMAGE_AFTER_USE,                            \
-         release_image_after_use)                            \
+  GPU_OP(REGENERATE_STRUCT_NAMES,                            \
+         regenerate_struct_names)                            \
   GPU_OP(RESTORE_SCISSOR_ON_FBO_CHANGE,                      \
          restore_scissor_on_fbo_change)                      \
   GPU_OP(REVERSE_POINT_SPRITE_COORD_ORIGIN,                  \

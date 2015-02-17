@@ -13,7 +13,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "remoting/protocol/authentication_method.h"
 #include "remoting/protocol/authenticator.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 namespace remoting {
 namespace protocol {
@@ -60,14 +60,13 @@ namespace protocol {
 //      mix of webapp, client plugin and host, for both Me2Me and IT2Me.
 class NegotiatingAuthenticatorBase : public Authenticator {
  public:
-  virtual ~NegotiatingAuthenticatorBase();
+  ~NegotiatingAuthenticatorBase() override;
 
   // Authenticator interface.
-  virtual State state() const OVERRIDE;
-  virtual bool started() const OVERRIDE;
-  virtual RejectionReason rejection_reason() const OVERRIDE;
-  virtual scoped_ptr<ChannelAuthenticator>
-      CreateChannelAuthenticator() const OVERRIDE;
+  State state() const override;
+  bool started() const override;
+  RejectionReason rejection_reason() const override;
+  scoped_ptr<ChannelAuthenticator> CreateChannelAuthenticator() const override;
 
   // Calls |current_authenticator_| to process |message|, passing the supplied
   // |resume_callback|.

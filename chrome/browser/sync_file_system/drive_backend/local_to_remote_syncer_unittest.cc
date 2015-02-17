@@ -40,8 +40,7 @@ namespace drive_backend {
 
 namespace {
 
-fileapi::FileSystemURL URL(const GURL& origin,
-                           const std::string& path) {
+storage::FileSystemURL URL(const GURL& origin, const std::string& path) {
   return CreateSyncableFileSystemURL(
       origin, base::FilePath::FromUTF8Unsafe(path));
 }
@@ -54,9 +53,9 @@ class LocalToRemoteSyncerTest : public testing::Test {
  public:
   LocalToRemoteSyncerTest()
       : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP) {}
-  virtual ~LocalToRemoteSyncerTest() {}
+  ~LocalToRemoteSyncerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
 
@@ -70,12 +69,11 @@ class LocalToRemoteSyncerTest : public testing::Test {
         kSyncRootFolderTitle));
     remote_change_processor_.reset(new FakeRemoteChangeProcessor);
 
-    context_.reset(new SyncEngineContext(
-        fake_drive_service.PassAs<drive::DriveServiceInterface>(),
-        drive_uploader.Pass(),
-        NULL,
-        base::ThreadTaskRunnerHandle::Get(),
-        base::ThreadTaskRunnerHandle::Get()));
+    context_.reset(new SyncEngineContext(fake_drive_service.Pass(),
+                                         drive_uploader.Pass(),
+                                         nullptr,
+                                         base::ThreadTaskRunnerHandle::Get(),
+                                         base::ThreadTaskRunnerHandle::Get()));
     context_->SetRemoteChangeProcessor(remote_change_processor_.get());
 
     RegisterSyncableFileSystem();
@@ -87,7 +85,7 @@ class LocalToRemoteSyncerTest : public testing::Test {
     sync_task_manager_->Initialize(SYNC_STATUS_OK);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     sync_task_manager_.reset();
     RevokeSyncableFileSystem();
     fake_drive_helper_.reset();
@@ -122,10 +120,8 @@ class LocalToRemoteSyncerTest : public testing::Test {
 
   void RegisterApp(const std::string& app_id,
                    const std::string& app_root_folder_id) {
-    SyncStatusCode status = SYNC_STATUS_FAILED;
-    context_->GetMetadataDatabase()->RegisterApp(
-        app_id, app_root_folder_id, CreateResultReceiver(&status));
-    base::RunLoop().RunUntilIdle();
+    SyncStatusCode status = context_->GetMetadataDatabase()->RegisterApp(
+        app_id, app_root_folder_id);
     EXPECT_EQ(SYNC_STATUS_OK, status);
   }
 
@@ -167,7 +163,7 @@ class LocalToRemoteSyncerTest : public testing::Test {
   }
 
   SyncStatusCode RunLocalToRemoteSyncer(FileChange file_change,
-                           const fileapi::FileSystemURL& url) {
+                                        const storage::FileSystemURL& url) {
     SyncStatusCode status = SYNC_STATUS_UNKNOWN;
     base::FilePath local_path = base::FilePath::FromUTF8Unsafe("dummy");
     scoped_ptr<LocalToRemoteSyncer> syncer(new LocalToRemoteSyncer(
@@ -210,7 +206,7 @@ class LocalToRemoteSyncerTest : public testing::Test {
       status = RunRemoteToLocalSyncer();
     } while (status == SYNC_STATUS_OK ||
              status == SYNC_STATUS_RETRY ||
-             GetMetadataDatabase()->PromoteLowerPriorityTrackersToNormal());
+             GetMetadataDatabase()->PromoteDemotedTrackers());
     EXPECT_EQ(SYNC_STATUS_NO_CHANGE_TO_SYNC, status);
     return status;
   }

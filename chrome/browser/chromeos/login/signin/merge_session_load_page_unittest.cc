@@ -54,14 +54,14 @@ class TestMergeSessionLoadPage :  public MergeSessionLoadPage {
 
 class MergeSessionLoadPageTest : public ChromeRenderViewHostTestHarness {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 #if defined OS_CHROMEOS
   test_user_manager_.reset(new chromeos::ScopedTestUserManager());
 #endif
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
 #if defined OS_CHROMEOS
     // Clean up pending tasks that might depend on the user manager.
     base::RunLoop().RunUntilIdle();
@@ -73,7 +73,7 @@ class MergeSessionLoadPageTest : public ChromeRenderViewHostTestHarness {
   void Navigate(const char* url, int page_id) {
     WebContentsTester::For(web_contents())->TestDidNavigate(
         web_contents()->GetMainFrame(), page_id, GURL(url),
-        content::PAGE_TRANSITION_TYPED);
+        ui::PAGE_TRANSITION_TYPED);
   }
 
   void ShowInterstitial(const char* url) {
@@ -126,7 +126,7 @@ TEST_F(MergeSessionLoadPageTest, MergeSessionPageNotShown) {
   Navigate(kURL1, 1);
   // Load next page.
   controller().LoadURL(GURL(kURL2), content::Referrer(),
-                       content::PAGE_TRANSITION_TYPED, std::string());
+                       ui::PAGE_TRANSITION_TYPED, std::string());
 
   // Simulate the load causing an merge session interstitial page
   // to be shown.
@@ -144,7 +144,7 @@ TEST_F(MergeSessionLoadPageTest, MergeSessionPageNotShownOnTimeout) {
   Navigate(kURL1, 1);
   // Load next page.
   controller().LoadURL(GURL(kURL2), content::Referrer(),
-                       content::PAGE_TRANSITION_TYPED, std::string());
+                       ui::PAGE_TRANSITION_TYPED, std::string());
 
   // Simulate the load causing an merge session interstitial page
   // to be shown.
@@ -159,7 +159,7 @@ TEST_F(MergeSessionLoadPageTest, MergeSessionPageShown) {
   Navigate(kURL1, 1);
   // Load next page.
   controller().LoadURL(GURL(kURL2), content::Referrer(),
-                       content::PAGE_TRANSITION_TYPED, std::string());
+                       ui::PAGE_TRANSITION_TYPED, std::string());
 
   // Simulate the load causing an merge session interstitial page
   // to be shown.

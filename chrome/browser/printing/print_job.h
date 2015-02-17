@@ -15,15 +15,19 @@
 
 class Thread;
 
+namespace base {
+class RefCountedMemory;
+}
+
 namespace printing {
 
-// See definition below.
 class JobEventDetails;
-
+class MetafilePlayer;
+class PdfToEmfConverter;
+class PrintJobWorker;
 class PrintedDocument;
 class PrintedPage;
 class PrintedPagesSource;
-class PrintJobWorker;
 class PrinterQuery;
 
 // Manages the print work for a specific document. Talks to the printer through
@@ -33,8 +37,7 @@ class PrinterQuery;
 // reference to the job to be sure it is kept alive. All the code in this class
 // runs in the UI thread.
 class PrintJob : public PrintJobWorkerOwner,
-                 public content::NotificationObserver,
-                 public base::MessageLoop::DestructionObserver {
+                 public content::NotificationObserver {
  public:
   // Create a empty PrintJob. When initializing with this constructor,
   // post-constructor initialization must be done with Initialize().
@@ -46,20 +49,16 @@ class PrintJob : public PrintJobWorkerOwner,
                   int page_count);
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // PrintJobWorkerOwner implementation.
-  virtual void GetSettingsDone(const PrintSettings& new_settings,
-                               PrintingContext::Result result) OVERRIDE;
-  virtual PrintJobWorker* DetachWorker(PrintJobWorkerOwner* new_owner) OVERRIDE;
-  virtual base::MessageLoop* message_loop() OVERRIDE;
-  virtual const PrintSettings& settings() const OVERRIDE;
-  virtual int cookie() const OVERRIDE;
-
-  // DestructionObserver implementation.
-  virtual void WillDestroyCurrentMessageLoop() OVERRIDE;
+  void GetSettingsDone(const PrintSettings& new_settings,
+                       PrintingContext::Result result) override;
+  PrintJobWorker* DetachWorker(PrintJobWorkerOwner* new_owner) override;
+  const PrintSettings& settings() const override;
+  int cookie() const override;
 
   // Starts the actual printing. Signals the worker that it should begin to
   // spool as soon as data is available.
@@ -91,8 +90,15 @@ class PrintJob : public PrintJobWorkerOwner,
   // Access the current printed document. Warning: may be NULL.
   PrintedDocument* document() const;
 
+#if defined(OS_WIN)
+  void StartPdfToEmfConversion(
+      const scoped_refptr<base::RefCountedMemory>& bytes,
+      const gfx::Size& page_size,
+      const gfx::Rect& content_area);
+#endif  // OS_WIN
+
  protected:
-  virtual ~PrintJob();
+  ~PrintJob() override;
 
  private:
   // Updates document_ to a new instance.
@@ -114,11 +120,14 @@ class PrintJob : public PrintJobWorkerOwner,
 
   void HoldUntilStopIsCalled();
 
-  content::NotificationRegistrar registrar_;
+#if defined(OS_WIN)
+  void OnPdfToEmfStarted(int page_count);
+  void OnPdfToEmfPageConverted(int page_number,
+                               float scale_factor,
+                               scoped_ptr<MetafilePlayer> emf);
+#endif  // OS_WIN
 
-  // Main message loop reference. Used to send notifications in the right
-  // thread.
-  base::MessageLoop* const ui_message_loop_;
+  content::NotificationRegistrar registrar_;
 
   // Source that generates the PrintedPage's (i.e. a WebContents). It will be
   // set back to NULL if the source is deleted before this object.
@@ -141,6 +150,11 @@ class PrintJob : public PrintJobWorkerOwner,
   // Is Canceling? If so, try to not cause recursion if on FAILED notification,
   // the notified calls Cancel() again.
   bool is_canceling_;
+
+#if defined(OS_WIN)
+  class PdfToEmfState;
+  scoped_ptr<PdfToEmfState> ptd_to_emf_state_;
+#endif  // OS_WIN
 
   // Used at shutdown so that we can quit a nested message loop.
   base::WeakPtrFactory<PrintJob> quit_factory_;

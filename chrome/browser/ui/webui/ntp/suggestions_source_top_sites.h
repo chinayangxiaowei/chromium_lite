@@ -9,9 +9,9 @@
 
 #include "base/basictypes.h"
 #include "base/task/cancelable_task_tracker.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/visit_filter.h"
 #include "chrome/browser/ui/webui/ntp/suggestions_source.h"
+#include "components/history/core/browser/history_types.h"
 
 class SuggestionsCombiner;
 class Profile;
@@ -25,16 +25,16 @@ class DictionaryValue;
 class SuggestionsSourceTopSites : public SuggestionsSource {
  public:
   SuggestionsSourceTopSites();
-  virtual ~SuggestionsSourceTopSites();
+  ~SuggestionsSourceTopSites() override;
 
  protected:
   // SuggestionsSource overrides:
-  virtual void SetDebug(bool enable) OVERRIDE;
-  virtual int GetWeight() OVERRIDE;
-  virtual int GetItemCount() OVERRIDE;
-  virtual base::DictionaryValue* PopItem() OVERRIDE;
-  virtual void FetchItems(Profile* profile) OVERRIDE;
-  virtual void SetCombiner(SuggestionsCombiner* combiner) OVERRIDE;
+  void SetDebug(bool enable) override;
+  int GetWeight() override;
+  int GetItemCount() override;
+  base::DictionaryValue* PopItem() override;
+  void FetchItems(Profile* profile) override;
+  void SetCombiner(SuggestionsCombiner* combiner) override;
 
   void OnSuggestionsUrlsAvailable(const history::FilteredURLList* data);
 

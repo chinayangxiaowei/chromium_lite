@@ -66,7 +66,7 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   typedef base::Callback<void(GURL, GURL, bool)>
       ClientReportMalwareRequestCallback;
 
-  virtual ~ClientSideDetectionService();
+  ~ClientSideDetectionService() override;
 
   // Creates a client-side detection service.  The service is initially
   // disabled, use SetEnabledAndRefreshState() to start it.  The caller takes
@@ -88,12 +88,12 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   }
 
   // From the net::URLFetcherDelegate interface.
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE;
+  void OnURLFetchComplete(const net::URLFetcher* source) override;
 
   // content::NotificationObserver overrides:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Sends a request to the SafeBrowsing servers with the ClientPhishingRequest.
   // The URL scheme of the |url()| in the request should be HTTP.  This method
@@ -316,10 +316,6 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   // of malware requests that we send in a day.
   std::queue<base::Time> malware_report_times_;
 
-  // Used to asynchronously call the callbacks for
-  // SendClientReportPhishingRequest.
-  base::WeakPtrFactory<ClientSideDetectionService> weak_factory_;
-
   // The context we use to issue network requests.
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
 
@@ -328,6 +324,10 @@ class ClientSideDetectionService : public net::URLFetcherDelegate,
   BadSubnetMap bad_subnets_;
 
   content::NotificationRegistrar registrar_;
+
+  // Used to asynchronously call the callbacks for
+  // SendClientReportPhishingRequest.
+  base::WeakPtrFactory<ClientSideDetectionService> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ClientSideDetectionService);
 };

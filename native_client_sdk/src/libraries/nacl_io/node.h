@@ -22,6 +22,7 @@
 #define S_IRALL (S_IRUSR | S_IRGRP | S_IROTH)
 #define S_IWALL (S_IWUSR | S_IWGRP | S_IWOTH)
 #define S_IXALL (S_IXUSR | S_IXGRP | S_IXOTH)
+#define S_MODEBITS 07777
 
 namespace nacl_io {
 
@@ -89,9 +90,12 @@ class Node : public sdk_util::RefObject {
   virtual Error Tcgetattr(struct termios* termios_p);
   virtual Error Tcsetattr(int optional_actions,
                           const struct termios* termios_p);
+  virtual Error Futimens(const struct timespec times[2]);
+  virtual Error Fchmod(mode_t mode);
 
   virtual int GetLinks();
   virtual int GetMode();
+  virtual void SetMode(int mode);
   virtual int GetType();
   virtual void SetType(int type);
   // Assume that |out_size| is non-NULL.

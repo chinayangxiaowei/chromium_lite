@@ -42,13 +42,14 @@ void ResourceRequestInfo::AllocateForTesting(net::URLRequest* request,
           false,                             // parent_is_main_frame
           0,                                 // parent_render_frame_id
           resource_type,                     // resource_type
-          PAGE_TRANSITION_LINK,              // transition_type
+          ui::PAGE_TRANSITION_LINK,          // transition_type
           false,                             // should_replace_current_entry
           false,                             // is_download
           false,                             // is_stream
           true,                              // allow_download
           false,                             // has_user_gesture
           false,                             // enable load timing
+          false,                             // enable upload progress
           blink::WebReferrerPolicyDefault,   // referrer_policy
           blink::WebPageVisibilityStateVisible,  // visibility_state
           context,                           // context
@@ -97,13 +98,14 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
     bool parent_is_main_frame,
     int parent_render_frame_id,
     ResourceType resource_type,
-    PageTransition transition_type,
+    ui::PageTransition transition_type,
     bool should_replace_current_entry,
     bool is_download,
     bool is_stream,
     bool allow_download,
     bool has_user_gesture,
     bool enable_load_timing,
+    bool enable_upload_progress,
     blink::WebReferrerPolicy referrer_policy,
     blink::WebPageVisibilityState visibility_state,
     ResourceContext* context,
@@ -126,7 +128,9 @@ ResourceRequestInfoImpl::ResourceRequestInfoImpl(
       allow_download_(allow_download),
       has_user_gesture_(has_user_gesture),
       enable_load_timing_(enable_load_timing),
+      enable_upload_progress_(enable_upload_progress),
       was_ignored_by_handler_(false),
+      counted_as_in_flight_request_(false),
       resource_type_(resource_type),
       transition_type_(transition_type),
       memory_cost_(0),
@@ -193,7 +197,7 @@ ResourceRequestInfoImpl::GetVisibilityState() const {
   return visibility_state_;
 }
 
-PageTransition ResourceRequestInfoImpl::GetPageTransition() const {
+ui::PageTransition ResourceRequestInfoImpl::GetPageTransition() const {
   return transition_type_;
 }
 

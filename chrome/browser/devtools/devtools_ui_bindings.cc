@@ -28,12 +28,11 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/extensions/chrome_manifest_url_handlers.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
-#include "content/public/browser/devtools_client_host.h"
-#include "content/public/browser/devtools_manager.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
@@ -44,17 +43,21 @@
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/common/renderer_preferences.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 
 using base::DictionaryValue;
 using content::BrowserThread;
+
+namespace content {
+struct LoadCommittedDetails;
+struct FrameNavigateParams;
+}
 
 namespace {
 
@@ -62,6 +65,12 @@ static const char kFrontendHostId[] = "id";
 static const char kFrontendHostMethod[] = "method";
 static const char kFrontendHostParams[] = "params";
 static const char kTitleFormat[] = "Developer Tools - %s";
+
+const size_t kMaxMessageChunkSize = IPC::Channel::kMaximumMessageSize / 4;
+
+typedef std::vector<DevToolsUIBindings*> DevToolsUIBindingsList;
+base::LazyInstance<DevToolsUIBindingsList>::Leaky g_instances =
+    LAZY_INSTANCE_INITIALIZER;
 
 std::string SkColorToRGBAString(SkColor color) {
   // We avoid StringPrintf because it will use locale specific formatters for
@@ -108,12 +117,12 @@ class DevToolsConfirmInfoBarDelegate : public ConfirmInfoBarDelegate {
   DevToolsConfirmInfoBarDelegate(
       const InfoBarCallback& callback,
       const base::string16& message);
-  virtual ~DevToolsConfirmInfoBarDelegate();
+  ~DevToolsConfirmInfoBarDelegate() override;
 
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
+  base::string16 GetMessageText() const override;
+  base::string16 GetButtonLabel(InfoBarButton button) const override;
+  bool Accept() override;
+  bool Cancel() override;
 
   InfoBarCallback callback_;
   const base::string16 message_;
@@ -178,21 +187,21 @@ class DefaultBindingsDelegate : public DevToolsUIBindings::Delegate {
       : web_contents_(web_contents) {}
 
  private:
-  virtual ~DefaultBindingsDelegate() {}
+  ~DefaultBindingsDelegate() override {}
 
-  virtual void ActivateWindow() OVERRIDE;
-  virtual void CloseWindow() OVERRIDE {}
-  virtual void SetInspectedPageBounds(const gfx::Rect& rect) OVERRIDE {}
-  virtual void InspectElementCompleted() OVERRIDE {}
-  virtual void MoveWindow(int x, int y) OVERRIDE {}
-  virtual void SetIsDocked(bool is_docked) OVERRIDE {}
-  virtual void OpenInNewTab(const std::string& url) OVERRIDE;
-  virtual void SetWhitelistedShortcuts(const std::string& message) OVERRIDE {}
+  void ActivateWindow() override;
+  void CloseWindow() override {}
+  void SetInspectedPageBounds(const gfx::Rect& rect) override {}
+  void InspectElementCompleted() override {}
+  void MoveWindow(int x, int y) override {}
+  void SetIsDocked(bool is_docked) override {}
+  void OpenInNewTab(const std::string& url) override;
+  void SetWhitelistedShortcuts(const std::string& message) override {}
 
-  virtual void InspectedContentsClosing() OVERRIDE;
-  virtual void OnLoadCompleted() OVERRIDE {}
-  virtual InfoBarService* GetInfoBarService() OVERRIDE;
-  virtual void RenderProcessGone() OVERRIDE {}
+  void InspectedContentsClosing() override;
+  void OnLoadCompleted() override {}
+  InfoBarService* GetInfoBarService() override;
+  void RenderProcessGone(bool crashed) override {}
 
   content::WebContents* web_contents_;
   DISALLOW_COPY_AND_ASSIGN(DefaultBindingsDelegate);
@@ -206,7 +215,7 @@ void DefaultBindingsDelegate::ActivateWindow() {
 void DefaultBindingsDelegate::OpenInNewTab(const std::string& url) {
   content::OpenURLParams params(
       GURL(url), content::Referrer(), NEW_FOREGROUND_TAB,
-      content::PAGE_TRANSITION_LINK, false);
+      ui::PAGE_TRANSITION_LINK, false);
   Browser* browser = FindBrowser(web_contents_);
   browser->OpenURL(params);
 }
@@ -227,15 +236,17 @@ class DevToolsUIBindings::FrontendWebContentsObserver
     : public content::WebContentsObserver {
  public:
   explicit FrontendWebContentsObserver(DevToolsUIBindings* ui_bindings);
-  virtual ~FrontendWebContentsObserver();
+  ~FrontendWebContentsObserver() override;
 
  private:
   // contents::WebContentsObserver:
-  virtual void WebContentsDestroyed() OVERRIDE;
-  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
-  virtual void AboutToNavigateRenderView(
-      content::RenderViewHost* render_view_host) OVERRIDE;
-  virtual void DocumentOnLoadCompletedInMainFrame() OVERRIDE;
+  void RenderProcessGone(base::TerminationStatus status) override;
+  void AboutToNavigateRenderView(
+      content::RenderViewHost* render_view_host) override;
+  void DocumentOnLoadCompletedInMainFrame() override;
+  void DidNavigateMainFrame(
+      const content::LoadCommittedDetails& details,
+      const content::FrameNavigateParams& params) override;
 
   DevToolsUIBindings* devtools_bindings_;
   DISALLOW_COPY_AND_ASSIGN(FrontendWebContentsObserver);
@@ -251,36 +262,28 @@ DevToolsUIBindings::FrontendWebContentsObserver::
     ~FrontendWebContentsObserver() {
 }
 
-void DevToolsUIBindings::FrontendWebContentsObserver::WebContentsDestroyed() {
-  delete devtools_bindings_;
-}
-
 void DevToolsUIBindings::FrontendWebContentsObserver::RenderProcessGone(
     base::TerminationStatus status) {
+  bool crashed = true;
   switch (status) {
     case base::TERMINATION_STATUS_ABNORMAL_TERMINATION:
     case base::TERMINATION_STATUS_PROCESS_WAS_KILLED:
     case base::TERMINATION_STATUS_PROCESS_CRASHED:
-      content::DevToolsManager::GetInstance()->ClientHostClosing(
-          devtools_bindings_);
+      if (devtools_bindings_->agent_host_.get())
+        devtools_bindings_->Detach();
       break;
     default:
+      crashed = false;
       break;
   }
-  devtools_bindings_->delegate_->RenderProcessGone();
+  devtools_bindings_->delegate_->RenderProcessGone(crashed);
 }
 
 void DevToolsUIBindings::FrontendWebContentsObserver::AboutToNavigateRenderView(
     content::RenderViewHost* render_view_host) {
-  content::NavigationEntry* entry =
-      web_contents()->GetController().GetActiveEntry();
-  if (devtools_bindings_->url_ == entry->GetURL()) {
-    devtools_bindings_->frontend_host_.reset(
-        content::DevToolsFrontendHost::Create(
-            render_view_host, devtools_bindings_));
-  } else {
-    delete devtools_bindings_;
-  }
+  devtools_bindings_->frontend_host_.reset(
+      content::DevToolsFrontendHost::Create(
+          render_view_host, devtools_bindings_));
 }
 
 void DevToolsUIBindings::FrontendWebContentsObserver::
@@ -288,7 +291,26 @@ void DevToolsUIBindings::FrontendWebContentsObserver::
   devtools_bindings_->DocumentOnLoadCompletedInMainFrame();
 }
 
+void DevToolsUIBindings::FrontendWebContentsObserver::
+    DidNavigateMainFrame(const content::LoadCommittedDetails& details,
+                         const content::FrameNavigateParams& params) {
+  devtools_bindings_->DidNavigateMainFrame();
+}
+
 // DevToolsUIBindings ---------------------------------------------------------
+
+DevToolsUIBindings* DevToolsUIBindings::ForWebContents(
+     content::WebContents* web_contents) {
+ if (g_instances == NULL)
+   return NULL;
+ DevToolsUIBindingsList* instances = g_instances.Pointer();
+ for (DevToolsUIBindingsList::iterator it(instances->begin());
+      it != instances->end(); ++it) {
+   if ((*it)->web_contents() == web_contents)
+     return *it;
+ }
+ return NULL;
+}
 
 // static
 GURL DevToolsUIBindings::ApplyThemeToURL(Profile* profile,
@@ -313,15 +335,15 @@ GURL DevToolsUIBindings::ApplyThemeToURL(Profile* profile,
   return GURL(url_string);
 }
 
-DevToolsUIBindings::DevToolsUIBindings(content::WebContents* web_contents,
-                                       const GURL& url)
+DevToolsUIBindings::DevToolsUIBindings(content::WebContents* web_contents)
     : profile_(Profile::FromBrowserContext(web_contents->GetBrowserContext())),
       web_contents_(web_contents),
       delegate_(new DefaultBindingsDelegate(web_contents_)),
       device_count_updates_enabled_(false),
       devices_updates_enabled_(false),
-      url_(url),
+      frontend_loaded_(false),
       weak_factory_(this) {
+  g_instances.Get().push_back(this);
   frontend_contents_observer_.reset(new FrontendWebContentsObserver(this));
   web_contents_->GetMutableRendererPrefs()->can_accept_load_drops = false;
 
@@ -329,10 +351,6 @@ DevToolsUIBindings::DevToolsUIBindings(content::WebContents* web_contents,
   file_system_indexer_ = new DevToolsFileSystemIndexer();
   extensions::ChromeExtensionWebContentsObserver::CreateForWebContents(
       web_contents_);
-
-  web_contents_->GetController().LoadURL(
-      url, content::Referrer(),
-      content::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
 
   // Wipe out page icon so that the default application icon is used.
   content::NavigationEntry* entry =
@@ -348,10 +366,15 @@ DevToolsUIBindings::DevToolsUIBindings(content::WebContents* web_contents,
 
   embedder_message_dispatcher_.reset(
       DevToolsEmbedderMessageDispatcher::createForDevToolsFrontend(this));
+
+  frontend_host_.reset(
+      content::DevToolsFrontendHost::Create(
+          web_contents_->GetRenderViewHost(), this));
 }
 
 DevToolsUIBindings::~DevToolsUIBindings() {
-  content::DevToolsManager::GetInstance()->ClientHostClosing(this);
+  if (agent_host_.get())
+    agent_host_->DetachClient();
 
   for (IndexingJobsMap::const_iterator jobs_it(indexing_jobs_.begin());
        jobs_it != indexing_jobs_.end(); ++jobs_it) {
@@ -360,6 +383,13 @@ DevToolsUIBindings::~DevToolsUIBindings() {
   indexing_jobs_.clear();
   SetDeviceCountUpdatesEnabled(false);
   SetDevicesUpdatesEnabled(false);
+
+  // Remove self from global list.
+  DevToolsUIBindingsList* instances = g_instances.Pointer();
+  DevToolsUIBindingsList::iterator it(
+      std::find(instances->begin(), instances->end(), this));
+  DCHECK(it != instances->end());
+  instances->erase(it);
 }
 
 // content::NotificationObserver overrides ------------------------------------
@@ -403,23 +433,36 @@ void DevToolsUIBindings::HandleMessageFromDevToolsFrontend(
 
 void DevToolsUIBindings::HandleMessageFromDevToolsFrontendToBackend(
     const std::string& message) {
-  content::DevToolsManager::GetInstance()->DispatchOnInspectorBackend(
-      this, message);
+  if (agent_host_.get())
+    agent_host_->DispatchProtocolMessage(message);
 }
 
-// content::DevToolsClientHost implementation ---------------------------------
-void DevToolsUIBindings::DispatchOnInspectorFrontend(
-    const std::string& message) {
-  base::StringValue message_value(message);
-  CallClientFunction("InspectorFrontendAPI.dispatchMessage",
-                     &message_value, NULL, NULL);
+// content::DevToolsAgentHostClient implementation --------------------------
+void DevToolsUIBindings::DispatchProtocolMessage(
+    content::DevToolsAgentHost* agent_host, const std::string& message) {
+  DCHECK(agent_host == agent_host_.get());
+
+  if (message.length() < kMaxMessageChunkSize) {
+    base::StringValue message_value(message);
+    CallClientFunction("InspectorFrontendAPI.dispatchMessage",
+                       &message_value, NULL, NULL);
+    return;
+  }
+
+  base::FundamentalValue total_size(static_cast<int>(message.length()));
+  for (size_t pos = 0; pos < message.length(); pos += kMaxMessageChunkSize) {
+    base::StringValue message_value(message.substr(pos, kMaxMessageChunkSize));
+    CallClientFunction("InspectorFrontendAPI.dispatchMessageChunk",
+                       &message_value, pos ? NULL : &total_size, NULL);
+  }
 }
 
-void DevToolsUIBindings::InspectedContentsClosing() {
+void DevToolsUIBindings::AgentHostClosed(
+    content::DevToolsAgentHost* agent_host,
+    bool replaced_with_another_client) {
+  DCHECK(agent_host == agent_host_.get());
+  agent_host_ = NULL;
   delegate_->InspectedContentsClosing();
-}
-
-void DevToolsUIBindings::ReplacedWithAnotherClient() {
 }
 
 // DevToolsEmbedderMessageDispatcher::Delegate implementation -----------------
@@ -429,6 +472,10 @@ void DevToolsUIBindings::ActivateWindow() {
 
 void DevToolsUIBindings::CloseWindow() {
   delegate_->CloseWindow();
+}
+
+void DevToolsUIBindings::LoadCompleted() {
+  FrontendLoaded();
 }
 
 void DevToolsUIBindings::SetInspectedPageBounds(const gfx::Rect& rect) {
@@ -625,8 +672,8 @@ void DevToolsUIBindings::SetDevicesUpdatesEnabled(bool enabled) {
 }
 
 void DevToolsUIBindings::SendMessageToBrowser(const std::string& message) {
-  content::DevToolsManager::GetInstance()->DispatchOnInspectorBackend(
-      this, message);
+  if (agent_host_.get())
+    agent_host_->DispatchProtocolMessage(message);
 }
 
 void DevToolsUIBindings::DeviceCountChanged(int count) {
@@ -758,14 +805,14 @@ void DevToolsUIBindings::AddDevToolsExtensionsToClient() {
   base::ListValue results;
   for (extensions::ExtensionSet::const_iterator extension(extensions->begin());
        extension != extensions->end(); ++extension) {
-    if (extensions::ManifestURL::GetDevToolsPage(extension->get()).is_empty())
+    if (extensions::chrome_manifest_urls::GetDevToolsPage(extension->get())
+            .is_empty())
       continue;
     base::DictionaryValue* extension_info = new base::DictionaryValue();
     extension_info->Set(
         "startPage",
-        new base::StringValue(
-            extensions::ManifestURL::GetDevToolsPage(
-                extension->get()).spec()));
+        new base::StringValue(extensions::chrome_manifest_urls::GetDevToolsPage(
+                                  extension->get()).spec()));
     extension_info->Set("name", new base::StringValue((*extension)->name()));
     extension_info->Set("exposeExperimentalAPIs",
                         new base::FundamentalValue(
@@ -778,6 +825,30 @@ void DevToolsUIBindings::AddDevToolsExtensionsToClient() {
 
 void DevToolsUIBindings::SetDelegate(Delegate* delegate) {
   delegate_.reset(delegate);
+}
+
+void DevToolsUIBindings::AttachTo(
+    const scoped_refptr<content::DevToolsAgentHost>& agent_host) {
+  if (agent_host_.get())
+    Detach();
+  agent_host_ = agent_host;
+  agent_host_->AttachClient(this);
+}
+
+void DevToolsUIBindings::Reattach() {
+  DCHECK(agent_host_.get());
+  agent_host_->DetachClient();
+  agent_host_->AttachClient(this);
+}
+
+void DevToolsUIBindings::Detach() {
+  if (agent_host_.get())
+    agent_host_->DetachClient();
+  agent_host_ = NULL;
+}
+
+bool DevToolsUIBindings::IsAttachedTo(content::DevToolsAgentHost* agent_host) {
+  return agent_host_.get() == agent_host;
 }
 
 void DevToolsUIBindings::CallClientFunction(const std::string& function_name,
@@ -805,6 +876,23 @@ void DevToolsUIBindings::CallClientFunction(const std::string& function_name,
 }
 
 void DevToolsUIBindings::DocumentOnLoadCompletedInMainFrame() {
+  // In the DEBUG_DEVTOOLS mode, the DocumentOnLoadCompletedInMainFrame event
+  // arrives before the LoadCompleted event, thus it should not trigger the
+  // frontend load handling.
+#if !defined(DEBUG_DEVTOOLS)
+  FrontendLoaded();
+#endif
+}
+
+void DevToolsUIBindings::DidNavigateMainFrame() {
+  frontend_loaded_ = false;
+}
+
+void DevToolsUIBindings::FrontendLoaded() {
+  if (frontend_loaded_)
+    return;
+  frontend_loaded_ = true;
+
   // Call delegate first - it seeds importants bit of information.
   delegate_->OnLoadCompleted();
 

@@ -6,7 +6,7 @@
 
 #include "base/lazy_instance.h"
 #include "base/values.h"
-#include "chrome/browser/sessions/session_id.h"
+#include "chrome/browser/sessions/session_tab_helper.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -45,12 +45,9 @@ class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
     DCHECK(registry_);
   }
 
-  virtual ~LiveRequest() {}
+  ~LiveRequest() override {}
 
   // Accessors.
-  const content::WebContents* target_contents() const {
-    return content::WebContentsObserver::web_contents();
-  }
   const std::string& extension_id() const {
     return extension_id_;
   }
@@ -93,31 +90,31 @@ class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
   }
 
   void GetCaptureInfo(tab_capture::CaptureInfo* info) const {
-    info->tab_id = SessionID::IdForTab(web_contents());
+    info->tab_id = SessionTabHelper::IdForTab(web_contents());
     info->status = capture_state_;
     info->fullscreen = is_fullscreened_;
   }
 
  protected:
-  virtual void DidShowFullscreenWidget(int routing_id) OVERRIDE {
+  void DidShowFullscreenWidget(int routing_id) override {
     is_fullscreened_ = true;
     if (capture_state_ == tab_capture::TAB_CAPTURE_STATE_ACTIVE)
       registry_->DispatchStatusChangeEvent(this);
   }
 
-  virtual void DidDestroyFullscreenWidget(int routing_id) OVERRIDE {
+  void DidDestroyFullscreenWidget(int routing_id) override {
     is_fullscreened_ = false;
     if (capture_state_ == tab_capture::TAB_CAPTURE_STATE_ACTIVE)
       registry_->DispatchStatusChangeEvent(this);
   }
 
-  virtual void DidToggleFullscreenModeForTab(bool entered_fullscreen) OVERRIDE {
+  void DidToggleFullscreenModeForTab(bool entered_fullscreen) override {
     is_fullscreened_ = entered_fullscreen;
     if (capture_state_ == tab_capture::TAB_CAPTURE_STATE_ACTIVE)
       registry_->DispatchStatusChangeEvent(this);
   }
 
-  virtual void WebContentsDestroyed() OVERRIDE {
+  void WebContentsDestroyed() override {
     registry_->KillRequest(this);  // Deletes |this|.
   }
 
@@ -327,7 +324,7 @@ TabCaptureRegistry::LiveRequest* TabCaptureRegistry::FindRequest(
     const content::WebContents* target_contents) const {
   for (ScopedVector<LiveRequest>::const_iterator it = requests_.begin();
        it != requests_.end(); ++it) {
-    if ((*it)->target_contents() == target_contents)
+    if ((*it)->web_contents() == target_contents)
       return *it;
   }
   return NULL;

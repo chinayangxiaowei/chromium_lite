@@ -30,14 +30,14 @@ class FirefoxImporter : public Importer {
   FirefoxImporter();
 
   // Importer:
-  virtual void StartImport(const importer::SourceProfile& source_profile,
-                           uint16 items,
-                           ImporterBridge* bridge) OVERRIDE;
+  void StartImport(const importer::SourceProfile& source_profile,
+                   uint16 items,
+                   ImporterBridge* bridge) override;
 
  private:
   typedef std::map<int64, std::set<GURL> > FaviconMap;
 
-  virtual ~FirefoxImporter();
+  ~FirefoxImporter() override;
 
   void ImportBookmarks();
   void ImportPasswords();
@@ -46,6 +46,7 @@ class FirefoxImporter : public Importer {
   // Import the user's home page, unless it is set to default home page as
   // defined in browserconfig.properties.
   void ImportHomepage();
+  void ImportAutofillFormData();
   void GetSearchEnginesXMLData(std::vector<std::string>* search_engine_data);
   void GetSearchEnginesXMLDataFromJSON(
       std::vector<std::string>* search_engine_data);

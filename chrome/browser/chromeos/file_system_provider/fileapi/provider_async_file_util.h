@@ -7,16 +7,17 @@
 
 #include "base/basictypes.h"
 #include "base/callback.h"
-#include "webkit/browser/fileapi/async_file_util.h"
+#include "storage/browser/fileapi/async_file_util.h"
 
 namespace chromeos {
 namespace file_system_provider {
 
 class FileSystemInterface;
 
+// TODO(mtomasz): Remove this namespace.
 namespace internal {
 
-// The implementation of fileapi::AsyncFileUtil for provided file systems. It is
+// The implementation of storage::AsyncFileUtil for provided file systems. It is
 // created one per Chrome process. It is responsible for routing calls to the
 // correct profile, and then to the correct profided file system.
 //
@@ -26,78 +27,78 @@ namespace internal {
 // See: https://code.google.com/p/gyp/issues/detail?id=384
 //
 // All of the methods should be called on the IO thread.
-class ProviderAsyncFileUtil : public fileapi::AsyncFileUtil {
+class ProviderAsyncFileUtil : public storage::AsyncFileUtil {
  public:
   ProviderAsyncFileUtil();
   virtual ~ProviderAsyncFileUtil();
 
-  // fileapi::AsyncFileUtil overrides.
+  // storage::AsyncFileUtil overrides.
   virtual void CreateOrOpen(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
       int file_flags,
-      const CreateOrOpenCallback& callback) OVERRIDE;
+      const CreateOrOpenCallback& callback) override;
   virtual void EnsureFileExists(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const EnsureFileExistsCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const EnsureFileExistsCallback& callback) override;
   virtual void CreateDirectory(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
       bool exclusive,
       bool recursive,
-      const StatusCallback& callback) OVERRIDE;
+      const StatusCallback& callback) override;
   virtual void GetFileInfo(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const GetFileInfoCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const GetFileInfoCallback& callback) override;
   virtual void ReadDirectory(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const ReadDirectoryCallback& callback) OVERRIDE;
-  virtual void Touch(scoped_ptr<fileapi::FileSystemOperationContext> context,
-                     const fileapi::FileSystemURL& url,
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const ReadDirectoryCallback& callback) override;
+  virtual void Touch(scoped_ptr<storage::FileSystemOperationContext> context,
+                     const storage::FileSystemURL& url,
                      const base::Time& last_access_time,
                      const base::Time& last_modified_time,
-                     const StatusCallback& callback) OVERRIDE;
-  virtual void Truncate(scoped_ptr<fileapi::FileSystemOperationContext> context,
-                        const fileapi::FileSystemURL& url,
+                     const StatusCallback& callback) override;
+  virtual void Truncate(scoped_ptr<storage::FileSystemOperationContext> context,
+                        const storage::FileSystemURL& url,
                         int64 length,
-                        const StatusCallback& callback) OVERRIDE;
+                        const StatusCallback& callback) override;
   virtual void CopyFileLocal(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& src_url,
-      const fileapi::FileSystemURL& dest_url,
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& src_url,
+      const storage::FileSystemURL& dest_url,
       CopyOrMoveOption option,
       const CopyFileProgressCallback& progress_callback,
-      const StatusCallback& callback) OVERRIDE;
+      const StatusCallback& callback) override;
   virtual void MoveFileLocal(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& src_url,
-      const fileapi::FileSystemURL& dest_url,
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& src_url,
+      const storage::FileSystemURL& dest_url,
       CopyOrMoveOption option,
-      const StatusCallback& callback) OVERRIDE;
+      const StatusCallback& callback) override;
   virtual void CopyInForeignFile(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
+      scoped_ptr<storage::FileSystemOperationContext> context,
       const base::FilePath& src_file_path,
-      const fileapi::FileSystemURL& dest_url,
-      const StatusCallback& callback) OVERRIDE;
+      const storage::FileSystemURL& dest_url,
+      const StatusCallback& callback) override;
   virtual void DeleteFile(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const StatusCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const StatusCallback& callback) override;
   virtual void DeleteDirectory(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const StatusCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const StatusCallback& callback) override;
   virtual void DeleteRecursively(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const StatusCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const StatusCallback& callback) override;
   virtual void CreateSnapshotFile(
-      scoped_ptr<fileapi::FileSystemOperationContext> context,
-      const fileapi::FileSystemURL& url,
-      const CreateSnapshotFileCallback& callback) OVERRIDE;
+      scoped_ptr<storage::FileSystemOperationContext> context,
+      const storage::FileSystemURL& url,
+      const CreateSnapshotFileCallback& callback) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ProviderAsyncFileUtil);

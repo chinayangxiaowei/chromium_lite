@@ -95,7 +95,7 @@ void GpuVideoEncodeAccelerator::Initialize(
     return;
   }
 
-  CreateEncoder();
+  encoder_ = CreateEncoder();
   if (!encoder_) {
     DLOG(ERROR)
         << "GpuVideoEncodeAccelerator::Initialize(): VEA creation failed";
@@ -163,41 +163,48 @@ void GpuVideoEncodeAccelerator::OnWillDestroyStub() {
 }
 
 // static
-std::vector<media::VideoEncodeAccelerator::SupportedProfile>
+std::vector<gpu::VideoEncodeAcceleratorSupportedProfile>
 GpuVideoEncodeAccelerator::GetSupportedProfiles() {
-  std::vector<media::VideoEncodeAccelerator::SupportedProfile> profiles;
+  scoped_ptr<media::VideoEncodeAccelerator> encoder = CreateEncoder();
+  if (!encoder)
+    return std::vector<gpu::VideoEncodeAcceleratorSupportedProfile>();
+  return ConvertMediaToGpuProfiles(encoder->GetSupportedProfiles());
+}
 
-#if defined(OS_CHROMEOS) && defined(USE_X11)
-#if defined(ARCH_CPU_ARMEL)
-  profiles = V4L2VideoEncodeAccelerator::GetSupportedProfiles();
-#elif defined(ARCH_CPU_X86_FAMILY)
-  profiles = VaapiVideoEncodeAccelerator::GetSupportedProfiles();
-#endif
-#elif defined(OS_ANDROID) && defined(ENABLE_WEBRTC)
-  profiles = AndroidVideoEncodeAccelerator::GetSupportedProfiles();
-#endif
-
-  // TODO(sheu): return platform-specific profiles.
+std::vector<gpu::VideoEncodeAcceleratorSupportedProfile>
+GpuVideoEncodeAccelerator::ConvertMediaToGpuProfiles(const std::vector<
+    media::VideoEncodeAccelerator::SupportedProfile>& media_profiles) {
+  std::vector<gpu::VideoEncodeAcceleratorSupportedProfile> profiles;
+  for (size_t i = 0; i < media_profiles.size(); i++) {
+    gpu::VideoEncodeAcceleratorSupportedProfile profile;
+    profile.profile =
+        static_cast<gpu::VideoCodecProfile>(media_profiles[i].profile);
+    profile.max_resolution = media_profiles[i].max_resolution;
+    profile.max_framerate_numerator = media_profiles[i].max_framerate_numerator;
+    profile.max_framerate_denominator =
+        media_profiles[i].max_framerate_denominator;
+    profiles.push_back(profile);
+  }
   return profiles;
 }
 
-void GpuVideoEncodeAccelerator::CreateEncoder() {
-  DCHECK(!encoder_);
+scoped_ptr<media::VideoEncodeAccelerator>
+GpuVideoEncodeAccelerator::CreateEncoder() {
+  scoped_ptr<media::VideoEncodeAccelerator> encoder;
 #if defined(OS_CHROMEOS) && defined(USE_X11)
 #if defined(ARCH_CPU_ARMEL)
   scoped_ptr<V4L2Device> device = V4L2Device::Create(V4L2Device::kEncoder);
-  if (!device.get())
-    return;
-
-  encoder_.reset(new V4L2VideoEncodeAccelerator(device.Pass()));
+  if (device)
+    encoder.reset(new V4L2VideoEncodeAccelerator(device.Pass()));
 #elif defined(ARCH_CPU_X86_FAMILY)
   const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
   if (!cmd_line->HasSwitch(switches::kDisableVaapiAcceleratedVideoEncode))
-    encoder_.reset(new VaapiVideoEncodeAccelerator(gfx::GetXDisplay()));
+    encoder.reset(new VaapiVideoEncodeAccelerator(gfx::GetXDisplay()));
 #endif
 #elif defined(OS_ANDROID) && defined(ENABLE_WEBRTC)
-  encoder_.reset(new AndroidVideoEncodeAccelerator());
+  encoder.reset(new AndroidVideoEncodeAccelerator());
 #endif
+  return encoder.Pass();
 }
 
 void GpuVideoEncodeAccelerator::OnEncode(int32 frame_id,
@@ -245,7 +252,7 @@ void GpuVideoEncodeAccelerator::OnEncode(int32 frame_id,
                                 frame_id,
                                 base::Passed(&shm))));
 
-  if (!frame) {
+  if (!frame.get()) {
     DLOG(ERROR) << "GpuVideoEncodeAccelerator::OnEncode(): "
                    "could not create VideoFrame for frame_id=" << frame_id;
     NotifyError(media::VideoEncodeAccelerator::kPlatformFailureError);

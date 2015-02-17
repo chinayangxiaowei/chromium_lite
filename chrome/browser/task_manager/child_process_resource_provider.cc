@@ -10,11 +10,11 @@
 #include "base/strings/string16.h"
 #include "chrome/browser/task_manager/resource_provider.h"
 #include "chrome/browser/task_manager/task_manager.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/nacl/common/nacl_process_type.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -32,17 +32,17 @@ class ChildProcessResource : public Resource {
                        const base::string16& name,
                        base::ProcessHandle handle,
                        int unique_process_id);
-  virtual ~ChildProcessResource();
+  ~ChildProcessResource() override;
 
   // Resource methods:
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual base::string16 GetProfileName() const OVERRIDE;
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE;
-  virtual base::ProcessHandle GetProcess() const OVERRIDE;
-  virtual int GetUniqueChildProcessId() const OVERRIDE;
-  virtual Type GetType() const OVERRIDE;
-  virtual bool SupportNetworkUsage() const OVERRIDE;
-  virtual void SetSupportNetworkUsage() OVERRIDE;
+  base::string16 GetTitle() const override;
+  base::string16 GetProfileName() const override;
+  gfx::ImageSkia GetIcon() const override;
+  base::ProcessHandle GetProcess() const override;
+  int GetUniqueChildProcessId() const override;
+  Type GetType() const override;
+  bool SupportNetworkUsage() const override;
+  void SetSupportNetworkUsage() override;
 
   // Returns the pid of the child process.
   int process_id() const { return pid_; }

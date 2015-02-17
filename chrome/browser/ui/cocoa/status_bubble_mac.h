@@ -33,15 +33,14 @@ class StatusBubbleMac : public StatusBubble {
   };
 
   StatusBubbleMac(NSWindow* parent, id delegate);
-  virtual ~StatusBubbleMac();
+  ~StatusBubbleMac() override;
 
   // StatusBubble implementation.
-  virtual void SetStatus(const base::string16& status) OVERRIDE;
-  virtual void SetURL(const GURL& url, const std::string& languages) OVERRIDE;
-  virtual void Hide() OVERRIDE;
-  virtual void MouseMoved(const gfx::Point& location,
-                          bool left_content) OVERRIDE;
-  virtual void UpdateDownloadShelfVisibility(bool visible) OVERRIDE;
+  void SetStatus(const base::string16& status) override;
+  void SetURL(const GURL& url, const std::string& languages) override;
+  void Hide() override;
+  void MouseMoved(const gfx::Point& location, bool left_content) override;
+  void UpdateDownloadShelfVisibility(bool visible) override;
 
   // Mac-specific method: Update the size and position of the status bubble to
   // match the parent window. Safe to call even when the status bubble does not
@@ -123,17 +122,6 @@ class StatusBubbleMac : public StatusBubble {
   // for the given mouse position if necessary. Protected for use in tests.
   void SetFrameAvoidingMouse(NSRect window_frame, const gfx::Point& mouse_pos);
 
-  // The factory used to generate weak pointers for the show and hide delay
-  // timers.
-  base::WeakPtrFactory<StatusBubbleMac> timer_factory_;
-
-  // The factory used to generate weak pointers for the expansion delay timer.
-  base::WeakPtrFactory<StatusBubbleMac> expand_timer_factory_;
-
-  // The factory used to generate weak pointers for the CAAnimation completion
-  // handlers.
-  base::WeakPtrFactory<StatusBubbleMac> completion_handler_factory_;
-
   // Calculate the appropriate frame for the status bubble window. If
   // |expanded_width|, use entire width of parent frame.
   NSRect CalculateWindowFrame(bool expanded_width);
@@ -184,6 +172,17 @@ class StatusBubbleMac : public StatusBubble {
   // Needs to be passed to ElideURL if the original URL string is wider than
   // the standard bubble width.
   std::string languages_;
+
+  // The factory used to generate weak pointers for the show and hide delay
+  // timers.
+  base::WeakPtrFactory<StatusBubbleMac> timer_factory_;
+
+  // The factory used to generate weak pointers for the expansion delay timer.
+  base::WeakPtrFactory<StatusBubbleMac> expand_timer_factory_;
+
+  // The factory used to generate weak pointers for the CAAnimation completion
+  // handlers.
+  base::WeakPtrFactory<StatusBubbleMac> completion_handler_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(StatusBubbleMac);
 };

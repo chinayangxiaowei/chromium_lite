@@ -18,14 +18,14 @@
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -46,6 +46,11 @@ content::WebUIDataSource* CreateDownloadsUIHTMLSource(Profile* profile) {
   source->AddLocalizedString("clear_all", IDS_DOWNLOAD_LINK_CLEAR_ALL);
   source->AddLocalizedString("open_downloads_folder",
                              IDS_DOWNLOAD_LINK_OPEN_DOWNLOADS_FOLDER);
+
+  // No results/downloads messages that show instead of the downloads list.
+  source->AddLocalizedString("no_downloads", IDS_DOWNLOAD_NO_DOWNLOADS);
+  source->AddLocalizedString("no_search_results",
+                             IDS_DOWNLOAD_NO_SEARCH_RESULTS);
 
   // Status.
   source->AddLocalizedString("status_cancelled", IDS_DOWNLOAD_TAB_CANCELLED);
@@ -88,7 +93,6 @@ content::WebUIDataSource* CreateDownloadsUIHTMLSource(Profile* profile) {
   source->AddResourcePath("downloads.css", IDR_DOWNLOADS_CSS);
   source->AddResourcePath("downloads.js", IDR_DOWNLOADS_JS);
   source->SetDefaultResource(IDR_DOWNLOADS_HTML);
-  source->SetUseJsonJSFormatV2();
 
   return source;
 }

@@ -6,7 +6,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/values.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_shill_device_client.h"
 #include "chromeos/dbus/fake_shill_manager_client.h"
 #include "chromeos/network/network_device_handler_impl.h"
@@ -31,14 +31,10 @@ class NetworkDeviceHandlerTest : public testing::Test {
   NetworkDeviceHandlerTest() : fake_device_client_(NULL) {}
   virtual ~NetworkDeviceHandlerTest() {}
 
-  virtual void SetUp() OVERRIDE {
-    FakeDBusThreadManager* dbus_manager = new FakeDBusThreadManager;
-    dbus_manager->SetFakeShillClients();
-
+  virtual void SetUp() override {
     fake_device_client_ = new FakeShillDeviceClient;
-    dbus_manager->SetShillDeviceClient(
+    DBusThreadManager::GetSetterForTesting()->SetShillDeviceClient(
         scoped_ptr<ShillDeviceClient>(fake_device_client_));
-    DBusThreadManager::InitializeForTesting(dbus_manager);
 
     success_callback_ = base::Bind(&NetworkDeviceHandlerTest::SuccessCallback,
                                    base::Unretained(this));
@@ -71,7 +67,7 @@ class NetworkDeviceHandlerTest : public testing::Test {
     message_loop_.RunUntilIdle();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     network_device_handler_.reset();
     network_state_handler_.reset();
     DBusThreadManager::Shutdown();

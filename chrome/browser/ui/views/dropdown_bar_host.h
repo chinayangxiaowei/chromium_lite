@@ -45,7 +45,7 @@ class DropdownBarHost : public ui::AcceleratorTarget,
                         public gfx::AnimationDelegate {
  public:
   explicit DropdownBarHost(BrowserView* browser_view);
-  virtual ~DropdownBarHost();
+  ~DropdownBarHost() override;
 
   // Initializes the DropdownBarHost. This creates the widget that |view| paints
   // into.
@@ -79,18 +79,18 @@ class DropdownBarHost : public ui::AcceleratorTarget,
   virtual void SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw) = 0;
 
   // Overridden from views::FocusChangeListener:
-  virtual void OnWillChangeFocus(views::View* focused_before,
-                                 views::View* focused_now) OVERRIDE;
-  virtual void OnDidChangeFocus(views::View* focused_before,
-                                views::View* focused_now) OVERRIDE;
+  void OnWillChangeFocus(views::View* focused_before,
+                         views::View* focused_now) override;
+  void OnDidChangeFocus(views::View* focused_before,
+                        views::View* focused_now) override;
 
   // Overridden from ui::AcceleratorTarget:
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) = 0;
   virtual bool CanHandleAccelerators() const = 0;
 
   // gfx::AnimationDelegate implementation:
-  virtual void AnimationProgressed(const gfx::Animation* animation) OVERRIDE;
-  virtual void AnimationEnded(const gfx::Animation* animation) OVERRIDE;
+  void AnimationProgressed(const gfx::Animation* animation) override;
+  void AnimationEnded(const gfx::Animation* animation) override;
 
   // During testing we can disable animations by setting this flag to true,
   // so that opening and closing the dropdown bar is shown instantly, instead of
@@ -141,15 +141,6 @@ class DropdownBarHost : public ui::AcceleratorTarget,
   // returns the boundary of browser_view and the drop down
   // can be shown in any client area.
   virtual void GetWidgetBounds(gfx::Rect* bounds);
-
-  // The find bar widget needs rounded edges, so we create a polygon
-  // that corresponds to the background images for this window (and
-  // make the polygon only contain the pixels that we want to
-  // draw). The polygon is then given to SetWindowRgn which changes
-  // the window from being a rectangle in shape, to being a rect with
-  // curved edges. We also check to see if the region should be
-  // truncated to prevent from drawing onto Chrome's window border.
-  void UpdateWindowEdges(const gfx::Rect& new_pos);
 
   // Allows implementation to tweak widget position.
   void SetWidgetPositionNative(const gfx::Rect& new_pos, bool no_redraw);

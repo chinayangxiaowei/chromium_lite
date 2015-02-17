@@ -26,23 +26,13 @@ namespace {
 
 const char* kWhitelist[] = {
   prefs::kMaxSeparationForGestureTouchesInPixels,
-  prefs::kFlingAccelerationCurveCoefficient0,
-  prefs::kFlingAccelerationCurveCoefficient1,
-  prefs::kFlingAccelerationCurveCoefficient2,
-  prefs::kFlingAccelerationCurveCoefficient3,
-  prefs::kTabScrubActivationDelayInMS,
+  prefs::kTabScrubActivationDelayInMs,
   prefs::kOverscrollHorizontalThresholdComplete,
   prefs::kOverscrollVerticalThresholdComplete,
   prefs::kOverscrollMinimumThresholdStart,
   prefs::kOverscrollVerticalThresholdStart,
   prefs::kOverscrollHorizontalResistThreshold,
   prefs::kOverscrollVerticalResistThreshold,
-  prefs::kFlingCurveTouchscreenAlpha,
-  prefs::kFlingCurveTouchscreenBeta,
-  prefs::kFlingCurveTouchscreenGamma,
-  prefs::kFlingCurveTouchpadAlpha,
-  prefs::kFlingCurveTouchpadBeta,
-  prefs::kFlingCurveTouchpadGamma,
 };
 
 void RevertPreferences(PrefService* prefs,

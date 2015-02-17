@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "base/base64.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram.h"
@@ -82,7 +82,7 @@ class ContentHashFetcherJob
 
  private:
   friend class base::RefCountedThreadSafe<ContentHashFetcherJob>;
-  virtual ~ContentHashFetcherJob();
+  ~ContentHashFetcherJob() override;
 
   // Tries to load a verified_contents.json file at |path|. On successfully
   // reading and validing the file, the verified_contents_ member variable will
@@ -97,7 +97,7 @@ class ContentHashFetcherJob
   void DoneCheckingForVerifiedContents(bool found);
 
   // URLFetcherDelegate interface
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE;
+  void OnURLFetchComplete(const net::URLFetcher* source) override;
 
   // Callback for when we're done ensuring we have verified contents, and are
   // ready to move on to MaybeCreateHashes.
@@ -379,9 +379,7 @@ bool ContentHashFetcherJob::CreateHashes(const base::FilePath& hashes_file) {
     extension_path_.AppendRelativePath(full_path, &relative_path);
     relative_path = relative_path.NormalizePathSeparatorsTo('/');
 
-    const std::string* expected_root =
-        verified_contents_->GetTreeHashRoot(relative_path);
-    if (!expected_root)
+    if (!verified_contents_->HasTreeHashRoot(relative_path))
       continue;
 
     std::string contents;
@@ -396,7 +394,7 @@ bool ContentHashFetcherJob::CreateHashes(const base::FilePath& hashes_file) {
     ComputedHashes::ComputeHashesForContent(contents, block_size_, &hashes);
     std::string root =
         ComputeTreeHashRoot(hashes, block_size_ / crypto::kSHA256Length);
-    if (expected_root && *expected_root != root) {
+    if (!verified_contents_->TreeHashRootEquals(relative_path, root)) {
       VLOG(1) << "content mismatch for " << relative_path.AsUTF8Unsafe();
       hash_mismatch_paths_.insert(relative_path);
       continue;

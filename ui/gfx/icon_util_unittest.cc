@@ -4,7 +4,7 @@
 
 #include "ui/gfx/icon_util.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
@@ -26,8 +26,9 @@ static const char kTempIconFilename[] = "temp_test_icon.ico";
 
 class IconUtilTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
-    PathService::Get(gfx::DIR_TEST_DATA, &test_data_directory_);
+  virtual void SetUp() override {
+    gfx::RegisterPathProvider();
+    ASSERT_TRUE(PathService::Get(gfx::DIR_TEST_DATA, &test_data_directory_));
     temp_directory_.CreateUniqueTempDir();
   }
 

@@ -10,6 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/scoped_observer.h"
 #include "base/strings/string16.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/ui/host_desktop.h"
@@ -19,19 +20,28 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/gfx/image/image.h"
 
+#if defined(ENABLE_MANAGED_USERS)
+#include "chrome/browser/supervised_user/supervised_user_service_observer.h"
+#endif
+
+class AvatarMenuActions;
 class AvatarMenuObserver;
 class Browser;
 class Profile;
 class ProfileInfoInterface;
 class ProfileList;
-class AvatarMenuActions;
+class SupervisedUserService;
 
 // This class represents the menu-like interface used to select profiles,
 // such as the bubble that appears when the avatar icon is clicked in the
 // browser window frame. This class will notify its observer when the backend
 // data changes, and the view for this model should forward actions
 // back to it in response to user events.
-class AvatarMenu : public content::NotificationObserver {
+class AvatarMenu :
+#if defined(ENABLE_MANAGED_USERS)
+    public SupervisedUserServiceObserver,
+#endif
+    public content::NotificationObserver {
  public:
   // Represents an item in the menu.
   struct Item {
@@ -77,7 +87,7 @@ class AvatarMenu : public content::NotificationObserver {
   AvatarMenu(ProfileInfoInterface* profile_cache,
              AvatarMenuObserver* observer,
              Browser* browser);
-  virtual ~AvatarMenu();
+  ~AvatarMenu() override;
 
   // True if avatar menu should be displayed.
   static bool ShouldShowAvatarMenu();
@@ -137,16 +147,27 @@ class AvatarMenu : public content::NotificationObserver {
   bool ShouldShowEditProfileLink() const;
 
   // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
  private:
+#if defined(ENABLE_MANAGED_USERS)
+  // SupervisedUserServiceObserver:
+  void OnCustodianInfoChanged() override;
+#endif
+
   // The model that provides the list of menu items.
   scoped_ptr<ProfileList> profile_list_;
 
   // The controller for avatar menu actions.
   scoped_ptr<AvatarMenuActions> menu_actions_;
+
+#if defined(ENABLE_MANAGED_USERS)
+  // Observes changes to a supervised user's custodian info.
+  ScopedObserver<SupervisedUserService, SupervisedUserServiceObserver>
+      supervised_user_observer_;
+#endif
 
   // The cache that provides the profile information. Weak.
   ProfileInfoInterface* profile_info_;

@@ -19,13 +19,15 @@ namespace predictors {
 class AutocompleteActionPredictorTable;
 class LoggedInPredictorTable;
 class PredictorDatabaseInternal;
+class ResourcePrefetchPredictorTables;
 
 class PredictorDatabase : public KeyedService {
  public:
   explicit PredictorDatabase(Profile* profile);
-  virtual ~PredictorDatabase();
+  ~PredictorDatabase() override;
 
   scoped_refptr<AutocompleteActionPredictorTable> autocomplete_table();
+  scoped_refptr<ResourcePrefetchPredictorTables> resource_prefetch_tables();
   scoped_refptr<LoggedInPredictorTable> logged_in_table();
 
   // Used for testing.
@@ -33,7 +35,7 @@ class PredictorDatabase : public KeyedService {
 
  private:
   // KeyedService
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   scoped_refptr<PredictorDatabaseInternal> db_;
 

@@ -9,16 +9,16 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/infobars/infobar_background.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/infobar_delegate.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
 #include "ui/accessibility/ax_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/label_button_border.h"
@@ -126,7 +126,7 @@ views::LabelButton* InfoBarView::CreateLabelButton(
       views::Painter::CreateImageGridPainter(kPressedImageSet));
 
   views::LabelButton* label_button = new views::LabelButton(listener, text);
-  label_button->SetBorder(label_button_border.PassAs<views::Border>());
+  label_button->SetBorder(label_button_border.Pass());
   label_button->set_animate_on_state_change(false);
   label_button->SetTextColor(views::Button::STATE_NORMAL, SK_ColorBLACK);
   label_button->SetTextColor(views::Button::STATE_HOVERED, SK_ColorBLACK);

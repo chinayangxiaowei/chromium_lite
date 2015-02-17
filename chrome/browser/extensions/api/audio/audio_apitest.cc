@@ -6,15 +6,15 @@
 #include "base/message_loop/message_loop.h"
 #include "chrome/browser/extensions/api/audio/audio_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/common/chrome_switches.h"
+#include "extensions/test/extension_test_message_listener.h"
 
 namespace extensions {
 
 class AudioApiTest: public ExtensionApiTest {
  public:
   AudioApiTest() {}
-  virtual ~AudioApiTest() {}
+  ~AudioApiTest() override {}
 };
 
 #if defined(OS_CHROMEOS)

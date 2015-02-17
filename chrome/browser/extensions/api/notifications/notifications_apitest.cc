@@ -11,16 +11,20 @@
 #include "chrome/browser/extensions/extension_function_test_utils.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/test/test_api.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/features/feature.h"
+#include "extensions/common/test_util.h"
+#include "extensions/test/result_catcher.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/notification_list.h"
 #include "ui/message_center/notifier_settings.h"
 
 using extensions::Extension;
+using extensions::ResultCatcher;
 
 namespace utils = extension_function_test_utils;
 
@@ -36,7 +40,7 @@ class UserGestureCatcher : public content::NotificationObserver {
                    content::NotificationService::AllSources());
   }
 
-  virtual ~UserGestureCatcher() {}
+  ~UserGestureCatcher() override {}
 
   bool GetNextResult() {
     if (results_.empty()) {
@@ -55,9 +59,9 @@ class UserGestureCatcher : public content::NotificationObserver {
   }
 
  private:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     results_.push_back(
         static_cast<content::Source<extensions::TestSendMessageFunction> >(
             source)
@@ -91,6 +95,16 @@ class NotificationsApiTest : public ExtensionApiTest {
     }
     return extension;
   }
+
+ protected:
+  std::string GetNotificationIdFromDelegateId(std::string delegate_id) {
+    return g_browser_process->notification_ui_manager()
+        ->FindById(
+              delegate_id,
+              NotificationUIManager::GetProfileID(
+                  g_browser_process->profile_manager()->GetLastUsedProfile()))
+        ->id();
+  }
 };
 
 }  // namespace
@@ -114,17 +128,19 @@ IN_PROC_BROWSER_TEST_F(NotificationsApiTest, TestByUser) {
 
   {
     ResultCatcher catcher;
-    g_browser_process->message_center()->RemoveNotification(
-        extension->id() + "-FOO",
-        false);
+    const std::string notification_id =
+        GetNotificationIdFromDelegateId(extension->id() + "-FOO");
+    g_browser_process->message_center()->RemoveNotification(notification_id,
+                                                            false);
     EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
   }
 
   {
     ResultCatcher catcher;
-    g_browser_process->message_center()->RemoveNotification(
-        extension->id() + "-BAR",
-        true);
+    const std::string notification_id =
+        GetNotificationIdFromDelegateId(extension->id() + "-BAR");
+    g_browser_process->message_center()->RemoveNotification(notification_id,
+                                                            true);
     EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
   }
 
@@ -162,7 +178,8 @@ IN_PROC_BROWSER_TEST_F(NotificationsApiTest, TestPartialUpdate) {
 }
 
 IN_PROC_BROWSER_TEST_F(NotificationsApiTest, TestGetPermissionLevel) {
-  scoped_refptr<Extension> empty_extension(utils::CreateEmptyExtension());
+  scoped_refptr<Extension> empty_extension(
+      extensions::test_util::CreateEmptyExtension());
 
   // Get permission level for the extension whose notifications are enabled.
   {

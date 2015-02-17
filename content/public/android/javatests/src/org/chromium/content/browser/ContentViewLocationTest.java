@@ -12,6 +12,7 @@ import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.MockLocationProvider;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnEvaluateJavaScriptResultHelper;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_shell_apk.ContentShellTestBase;
 
 /**
@@ -44,7 +45,7 @@ public class ContentViewLocationTest extends ContentShellTestBase {
     }
 
     private void pollForPositionCallback() throws Throwable {
-        mJavascriptHelper.evaluateJavaScript(getContentViewCore(),
+        mJavascriptHelper.evaluateJavaScript(getWebContents(),
                 "positionCount = 0");
         mJavascriptHelper.waitUntilHasValue();
         assertEquals(0, Integer.parseInt(mJavascriptHelper.getJsonResultAndClear()));
@@ -52,7 +53,7 @@ public class ContentViewLocationTest extends ContentShellTestBase {
         assertTrue(CriteriaHelper.pollForCriteria(new Criteria() {
                 @Override
                 public boolean isSatisfied() {
-                    mJavascriptHelper.evaluateJavaScript(getContentViewCore(), "positionCount");
+                    mJavascriptHelper.evaluateJavaScript(getWebContents(), "positionCount");
                     try {
                         mJavascriptHelper.waitUntilHasValue();
                     } catch (Exception e) {
@@ -64,7 +65,7 @@ public class ContentViewLocationTest extends ContentShellTestBase {
     }
 
     private void startGeolocationWatchPosition() throws Throwable {
-        mJavascriptHelper.evaluateJavaScript(getContentViewCore(),
+        mJavascriptHelper.evaluateJavaScript(getWebContents(),
                 "initiate_watchPosition();");
         mJavascriptHelper.waitUntilHasValue();
     }
@@ -99,8 +100,8 @@ public class ContentViewLocationTest extends ContentShellTestBase {
 
     @Override
     protected void tearDown() throws Exception {
-         mMockLocationProvider.stopUpdates();
-         super.tearDown();
+        mMockLocationProvider.stopUpdates();
+        super.tearDown();
     }
 
     @MediumTest
@@ -115,7 +116,7 @@ public class ContentViewLocationTest extends ContentShellTestBase {
         hideContentViewOnUiThread();
         ensureGeolocationRunning(false);
 
-        mJavascriptHelper.evaluateJavaScript(getContentViewCore(),
+        mJavascriptHelper.evaluateJavaScript(getWebContents(),
                 "positionCount = 0");
         mJavascriptHelper.waitUntilHasValue();
 
@@ -125,8 +126,8 @@ public class ContentViewLocationTest extends ContentShellTestBase {
         ensureGeolocationRunning(true);
 
         // Navigate away and ensure that geolocation stops.
-        loadUrl(getContentViewCore(), mTestCallbackHelperContainer,
-              new LoadUrlParams("about:blank"));
+        loadUrl(getContentViewCore().getWebContents().getNavigationController(),
+                mTestCallbackHelperContainer, new LoadUrlParams("about:blank"));
         ensureGeolocationRunning(false);
     }
 
@@ -168,8 +169,8 @@ public class ContentViewLocationTest extends ContentShellTestBase {
         startGeolocationWatchPosition();
         ensureGeolocationRunning(false);
 
-        loadUrl(getContentViewCore(), mTestCallbackHelperContainer,
-                new LoadUrlParams("about:blank"));
+        loadUrl(getContentViewCore().getWebContents().getNavigationController(),
+                mTestCallbackHelperContainer, new LoadUrlParams("about:blank"));
         showContentViewOnUiThread();
         ensureGeolocationRunning(false);
     }

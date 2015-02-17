@@ -16,6 +16,7 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
+#include "base/process/process_handle.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
@@ -74,10 +75,10 @@ class CONTENT_EXPORT PluginProcessHost : public BrowserChildProcessHostDelegate,
   };
 
   PluginProcessHost();
-  virtual ~PluginProcessHost();
+  ~PluginProcessHost() override;
 
   // IPC::Sender implementation:
-  virtual bool Send(IPC::Message* message) OVERRIDE;
+  bool Send(IPC::Message* message) override;
 
   // Initialize the new plugin process, returning true on success. This must
   // be called before the object can be used.
@@ -86,9 +87,9 @@ class CONTENT_EXPORT PluginProcessHost : public BrowserChildProcessHostDelegate,
   // Force the plugin process to shutdown (cleanly).
   void ForceShutdown();
 
-  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
-  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& msg) override;
+  void OnChannelConnected(int32 peer_pid) override;
+  void OnChannelError() override;
 
   // Tells the plugin process to create a new channel for communication with a
   // renderer.  When the plugin process responds with the channel name,
@@ -120,6 +121,12 @@ class CONTENT_EXPORT PluginProcessHost : public BrowserChildProcessHostDelegate,
   void AddWindow(HWND window);
 #endif
 
+  // Given a pid of a plugin process, returns the plugin information in |info|
+  // if we know about that process. Otherwise returns false.
+  // This method can be called on any thread.
+  static bool GetWebPluginInfoFromPluginPid(base::ProcessId pid,
+                                            WebPluginInfo* info);
+
  private:
   // Sends a message to the plugin process to request creation of a new channel
   // for the given mime type.
@@ -140,8 +147,8 @@ class CONTENT_EXPORT PluginProcessHost : public BrowserChildProcessHostDelegate,
   void OnPluginSetCursorVisibility(bool visible);
 #endif
 
-  virtual bool CanShutdown() OVERRIDE;
-  virtual void OnProcessCrashed(int exit_code) OVERRIDE;
+  bool CanShutdown() override;
+  void OnProcessCrashed(int exit_code) override;
 
   void CancelRequests();
 
@@ -160,6 +167,9 @@ class CONTENT_EXPORT PluginProcessHost : public BrowserChildProcessHostDelegate,
 
   // Information about the plugin.
   WebPluginInfo info_;
+
+  // The pid of the plugin process.
+  int pid_;
 
 #if defined(OS_WIN)
   // Tracks plugin parent windows created on the UI thread.

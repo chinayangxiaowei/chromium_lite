@@ -16,17 +16,26 @@ namespace test {
 
 class QuicSentPacketManagerPeer {
  public:
+  static size_t GetMaxTailLossProbes(
+      QuicSentPacketManager* sent_packet_manager);
+
   static void SetMaxTailLossProbes(
       QuicSentPacketManager* sent_packet_manager, size_t max_tail_loss_probes);
+
+  static QuicByteCount GetReceiveWindow(
+      QuicSentPacketManager* sent_packet_manager);
+
+  static void SetIsServer(QuicSentPacketManager* sent_packet_manager,
+                          bool is_server);
+
+  static const SendAlgorithmInterface* GetSendAlgorithm(
+      const QuicSentPacketManager& sent_packet_manager);
 
   static void SetSendAlgorithm(QuicSentPacketManager* sent_packet_manager,
                                SendAlgorithmInterface* send_algorithm);
 
   static const LossDetectionInterface* GetLossAlgorithm(
       QuicSentPacketManager* sent_packet_manager);
-
-  static const SendAlgorithmInterface* GetCongestionControlAlgorithm(
-      const QuicSentPacketManager& sent_packet_manager);
 
   static void SetLossAlgorithm(QuicSentPacketManager* sent_packet_manager,
                                LossDetectionInterface* loss_detector);
@@ -68,6 +77,9 @@ class QuicSentPacketManagerPeer {
 
   static QuicSentPacketManager::NetworkChangeVisitor* GetNetworkChangeVisitor(
       const QuicSentPacketManager* sent_packet_manager);
+
+  static QuicSustainedBandwidthRecorder& GetBandwidthRecorder(
+      QuicSentPacketManager* sent_packet_manager);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuicSentPacketManagerPeer);

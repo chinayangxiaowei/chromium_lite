@@ -99,48 +99,42 @@ class ClientSession
       const base::TimeDelta& max_duration,
       scoped_refptr<protocol::PairingRegistry> pairing_registry,
       const std::vector<HostExtension*>& extensions);
-  virtual ~ClientSession();
+  ~ClientSession() override;
 
   // Returns the set of capabilities negotiated between client and host.
   const std::string& capabilities() const { return capabilities_; }
 
   // protocol::HostStub interface.
-  virtual void NotifyClientResolution(
-      const protocol::ClientResolution& resolution) OVERRIDE;
-  virtual void ControlVideo(
-      const protocol::VideoControl& video_control) OVERRIDE;
-  virtual void ControlAudio(
-      const protocol::AudioControl& audio_control) OVERRIDE;
-  virtual void SetCapabilities(
-      const protocol::Capabilities& capabilities) OVERRIDE;
-  virtual void RequestPairing(
-      const remoting::protocol::PairingRequest& pairing_request) OVERRIDE;
-  virtual void DeliverClientMessage(
-      const protocol::ExtensionMessage& message) OVERRIDE;
+  void NotifyClientResolution(
+      const protocol::ClientResolution& resolution) override;
+  void ControlVideo(const protocol::VideoControl& video_control) override;
+  void ControlAudio(const protocol::AudioControl& audio_control) override;
+  void SetCapabilities(const protocol::Capabilities& capabilities) override;
+  void RequestPairing(
+      const remoting::protocol::PairingRequest& pairing_request) override;
+  void DeliverClientMessage(const protocol::ExtensionMessage& message) override;
 
   // protocol::ConnectionToClient::EventHandler interface.
-  virtual void OnConnectionAuthenticating(
-      protocol::ConnectionToClient* connection) OVERRIDE;
-  virtual void OnConnectionAuthenticated(
-      protocol::ConnectionToClient* connection) OVERRIDE;
-  virtual void OnConnectionChannelsConnected(
-      protocol::ConnectionToClient* connection) OVERRIDE;
-  virtual void OnConnectionClosed(protocol::ConnectionToClient* connection,
-                                  protocol::ErrorCode error) OVERRIDE;
-  virtual void OnSequenceNumberUpdated(
-      protocol::ConnectionToClient* connection, int64 sequence_number) OVERRIDE;
-  virtual void OnRouteChange(
-      protocol::ConnectionToClient* connection,
-      const std::string& channel_name,
-      const protocol::TransportRoute& route) OVERRIDE;
+  void OnConnectionAuthenticating(
+      protocol::ConnectionToClient* connection) override;
+  void OnConnectionAuthenticated(
+      protocol::ConnectionToClient* connection) override;
+  void OnConnectionChannelsConnected(
+      protocol::ConnectionToClient* connection) override;
+  void OnConnectionClosed(protocol::ConnectionToClient* connection,
+                          protocol::ErrorCode error) override;
+  void OnSequenceNumberUpdated(protocol::ConnectionToClient* connection,
+                               int64 sequence_number) override;
+  void OnRouteChange(protocol::ConnectionToClient* connection,
+                     const std::string& channel_name,
+                     const protocol::TransportRoute& route) override;
 
   // ClientSessionControl interface.
-  virtual const std::string& client_jid() const OVERRIDE;
-  virtual void DisconnectSession() OVERRIDE;
-  virtual void OnLocalMouseMoved(
-      const webrtc::DesktopVector& position) OVERRIDE;
-  virtual void SetDisableInputs(bool disable_inputs) OVERRIDE;
-  virtual void ResetVideoPipeline() OVERRIDE;
+  const std::string& client_jid() const override;
+  void DisconnectSession() override;
+  void OnLocalMouseMoved(const webrtc::DesktopVector& position) override;
+  void SetDisableInputs(bool disable_inputs) override;
+  void ResetVideoPipeline() override;
 
   void SetGnubbyAuthHandlerForTesting(GnubbyAuthHandler* gnubby_auth_handler);
 
@@ -172,10 +166,6 @@ class ClientSession
   scoped_ptr<protocol::ConnectionToClient> connection_;
 
   std::string client_jid_;
-
-  // Used to disable callbacks to |this| once DisconnectSession() has been
-  // called.
-  base::WeakPtrFactory<ClientSessionControl> control_factory_;
 
   // Used to create a DesktopEnvironment instance for this session.
   DesktopEnvironmentFactory* desktop_environment_factory_;
@@ -262,6 +252,10 @@ class ClientSession
   bool pause_video_;
   bool lossless_video_encode_;
   bool lossless_video_color_;
+
+  // Used to disable callbacks to |this| once DisconnectSession() has been
+  // called.
+  base::WeakPtrFactory<ClientSessionControl> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ClientSession);
 };

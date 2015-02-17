@@ -19,8 +19,6 @@ import android.webkit.ValueCallback;
 
 import org.chromium.base.ContentUriUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.content.browser.ContentVideoView;
-import org.chromium.content.browser.ContentViewCore;
 
 /**
  * Adapts the AwWebContentsDelegate interface to the AwContentsClient interface.
@@ -30,15 +28,19 @@ import org.chromium.content.browser.ContentViewCore;
 class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {
     private static final String TAG = "AwWebContentsDelegateAdapter";
 
-    final AwContentsClient mContentsClient;
-    View mContainerView;
-    final Context mContext;
+    private final AwContents mAwContents;
+    private final AwContentsClient mContentsClient;
+    private final AwContentViewClient mContentViewClient;
+    private final Context mContext;
+    private View mContainerView;
 
-    public AwWebContentsDelegateAdapter(AwContentsClient contentsClient,
-            View containerView, Context context) {
+    public AwWebContentsDelegateAdapter(AwContents awContents, AwContentsClient contentsClient,
+            AwContentViewClient contentViewClient, Context context, View containerView) {
+        mAwContents = awContents;
         mContentsClient = contentsClient;
-        setContainerView(containerView);
+        mContentViewClient = contentViewClient;
         mContext = context;
+        setContainerView(containerView);
     }
 
     public void setContainerView(View containerView) {
@@ -79,8 +81,8 @@ class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {
     @Override
     public boolean takeFocus(boolean reverse) {
         int direction =
-            (reverse == (mContainerView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL)) ?
-            View.FOCUS_RIGHT : View.FOCUS_LEFT;
+                (reverse == (mContainerView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL))
+                ? View.FOCUS_RIGHT : View.FOCUS_LEFT;
         if (tryToMoveFocus(direction)) return true;
         direction = reverse ? View.FOCUS_UP : View.FOCUS_DOWN;
         return tryToMoveFocus(direction);
@@ -135,25 +137,27 @@ class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {
     }
 
     @Override
-    public void showRepostFormWarningDialog(final ContentViewCore contentViewCore) {
+    public void showRepostFormWarningDialog() {
         // TODO(mkosiba) We should be using something akin to the JsResultReceiver as the
         // callback parameter (instead of ContentViewCore) and implement a way of converting
         // that to a pair of messages.
-        final int MSG_CONTINUE_PENDING_RELOAD = 1;
-        final int MSG_CANCEL_PENDING_RELOAD = 2;
+        final int msgContinuePendingReload = 1;
+        final int msgCancelPendingReload = 2;
 
         // TODO(sgurun) Remember the URL to cancel the reload behavior
         // if it is different than the most recent NavigationController entry.
         final Handler handler = new Handler(ThreadUtils.getUiThreadLooper()) {
             @Override
             public void handleMessage(Message msg) {
+                if (mAwContents.getNavigationController() == null) return;
+
                 switch(msg.what) {
-                    case MSG_CONTINUE_PENDING_RELOAD: {
-                        contentViewCore.continuePendingReload();
+                    case msgContinuePendingReload: {
+                        mAwContents.getNavigationController().continuePendingReload();
                         break;
                     }
-                    case MSG_CANCEL_PENDING_RELOAD: {
-                        contentViewCore.cancelPendingReload();
+                    case msgCancelPendingReload: {
+                        mAwContents.getNavigationController().cancelPendingReload();
                         break;
                     }
                     default:
@@ -163,8 +167,8 @@ class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {
             }
         };
 
-        Message resend = handler.obtainMessage(MSG_CONTINUE_PENDING_RELOAD);
-        Message dontResend = handler.obtainMessage(MSG_CANCEL_PENDING_RELOAD);
+        Message resend = handler.obtainMessage(msgContinuePendingReload);
+        Message dontResend = handler.obtainMessage(msgCancelPendingReload);
         mContentsClient.onFormResubmission(dontResend, resend);
     }
 
@@ -210,9 +214,10 @@ class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {
 
     @Override
     public void toggleFullscreenModeForTab(boolean enterFullscreen) {
-        if (!enterFullscreen) {
-            ContentVideoView videoView = ContentVideoView.getContentVideoView();
-            if (videoView != null) videoView.exitFullscreen(false);
+        if (enterFullscreen) {
+            mContentViewClient.enterFullscreen();
+        } else {
+            mContentViewClient.exitFullscreen();
         }
     }
 

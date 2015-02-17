@@ -101,7 +101,7 @@ class BrowserTabStripController::TabContextMenuContents
         views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU));
   }
 
-  virtual ~TabContextMenuContents() {
+  ~TabContextMenuContents() override {
     if (controller_)
       controller_->tabstrip_->StopAllHighlighting();
   }
@@ -122,17 +122,14 @@ class BrowserTabStripController::TabContextMenuContents
   }
 
   // Overridden from ui::SimpleMenuModel::Delegate:
-  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE {
-    return false;
-  }
-  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE {
+  bool IsCommandIdChecked(int command_id) const override { return false; }
+  bool IsCommandIdEnabled(int command_id) const override {
     return controller_->IsCommandEnabledForTab(
         static_cast<TabStripModel::ContextMenuCommand>(command_id),
         tab_);
   }
-  virtual bool GetAcceleratorForCommandId(
-      int command_id,
-      ui::Accelerator* accelerator) OVERRIDE {
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* accelerator) override {
     int browser_cmd;
     return TabStripModel::ContextMenuCommandToBrowserCommand(command_id,
                                                              &browser_cmd) ?
@@ -140,12 +137,12 @@ class BrowserTabStripController::TabContextMenuContents
                                                             accelerator) :
         false;
   }
-  virtual void CommandIdHighlighted(int command_id) OVERRIDE {
+  void CommandIdHighlighted(int command_id) override {
     controller_->StopHighlightTabsForCommand(last_command_, tab_);
     last_command_ = static_cast<TabStripModel::ContextMenuCommand>(command_id);
     controller_->StartHighlightTabsForCommand(last_command_, tab_);
   }
-  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE {
+  void ExecuteCommand(int command_id, int event_flags) override {
     // Executing the command destroys |this|, and can also end up destroying
     // |controller_|. So stop the highlights before executing the command.
     controller_->tabstrip_->StopAllHighlighting();
@@ -154,7 +151,7 @@ class BrowserTabStripController::TabContextMenuContents
         tab_);
   }
 
-  virtual void MenuClosed(ui::SimpleMenuModel* /*source*/) OVERRIDE {
+  void MenuClosed(ui::SimpleMenuModel* /*source*/) override {
     if (controller_)
       controller_->tabstrip_->StopAllHighlighting();
   }
@@ -300,6 +297,11 @@ void BrowserTabStripController::CloseTab(int model_index,
                              TabStripModel::CLOSE_CREATE_HISTORICAL_TAB);
 }
 
+void BrowserTabStripController::ToggleTabAudioMute(int model_index) {
+  content::WebContents* const contents = model_->GetWebContentsAt(model_index);
+  chrome::SetTabAudioMuted(contents, !chrome::IsTabAudioMuted(contents));
+}
+
 void BrowserTabStripController::ShowContextMenuForTab(
     Tab* tab,
     const gfx::Point& p,
@@ -339,7 +341,7 @@ void BrowserTabStripController::OnDropIndexUpdate(int index,
 void BrowserTabStripController::PerformDrop(bool drop_before,
                                             int index,
                                             const GURL& url) {
-  chrome::NavigateParams params(browser_, url, content::PAGE_TRANSITION_LINK);
+  chrome::NavigateParams params(browser_, url, ui::PAGE_TRANSITION_LINK);
   params.tabstrip_index = index;
 
   if (drop_before) {

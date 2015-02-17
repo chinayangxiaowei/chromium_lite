@@ -237,7 +237,7 @@ menu.chrome-menu > menuitem[disabled] {
 }
 
 menu.chrome-menu > menuitem:not([disabled])[selected],
-menu.chrome-menu > menuitem:not([disabled])[selected]:active {
+menu.chrome-menu > menuitem:not([disabled]):active {
   background-color: rgb(66, 129, 244);
   color: white;
 }
@@ -452,10 +452,10 @@ html[dir='rtl'] .entry-name {
 }
 
 .cr-dialog-title {
-  -webkit-margin-after: 10px;
   -webkit-margin-end: 20px;
   display: block;
   font-size: 125%;
+  margin-bottom: 10px;
   white-space: nowrap;
   word-wrap: normal;
 }

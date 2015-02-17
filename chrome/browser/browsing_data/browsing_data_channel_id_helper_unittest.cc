@@ -23,13 +23,13 @@ class BrowsingDataChannelIDHelperTest
   BrowsingDataChannelIDHelperTest() : ssl_config_changed_count_(0) {
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     testing_profile_.reset(new TestingProfile());
 
     testing_profile_->GetSSLConfigService()->AddObserver(this);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     testing_profile_->GetSSLConfigService()->RemoveObserver(this);
   }
 
@@ -53,9 +53,7 @@ class BrowsingDataChannelIDHelperTest
   }
 
   // net::SSLConfigService::Observer implementation:
-  virtual void OnSSLConfigChanged() OVERRIDE {
-    ssl_config_changed_count_++;
-  }
+  void OnSSLConfigChanged() override { ssl_config_changed_count_++; }
 
  protected:
   content::TestBrowserThreadBundle thread_bundle_;
@@ -69,7 +67,8 @@ class BrowsingDataChannelIDHelperTest
 TEST_F(BrowsingDataChannelIDHelperTest, FetchData) {
   CreateChannelIDsForTest();
   scoped_refptr<BrowsingDataChannelIDHelper> helper(
-      BrowsingDataChannelIDHelper::Create(testing_profile_.get()));
+      BrowsingDataChannelIDHelper::Create(
+          testing_profile_->GetRequestContext()));
 
   helper->StartFetching(
       base::Bind(&BrowsingDataChannelIDHelperTest::FetchCallback,
@@ -99,7 +98,8 @@ TEST_F(BrowsingDataChannelIDHelperTest, FetchData) {
 TEST_F(BrowsingDataChannelIDHelperTest, DeleteChannelID) {
   CreateChannelIDsForTest();
   scoped_refptr<BrowsingDataChannelIDHelper> helper(
-      BrowsingDataChannelIDHelper::Create(testing_profile_.get()));
+      BrowsingDataChannelIDHelper::Create(
+          testing_profile_->GetRequestContext()));
 
   helper->DeleteChannelID("https://www.google.com:443");
 

@@ -6,13 +6,18 @@
 
 #include "base/basictypes.h"
 #include "base/lazy_instance.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/devtools/devtools_manager_impl.h"
-#include "content/browser/devtools/devtools_power_handler.h"
+#include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/devtools_protocol.h"
 #include "content/browser/devtools/devtools_protocol_constants.h"
-#include "content/browser/devtools/devtools_tracing_handler.h"
-#include "content/browser/devtools/renderer_overrides_handler.h"
+#include "content/browser/devtools/protocol/devtools_protocol_handler_impl.h"
+#include "content/browser/devtools/protocol/dom_handler.h"
+#include "content/browser/devtools/protocol/input_handler.h"
+#include "content/browser/devtools/protocol/network_handler.h"
+#include "content/browser/devtools/protocol/page_handler.h"
+#include "content/browser/devtools/protocol/power_handler.h"
+#include "content/browser/devtools/protocol/tracing_handler.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/site_instance_impl.h"
@@ -24,6 +29,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_widget_host_iterator.h"
+#include "content/public/browser/web_contents_delegate.h"
 
 #if defined(OS_ANDROID)
 #include "content/browser/power_save_blocker_impl.h"
@@ -72,7 +78,7 @@ bool DevToolsAgentHost::IsDebuggerAttached(WebContents* web_contents) {
 }
 
 //static
-std::vector<WebContents*> DevToolsAgentHost::GetInspectableWebContents() {
+std::vector<WebContents*> DevToolsAgentHostImpl::GetInspectableWebContents() {
   std::set<WebContents*> set;
   scoped_ptr<RenderWidgetHostIterator> widgets(
       RenderWidgetHost::GetRenderWidgetHosts());
@@ -107,27 +113,36 @@ void RenderViewDevToolsAgentHost::OnCancelPendingNavigation(
 
 RenderViewDevToolsAgentHost::RenderViewDevToolsAgentHost(RenderViewHost* rvh)
     : render_view_host_(NULL),
-      overrides_handler_(new RendererOverridesHandler()),
-      tracing_handler_(
-          new DevToolsTracingHandler(DevToolsTracingHandler::Renderer)),
-      power_handler_(new DevToolsPowerHandler()),
+      dom_handler_(new devtools::dom::DOMHandler()),
+      input_handler_(new devtools::input::InputHandler()),
+      network_handler_(new devtools::network::NetworkHandler()),
+      page_handler_(new devtools::page::PageHandler()),
+      power_handler_(new devtools::power::PowerHandler()),
+      tracing_handler_(new devtools::tracing::TracingHandler(
+          devtools::tracing::TracingHandler::Renderer)),
+      handler_impl_(new DevToolsProtocolHandlerImpl()),
       reattaching_(false) {
+  handler_impl_->SetDOMHandler(dom_handler_.get());
+  handler_impl_->SetInputHandler(input_handler_.get());
+  handler_impl_->SetNetworkHandler(network_handler_.get());
+  handler_impl_->SetPageHandler(page_handler_.get());
+  handler_impl_->SetPowerHandler(power_handler_.get());
+  handler_impl_->SetTracingHandler(tracing_handler_.get());
   SetRenderViewHost(rvh);
   DevToolsProtocol::Notifier notifier(base::Bind(
-      &RenderViewDevToolsAgentHost::OnDispatchOnInspectorFrontend,
+      &RenderViewDevToolsAgentHost::DispatchOnInspectorFrontend,
       base::Unretained(this)));
-  overrides_handler_->SetNotifier(notifier);
-  tracing_handler_->SetNotifier(notifier);
-  power_handler_->SetNotifier(notifier);
+  handler_impl_->SetNotifier(notifier);
   g_instances.Get().push_back(this);
   AddRef();  // Balanced in RenderViewHostDestroyed.
+  DevToolsManager::GetInstance()->AgentHostChanged(this);
 }
 
 WebContents* RenderViewDevToolsAgentHost::GetWebContents() {
   return web_contents();
 }
 
-void RenderViewDevToolsAgentHost::DispatchOnInspectorBackend(
+void RenderViewDevToolsAgentHost::DispatchProtocolMessage(
     const std::string& message) {
   std::string error_message;
 
@@ -136,11 +151,11 @@ void RenderViewDevToolsAgentHost::DispatchOnInspectorBackend(
   scoped_refptr<DevToolsProtocol::Command> command =
       DevToolsProtocol::ParseCommand(message_dict.get(), &error_message);
 
-  if (command) {
+  if (command.get()) {
     scoped_refptr<DevToolsProtocol::Response> overridden_response;
 
     DevToolsManagerDelegate* delegate =
-        DevToolsManagerImpl::GetInstance()->delegate();
+        DevToolsManager::GetInstance()->delegate();
     if (delegate) {
       scoped_ptr<base::DictionaryValue> overridden_response_value(
           delegate->HandleCommand(this, message_dict.get()));
@@ -148,20 +163,16 @@ void RenderViewDevToolsAgentHost::DispatchOnInspectorBackend(
         overridden_response = DevToolsProtocol::ParseResponse(
             overridden_response_value.get());
     }
-    if (!overridden_response)
-      overridden_response = overrides_handler_->HandleCommand(command);
-    if (!overridden_response)
-      overridden_response = tracing_handler_->HandleCommand(command);
-    if (!overridden_response)
-      overridden_response = power_handler_->HandleCommand(command);
-    if (overridden_response) {
+    if (!overridden_response.get())
+      overridden_response = handler_impl_->HandleCommand(command);
+    if (overridden_response.get()) {
       if (!overridden_response->is_async_promise())
-        OnDispatchOnInspectorFrontend(overridden_response->Serialize());
+        DispatchOnInspectorFrontend(overridden_response->Serialize());
       return;
     }
   }
 
-  IPCDevToolsAgentHost::DispatchOnInspectorBackend(message);
+  IPCDevToolsAgentHost::DispatchProtocolMessage(message);
 }
 
 void RenderViewDevToolsAgentHost::SendMessageToAgent(IPC::Message* msg) {
@@ -177,10 +188,10 @@ void RenderViewDevToolsAgentHost::OnClientAttached() {
 
   InnerOnClientAttached();
 
-  // TODO(kaznacheev): Move this call back to DevToolsManagerImpl when
+  // TODO(kaznacheev): Move this call back to DevToolsManager when
   // extensions::ProcessManager no longer relies on this notification.
   if (!reattaching_)
-    DevToolsManagerImpl::GetInstance()->NotifyObservers(this, true);
+    DevToolsAgentHostImpl::NotifyCallbacks(this, true);
 }
 
 void RenderViewDevToolsAgentHost::InnerOnClientAttached() {
@@ -204,15 +215,15 @@ void RenderViewDevToolsAgentHost::OnClientDetached() {
 #if defined(OS_ANDROID)
   power_save_blocker_.reset();
 #endif
-  overrides_handler_->OnClientDetached();
-  tracing_handler_->OnClientDetached();
-  power_handler_->OnClientDetached();
+  page_handler_->Detached();
+  power_handler_->Detached();
+  tracing_handler_->Detached();
   ClientDetachedFromRenderer();
 
-  // TODO(kaznacheev): Move this call back to DevToolsManagerImpl when
+  // TODO(kaznacheev): Move this call back to DevToolsManager when
   // extensions::ProcessManager no longer relies on this notification.
   if (!reattaching_)
-    DevToolsManagerImpl::GetInstance()->NotifyObservers(this, false);
+    DevToolsAgentHostImpl::NotifyCallbacks(this, false);
 }
 
 void RenderViewDevToolsAgentHost::ClientDetachedFromRenderer() {
@@ -286,8 +297,9 @@ void RenderViewDevToolsAgentHost::RenderViewDeleted(RenderViewHost* rvh) {
 
   DCHECK(render_view_host_);
   scoped_refptr<RenderViewDevToolsAgentHost> protect(this);
-  NotifyCloseListener();
+  HostClosed();
   ClearRenderViewHost();
+  DevToolsManager::GetInstance()->AgentHostChanged(this);
   Release();
 }
 
@@ -319,6 +331,8 @@ bool RenderViewDevToolsAgentHost::OnMessageReceived(
 }
 
 void RenderViewDevToolsAgentHost::DidAttachInterstitialPage() {
+  page_handler_->DidAttachInterstitialPage();
+
   if (!render_view_host_)
     return;
   // The rvh set in AboutToNavigateRenderView turned out to be interstitial.
@@ -331,12 +345,26 @@ void RenderViewDevToolsAgentHost::DidAttachInterstitialPage() {
   ConnectRenderViewHost(web_contents->GetRenderViewHost());
 }
 
+void RenderViewDevToolsAgentHost::DidDetachInterstitialPage() {
+  page_handler_->DidDetachInterstitialPage();
+}
+
+void RenderViewDevToolsAgentHost::TitleWasSet(
+    NavigationEntry* entry, bool explicit_set) {
+  DevToolsManager::GetInstance()->AgentHostChanged(this);
+}
+
+void RenderViewDevToolsAgentHost::NavigationEntryCommitted(
+    const LoadCommittedDetails& load_details) {
+  DevToolsManager::GetInstance()->AgentHostChanged(this);
+}
+
 void RenderViewDevToolsAgentHost::Observe(int type,
                                           const NotificationSource& source,
                                           const NotificationDetails& details) {
   if (type == content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED) {
     bool visible = *Details<bool>(details).ptr();
-    overrides_handler_->OnVisibilityChanged(visible);
+    page_handler_->OnVisibilityChanged(visible);
   }
 }
 
@@ -345,7 +373,10 @@ void RenderViewDevToolsAgentHost::SetRenderViewHost(RenderViewHost* rvh) {
   render_view_host_ = static_cast<RenderViewHostImpl*>(rvh);
 
   WebContentsObserver::Observe(WebContents::FromRenderViewHost(rvh));
-  overrides_handler_->SetRenderViewHost(render_view_host_);
+  dom_handler_->SetRenderViewHost(render_view_host_);
+  input_handler_->SetRenderViewHost(render_view_host_);
+  network_handler_->SetRenderViewHost(render_view_host_);
+  page_handler_->SetRenderViewHost(render_view_host_);
 
   registrar_.Add(
       this,
@@ -359,8 +390,11 @@ void RenderViewDevToolsAgentHost::ClearRenderViewHost() {
       this,
       content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED,
       content::Source<RenderWidgetHost>(render_view_host_));
-  render_view_host_ = NULL;
-  overrides_handler_->ClearRenderViewHost();
+  render_view_host_ = nullptr;
+  dom_handler_->SetRenderViewHost(nullptr);
+  input_handler_->SetRenderViewHost(nullptr);
+  network_handler_->SetRenderViewHost(nullptr);
+  page_handler_->SetRenderViewHost(nullptr);
 }
 
 void RenderViewDevToolsAgentHost::DisconnectWebContents() {
@@ -369,6 +403,39 @@ void RenderViewDevToolsAgentHost::DisconnectWebContents() {
 
 void RenderViewDevToolsAgentHost::ConnectWebContents(WebContents* wc) {
   ConnectRenderViewHost(wc->GetRenderViewHost());
+}
+
+DevToolsAgentHost::Type RenderViewDevToolsAgentHost::GetType() {
+  return TYPE_WEB_CONTENTS;
+}
+
+std::string RenderViewDevToolsAgentHost::GetTitle() {
+  if (WebContents* web_contents = GetWebContents())
+    return base::UTF16ToUTF8(web_contents->GetTitle());
+  return "";
+}
+
+GURL RenderViewDevToolsAgentHost::GetURL() {
+  if (WebContents* web_contents = GetWebContents())
+    return web_contents->GetVisibleURL();
+  return render_view_host_ ?
+      render_view_host_->GetMainFrame()->GetLastCommittedURL() : GURL();
+}
+
+bool RenderViewDevToolsAgentHost::Activate() {
+  if (render_view_host_) {
+    render_view_host_->GetDelegate()->Activate();
+    return true;
+  }
+  return false;
+}
+
+bool RenderViewDevToolsAgentHost::Close() {
+  if (render_view_host_) {
+    render_view_host_->ClosePage();
+    return true;
+  }
+  return false;
 }
 
 void RenderViewDevToolsAgentHost::ConnectRenderViewHost(RenderViewHost* rvh) {
@@ -386,8 +453,7 @@ void RenderViewDevToolsAgentHost::RenderViewCrashed() {
   scoped_refptr<DevToolsProtocol::Notification> notification =
       DevToolsProtocol::CreateNotification(
           devtools::Inspector::targetCrashed::kName, NULL);
-  DevToolsManagerImpl::GetInstance()->
-      DispatchOnInspectorFrontend(this, notification->Serialize());
+  SendMessageToClient(notification->Serialize());
 }
 
 bool RenderViewDevToolsAgentHost::DispatchIPCMessage(
@@ -403,8 +469,6 @@ bool RenderViewDevToolsAgentHost::DispatchIPCMessage(
                         OnSaveAgentRuntimeState)
     IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_SwapCompositorFrame,
                                 handled = false; OnSwapCompositorFrame(msg))
-    IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_SetTouchEventEmulationEnabled,
-                                handled = OnSetTouchEventEmulationEnabled(msg))
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -415,19 +479,14 @@ void RenderViewDevToolsAgentHost::OnSwapCompositorFrame(
   ViewHostMsg_SwapCompositorFrame::Param param;
   if (!ViewHostMsg_SwapCompositorFrame::Read(&message, &param))
     return;
-  overrides_handler_->OnSwapCompositorFrame(param.b.metadata);
-}
-
-bool RenderViewDevToolsAgentHost::OnSetTouchEventEmulationEnabled(
-    const IPC::Message& message) {
-  return overrides_handler_->OnSetTouchEventEmulationEnabled();
+  page_handler_->OnSwapCompositorFrame(param.b.metadata);
 }
 
 void RenderViewDevToolsAgentHost::SynchronousSwapCompositorFrame(
     const cc::CompositorFrameMetadata& frame_metadata) {
   if (!render_view_host_)
     return;
-  overrides_handler_->OnSwapCompositorFrame(frame_metadata);
+  page_handler_->OnSwapCompositorFrame(frame_metadata);
 }
 
 void RenderViewDevToolsAgentHost::OnSaveAgentRuntimeState(
@@ -438,18 +497,18 @@ void RenderViewDevToolsAgentHost::OnSaveAgentRuntimeState(
 }
 
 void RenderViewDevToolsAgentHost::OnDispatchOnInspectorFrontend(
-    const std::string& message) {
-  if (!render_view_host_)
+    const std::string& message,
+    uint32 total_size) {
+  if (!IsAttached() || !render_view_host_)
     return;
+  ProcessChunkedMessageFromAgent(message, total_size);
+}
 
-  scoped_refptr<DevToolsProtocol::Notification> notification =
-      DevToolsProtocol::ParseNotification(message);
-
-  if (notification) {
-    tracing_handler_->HandleNotification(notification);
-  }
-  DevToolsManagerImpl::GetInstance()->DispatchOnInspectorFrontend(
-      this, message);
+void RenderViewDevToolsAgentHost::DispatchOnInspectorFrontend(
+    const std::string& message) {
+  if (!IsAttached() || !render_view_host_)
+    return;
+  SendMessageToClient(message);
 }
 
 }  // namespace content

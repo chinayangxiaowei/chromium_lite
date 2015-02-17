@@ -20,6 +20,7 @@ namespace net {
 class GrowableIOBuffer;
 class HttpResponseHeaders;
 class UploadDataStream;
+class RedirectInfo;
 }  // namespace net
 
 namespace cronet {
@@ -62,6 +63,17 @@ class URLRequestAdapter : public net::URLRequest::Delegate {
   // Sets the request to streaming upload.
   void SetUploadChannel(JNIEnv* env, int64 content_length);
 
+  // Disables redirect. Note that redirect is enabled by default.
+  void DisableRedirects();
+
+  // Indicates that the request body will be streamed by calling AppendChunk()
+  // repeatedly. This must be called before Start().
+  void EnableChunkedUpload();
+
+  // Appends a chunk to the POST body.
+  // This must be called after EnableChunkedUpload() and Start().
+  void AppendChunk(const char* bytes, int bytes_len, bool is_last_chunk);
+
   // Starts the request.
   void Start();
 
@@ -83,6 +95,11 @@ class URLRequestAdapter : public net::URLRequest::Delegate {
     return http_status_code_;
   };
 
+  // Returns the HTTP status text of the normalized status line.
+  const std::string& http_status_text() const {
+    return http_status_text_;
+  }
+
   // Returns the value of the content-length response header.
   int64 content_length() const { return expected_size_; }
 
@@ -101,10 +118,17 @@ class URLRequestAdapter : public net::URLRequest::Delegate {
   // Returns a pointer to the downloaded data.
   unsigned char* Data() const;
 
-  virtual void OnResponseStarted(net::URLRequest* request) OVERRIDE;
+  // Get NPN or ALPN Negotiated Protocol (if any) from HttpResponseInfo.
+  std::string GetNegotiatedProtocol() const;
 
-  virtual void OnReadCompleted(net::URLRequest* request,
-                               int bytes_read) OVERRIDE;
+  // net::URLRequest::Delegate implementation:
+  void OnResponseStarted(net::URLRequest* request) override;
+  void OnReadCompleted(net::URLRequest* request, int bytes_read) override;
+  void OnReceivedRedirect(net::URLRequest* request,
+                          const net::RedirectInfo& redirect_info,
+                          bool* defer_redirect) override;
+
+  bool OnNetworkThread() const;
 
  private:
   static void OnDestroyRequest(URLRequestAdapter* self);
@@ -116,7 +140,8 @@ class URLRequestAdapter : public net::URLRequest::Delegate {
   void OnRequestCompleted();
   void OnRequestCanceled();
   void OnBytesRead(int bytes_read);
-  void OnAppendChunk(const char* bytes, int bytes_len, bool is_last_chunk);
+  void OnAppendChunk(const scoped_ptr<char[]> bytes, int bytes_len,
+                     bool is_last_chunk);
 
   void Read();
 
@@ -126,16 +151,20 @@ class URLRequestAdapter : public net::URLRequest::Delegate {
   net::RequestPriority priority_;
   std::string method_;
   net::HttpRequestHeaders headers_;
-  net::URLRequest* url_request_;
+  scoped_ptr<net::URLRequest> url_request_;
   scoped_ptr<net::UploadDataStream> upload_data_stream_;
   scoped_refptr<net::GrowableIOBuffer> read_buffer_;
   int bytes_read_;
   int total_bytes_read_;
   int error_code_;
   int http_status_code_;
+  std::string http_status_text_;
   std::string content_type_;
   bool canceled_;
   int64 expected_size_;
+  bool chunked_upload_;
+  // Indicates whether redirect has been disabled.
+  bool disable_redirect_;
 
   DISALLOW_COPY_AND_ASSIGN(URLRequestAdapter);
 };

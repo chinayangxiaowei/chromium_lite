@@ -18,7 +18,6 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_switches.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
@@ -131,12 +130,10 @@ void WebstoreInstallerTest::RunTestAsync(
   std::string script = base::StringPrintf(
       "%s('%s')", test_function_name.c_str(), test_gallery_url_.c_str());
   browser()->tab_strip_model()->GetActiveWebContents()->GetMainFrame()->
-      ExecuteJavaScript(base::UTF8ToUTF16(script));
+      ExecuteJavaScriptForTests(base::UTF8ToUTF16(script));
 }
 
 void WebstoreInstallerTest::AutoAcceptInstall() {
-  // TODO(tmdiep): Refactor and remove the use of the command line flag.
-  // See crbug.com/357774.
   ExtensionInstallPrompt::g_auto_confirm_for_tests =
       ExtensionInstallPrompt::ACCEPT;
 }

@@ -12,52 +12,9 @@
 
 namespace extension_urls {
 
-// Returns the URL prefix for the extension/apps gallery. Can be set via the
-// --apps-gallery-url switch. The URL returned will not contain a trailing
-// slash. Do not use this as a prefix/extent for the store.
-std::string GetWebstoreLaunchURL();
-
-// Returns the URL to the extensions category on the Web Store. This is
-// derived from GetWebstoreLaunchURL().
-std::string GetExtensionGalleryURL();
-
-// Returns the URL prefix for an item in the extension/app gallery. This URL
-// will contain a trailing slash and should be concatenated with an item ID
-// to get the item detail URL.
-std::string GetWebstoreItemDetailURLPrefix();
-
-// Returns the URL used to get webstore data (ratings, manifest, icon URL,
-// etc.) about an extension from the webstore as JSON.
-GURL GetWebstoreItemJsonDataURL(const std::string& extension_id);
-
-// Returns the URL used to get webstore search results in JSON format. The URL
-// returns a JSON dictionary that has the search results (under "results").
-// Each entry in the array is a dictionary as the data returned for
-// GetWebstoreItemJsonDataURL above. |query| is the user typed query string.
-// |hl| is the host language code, e.g. en_US. Both arguments will be escaped
-// and added as a query parameter to the returned web store json search URL.
-GURL GetWebstoreJsonSearchUrl(const std::string& query, const std::string& hl);
-
-// Returns the URL of the web store search results page for |query|.
-GURL GetWebstoreSearchPageUrl(const std::string& query);
-
-// Return the update URL used by gallery/webstore extensions/apps. This may
-// have been overridden by a command line flag for testing purposes.
-GURL GetWebstoreUpdateUrl();
-
-// This returns the compile-time constant webstore update url. Usually you
-// should prefer using GetWebstoreUpdateUrl.
+// This returns the compile-time constant webstore update url specific to
+// Chrome. Usually you should prefer using GetWebstoreUpdateUrl.
 GURL GetDefaultWebstoreUpdateUrl();
-
-// Returns whether the URL is the webstore update URL (just considering host
-// and path, not scheme, query, etc.)
-bool IsWebstoreUpdateUrl(const GURL& update_url);
-
-// Returns true if the URL points to an extension blacklist.
-bool IsBlacklistUpdateUrl(const GURL& url);
-// The greatest common prefixes of the main extensions gallery's browse and
-// download URLs.
-extern const char kGalleryBrowsePrefix[];
 
 // Field to use with webstore URL for tracking launch source.
 extern const char kWebstoreSourceField[];
@@ -116,8 +73,17 @@ extern const char kIdentityApiUiAppId[];
 // The extension id of the Crosh component app for ChromeOS.
 extern const char kCroshBuiltinAppId[];
 
+// The extension id of the hotword audio verification dialogue app.
+extern const char kHotwordAudioVerificationAppId[];
+
 // The extension id of the hotword voice search trigger extension.
 extern const char kHotwordExtensionId[];
+
+// The extension id of the new (experimental) hotword extension.
+extern const char kHotwordNewExtensionId[];
+
+// The extension id of the hotword shared module.
+extern const char kHotwordSharedModuleId[];
 
 // The extension id of the PDF extension.
 extern const char kPdfExtensionId[];
@@ -136,9 +102,6 @@ extern const char kSettingsAppId[];
 
 // The extension id used for testing streamsPrivate
 extern const char kStreamsPrivateTestExtensionId[];
-
-// The extension id of the Web Store component application.
-extern const char kWebStoreAppId[];
 
 // The extension id of the Youtube application.
 extern const char kYoutubeAppId[];
@@ -249,6 +212,10 @@ extern const char kChromeVoxExtensionPath[];
 extern const char kChromeVoxManifestFilename[];
 // Name of ChromeVox guest manifest file.
 extern const char kChromeVoxGuestManifestFilename[];
+// Name of ChromeVox next manifest file.
+extern const char kChromeVoxNextManifestFilename[];
+// Name of ChromeVox next guest manifest file.
+extern const char kChromeVoxNextGuestManifestFilename[];
 // Extension id, path (relative to |chrome::DIR_RESOURCES|) and IME engine
 // id for the builtin-in Braille IME extension.
 extern const char kBrailleImeExtensionId[];
@@ -266,6 +233,8 @@ extern const char kSpeechSynthesisExtensionId[];
 extern const char kWallpaperManagerId[];
 // The extension id of the first run dialog application.
 extern const char kFirstRunDialogId[];
+// The extension id of the new ZIP unpacker extension.
+extern const char kZIPUnpackerExtensionId[];
 #endif
 
 // What causes an extension to be installed? Used in histograms, so don't
@@ -296,39 +265,5 @@ extern const uint8 kWebstoreSignaturesPublicKey[];
 extern const int kWebstoreSignaturesPublicKeySize;
 
 }  // namespace extension_misc
-
-namespace extensions {
-
-// This enum is used for the launch type the user wants to use for an
-// application.
-// Do not remove items or re-order this enum as it is used in preferences
-// and histograms.
-enum LaunchType {
-  LAUNCH_TYPE_INVALID = -1,
-  LAUNCH_TYPE_FIRST = 0,
-  LAUNCH_TYPE_PINNED = LAUNCH_TYPE_FIRST,
-  LAUNCH_TYPE_REGULAR = 1,
-  LAUNCH_TYPE_FULLSCREEN = 2,
-  LAUNCH_TYPE_WINDOW = 3,
-  NUM_LAUNCH_TYPES,
-
-  // Launch an app in the in the way a click on the NTP would,
-  // if no user pref were set.  Update this constant to change
-  // the default for the NTP and chrome.management.launchApp().
-  LAUNCH_TYPE_DEFAULT = LAUNCH_TYPE_REGULAR
-};
-
-// Don't remove items or change the order of this enum.  It's used in
-// histograms and preferences.
-enum LaunchContainer {
-  LAUNCH_CONTAINER_WINDOW,
-  LAUNCH_CONTAINER_PANEL,
-  LAUNCH_CONTAINER_TAB,
-  // For platform apps, which don't actually have a container (they just get a
-  // "onLaunched" event).
-  LAUNCH_CONTAINER_NONE
-};
-
-}  // namespace extensions
 
 #endif  // CHROME_COMMON_EXTENSIONS_EXTENSION_CONSTANTS_H_

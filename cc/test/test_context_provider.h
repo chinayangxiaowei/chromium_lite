@@ -27,25 +27,25 @@ class TestContextProvider : public ContextProvider {
   static scoped_refptr<TestContextProvider> Create(
       scoped_ptr<TestWebGraphicsContext3D> context);
 
-  virtual bool BindToCurrentThread() OVERRIDE;
-  virtual Capabilities ContextCapabilities() OVERRIDE;
-  virtual gpu::gles2::GLES2Interface* ContextGL() OVERRIDE;
-  virtual gpu::ContextSupport* ContextSupport() OVERRIDE;
-  virtual class GrContext* GrContext() OVERRIDE;
-  virtual bool IsContextLost() OVERRIDE;
-  virtual void VerifyContexts() OVERRIDE;
-  virtual void DeleteCachedResources() OVERRIDE;
-  virtual bool DestroyedOnMainThread() OVERRIDE;
-  virtual void SetLostContextCallback(const LostContextCallback& cb) OVERRIDE;
-  virtual void SetMemoryPolicyChangedCallback(
-      const MemoryPolicyChangedCallback& cb) OVERRIDE;
+  bool BindToCurrentThread() override;
+  Capabilities ContextCapabilities() override;
+  gpu::gles2::GLES2Interface* ContextGL() override;
+  gpu::ContextSupport* ContextSupport() override;
+  class GrContext* GrContext() override;
+  bool IsContextLost() override;
+  void VerifyContexts() override;
+  void DeleteCachedResources() override;
+  bool DestroyedOnMainThread() override;
+  void SetLostContextCallback(const LostContextCallback& cb) override;
+  void SetMemoryPolicyChangedCallback(
+      const MemoryPolicyChangedCallback& cb) override;
 
   TestWebGraphicsContext3D* TestContext3d();
 
   // This returns the TestWebGraphicsContext3D but is valid to call
   // before the context is bound to a thread. This is needed to set up
   // state on the test context before binding. Don't call
-  // makeContextCurrent on the context returned from this method.
+  // InitializeOnCurrentThread on the context returned from this method.
   TestWebGraphicsContext3D* UnboundTestContext3d();
 
   TestContextSupport* support() { return &support_; }
@@ -56,7 +56,7 @@ class TestContextProvider : public ContextProvider {
 
  protected:
   explicit TestContextProvider(scoped_ptr<TestWebGraphicsContext3D> context);
-  virtual ~TestContextProvider();
+  ~TestContextProvider() override;
 
  private:
   void OnLostContext();

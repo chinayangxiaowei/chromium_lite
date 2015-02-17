@@ -48,9 +48,9 @@ class MockOAuthFetcher : public net::TestURLFetcher {
     SetResponseString(results);
   }
 
-  virtual ~MockOAuthFetcher() { }
+  ~MockOAuthFetcher() override {}
 
-  virtual void Start() OVERRIDE {
+  void Start() override {
     if ((GetResponseCode() != net::HTTP_OK) && (max_failure_count_ != -1) &&
         (current_failure_count_ == max_failure_count_)) {
       set_response_code(net::HTTP_OK);
@@ -87,12 +87,11 @@ class MockOAuthFetcherFactory : public net::URLFetcherFactory,
         response_code_(net::HTTP_OK),
         complete_immediately_(true) {
   }
-  virtual ~MockOAuthFetcherFactory() {}
-  virtual net::URLFetcher* CreateURLFetcher(
-      int id,
-      const GURL& url,
-      net::URLFetcher::RequestType request_type,
-      net::URLFetcherDelegate* d) OVERRIDE {
+  ~MockOAuthFetcherFactory() override {}
+  net::URLFetcher* CreateURLFetcher(int id,
+                                    const GURL& url,
+                                    net::URLFetcher::RequestType request_type,
+                                    net::URLFetcherDelegate* d) override {
     url_fetcher_ = new MockOAuthFetcher(
         response_code_,
         max_failure_count_,
@@ -172,7 +171,7 @@ namespace gaia {
 
 class GaiaOAuthClientTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     client_info_.client_id = "test_client_id";
     client_info_.client_secret = "test_client_secret";
     client_info_.redirect_uri = "test_redirect_uri";
@@ -180,11 +179,11 @@ class GaiaOAuthClientTest : public testing::Test {
 
  protected:
   net::TestURLRequestContextGetter* GetRequestContext() {
-    if (!request_context_getter_) {
+    if (!request_context_getter_.get()) {
       request_context_getter_ = new net::TestURLRequestContextGetter(
           message_loop_.message_loop_proxy());
     }
-    return request_context_getter_;
+    return request_context_getter_.get();
   }
 
   base::MessageLoop message_loop_;
@@ -214,14 +213,14 @@ class MockGaiaOAuthClientDelegate : public gaia::GaiaOAuthClient::Delegate {
   MOCK_METHOD1(OnGetUserInfoResponsePtr,
                void(const base::DictionaryValue* user_info));
   virtual void OnGetUserInfoResponse(
-      scoped_ptr<base::DictionaryValue> user_info) OVERRIDE {
+      scoped_ptr<base::DictionaryValue> user_info) override {
     user_info_.reset(user_info.release());
     OnGetUserInfoResponsePtr(user_info_.get());
   }
   MOCK_METHOD1(OnGetTokenInfoResponsePtr,
                void(const base::DictionaryValue* token_info));
   virtual void OnGetTokenInfoResponse(
-      scoped_ptr<base::DictionaryValue> token_info) OVERRIDE {
+      scoped_ptr<base::DictionaryValue> token_info) override {
     token_info_.reset(token_info.release());
     OnGetTokenInfoResponsePtr(token_info_.get());
   }

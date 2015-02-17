@@ -6,15 +6,19 @@
 
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_window.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/browser/ui/views/auto_keep_alive.h"
 #include "chrome/grit/chromium_strings.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/screen.h"
@@ -32,46 +36,26 @@
 
 namespace {
 
-// Default window size.
-const int kWindowWidth = 900;
-const int kWindowHeight = 700;
+// An open User Manager window. There can only be one open at a time. This
+// is reset to NULL when the window is closed.
+UserManagerView* instance_ = NULL;
 
-}
+} // namespace
 
-namespace chrome {
+// UserManager -----------------------------------------------------------------
 
-// Declared in browser_dialogs.h so others don't have to depend on this header.
-void ShowUserManager(const base::FilePath& profile_path_to_focus) {
-  UserManagerView::Show(
-      profile_path_to_focus, profiles::USER_MANAGER_NO_TUTORIAL);
-}
+void UserManager::Show(
+    const base::FilePath& profile_path_to_focus,
+    profiles::UserManagerTutorialMode tutorial_mode,
+    profiles::UserManagerProfileSelected profile_open_action) {
+  DCHECK(profile_path_to_focus != ProfileManager::GetGuestProfilePath());
 
-void ShowUserManagerWithTutorial(profiles::UserManagerTutorialMode tutorial) {
-  UserManagerView::Show(base::FilePath(), tutorial);
-}
-
-void HideUserManager() {
-  UserManagerView::Hide();
-}
-
-}  // namespace chrome
-
-// static
-UserManagerView* UserManagerView::instance_ = NULL;
-
-UserManagerView::UserManagerView()
-    : web_view_(NULL),
-      keep_alive_(new AutoKeepAlive(NULL)) {
-}
-
-UserManagerView::~UserManagerView() {
-}
-
-// static
-void UserManagerView::Show(const base::FilePath& profile_path_to_focus,
-                           profiles::UserManagerTutorialMode tutorial_mode) {
   ProfileMetrics::LogProfileSwitchUser(ProfileMetrics::OPEN_USER_MANAGER);
   if (instance_) {
+    // If we are showing the User Manager after locking a profile, change the
+    // active profile to Guest.
+    profiles::SetActiveProfileToGuestIfLocked();
+
     // If there's a user manager window open already, just activate it.
     instance_->GetWidget()->Activate();
     return;
@@ -82,67 +66,74 @@ void UserManagerView::Show(const base::FilePath& profile_path_to_focus,
   profiles::CreateGuestProfileForUserManager(
       profile_path_to_focus,
       tutorial_mode,
+      profile_open_action,
       base::Bind(&UserManagerView::OnGuestProfileCreated,
-                 base::Passed(make_scoped_ptr(new UserManagerView)),
-                 profile_path_to_focus));
+                 base::Passed(make_scoped_ptr(new UserManagerView))));
 }
 
-// static
-void UserManagerView::Hide() {
+void UserManager::Hide() {
   if (instance_)
     instance_->GetWidget()->Close();
 }
 
-// static
-bool UserManagerView::IsShowing() {
+bool UserManager::IsShowing() {
   return instance_ ? instance_->GetWidget()->IsActive() : false;
+}
+
+// UserManagerView -------------------------------------------------------------
+
+UserManagerView::UserManagerView()
+    : web_view_(NULL),
+      keep_alive_(new AutoKeepAlive(NULL)) {
+}
+
+UserManagerView::~UserManagerView() {
 }
 
 // static
 void UserManagerView::OnGuestProfileCreated(
     scoped_ptr<UserManagerView> instance,
-    const base::FilePath& profile_path_to_focus,
     Profile* guest_profile,
     const std::string& url) {
+  // If we are showing the User Manager after locking a profile, change the
+  // active profile to Guest.
+  profiles::SetActiveProfileToGuestIfLocked();
+
+  DCHECK(!instance_);
   instance_ = instance.release();  // |instance_| takes over ownership.
-  instance_->Init(profile_path_to_focus, guest_profile, GURL(url));
+  instance_->Init(guest_profile, GURL(url));
 }
 
-void UserManagerView::Init(
-    const base::FilePath& profile_path_to_focus,
-    Profile* guest_profile,
-    const GURL& url) {
+void UserManagerView::Init(Profile* guest_profile, const GURL& url) {
   web_view_ = new views::WebView(guest_profile);
   web_view_->set_allow_accelerators(true);
   AddChildView(web_view_);
   SetLayoutManager(new views::FillLayout);
   AddAccelerator(ui::Accelerator(ui::VKEY_W, ui::EF_CONTROL_DOWN));
+  AddAccelerator(ui::Accelerator(ui::VKEY_F4, ui::EF_ALT_DOWN));
 
   // If the user manager is being displayed from an existing profile, use
   // its last active browser to determine where the user manager should be
   // placed.  This is used so that we can center the dialog on the correct
   // monitor in a multiple-monitor setup.
   //
-  // If |profile_path_to_focus| is empty (for example, starting up chrome
+  // If the last active profile is empty (for example, starting up chrome
   // when all existing profiles are locked) or we can't find an active
   // browser, bounds will remain empty and the user manager will be centered on
   // the default monitor by default.
   gfx::Rect bounds;
-  if (!profile_path_to_focus.empty()) {
-    ProfileManager* manager = g_browser_process->profile_manager();
-    if (manager) {
-      Profile* profile = manager->GetProfileByPath(profile_path_to_focus);
-      DCHECK(profile);
-      Browser* browser = chrome::FindLastActiveWithProfile(profile,
-          chrome::GetActiveDesktop());
-      if (browser) {
-        gfx::NativeView native_view =
-            views::Widget::GetWidgetForNativeWindow(
-                browser->window()->GetNativeWindow())->GetNativeView();
-        bounds = gfx::Screen::GetScreenFor(native_view)->
-            GetDisplayNearestWindow(native_view).work_area();
-        bounds.ClampToCenteredSize(gfx::Size(kWindowWidth, kWindowHeight));
-      }
+  Profile* profile = ProfileManager::GetLastUsedProfile();
+  if (profile) {
+    Browser* browser = chrome::FindLastActiveWithProfile(profile,
+        chrome::GetActiveDesktop());
+    if (browser) {
+      gfx::NativeView native_view =
+          views::Widget::GetWidgetForNativeWindow(
+              browser->window()->GetNativeWindow())->GetNativeView();
+      bounds = gfx::Screen::GetScreenFor(native_view)->
+          GetDisplayNearestWindow(native_view).work_area();
+      bounds.ClampToCenteredSize(gfx::Size(UserManager::kWindowWidth,
+                                           UserManager::kWindowHeight));
     }
   }
 
@@ -161,21 +152,29 @@ void UserManagerView::Init(
           guest_profile->GetPath()),
       views::HWNDForWidget(GetWidget()));
 #endif
-  GetWidget()->Show();
 
   web_view_->LoadInitialURL(url);
+  content::RenderWidgetHostView* rwhv =
+      web_view_->GetWebContents()->GetRenderWidgetHostView();
+  if (rwhv)
+    rwhv->SetBackgroundColor(profiles::kUserManagerBackgroundColor);
+
   web_view_->RequestFocus();
+
+  GetWidget()->Show();
 }
 
 bool UserManagerView::AcceleratorPressed(const ui::Accelerator& accelerator) {
-  DCHECK_EQ(ui::VKEY_W, accelerator.key_code());
-  DCHECK_EQ(ui::EF_CONTROL_DOWN, accelerator.modifiers());
+  int key = accelerator.key_code();
+  int modifier = accelerator.modifiers();
+  DCHECK((key == ui::VKEY_W && modifier == ui::EF_CONTROL_DOWN) ||
+         (key == ui::VKEY_F4 && modifier == ui::EF_ALT_DOWN));
   GetWidget()->Close();
   return true;
 }
 
 gfx::Size UserManagerView::GetPreferredSize() const {
-  return gfx::Size(kWindowWidth, kWindowHeight);
+  return gfx::Size(UserManager::kWindowWidth, UserManager::kWindowHeight);
 }
 
 bool UserManagerView::CanResize() const {
@@ -183,6 +182,10 @@ bool UserManagerView::CanResize() const {
 }
 
 bool UserManagerView::CanMaximize() const {
+  return true;
+}
+
+bool UserManagerView::CanMinimize() const {
   return true;
 }
 

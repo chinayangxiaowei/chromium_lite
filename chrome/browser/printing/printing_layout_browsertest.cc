@@ -3,9 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/process/process.h"
@@ -45,18 +45,18 @@ class PrintingLayoutTest : public PrintingTest<InProcessBrowserTest>,
     emf_path_ = browser_directory.AppendASCII("metafile_dumps");
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Make sure there is no left overs.
     CleanupDumpDirectory();
     InProcessBrowserTest::SetUp();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     InProcessBrowserTest::TearDown();
     base::DeleteFile(emf_path_, true);
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitchPath(switches::kDebugPrint, emf_path_);
   }
 

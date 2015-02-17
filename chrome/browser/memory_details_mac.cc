@@ -20,9 +20,9 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/process_type.h"
-#include "grit/chromium_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using content::BrowserThread;
@@ -215,13 +215,8 @@ void MemoryDetails::CollectProcessDataChrome(
     info.process_type = content::PROCESS_TYPE_UNKNOWN;
 
   chrome::VersionInfo version_info;
-  if (version_info.is_valid()) {
-    info.product_name = base::ASCIIToUTF16(version_info.Name());
-    info.version = base::ASCIIToUTF16(version_info.Version());
-  } else {
-    info.product_name = process_data_[CHROME_BROWSER].name;
-    info.version = base::string16();
-  }
+  info.product_name = base::ASCIIToUTF16(version_info.Name());
+  info.version = base::ASCIIToUTF16(version_info.Version());
 
   // Check if this is one of the child processes whose data we collected
   // on the IO thread, and if so copy over that data.

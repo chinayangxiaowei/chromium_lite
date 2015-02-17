@@ -42,14 +42,13 @@ TEST(PSLMatchingUtilsTest, IsPublicSuffixDomainMatch) {
       {"http://www.example.com/%00", "http://www.example.com/%00", false},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(pairs); ++i) {
+  for (size_t i = 0; i < arraysize(pairs); ++i) {
     autofill::PasswordForm form1;
     form1.signon_realm = pairs[i].url1;
     autofill::PasswordForm form2;
     form2.signon_realm = pairs[i].url2;
     EXPECT_EQ(pairs[i].should_match,
-              PSLMatchingHelper::IsPublicSuffixDomainMatch(form1.signon_realm,
-                                                           form2.signon_realm))
+              IsPublicSuffixDomainMatch(form1.signon_realm, form2.signon_realm))
         << "First URL = " << pairs[i].url1
         << ", second URL = " << pairs[i].url2;
   }

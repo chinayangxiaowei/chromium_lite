@@ -23,9 +23,7 @@
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/content_settings/content_settings_provider.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/devtools/devtools_network_controller.h"
@@ -39,8 +37,13 @@
 #include "chrome/browser/net/chrome_http_user_agent_settings.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
+#include "chrome/browser/net/chrome_url_request_context_getter.h"
 #include "chrome/browser/net/cookie_store_util.h"
 #include "chrome/browser/net/proxy_service_factory.h"
+#include "chrome/browser/net/resource_prefetch_predictor_observer.h"
+#include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_configurator.h"
+#include "chrome/browser/predictors/resource_prefetch_predictor.h"
+#include "chrome/browser/predictors/resource_prefetch_predictor_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_names_io_thread.h"
@@ -48,6 +51,12 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "components/content_settings/core/browser/content_settings_provider.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config_service.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_configurator.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/startup_metric_utils/startup_metric_utils.h"
 #include "components/sync_driver/pref_names.h"
@@ -102,13 +111,14 @@
 #if defined(OS_ANDROID)
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings_factory.h"
-#include "components/data_reduction_proxy/common/data_reduction_proxy_switches.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
 #endif  // defined(OS_ANDROID)
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/drive/drive_protocol_handler.h"
+#include "chrome/browser/chromeos/fileapi/external_file_protocol_handler.h"
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/net/cert_verify_proc_chromeos.h"
+#include "chrome/browser/chromeos/net/client_cert_filter_chromeos.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/policy_cert_service.h"
 #include "chrome/browser/chromeos/policy/policy_cert_service_factory.h"
@@ -123,6 +133,7 @@
 #include "components/user_manager/user_manager.h"
 #include "crypto/nss_util.h"
 #include "crypto/nss_util_internal.h"
+#include "net/cert/cert_verifier.h"
 #include "net/cert/multi_threaded_cert_verifier.h"
 #include "net/ssl/client_cert_store_chromeos.h"
 #endif  // defined(OS_CHROMEOS)
@@ -203,7 +214,7 @@ class DebugDevToolsInterceptor : public net::URLRequestInterceptor {
   // net::URLRequestInterceptor implementation.
   virtual net::URLRequestJob* MaybeInterceptRequest(
       net::URLRequest* request,
-      net::NetworkDelegate* network_delegate) const OVERRIDE {
+      net::NetworkDelegate* network_delegate) const override {
     base::FilePath path;
     if (IsSupportedDevToolsURL(request->url(), &path))
       return new net::URLRequestFileJob(
@@ -302,7 +313,7 @@ void StartNSSInitOnIOThread(const std::string& username,
            << "  hash:" << username_hash;
 
   // Make sure NSS is initialized for the user.
-  crypto::InitializeNSSForChromeOSUser(username, username_hash, path);
+  crypto::InitializeNSSForChromeOSUser(username_hash, path);
 
   // Check if it's OK to initialize TPM for the user before continuing. This
   // may not be the case if the TPM slot initialization was previously
@@ -325,6 +336,25 @@ void StartNSSInitOnIOThread(const std::string& username,
 }
 #endif  // defined(OS_CHROMEOS)
 
+#if defined(USE_NSS)
+void InitializeAndPassKeygenHandler(
+    scoped_ptr<net::KeygenHandler> keygen_handler,
+    const base::Callback<void(scoped_ptr<net::KeygenHandler>)>& callback,
+    scoped_ptr<ChromeNSSCryptoModuleDelegate> delegate) {
+  if (delegate)
+    keygen_handler->set_crypto_module_delegate(delegate.Pass());
+  callback.Run(keygen_handler.Pass());
+}
+#endif  // defined(USE_NSS)
+
+void InvalidateContextGettersOnIO(
+    scoped_ptr<ProfileIOData::ChromeURLRequestContextGetterVector> getters) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  ProfileIOData::ChromeURLRequestContextGetterVector::iterator iter;
+  for (iter = getters->begin(); iter != getters->end(); ++iter)
+    (*iter)->Invalidate();
+}
+
 }  // namespace
 
 void ProfileIOData::InitializeOnUIThread(Profile* profile) {
@@ -346,6 +376,13 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
   params->extension_info_map =
       extensions::ExtensionSystem::Get(profile)->info_map();
 #endif
+
+  if (predictors::ResourcePrefetchPredictor* predictor =
+          predictors::ResourcePrefetchPredictorFactory::GetForProfile(
+              profile)) {
+    resource_prefetch_predictor_observer_.reset(
+        new chrome_browser_net::ResourcePrefetchPredictorObserver(predictor));
+  }
 
   ProtocolHandlerRegistry* protocol_handler_registry =
       ProtocolHandlerRegistryFactory::GetForBrowserContext(profile);
@@ -455,18 +492,16 @@ void ProfileIOData::InitializeOnUIThread(Profile* profile) {
 
   media_device_id_salt_ = new MediaDeviceIDSalt(pref_service, IsOffTheRecord());
 
-  // TODO(bnc): remove per https://crbug.com/334602.
-  network_prediction_enabled_.Init(prefs::kNetworkPredictionEnabled,
-                                   pref_service);
-  network_prediction_enabled_.MoveToThread(io_message_loop_proxy);
-
   network_prediction_options_.Init(prefs::kNetworkPredictionOptions,
                                    pref_service);
 
   network_prediction_options_.MoveToThread(io_message_loop_proxy);
 
 #if defined(OS_CHROMEOS)
-  cert_verifier_ = policy::PolicyCertServiceFactory::CreateForProfile(profile);
+  scoped_ptr<policy::PolicyCertVerifier> verifier =
+      policy::PolicyCertServiceFactory::CreateForProfile(profile);
+  policy_cert_verifier_ = verifier.get();
+  cert_verifier_ = verifier.Pass();
 #endif
   // The URLBlacklistManager has to be created on the UI thread to register
   // observers of |pref_service|, and it also has to clean up on
@@ -562,6 +597,7 @@ ProfileIOData::ProfileParams::~ProfileParams() {}
 ProfileIOData::ProfileIOData(Profile::ProfileType profile_type)
     : initialized_(false),
 #if defined(OS_CHROMEOS)
+      policy_cert_verifier_(NULL),
       use_system_key_slot_(false),
 #endif
       resource_context_(new ResourceContext(this)),
@@ -671,7 +707,7 @@ bool ProfileIOData::IsHandledProtocol(const std::string& scheme) {
     content::kChromeUIScheme,
     url::kDataScheme,
 #if defined(OS_CHROMEOS)
-    chrome::kDriveScheme,
+    content::kExternalFileScheme,
 #endif  // defined(OS_CHROMEOS)
     url::kAboutScheme,
 #if !defined(DISABLE_FTP_SUPPORT)
@@ -839,17 +875,9 @@ bool ProfileIOData::GetMetricsEnabledStateOnIOThread() const {
 #endif  // defined(OS_CHROMEOS)
 }
 
-#if defined(OS_ANDROID)
 bool ProfileIOData::IsDataReductionProxyEnabled() const {
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  return data_reduction_proxy_enabled_.GetValue() ||
-         CommandLine::ForCurrentProcess()->HasSwitch(
-            data_reduction_proxy::switches::kEnableDataReductionProxy);
-#else
   return false;
-#endif  // defined(SPDY_PROXY_AUTH_ORIGIN)
 }
-#endif
 
 base::WeakPtr<net::HttpServerProperties>
 ProfileIOData::http_server_properties() const {
@@ -888,8 +916,8 @@ ProfileIOData::ResourceContext::CreateClientCertStore() {
     return io_data_->client_cert_store_factory_.Run();
 #if defined(OS_CHROMEOS)
   return scoped_ptr<net::ClientCertStore>(new net::ClientCertStoreChromeOS(
-      io_data_->use_system_key_slot(),
-      io_data_->username_hash(),
+      make_scoped_ptr(new chromeos::ClientCertFilterChromeOS(
+          io_data_->use_system_key_slot(), io_data_->username_hash())),
       base::Bind(&CreateCryptoModuleBlockingPasswordDelegate,
                  chrome::kCryptoModulePasswordClientAuth)));
 #elif defined(USE_NSS)
@@ -920,42 +948,20 @@ void ProfileIOData::ResourceContext::CreateKeygenHandler(
   scoped_ptr<net::KeygenHandler> keygen_handler(
       new net::KeygenHandler(key_size_in_bits, challenge_string, url));
 
-  scoped_ptr<ChromeNSSCryptoModuleDelegate> delegate(
-      new ChromeNSSCryptoModuleDelegate(chrome::kCryptoModulePasswordKeygen,
-                                        net::HostPortPair::FromURL(url)));
-  ChromeNSSCryptoModuleDelegate* delegate_ptr = delegate.get();
-  keygen_handler->set_crypto_module_delegate(
-      delegate.PassAs<crypto::NSSCryptoModuleDelegate>());
+  base::Callback<void(scoped_ptr<ChromeNSSCryptoModuleDelegate>)>
+      got_delegate_callback = base::Bind(&InitializeAndPassKeygenHandler,
+                                         base::Passed(&keygen_handler),
+                                         callback);
 
-  base::Closure bound_callback =
-      base::Bind(callback, base::Passed(&keygen_handler));
-  if (delegate_ptr->InitializeSlot(this, bound_callback)) {
-    // Initialization complete, run the callback synchronously.
-    bound_callback.Run();
-    return;
-  }
-  // Otherwise, the InitializeSlot will run the callback asynchronously.
+  ChromeNSSCryptoModuleDelegate::CreateForResourceContext(
+      chrome::kCryptoModulePasswordKeygen,
+      net::HostPortPair::FromURL(url),
+      this,
+      got_delegate_callback);
 #else
   callback.Run(make_scoped_ptr(
       new net::KeygenHandler(key_size_in_bits, challenge_string, url)));
 #endif
-}
-
-bool ProfileIOData::ResourceContext::AllowMicAccess(const GURL& origin) {
-  return AllowContentAccess(origin, CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC);
-}
-
-bool ProfileIOData::ResourceContext::AllowCameraAccess(const GURL& origin) {
-  return AllowContentAccess(origin, CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA);
-}
-
-bool ProfileIOData::ResourceContext::AllowContentAccess(
-    const GURL& origin, ContentSettingsType type) {
-  HostContentSettingsMap* content_settings =
-      io_data_->GetHostContentSettingsMap();
-  ContentSetting setting = content_settings->GetContentSetting(
-      origin, origin, type, NO_RESOURCE_IDENTIFIER);
-  return setting == CONTENT_SETTING_ALLOW;
 }
 
 ResourceContext::SaltCallback
@@ -1022,10 +1028,6 @@ void ProfileIOData::Init(
   network_delegate->set_cookie_settings(profile_params_->cookie_settings.get());
   network_delegate->set_enable_do_not_track(&enable_do_not_track_);
   network_delegate->set_force_google_safe_search(&force_safesearch_);
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  network_delegate->set_data_reduction_proxy_enabled_pref(
-      &data_reduction_proxy_enabled_);
-#endif
   network_delegate->set_prerender_tracker(profile_params_->prerender_tracker);
   network_delegate_.reset(network_delegate);
 
@@ -1043,7 +1045,6 @@ void ProfileIOData::Init(
           profile_params_->proxy_config_service.release(),
           command_line,
           quick_check_enabled_.GetValue()));
-
   transport_security_state_.reset(new net::TransportSecurityState());
   transport_security_persister_.reset(
       new net::TransportSecurityPersister(
@@ -1062,6 +1063,11 @@ void ProfileIOData::Init(
   resource_context_->host_resolver_ = io_thread_globals->host_resolver.get();
   resource_context_->request_context_ = main_request_context_.get();
 
+  if (profile_params_->resource_prefetch_predictor_observer_) {
+    resource_prefetch_predictor_observer_.reset(
+        profile_params_->resource_prefetch_predictor_observer_.release());
+  }
+
 #if defined(ENABLE_MANAGED_USERS)
   supervised_user_url_filter_ = profile_params_->supervised_user_url_filter;
 #endif
@@ -1072,19 +1078,19 @@ void ProfileIOData::Init(
   if (use_system_key_slot_)
     EnableNSSSystemKeySlotForResourceContext(resource_context_.get());
 
-  scoped_refptr<net::CertVerifyProc> verify_proc;
   crypto::ScopedPK11Slot public_slot =
       crypto::GetPublicSlotForChromeOSUser(username_hash_);
   // The private slot won't be ready by this point. It shouldn't be necessary
   // for cert trust purposes anyway.
-  verify_proc = new chromeos::CertVerifyProcChromeOS(public_slot.Pass());
-  if (cert_verifier_) {
-    cert_verifier_->InitializeOnIOThread(verify_proc);
-    main_request_context_->set_cert_verifier(cert_verifier_.get());
+  scoped_refptr<net::CertVerifyProc> verify_proc(
+      new chromeos::CertVerifyProcChromeOS(public_slot.Pass()));
+  if (policy_cert_verifier_) {
+    DCHECK_EQ(policy_cert_verifier_, cert_verifier_.get());
+    policy_cert_verifier_->InitializeOnIOThread(verify_proc);
   } else {
-    main_request_context_->set_cert_verifier(
-        new net::MultiThreadedCertVerifier(verify_proc.get()));
+    cert_verifier_.reset(new net::MultiThreadedCertVerifier(verify_proc.get()));
   }
+  main_request_context_->set_cert_verifier(cert_verifier_.get());
 #else
   main_request_context_->set_cert_verifier(
       io_thread_globals->cert_verifier.get());
@@ -1141,8 +1147,8 @@ scoped_ptr<net::URLRequestJobFactory> ProfileIOData::SetUpJobFactoryDefaults(
 #if defined(OS_CHROMEOS)
   if (profile_params_) {
     set_protocol = job_factory->SetProtocolHandler(
-        chrome::kDriveScheme,
-        new drive::DriveProtocolHandler(profile_params_->profile));
+        content::kExternalFileScheme,
+        new chromeos::ExternalFileProtocolHandler(profile_params_->profile));
     DCHECK(set_protocol);
   }
 #endif  // defined(OS_CHROMEOS)
@@ -1161,8 +1167,7 @@ scoped_ptr<net::URLRequestJobFactory> ProfileIOData::SetUpJobFactoryDefaults(
 #endif
 
   // Set up interceptors in the reverse order.
-  scoped_ptr<net::URLRequestJobFactory> top_job_factory =
-      job_factory.PassAs<net::URLRequestJobFactory>();
+  scoped_ptr<net::URLRequestJobFactory> top_job_factory = job_factory.Pass();
   for (content::URLRequestInterceptorScopedVector::reverse_iterator i =
            request_interceptors.rbegin();
        i != request_interceptors.rend();
@@ -1174,13 +1179,14 @@ scoped_ptr<net::URLRequestJobFactory> ProfileIOData::SetUpJobFactoryDefaults(
 
   if (protocol_handler_interceptor) {
     protocol_handler_interceptor->Chain(top_job_factory.Pass());
-    return protocol_handler_interceptor.PassAs<net::URLRequestJobFactory>();
+    return protocol_handler_interceptor.Pass();
   } else {
     return top_job_factory.Pass();
   }
 }
 
-void ProfileIOData::ShutdownOnUIThread() {
+void ProfileIOData::ShutdownOnUIThread(
+    scoped_ptr<ChromeURLRequestContextGetterVector> context_getters) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   if (signin_names_)
@@ -1198,18 +1204,15 @@ void ProfileIOData::ShutdownOnUIThread() {
   enable_metrics_.Destroy();
 #endif
   safe_browsing_enabled_.Destroy();
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  data_reduction_proxy_enabled_.Destroy();
-#endif
   printing_enabled_.Destroy();
   sync_disabled_.Destroy();
   signin_allowed_.Destroy();
-  // TODO(bnc): remove per https://crbug.com/334602.
-  network_prediction_enabled_.Destroy();
   network_prediction_options_.Destroy();
   quick_check_enabled_.Destroy();
-  if (media_device_id_salt_)
+  if (media_device_id_salt_.get())
     media_device_id_salt_->ShutdownOnUIThread();
+  if (data_reduction_proxy_statistics_prefs_.get())
+    data_reduction_proxy_statistics_prefs_->ShutdownOnUIThread();
   session_startup_pref_.Destroy();
 #if defined(ENABLE_CONFIGURATION_POLICY)
   if (url_blacklist_manager_)
@@ -1218,6 +1221,16 @@ void ProfileIOData::ShutdownOnUIThread() {
   if (chrome_http_user_agent_settings_)
     chrome_http_user_agent_settings_->CleanupOnUIThread();
   incognito_availibility_pref_.Destroy();
+
+  if (!context_getters->empty()) {
+    if (BrowserThread::IsMessageLoopValid(BrowserThread::IO)) {
+      BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE,
+          base::Bind(&InvalidateContextGettersOnIO,
+              base::Passed(&context_getters)));
+    }
+  }
+
   bool posted = BrowserThread::DeleteSoon(BrowserThread::IO, FROM_HERE, this);
   if (!posted)
     delete this;

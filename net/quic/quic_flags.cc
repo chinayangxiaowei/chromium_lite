@@ -12,13 +12,6 @@
 // other transmissions.
 bool FLAGS_track_retransmission_history = false;
 
-// Do not remove this flag until the Finch-trials described in b/11706275
-// are complete.
-// If true, QUIC connections will support the use of a pacing algorithm when
-// sending packets, in an attempt to reduce packet loss.  The client must also
-// request pacing for the server to enable it.
-bool FLAGS_enable_quic_pacing = true;
-
 bool FLAGS_quic_allow_oversized_packets_for_test = false;
 
 // When true, the use time based loss detection instead of nack.
@@ -36,5 +29,32 @@ bool FLAGS_send_quic_crypto_reject_reason = false;
 // must also request FEC protection for the server to use FEC.
 bool FLAGS_enable_quic_fec = false;
 
-// If true, a QUIC connection with too many unfinished streams will be closed.
-bool FLAGS_close_quic_connection_unfinished_streams = false;
+// When true, defaults to BBR congestion control instead of Cubic.
+bool FLAGS_quic_use_bbr_congestion_control = false;
+
+// If true, the server will accept slightly more streams than the negotiated
+// limit.
+bool FLAGS_quic_allow_more_open_streams = false;
+
+// If true, then QUIC connections will set both idle and overall timeouts in a
+// single method.
+bool FLAGS_quic_unified_timeouts = true;
+
+// If true, QUIC will be more resilliant to junk packets with valid connection
+// IDs.
+bool FLAGS_quic_drop_junk_packets = true;
+
+// If true, QUIC BBR congestion control may be enabled via Finch and/or via QUIC
+// connection options.
+bool FLAGS_quic_allow_bbr = false;
+
+// If true, truncate QUIC connection IDs if the client requests it.
+bool FLAGS_allow_truncated_connection_ids_for_quic = false;
+
+// If true, close the connection when there are too many outstanding QUIC
+// packets in the sent or received packet managers.
+bool FLAGS_quic_too_many_outstanding_packets = false;
+
+// If true, QUIC connections will delay moving to forward security until the
+// client starts sending foward secure encrypted packets.
+bool FLAGS_enable_quic_delay_forward_security = true;

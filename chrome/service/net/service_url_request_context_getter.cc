@@ -80,9 +80,6 @@ std::string BuildOSCpuInfo() {
 std::string MakeUserAgentForServiceProcess() {
   std::string user_agent;
   chrome::VersionInfo version_info;
-  if (!version_info.is_valid()) {
-    DLOG(ERROR) << "Unable to create chrome::VersionInfo object";
-  }
   std::string extra_version_info;
   if (!version_info.IsOfficialBuild())
     extra_version_info = "-devel";
@@ -105,8 +102,8 @@ ServiceURLRequestContextGetter::ServiceURLRequestContextGetter()
   // MessageLoopProxy* instead of MessageLoop*.
   DCHECK(g_service_process);
   proxy_config_service_.reset(net::ProxyService::CreateSystemProxyConfigService(
-      g_service_process->io_thread()->message_loop_proxy().get(),
-      g_service_process->file_thread()->message_loop()));
+      g_service_process->io_thread()->message_loop_proxy(),
+      g_service_process->file_thread()->message_loop_proxy()));
 }
 
 net::URLRequestContext*

@@ -32,8 +32,14 @@ component("surfaces") {
     "//base/third_party/dynamic_annotations",
     "//cc",
     "//skia",
+    "//ui/events:events_base",
     "//ui/gfx",
     "//ui/gfx/geometry",
   ]
+
+  if (is_android && !is_debug) {
+    configs -= [ "//build/config/compiler:optimize" ]
+    configs += [ "//build/config/compiler:optimize_max" ]
+  }
 }
 

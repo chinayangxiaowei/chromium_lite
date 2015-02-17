@@ -6,8 +6,8 @@
 
 #include "base/bind_helpers.h"
 #include "base/cancelable_callback.h"
-#include "base/file_util.h"
 #include "base/files/file.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "chrome/common/chrome_utility_messages.h"
@@ -109,11 +109,11 @@ class PwgUtilityProcessHostClient : public content::UtilityProcessHostClient {
                const PWGRasterConverter::ResultCallback& callback);
 
   // UtilityProcessHostClient implementation.
-  virtual void OnProcessCrashed(int exit_code) OVERRIDE;
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  void OnProcessCrashed(int exit_code) override;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
  private:
-  virtual ~PwgUtilityProcessHostClient();
+  ~PwgUtilityProcessHostClient() override;
 
   // Message handlers.
   void OnProcessStarted();
@@ -127,7 +127,7 @@ class PwgUtilityProcessHostClient : public content::UtilityProcessHostClient {
   void RunCallbackOnUIThread(bool success);
   void OnFilesReadyOnUIThread();
 
-  scoped_ptr<FileHandlers> files_;
+  scoped_ptr<FileHandlers, BrowserThread::DeleteOnFileThread> files_;
   printing::PdfRenderSettings settings_;
   printing::PwgRasterSettings bitmap_settings_;
   PWGRasterConverter::ResultCallback callback_;
@@ -142,8 +142,6 @@ PwgUtilityProcessHostClient::PwgUtilityProcessHostClient(
     : settings_(settings), bitmap_settings_(bitmap_settings) {}
 
 PwgUtilityProcessHostClient::~PwgUtilityProcessHostClient() {
-  // Delete temp directory.
-  BrowserThread::DeleteSoon(BrowserThread::FILE, FROM_HERE, files_.release());
 }
 
 void PwgUtilityProcessHostClient::Convert(
@@ -245,12 +243,12 @@ class PWGRasterConverterImpl : public PWGRasterConverter {
  public:
   PWGRasterConverterImpl();
 
-  virtual ~PWGRasterConverterImpl();
+  ~PWGRasterConverterImpl() override;
 
-  virtual void Start(base::RefCountedMemory* data,
-                     const printing::PdfRenderSettings& conversion_settings,
-                     const printing::PwgRasterSettings& bitmap_settings,
-                     const ResultCallback& callback) OVERRIDE;
+  void Start(base::RefCountedMemory* data,
+             const printing::PdfRenderSettings& conversion_settings,
+             const printing::PwgRasterSettings& bitmap_settings,
+             const ResultCallback& callback) override;
 
  private:
   scoped_refptr<PwgUtilityProcessHostClient> utility_client_;

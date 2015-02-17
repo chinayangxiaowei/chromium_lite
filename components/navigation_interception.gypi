@@ -15,6 +15,7 @@
         '../content/content.gyp:content_browser',
         '../content/content.gyp:content_common',
         '../net/net.gyp:net',
+        '../ui/base/ui_base.gyp:ui_base',
       ],
       'include_dirs': [
         '..',
@@ -49,6 +50,7 @@
     ['OS=="android"', {
       'targets': [
         {
+          # GN version: //components/navigation_intercaption/android:navigation_interception_java
           'target_name': 'navigation_interception_java',
           'type': 'none',
           'dependencies': [

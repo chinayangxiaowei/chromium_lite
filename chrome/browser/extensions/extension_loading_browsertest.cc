@@ -32,7 +32,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionLoadingTest,
   ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
 
   TestExtensionDir extension_dir;
-  const char* manifest_template =
+  const char manifest_template[] =
       "{"
       "  \"name\": \"Overrides New Tab\","
       "  \"version\": \"%d\","
@@ -80,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionLoadingTest,
   // to crash, so open a new tab to wait long enough.
   AddTabAtIndex(browser()->tab_strip_model()->count(),
                 GURL("http://www.google.com/"),
-                content::PAGE_TRANSITION_TYPED);
+                ui::PAGE_TRANSITION_TYPED);
 
   // Check that the extension hasn't crashed.
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile());

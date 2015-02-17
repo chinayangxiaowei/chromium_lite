@@ -26,13 +26,13 @@
 #include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/webui/web_ui_util.h"
@@ -153,7 +153,7 @@ OpenTabsUIDelegate* ForeignSessionHandler::GetOpenTabsUIDelegate(
       ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile);
 
   // Only return the delegate if it exists and it is done syncing sessions.
-  if (service && service->ShouldPushChanges())
+  if (service && service->SyncActive())
     return service->GetOpenTabsUIDelegate();
 
   return NULL;
@@ -252,6 +252,10 @@ void ForeignSessionHandler::HandleGetForeignSessions(
       const std::string& session_tag = session->session_tag;
       scoped_ptr<base::DictionaryValue> session_data(
           new base::DictionaryValue());
+      // The items which are to be written into |session_data| are also
+      // described in chrome/browser/resources/ntp4/other_sessions.js in
+      // @typedef for SessionData. Please update it whenever you add or remove
+      // any keys here.
       session_data->SetString("tag", session_tag);
       session_data->SetString("name", session->session_name);
       session_data->SetString("deviceType", session->DeviceTypeAsString());
@@ -400,6 +404,9 @@ bool ForeignSessionHandler::SessionWindowToValue(
   }
   if (tab_values->GetSize() == 0)
     return false;
+  // The items which are to be written into |dictionary| are also described in
+  // chrome/browser/resources/ntp4/other_sessions.js in @typedef for WindowData.
+  // Please update it whenever you add or remove any keys here.
   dictionary->SetString("type", "window");
   dictionary->SetDouble("timestamp", modification_time.ToInternalValue());
   const base::TimeDelta last_synced = base::Time::Now() - modification_time;

@@ -36,20 +36,20 @@ const char kPrivilegedScheme[] = "privileged";
 
 class SiteInstanceTestWebUIControllerFactory : public WebUIControllerFactory {
  public:
-  virtual WebUIController* CreateWebUIControllerForURL(
-      WebUI* web_ui, const GURL& url) const OVERRIDE {
+  WebUIController* CreateWebUIControllerForURL(WebUI* web_ui,
+                                               const GURL& url) const override {
     return NULL;
   }
-  virtual WebUI::TypeID GetWebUIType(BrowserContext* browser_context,
-      const GURL& url) const OVERRIDE {
+  WebUI::TypeID GetWebUIType(BrowserContext* browser_context,
+                             const GURL& url) const override {
     return WebUI::kNoWebUI;
   }
-  virtual bool UseWebUIForURL(BrowserContext* browser_context,
-                              const GURL& url) const OVERRIDE {
+  bool UseWebUIForURL(BrowserContext* browser_context,
+                      const GURL& url) const override {
     return HasWebUIScheme(url);
   }
-  virtual bool UseWebUIBindingsForURL(BrowserContext* browser_context,
-                                      const GURL& url) const OVERRIDE {
+  bool UseWebUIBindingsForURL(BrowserContext* browser_context,
+                              const GURL& url) const override {
     return HasWebUIScheme(url);
   }
 };
@@ -61,12 +61,12 @@ class SiteInstanceTestBrowserClient : public TestContentBrowserClient {
     WebUIControllerFactory::RegisterFactory(&factory_);
   }
 
-  virtual ~SiteInstanceTestBrowserClient() {
+  ~SiteInstanceTestBrowserClient() override {
     WebUIControllerFactory::UnregisterFactoryForTesting(&factory_);
   }
 
-  virtual bool IsSuitableHost(RenderProcessHost* process_host,
-                              const GURL& site_url) OVERRIDE {
+  bool IsSuitableHost(RenderProcessHost* process_host,
+                      const GURL& site_url) override {
     return (privileged_process_id_ == process_host->GetID()) ==
         site_url.SchemeIs(kPrivilegedScheme);
   }
@@ -90,7 +90,7 @@ class SiteInstanceTest : public testing::Test {
         old_browser_client_(NULL) {
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     old_browser_client_ = SetBrowserClientForTesting(&browser_client_);
     url::AddStandardScheme(kPrivilegedScheme);
     url::AddStandardScheme(kChromeUIScheme);
@@ -98,7 +98,7 @@ class SiteInstanceTest : public testing::Test {
     SiteInstanceImpl::set_render_process_host_factory(&rph_factory_);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     // Ensure that no RenderProcessHosts are left over after the tests.
     EXPECT_TRUE(RenderProcessHost::AllHostsIterator().IsAtEnd());
 
@@ -157,9 +157,7 @@ class TestBrowsingInstance : public BrowsingInstance {
   using BrowsingInstance::UnregisterSiteInstance;
 
  private:
-  virtual ~TestBrowsingInstance() {
-    (*delete_counter_)++;
-  }
+  ~TestBrowsingInstance() override { (*delete_counter_)++; }
 
   int* delete_counter_;
 };
@@ -179,9 +177,7 @@ class TestSiteInstance : public SiteInstanceImpl {
  private:
   TestSiteInstance(BrowsingInstance* browsing_instance, int* delete_counter)
     : SiteInstanceImpl(browsing_instance), delete_counter_(delete_counter) {}
-  virtual ~TestSiteInstance() {
-    (*delete_counter_)++;
-  }
+  ~TestSiteInstance() override { (*delete_counter_)++; }
 
   int* delete_counter_;
 };
@@ -204,7 +200,7 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
   EXPECT_EQ(0, site_delete_counter);
 
   NavigationEntryImpl* e1 = new NavigationEntryImpl(
-      instance, 0, url, Referrer(), base::string16(), PAGE_TRANSITION_LINK,
+      instance, 0, url, Referrer(), base::string16(), ui::PAGE_TRANSITION_LINK,
       false);
 
   // Redundantly setting e1's SiteInstance shouldn't affect the ref count.
@@ -213,7 +209,7 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
 
   // Add a second reference
   NavigationEntryImpl* e2 = new NavigationEntryImpl(
-      instance, 0, url, Referrer(), base::string16(), PAGE_TRANSITION_LINK,
+      instance, 0, url, Referrer(), base::string16(), ui::PAGE_TRANSITION_LINK,
       false);
 
   // Now delete both entries and be sure the SiteInstance goes away.
@@ -266,7 +262,7 @@ TEST_F(SiteInstanceTest, CloneNavigationEntry) {
                                                &browsing_delete_counter);
 
   NavigationEntryImpl* e1 = new NavigationEntryImpl(
-      instance1, 0, url, Referrer(), base::string16(), PAGE_TRANSITION_LINK,
+      instance1, 0, url, Referrer(), base::string16(), ui::PAGE_TRANSITION_LINK,
       false);
   // Clone the entry
   NavigationEntryImpl* e2 = new NavigationEntryImpl(*e1);
@@ -568,10 +564,13 @@ static SiteInstanceImpl* CreateSiteInstance(BrowserContext* browser_context,
 // Test to ensure that pages that require certain privileges are grouped
 // in processes with similar pages.
 TEST_F(SiteInstanceTest, ProcessSharingByType) {
-  // This test shouldn't run with --site-per-process mode, since it doesn't
-  // allow render process reuse, which this test explicitly exercises.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSitePerProcess))
+  // This test shouldn't run with --site-per-process or
+  // --enable-strict-site-isolation modes, since they don't allow render
+  // process reuse, which this test explicitly exercises.
+  const base::CommandLine& command_line =
+      *base::CommandLine::ForCurrentProcess();
+  if (command_line.HasSwitch(switches::kSitePerProcess) ||
+      command_line.HasSwitch(switches::kEnableStrictSiteIsolation))
     return;
 
   // On Android by default the number of renderer hosts is unlimited and process

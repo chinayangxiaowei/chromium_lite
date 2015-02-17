@@ -46,12 +46,11 @@ class MaximizeDelegateView : public views::WidgetDelegateView {
   explicit MaximizeDelegateView(const gfx::Rect& initial_bounds)
       : initial_bounds_(initial_bounds) {
   }
-  virtual ~MaximizeDelegateView() {}
+  ~MaximizeDelegateView() override {}
 
-  virtual bool GetSavedWindowPlacement(
-      const views::Widget* widget,
-      gfx::Rect* bounds,
-      ui::WindowShowState* show_state) const OVERRIDE {
+  bool GetSavedWindowPlacement(const views::Widget* widget,
+                               gfx::Rect* bounds,
+                               ui::WindowShowState* show_state) const override {
     *bounds = initial_bounds_;
     *show_state = ui::SHOW_STATE_MAXIMIZED;
     return true;
@@ -70,12 +69,12 @@ class TestShellObserver : public ShellObserver {
     Shell::GetInstance()->AddShellObserver(this);
   }
 
-  virtual ~TestShellObserver() {
+  ~TestShellObserver() override {
     Shell::GetInstance()->RemoveShellObserver(this);
   }
 
-  virtual void OnFullscreenStateChanged(bool is_fullscreen,
-                                        aura::Window* root_window) OVERRIDE {
+  void OnFullscreenStateChanged(bool is_fullscreen,
+                                aura::Window* root_window) override {
     call_count_++;
     is_fullscreen_ = is_fullscreen;
   }
@@ -313,9 +312,9 @@ class DontClobberRestoreBoundsWindowObserver : public aura::WindowObserver {
 
   void set_window(aura::Window* window) { window_ = window; }
 
-  virtual void OnWindowPropertyChanged(aura::Window* window,
-                                       const void* key,
-                                       intptr_t old) OVERRIDE {
+  void OnWindowPropertyChanged(aura::Window* window,
+                               const void* key,
+                               intptr_t old) override {
     if (!window_)
       return;
 
@@ -529,7 +528,7 @@ namespace {
 class WorkspaceLayoutManagerSoloTest : public test::AshTestBase {
  public:
   WorkspaceLayoutManagerSoloTest() {}
-  virtual ~WorkspaceLayoutManagerSoloTest() {}
+  ~WorkspaceLayoutManagerSoloTest() override {}
 
   aura::Window* CreateTestWindow(const gfx::Rect& bounds) {
     return CreateTestWindowInShellWithBounds(bounds);
@@ -574,12 +573,12 @@ class FocusDelegate : public aura::test::TestWindowDelegate {
       : window_(NULL),
         show_state_(ui::SHOW_STATE_END) {
   }
-  virtual ~FocusDelegate() {}
+  ~FocusDelegate() override {}
 
   void set_window(aura::Window* window) { window_ = window; }
 
   // aura::test::TestWindowDelegate overrides:
-  virtual void OnWindowTargetVisibilityChanged(bool visible) OVERRIDE {
+  void OnWindowTargetVisibilityChanged(bool visible) override {
     if (window_) {
       if (visible)
         window_->Focus();
@@ -788,9 +787,9 @@ namespace {
 class WorkspaceLayoutManagerBackdropTest : public test::AshTestBase {
  public:
   WorkspaceLayoutManagerBackdropTest() {}
-  virtual ~WorkspaceLayoutManagerBackdropTest() {}
+  ~WorkspaceLayoutManagerBackdropTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     test::AshTestBase::SetUp();
     UpdateDisplay("800x600");
     default_container_ = Shell::GetContainer(Shell::GetPrimaryRootWindow(),
@@ -976,9 +975,9 @@ TEST_F(WorkspaceLayoutManagerBackdropTest, ShelfVisibilityChangesBounds) {
 class WorkspaceLayoutManagerKeyboardTest : public test::AshTestBase {
  public:
   WorkspaceLayoutManagerKeyboardTest() {}
-  virtual ~WorkspaceLayoutManagerKeyboardTest() {}
+  ~WorkspaceLayoutManagerKeyboardTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     test::AshTestBase::SetUp();
     UpdateDisplay("800x600");
     aura::Window* default_container = Shell::GetContainer(
@@ -992,12 +991,12 @@ class WorkspaceLayoutManagerKeyboardTest : public test::AshTestBase {
   }
 
   void ShowKeyboard() {
+    layout_manager_->OnKeyboardBoundsChanging(keyboard_bounds_);
     restore_work_area_insets_ = Shell::GetScreen()->GetPrimaryDisplay().
         GetWorkAreaInsets();
     Shell::GetInstance()->SetDisplayWorkAreaInsets(
         Shell::GetPrimaryRootWindow(),
         gfx::Insets(0, 0, keyboard_bounds_.height(), 0));
-    layout_manager_->OnKeyboardBoundsChanging(keyboard_bounds_);
   }
 
   void HideKeyboard() {
@@ -1011,6 +1010,32 @@ class WorkspaceLayoutManagerKeyboardTest : public test::AshTestBase {
     keyboard_bounds_ = bounds;
   }
 
+  void Focus(ui::TextInputClient* text_input_client) {
+    if (switches::IsTextInputFocusManagerEnabled()) {
+      ui::TextInputFocusManager::GetInstance()->FocusTextInputClient(
+          text_input_client);
+    } else {
+      aura::Window* root_window =
+          ash::Shell::GetInstance()->GetPrimaryRootWindow();
+      ui::InputMethod* input_method =
+          root_window->GetProperty(aura::client::kRootWindowInputMethodKey);
+      input_method->SetFocusedTextInputClient(text_input_client);
+    }
+  }
+
+  void Blur(ui::TextInputClient* text_input_client) {
+    if (switches::IsTextInputFocusManagerEnabled()) {
+      ui::TextInputFocusManager::GetInstance()->BlurTextInputClient(
+          text_input_client);
+    } else {
+      aura::Window* root_window =
+          ash::Shell::GetInstance()->GetPrimaryRootWindow();
+      ui::InputMethod* input_method =
+          root_window->GetProperty(aura::client::kRootWindowInputMethodKey);
+      input_method->SetFocusedTextInputClient(NULL);
+    }
+  }
+
  private:
   gfx::Insets restore_work_area_insets_;
   gfx::Rect keyboard_bounds_;
@@ -1022,17 +1047,56 @@ class WorkspaceLayoutManagerKeyboardTest : public test::AshTestBase {
 class FakeTextInputClient : public ui::DummyTextInputClient {
  public:
   explicit FakeTextInputClient(gfx::NativeWindow window) : window_(window) {}
-  virtual ~FakeTextInputClient() {}
+  ~FakeTextInputClient() override {}
 
-  virtual gfx::NativeWindow GetAttachedWindow() const OVERRIDE {
-    return window_;
-  }
+  gfx::NativeWindow GetAttachedWindow() const override { return window_; }
 
  private:
   gfx::NativeWindow window_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeTextInputClient);
 };
+
+// Tests that when a child window gains focus the top level window containing it
+// is resized to fit the remaining workspace area.
+TEST_F(WorkspaceLayoutManagerKeyboardTest, ChildWindowFocused) {
+  gfx::Rect work_area(
+      Shell::GetScreen()->GetPrimaryDisplay().work_area());
+  gfx::Rect keyboard_bounds(work_area.x(),
+                            work_area.y() + work_area.height() / 2,
+                            work_area.width(),
+                            work_area.height() / 2);
+
+  SetKeyboardBounds(keyboard_bounds);
+
+  aura::test::TestWindowDelegate delegate1;
+  scoped_ptr<aura::Window> parent_window(CreateTestWindowInShellWithDelegate(
+      &delegate1, -1, work_area));
+  aura::test::TestWindowDelegate delegate2;
+  scoped_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
+      &delegate2, -1, work_area));
+  parent_window->AddChild(window.get());
+
+  FakeTextInputClient text_input_client(window.get());
+  Focus(&text_input_client);
+
+  int available_height =
+      Shell::GetScreen()->GetPrimaryDisplay().bounds().height() -
+      keyboard_bounds.height();
+
+  gfx::Rect initial_window_bounds(50, 50, 100, 500);
+  parent_window->SetBounds(initial_window_bounds);
+  EXPECT_EQ(initial_window_bounds.ToString(),
+            parent_window->bounds().ToString());
+  ShowKeyboard();
+  EXPECT_EQ(gfx::Rect(50, 0, 100, available_height).ToString(),
+            parent_window->bounds().ToString());
+  HideKeyboard();
+  EXPECT_EQ(initial_window_bounds.ToString(),
+            parent_window->bounds().ToString());
+
+  Blur(&text_input_client);
+}
 
 TEST_F(WorkspaceLayoutManagerKeyboardTest, AdjustWindowForA11yKeyboard) {
   gfx::Rect work_area(
@@ -1043,44 +1107,51 @@ TEST_F(WorkspaceLayoutManagerKeyboardTest, AdjustWindowForA11yKeyboard) {
                             work_area.height() / 2);
 
   SetKeyboardBounds(keyboard_bounds);
-  scoped_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(work_area));
 
-  aura::Window* root_window = ash::Shell::GetInstance()->GetPrimaryRootWindow();
+  aura::test::TestWindowDelegate delegate;
+  scoped_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
+      &delegate, -1, work_area));
+
   FakeTextInputClient text_input_client(window.get());
-  ui::InputMethod* input_method =
-      root_window->GetProperty(aura::client::kRootWindowInputMethodKey);
-  if (switches::IsTextInputFocusManagerEnabled()) {
-    ui::TextInputFocusManager::GetInstance()->FocusTextInputClient(
-        &text_input_client);
-  } else {
-    input_method->SetFocusedTextInputClient(&text_input_client);
-  }
+  Focus(&text_input_client);
 
   int available_height =
       Shell::GetScreen()->GetPrimaryDisplay().bounds().height() -
       keyboard_bounds.height();
 
-  EXPECT_EQ(gfx::Rect(work_area).ToString(),
-      window->bounds().ToString());
+  EXPECT_EQ(gfx::Rect(work_area).ToString(), window->bounds().ToString());
   ShowKeyboard();
   EXPECT_EQ(gfx::Rect(work_area.origin(),
             gfx::Size(work_area.width(), available_height)).ToString(),
             window->bounds().ToString());
   HideKeyboard();
+  EXPECT_EQ(gfx::Rect(work_area).ToString(), window->bounds().ToString());
 
-  window->SetBounds(gfx::Rect(50, 50, 100, 500));
-  EXPECT_EQ("50,50 100x500", window->bounds().ToString());
+  gfx::Rect small_window_bound(50, 50, 100, 500);
+  window->SetBounds(small_window_bound);
+  EXPECT_EQ(small_window_bound.ToString(), window->bounds().ToString());
   ShowKeyboard();
   EXPECT_EQ(gfx::Rect(50, 0, 100, available_height).ToString(),
             window->bounds().ToString());
   HideKeyboard();
-  if (switches::IsTextInputFocusManagerEnabled()) {
-    ui::TextInputFocusManager::GetInstance()->BlurTextInputClient(
-        &text_input_client);
-  } else {
-    input_method->SetFocusedTextInputClient(NULL);
-  }
+  EXPECT_EQ(small_window_bound.ToString(), window->bounds().ToString());
+
+  gfx::Rect occluded_window_bounds(50,
+      keyboard_bounds.y() + keyboard_bounds.height()/2, 50,
+      keyboard_bounds.height()/2);
+  window->SetBounds(occluded_window_bounds);
+  EXPECT_EQ(occluded_window_bounds.ToString(),
+      occluded_window_bounds.ToString());
+  ShowKeyboard();
+  EXPECT_EQ(gfx::Rect(50,
+                      keyboard_bounds.y() - keyboard_bounds.height()/2,
+                      occluded_window_bounds.width(),
+                      occluded_window_bounds.height()).ToString(),
+            window->bounds().ToString());
+  HideKeyboard();
+  EXPECT_EQ(occluded_window_bounds.ToString(), window->bounds().ToString());
+
+  Blur(&text_input_client);
 }
 
 }  // namespace ash

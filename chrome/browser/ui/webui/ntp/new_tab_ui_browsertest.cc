@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -19,9 +20,34 @@
 using content::OpenURLParams;
 using content::Referrer;
 
+namespace {
+
+static bool had_console_errors = false;
+
+bool HandleMessage(int severity,
+                   const char* file,
+                   int line,
+                   size_t message_start,
+                   const std::string& str) {
+  if (severity == logging::LOG_ERROR && file && file == std::string("CONSOLE"))
+    had_console_errors = true;
+  return false;
+}
+
+}  // namespace
+
 class NewTabUIBrowserTest : public InProcessBrowserTest {
  public:
-  NewTabUIBrowserTest() {}
+  NewTabUIBrowserTest() {
+    logging::SetLogMessageHandler(&HandleMessage);
+  }
+
+  ~NewTabUIBrowserTest() override { logging::SetLogMessageHandler(NULL); }
+
+  void TearDown() override {
+    InProcessBrowserTest::TearDown();
+    ASSERT_FALSE(had_console_errors);
+  }
 };
 
 // TODO(samarth): delete along with rest of NTP4 code.
@@ -58,7 +84,7 @@ IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, DISABLED_LoadNTPInExistingProcess) {
         content::RenderProcessHostWatcher::WATCH_FOR_HOST_DESTRUCTION);
     browser()->OpenURL(OpenURLParams(
         test_server()->GetURL("files/title1.html"), Referrer(), CURRENT_TAB,
-        content::PAGE_TRANSITION_TYPED, false));
+        ui::PAGE_TRANSITION_TYPED, false));
     process_exited_observer.Wait();
   }
 
@@ -113,14 +139,20 @@ IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, DISABLED_ChromeHangInNTP) {
   chrome::NewTab(browser());
   browser()->OpenURL(OpenURLParams(
       GURL(content::kChromeUIHangURL), Referrer(), CURRENT_TAB,
-      content::PAGE_TRANSITION_TYPED, false));
+      ui::PAGE_TRANSITION_TYPED, false));
+}
+
+// Navigate to incognito NTP. Fails if there are console errors.
+IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, ShowIncognito) {
+  ui_test_utils::NavigateToURL(CreateIncognitoBrowser(),
+                               GURL(chrome::kChromeUINewTabURL));
 }
 
 class NewTabUIProcessPerTabTest : public NewTabUIBrowserTest {
  public:
    NewTabUIProcessPerTabTest() {}
 
-   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+   void SetUpCommandLine(CommandLine* command_line) override {
      command_line->AppendSwitch(switches::kProcessPerTab);
    }
 };
@@ -147,6 +179,6 @@ IN_PROC_BROWSER_TEST_F(NewTabUIProcessPerTabTest, NavBeforeNTPCommits) {
       browser()->tab_strip_model()->GetActiveWebContents());
   browser()->OpenURL(OpenURLParams(
       GURL("data:text/html,hello world"), Referrer(), CURRENT_TAB,
-      content::PAGE_TRANSITION_TYPED, false));
+      ui::PAGE_TRANSITION_TYPED, false));
   observer.Wait();
 }

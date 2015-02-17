@@ -38,17 +38,17 @@ namespace {
 class BoundsSetter : public aura::LayoutManager {
  public:
   BoundsSetter() {}
-  virtual ~BoundsSetter() {}
+  ~BoundsSetter() override {}
 
   // aura::LayoutManager overrides:
-  virtual void OnWindowResized() OVERRIDE {}
-  virtual void OnWindowAddedToLayout(aura::Window* child) OVERRIDE {}
-  virtual void OnWillRemoveWindowFromLayout(aura::Window* child) OVERRIDE {}
-  virtual void OnWindowRemovedFromLayout(aura::Window* child) OVERRIDE {}
-  virtual void OnChildWindowVisibilityChanged(
-      aura::Window* child, bool visible) OVERRIDE {}
-  virtual void SetChildBounds(
-      aura::Window* child, const gfx::Rect& requested_bounds) OVERRIDE {}
+  void OnWindowResized() override {}
+  void OnWindowAddedToLayout(aura::Window* child) override {}
+  void OnWillRemoveWindowFromLayout(aura::Window* child) override {}
+  void OnWindowRemovedFromLayout(aura::Window* child) override {}
+  void OnChildWindowVisibilityChanged(aura::Window* child,
+                                      bool visible) override {}
+  void SetChildBounds(aura::Window* child,
+                      const gfx::Rect& requested_bounds) override {}
 
   void SetBounds(aura::Window* window, const gfx::Rect& bounds) {
     SetChildBoundsDirect(window, bounds);
@@ -71,7 +71,6 @@ WMEventType WMEventTypeFromShowState(ui::WindowShowState requested_show_state) {
       return WM_EVENT_FULLSCREEN;
     case ui::SHOW_STATE_INACTIVE:
       return WM_EVENT_SHOW_INACTIVE;
-    case ui::SHOW_STATE_DETACHED:
     case ui::SHOW_STATE_END:
       NOTREACHED() << "No WMEvent defined for the show state:"
                    << requested_show_state;
@@ -102,7 +101,8 @@ WindowStateType WindowState::GetStateType() const {
 }
 
 bool WindowState::IsMinimized() const {
-  return GetStateType() == WINDOW_STATE_TYPE_MINIMIZED;
+  return GetStateType() == WINDOW_STATE_TYPE_MINIMIZED ||
+         GetStateType() == WINDOW_STATE_TYPE_DOCKED_MINIMIZED;
 }
 
 bool WindowState::IsMaximized() const {
@@ -137,24 +137,24 @@ bool WindowState::IsActive() const {
 }
 
 bool WindowState::IsDocked() const {
-  return window_->parent() &&
-         window_->parent()->id() == kShellWindowId_DockedContainer;
+  return GetStateType() == WINDOW_STATE_TYPE_DOCKED ||
+         GetStateType() == WINDOW_STATE_TYPE_DOCKED_MINIMIZED;
 }
 
 bool WindowState::CanMaximize() const {
-  return window_->GetProperty(aura::client::kCanMaximizeKey);
+  // Window must have the kCanMaximizeKey and have no maximum width or height.
+  if (!window()->GetProperty(aura::client::kCanMaximizeKey))
+    return false;
+
+  if (!window()->delegate())
+    return true;
+
+  gfx::Size max_size = window_->delegate()->GetMaximumSize();
+  return !max_size.width() && !max_size.height();
 }
 
 bool WindowState::CanMinimize() const {
-  RootWindowController* controller = RootWindowController::ForWindow(window_);
-  if (!controller)
-    return false;
-  aura::Window* lockscreen =
-      controller->GetContainer(kShellWindowId_LockScreenContainersContainer);
-  if (lockscreen->Contains(window_))
-    return false;
-
-  return true;
+  return window()->GetProperty(aura::client::kCanMinimizeKey);
 }
 
 bool WindowState::CanResize() const {
@@ -169,10 +169,10 @@ bool WindowState::CanSnap() const {
   if (!CanResize() || window_->type() == ui::wm::WINDOW_TYPE_PANEL ||
       ::wm::GetTransientParent(window_))
     return false;
-  // If a window has a maximum size defined, snapping may make it too big.
-  // TODO(oshima): We probably should snap if possible.
-  return window_->delegate() ? window_->delegate()->GetMaximumSize().IsEmpty() :
-                              true;
+  // If a window cannot be maximized, assume it cannot snap either.
+  // TODO(oshima): We should probably snap if the maximum size is greater than
+  // the snapped size.
+  return CanMaximize();
 }
 
 bool WindowState::HasRestoreBounds() const {

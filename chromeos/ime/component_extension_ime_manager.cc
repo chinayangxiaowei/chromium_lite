@@ -4,8 +4,10 @@
 
 #include "chromeos/ime/component_extension_ime_manager.h"
 
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
+#include "chromeos/chromeos_switches.h"
 #include "chromeos/ime/extension_ime_util.h"
 
 namespace chromeos {
@@ -35,12 +37,14 @@ const char* kLoginLayoutWhitelist[] = {
   "gb(extd)",
   "hr",
   "hu",
+  "ie",
   "is",
   "it",
   "jp",
   "latam",
   "lt",
   "lv(apostrophe)",
+  "mt",
   "no",
   "pl",
   "pt",
@@ -54,6 +58,27 @@ const char* kLoginLayoutWhitelist[] = {
   "us(dvorak)",
   "us(intl)"
 };
+
+// Gets the input method category according to the given input method id.
+// This is used for sorting a list of input methods.
+int GetInputMethodCategory(const std::string& id) {
+  const std::string engine_id =
+      chromeos::extension_ime_util::GetComponentIDByInputMethodID(id);
+  if (StartsWithASCII(engine_id, "xkb:", true))
+    return 0;
+  if (StartsWithASCII(engine_id, "vkd_", true))
+    return 1;
+  if (engine_id.find("-t-i0-") != std::string::npos &&
+      !StartsWithASCII(engine_id, "zh-", true)) {
+    return 2;
+  }
+  return 3;
+}
+
+bool InputMethodCompare(const input_method::InputMethodDescriptor& im1,
+                        const input_method::InputMethodDescriptor& im2) {
+  return GetInputMethodCategory(im1.id()) < GetInputMethodCategory(im2.id());
+}
 
 } // namespace
 
@@ -105,20 +130,23 @@ void ComponentExtensionIMEManager::Initialize(
 }
 
 bool ComponentExtensionIMEManager::LoadComponentExtensionIME(
+    Profile* profile,
     const std::string& input_method_id) {
   ComponentExtensionIME ime;
-  if (FindEngineEntry(input_method_id, &ime))
-    return delegate_->Load(ime.id, ime.manifest, ime.path);
-  else
-    return false;
+  if (FindEngineEntry(input_method_id, &ime)) {
+    delegate_->Load(profile, ime.id, ime.manifest, ime.path);
+    return true;
+  }
+  return false;
 }
 
 bool ComponentExtensionIMEManager::UnloadComponentExtensionIME(
+    Profile* profile,
     const std::string& input_method_id) {
   ComponentExtensionIME ime;
   if (!FindEngineEntry(input_method_id, &ime))
     return false;
-  delegate_->Unload(ime.id, ime.path);
+  delegate_->Unload(profile, ime.id, ime.path);
   return true;
 }
 
@@ -136,6 +164,8 @@ bool ComponentExtensionIMEManager::IsWhitelistedExtension(
 
 input_method::InputMethodDescriptors
     ComponentExtensionIMEManager::GetAllIMEAsInputMethodDescriptor() {
+  bool enable_new_korean_ime = CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableNewKoreanIme);
   input_method::InputMethodDescriptors result;
   for (std::map<std::string, ComponentExtensionIME>::const_iterator it =
           component_extension_imes_.begin();
@@ -143,6 +173,9 @@ input_method::InputMethodDescriptors
     const ComponentExtensionIME& ext = it->second;
     for (size_t j = 0; j < ext.engines.size(); ++j) {
       const ComponentExtensionEngine& ime = ext.engines[j];
+      // Filter out new Korean IME if the experimental flag is OFF.
+      if (!enable_new_korean_ime && ime.engine_id == "ko-t-i0-und")
+        continue;
       const std::string input_method_id =
           extension_ime_util::GetComponentInputMethodID(
               ext.id, ime.engine_id);
@@ -151,7 +184,7 @@ input_method::InputMethodDescriptors
           input_method::InputMethodDescriptor(
               input_method_id,
               ime.display_name,
-              std::string(), // TODO(uekawa): Set short name.
+              ime.indicator,
               layouts,
               ime.language_codes,
               // Enables extension based xkb keyboards on login screen.
@@ -161,6 +194,7 @@ input_method::InputMethodDescriptors
               ime.input_view_url));
     }
   }
+  std::stable_sort(result.begin(), result.end(), InputMethodCompare);
   return result;
 }
 

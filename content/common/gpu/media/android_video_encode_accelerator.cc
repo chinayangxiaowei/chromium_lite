@@ -4,6 +4,8 @@
 
 #include "content/common/gpu/media/android_video_encode_accelerator.h"
 
+#include <set>
+
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
@@ -26,8 +28,9 @@ using media::VideoFrame;
 
 namespace content {
 
-enum {
+enum PixelFormat {
   // Subset of MediaCodecInfo.CodecCapabilities.
+  COLOR_FORMAT_YUV420_PLANAR = 19,
   COLOR_FORMAT_YUV420_SEMIPLANAR = 21,
 };
 
@@ -67,6 +70,19 @@ static inline const base::TimeDelta NoWaitTimeOut() {
   return base::TimeDelta::FromMicroseconds(0);
 }
 
+static bool GetSupportedColorFormatForMime(const std::string& mime,
+                                           PixelFormat* pixel_format) {
+  std::set<int> formats = MediaCodecBridge::GetEncoderColorFormats(mime);
+  if (formats.count(COLOR_FORMAT_YUV420_SEMIPLANAR) > 0)
+    *pixel_format = COLOR_FORMAT_YUV420_SEMIPLANAR;
+  else if (formats.count(COLOR_FORMAT_YUV420_PLANAR) > 0)
+    *pixel_format = COLOR_FORMAT_YUV420_PLANAR;
+  else
+    return false;
+
+  return true;
+}
+
 AndroidVideoEncodeAccelerator::AndroidVideoEncodeAccelerator()
     : num_buffers_at_codec_(0),
       num_output_buffers_(-1),
@@ -77,7 +93,6 @@ AndroidVideoEncodeAccelerator::~AndroidVideoEncodeAccelerator() {
   DCHECK(thread_checker_.CalledOnValidThread());
 }
 
-// static
 std::vector<media::VideoEncodeAccelerator::SupportedProfile>
 AndroidVideoEncodeAccelerator::GetSupportedProfiles() {
   std::vector<MediaCodecBridge::CodecsInfo> codecs_info =
@@ -105,8 +120,8 @@ AndroidVideoEncodeAccelerator::GetSupportedProfiles() {
     // encoder?  Sure would be.  Too bad it doesn't.  So we hard-code some
     // reasonable defaults.
     profile.max_resolution.SetSize(1920, 1088);
-    profile.max_framerate.numerator = 30;
-    profile.max_framerate.denominator = 1;
+    profile.max_framerate_numerator = 30;
+    profile.max_framerate_denominator = 1;
     profiles.push_back(profile);
   }
   return profiles;
@@ -143,17 +158,17 @@ bool AndroidVideoEncodeAccelerator::Initialize(
     return false;
   }
 
-  // TODO(fischman): when there is more HW out there with different color-space
-  // support, this should turn into a negotiation with the codec for supported
-  // formats.  For now we use the only format supported by the only available
-  // HW.
-  media_codec_.reset(
-      media::VideoCodecBridge::CreateEncoder(media::kCodecVP8,
-                                             input_visible_size,
-                                             initial_bitrate,
-                                             INITIAL_FRAMERATE,
-                                             IFRAME_INTERVAL,
-                                             COLOR_FORMAT_YUV420_SEMIPLANAR));
+  PixelFormat pixel_format = COLOR_FORMAT_YUV420_SEMIPLANAR;
+  if (!GetSupportedColorFormatForMime("video/x-vnd.on2.vp8", &pixel_format)) {
+    DLOG(ERROR) << "No color format support.";
+    return false;
+  }
+  media_codec_.reset(media::VideoCodecBridge::CreateEncoder(media::kCodecVP8,
+                                                            input_visible_size,
+                                                            initial_bitrate,
+                                                            INITIAL_FRAMERATE,
+                                                            IFRAME_INTERVAL,
+                                                            pixel_format));
 
   if (!media_codec_) {
     DLOG(ERROR) << "Failed to create/start the codec: "

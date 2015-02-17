@@ -28,12 +28,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_controller_factory.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/devtools_agent_host.h"
-#include "content/public/browser/devtools_client_host.h"
 #include "content/public/browser/devtools_http_handler.h"
-#include "content/public/browser/devtools_manager.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_process_host.h"
@@ -46,20 +45,16 @@
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using content::DevToolsAgentHost;
-using content::DevToolsClientHost;
 using content::DevToolsHttpHandler;
-using content::DevToolsManager;
 using content::RenderProcessHost;
 using content::RenderViewHost;
 using content::RenderWidgetHost;
@@ -77,7 +72,7 @@ class ExtensionRegistry;
 
 // ExtensionDevToolsClientHost ------------------------------------------------
 
-class ExtensionDevToolsClientHost : public DevToolsClientHost,
+class ExtensionDevToolsClientHost : public content::DevToolsAgentHostClient,
                                     public content::NotificationObserver,
                                     public ExtensionRegistryObserver {
  public:
@@ -88,9 +83,10 @@ class ExtensionDevToolsClientHost : public DevToolsClientHost,
                               const Debuggee& debuggee,
                               infobars::InfoBar* infobar);
 
-  virtual ~ExtensionDevToolsClientHost();
+  ~ExtensionDevToolsClientHost() override;
 
   const std::string& extension_id() { return extension_id_; }
+  DevToolsAgentHost* agent_host() { return agent_host_.get(); }
   void Close();
   void SendMessageToBackend(DebuggerSendCommandFunction* function,
                             const std::string& method,
@@ -99,24 +95,24 @@ class ExtensionDevToolsClientHost : public DevToolsClientHost,
   // Marks connection as to-be-terminated by the user.
   void MarkAsDismissed();
 
-  // DevToolsClientHost interface
-  virtual void InspectedContentsClosing() OVERRIDE;
-  virtual void DispatchOnInspectorFrontend(const std::string& message) OVERRIDE;
-  virtual void ReplacedWithAnotherClient() OVERRIDE;
+  // DevToolsAgentHostClient interface.
+  void AgentHostClosed(DevToolsAgentHost* agent_host,
+                       bool replaced_with_another_client) override;
+  void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
+                               const std::string& message) override;
 
  private:
   void SendDetachedEvent();
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // ExtensionRegistryObserver implementation.
-  virtual void OnExtensionUnloaded(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      UnloadedExtensionInfo::Reason reason) OVERRIDE;
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionInfo::Reason reason) override;
 
   Profile* profile_;
   scoped_refptr<DevToolsAgentHost> agent_host_;
@@ -171,16 +167,15 @@ class ExtensionDevToolsInfoBarDelegate : public ConfirmInfoBarDelegate {
 
  private:
   explicit ExtensionDevToolsInfoBarDelegate(const std::string& client_name);
-  virtual ~ExtensionDevToolsInfoBarDelegate();
+  ~ExtensionDevToolsInfoBarDelegate() override;
 
   // ConfirmInfoBarDelegate:
-  virtual void InfoBarDismissed() OVERRIDE;
-  virtual Type GetInfoBarType() const OVERRIDE;
-  virtual bool ShouldExpireInternal(
-      const NavigationDetails& details) const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual int GetButtons() const OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
+  void InfoBarDismissed() override;
+  Type GetInfoBarType() const override;
+  bool ShouldExpireInternal(const NavigationDetails& details) const override;
+  base::string16 GetMessageText() const override;
+  int GetButtons() const override;
+  bool Cancel() override;
 
   std::string client_name_;
   ExtensionDevToolsClientHost* client_host_;
@@ -289,11 +284,10 @@ void AttachedClientHosts::Remove(ExtensionDevToolsClientHost* client_host) {
 ExtensionDevToolsClientHost* AttachedClientHosts::Lookup(
     DevToolsAgentHost* agent_host,
     const std::string& extension_id) {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
   for (ClientHosts::iterator it = client_hosts_.begin();
        it != client_hosts_.end(); ++it) {
     ExtensionDevToolsClientHost* client_host = *it;
-    if (manager->GetDevToolsAgentHostFor(client_host) == agent_host &&
+    if (client_host->agent_host() == agent_host &&
         client_host->extension_id() == extension_id)
       return client_host;
   }
@@ -334,8 +328,7 @@ ExtensionDevToolsClientHost::ExtensionDevToolsClientHost(
                  content::NotificationService::AllSources());
 
   // Attach to debugger and tell it we are ready.
-  DevToolsManager::GetInstance()->RegisterDevToolsClientHostFor(
-      agent_host_.get(), this);
+  agent_host_->AttachClient(this);
 
   if (infobar_) {
     static_cast<ExtensionDevToolsInfoBarDelegate*>(
@@ -363,18 +356,18 @@ ExtensionDevToolsClientHost::~ExtensionDevToolsClientHost() {
   AttachedClientHosts::GetInstance()->Remove(this);
 }
 
-// DevToolsClientHost interface
-void ExtensionDevToolsClientHost::InspectedContentsClosing() {
+// DevToolsAgentHostClient implementation.
+void ExtensionDevToolsClientHost::AgentHostClosed(
+    DevToolsAgentHost* agent_host, bool replaced_with_another_client) {
+  DCHECK(agent_host == agent_host_.get());
+  if (replaced_with_another_client)
+    detach_reason_ = OnDetach::REASON_REPLACED_WITH_DEVTOOLS;
   SendDetachedEvent();
   delete this;
 }
 
-void ExtensionDevToolsClientHost::ReplacedWithAnotherClient() {
-  detach_reason_ = OnDetach::REASON_REPLACED_WITH_DEVTOOLS;
-}
-
 void ExtensionDevToolsClientHost::Close() {
-  DevToolsManager::GetInstance()->ClientHostClosing(this);
+  agent_host_->DetachClient();
   delete this;
 }
 
@@ -394,7 +387,7 @@ void ExtensionDevToolsClientHost::SendMessageToBackend(
 
   std::string json_args;
   base::JSONWriter::Write(&protocol_request, &json_args);
-  DevToolsManager::GetInstance()->DispatchOnInspectorBackend(this, json_args);
+  agent_host_->DispatchProtocolMessage(json_args);
 }
 
 void ExtensionDevToolsClientHost::MarkAsDismissed() {
@@ -442,8 +435,9 @@ void ExtensionDevToolsClientHost::Observe(
   }
 }
 
-void ExtensionDevToolsClientHost::DispatchOnInspectorFrontend(
-    const std::string& message) {
+void ExtensionDevToolsClientHost::DispatchProtocolMessage(
+    DevToolsAgentHost* agent_host, const std::string& message) {
+  DCHECK(agent_host == agent_host_.get());
   if (!EventRouter::Get(profile_))
     return;
 
@@ -521,8 +515,7 @@ bool DebuggerFunction::InitAgentHost() {
     }
   } else if (debuggee_.extension_id) {
     ExtensionHost* extension_host =
-        ExtensionSystem::Get(GetProfile())
-            ->process_manager()
+        ProcessManager::Get(GetProfile())
             ->GetBackgroundHostForExtension(*debuggee_.extension_id);
     if (extension_host) {
       if (PermissionsData::IsRestrictedUrl(extension_host->GetURL(),

@@ -31,7 +31,6 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
@@ -51,11 +50,10 @@ class OriginChipExtensionIcon : public extensions::IconImage::Observer {
   OriginChipExtensionIcon(LocationIconView* icon_view,
                           Profile* profile,
                           const extensions::Extension* extension);
-  virtual ~OriginChipExtensionIcon();
+  ~OriginChipExtensionIcon() override;
 
   // IconImage::Observer:
-  virtual void OnExtensionIconImageChanged(
-      extensions::IconImage* image) OVERRIDE;
+  void OnExtensionIconImageChanged(extensions::IconImage* image) override;
 
  private:
   LocationIconView* icon_view_;
@@ -151,7 +149,7 @@ OriginChipView::OriginChipView(LocationBarView* location_bar_view,
   scoped_refptr<SafeBrowsingService> sb_service =
       g_browser_process->safe_browsing_service();
   // |sb_service| may be NULL in tests.
-  if (sb_service && sb_service->ui_manager())
+  if (sb_service.get() && sb_service->ui_manager().get())
     sb_service->ui_manager()->AddObserver(this);
 
   SetFontList(font_list);
@@ -183,7 +181,7 @@ OriginChipView::OriginChipView(LocationBarView* location_bar_view,
 OriginChipView::~OriginChipView() {
   scoped_refptr<SafeBrowsingService> sb_service =
       g_browser_process->safe_browsing_service();
-  if (sb_service.get() && sb_service->ui_manager())
+  if (sb_service.get() && sb_service->ui_manager().get())
     sb_service->ui_manager()->RemoveObserver(this);
 }
 
@@ -348,7 +346,7 @@ void OriginChipView::SetBorderImages(const int images[3][9]) {
   pressed_text_color_ = host_label_->enabled_color();
   host_label_->SetBackgroundColor(background_colors_[state()]);
 
-  SetBorder(border.PassAs<views::Border>());
+  SetBorder(border.Pass());
 }
 
 void OriginChipView::AnimationProgressed(const gfx::Animation* animation) {

@@ -11,7 +11,7 @@
 #include "chrome/browser/chromeos/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/chromeos/file_system_provider/provided_file_system_interface.h"
 #include "chrome/browser/chromeos/file_system_provider/request_value.h"
-#include "webkit/browser/fileapi/async_file_util.h"
+#include "storage/browser/fileapi/async_file_util.h"
 
 namespace base {
 class FilePath;
@@ -26,28 +26,28 @@ namespace file_system_provider {
 namespace operations {
 
 // Opens a file for either read or write, with optionally creating the file
-// first. Note, that this is part of fileapi::CreateOrOpen file, but it does
+// first. Note, that this is part of storage::CreateOrOpen file, but it does
 // not download the file locally. Created per request.
 class CloseFile : public Operation {
  public:
   CloseFile(extensions::EventRouter* event_router,
             const ProvidedFileSystemInfo& file_system_info,
             int open_request_id,
-            const fileapi::AsyncFileUtil::StatusCallback& callback);
+            const storage::AsyncFileUtil::StatusCallback& callback);
   virtual ~CloseFile();
 
   // Operation overrides.
-  virtual bool Execute(int request_id) OVERRIDE;
+  virtual bool Execute(int request_id) override;
   virtual void OnSuccess(int request_id,
                          scoped_ptr<RequestValue> result,
-                         bool has_more) OVERRIDE;
+                         bool has_more) override;
   virtual void OnError(int request_id,
                        scoped_ptr<RequestValue> result,
-                       base::File::Error error) OVERRIDE;
+                       base::File::Error error) override;
 
  private:
   int open_request_id_;
-  const fileapi::AsyncFileUtil::StatusCallback callback_;
+  const storage::AsyncFileUtil::StatusCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(CloseFile);
 };

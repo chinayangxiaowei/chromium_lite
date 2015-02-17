@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stl_util.h"
@@ -3836,11 +3836,11 @@ class OnDiskDirectoryBackingStoreForTest : public OnDiskDirectoryBackingStore {
  public:
   OnDiskDirectoryBackingStoreForTest(const std::string& dir_name,
                                      const base::FilePath& backing_filepath);
-  virtual ~OnDiskDirectoryBackingStoreForTest();
+  ~OnDiskDirectoryBackingStoreForTest() override;
   bool DidFailFirstOpenAttempt();
 
  protected:
-  virtual void ReportFirstTryOpenFailure() OVERRIDE;
+  void ReportFirstTryOpenFailure() override;
 
  private:
   bool first_open_failed_;

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/safe_browsing/safe_browsing_store_file.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/md5.h"
 #include "base/metrics/histogram.h"
@@ -618,10 +618,8 @@ bool SafeBrowsingStoreFile::CheckValidity() {
   return true;
 }
 
-void SafeBrowsingStoreFile::Init(
-    const base::FilePath& filename,
-    const base::Closure& corruption_callback
-) {
+void SafeBrowsingStoreFile::Init(const base::FilePath& filename,
+                                 const base::Closure& corruption_callback) {
   filename_ = filename;
   corruption_callback_ = corruption_callback;
 }

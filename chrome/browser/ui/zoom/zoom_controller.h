@@ -66,9 +66,18 @@ class ZoomController : public content::WebContentsObserver,
     bool can_show_bubble;
   };
 
-  virtual ~ZoomController();
+  ~ZoomController() override;
 
   ZoomMode zoom_mode() const { return zoom_mode_; }
+
+  // Convenience method to get default zoom level. Implemented here for
+  // inlining.
+  double GetDefaultZoomLevel() const {
+    // TODO(wjmaclean) Make this refer to the webcontents-specific HostZoomMap
+    // when that becomes available.
+    return content::HostZoomMap::GetDefaultForBrowserContext(browser_context_)->
+        GetDefaultZoomLevel();
+  }
 
   // Convenience method to quickly check if the tab's at default zoom.
   bool IsAtDefaultZoom() const;
@@ -112,10 +121,10 @@ class ZoomController : public content::WebContentsObserver,
   void SetZoomMode(ZoomMode zoom_mode);
 
   // content::WebContentsObserver overrides:
-  virtual void DidNavigateMainFrame(
+  void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) OVERRIDE;
-  virtual void WebContentsDestroyed() OVERRIDE;
+      const content::FrameNavigateParams& params) override;
+  void WebContentsDestroyed() override;
 
  protected:
   // Protected for testing.
@@ -141,9 +150,6 @@ class ZoomController : public content::WebContentsObserver,
 
   // Current zoom level.
   double zoom_level_;
-
-  // Used to access the default zoom level preference.
-  DoublePrefMember default_zoom_level_;
 
   scoped_ptr<ZoomChangedEventData> event_data_;
 

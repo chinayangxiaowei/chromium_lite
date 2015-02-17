@@ -49,6 +49,7 @@ class WaitableEvent;
 namespace net {
 class HostResolver;
 class SSLConfigService;
+class ProxyService;
 class TransportSecurityState;
 class URLRequestContextGetter;
 }
@@ -318,6 +319,10 @@ class Predictor {
   FRIEND_TEST_ALL_PREFIXES(PredictorTest, SingleLookupTestWithDisabledAdvisor);
   FRIEND_TEST_ALL_PREFIXES(PredictorTest, SingleLookupTestWithEnabledAdvisor);
   FRIEND_TEST_ALL_PREFIXES(PredictorTest, TestSimplePreconnectAdvisor);
+  FRIEND_TEST_ALL_PREFIXES(PredictorTest, NoProxyService);
+  FRIEND_TEST_ALL_PREFIXES(PredictorTest, ProxyDefinitelyEnabled);
+  FRIEND_TEST_ALL_PREFIXES(PredictorTest, ProxyDefinitelyNotEnabled);
+  FRIEND_TEST_ALL_PREFIXES(PredictorTest, ProxyMaybeEnabled);
   friend class WaitForResolutionHelper;  // For testing.
 
   class LookupRequest;
@@ -501,6 +506,13 @@ class Predictor {
                              UrlInfo::ResolutionMotivation motivation,
                              bool is_preconnect);
 
+  // If we can determine immediately (i.e. synchronously) that requests to this
+  // URL would likely go through a proxy, then return true.  Otherwise, return
+  // false. This is used to avoid issuing DNS requests when a fixed proxy
+  // configuration is in place, which improves efficiency, and is also important
+  // if the unproxied DNS may contain incorrect entries.
+  bool WouldLikelyProxyURL(const GURL& url);
+
   // Applies the HSTS redirect for |url|, if any.
   GURL GetHSTSRedirectOnIOThread(const GURL& url);
 
@@ -517,11 +529,11 @@ class Predictor {
   const bool predictor_enabled_;
 
   // This is set by InitNetworkPredictor and used for calling
-  // chrome_browser_net::CanPredictNetworkActionsUI.
+  // CanPrefetchAndPrerenderUI and CanPreresolveAndPreconnectUI.
   PrefService* user_prefs_;
 
   // This is set by InitNetworkPredictor and used for calling
-  // chrome_browser_net::CanPredictNetworkActionsIO.
+  // CanPrefetchAndPrerenderIO and CanPreresolveAndPreconnectIO.
   ProfileIOData* profile_io_data_;
 
   // work_queue_ holds a list of names we need to look up.
@@ -558,6 +570,9 @@ class Predictor {
   // redirects).
   net::SSLConfigService* ssl_config_service_;
 
+  // The ProxyService, used to determine whether preresolve is useful.
+  net::ProxyService* proxy_service_;
+
   // Are we currently using preconnection, rather than just DNS resolution, for
   // subresources and omni-box search URLs.
   // This is false if and only if disabled by a command line switch.
@@ -589,12 +604,12 @@ class Predictor {
   // A time after which we need to do more trimming of referrers.
   base::TimeTicks next_trim_time_;
 
-  scoped_ptr<base::WeakPtrFactory<Predictor> > weak_factory_;
-
   scoped_ptr<ProxyAdvisor> proxy_advisor_;
 
   // An observer for testing.
   PredictorObserver* observer_;
+
+  scoped_ptr<base::WeakPtrFactory<Predictor> > weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(Predictor);
 };
@@ -604,18 +619,18 @@ class SimplePredictor : public Predictor {
  public:
   explicit SimplePredictor(bool preconnect_enabled, bool predictor_enabled)
       : Predictor(preconnect_enabled, predictor_enabled) {}
-  virtual ~SimplePredictor() {}
-  virtual void InitNetworkPredictor(
-      PrefService* user_prefs,
-      PrefService* local_state,
-      IOThread* io_thread,
-      net::URLRequestContextGetter* getter,
-      ProfileIOData* profile_io_data) OVERRIDE;
-  virtual void ShutdownOnUIThread() OVERRIDE;
+  ~SimplePredictor() override {}
+  void InitNetworkPredictor(PrefService* user_prefs,
+                            PrefService* local_state,
+                            IOThread* io_thread,
+                            net::URLRequestContextGetter* getter,
+                            ProfileIOData* profile_io_data) override;
+  void ShutdownOnUIThread() override;
+
  private:
   // These member functions return True for unittests.
-  virtual bool CanPrefetchAndPrerender() const OVERRIDE;
-  virtual bool CanPreresolveAndPreconnect() const OVERRIDE;
+  bool CanPrefetchAndPrerender() const override;
+  bool CanPreresolveAndPreconnect() const override;
 };
 
 }  // namespace chrome_browser_net

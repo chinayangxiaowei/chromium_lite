@@ -15,6 +15,7 @@
 #include "base/message_loop/message_loop.h"
 #include "base/strings/stringize_macros.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/time/time.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
@@ -57,7 +58,9 @@ static void CreateShader(GLuint program,
 
 namespace content {
 
-RenderingHelperParams::RenderingHelperParams() {}
+RenderingHelperParams::RenderingHelperParams()
+    : rendering_fps(0), warm_up_iterations(0), render_as_thumbnails(false) {
+}
 
 RenderingHelperParams::~RenderingHelperParams() {}
 
@@ -74,7 +77,8 @@ VideoFrameTexture::~VideoFrameTexture() {
   base::ResetAndReturn(&no_longer_needed_cb_).Run();
 }
 
-RenderingHelper::RenderedVideo::RenderedVideo() : last_frame_rendered(false) {
+RenderingHelper::RenderedVideo::RenderedVideo()
+    : is_flushing(false), frames_to_drop(0) {
 }
 
 RenderingHelper::RenderedVideo::~RenderedVideo() {
@@ -111,6 +115,9 @@ void RenderingHelper::Initialize(const RenderingHelperParams& params,
     UnInitialize(&done);
     done.Wait();
   }
+
+  render_task_.Reset(
+      base::Bind(&RenderingHelper::RenderContent, base::Unretained(this)));
 
   frame_duration_ = params.rendering_fps > 0
                         ? base::TimeDelta::FromSeconds(1) / params.rendering_fps
@@ -170,8 +177,8 @@ void RenderingHelper::Initialize(const RenderingHelperParams& params,
 
   gl_surface_ = gfx::GLSurface::CreateViewGLSurface(window_);
   gl_context_ = gfx::GLContext::CreateGLContext(
-      NULL, gl_surface_, gfx::PreferIntegratedGpu);
-  gl_context_->MakeCurrent(gl_surface_);
+      NULL, gl_surface_.get(), gfx::PreferIntegratedGpu);
+  gl_context_->MakeCurrent(gl_surface_.get());
 
   CHECK_GT(params.window_sizes.size(), 0U);
   videos_.resize(params.window_sizes.size());
@@ -297,26 +304,51 @@ void RenderingHelper::Initialize(const RenderingHelperParams& params,
   glEnableVertexAttribArray(tc_location);
   glVertexAttribPointer(tc_location, 2, GL_FLOAT, GL_FALSE, 0, kTextureCoords);
 
-  if (frame_duration_ != base::TimeDelta()) {
-    render_timer_.reset(new base::RepeatingTimer<RenderingHelper>());
-    render_timer_->Start(
-        FROM_HERE, frame_duration_, this, &RenderingHelper::RenderContent);
+  if (frame_duration_ != base::TimeDelta())
+    WarmUpRendering(params.warm_up_iterations);
+
+  // It's safe to use Unretained here since |rendering_thread_| will be stopped
+  // in VideoDecodeAcceleratorTest.TearDown(), while the |rendering_helper_| is
+  // a member of that class. (See video_decode_accelerator_unittest.cc.)
+  gl_surface_->GetVSyncProvider()->GetVSyncParameters(base::Bind(
+      &RenderingHelper::UpdateVSyncParameters, base::Unretained(this), done));
+}
+
+// The rendering for the first few frames is slow (e.g., 100ms on Peach Pit).
+// This affects the numbers measured in the performance test. We try to render
+// several frames here to warm up the rendering.
+void RenderingHelper::WarmUpRendering(int warm_up_iterations) {
+  unsigned int texture_id;
+  scoped_ptr<GLubyte[]> emptyData(new GLubyte[screen_size_.GetArea() * 2]);
+  glGenTextures(1, &texture_id);
+  glBindTexture(GL_TEXTURE_2D, texture_id);
+  glTexImage2D(GL_TEXTURE_2D,
+               0,
+               GL_RGB,
+               screen_size_.width(),
+               screen_size_.height(),
+               0,
+               GL_RGB,
+               GL_UNSIGNED_SHORT_5_6_5,
+               emptyData.get());
+  for (int i = 0; i < warm_up_iterations; ++i) {
+    RenderTexture(GL_TEXTURE_2D, texture_id);
+    gl_surface_->SwapBuffers();
   }
-  done->Signal();
+  glDeleteTextures(1, &texture_id);
 }
 
 void RenderingHelper::UnInitialize(base::WaitableEvent* done) {
   CHECK_EQ(base::MessageLoop::current(), message_loop_);
 
-  // Deletion will also stop the timer.
-  render_timer_.reset();
+  render_task_.Cancel();
 
   if (render_as_thumbnails_) {
     glDeleteTextures(1, &thumbnails_texture_id_);
     glDeleteFramebuffersEXT(1, &thumbnails_fbo_id_);
   }
 
-  gl_context_->ReleaseCurrent(gl_surface_);
+  gl_context_->ReleaseCurrent(gl_surface_.get());
   gl_context_ = NULL;
   gl_surface_ = NULL;
 
@@ -395,24 +427,20 @@ void RenderingHelper::QueueVideoFrame(
     scoped_refptr<VideoFrameTexture> video_frame) {
   CHECK_EQ(base::MessageLoop::current(), message_loop_);
   RenderedVideo* video = &videos_[window_id];
-
-  // Pop the last frame if it has been rendered.
-  if (video->last_frame_rendered) {
-    // When last_frame_rendered is true, we should have only one pending frame.
-    // Since we are going to have a new frame, we can release the pending one.
-    DCHECK(video->pending_frames.size() == 1);
-    video->pending_frames.pop();
-    video->last_frame_rendered = false;
-  }
+  DCHECK(!video->is_flushing);
 
   video->pending_frames.push(video_frame);
-}
 
-void RenderingHelper::DropPendingFrames(size_t window_id) {
-  CHECK_EQ(base::MessageLoop::current(), message_loop_);
-  RenderedVideo* video = &videos_[window_id];
-  video->pending_frames = std::queue<scoped_refptr<VideoFrameTexture> >();
-  video->last_frame_rendered = false;
+  if (video->frames_to_drop > 0 && video->pending_frames.size() > 1) {
+    --video->frames_to_drop;
+    video->pending_frames.pop();
+  }
+
+  // Schedules the first RenderContent() if need.
+  if (scheduled_render_time_.is_null()) {
+    scheduled_render_time_ = base::TimeTicks::Now();
+    message_loop_->PostTask(FROM_HERE, render_task_.callback());
+  }
 }
 
 void RenderingHelper::RenderTexture(uint32 texture_target, uint32 texture_id) {
@@ -503,39 +531,58 @@ void RenderingHelper::GetThumbnailsAsRGB(std::vector<unsigned char>* rgb,
   done->Signal();
 }
 
+void RenderingHelper::Flush(size_t window_id) {
+  videos_[window_id].is_flushing = true;
+}
+
 void RenderingHelper::RenderContent() {
   CHECK_EQ(base::MessageLoop::current(), message_loop_);
+
+  // Update the VSync params.
+  //
+  // It's safe to use Unretained here since |rendering_thread_| will be stopped
+  // in VideoDecodeAcceleratorTest.TearDown(), while the |rendering_helper_| is
+  // a member of that class. (See video_decode_accelerator_unittest.cc.)
+  gl_surface_->GetVSyncProvider()->GetVSyncParameters(
+      base::Bind(&RenderingHelper::UpdateVSyncParameters,
+                 base::Unretained(this),
+                 static_cast<base::WaitableEvent*>(NULL)));
+
   glUniform1i(glGetUniformLocation(program_, "tex_flip"), 1);
 
   // Frames that will be returned to the client (via the no_longer_needed_cb)
   // after this vector falls out of scope at the end of this method. We need
   // to keep references to them until after SwapBuffers() call below.
   std::vector<scoped_refptr<VideoFrameTexture> > frames_to_be_returned;
-
+  bool need_swap_buffer = false;
   if (render_as_thumbnails_) {
     // In render_as_thumbnails_ mode, we render the FBO content on the
     // screen instead of the decoded textures.
     GLSetViewPort(videos_[0].render_area);
     RenderTexture(GL_TEXTURE_2D, thumbnails_texture_id_);
+    need_swap_buffer = true;
   } else {
-    for (size_t i = 0; i < videos_.size(); ++i) {
-      RenderedVideo* video = &videos_[i];
-      if (video->pending_frames.empty())
+    for (RenderedVideo& video : videos_) {
+      if (video.pending_frames.empty())
         continue;
-      scoped_refptr<VideoFrameTexture> frame = video->pending_frames.front();
-      GLSetViewPort(video->render_area);
+      need_swap_buffer = true;
+      scoped_refptr<VideoFrameTexture> frame = video.pending_frames.front();
+      GLSetViewPort(video.render_area);
       RenderTexture(frame->texture_target(), frame->texture_id());
 
-      if (video->pending_frames.size() > 1) {
-        frames_to_be_returned.push_back(video->pending_frames.front());
-        video->pending_frames.pop();
+      if (video.pending_frames.size() > 1 || video.is_flushing) {
+        frames_to_be_returned.push_back(video.pending_frames.front());
+        video.pending_frames.pop();
       } else {
-        video->last_frame_rendered = true;
+        ++video.frames_to_drop;
       }
     }
   }
 
-  gl_surface_->SwapBuffers();
+  if (need_swap_buffer)
+    gl_surface_->SwapBuffers();
+
+  ScheduleNextRenderContent();
 }
 
 // Helper function for the LayoutRenderingAreas(). The |lengths| are the
@@ -590,5 +637,50 @@ void RenderingHelper::LayoutRenderingAreas(
     size_t y = offset_y[i / cols] + (heights[i / cols] - h) / 2;
     videos_[i].render_area = gfx::Rect(x, y, w, h);
   }
+}
+
+void RenderingHelper::UpdateVSyncParameters(base::WaitableEvent* done,
+                                            const base::TimeTicks timebase,
+                                            const base::TimeDelta interval) {
+  vsync_timebase_ = timebase;
+  vsync_interval_ = interval;
+
+  if (done)
+    done->Signal();
+}
+
+void RenderingHelper::DropOneFrameForAllVideos() {
+  for (RenderedVideo& video : videos_) {
+    if (video.pending_frames.empty())
+      continue;
+
+    if (video.pending_frames.size() > 1 || video.is_flushing) {
+      video.pending_frames.pop();
+    } else {
+      ++video.frames_to_drop;
+    }
+  }
+}
+
+void RenderingHelper::ScheduleNextRenderContent() {
+  scheduled_render_time_ += frame_duration_;
+
+  // Schedules the next RenderContent() at latest VSYNC before the
+  // |scheduled_render_time_|.
+  base::TimeTicks now = base::TimeTicks::Now();
+  base::TimeTicks target =
+      std::max(now + vsync_interval_, scheduled_render_time_);
+
+  int64 intervals = (target - vsync_timebase_) / vsync_interval_;
+  target = vsync_timebase_ + intervals * vsync_interval_;
+
+  // When the rendering falls behind, drops frames.
+  while (scheduled_render_time_ < target) {
+    scheduled_render_time_ += frame_duration_;
+    DropOneFrameForAllVideos();
+  }
+
+  message_loop_->PostDelayedTask(
+      FROM_HERE, render_task_.callback(), target - now);
 }
 }  // namespace content

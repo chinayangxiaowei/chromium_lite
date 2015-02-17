@@ -19,7 +19,6 @@
 #include "ui/gfx/screen_type_delegate.h"
 #include "ui/keyboard/keyboard.h"
 #include "ui/keyboard/keyboard_controller.h"
-#include "ui/keyboard/keyboard_util.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/ui/views/select_file_dialog_extension.h"
@@ -31,12 +30,15 @@
 #include "ui/shell_dialogs/shell_dialogs_delegate.h"
 #endif
 
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif
+
 #if !defined(OS_CHROMEOS)
 class ScreenTypeDelegateWin : public gfx::ScreenTypeDelegate {
  public:
   ScreenTypeDelegateWin() {}
-  virtual gfx::ScreenType GetScreenTypeForNativeView(
-      gfx::NativeView view) OVERRIDE {
+  gfx::ScreenType GetScreenTypeForNativeView(gfx::NativeView view) override {
     return chrome::IsNativeViewInAsh(view) ?
         gfx::SCREEN_TYPE_ALTERNATE :
         gfx::SCREEN_TYPE_NATIVE;
@@ -48,7 +50,11 @@ class ScreenTypeDelegateWin : public gfx::ScreenTypeDelegate {
 class ShellDialogsDelegateWin : public ui::ShellDialogsDelegate {
  public:
   ShellDialogsDelegateWin() {}
-  virtual bool IsWindowInMetro(gfx::NativeWindow window) OVERRIDE {
+  bool IsWindowInMetro(gfx::NativeWindow window) override {
+#if defined(OS_WIN)
+    if (base::win::GetVersion() < base::win::VERSION_WIN8)
+      return false;
+#endif
     return chrome::IsNativeViewInAsh(window);
   }
  private:
@@ -99,12 +105,9 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit() {
   // Initialize TabScrubber after the Ash Shell has been initialized.
   TabScrubber::GetInstance();
   // Activate virtual keyboard after profile is initialized. It depends on the
-  // default profile. If keyboard usability experiment flag is set, defer the
-  // activation to UpdateWindow() in virtual_keyboard_window_controller.cc.
-  if (!keyboard::IsKeyboardUsabilityExperimentEnabled()) {
-    ash::Shell::GetPrimaryRootWindowController()->ActivateKeyboard(
-        keyboard::KeyboardController::GetInstance());
-  }
+  // default profile.
+  ash::Shell::GetPrimaryRootWindowController()->ActivateKeyboard(
+      keyboard::KeyboardController::GetInstance());
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {

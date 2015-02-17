@@ -42,7 +42,8 @@ class ResourceStyleGuideTest(SuperMoxTestBase):
     error = self.checker.IncludeCheck(1, line)
     self.assertNotEqual('', error,
         'Should be flagged as style error: ' + line)
-    self.assertEqual(GetHighlight(line, error), '</include>')
+    highlight = GetHighlight(line, error).strip()
+    self.assertTrue('include' in highlight and highlight[0] == '<')
 
   def ShouldPassIncludeCheck(self, line):
     """Checks that the '</include>' checker doesn't flag |line| as an error."""
@@ -54,6 +55,8 @@ class ResourceStyleGuideTest(SuperMoxTestBase):
         "</include>   ",
         "    </include>",
         "    </include>   ",
+        '  <include src="blah.js" />   ',
+        '<include src="blee.js"/>',
     ]
     for line in lines:
       self.ShouldFailIncludeCheck(line)
@@ -455,15 +458,20 @@ class CssStyleGuideTest(SuperMoxTestBase):
     self.mox.StubOutWithMock(self.output_api, 'PresubmitPromptWarning',
                              use_mock_anything=True)
 
-    author_msg = ('Was the CSS checker useful? '
-                  'Send feedback or hate mail to dbeam@chromium.org.')
     self.output_api = self.mox.CreateMockAnything()
     self.mox.StubOutWithMock(self.output_api, 'PresubmitNotifyResult',
                              use_mock_anything=True)
-    self.output_api.PresubmitNotifyResult(author_msg).AndReturn(None)
+
+  def VerifyContentsIsValid(self, contents):
+    self.fake_file.NewContents().AndReturn(contents.splitlines())
+    self.mox.ReplayAll()
+    css_checker.CSSChecker(self.input_api, self.output_api).RunChecks()
 
   def VerifyContentsProducesOutput(self, contents, output):
     self.fake_file.NewContents().AndReturn(contents.splitlines())
+    author_msg = ('Was the CSS checker useful? '
+                  'Send feedback or hate mail to dbeam@chromium.org.')
+    self.output_api.PresubmitNotifyResult(author_msg).AndReturn(None)
     self.output_api.PresubmitPromptWarning(
         self.fake_file_name + ':\n' + output.strip()).AndReturn(None)
     self.mox.ReplayAll()
@@ -507,6 +515,24 @@ class CssStyleGuideTest(SuperMoxTestBase):
 
     z-index: 5;
     color: black;""")
+
+  def testCssStringWithAt(self):
+    self.VerifyContentsIsValid("""
+#logo {
+  background-image: url('images/google_logo.png@2x');
+}
+
+body.alternate-logo #logo {
+  -webkit-mask-image: url('images/google_logo.png@2x');
+  background: none;
+}
+
+.stuff1 {
+}
+
+.stuff2 {
+}
+      """)
 
   def testCssAlphaWithNonStandard(self):
     self.VerifyContentsProducesOutput("""
@@ -568,7 +594,8 @@ blah /* hey! */
   }}
 
 @-webkit-keyframe blah {
-  100% { height: -500px 0; }
+  from { height: rotate(-10turn); }
+  100% { height: 500px; }
 }
 
 #rule {
@@ -712,6 +739,19 @@ b:before,
 """(replace with rgb(170, 187, 204), rgb(221, 238, 255))
     color: #bad; (replace with rgb(187, 170, 221))
     color: #bada55; (replace with rgb(186, 218, 85))""")
+
+  def testWebkitBeforeOrAfter(self):
+    self.VerifyContentsProducesOutput("""
+.test {
+  -webkit-margin-before: 10px;
+  -webkit-margin-start: 20px;
+  -webkit-padding-after: 3px;
+  -webkit-padding-end: 5px;
+}
+""", """
+- Use *-top/bottom instead of -webkit-*-before/after.
+    -webkit-margin-before: 10px; (replace with margin-top)
+    -webkit-padding-after: 3px; (replace with padding-bottom)""")
 
   def testCssZeroLengthTerms(self):
     self.VerifyContentsProducesOutput("""

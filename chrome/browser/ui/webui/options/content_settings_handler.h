@@ -9,10 +9,12 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_change_registrar.h"
+#include "base/scoped_observer.h"
 #include "chrome/browser/pepper_flash_settings_manager.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
 #include "chrome/browser/ui/webui/options/pepper_flash_content_settings_utils.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/browser/content_settings_observer.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/notification_observer.h"
@@ -24,30 +26,36 @@ class ProtocolHandlerRegistry;
 namespace options {
 
 class ContentSettingsHandler : public OptionsPageUIHandler,
+                               public content_settings::Observer,
                                public content::NotificationObserver,
                                public PepperFlashSettingsManager::Client {
  public:
   ContentSettingsHandler();
-  virtual ~ContentSettingsHandler();
+  ~ContentSettingsHandler() override;
 
   // OptionsPageUIHandler implementation.
-  virtual void GetLocalizedValues(
-      base::DictionaryValue* localized_strings) OVERRIDE;
-  virtual void InitializeHandler() OVERRIDE;
-  virtual void InitializePage() OVERRIDE;
-  virtual void RegisterMessages() OVERRIDE;
+  void GetLocalizedValues(base::DictionaryValue* localized_strings) override;
+  void InitializeHandler() override;
+  void InitializePage() override;
+  void RegisterMessages() override;
+
+  // content_settings::Observer implementation.
+  void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
+                               const ContentSettingsPattern& secondary_pattern,
+                               ContentSettingsType content_type,
+                               std::string resource_identifier) override;
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // PepperFlashSettingsManager::Client implementation.
-  virtual void OnGetPermissionSettingsCompleted(
+  void OnGetPermissionSettingsCompleted(
       uint32 request_id,
       bool success,
       PP_Flash_BrowserOperations_Permission default_permission,
-      const ppapi::FlashSiteSettings& sites) OVERRIDE;
+      const ppapi::FlashSiteSettings& sites) override;
 
   // Gets a string identifier for the group name, for use in HTML.
   static std::string ContentSettingsTypeToGroupName(ContentSettingsType type);
@@ -221,6 +229,7 @@ class ContentSettingsHandler : public OptionsPageUIHandler,
   scoped_ptr<PepperFlashSettingsManager> flash_settings_manager_;
   MediaSettingsInfo media_settings_;
   scoped_ptr<content::HostZoomMap::Subscription> host_zoom_map_subscription_;
+  ScopedObserver<HostContentSettingsMap, content_settings::Observer> observer_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSettingsHandler);
 };

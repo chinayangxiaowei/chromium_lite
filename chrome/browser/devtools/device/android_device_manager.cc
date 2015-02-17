@@ -50,9 +50,9 @@ static void PostSocketCallback(
     scoped_refptr<base::MessageLoopProxy> response_message_loop,
     const AndroidDeviceManager::SocketCallback& callback,
     int result,
-    net::StreamSocket* socket) {
-  response_message_loop->PostTask(FROM_HERE,
-                                  base::Bind(callback, result, socket));
+    scoped_ptr<net::StreamSocket> socket) {
+  response_message_loop->PostTask(
+      FROM_HERE, base::Bind(callback, result, base::Passed(&socket)));
 }
 
 class HttpRequest {
@@ -61,39 +61,41 @@ class HttpRequest {
   typedef AndroidDeviceManager::SocketCallback SocketCallback;
 
   static void CommandRequest(const std::string& request,
-                           const CommandCallback& callback,
-                           int result,
-                           net::StreamSocket* socket) {
+                             const CommandCallback& callback,
+                             int result,
+                             scoped_ptr<net::StreamSocket> socket) {
     if (result != net::OK) {
       callback.Run(result, std::string());
       return;
     }
-    new HttpRequest(socket, request, callback);
+    new HttpRequest(socket.Pass(), request, callback);
   }
 
   static void SocketRequest(const std::string& request,
-                          const SocketCallback& callback,
-                          int result,
-                          net::StreamSocket* socket) {
+                            const SocketCallback& callback,
+                            int result,
+                            scoped_ptr<net::StreamSocket> socket) {
     if (result != net::OK) {
-      callback.Run(result, NULL);
+      callback.Run(result, make_scoped_ptr<net::StreamSocket>(NULL));
       return;
     }
-    new HttpRequest(socket, request, callback);
+    new HttpRequest(socket.Pass(), request, callback);
   }
 
  private:
-  HttpRequest(net::StreamSocket* socket,
+  HttpRequest(scoped_ptr<net::StreamSocket> socket,
               const std::string& request,
               const CommandCallback& callback)
-      : socket_(socket), command_callback_(callback), body_pos_(0) {
+      : socket_(socket.Pass()),
+        command_callback_(callback),
+        body_pos_(0) {
     SendRequest(request);
   }
 
-  HttpRequest(net::StreamSocket* socket,
-                      const std::string& request,
-                      const SocketCallback& callback)
-    : socket_(socket),
+  HttpRequest(scoped_ptr<net::StreamSocket> socket,
+              const std::string& request,
+              const SocketCallback& callback)
+    : socket_(socket.Pass()),
       socket_callback_(callback),
       body_pos_(0) {
     SendRequest(request);
@@ -169,7 +171,7 @@ class HttpRequest {
       if (!command_callback_.is_null())
         command_callback_.Run(net::OK, response_.substr(body_pos_));
       else
-        socket_callback_.Run(net::OK, socket_.release());
+        socket_callback_.Run(net::OK, socket_.Pass());
       delete this;
       return;
     }
@@ -191,7 +193,7 @@ class HttpRequest {
     if (!command_callback_.is_null())
       command_callback_.Run(result, std::string());
     else
-      socket_callback_.Run(result, NULL);
+      socket_callback_.Run(result, make_scoped_ptr<net::StreamSocket>(NULL));
     delete this;
     return false;
   }
@@ -324,7 +326,7 @@ AndroidDeviceManager::DeviceProvider::~DeviceProvider() {
 
 void AndroidDeviceManager::Device::QueryDeviceInfo(
     const DeviceInfoCallback& callback) {
-  device_message_loop_->PostTask(
+  message_loop_proxy_->PostTask(
       FROM_HERE,
       base::Bind(&DeviceProvider::QueryDeviceInfo,
                  provider_,
@@ -336,7 +338,7 @@ void AndroidDeviceManager::Device::QueryDeviceInfo(
 
 void AndroidDeviceManager::Device::OpenSocket(const std::string& socket_name,
                                               const SocketCallback& callback) {
-  device_message_loop_->PostTask(
+  message_loop_proxy_->PostTask(
       FROM_HERE,
       base::Bind(&DeviceProvider::OpenSocket,
                  provider_,
@@ -349,7 +351,7 @@ void AndroidDeviceManager::Device::SendJsonRequest(
     const std::string& socket_name,
     const std::string& request,
     const CommandCallback& callback) {
-  device_message_loop_->PostTask(
+  message_loop_proxy_->PostTask(
       FROM_HERE,
       base::Bind(&DeviceProvider::SendJsonRequest,
                  provider_,
@@ -364,7 +366,7 @@ void AndroidDeviceManager::Device::SendJsonRequest(
 void AndroidDeviceManager::Device::HttpUpgrade(const std::string& socket_name,
                                                const std::string& url,
                                                const SocketCallback& callback) {
-  device_message_loop_->PostTask(
+  message_loop_proxy_->PostTask(
       FROM_HERE,
       base::Bind(&DeviceProvider::HttpUpgrade,
                  provider_,
@@ -380,17 +382,21 @@ AndroidDeviceManager::Device::Device(
     scoped_refptr<base::MessageLoopProxy> device_message_loop,
     scoped_refptr<DeviceProvider> provider,
     const std::string& serial)
-    : device_message_loop_(device_message_loop),
+    : message_loop_proxy_(device_message_loop),
       provider_(provider),
       serial_(serial),
       weak_factory_(this) {
 }
 
 AndroidDeviceManager::Device::~Device() {
+  std::set<AndroidWebSocket*> sockets_copy(sockets_);
+  for (AndroidWebSocket* socket : sockets_copy)
+    socket->OnSocketClosed();
+
   provider_->AddRef();
   DeviceProvider* raw_ptr = provider_.get();
   provider_ = NULL;
-  device_message_loop_->PostTask(
+  message_loop_proxy_->PostTask(
       FROM_HERE,
       base::Bind(&ReleaseDeviceAndProvider,
                  base::Unretained(raw_ptr),
@@ -487,8 +493,8 @@ void AndroidDeviceManager::UpdateDevices(
        ++it) {
     DeviceWeakMap::iterator found = devices_.find(it->serial);
     scoped_refptr<Device> device;
-    if (found == devices_.end() || !found->second
-        || found->second->provider_ != it->provider) {
+    if (found == devices_.end() || !found->second ||
+        found->second->provider_.get() != it->provider.get()) {
       device = new Device(handler_thread_->message_loop(),
           it->provider, it->serial);
     } else {

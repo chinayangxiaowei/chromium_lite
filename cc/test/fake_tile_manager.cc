@@ -5,8 +5,10 @@
 #include "cc/test/fake_tile_manager.h"
 
 #include <deque>
+#include <limits>
 
 #include "base/lazy_instance.h"
+#include "cc/resources/raster_buffer.h"
 #include "cc/resources/rasterizer.h"
 
 namespace cc {
@@ -16,9 +18,9 @@ namespace {
 class FakeRasterizerImpl : public Rasterizer, public RasterizerTaskClient {
  public:
   // Overridden from Rasterizer:
-  virtual void SetClient(RasterizerClient* client) OVERRIDE {}
-  virtual void Shutdown() OVERRIDE {}
-  virtual void ScheduleTasks(RasterTaskQueue* queue) OVERRIDE {
+  void SetClient(RasterizerClient* client) override {}
+  void Shutdown() override {}
+  void ScheduleTasks(RasterTaskQueue* queue) override {
     for (RasterTaskQueue::Item::Vector::const_iterator it =
              queue->items.begin();
          it != queue->items.end();
@@ -32,7 +34,7 @@ class FakeRasterizerImpl : public Rasterizer, public RasterizerTaskClient {
       completed_tasks_.push_back(task);
     }
   }
-  virtual void CheckForCompletedTasks() OVERRIDE {
+  void CheckForCompletedTasks() override {
     for (RasterTask::Vector::iterator it = completed_tasks_.begin();
          it != completed_tasks_.end();
          ++it) {
@@ -48,10 +50,11 @@ class FakeRasterizerImpl : public Rasterizer, public RasterizerTaskClient {
   }
 
   // Overridden from RasterizerTaskClient:
-  virtual SkCanvas* AcquireCanvasForRaster(RasterTask* task) OVERRIDE {
-    return NULL;
+  scoped_ptr<RasterBuffer> AcquireBufferForRaster(
+      const Resource* resource) override {
+    return nullptr;
   }
-  virtual void ReleaseCanvasForRaster(RasterTask* task) OVERRIDE {}
+  void ReleaseBufferForRaster(scoped_ptr<RasterBuffer> buffer) override {}
 
  private:
   RasterTask::Vector completed_tasks_;
@@ -66,7 +69,9 @@ FakeTileManager::FakeTileManager(TileManagerClient* client)
                   base::MessageLoopProxy::current(),
                   NULL,
                   g_fake_rasterizer.Pointer(),
-                  NULL) {}
+                  NULL,
+                  std::numeric_limits<size_t>::max()) {
+}
 
 FakeTileManager::FakeTileManager(TileManagerClient* client,
                                  ResourcePool* resource_pool)
@@ -74,28 +79,24 @@ FakeTileManager::FakeTileManager(TileManagerClient* client,
                   base::MessageLoopProxy::current(),
                   resource_pool,
                   g_fake_rasterizer.Pointer(),
-                  NULL) {}
+                  NULL,
+                  std::numeric_limits<size_t>::max()) {
+}
 
 FakeTileManager::~FakeTileManager() {}
 
 void FakeTileManager::AssignMemoryToTiles(
     const GlobalStateThatImpactsTilePriority& state) {
   tiles_for_raster.clear();
-  all_tiles.Clear();
 
   SetGlobalStateForTesting(state);
-  GetTilesWithAssignedBins(&all_tiles);
-  AssignGpuMemoryToTiles(&all_tiles, &tiles_for_raster);
+  AssignGpuMemoryToTiles(&tiles_for_raster);
 }
 
 bool FakeTileManager::HasBeenAssignedMemory(Tile* tile) {
   return std::find(tiles_for_raster.begin(),
                    tiles_for_raster.end(),
                    tile) != tiles_for_raster.end();
-}
-
-void FakeTileManager::DidFinishRunningTasksForTesting() {
-  DidFinishRunningTasks();
 }
 
 void FakeTileManager::Release(Tile* tile) {

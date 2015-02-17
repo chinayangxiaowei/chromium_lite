@@ -17,7 +17,7 @@
 #include "remoting/protocol/pairing_registry.h"
 #include "remoting/protocol/token_validator.h"
 #include "remoting/protocol/v2_authenticator.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 namespace remoting {
 namespace protocol {
@@ -45,7 +45,7 @@ scoped_ptr<Authenticator> NegotiatingHostAuthenticator::CreateWithSharedSecret(
   if (pairing_registry.get()) {
     result->AddMethod(AuthenticationMethod::Spake2Pair());
   }
-  return scoped_ptr<Authenticator>(result.Pass());
+  return result.Pass();
 }
 
 // static
@@ -58,7 +58,7 @@ NegotiatingHostAuthenticator::CreateWithThirdPartyAuth(
       new NegotiatingHostAuthenticator(local_cert, key_pair));
   result->token_validator_ = token_validator.Pass();
   result->AddMethod(AuthenticationMethod::ThirdParty());
-  return scoped_ptr<Authenticator>(result.Pass());
+  return result.Pass();
 }
 
 NegotiatingHostAuthenticator::~NegotiatingHostAuthenticator() {

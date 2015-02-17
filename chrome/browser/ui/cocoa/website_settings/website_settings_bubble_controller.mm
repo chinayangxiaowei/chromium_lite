@@ -13,7 +13,6 @@
 #include "base/strings/sys_string_conversions.h"
 #import "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/infobars/infobar_service.h"
-#include "chrome/browser/ssl/chrome_ssl_host_state_delegate.h"
 #import "chrome/browser/ui/browser_dialogs.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
@@ -23,15 +22,14 @@
 #include "chrome/browser/ui/website_settings/permission_menu_model.h"
 #include "chrome/browser/ui/website_settings/website_settings_utils.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #import "third_party/google_toolbox_for_mac/src/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #import "ui/base/cocoa/controls/hyperlink_button_cell.h"
 #import "ui/base/cocoa/flipped_view.h"
@@ -106,7 +104,7 @@ const CGFloat kTabLabelTopPadding = 6;
 // The amount of padding to leave on either side of the tab label.
 const CGFloat kTabLabelXPadding = 12;
 
-// Return the text color to use for the indentity status when the site's
+// Return the text color to use for the identity status when the site's
 // identity has been verified.
 NSColor* IdentityVerifiedTextColor() {
   // RGB components are specified using integer RGB [0-255] values for easy
@@ -133,9 +131,20 @@ NSColor* IdentityVerifiedTextColor() {
   // the same as the currently selected segment.
   NSInteger keySegment_;
 }
+
+// The text attributes to use for the tab labels.
++ (NSDictionary*)textAttributes;
+
 @end
 
 @implementation WebsiteSettingsTabSegmentedCell
+
++ (NSDictionary*)textAttributes {
+  NSFont* smallSystemFont =
+      [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+  return @{ NSFontAttributeName : smallSystemFont };
+}
+
 - (id)init {
   if ((self = [super init])) {
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
@@ -247,17 +256,29 @@ NSColor* IdentityVerifiedTextColor() {
 }
 
 - (void)drawSegment:(NSInteger)segment
-            inFrame:(NSRect)frame
+            inFrame:(NSRect)tabFrame
            withView:(NSView*)controlView {
-  // Call the superclass to draw the label, adjusting the rectangle so that
-  // the label appears centered in the tab.
+  // Adjust the tab's frame so that the label appears centered in the tab.
   if (segment == 0) {
-    frame.origin.x += kTabStripXPadding / 2;
-    frame.size.width -= kTabStripXPadding;
+    tabFrame.origin.x += kTabStripXPadding;
+    tabFrame.size.width -= kTabStripXPadding;
   }
-  frame.origin.y += kTabLabelTopPadding;
-  frame.size.height -= kTabLabelTopPadding;
-  [super drawSegment:segment inFrame:frame withView:controlView];
+  tabFrame.origin.y += kTabLabelTopPadding;
+  tabFrame.size.height -= kTabLabelTopPadding;
+
+  // Center the label's frame in the tab's frame.
+  NSString* label = [self labelForSegment:segment];
+  NSDictionary* textAttributes =
+      [WebsiteSettingsTabSegmentedCell textAttributes];
+  NSSize textSize = [label sizeWithAttributes:textAttributes];
+  NSRect labelFrame;
+  labelFrame.size = textSize;
+  labelFrame.origin.x =
+      tabFrame.origin.x + (NSWidth(tabFrame) - textSize.width) / 2.0;
+  labelFrame.origin.y =
+      tabFrame.origin.y + (NSHeight(tabFrame) - textSize.height) / 2.0;
+
+  [label drawInRect:labelFrame withAttributes:textAttributes];
 }
 
 // Overrides the default tracking behavior to only respond to clicks inside the
@@ -417,11 +438,8 @@ NSColor* IdentityVerifiedTextColor() {
   [segmentedControl_ setAction:@selector(tabSelected:)];
   [segmentedControl_ setAutoresizingMask:NSViewWidthSizable];
 
-  NSFont* smallSystemFont =
-      [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
   NSDictionary* textAttributes =
-      [NSDictionary dictionaryWithObject:smallSystemFont
-                                  forKey:NSFontAttributeName];
+      [WebsiteSettingsTabSegmentedCell textAttributes];
 
   // Create the "Permissions" tab.
   NSString* label = l10n_util::GetNSString(
@@ -430,8 +448,6 @@ NSColor* IdentityVerifiedTextColor() {
                    forSegment:WebsiteSettingsUI::TAB_ID_PERMISSIONS];
   NSSize textSize = [label sizeWithAttributes:textAttributes];
   CGFloat tabWidth = textSize.width + 2 * kTabLabelXPadding;
-  [segmentedControl_ setWidth:tabWidth + kTabStripXPadding
-                   forSegment:WebsiteSettingsUI::TAB_ID_PERMISSIONS];
 
   // Create the "Connection" tab.
   label = l10n_util::GetNSString(IDS_WEBSITE_SETTINGS_TAB_LABEL_CONNECTION);
@@ -451,7 +467,7 @@ NSColor* IdentityVerifiedTextColor() {
   [segmentedControl_ setWidth:tabWidth
                    forSegment:WebsiteSettingsUI::TAB_ID_CONNECTION];
 
-  [segmentedControl_ setFont:smallSystemFont];
+  [segmentedControl_ setFont:[textAttributes objectForKey:NSFontAttributeName]];
   [contentView_ addSubview:segmentedControl_];
 
   NSRect tabFrame = NSMakeRect(0, 0, [self defaultWindowWidth], 300);
@@ -506,32 +522,33 @@ NSColor* IdentityVerifiedTextColor() {
 // Handler for the link button below the list of cookies.
 - (void)showCookiesAndSiteData:(id)sender {
   DCHECK(webContents_);
-  content::RecordAction(
-      base::UserMetricsAction("WebsiteSettings_CookiesDialogOpened"));
+  presenter_->RecordWebsiteSettingsAction(
+      WebsiteSettings::WEBSITE_SETTINGS_COOKIES_DIALOG_OPENED);
   chrome::ShowCollectedCookiesDialog(webContents_);
 }
 
 // Handler for the link button to show certificate information.
 - (void)showCertificateInfo:(id)sender {
   DCHECK(certificateId_);
+  presenter_->RecordWebsiteSettingsAction(
+      WebsiteSettings::WEBSITE_SETTINGS_CERTIFICATE_DIALOG_OPENED);
   ShowCertificateViewerByID(webContents_, [self parentWindow], certificateId_);
 }
 
 // Handler for the link button to revoke user certificate decisions.
 - (void)resetCertificateDecisions:(id)sender {
   DCHECK(resetDecisionsButton_);
-  ChromeSSLHostStateDelegate* delegate =
-      presenter_->chrome_ssl_host_state_delegate();
-  DCHECK(delegate);
-  delegate->RevokeUserDecisionsHard(presenter_->site_url().host());
+  presenter_->OnRevokeSSLErrorBypassButtonPressed();
   [self close];
 }
 
 // Handler for the link to show help information about the connection tab.
 - (void)showHelpPage:(id)sender {
+  presenter_->RecordWebsiteSettingsAction(
+      WebsiteSettings::WEBSITE_SETTINGS_CONNECTION_HELP_OPENED);
   webContents_->OpenURL(content::OpenURLParams(
       GURL(chrome::kPageInfoHelpCenterURL), content::Referrer(),
-      NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK, false));
+      NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK, false));
 }
 
 // Create the contents of the Connection tab and add it to the given tab view.
@@ -926,7 +943,20 @@ NSColor* IdentityVerifiedTextColor() {
 
 // Called when the user changes the selected segment in the segmented control.
 - (void)tabSelected:(id)sender {
-  [tabView_ selectTabViewItemAtIndex:[segmentedControl_ selectedSegment]];
+  NSInteger index = [segmentedControl_ selectedSegment];
+  switch (index) {
+    case WebsiteSettingsUI::TAB_ID_PERMISSIONS:
+      presenter_->RecordWebsiteSettingsAction(
+          WebsiteSettings::WEBSITE_SETTINGS_PERMISSIONS_TAB_SELECTED);
+      break;
+    case WebsiteSettingsUI::TAB_ID_CONNECTION:
+      presenter_->RecordWebsiteSettingsAction(
+          WebsiteSettings::WEBSITE_SETTINGS_CONNECTION_TAB_SELECTED);
+      break;
+    default:
+      NOTREACHED();
+  }
+  [tabView_ selectTabViewItemAtIndex:index];
 }
 
 // Adds a new row to the UI listing the permissions. Returns the amount of

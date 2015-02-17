@@ -30,17 +30,18 @@ class HelpHandler : public content::WebUIMessageHandler,
                     public content::NotificationObserver {
  public:
   HelpHandler();
-  virtual ~HelpHandler();
+  ~HelpHandler() override;
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // Adds string values for the UI to |localized_strings|.
   static void GetLocalizedValues(base::DictionaryValue* localized_strings);
 
   // NotificationObserver implementation.
-  virtual void Observe(int type, const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Returns the browser version as a string.
   static base::string16 BuildBrowserVersionString();
@@ -71,6 +72,9 @@ class HelpHandler : public content::WebUIMessageHandler,
   void RelaunchAndPowerwash(const base::ListValue* args);
 #endif
 
+  // Checks for and applies update.
+  void RequestUpdate(const base::ListValue* args);
+
   // Callback method which forwards status updates to the page.
   void SetUpdateStatus(VersionUpdater::Status status, int progress,
                        const base::string16& fail_message);
@@ -86,6 +90,9 @@ class HelpHandler : public content::WebUIMessageHandler,
   void OnOSFirmware(const std::string& firmware);
   void OnCurrentChannel(const std::string& channel);
   void OnTargetChannel(const std::string& channel);
+
+  // Callback for setting the FCC label alt text.
+  void OnFCCLabelTextRead(const std::string& text);
 #endif
 
   // Specialized instance of the VersionUpdater used to update the browser.

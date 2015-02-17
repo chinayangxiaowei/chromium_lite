@@ -7,14 +7,13 @@
 
 #include <string>
 
-#include "base/memory/weak_ptr.h"
-#include "base/scoped_observer.h"
+#include "base/observer_list.h"
 #include "chrome/browser/extensions/chrome_extension_function.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
-#include "extensions/browser/extension_registry_observer.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace base {
 class DictionaryValue;
@@ -27,13 +26,36 @@ class WebContents;
 
 namespace extensions {
 class ExtensionPrefs;
-class ExtensionRegistry;
-class TabHelper;
 
 class ExtensionActionAPI : public BrowserContextKeyedAPI {
  public:
+  class Observer {
+   public:
+    // Called when there is a change to the given |extension_action|.
+    // |web_contents| is the web contents that was affected, and
+    // |browser_context| is the associated BrowserContext. (The latter is
+    // included because ExtensionActionAPI is shared between normal and
+    // incognito contexts, so |browser_context| may not equal
+    // |browser_context_|.)
+    virtual void OnExtensionActionUpdated(
+        ExtensionAction* extension_action,
+        content::WebContents* web_contents,
+        content::BrowserContext* browser_context);
+
+    // Called when the page actions have been refreshed do to a possible change
+    // in count or visibility.
+    virtual void OnPageActionsUpdated(content::WebContents* web_contents);
+
+    // Called when the ExtensionActionAPI is shutting down, giving observers a
+    // chance to unregister themselves if there is not a definitive lifecycle.
+    virtual void OnExtensionActionAPIShuttingDown();
+
+   protected:
+    virtual ~Observer();
+  };
+
   explicit ExtensionActionAPI(content::BrowserContext* context);
-  virtual ~ExtensionActionAPI();
+  ~ExtensionActionAPI() override;
 
   // Convenience method to get the instance for a profile.
   static ExtensionActionAPI* Get(content::BrowserContext* context);
@@ -44,83 +66,73 @@ class ExtensionActionAPI : public BrowserContextKeyedAPI {
                                          const std::string& extension_id,
                                          bool visible);
 
-  // Fires the onClicked event for page_action.
-  static void PageActionExecuted(content::BrowserContext* context,
-                                 const ExtensionAction& page_action,
-                                 int tab_id,
-                                 const std::string& url,
-                                 int button);
-
-  // Fires the onClicked event for browser_action.
-  static void BrowserActionExecuted(content::BrowserContext* context,
-                                    const ExtensionAction& browser_action,
-                                    content::WebContents* web_contents);
-
   // BrowserContextKeyedAPI implementation.
   static BrowserContextKeyedAPIFactory<ExtensionActionAPI>*
       GetFactoryInstance();
 
+  // Add or remove observers.
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
+  // Executes the action of the given |extension| on the |browser|'s active
+  // web contents. If |grant_tab_permissions| is true, this will also grant
+  // activeTab to the extension (so this should only be done if this is through
+  // a direct user action). Returns the action that should be taken.
+  ExtensionAction::ShowAction ExecuteExtensionAction(
+      const Extension* extension,
+      Browser* browser,
+      bool grant_active_tab_permissions);
+
+  // Opens the popup for the given |extension| in the given |browser|'s window.
+  // If |grant_active_tab_permissions| is true, this grants the extension
+  // activeTab (so this should only be done if this is through a direct user
+  // action).
+  bool ShowExtensionActionPopup(const Extension* extension,
+                                Browser* browser,
+                                bool grant_active_tab_permissions);
+
+  // Returns true if the given |extension| wants to run on the tab pointed to
+  // by |web_contents|.
+  bool ExtensionWantsToRun(const Extension* extension,
+                           content::WebContents* web_contents);
+
+  // Notifies that there has been a change in the given |extension_action|.
+  void NotifyChange(ExtensionAction* extension_action,
+                    content::WebContents* web_contents,
+                    content::BrowserContext* browser_context);
+
+  // Clears the values for all ExtensionActions for the tab associated with the
+  // given |web_contents| (and signals that page actions changed).
+  void ClearAllValuesForTab(content::WebContents* web_contents);
+
+  // Notifies that the current set of page actions for |web_contents| has
+  // changed, and signals the browser to update.
+  void NotifyPageActionsChanged(content::WebContents* web_contents);
+
  private:
   friend class BrowserContextKeyedAPIFactory<ExtensionActionAPI>;
 
-  // The DispatchEvent methods forward events to the |profile|'s event router.
-  static void DispatchEventToExtension(content::BrowserContext* context,
-                                       const std::string& extension_id,
-                                       const std::string& event_name,
-                                       scoped_ptr<base::ListValue> event_args);
-
-  // Called to dispatch a deprecated style page action click event that was
-  // registered like:
-  //   chrome.pageActions["name"].addListener(function(actionId, info){})
-  static void DispatchOldPageActionEvent(content::BrowserContext* context,
-                                         const std::string& extension_id,
-                                         const std::string& page_action_id,
-                                         int tab_id,
-                                         const std::string& url,
-                                         int button);
+  // The DispatchEvent methods forward events to the |context|'s event router.
+  void DispatchEventToExtension(content::BrowserContext* context,
+                                const std::string& extension_id,
+                                const std::string& event_name,
+                                scoped_ptr<base::ListValue> event_args);
 
   // Called when either a browser or page action is executed. Figures out which
   // event to send based on what the extension wants.
-  static void ExtensionActionExecuted(content::BrowserContext* context,
-                                      const ExtensionAction& extension_action,
-                                      content::WebContents* web_contents);
+  void ExtensionActionExecuted(const ExtensionAction& extension_action,
+                               content::WebContents* web_contents);
 
   // BrowserContextKeyedAPI implementation.
+  void Shutdown() override;
   static const char* service_name() { return "ExtensionActionAPI"; }
+  static const bool kServiceRedirectedInIncognito = true;
+
+  ObserverList<Observer> observers_;
+
+  content::BrowserContext* browser_context_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionActionAPI);
-};
-
-// This class manages reading and writing browser action values from storage.
-class ExtensionActionStorageManager
-    : public content::NotificationObserver,
-      public ExtensionRegistryObserver,
-      public base::SupportsWeakPtr<ExtensionActionStorageManager> {
- public:
-  explicit ExtensionActionStorageManager(Profile* profile);
-  virtual ~ExtensionActionStorageManager();
-
- private:
-  // NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
-
-  // ExtensionRegistryObserver:
-  virtual void OnExtensionLoaded(content::BrowserContext* browser_context,
-                                 const Extension* extension) OVERRIDE;
-
-  // Reads/Writes the ExtensionAction's default values to/from storage.
-  void WriteToStorage(ExtensionAction* extension_action);
-  void ReadFromStorage(
-      const std::string& extension_id, scoped_ptr<base::Value> value);
-
-  Profile* profile_;
-  content::NotificationRegistrar registrar_;
-
-  // Listen to extension loaded notification.
-  ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
-      extension_registry_observer_;
 };
 
 // Implementation of the browserAction and pageAction APIs.
@@ -136,20 +148,13 @@ class ExtensionActionFunction : public ChromeSyncExtensionFunction {
 
  protected:
   ExtensionActionFunction();
-  virtual ~ExtensionActionFunction();
-  virtual bool RunSync() OVERRIDE;
+  ~ExtensionActionFunction() override;
+  bool RunSync() override;
   virtual bool RunExtensionAction() = 0;
 
   bool ExtractDataFromArguments();
   void NotifyChange();
-  void NotifyBrowserActionChange();
-  void NotifyLocationBarChange();
-  void NotifySystemIndicatorChange();
   bool SetVisible(bool visible);
-
-  // Extension-related information for |tab_id_|.
-  // CHECK-fails if there is no tab.
-  extensions::TabHelper& tab_helper() const;
 
   // All the extension action APIs take a single argument called details that
   // is a dictionary.
@@ -176,80 +181,80 @@ class ExtensionActionFunction : public ChromeSyncExtensionFunction {
 // show
 class ExtensionActionShowFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionShowFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionShowFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // hide
 class ExtensionActionHideFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionHideFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionHideFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // setIcon
 class ExtensionActionSetIconFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionSetIconFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionSetIconFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // setTitle
 class ExtensionActionSetTitleFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionSetTitleFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionSetTitleFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // setPopup
 class ExtensionActionSetPopupFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionSetPopupFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionSetPopupFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // setBadgeText
 class ExtensionActionSetBadgeTextFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionSetBadgeTextFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionSetBadgeTextFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // setBadgeBackgroundColor
 class ExtensionActionSetBadgeBackgroundColorFunction
     : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionSetBadgeBackgroundColorFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionSetBadgeBackgroundColorFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // getTitle
 class ExtensionActionGetTitleFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionGetTitleFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionGetTitleFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // getPopup
 class ExtensionActionGetPopupFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionGetPopupFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionGetPopupFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // getBadgeText
 class ExtensionActionGetBadgeTextFunction : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionGetBadgeTextFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionGetBadgeTextFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 // getBadgeBackgroundColor
 class ExtensionActionGetBadgeBackgroundColorFunction
     : public ExtensionActionFunction {
  protected:
-  virtual ~ExtensionActionGetBadgeBackgroundColorFunction() {}
-  virtual bool RunExtensionAction() OVERRIDE;
+  ~ExtensionActionGetBadgeBackgroundColorFunction() override {}
+  bool RunExtensionAction() override;
 };
 
 //
@@ -261,7 +266,7 @@ class BrowserActionSetIconFunction : public ExtensionActionSetIconFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.setIcon", BROWSERACTION_SETICON)
 
  protected:
-  virtual ~BrowserActionSetIconFunction() {}
+  ~BrowserActionSetIconFunction() override {}
 };
 
 class BrowserActionSetTitleFunction : public ExtensionActionSetTitleFunction {
@@ -269,7 +274,7 @@ class BrowserActionSetTitleFunction : public ExtensionActionSetTitleFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.setTitle", BROWSERACTION_SETTITLE)
 
  protected:
-  virtual ~BrowserActionSetTitleFunction() {}
+  ~BrowserActionSetTitleFunction() override {}
 };
 
 class BrowserActionSetPopupFunction : public ExtensionActionSetPopupFunction {
@@ -277,7 +282,7 @@ class BrowserActionSetPopupFunction : public ExtensionActionSetPopupFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.setPopup", BROWSERACTION_SETPOPUP)
 
  protected:
-  virtual ~BrowserActionSetPopupFunction() {}
+  ~BrowserActionSetPopupFunction() override {}
 };
 
 class BrowserActionGetTitleFunction : public ExtensionActionGetTitleFunction {
@@ -285,7 +290,7 @@ class BrowserActionGetTitleFunction : public ExtensionActionGetTitleFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.getTitle", BROWSERACTION_GETTITLE)
 
  protected:
-  virtual ~BrowserActionGetTitleFunction() {}
+  ~BrowserActionGetTitleFunction() override {}
 };
 
 class BrowserActionGetPopupFunction : public ExtensionActionGetPopupFunction {
@@ -293,7 +298,7 @@ class BrowserActionGetPopupFunction : public ExtensionActionGetPopupFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.getPopup", BROWSERACTION_GETPOPUP)
 
  protected:
-  virtual ~BrowserActionGetPopupFunction() {}
+  ~BrowserActionGetPopupFunction() override {}
 };
 
 class BrowserActionSetBadgeTextFunction
@@ -303,7 +308,7 @@ class BrowserActionSetBadgeTextFunction
                              BROWSERACTION_SETBADGETEXT)
 
  protected:
-  virtual ~BrowserActionSetBadgeTextFunction() {}
+  ~BrowserActionSetBadgeTextFunction() override {}
 };
 
 class BrowserActionSetBadgeBackgroundColorFunction
@@ -313,7 +318,7 @@ class BrowserActionSetBadgeBackgroundColorFunction
                              BROWSERACTION_SETBADGEBACKGROUNDCOLOR)
 
  protected:
-  virtual ~BrowserActionSetBadgeBackgroundColorFunction() {}
+  ~BrowserActionSetBadgeBackgroundColorFunction() override {}
 };
 
 class BrowserActionGetBadgeTextFunction
@@ -323,7 +328,7 @@ class BrowserActionGetBadgeTextFunction
                              BROWSERACTION_GETBADGETEXT)
 
  protected:
-  virtual ~BrowserActionGetBadgeTextFunction() {}
+  ~BrowserActionGetBadgeTextFunction() override {}
 };
 
 class BrowserActionGetBadgeBackgroundColorFunction
@@ -333,7 +338,7 @@ class BrowserActionGetBadgeBackgroundColorFunction
                              BROWSERACTION_GETBADGEBACKGROUNDCOLOR)
 
  protected:
-  virtual ~BrowserActionGetBadgeBackgroundColorFunction() {}
+  ~BrowserActionGetBadgeBackgroundColorFunction() override {}
 };
 
 class BrowserActionEnableFunction : public ExtensionActionShowFunction {
@@ -341,7 +346,7 @@ class BrowserActionEnableFunction : public ExtensionActionShowFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.enable", BROWSERACTION_ENABLE)
 
  protected:
-  virtual ~BrowserActionEnableFunction() {}
+  ~BrowserActionEnableFunction() override {}
 };
 
 class BrowserActionDisableFunction : public ExtensionActionHideFunction {
@@ -349,7 +354,7 @@ class BrowserActionDisableFunction : public ExtensionActionHideFunction {
   DECLARE_EXTENSION_FUNCTION("browserAction.disable", BROWSERACTION_DISABLE)
 
  protected:
-  virtual ~BrowserActionDisableFunction() {}
+  ~BrowserActionDisableFunction() override {}
 };
 
 class BrowserActionOpenPopupFunction : public ChromeAsyncExtensionFunction,
@@ -360,14 +365,14 @@ class BrowserActionOpenPopupFunction : public ChromeAsyncExtensionFunction,
   BrowserActionOpenPopupFunction();
 
  private:
-  virtual ~BrowserActionOpenPopupFunction() {}
+  ~BrowserActionOpenPopupFunction() override {}
 
   // ExtensionFunction:
-  virtual bool RunAsync() OVERRIDE;
+  bool RunAsync() override;
 
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
   void OpenPopupTimedOut();
 
   content::NotificationRegistrar registrar_;
@@ -387,7 +392,7 @@ class PageActionShowFunction : public extensions::ExtensionActionShowFunction {
   DECLARE_EXTENSION_FUNCTION("pageAction.show", PAGEACTION_SHOW)
 
  protected:
-  virtual ~PageActionShowFunction() {}
+  ~PageActionShowFunction() override {}
 };
 
 class PageActionHideFunction : public extensions::ExtensionActionHideFunction {
@@ -395,7 +400,7 @@ class PageActionHideFunction : public extensions::ExtensionActionHideFunction {
   DECLARE_EXTENSION_FUNCTION("pageAction.hide", PAGEACTION_HIDE)
 
  protected:
-  virtual ~PageActionHideFunction() {}
+  ~PageActionHideFunction() override {}
 };
 
 class PageActionSetIconFunction
@@ -404,7 +409,7 @@ class PageActionSetIconFunction
   DECLARE_EXTENSION_FUNCTION("pageAction.setIcon", PAGEACTION_SETICON)
 
  protected:
-  virtual ~PageActionSetIconFunction() {}
+  ~PageActionSetIconFunction() override {}
 };
 
 class PageActionSetTitleFunction
@@ -413,7 +418,7 @@ class PageActionSetTitleFunction
   DECLARE_EXTENSION_FUNCTION("pageAction.setTitle", PAGEACTION_SETTITLE)
 
  protected:
-  virtual ~PageActionSetTitleFunction() {}
+  ~PageActionSetTitleFunction() override {}
 };
 
 class PageActionSetPopupFunction
@@ -422,7 +427,7 @@ class PageActionSetPopupFunction
   DECLARE_EXTENSION_FUNCTION("pageAction.setPopup", PAGEACTION_SETPOPUP)
 
  protected:
-  virtual ~PageActionSetPopupFunction() {}
+  ~PageActionSetPopupFunction() override {}
 };
 
 class PageActionGetTitleFunction
@@ -431,7 +436,7 @@ class PageActionGetTitleFunction
   DECLARE_EXTENSION_FUNCTION("pageAction.getTitle", PAGEACTION_GETTITLE)
 
  protected:
-  virtual ~PageActionGetTitleFunction() {}
+  ~PageActionGetTitleFunction() override {}
 };
 
 class PageActionGetPopupFunction
@@ -440,41 +445,7 @@ class PageActionGetPopupFunction
   DECLARE_EXTENSION_FUNCTION("pageAction.getPopup", PAGEACTION_GETPOPUP)
 
  protected:
-  virtual ~PageActionGetPopupFunction() {}
-};
-
-// Base class for deprecated page actions APIs
-class PageActionsFunction : public ChromeSyncExtensionFunction {
- protected:
-  PageActionsFunction();
-  virtual ~PageActionsFunction();
-  bool SetPageActionEnabled(bool enable);
-};
-
-// Implement chrome.pageActions.enableForTab().
-class EnablePageActionsFunction : public PageActionsFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("pageActions.enableForTab",
-                             PAGEACTIONS_ENABLEFORTAB)
-
- protected:
-  virtual ~EnablePageActionsFunction() {}
-
-  // ExtensionFunction:
-  virtual bool RunSync() OVERRIDE;
-};
-
-// Implement chrome.pageActions.disableForTab().
-class DisablePageActionsFunction : public PageActionsFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("pageActions.disableForTab",
-                             PAGEACTIONS_DISABLEFORTAB)
-
- protected:
-  virtual ~DisablePageActionsFunction() {}
-
-  // ExtensionFunction:
-  virtual bool RunSync() OVERRIDE;
+  ~PageActionGetPopupFunction() override {}
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_API_EXTENSION_ACTION_EXTENSION_ACTION_API_H_

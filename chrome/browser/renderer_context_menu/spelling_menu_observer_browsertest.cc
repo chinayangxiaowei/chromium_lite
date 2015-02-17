@@ -46,21 +46,19 @@ class MockRenderViewContextMenu : public RenderViewContextMenuProxy {
   virtual ~MockRenderViewContextMenu();
 
   // RenderViewContextMenuProxy implementation.
-  virtual void AddMenuItem(int command_id,
-                           const base::string16& title) OVERRIDE;
-  virtual void AddCheckItem(int command_id,
-                            const base::string16& title) OVERRIDE;
-  virtual void AddSeparator() OVERRIDE;
-  virtual void AddSubMenu(int command_id,
-                          const base::string16& label,
-                          ui::MenuModel* model) OVERRIDE;
-  virtual void UpdateMenuItem(int command_id,
-                              bool enabled,
-                              bool hidden,
-                              const base::string16& title) OVERRIDE;
-  virtual RenderViewHost* GetRenderViewHost() const OVERRIDE;
-  virtual WebContents* GetWebContents() const OVERRIDE;
-  virtual content::BrowserContext* GetBrowserContext() const OVERRIDE;
+  void AddMenuItem(int command_id, const base::string16& title) override;
+  void AddCheckItem(int command_id, const base::string16& title) override;
+  void AddSeparator() override;
+  void AddSubMenu(int command_id,
+                  const base::string16& label,
+                  ui::MenuModel* model) override;
+  void UpdateMenuItem(int command_id,
+                      bool enabled,
+                      bool hidden,
+                      const base::string16& title) override;
+  RenderViewHost* GetRenderViewHost() const override;
+  WebContents* GetWebContents() const override;
+  content::BrowserContext* GetBrowserContext() const override;
 
   // Attaches a RenderViewContextMenuObserver to be tested.
   void SetObserver(RenderViewContextMenuObserver* observer);
@@ -81,7 +79,10 @@ class MockRenderViewContextMenu : public RenderViewContextMenuProxy {
 
   // A dummy profile used in this test. Call GetPrefs() when a test needs to
   // change this profile and use PrefService methods.
-  scoped_ptr<TestingProfile> profile_;
+  scoped_ptr<TestingProfile> original_profile_;
+
+  // Either |original_profile_| or its incognito profile.
+  Profile* profile_;
 
   // A list of menu items added by the SpellingMenuObserver class.
   std::vector<MockMenuItem> items_;
@@ -91,10 +92,9 @@ class MockRenderViewContextMenu : public RenderViewContextMenuProxy {
 
 MockRenderViewContextMenu::MockRenderViewContextMenu(bool incognito)
     : observer_(NULL) {
-  TestingProfile::Builder builder;
-  if (incognito)
-    builder.SetIncognito();
-  profile_ = builder.Build();
+  original_profile_ = TestingProfile::Builder().Build();
+  profile_ = incognito ? original_profile_->GetOffTheRecordProfile()
+                       : original_profile_.get();
 }
 
 MockRenderViewContextMenu::~MockRenderViewContextMenu() {
@@ -170,7 +170,7 @@ WebContents* MockRenderViewContextMenu::GetWebContents() const {
 }
 
 content::BrowserContext* MockRenderViewContextMenu::GetBrowserContext() const {
-  return profile_.get();
+  return profile_;
 }
 
 size_t MockRenderViewContextMenu::GetMenuSize() const {
@@ -204,11 +204,9 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
  public:
   SpellingMenuObserverTest();
 
-  virtual void SetUpOnMainThread() OVERRIDE {
-    Reset(false);
-  }
+  void SetUpOnMainThread() override { Reset(false); }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     observer_.reset();
     menu_.reset();
   }
@@ -240,7 +238,7 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
         menu()->GetBrowserContext(), SpellingServiceClient::SPELLCHECK));
   }
 
-  virtual ~SpellingMenuObserverTest();
+  ~SpellingMenuObserverTest() override;
   MockRenderViewContextMenu* menu() { return menu_.get(); }
   SpellingMenuObserver* observer() { return observer_.get(); }
  private:

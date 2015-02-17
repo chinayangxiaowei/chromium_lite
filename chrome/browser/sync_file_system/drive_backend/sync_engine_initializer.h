@@ -69,17 +69,13 @@ class SyncEngineInitializer : public SyncTask {
   SyncEngineInitializer(SyncEngineContext* sync_context,
                         const base::FilePath& database_path,
                         leveldb::Env* env_override);
-  virtual ~SyncEngineInitializer();
-  virtual void RunPreflight(scoped_ptr<SyncTaskToken> token) OVERRIDE;
+  ~SyncEngineInitializer() override;
+  void RunPreflight(scoped_ptr<SyncTaskToken> token) override;
 
   scoped_ptr<MetadataDatabase> PassMetadataDatabase();
 
  private:
   typedef base::Callback<void(const SyncStatusCallback& callback)> Task;
-
-  void DidCreateMetadataDatabase(scoped_ptr<SyncTaskToken> token,
-                                 SyncStatusCode status,
-                                 scoped_ptr<MetadataDatabase> instance);
 
   void GetAboutResource(scoped_ptr<SyncTaskToken> token);
   void DidGetAboutResource(
@@ -103,8 +99,6 @@ class SyncEngineInitializer : public SyncTask {
       google_apis::GDataErrorCode error,
       scoped_ptr<google_apis::FileList> file_list);
   void PopulateDatabase(scoped_ptr<SyncTaskToken> token);
-  void DidPopulateDatabase(scoped_ptr<SyncTaskToken> token,
-                           SyncStatusCode status);
 
   SyncEngineContext* sync_context_;  // Not owned.
   leveldb::Env* env_override_;

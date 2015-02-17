@@ -12,6 +12,7 @@
 #include "components/autofill/core/browser/personal_data_manager_observer.h"
 
 namespace autofill {
+class AutofillProfile;
 class PersonalDataManager;
 }  // namespace autofill
 
@@ -26,19 +27,20 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
                                public autofill::PersonalDataManagerObserver {
  public:
   AutofillOptionsHandler();
-  virtual ~AutofillOptionsHandler();
+  ~AutofillOptionsHandler() override;
 
   // OptionsPageUIHandler implementation.
-  virtual void GetLocalizedValues(
-      base::DictionaryValue* localized_strings) OVERRIDE;
-  virtual void InitializeHandler() OVERRIDE;
-  virtual void InitializePage() OVERRIDE;
-  virtual void RegisterMessages() OVERRIDE;
+  void GetLocalizedValues(base::DictionaryValue* localized_strings) override;
+  void InitializeHandler() override;
+  void InitializePage() override;
+  void RegisterMessages() override;
 
   // PersonalDataManagerObserver implementation.
-  virtual void OnPersonalDataChanged() OVERRIDE;
+  void OnPersonalDataChanged() override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(AutofillOptionsHandlerTest, AddressToDictionary);
+
   // Loads the strings for the address and credit card overlays.
   void SetAddressOverlayStrings(base::DictionaryValue* localized_strings);
   void SetCreditCardOverlayStrings(base::DictionaryValue* localized_strings);
@@ -94,6 +96,11 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
 
   // Returns true if |personal_data_| is non-null and loaded.
   bool IsPersonalDataLoaded() const;
+
+  // Fills in |address| with the data format that the options js expects.
+  static void AutofillProfileToDictionary(
+      const autofill::AutofillProfile& profile,
+      base::DictionaryValue* address);
 
   // The personal data manager, used to load Autofill profiles and credit cards.
   // Unowned pointer, may not be NULL.

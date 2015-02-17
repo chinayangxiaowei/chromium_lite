@@ -4,7 +4,7 @@
 
 #include "chrome/browser/net/net_log_temp_file.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/values.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/ui/webui/net_internals/net_internals_ui.h"
@@ -124,6 +124,7 @@ void NetLogTempFile::StartNetLog(bool strip_private_data) {
     net_log_logger_->set_log_level(net::NetLog::LOG_STRIP_PRIVATE_DATA);
     log_type_ = LOG_TYPE_STRIP_PRIVATE_DATA;
   } else {
+    net_log_logger_->set_log_level(net::NetLog::LOG_ALL_BUT_BYTES);
     log_type_ = LOG_TYPE_NORMAL;
   }
   net_log_logger_->StartObserving(chrome_net_log_);

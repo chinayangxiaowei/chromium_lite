@@ -14,9 +14,9 @@
 #include "base/at_exit.h"
 #include "base/basictypes.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/file_version_info.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
@@ -288,83 +288,6 @@ installer::InstallStatus RenameChromeExecutables(
   VLOG(1) << "Deleting temporary directory " << temp_path.path().value();
 
   return ret;
-}
-
-// For each product that is being updated (i.e., already installed at an earlier
-// version), see if that product has an update policy override that differs from
-// that for the binaries.  If any are found, fail with an error indicating that
-// the Group Policy settings are in an inconsistent state.  Do not do this test
-// for same-version installs, since it would be unkind to block attempts to
-// repair a corrupt installation.  This function returns false when installation
-// should be halted, in which case |status| contains the relevant exit code and
-// the proper installer result has been written to the registry.
-bool CheckGroupPolicySettings(const InstallationState& original_state,
-                              const InstallerState& installer_state,
-                              const Version& new_version,
-                              installer::InstallStatus* status) {
-#if !defined(GOOGLE_CHROME_BUILD)
-  // Chromium builds are not updated via Google Update, so there are no
-  // Group Policy settings to consult.
-  return true;
-#else
-  DCHECK(status);
-
-  // Single installs are always in good shape.
-  if (!installer_state.is_multi_install())
-    return true;
-
-  bool settings_are_valid = true;
-  const bool is_system_install = installer_state.system_install();
-  BrowserDistribution* const binaries_dist =
-      installer_state.multi_package_binaries_distribution();
-
-  // Get the update policy for the binaries.
-  const GoogleUpdateSettings::UpdatePolicy binaries_policy =
-      GoogleUpdateSettings::GetAppUpdatePolicy(binaries_dist->GetAppGuid(),
-                                               NULL);
-
-  // Check for differing update policies for all of the products being updated.
-  const Products& products = installer_state.products();
-  Products::const_iterator scan = products.begin();
-  for (Products::const_iterator end = products.end(); scan != end; ++scan) {
-    BrowserDistribution* dist = (*scan)->distribution();
-    const ProductState* product_state =
-        original_state.GetProductState(is_system_install, dist->GetType());
-    // Is an earlier version of this product already installed?
-    if (product_state != NULL &&
-        product_state->version().CompareTo(new_version) < 0) {
-      bool is_overridden = false;
-      GoogleUpdateSettings::UpdatePolicy app_policy =
-          GoogleUpdateSettings::GetAppUpdatePolicy(dist->GetAppGuid(),
-                                                   &is_overridden);
-      if (is_overridden && app_policy != binaries_policy) {
-        LOG(ERROR) << "Found legacy Group Policy setting for "
-                   << dist->GetDisplayName() << " (value: " << app_policy
-                   << ") that does not match the setting for "
-                   << binaries_dist->GetDisplayName()
-                   << " (value: " << binaries_policy << ").";
-        settings_are_valid = false;
-      }
-    }
-  }
-
-  if (!settings_are_valid) {
-    // TODO(grt): add " See http://goo.gl/+++ for details." to the end of this
-    // log message and to the IDS_INSTALL_INCONSISTENT_UPDATE_POLICY string once
-    // we have a help center article that explains why this error is being
-    // reported and how to resolve it.
-    LOG(ERROR) << "Cannot apply update on account of inconsistent "
-                  "Google Update Group Policy settings. Use the Group Policy "
-                  "Editor to set the update policy override for the "
-               << binaries_dist->GetDisplayName()
-               << " application and try again.";
-    *status = installer::INCONSISTENT_UPDATE_POLICY;
-    installer_state.WriteInstallerResult(
-        *status, IDS_INSTALL_INCONSISTENT_UPDATE_POLICY_BASE, NULL);
-  }
-
-  return settings_are_valid;
-#endif  // defined(GOOGLE_CHROME_BUILD)
 }
 
 // If only the binaries are being updated, fail.
@@ -1207,16 +1130,7 @@ bool HandleNonInstallCmdLineOptions(const InstallationState& original_state,
     }
   } else if (cmd_line.HasSwitch(installer::switches::kReenableAutoupdates)) {
     // setup.exe has been asked to attempt to reenable updates for Chrome.
-    // Figure out whether we should do so for the multi binaries or the main
-    // Chrome product.
-    BrowserDistribution::Type dist_type = BrowserDistribution::CHROME_BROWSER;
-    if (installer_state->is_multi_install())
-      dist_type = BrowserDistribution::CHROME_BINARIES;
-
-    BrowserDistribution* dist =
-        BrowserDistribution::GetSpecificDistribution(dist_type);
-    bool updates_enabled =
-        GoogleUpdateSettings::ReenableAutoupdatesForApp(dist->GetAppGuid());
+    bool updates_enabled = GoogleUpdateSettings::ReenableAutoupdates();
     *exit_code = updates_enabled ? installer::REENABLE_UPDATES_SUCCEEDED :
                                    installer::REENABLE_UPDATES_FAILED;
   } else {
@@ -1548,11 +1462,6 @@ InstallStatus InstallProductsHelper(
 
       installer_state.WriteInstallerResult(install_status, message_id, NULL);
     }
-
-    proceed_with_installation =
-        proceed_with_installation &&
-        CheckGroupPolicySettings(original_state, installer_state,
-                                 *installer_version, &install_status);
 
     if (proceed_with_installation) {
       // If Google Update is absent at user-level, install it using the

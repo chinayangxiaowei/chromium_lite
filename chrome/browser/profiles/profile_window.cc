@@ -20,6 +20,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/profile_chooser_constants.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -50,34 +51,33 @@ class BrowserAddedForProfileObserver : public chrome::BrowserListObserver {
  public:
   BrowserAddedForProfileObserver(
       Profile* profile,
-      profiles::ProfileSwitchingDoneCallback callback)
+      ProfileManager::CreateCallback callback)
       : profile_(profile),
         callback_(callback) {
     DCHECK(!callback_.is_null());
     BrowserList::AddObserver(this);
   }
-  virtual ~BrowserAddedForProfileObserver() {
-  }
+  ~BrowserAddedForProfileObserver() override {}
 
  private:
   // Overridden from BrowserListObserver:
-  virtual void OnBrowserAdded(Browser* browser) OVERRIDE {
+  void OnBrowserAdded(Browser* browser) override {
     if (browser->profile() == profile_) {
       BrowserList::RemoveObserver(this);
-      callback_.Run();
+      callback_.Run(profile_, Profile::CREATE_STATUS_INITIALIZED);
       base::MessageLoop::current()->DeleteSoon(FROM_HERE, this);
     }
   }
 
   // Profile for which the browser should be opened.
   Profile* profile_;
-  profiles::ProfileSwitchingDoneCallback callback_;
+  ProfileManager::CreateCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserAddedForProfileObserver);
 };
 
 void OpenBrowserWindowForProfile(
-    profiles::ProfileSwitchingDoneCallback callback,
+    ProfileManager::CreateCallback callback,
     bool always_create,
     bool is_new_profile,
     chrome::HostDesktopType desktop_type,
@@ -108,7 +108,7 @@ void OpenBrowserWindowForProfile(
     if (browser) {
       browser->window()->Activate();
       if (!callback.is_null())
-        callback.Run();
+        callback.Run(profile, Profile::CREATE_STATUS_INITIALIZED);
       return;
     }
   }
@@ -137,10 +137,12 @@ void OpenBrowserWindowForProfile(
 
 // Called after a |guest_profile| is available to be used by the user manager.
 // Based on the value of |tutorial_mode| we determine a url to be displayed
-// by the webui and run the |callback|, if it exists.
+// by the webui and run the |callback|, if it exists. After opening a profile,
+// perform |profile_open_action|.
 void OnUserManagerGuestProfileCreated(
     const base::FilePath& profile_path_to_focus,
     profiles::UserManagerTutorialMode tutorial_mode,
+    profiles::UserManagerProfileSelected profile_open_action,
     const base::Callback<void(Profile*, const std::string&)>& callback,
     Profile* guest_profile,
     Profile::CreateStatus status) {
@@ -151,7 +153,7 @@ void OnUserManagerGuestProfileCreated(
   std::string page = chrome::kChromeUIUserManagerURL;
 
   if (tutorial_mode == profiles::USER_MANAGER_TUTORIAL_OVERVIEW) {
-    page += "#tutorial";
+    page += profiles::kUserManagerDisplayTutorial;
   } else if (!profile_path_to_focus.empty()) {
     const ProfileInfoCache& cache =
         g_browser_process->profile_manager()->GetProfileInfoCache();
@@ -160,8 +162,19 @@ void OnUserManagerGuestProfileCreated(
       page += "#";
       page += base::IntToString(index);
     }
+  } else if (profile_open_action ==
+             profiles::USER_MANAGER_SELECT_PROFILE_TASK_MANAGER) {
+    page += profiles::kUserManagerSelectProfileTaskManager;
+  } else if (profile_open_action ==
+             profiles::USER_MANAGER_SELECT_PROFILE_ABOUT_CHROME) {
+    page += profiles::kUserManagerSelectProfileAboutChrome;
+  } else if (profile_open_action ==
+             profiles::USER_MANAGER_SELECT_PROFILE_CHROME_SETTINGS) {
+    page += profiles::kUserManagerSelectProfileChromeSettings;
+  } else if (profile_open_action ==
+             profiles::USER_MANAGER_SELECT_PROFILE_CHROME_MEMORY) {
+    page += profiles::kUserManagerSelectProfileChromeMemory;
   }
-
   callback.Run(guest_profile, page);
 }
 
@@ -177,6 +190,13 @@ void UpdateServicesWithNewProfileManagementFlag(Profile* profile,
 }  // namespace
 
 namespace profiles {
+
+// User Manager parameters are prefixed with hash.
+const char kUserManagerDisplayTutorial[] = "#tutorial";
+const char kUserManagerSelectProfileTaskManager[] = "#task-manager";
+const char kUserManagerSelectProfileAboutChrome[] = "#about-chrome";
+const char kUserManagerSelectProfileChromeSettings[] = "#chrome-settings";
+const char kUserManagerSelectProfileChromeMemory[] = "#chrome-memory";
 
 void FindOrCreateNewWindowForProfile(
     Profile* profile,
@@ -209,7 +229,7 @@ void FindOrCreateNewWindowForProfile(
 void SwitchToProfile(const base::FilePath& path,
                      chrome::HostDesktopType desktop_type,
                      bool always_create,
-                     ProfileSwitchingDoneCallback callback,
+                     ProfileManager::CreateCallback callback,
                      ProfileMetrics::ProfileOpen metric) {
   g_browser_process->profile_manager()->CreateProfileAsync(
       path,
@@ -225,7 +245,7 @@ void SwitchToProfile(const base::FilePath& path,
 }
 
 void SwitchToGuestProfile(chrome::HostDesktopType desktop_type,
-                          ProfileSwitchingDoneCallback callback) {
+                          ProfileManager::CreateCallback callback) {
   g_browser_process->profile_manager()->CreateProfileAsync(
       ProfileManager::GetGuestProfilePath(),
       base::Bind(&OpenBrowserWindowForProfile,
@@ -240,7 +260,7 @@ void SwitchToGuestProfile(chrome::HostDesktopType desktop_type,
 }
 
 void CreateAndSwitchToNewProfile(chrome::HostDesktopType desktop_type,
-                                 ProfileSwitchingDoneCallback callback,
+                                 ProfileManager::CreateCallback callback,
                                  ProfileMetrics::ProfileAdd metric) {
   ProfileInfoCache& cache =
       g_browser_process->profile_manager()->GetProfileInfoCache();
@@ -259,30 +279,70 @@ void CreateAndSwitchToNewProfile(chrome::HostDesktopType desktop_type,
   ProfileMetrics::LogProfileAddNewUser(metric);
 }
 
+void GuestBrowserCloseSuccess(const base::FilePath& profile_path) {
+  UserManager::Show(base::FilePath(),
+                    profiles::USER_MANAGER_NO_TUTORIAL,
+                    profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
+}
+
 void CloseGuestProfileWindows() {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   Profile* profile = profile_manager->GetProfileByPath(
       ProfileManager::GetGuestProfilePath());
 
   if (profile) {
-    BrowserList::CloseAllBrowsersWithProfile(profile);
+    BrowserList::CloseAllBrowsersWithProfile(
+        profile, base::Bind(&GuestBrowserCloseSuccess));
   }
+}
+
+void LockBrowserCloseSuccess(const base::FilePath& profile_path) {
+  ProfileInfoCache* cache =
+      &g_browser_process->profile_manager()->GetProfileInfoCache();
+
+  cache->SetProfileSigninRequiredAtIndex(
+      cache->GetIndexOfProfileWithPath(profile_path), true);
+  chrome::HideTaskManager();
+  UserManager::Show(profile_path,
+                    profiles::USER_MANAGER_NO_TUTORIAL,
+                    profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
 }
 
 void LockProfile(Profile* profile) {
   DCHECK(profile);
-  ProfileInfoCache& cache =
-      g_browser_process->profile_manager()->GetProfileInfoCache();
+  if (profile) {
+    BrowserList::CloseAllBrowsersWithProfile(
+        profile, base::Bind(&LockBrowserCloseSuccess));
+  }
+}
 
-  size_t index = cache.GetIndexOfProfileWithPath(profile->GetPath());
-  cache.SetProfileSigninRequiredAtIndex(index, true);
-  chrome::ShowUserManager(profile->GetPath());
-  BrowserList::CloseAllBrowsersWithProfile(profile);
+bool IsLockAvailable(Profile* profile) {
+  DCHECK(profile);
+  if (!switches::IsNewProfileManagement())
+    return false;
+
+  const std::string& hosted_domain = profile->GetPrefs()->
+      GetString(prefs::kGoogleServicesHostedDomain);
+  // TODO(mlerman): Prohibit only users who authenticate using SAML. Until then,
+  // prohibited users who use hosted domains (aside from google.com).
+  if (hosted_domain != Profile::kNoHostedDomainFound &&
+      hosted_domain != "google.com") {
+    return false;
+  }
+
+  const ProfileInfoCache& cache =
+      g_browser_process->profile_manager()->GetProfileInfoCache();
+  for (size_t i = 0; i < cache.GetNumberOfProfiles(); ++i) {
+    if (cache.ProfileIsSupervisedAtIndex(i))
+      return true;
+  }
+  return false;
 }
 
 void CreateGuestProfileForUserManager(
     const base::FilePath& profile_path_to_focus,
     profiles::UserManagerTutorialMode tutorial_mode,
+    profiles::UserManagerProfileSelected profile_open_action,
     const base::Callback<void(Profile*, const std::string&)>& callback) {
   // Create the guest profile, if necessary, and open the User Manager
   // from the guest profile.
@@ -291,6 +351,7 @@ void CreateGuestProfileForUserManager(
       base::Bind(&OnUserManagerGuestProfileCreated,
                  profile_path_to_focus,
                  tutorial_mode,
+                 profile_open_action,
                  callback),
       base::string16(),
       base::string16(),
@@ -300,10 +361,14 @@ void CreateGuestProfileForUserManager(
 void ShowUserManagerMaybeWithTutorial(Profile* profile) {
   // Guest users cannot appear in the User Manager, nor display a tutorial.
   if (!profile || profile->IsGuestSession()) {
-    chrome::ShowUserManager(base::FilePath());
+    UserManager::Show(base::FilePath(),
+                      profiles::USER_MANAGER_NO_TUTORIAL,
+                      profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
     return;
   }
-  chrome::ShowUserManagerWithTutorial(profiles::USER_MANAGER_TUTORIAL_OVERVIEW);
+  UserManager::Show(base::FilePath(),
+                    profiles::USER_MANAGER_TUTORIAL_OVERVIEW,
+                    profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
 }
 
 void EnableNewProfileManagementPreview(Profile* profile) {
@@ -334,7 +399,9 @@ void EnableNewProfileManagementPreview(Profile* profile) {
 
   switches::EnableNewProfileManagementForTesting(
       CommandLine::ForCurrentProcess());
-  chrome::ShowUserManagerWithTutorial(profiles::USER_MANAGER_TUTORIAL_OVERVIEW);
+  UserManager::Show(base::FilePath(),
+                    profiles::USER_MANAGER_TUTORIAL_OVERVIEW,
+                    profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
   UpdateServicesWithNewProfileManagementFlag(profile, true);
 #endif
 }

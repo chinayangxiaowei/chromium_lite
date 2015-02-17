@@ -11,10 +11,6 @@
 #include "chrome/browser/signin/screenlock_bridge.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 
-namespace gfx {
-class Image;
-}
-
 namespace extensions {
 
 class ScreenlockPrivateGetLockedFunction : public ChromeAsyncExtensionFunction {
@@ -22,10 +18,10 @@ class ScreenlockPrivateGetLockedFunction : public ChromeAsyncExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("screenlockPrivate.getLocked",
                              SCREENLOCKPRIVATE_GETLOCKED)
   ScreenlockPrivateGetLockedFunction();
-  virtual bool RunAsync() OVERRIDE;
+  bool RunAsync() override;
 
  private:
-  virtual ~ScreenlockPrivateGetLockedFunction();
+  ~ScreenlockPrivateGetLockedFunction() override;
   DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateGetLockedFunction);
 };
 
@@ -34,90 +30,23 @@ class ScreenlockPrivateSetLockedFunction : public ChromeAsyncExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("screenlockPrivate.setLocked",
                              SCREENLOCKPRIVATE_SETLOCKED)
   ScreenlockPrivateSetLockedFunction();
-  virtual bool RunAsync() OVERRIDE;
+  bool RunAsync() override;
 
  private:
-  virtual ~ScreenlockPrivateSetLockedFunction();
+  ~ScreenlockPrivateSetLockedFunction() override;
   DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateSetLockedFunction);
 };
 
-class ScreenlockPrivateShowMessageFunction
-    : public ChromeAsyncExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("screenlockPrivate.showMessage",
-                             SCREENLOCKPRIVATE_SHOWMESSAGE)
-  ScreenlockPrivateShowMessageFunction();
-  virtual bool RunAsync() OVERRIDE;
-
- private:
-  virtual ~ScreenlockPrivateShowMessageFunction();
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateShowMessageFunction);
-};
-
-class ScreenlockPrivateShowCustomIconFunction
-    : public ChromeAsyncExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("screenlockPrivate.showCustomIcon",
-                             SCREENLOCKPRIVATE_SHOWCUSTOMICON)
-  ScreenlockPrivateShowCustomIconFunction();
-  virtual bool RunAsync() OVERRIDE;
-
- private:
-  virtual ~ScreenlockPrivateShowCustomIconFunction();
-  void OnImageLoaded(const gfx::Image& image);
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateShowCustomIconFunction);
-};
-
-class ScreenlockPrivateHideCustomIconFunction
-    : public ChromeAsyncExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("screenlockPrivate.hideCustomIcon",
-                             SCREENLOCKPRIVATE_HIDECUSTOMICON)
-  ScreenlockPrivateHideCustomIconFunction();
-  virtual bool RunAsync() OVERRIDE;
-
- private:
-  virtual ~ScreenlockPrivateHideCustomIconFunction();
-  void OnImageLoaded(const gfx::Image& image);
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateHideCustomIconFunction);
-};
-
-class ScreenlockPrivateSetAuthTypeFunction
-    : public ChromeAsyncExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("screenlockPrivate.setAuthType",
-                             SCREENLOCKPRIVATE_SETAUTHTYPE)
-  ScreenlockPrivateSetAuthTypeFunction();
-  virtual bool RunAsync() OVERRIDE;
-
- private:
-  virtual ~ScreenlockPrivateSetAuthTypeFunction();
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateSetAuthTypeFunction);
-};
-
-class ScreenlockPrivateGetAuthTypeFunction
-    : public ChromeAsyncExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("screenlockPrivate.getAuthType",
-                             SCREENLOCKPRIVATE_GETAUTHTYPE)
-  ScreenlockPrivateGetAuthTypeFunction();
-  virtual bool RunAsync() OVERRIDE;
-
- private:
-  virtual ~ScreenlockPrivateGetAuthTypeFunction();
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateGetAuthTypeFunction);
-};
-
 class ScreenlockPrivateAcceptAuthAttemptFunction
-    : public ChromeAsyncExtensionFunction {
+    : public ChromeSyncExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("screenlockPrivate.acceptAuthAttempt",
                              SCREENLOCKPRIVATE_ACCEPTAUTHATTEMPT)
   ScreenlockPrivateAcceptAuthAttemptFunction();
-  virtual bool RunAsync() OVERRIDE;
+  bool RunSync() override;
 
  private:
-  virtual ~ScreenlockPrivateAcceptAuthAttemptFunction();
+  ~ScreenlockPrivateAcceptAuthAttemptFunction() override;
   DISALLOW_COPY_AND_ASSIGN(ScreenlockPrivateAcceptAuthAttemptFunction);
 };
 
@@ -125,20 +54,21 @@ class ScreenlockPrivateEventRouter : public extensions::BrowserContextKeyedAPI,
                                      public ScreenlockBridge::Observer {
  public:
   explicit ScreenlockPrivateEventRouter(content::BrowserContext* context);
-  virtual ~ScreenlockPrivateEventRouter();
+  ~ScreenlockPrivateEventRouter() override;
 
-  void OnAuthAttempted(ScreenlockBridge::LockHandler::AuthType auth_type,
+  bool OnAuthAttempted(ScreenlockBridge::LockHandler::AuthType auth_type,
                        const std::string& value);
 
   // BrowserContextKeyedAPI
   static extensions::BrowserContextKeyedAPIFactory<
       ScreenlockPrivateEventRouter>*
       GetFactoryInstance();
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // ScreenlockBridge::Observer
-  virtual void OnScreenDidLock() OVERRIDE;
-  virtual void OnScreenDidUnlock() OVERRIDE;
+  void OnScreenDidLock() override;
+  void OnScreenDidUnlock() override;
+  void OnFocusedUserChanged(const std::string& user_id) override;
 
  private:
   friend class extensions::BrowserContextKeyedAPIFactory<

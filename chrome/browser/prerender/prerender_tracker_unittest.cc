@@ -19,9 +19,9 @@
 #include "content/public/browser/resource_controller.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/test/test_browser_thread.h"
-#include "content/test/net/url_request_mock_http_job.h"
 #include "ipc/ipc_message.h"
 #include "net/base/request_priority.h"
+#include "net/test/url_request/url_request_mock_http_job.h"
 #include "net/url_request/redirect_info.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_test_util.h"
@@ -46,18 +46,18 @@ class TestPrerenderContents : public PrerenderContents {
     PrerenderResourceThrottle::OverridePrerenderContentsForTesting(this);
   }
 
-  virtual ~TestPrerenderContents() {
+  ~TestPrerenderContents() override {
     if (final_status() == FINAL_STATUS_MAX)
       SetFinalStatus(FINAL_STATUS_USED);
     PrerenderResourceThrottle::OverridePrerenderContentsForTesting(NULL);
   }
 
-  virtual bool GetChildId(int* child_id) const OVERRIDE {
+  bool GetChildId(int* child_id) const override {
     *child_id = child_id_;
     return true;
   }
 
-  virtual bool GetRouteId(int* route_id) const OVERRIDE {
+  bool GetRouteId(int* route_id) const override {
     *route_id = route_id_;
     return true;
   }
@@ -89,9 +89,8 @@ class TestPrerenderManager : public PrerenderManager {
 
   // We never allocate our PrerenderContents in PrerenderManager, so we don't
   // ever want the default pending delete behaviour.
-  virtual void MoveEntryToPendingDelete(PrerenderContents* entry,
-                                        FinalStatus final_status) OVERRIDE {
-  }
+  void MoveEntryToPendingDelete(PrerenderContents* entry,
+                                FinalStatus final_status) override {}
 };
 
 class DeferredRedirectDelegate : public net::URLRequest::Delegate,
@@ -119,9 +118,9 @@ class DeferredRedirectDelegate : public net::URLRequest::Delegate,
   bool resume_called() const { return resume_called_; }
 
   // net::URLRequest::Delegate implementation:
-  virtual void OnReceivedRedirect(net::URLRequest* request,
-                                  const net::RedirectInfo& redirect_info,
-                                  bool* defer_redirect) OVERRIDE {
+  void OnReceivedRedirect(net::URLRequest* request,
+                          const net::RedirectInfo& redirect_info,
+                          bool* defer_redirect) override {
     // Defer the redirect either way.
     *defer_redirect = true;
 
@@ -129,22 +128,20 @@ class DeferredRedirectDelegate : public net::URLRequest::Delegate,
     throttle_->WillRedirectRequest(redirect_info.new_url, &was_deferred_);
     run_loop_->Quit();
   }
-  virtual void OnResponseStarted(net::URLRequest* request) OVERRIDE { }
-  virtual void OnReadCompleted(net::URLRequest* request,
-                               int bytes_read) OVERRIDE {
-  }
+  void OnResponseStarted(net::URLRequest* request) override {}
+  void OnReadCompleted(net::URLRequest* request, int bytes_read) override {}
 
   // content::ResourceController implementation:
-  virtual void Cancel() OVERRIDE {
+  void Cancel() override {
     EXPECT_FALSE(cancel_called_);
     EXPECT_FALSE(resume_called_);
 
     cancel_called_ = true;
     run_loop_->Quit();
   }
-  virtual void CancelAndIgnore() OVERRIDE { Cancel(); }
-  virtual void CancelWithError(int error_code) OVERRIDE { Cancel(); }
-  virtual void Resume() OVERRIDE {
+  void CancelAndIgnore() override { Cancel(); }
+  void CancelWithError(int error_code) override { Cancel(); }
+  void Resume() override {
     EXPECT_TRUE(was_deferred_);
     EXPECT_FALSE(cancel_called_);
     EXPECT_FALSE(resume_called_);
@@ -178,7 +175,7 @@ class PrerenderTrackerTest : public testing::Test {
     chrome_browser_net::SetUrlRequestMocksEnabled(true);
   }
 
-  virtual ~PrerenderTrackerTest() {
+  ~PrerenderTrackerTest() override {
     chrome_browser_net::SetUrlRequestMocksEnabled(false);
 
     // Cleanup work so the file IO tasks from URLRequestMockHTTPJob
@@ -224,12 +221,12 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectResume) {
   // Fake a request.
   net::TestURLRequestContext url_request_context;
   DeferredRedirectDelegate delegate;
-  net::URLRequest request(
-      content::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
+  scoped_ptr<net::URLRequest> request(url_request_context.CreateRequest(
+      net::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
       net::DEFAULT_PRIORITY,
       &delegate,
-      &url_request_context);
-  content::ResourceRequestInfo::AllocateForTesting(&request,
+      NULL));
+  content::ResourceRequestInfo::AllocateForTesting(request.get(),
                                                    content::RESOURCE_TYPE_IMAGE,
                                                    NULL,
                                                    kDefaultChildId,
@@ -238,11 +235,11 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectResume) {
                                                    true);
 
   // Install a prerender throttle.
-  PrerenderResourceThrottle throttle(&request);
+  PrerenderResourceThrottle throttle(request.get());
   delegate.SetThrottle(&throttle);
 
   // Start the request and wait for a redirect.
-  request.Start();
+  request->Start();
   delegate.Run();
   EXPECT_TRUE(delegate.was_deferred());
   // This calls WillRedirectRequestOnUI().
@@ -267,13 +264,13 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectMainFrame) {
   // Fake a request.
   net::TestURLRequestContext url_request_context;
   DeferredRedirectDelegate delegate;
-  net::URLRequest request(
-      content::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
+  scoped_ptr<net::URLRequest> request(url_request_context.CreateRequest(
+      net::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
       net::DEFAULT_PRIORITY,
       &delegate,
-      &url_request_context);
+      NULL));
   content::ResourceRequestInfo::AllocateForTesting(
-      &request,
+      request.get(),
       content::RESOURCE_TYPE_MAIN_FRAME,
       NULL,
       kDefaultChildId,
@@ -282,12 +279,12 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectMainFrame) {
       true);
 
   // Install a prerender throttle.
-  PrerenderResourceThrottle throttle(&request);
+  PrerenderResourceThrottle throttle(request.get());
   delegate.SetThrottle(&throttle);
 
   // Start the request and wait for a redirect. This time, it should
   // not be deferred.
-  request.Start();
+  request->Start();
   delegate.Run();
   // This calls WillRedirectRequestOnUI().
   RunEvents();
@@ -309,12 +306,12 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectSyncXHR) {
   // Fake a request.
   net::TestURLRequestContext url_request_context;
   DeferredRedirectDelegate delegate;
-  net::URLRequest request(
-      content::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
+  scoped_ptr<net::URLRequest> request(url_request_context.CreateRequest(
+      net::URLRequestMockHTTPJob::GetMockUrl(base::FilePath(kRedirectPath)),
       net::DEFAULT_PRIORITY,
       &delegate,
-      &url_request_context);
-  content::ResourceRequestInfo::AllocateForTesting(&request,
+      NULL));
+  content::ResourceRequestInfo::AllocateForTesting(request.get(),
                                                    content::RESOURCE_TYPE_XHR,
                                                    NULL,
                                                    kDefaultChildId,
@@ -323,11 +320,11 @@ TEST_F(PrerenderTrackerTest, PrerenderThrottledRedirectSyncXHR) {
                                                    false);
 
   // Install a prerender throttle.
-  PrerenderResourceThrottle throttle(&request);
+  PrerenderResourceThrottle throttle(request.get());
   delegate.SetThrottle(&throttle);
 
   // Start the request and wait for a redirect.
-  request.Start();
+  request->Start();
   delegate.Run();
   // This calls WillRedirectRequestOnUI().
   RunEvents();

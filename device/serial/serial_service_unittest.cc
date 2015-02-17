@@ -17,7 +17,7 @@ namespace device {
 namespace {
 
 class FakeSerialDeviceEnumerator : public SerialDeviceEnumerator {
-  virtual mojo::Array<serial::DeviceInfoPtr> GetDevices() OVERRIDE {
+  mojo::Array<serial::DeviceInfoPtr> GetDevices() override {
     mojo::Array<serial::DeviceInfoPtr> devices(1);
     devices[0] = serial::DeviceInfo::New();
     devices[0]->path = "device";
@@ -27,31 +27,27 @@ class FakeSerialDeviceEnumerator : public SerialDeviceEnumerator {
 
 class FailToOpenIoHandler : public TestSerialIoHandler {
  public:
-  static scoped_refptr<SerialIoHandler> Create() {
-    return new FailToOpenIoHandler;
-  }
-
-  virtual void Open(const std::string& port,
-                    const OpenCompleteCallback& callback) OVERRIDE {
+  void Open(const std::string& port,
+            const OpenCompleteCallback& callback) override {
     callback.Run(false);
   }
 
  protected:
-  virtual ~FailToOpenIoHandler() {}
+  ~FailToOpenIoHandler() override {}
 };
 
 }  // namespace
 
 class SerialServiceTest : public testing::Test, public mojo::ErrorHandler {
  public:
-  SerialServiceTest() {}
+  SerialServiceTest() : connected_(false), expecting_error_(false) {}
 
   void StoreDevices(mojo::Array<serial::DeviceInfoPtr> devices) {
     devices_ = devices.Pass();
     StopMessageLoop();
   }
 
-  virtual void OnConnectionError() OVERRIDE {
+  void OnConnectionError() override {
     StopMessageLoop();
     EXPECT_TRUE(expecting_error_);
   }
@@ -66,12 +62,48 @@ class SerialServiceTest : public testing::Test, public mojo::ErrorHandler {
     message_loop_.PostTask(FROM_HERE, run_loop_->QuitClosure());
   }
 
-  void OnGotInfo(serial::ConnectionInfoPtr options) { StopMessageLoop(); }
+  void OnGotInfo(serial::ConnectionInfoPtr options) {
+    connected_ = true;
+    StopMessageLoop();
+  }
+
+  scoped_refptr<SerialIoHandler> ReturnIoHandler() { return io_handler_; }
+
+  void RunConnectTest(const std::string& path, bool expecting_success) {
+    if (!io_handler_.get())
+      io_handler_ = new TestSerialIoHandler;
+    mojo::InterfacePtr<serial::SerialService> service;
+    mojo::BindToProxy(
+        new SerialServiceImpl(
+            new SerialConnectionFactory(
+                base::Bind(&SerialServiceTest::ReturnIoHandler,
+                           base::Unretained(this)),
+                base::MessageLoopProxy::current()),
+            scoped_ptr<SerialDeviceEnumerator>(new FakeSerialDeviceEnumerator)),
+        &service);
+    mojo::InterfacePtr<serial::Connection> connection;
+    mojo::InterfacePtr<serial::DataSink> sink;
+    mojo::InterfacePtr<serial::DataSource> source;
+    service->Connect(path,
+                     serial::ConnectionOptions::New(),
+                     mojo::GetProxy(&connection),
+                     mojo::GetProxy(&sink),
+                     mojo::GetProxy(&source));
+    connection.set_error_handler(this);
+    expecting_error_ = !expecting_success;
+    connection->GetInfo(
+        base::Bind(&SerialServiceTest::OnGotInfo, base::Unretained(this)));
+    RunMessageLoop();
+    EXPECT_EQ(!expecting_success, connection.encountered_error());
+    EXPECT_EQ(expecting_success, connected_);
+    connection.reset();
+  }
 
   base::MessageLoop message_loop_;
   scoped_ptr<base::RunLoop> run_loop_;
   mojo::Array<serial::DeviceInfoPtr> devices_;
   scoped_refptr<TestSerialIoHandler> io_handler_;
+  bool connected_;
   bool expecting_error_;
   serial::ConnectionInfoPtr info_;
 
@@ -81,7 +113,7 @@ class SerialServiceTest : public testing::Test, public mojo::ErrorHandler {
 
 TEST_F(SerialServiceTest, GetDevices) {
   mojo::InterfacePtr<serial::SerialService> service;
-  SerialServiceImpl::Create(NULL, mojo::Get(&service));
+  SerialServiceImpl::Create(NULL, NULL, mojo::GetProxy(&service));
   service.set_error_handler(this);
   mojo::Array<serial::DeviceInfoPtr> result;
   service->GetDevices(
@@ -94,56 +126,16 @@ TEST_F(SerialServiceTest, GetDevices) {
 }
 
 TEST_F(SerialServiceTest, Connect) {
-  mojo::InterfacePtr<serial::SerialService> service;
-  mojo::BindToProxy(
-      new SerialServiceImpl(
-          new SerialConnectionFactory(base::Bind(&TestSerialIoHandler::Create),
-                                      base::MessageLoopProxy::current()),
-          scoped_ptr<SerialDeviceEnumerator>(new FakeSerialDeviceEnumerator)),
-      &service);
-  service.set_error_handler(this);
-  mojo::InterfacePtr<serial::Connection> connection;
-  service->Connect(
-      "device", serial::ConnectionOptions::New(), mojo::Get(&connection));
-  connection.set_error_handler(this);
-  connection->GetInfo(
-      base::Bind(&SerialServiceTest::OnGotInfo, base::Unretained(this)));
-  RunMessageLoop();
-  connection.reset();
+  RunConnectTest("device", true);
 }
 
 TEST_F(SerialServiceTest, ConnectInvalidPath) {
-  mojo::InterfacePtr<serial::SerialService> service;
-  mojo::BindToProxy(
-      new SerialServiceImpl(
-          new SerialConnectionFactory(base::Bind(&TestSerialIoHandler::Create),
-                                      base::MessageLoopProxy::current()),
-          scoped_ptr<SerialDeviceEnumerator>(new FakeSerialDeviceEnumerator)),
-      &service);
-  mojo::InterfacePtr<serial::Connection> connection;
-  service->Connect(
-      "invalid_path", serial::ConnectionOptions::New(), mojo::Get(&connection));
-  connection.set_error_handler(this);
-  expecting_error_ = true;
-  RunMessageLoop();
-  EXPECT_TRUE(connection.encountered_error());
+  RunConnectTest("invalid_path", false);
 }
 
 TEST_F(SerialServiceTest, ConnectOpenFailed) {
-  mojo::InterfacePtr<serial::SerialService> service;
-  mojo::BindToProxy(
-      new SerialServiceImpl(
-          new SerialConnectionFactory(base::Bind(&FailToOpenIoHandler::Create),
-                                      base::MessageLoopProxy::current()),
-          scoped_ptr<SerialDeviceEnumerator>(new FakeSerialDeviceEnumerator)),
-      &service);
-  mojo::InterfacePtr<serial::Connection> connection;
-  service->Connect(
-      "device", serial::ConnectionOptions::New(), mojo::Get(&connection));
-  expecting_error_ = true;
-  connection.set_error_handler(this);
-  RunMessageLoop();
-  EXPECT_TRUE(connection.encountered_error());
+  io_handler_ = new FailToOpenIoHandler;
+  RunConnectTest("device", false);
 }
 
 }  // namespace device

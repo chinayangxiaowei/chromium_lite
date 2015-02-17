@@ -11,9 +11,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/sync/profile_signin_confirmation_helper.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #import "testing/gtest_mac.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -31,8 +31,7 @@ class ProfileSigninConfirmationViewControllerTest
   }
 
  protected:
-  virtual void SetUpOnMainThread() OVERRIDE {
-  }
+  void SetUpOnMainThread() override {}
 
   void SetupDialog(bool offerProfileCreation = true) {
     window_.reset(
@@ -63,9 +62,9 @@ class ProfileSigninConfirmationViewControllerTest
   }
 
   // ui::ProfileSigninConfirmationDelegate:
-  virtual void OnContinueSignin() OVERRIDE { continued_ = true; }
-  virtual void OnCancelSignin() OVERRIDE { cancelled_ = true; }
-  virtual void OnSigninWithNewProfile() OVERRIDE { created_ = true; }
+  void OnContinueSignin() override { continued_ = true; }
+  void OnCancelSignin() override { cancelled_ = true; }
+  void OnSigninWithNewProfile() override { created_ = true; }
   void OnClose() { closed_ = true; }
 
   // The window containing the dialog.

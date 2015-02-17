@@ -10,12 +10,12 @@
 
 #include "base/debug/trace_event_argument.h"
 #include "base/values.h"
-#include "ui/gfx/quad_f.h"
-#include "ui/gfx/rect.h"
-#include "ui/gfx/rect_conversions.h"
-#include "ui/gfx/rect_f.h"
+#include "ui/gfx/geometry/quad_f.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/transform.h"
-#include "ui/gfx/vector2d_f.h"
 
 namespace cc {
 
@@ -121,11 +121,9 @@ static inline void AddVertexToClippedQuad3d(const gfx::Point3F& new_vertex,
 gfx::Rect MathUtil::MapEnclosingClippedRect(const gfx::Transform& transform,
                                             const gfx::Rect& src_rect) {
   if (transform.IsIdentityOrIntegerTranslation()) {
-    return src_rect +
-           gfx::Vector2d(
-               static_cast<int>(SkMScalarToFloat(transform.matrix().get(0, 3))),
-               static_cast<int>(
-                   SkMScalarToFloat(transform.matrix().get(1, 3))));
+    gfx::Vector2d offset(static_cast<int>(transform.matrix().getFloat(0, 3)),
+                         static_cast<int>(transform.matrix().getFloat(1, 3)));
+    return src_rect + offset;
   }
   return gfx::ToEnclosingRect(MapClippedRect(transform, gfx::RectF(src_rect)));
 }
@@ -133,9 +131,9 @@ gfx::Rect MathUtil::MapEnclosingClippedRect(const gfx::Transform& transform,
 gfx::RectF MathUtil::MapClippedRect(const gfx::Transform& transform,
                                     const gfx::RectF& src_rect) {
   if (transform.IsIdentityOrTranslation()) {
-    return src_rect +
-           gfx::Vector2dF(SkMScalarToFloat(transform.matrix().get(0, 3)),
-                          SkMScalarToFloat(transform.matrix().get(1, 3)));
+    gfx::Vector2dF offset(transform.matrix().getFloat(0, 3),
+                          transform.matrix().getFloat(1, 3));
+    return src_rect + offset;
   }
 
   // Apply the transform, but retain the result in homogeneous coordinates.
@@ -163,11 +161,9 @@ gfx::RectF MathUtil::MapClippedRect(const gfx::Transform& transform,
 gfx::Rect MathUtil::ProjectEnclosingClippedRect(const gfx::Transform& transform,
                                                 const gfx::Rect& src_rect) {
   if (transform.IsIdentityOrIntegerTranslation()) {
-    return src_rect +
-           gfx::Vector2d(
-               static_cast<int>(SkMScalarToFloat(transform.matrix().get(0, 3))),
-               static_cast<int>(
-                   SkMScalarToFloat(transform.matrix().get(1, 3))));
+    gfx::Vector2d offset(static_cast<int>(transform.matrix().getFloat(0, 3)),
+                         static_cast<int>(transform.matrix().getFloat(1, 3)));
+    return src_rect + offset;
   }
   return gfx::ToEnclosingRect(
       ProjectClippedRect(transform, gfx::RectF(src_rect)));
@@ -176,9 +172,9 @@ gfx::Rect MathUtil::ProjectEnclosingClippedRect(const gfx::Transform& transform,
 gfx::RectF MathUtil::ProjectClippedRect(const gfx::Transform& transform,
                                         const gfx::RectF& src_rect) {
   if (transform.IsIdentityOrTranslation()) {
-    return src_rect +
-           gfx::Vector2dF(SkMScalarToFloat(transform.matrix().get(0, 3)),
-                          SkMScalarToFloat(transform.matrix().get(1, 3)));
+    gfx::Vector2dF offset(transform.matrix().getFloat(0, 3),
+                          transform.matrix().getFloat(1, 3));
+    return src_rect + offset;
   }
 
   // Perform the projection, but retain the result in homogeneous coordinates.
@@ -189,6 +185,41 @@ gfx::RectF MathUtil::ProjectClippedRect(const gfx::Transform& transform,
   HomogeneousCoordinate h4 = ProjectHomogeneousPoint(transform, q.p4());
 
   return ComputeEnclosingClippedRect(h1, h2, h3, h4);
+}
+
+gfx::Rect MathUtil::MapEnclosedRectWith2dAxisAlignedTransform(
+    const gfx::Transform& transform,
+    const gfx::Rect& rect) {
+  DCHECK(transform.Preserves2dAxisAlignment());
+
+  if (transform.IsIdentityOrIntegerTranslation()) {
+    gfx::Vector2d offset(static_cast<int>(transform.matrix().getFloat(0, 3)),
+                         static_cast<int>(transform.matrix().getFloat(1, 3)));
+    return rect + offset;
+  }
+  if (transform.IsIdentityOrTranslation()) {
+    gfx::Vector2dF offset(transform.matrix().getFloat(0, 3),
+                          transform.matrix().getFloat(1, 3));
+    return gfx::ToEnclosedRect(rect + offset);
+  }
+
+  SkMScalar quad[2 * 2];  // input: 2 x 2D points
+  quad[0] = rect.x();
+  quad[1] = rect.y();
+  quad[2] = rect.right();
+  quad[3] = rect.bottom();
+
+  SkMScalar result[4 * 2];  // output: 2 x 4D homogeneous points
+  transform.matrix().map2(quad, 2, result);
+
+  HomogeneousCoordinate hc0(result[0], result[1], result[2], result[3]);
+  HomogeneousCoordinate hc1(result[4], result[5], result[6], result[7]);
+  DCHECK(!hc0.ShouldBeClipped());
+  DCHECK(!hc1.ShouldBeClipped());
+
+  gfx::PointF top_left(hc0.CartesianPoint2d());
+  gfx::PointF bottom_right(hc1.CartesianPoint2d());
+  return gfx::ToEnclosedRect(gfx::BoundingRect(top_left, bottom_right));
 }
 
 void MathUtil::MapClippedQuad(const gfx::Transform& transform,
@@ -436,9 +467,8 @@ gfx::QuadF MathUtil::MapQuad(const gfx::Transform& transform,
                              bool* clipped) {
   if (transform.IsIdentityOrTranslation()) {
     gfx::QuadF mapped_quad(q);
-    mapped_quad +=
-        gfx::Vector2dF(SkMScalarToFloat(transform.matrix().get(0, 3)),
-                       SkMScalarToFloat(transform.matrix().get(1, 3)));
+    mapped_quad += gfx::Vector2dF(transform.matrix().getFloat(0, 3),
+                                  transform.matrix().getFloat(1, 3));
     *clipped = false;
     return mapped_quad;
   }
@@ -469,9 +499,8 @@ gfx::QuadF MathUtil::MapQuad3d(const gfx::Transform& transform,
                                bool* clipped) {
   if (transform.IsIdentityOrTranslation()) {
     gfx::QuadF mapped_quad(q);
-    mapped_quad +=
-        gfx::Vector2dF(SkMScalarToFloat(transform.matrix().get(0, 3)),
-                       SkMScalarToFloat(transform.matrix().get(1, 3)));
+    mapped_quad += gfx::Vector2dF(transform.matrix().getFloat(0, 3),
+                                  transform.matrix().getFloat(1, 3));
     *clipped = false;
     p[0] = gfx::Point3F(mapped_quad.p1().x(), mapped_quad.p1().y(), 0.0f);
     p[1] = gfx::Point3F(mapped_quad.p2().x(), mapped_quad.p2().y(), 0.0f);
@@ -664,7 +693,7 @@ scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Size& s) {
   scoped_ptr<base::DictionaryValue> res(new base::DictionaryValue());
   res->SetDouble("width", s.width());
   res->SetDouble("height", s.height());
-  return res.PassAs<base::Value>();
+  return res.Pass();
 }
 
 scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Rect& r) {
@@ -673,11 +702,11 @@ scoped_ptr<base::Value> MathUtil::AsValue(const gfx::Rect& r) {
   res->AppendInteger(r.y());
   res->AppendInteger(r.width());
   res->AppendInteger(r.height());
-  return res.PassAs<base::Value>();
+  return res.Pass();
 }
 
 bool MathUtil::FromValue(const base::Value* raw_value, gfx::Rect* out_rect) {
-  const base::ListValue* value = NULL;
+  const base::ListValue* value = nullptr;
   if (!raw_value->GetAsList(&value))
     return false;
 
@@ -701,7 +730,7 @@ scoped_ptr<base::Value> MathUtil::AsValue(const gfx::PointF& pt) {
   scoped_ptr<base::ListValue> res(new base::ListValue());
   res->AppendDouble(pt.x());
   res->AppendDouble(pt.y());
-  return res.PassAs<base::Value>();
+  return res.Pass();
 }
 
 void MathUtil::AddToTracedValue(const gfx::Size& s,
@@ -744,6 +773,12 @@ void MathUtil::AddToTracedValue(const gfx::Vector2d& v,
 }
 
 void MathUtil::AddToTracedValue(const gfx::Vector2dF& v,
+                                base::debug::TracedValue* res) {
+  res->AppendDouble(v.x());
+  res->AppendDouble(v.y());
+}
+
+void MathUtil::AddToTracedValue(const gfx::ScrollOffset& v,
                                 base::debug::TracedValue* res) {
   res->AppendDouble(v.x());
   res->AppendDouble(v.y());

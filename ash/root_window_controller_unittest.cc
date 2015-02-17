@@ -15,6 +15,7 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_tree_client.h"
@@ -47,14 +48,12 @@ namespace {
 class TestDelegate : public views::WidgetDelegateView {
  public:
   explicit TestDelegate(bool system_modal) : system_modal_(system_modal) {}
-  virtual ~TestDelegate() {}
+  ~TestDelegate() override {}
 
   // Overridden from views::WidgetDelegate:
-  virtual views::View* GetContentsView() OVERRIDE {
-    return this;
-  }
+  views::View* GetContentsView() override { return this; }
 
-  virtual ui::ModalType GetModalType() const OVERRIDE {
+  ui::ModalType GetModalType() const override {
     return system_modal_ ? ui::MODAL_TYPE_SYSTEM : ui::MODAL_TYPE_NONE;
   }
 
@@ -68,7 +67,7 @@ class DeleteOnBlurDelegate : public aura::test::TestWindowDelegate,
                              public aura::client::FocusChangeObserver {
  public:
   DeleteOnBlurDelegate() : window_(NULL) {}
-  virtual ~DeleteOnBlurDelegate() {}
+  ~DeleteOnBlurDelegate() override {}
 
   void SetWindow(aura::Window* window) {
     window_ = window;
@@ -77,13 +76,11 @@ class DeleteOnBlurDelegate : public aura::test::TestWindowDelegate,
 
  private:
   // aura::test::TestWindowDelegate overrides:
-  virtual bool CanFocus() OVERRIDE {
-    return true;
-  }
+  bool CanFocus() override { return true; }
 
   // aura::client::FocusChangeObserver implementation:
-  virtual void OnWindowFocused(aura::Window* gained_focus,
-                               aura::Window* lost_focus) OVERRIDE {
+  void OnWindowFocused(aura::Window* gained_focus,
+                       aura::Window* lost_focus) override {
     if (window_ == lost_focus)
       delete window_;
   }
@@ -525,9 +522,7 @@ TEST_F(RootWindowControllerTest, FocusBlockedWindow) {
 class DestroyedWindowObserver : public aura::WindowObserver {
  public:
   DestroyedWindowObserver() : destroyed_(false), window_(NULL) {}
-  virtual ~DestroyedWindowObserver() {
-    Shutdown();
-  }
+  ~DestroyedWindowObserver() override { Shutdown(); }
 
   void SetWindow(Window* window) {
     window_ = window;
@@ -537,7 +532,7 @@ class DestroyedWindowObserver : public aura::WindowObserver {
   bool destroyed() const { return destroyed_; }
 
   // WindowObserver overrides:
-  virtual void OnWindowDestroying(Window* window) OVERRIDE {
+  void OnWindowDestroying(Window* window) override {
     destroyed_ = true;
     Shutdown();
   }
@@ -613,11 +608,11 @@ TEST_F(NoSessionRootWindowControllerTest, Event) {
 class VirtualKeyboardRootWindowControllerTest
     : public RootWindowControllerTest {
  public:
-  VirtualKeyboardRootWindowControllerTest() {};
-  virtual ~VirtualKeyboardRootWindowControllerTest() {};
+  VirtualKeyboardRootWindowControllerTest() {}
+  ~VirtualKeyboardRootWindowControllerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
-    CommandLine::ForCurrentProcess()->AppendSwitch(
+  void SetUp() override {
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
         keyboard::switches::kEnableVirtualKeyboard);
     test::AshTestBase::SetUp();
     Shell::GetPrimaryRootWindowController()->ActivateKeyboard(
@@ -633,7 +628,7 @@ class MockTextInputClient : public ui::DummyTextInputClient {
   MockTextInputClient() :
       ui::DummyTextInputClient(ui::TEXT_INPUT_TYPE_TEXT) {}
 
-  virtual void EnsureCaretInRect(const gfx::Rect& rect) OVERRIDE {
+  void EnsureCaretInRect(const gfx::Rect& rect) override {
     visible_rect_ = rect;
   }
 
@@ -645,6 +640,21 @@ class MockTextInputClient : public ui::DummyTextInputClient {
   gfx::Rect visible_rect_;
 
   DISALLOW_COPY_AND_ASSIGN(MockTextInputClient);
+};
+
+class TargetHitTestEventHandler : public ui::test::TestEventHandler {
+ public:
+  TargetHitTestEventHandler() {}
+
+  // ui::test::TestEventHandler overrides.
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::ET_MOUSE_PRESSED)
+      ui::test::TestEventHandler::OnMouseEvent(event);
+    event->StopPropagation();
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(TargetHitTestEventHandler);
 };
 
 // Test for http://crbug.com/297858. Virtual keyboard container should only show
@@ -839,6 +849,115 @@ TEST_F(VirtualKeyboardRootWindowControllerTest, EnsureCaretInWorkArea) {
   } else {
     input_method->SetFocusedTextInputClient(NULL);
   }
+}
+
+// Tests that the virtual keyboard does not block context menus. The virtual
+// keyboard should appear in front of most content, but not context menus. See
+// crbug/377180.
+TEST_F(VirtualKeyboardRootWindowControllerTest, ZOrderTest) {
+  UpdateDisplay("800x600");
+  keyboard::KeyboardController* keyboard_controller =
+      keyboard::KeyboardController::GetInstance();
+  keyboard::KeyboardControllerProxy* proxy = keyboard_controller->proxy();
+
+  aura::Window* root_window = Shell::GetPrimaryRootWindow();
+  aura::Window* keyboard_container =
+      Shell::GetContainer(root_window, kShellWindowId_VirtualKeyboardContainer);
+  ASSERT_TRUE(keyboard_container);
+  keyboard_container->Show();
+
+  const int keyboard_height = 200;
+  aura::Window* keyboard_window = proxy->GetKeyboardWindow();
+  keyboard_container->AddChild(keyboard_window);
+  keyboard_window->set_owned_by_parent(false);
+  gfx::Rect keyboard_bounds = keyboard::KeyboardBoundsFromWindowBounds(
+      keyboard_container->bounds(), keyboard_height);
+  keyboard_window->SetBounds(keyboard_bounds);
+  keyboard_window->Show();
+
+  ui::test::EventGenerator generator(root_window);
+
+  // Cover the screen with two windows: a normal window on the left side and a
+  // context menu on the right side. When the virtual keyboard is displayed it
+  // partially occludes the normal window, but not the context menu. Compute
+  // positions for generating synthetic click events to perform hit tests,
+  // ensuring the correct window layering. 'top' is above the VK, whereas
+  // 'bottom' lies within the VK. 'left' is centered in the normal window, and
+  // 'right' is centered in the context menu.
+  int window_height = keyboard_bounds.bottom();
+  int window_width = keyboard_bounds.width() / 2;
+  int left = window_width / 2;
+  int right = 3 * window_width / 2;
+  int top = keyboard_bounds.y() / 2;
+  int bottom = window_height - keyboard_height / 2;
+
+  // Normal window is partially occluded by the virtual keyboard.
+  aura::test::TestWindowDelegate delegate;
+  scoped_ptr<aura::Window> normal(CreateTestWindowInShellWithDelegateAndType(
+      &delegate,
+      ui::wm::WINDOW_TYPE_NORMAL,
+      0,
+      gfx::Rect(0, 0, window_width, window_height)));
+  normal->set_owned_by_parent(false);
+  normal->Show();
+  TargetHitTestEventHandler normal_handler;
+  normal->AddPreTargetHandler(&normal_handler);
+
+  // Test that only the click on the top portion of the window is picked up. The
+  // click on the bottom hits the virtual keyboard instead.
+  generator.MoveMouseTo(left, top);
+  generator.ClickLeftButton();
+  EXPECT_EQ(1, normal_handler.num_mouse_events());
+  generator.MoveMouseTo(left, bottom);
+  generator.ClickLeftButton();
+  EXPECT_EQ(1, normal_handler.num_mouse_events());
+
+  // Menu overlaps virtual keyboard.
+  aura::test::TestWindowDelegate delegate2;
+  scoped_ptr<aura::Window> menu(CreateTestWindowInShellWithDelegateAndType(
+      &delegate2,
+      ui::wm::WINDOW_TYPE_MENU,
+      0,
+      gfx::Rect(window_width, 0, window_width, window_height)));
+  menu->set_owned_by_parent(false);
+  menu->Show();
+  TargetHitTestEventHandler menu_handler;
+  menu->AddPreTargetHandler(&menu_handler);
+
+  // Test that both clicks register.
+  generator.MoveMouseTo(right, top);
+  generator.ClickLeftButton();
+  EXPECT_EQ(1, menu_handler.num_mouse_events());
+  generator.MoveMouseTo(right, bottom);
+  generator.ClickLeftButton();
+  EXPECT_EQ(2, menu_handler.num_mouse_events());
+
+  // Cleanup to ensure that the test windows are destroyed before their
+  // delegates.
+  normal.reset();
+  menu.reset();
+}
+
+// Resolution in UpdateDisplay is not being respected on Windows 8.
+#if defined(OS_WIN)
+#define MAYBE_DisplayRotation DISABLED_DisplayRotation
+#else
+#define MAYBE_DisplayRotation DisplayRotation
+#endif
+
+// Tests that the virtual keyboard correctly resizes with a change to display
+// orientation. See crbug/417612.
+TEST_F(VirtualKeyboardRootWindowControllerTest, MAYBE_DisplayRotation) {
+  UpdateDisplay("800x600");
+  aura::Window* root_window = Shell::GetPrimaryRootWindow();
+  aura::Window* keyboard_container =
+      Shell::GetContainer(root_window, kShellWindowId_VirtualKeyboardContainer);
+  ASSERT_TRUE(keyboard_container);
+  keyboard_container->Show();
+  EXPECT_EQ("0,0 800x600", keyboard_container->bounds().ToString());
+
+  UpdateDisplay("600x800");
+  EXPECT_EQ("0,0 600x800", keyboard_container->bounds().ToString());
 }
 
 }  // namespace test

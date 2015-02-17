@@ -9,10 +9,10 @@
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_editor_controller.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
-#include "grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
@@ -82,7 +82,7 @@ class BookmarkEditorBaseControllerTest : public CocoaProfileTest {
                    configuration:BookmarkEditor::SHOW_TREE];
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     CocoaProfileTest::SetUp();
     ASSERT_TRUE(profile());
 
@@ -92,12 +92,12 @@ class BookmarkEditorBaseControllerTest : public CocoaProfileTest {
     [controller_ runAsModalSheet];
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     controller_ = NULL;
     CocoaTest::TearDown();
   }
 
-  virtual Browser* CreateBrowser() OVERRIDE {
+  Browser* CreateBrowser() override {
     Browser::CreateParams native_params(profile(), chrome::GetActiveDesktop());
     return chrome::CreateBrowserWithTestWindowForParams(&native_params);
   }

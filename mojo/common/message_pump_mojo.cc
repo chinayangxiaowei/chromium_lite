@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "base/debug/alias.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/threading/thread_local.h"
 #include "base/time/time.h"
 #include "mojo/common/message_pump_mojo_handler.h"
 #include "mojo/common/time_helper.h"
@@ -16,6 +18,9 @@
 namespace mojo {
 namespace common {
 namespace {
+
+base::LazyInstance<base::ThreadLocalPointer<MessagePumpMojo> >::Leaky
+    g_tls_current_pump = LAZY_INSTANCE_INITIALIZER;
 
 MojoDeadline TimeTicksToMojoDeadline(base::TimeTicks time_ticks,
                                      base::TimeTicks now) {
@@ -52,14 +57,24 @@ struct MessagePumpMojo::RunState {
 };
 
 MessagePumpMojo::MessagePumpMojo() : run_state_(NULL), next_handler_id_(0) {
+  DCHECK(!current())
+      << "There is already a MessagePumpMojo instance on this thread.";
+  g_tls_current_pump.Pointer()->Set(this);
 }
 
 MessagePumpMojo::~MessagePumpMojo() {
+  DCHECK_EQ(this, current());
+  g_tls_current_pump.Pointer()->Set(NULL);
 }
 
 // static
 scoped_ptr<base::MessagePump> MessagePumpMojo::Create() {
   return scoped_ptr<MessagePump>(new MessagePumpMojo());
+}
+
+// static
+MessagePumpMojo* MessagePumpMojo::current() {
+  return g_tls_current_pump.Pointer()->Get();
 }
 
 void MessagePumpMojo::AddHandler(MessagePumpMojoHandler* handler,
@@ -80,6 +95,14 @@ void MessagePumpMojo::AddHandler(MessagePumpMojoHandler* handler,
 
 void MessagePumpMojo::RemoveHandler(const Handle& handle) {
   handlers_.erase(handle);
+}
+
+void MessagePumpMojo::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void MessagePumpMojo::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 void MessagePumpMojo::Run(Delegate* delegate) {
@@ -124,11 +147,7 @@ void MessagePumpMojo::DoRunLoop(RunState* run_state, Delegate* delegate) {
   bool more_work_is_plausible = true;
   for (;;) {
     const bool block = !more_work_is_plausible;
-    DoInternalWork(*run_state, block);
-
-    // There isn't a good way to know if there are more handles ready, we assume
-    // not.
-    more_work_is_plausible = false;
+    more_work_is_plausible = DoInternalWork(*run_state, block);
 
     if (run_state->should_quit)
       break;
@@ -151,21 +170,23 @@ void MessagePumpMojo::DoRunLoop(RunState* run_state, Delegate* delegate) {
   }
 }
 
-void MessagePumpMojo::DoInternalWork(const RunState& run_state, bool block) {
+bool MessagePumpMojo::DoInternalWork(const RunState& run_state, bool block) {
   const MojoDeadline deadline = block ? GetDeadlineForWait(run_state) : 0;
   const WaitState wait_state = GetWaitState(run_state);
   const MojoResult result =
       WaitMany(wait_state.handles, wait_state.wait_signals, deadline);
+  bool did_work = true;
   if (result == 0) {
     // Control pipe was written to.
-    uint32_t num_bytes = 0;
-    ReadMessageRaw(run_state.read_handle.get(), NULL, &num_bytes, NULL, NULL,
+    ReadMessageRaw(run_state.read_handle.get(), NULL, NULL, NULL, NULL,
                    MOJO_READ_MESSAGE_FLAG_MAY_DISCARD);
   } else if (result > 0) {
     const size_t index = static_cast<size_t>(result);
     DCHECK(handlers_.find(wait_state.handles[index]) != handlers_.end());
+    WillSignalHandler();
     handlers_[wait_state.handles[index]].handler->OnHandleReady(
         wait_state.handles[index]);
+    DidSignalHandler();
   } else {
     switch (result) {
       case MOJO_RESULT_CANCELLED:
@@ -173,6 +194,7 @@ void MessagePumpMojo::DoInternalWork(const RunState& run_state, bool block) {
         RemoveFirstInvalidHandle(wait_state);
         break;
       case MOJO_RESULT_DEADLINE_EXCEEDED:
+        did_work = false;
         break;
       default:
         base::debug::Alias(&result);
@@ -192,9 +214,14 @@ void MessagePumpMojo::DoInternalWork(const RunState& run_state, bool block) {
     if (!i->second.deadline.is_null() && i->second.deadline < now &&
         handlers_.find(i->first) != handlers_.end() &&
         handlers_[i->first].id == i->second.id) {
+      WillSignalHandler();
       i->second.handler->OnHandleError(i->first, MOJO_RESULT_DEADLINE_EXCEEDED);
+      DidSignalHandler();
+      handlers_.erase(i->first);
+      did_work = true;
     }
   }
+  return did_work;
 }
 
 void MessagePumpMojo::RemoveFirstInvalidHandle(const WaitState& wait_state) {
@@ -217,7 +244,9 @@ void MessagePumpMojo::RemoveFirstInvalidHandle(const WaitState& wait_state) {
       MessagePumpMojoHandler* handler =
           handlers_[wait_state.handles[i]].handler;
       handlers_.erase(wait_state.handles[i]);
+      WillSignalHandler();
       handler->OnHandleError(wait_state.handles[i], result);
+      DidSignalHandler();
       return;
     }
   }
@@ -257,6 +286,14 @@ MojoDeadline MessagePumpMojo::GetDeadlineForWait(
         TimeTicksToMojoDeadline(i->second.deadline, now), deadline);
   }
   return deadline;
+}
+
+void MessagePumpMojo::WillSignalHandler() {
+  FOR_EACH_OBSERVER(Observer, observers_, WillSignalHandler());
+}
+
+void MessagePumpMojo::DidSignalHandler() {
+  FOR_EACH_OBSERVER(Observer, observers_, DidSignalHandler());
 }
 
 }  // namespace common

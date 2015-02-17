@@ -12,8 +12,8 @@
 #include "base/compiler_specific.h"
 #include "base/debug/trace_event.h"
 #include "base/environment.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/prefs/json_pref_store.h"
@@ -28,14 +28,11 @@
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/autocomplete/shortcuts_backend.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
-#include "chrome/browser/background/background_mode_manager.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
-#include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
-#include "chrome/browser/dom_distiller/lazy_dom_distiller_service.h"
+#include "chrome/browser/dom_distiller/profile_utils.h"
 #include "chrome/browser/domain_reliability/service_factory.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_service.h"
@@ -47,6 +44,7 @@
 #include "chrome/browser/net/proxy_service_factory.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_configurator.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings.h"
+#include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings_factory.h"
 #include "chrome/browser/net/ssl_config_service_manager.h"
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
@@ -73,15 +71,20 @@
 #include "chrome/browser/ssl/chrome_ssl_host_state_delegate.h"
 #include "chrome/browser/ssl/chrome_ssl_host_state_delegate_factory.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
 #include "components/bookmarks/browser/bookmark_model.h"
-#include "components/dom_distiller/content/dom_distiller_viewer_source.h"
-#include "components/dom_distiller/core/url_constants.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_prefs.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_statistics_prefs.h"
+#include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/domain_reliability/monitor.h"
 #include "components/domain_reliability/service.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -100,8 +103,6 @@
 #include "content/public/browser/user_metrics.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/page_zoom.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_ANDROID)
@@ -116,10 +117,8 @@
 #include "components/user_manager/user_manager.h"
 #endif
 
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-#include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings_factory.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_params.h"
-#include "components/data_reduction_proxy/browser/data_reduction_proxy_settings.h"
+#if defined(ENABLE_BACKGROUND)
+#include "chrome/browser/background/background_mode_manager.h"
 #endif
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
@@ -254,24 +253,6 @@ std::string ExitTypeToSessionTypePrefValue(Profile::ExitType type) {
   return std::string();
 }
 
-// Setup URLDataSource for the chrome-distiller:// scheme for the given
-// |profile|.
-void RegisterDomDistillerViewerSource(Profile* profile) {
-  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-  if (command_line.HasSwitch(switches::kEnableDomDistiller)) {
-    dom_distiller::DomDistillerServiceFactory* dom_distiller_service_factory =
-        dom_distiller::DomDistillerServiceFactory::GetInstance();
-    // The LazyDomDistillerService deletes itself when the profile is destroyed.
-    dom_distiller::LazyDomDistillerService* lazy_service =
-        new dom_distiller::LazyDomDistillerService(
-            profile, dom_distiller_service_factory);
-    content::URLDataSource::Add(
-        profile,
-        new dom_distiller::DomDistillerViewerSource(
-            lazy_service, dom_distiller::kDomDistillerScheme));
-  }
-}
-
 PrefStore* CreateExtensionPrefStore(Profile* profile,
                                     bool incognito_pref_store) {
 #if defined(ENABLE_EXTENSIONS)
@@ -282,17 +263,6 @@ PrefStore* CreateExtensionPrefStore(Profile* profile,
   return NULL;
 #endif
 }
-
-#if !defined(OS_ANDROID)
-// Deletes the file that was used by the AutomaticProfileResetter service, which
-// has since been removed, to store that the prompt had already been shown.
-// TODO(engedy): Remove this and caller in M42 or later. See crbug.com/398813.
-void DeleteResetPromptMementoFile(const base::FilePath& profile_dir) {
-  base::FilePath memento_path =
-      profile_dir.Append(FILE_PATH_LITERAL("Reset Prompt Memento"));
-  base::DeleteFile(memento_path, false);
-}
-#endif
 
 }  // namespace
 
@@ -353,6 +323,10 @@ void ProfileImpl::RegisterProfilePrefs(
       user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterBooleanPref(
       prefs::kForceSafeSearch,
+      false,
+      user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      prefs::kRecordHistory,
       false,
       user_prefs::PrefRegistrySyncable::UNSYNCABLE_PREF);
   registry->RegisterIntegerPref(
@@ -502,7 +476,7 @@ ProfileImpl::ProfileImpl(
 
   scoped_refptr<SafeBrowsingService> safe_browsing_service(
       g_browser_process->safe_browsing_service());
-  if (safe_browsing_service) {
+  if (safe_browsing_service.get()) {
     pref_validation_delegate_ =
         safe_browsing_service->CreatePreferenceValidationDelegate(this).Pass();
   }
@@ -551,10 +525,6 @@ void ProfileImpl::DoFinalInit() {
   pref_change_registrar_.Add(
       prefs::kSupervisedUserId,
       base::Bind(&ProfileImpl::UpdateProfileSupervisedUserIdCache,
-                 base::Unretained(this)));
-  pref_change_registrar_.Add(
-      prefs::kDefaultZoomLevel,
-      base::Bind(&ProfileImpl::OnDefaultZoomLevelChanged,
                  base::Unretained(this)));
 
   // Changes in the profile avatar.
@@ -608,6 +578,7 @@ void ProfileImpl::DoFinalInit() {
   ssl_config_service_manager_.reset(
       SSLConfigServiceManager::CreateDefaultManager(local_state));
 
+#if defined(ENABLE_BACKGROUND)
   // Initialize the BackgroundModeManager - this has to be done here before
   // InitExtensions() is called because it relies on receiving notifications
   // when extensions are loaded. BackgroundModeManager is not needed under
@@ -622,6 +593,7 @@ void ProfileImpl::DoFinalInit() {
     if (g_browser_process->background_mode_manager())
       g_browser_process->background_mode_manager()->RegisterProfile(this);
   }
+#endif  // defined(ENABLE_BACKGROUND)
 
   base::FilePath cookie_path = GetPath();
   cookie_path = cookie_path.Append(chrome::kCookieFilename);
@@ -666,7 +638,8 @@ void ProfileImpl::DoFinalInit() {
   scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
       data_reduction_proxy_params;
   scoped_ptr<DataReductionProxyChromeConfigurator> chrome_configurator;
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
+  scoped_ptr<data_reduction_proxy::DataReductionProxyStatisticsPrefs>
+      data_reduction_proxy_statistics_prefs;
   DataReductionProxyChromeSettings* data_reduction_proxy_chrome_settings =
       DataReductionProxyChromeSettingsFactory::GetForBrowserContext(this);
   data_reduction_proxy_params =
@@ -687,7 +660,27 @@ void ProfileImpl::DoFinalInit() {
   // settings after ownership is passed.
   DataReductionProxyChromeConfigurator*
       data_reduction_proxy_chrome_configurator = chrome_configurator.get();
+#if defined(OS_ANDROID) || defined(OS_IOS)
+  // On mobile we write data reduction proxy prefs directly to the pref service.
+  // On desktop we store data reduction proxy prefs in memory, writing to disk
+  // every 60 minutes and on termination. Shutdown hooks must be added for
+  // Android and iOS in order for non-zero delays to be supported.
+  // (http://crbug.com/408264)
+  base::TimeDelta commit_delay = base::TimeDelta();
+#else
+  base::TimeDelta commit_delay = base::TimeDelta::FromMinutes(60);
 #endif
+  // TODO(bengr): Remove this in M-43.
+  data_reduction_proxy::MigrateStatisticsPrefs(g_browser_process->local_state(),
+                                               prefs_.get());
+  data_reduction_proxy_statistics_prefs =
+      scoped_ptr<data_reduction_proxy::DataReductionProxyStatisticsPrefs>(
+          new data_reduction_proxy::DataReductionProxyStatisticsPrefs(
+              prefs_.get(),
+              base::MessageLoopProxy::current(),
+              commit_delay));
+  data_reduction_proxy_chrome_settings->SetDataReductionProxyStatisticsPrefs(
+      data_reduction_proxy_statistics_prefs.get());
 
   // Make sure we initialize the ProfileIOData after everything else has been
   // initialized that we might be reading from the IO thread.
@@ -696,18 +689,16 @@ void ProfileImpl::DoFinalInit() {
                 cache_max_size, media_cache_path, media_cache_max_size,
                 extensions_cookie_path, GetPath(), infinite_cache_path,
                 predictor_, session_cookie_mode, GetSpecialStoragePolicy(),
-                CreateDomainReliabilityMonitor(),
+                CreateDomainReliabilityMonitor(local_state),
                 data_reduction_proxy_unavailable,
                 chrome_configurator.Pass(),
-                data_reduction_proxy_params.Pass());
-
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
+                data_reduction_proxy_params.Pass(),
+                data_reduction_proxy_statistics_prefs.Pass());
   data_reduction_proxy_chrome_settings->InitDataReductionProxySettings(
       data_reduction_proxy_chrome_configurator,
       prefs_.get(),
       g_browser_process->local_state(),
       GetRequestContext());
-#endif
 
 #if defined(ENABLE_PLUGINS)
   ChromePluginServiceFilter::GetInstance()->RegisterResourceContext(
@@ -728,13 +719,6 @@ void ProfileImpl::DoFinalInit() {
   // The DomDistillerViewerSource is not a normal WebUI so it must be registered
   // as a URLDataSource early.
   RegisterDomDistillerViewerSource(this);
-
-#if !defined(OS_ANDROID)
-  BrowserThread::GetBlockingPool()->PostDelayedWorkerTask(
-      FROM_HERE,
-      base::Bind(&DeleteResetPromptMementoFile, GetPath()),
-      base::TimeDelta::FromMilliseconds(2 * create_readme_delay_ms));
-#endif
 
   // Creation has been finished.
   TRACE_EVENT_END1("browser",
@@ -774,50 +758,14 @@ void ProfileImpl::DoFinalInit() {
 }
 
 void ProfileImpl::InitHostZoomMap() {
-  HostZoomMap* host_zoom_map = HostZoomMap::GetForBrowserContext(this);
-  host_zoom_map->SetDefaultZoomLevel(
-      prefs_->GetDouble(prefs::kDefaultZoomLevel));
+  HostZoomMap* host_zoom_map = HostZoomMap::GetDefaultForBrowserContext(this);
+  DCHECK(!zoom_level_prefs_);
+  zoom_level_prefs_.reset(
+      new chrome::ChromeZoomLevelPrefs(prefs_.get(), GetPath()));
+  zoom_level_prefs_->InitPrefsAndCopyToHostZoomMap(GetPath(), host_zoom_map);
 
-  const base::DictionaryValue* host_zoom_dictionary =
-      prefs_->GetDictionary(prefs::kPerHostZoomLevels);
-  // Careful: The returned value could be NULL if the pref has never been set.
-  if (host_zoom_dictionary != NULL) {
-    std::vector<std::string> keys_to_remove;
-    for (base::DictionaryValue::Iterator i(*host_zoom_dictionary); !i.IsAtEnd();
-         i.Advance()) {
-      const std::string& host(i.key());
-      double zoom_level = 0;
-
-      bool success = i.value().GetAsDouble(&zoom_level);
-      DCHECK(success);
-
-      // Filter out A) the empty host, B) zoom levels equal to the default; and
-      // remember them, so that we can later erase them from Prefs.
-      // Values of type A and B could have been stored due to crbug.com/364399.
-      // Values of type B could further have been stored before the default zoom
-      // level was set to its current value. In either case, SetZoomLevelForHost
-      // will ignore type B values, thus, to have consistency with HostZoomMap's
-      // internal state, these values must also be removed from Prefs.
-      if (host.empty() ||
-          content::ZoomValuesEqual(zoom_level,
-                                   host_zoom_map->GetDefaultZoomLevel())) {
-        keys_to_remove.push_back(host);
-        continue;
-      }
-
-      host_zoom_map->SetZoomLevelForHost(host, zoom_level);
-    }
-
-    DictionaryPrefUpdate update(prefs_.get(), prefs::kPerHostZoomLevels);
-    base::DictionaryValue* host_zoom_dictionary = update.Get();
-    for (std::vector<std::string>::const_iterator it = keys_to_remove.begin();
-         it != keys_to_remove.end(); ++it) {
-      host_zoom_dictionary->RemoveWithoutPathExpansion(*it, NULL);
-    }
-  }
-
-  zoom_subscription_ = host_zoom_map->AddZoomLevelChangedCallback(
-      base::Bind(&ProfileImpl::OnZoomLevelChanged, base::Unretained(this)));
+  // TODO(wjmaclean): Remove this. crbug.com/420643
+  chrome::MigrateProfileZoomLevelPrefs(this);
 }
 
 base::FilePath ProfileImpl::last_selected_directory() {
@@ -989,10 +937,7 @@ void ProfileImpl::OnPrefsLoaded(bool success) {
   DCHECK(!net_pref_observer_);
   {
     TRACE_EVENT0("browser", "ProfileImpl::OnPrefsLoaded:NetPrefObserver")
-    net_pref_observer_.reset(new NetPrefObserver(
-        prefs_.get(),
-        prerender::PrerenderManagerFactory::GetForProfile(this),
-        predictor_));
+    net_pref_observer_.reset(new NetPrefObserver(prefs_.get()));
   }
 
   chrome_prefs::SchedulePrefsFilePathVerification(path_);
@@ -1039,6 +984,10 @@ Profile::ExitType ProfileImpl::GetLastSessionExitType() {
 PrefService* ProfileImpl::GetPrefs() {
   DCHECK(prefs_);  // Should explicitly be initialized.
   return prefs_.get();
+}
+
+chrome::ChromeZoomLevelPrefs* ProfileImpl::GetZoomLevelPrefs() {
+  return zoom_level_prefs_.get();
 }
 
 PrefService* ProfileImpl::GetOffTheRecordPrefs() {
@@ -1130,6 +1079,7 @@ net::SSLConfigService* ProfileImpl::GetSSLConfigService() {
 }
 
 HostContentSettingsMap* ProfileImpl::GetHostContentSettingsMap() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (!host_content_settings_map_.get()) {
     host_content_settings_map_ = new HostContentSettingsMap(GetPrefs(), false);
   }
@@ -1149,7 +1099,7 @@ DownloadManagerDelegate* ProfileImpl::GetDownloadManagerDelegate() {
       GetDownloadManagerDelegate();
 }
 
-quota::SpecialStoragePolicy* ProfileImpl::GetSpecialStoragePolicy() {
+storage::SpecialStoragePolicy* ProfileImpl::GetSpecialStoragePolicy() {
 #if defined(ENABLE_EXTENSIONS)
   return GetExtensionSpecialStoragePolicy();
 #else
@@ -1187,26 +1137,6 @@ history::TopSites* ProfileImpl::GetTopSites() {
 
 history::TopSites* ProfileImpl::GetTopSitesWithoutCreating() {
   return top_sites_.get();
-}
-
-void ProfileImpl::OnDefaultZoomLevelChanged() {
-  HostZoomMap::GetForBrowserContext(this)->SetDefaultZoomLevel(
-      pref_change_registrar_.prefs()->GetDouble(prefs::kDefaultZoomLevel));
-}
-
-void ProfileImpl::OnZoomLevelChanged(
-    const HostZoomMap::ZoomLevelChange& change) {
-
-  if (change.mode != HostZoomMap::ZOOM_CHANGED_FOR_HOST)
-    return;
-  HostZoomMap* host_zoom_map = HostZoomMap::GetForBrowserContext(this);
-  double level = change.zoom_level;
-  DictionaryPrefUpdate update(prefs_.get(), prefs::kPerHostZoomLevels);
-  base::DictionaryValue* host_zoom_dictionary = update.Get();
-  if (content::ZoomValuesEqual(level, host_zoom_map->GetDefaultZoomLevel()))
-    host_zoom_dictionary->RemoveWithoutPathExpansion(change.host, NULL);
-  else
-    host_zoom_dictionary->SetDoubleWithoutPathExpansion(change.host, level);
 }
 
 #if defined(ENABLE_SESSION_SERVICE)
@@ -1309,8 +1239,7 @@ void ProfileImpl::OnLogin() {
 void ProfileImpl::InitChromeOSPreferences() {
   chromeos_preferences_.reset(new chromeos::Preferences());
   chromeos_preferences_->Init(
-      PrefServiceSyncable::FromProfile(this),
-      chromeos::ProfileHelper::Get()->GetUserByProfile(this));
+      this, chromeos::ProfileHelper::Get()->GetUserByProfile(this));
 }
 
 #endif  // defined(OS_CHROMEOS)
@@ -1456,7 +1385,7 @@ PrefProxyConfigTracker* ProfileImpl::CreateProxyConfigTracker() {
 }
 
 scoped_ptr<domain_reliability::DomainReliabilityMonitor>
-ProfileImpl::CreateDomainReliabilityMonitor() {
+ProfileImpl::CreateDomainReliabilityMonitor(PrefService* local_state) {
   domain_reliability::DomainReliabilityService* service =
       domain_reliability::DomainReliabilityServiceFactory::GetInstance()->
           GetForBrowserContext(this);

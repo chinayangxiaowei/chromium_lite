@@ -29,19 +29,39 @@ OnHostResolutionCallback;
 class NET_EXPORT_PRIVATE TransportSocketParams
     : public base::RefCounted<TransportSocketParams> {
  public:
+  // CombineConnectAndWrite currently translates to using TCP FastOpen.
+  // TCP FastOpen should not be used if the first write to the socket may
+  // be non-idempotent, as the underlying socket could retransmit the data
+  // on failure of the first transmission.
+  // NOTE: Currently, COMBINE_CONNECT_AND_WRITE_DESIRED is used if the data in
+  // the write is known to be idempotent, and COMBINE_CONNECT_AND_WRITE_DEFAULT
+  // is used as a default for other cases (including non-idempotent writes).
+  enum CombineConnectAndWritePolicy {
+    COMBINE_CONNECT_AND_WRITE_DEFAULT,    // Default policy, implemented in
+                                          // TransportSocketParams constructor.
+    COMBINE_CONNECT_AND_WRITE_DESIRED,    // Combine if supported by socket.
+    COMBINE_CONNECT_AND_WRITE_PROHIBITED  // Do not combine.
+  };
+
   // |host_resolution_callback| will be invoked after the the hostname is
   // resolved.  If |host_resolution_callback| does not return OK, then the
-  // connection will be aborted with that value.
+  // connection will be aborted with that value. |combine_connect_and_write|
+  // defines the policy for use of TCP FastOpen on this socket.
   TransportSocketParams(
       const HostPortPair& host_port_pair,
       bool disable_resolver_cache,
       bool ignore_limits,
-      const OnHostResolutionCallback& host_resolution_callback);
+      const OnHostResolutionCallback& host_resolution_callback,
+      CombineConnectAndWritePolicy combine_connect_and_write);
 
   const HostResolver::RequestInfo& destination() const { return destination_; }
   bool ignore_limits() const { return ignore_limits_; }
   const OnHostResolutionCallback& host_resolution_callback() const {
     return host_resolution_callback_;
+  }
+
+  CombineConnectAndWritePolicy combine_connect_and_write() const {
+    return combine_connect_and_write_;
   }
 
  private:
@@ -51,6 +71,7 @@ class NET_EXPORT_PRIVATE TransportSocketParams
   HostResolver::RequestInfo destination_;
   bool ignore_limits_;
   const OnHostResolutionCallback host_resolution_callback_;
+  CombineConnectAndWritePolicy combine_connect_and_write_;
 
   DISALLOW_COPY_AND_ASSIGN(TransportSocketParams);
 };
@@ -90,6 +111,7 @@ class NET_EXPORT_PRIVATE TransportConnectJobHelper {
   State next_state() const { return next_state_; }
   void set_next_state(State next_state) { next_state_ = next_state; }
   CompletionCallback on_io_complete() const { return on_io_complete_; }
+  const TransportSocketParams* params() { return params_.get(); }
 
   int DoResolveHost(RequestPriority priority, const BoundNetLog& net_log);
   int DoResolveHostComplete(int result, const BoundNetLog& net_log);
@@ -142,10 +164,10 @@ class NET_EXPORT_PRIVATE TransportConnectJob : public ConnectJob {
                       HostResolver* host_resolver,
                       Delegate* delegate,
                       NetLog* net_log);
-  virtual ~TransportConnectJob();
+  ~TransportConnectJob() override;
 
   // ConnectJob methods.
-  virtual LoadState GetLoadState() const OVERRIDE;
+  LoadState GetLoadState() const override;
 
   // Rolls |addrlist| forward until the first IPv4 address, if any.
   // WARNING: this method should only be used to implement the prefer-IPv4 hack.
@@ -172,7 +194,7 @@ class NET_EXPORT_PRIVATE TransportConnectJob : public ConnectJob {
   // Begins the host resolution and the TCP connect.  Returns OK on success
   // and ERR_IO_PENDING if it cannot immediately service the request.
   // Otherwise, it returns a net error code.
-  virtual int ConnectInternal() OVERRIDE;
+  int ConnectInternal() override;
 
   TransportConnectJobHelper helper_;
 
@@ -201,43 +223,41 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool : public ClientSocketPool {
       ClientSocketFactory* client_socket_factory,
       NetLog* net_log);
 
-  virtual ~TransportClientSocketPool();
+  ~TransportClientSocketPool() override;
 
   // ClientSocketPool implementation.
-  virtual int RequestSocket(const std::string& group_name,
-                            const void* resolve_info,
-                            RequestPriority priority,
-                            ClientSocketHandle* handle,
-                            const CompletionCallback& callback,
-                            const BoundNetLog& net_log) OVERRIDE;
-  virtual void RequestSockets(const std::string& group_name,
-                              const void* params,
-                              int num_sockets,
-                              const BoundNetLog& net_log) OVERRIDE;
-  virtual void CancelRequest(const std::string& group_name,
-                             ClientSocketHandle* handle) OVERRIDE;
-  virtual void ReleaseSocket(const std::string& group_name,
-                             scoped_ptr<StreamSocket> socket,
-                             int id) OVERRIDE;
-  virtual void FlushWithError(int error) OVERRIDE;
-  virtual void CloseIdleSockets() OVERRIDE;
-  virtual int IdleSocketCount() const OVERRIDE;
-  virtual int IdleSocketCountInGroup(
-      const std::string& group_name) const OVERRIDE;
-  virtual LoadState GetLoadState(
-      const std::string& group_name,
-      const ClientSocketHandle* handle) const OVERRIDE;
-  virtual base::DictionaryValue* GetInfoAsValue(
+  int RequestSocket(const std::string& group_name,
+                    const void* resolve_info,
+                    RequestPriority priority,
+                    ClientSocketHandle* handle,
+                    const CompletionCallback& callback,
+                    const BoundNetLog& net_log) override;
+  void RequestSockets(const std::string& group_name,
+                      const void* params,
+                      int num_sockets,
+                      const BoundNetLog& net_log) override;
+  void CancelRequest(const std::string& group_name,
+                     ClientSocketHandle* handle) override;
+  void ReleaseSocket(const std::string& group_name,
+                     scoped_ptr<StreamSocket> socket,
+                     int id) override;
+  void FlushWithError(int error) override;
+  void CloseIdleSockets() override;
+  int IdleSocketCount() const override;
+  int IdleSocketCountInGroup(const std::string& group_name) const override;
+  LoadState GetLoadState(const std::string& group_name,
+                         const ClientSocketHandle* handle) const override;
+  base::DictionaryValue* GetInfoAsValue(
       const std::string& name,
       const std::string& type,
-      bool include_nested_pools) const OVERRIDE;
-  virtual base::TimeDelta ConnectionTimeout() const OVERRIDE;
-  virtual ClientSocketPoolHistograms* histograms() const OVERRIDE;
+      bool include_nested_pools) const override;
+  base::TimeDelta ConnectionTimeout() const override;
+  ClientSocketPoolHistograms* histograms() const override;
 
   // HigherLayeredPool implementation.
-  virtual bool IsStalled() const OVERRIDE;
-  virtual void AddHigherLayeredPool(HigherLayeredPool* higher_pool) OVERRIDE;
-  virtual void RemoveHigherLayeredPool(HigherLayeredPool* higher_pool) OVERRIDE;
+  bool IsStalled() const override;
+  void AddHigherLayeredPool(HigherLayeredPool* higher_pool) override;
+  void RemoveHigherLayeredPool(HigherLayeredPool* higher_pool) override;
 
  protected:
   // Methods shared with WebSocketTransportClientSocketPool
@@ -258,16 +278,16 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool : public ClientSocketPool {
           host_resolver_(host_resolver),
           net_log_(net_log) {}
 
-    virtual ~TransportConnectJobFactory() {}
+    ~TransportConnectJobFactory() override {}
 
     // ClientSocketPoolBase::ConnectJobFactory methods.
 
-    virtual scoped_ptr<ConnectJob> NewConnectJob(
+    scoped_ptr<ConnectJob> NewConnectJob(
         const std::string& group_name,
         const PoolBase::Request& request,
-        ConnectJob::Delegate* delegate) const OVERRIDE;
+        ConnectJob::Delegate* delegate) const override;
 
-    virtual base::TimeDelta ConnectionTimeout() const OVERRIDE;
+    base::TimeDelta ConnectionTimeout() const override;
 
    private:
     ClientSocketFactory* const client_socket_factory_;

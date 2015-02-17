@@ -8,12 +8,10 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/bubble/bubble_delegate.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
@@ -62,7 +60,7 @@ class BundleInstalledBubble : public views::BubbleDelegateView,
     AddContent(layout, bundle);
   }
 
-  virtual ~BundleInstalledBubble() {}
+  ~BundleInstalledBubble() override {}
 
  private:
   void AddContent(GridLayout* layout, const BundleInstaller* bundle) {
@@ -142,8 +140,7 @@ class BundleInstalledBubble : public views::BubbleDelegateView,
   }
 
   // views::ButtonListener implementation:
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE {
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override {
     GetWidget()->Close();
   }
 

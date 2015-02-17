@@ -20,8 +20,8 @@
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_name_folder_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_tree_browser_cell.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -123,70 +123,66 @@ class BookmarkEditorBaseControllerBridge : public BookmarkModelObserver {
         importing_(false)
   { }
 
-  virtual void BookmarkModelLoaded(BookmarkModel* model,
-                                   bool ids_reassigned) OVERRIDE {
+  void BookmarkModelLoaded(BookmarkModel* model, bool ids_reassigned) override {
     [controller_ modelChangedPreserveSelection:YES];
   }
 
-  virtual void BookmarkNodeMoved(BookmarkModel* model,
-                                 const BookmarkNode* old_parent,
-                                 int old_index,
-                                 const BookmarkNode* new_parent,
-                                 int new_index) OVERRIDE {
+  void BookmarkNodeMoved(BookmarkModel* model,
+                         const BookmarkNode* old_parent,
+                         int old_index,
+                         const BookmarkNode* new_parent,
+                         int new_index) override {
     if (!importing_ && new_parent->GetChild(new_index)->is_folder())
       [controller_ modelChangedPreserveSelection:YES];
   }
 
-  virtual void BookmarkNodeAdded(BookmarkModel* model,
-                                 const BookmarkNode* parent,
-                                 int index) OVERRIDE {
+  void BookmarkNodeAdded(BookmarkModel* model,
+                         const BookmarkNode* parent,
+                         int index) override {
     if (!importing_ && parent->GetChild(index)->is_folder())
       [controller_ modelChangedPreserveSelection:YES];
   }
 
-  virtual void BookmarkNodeRemoved(
-      BookmarkModel* model,
-      const BookmarkNode* parent,
-      int old_index,
-      const BookmarkNode* node,
-      const std::set<GURL>& removed_urls) OVERRIDE {
+  void BookmarkNodeRemoved(BookmarkModel* model,
+                           const BookmarkNode* parent,
+                           int old_index,
+                           const BookmarkNode* node,
+                           const std::set<GURL>& removed_urls) override {
     [controller_ nodeRemoved:node fromParent:parent];
     if (node->is_folder())
       [controller_ modelChangedPreserveSelection:NO];
   }
 
-  virtual void BookmarkAllUserNodesRemoved(
+  void BookmarkAllUserNodesRemoved(
       BookmarkModel* model,
-      const std::set<GURL>& removed_urls) OVERRIDE {
+      const std::set<GURL>& removed_urls) override {
     [controller_ modelChangedPreserveSelection:NO];
   }
 
-  virtual void BookmarkNodeChanged(BookmarkModel* model,
-                                   const BookmarkNode* node) OVERRIDE {
+  void BookmarkNodeChanged(BookmarkModel* model,
+                           const BookmarkNode* node) override {
     if (!importing_ && node->is_folder())
       [controller_ modelChangedPreserveSelection:YES];
   }
 
-  virtual void BookmarkNodeChildrenReordered(
-      BookmarkModel* model,
-      const BookmarkNode* node) OVERRIDE {
+  void BookmarkNodeChildrenReordered(BookmarkModel* model,
+                                     const BookmarkNode* node) override {
     if (!importing_)
       [controller_ modelChangedPreserveSelection:YES];
   }
 
-  virtual void BookmarkNodeFaviconChanged(BookmarkModel* model,
-                                          const BookmarkNode* node) OVERRIDE {
+  void BookmarkNodeFaviconChanged(BookmarkModel* model,
+                                  const BookmarkNode* node) override {
     // I care nothing for these 'favicons': I only show folders.
   }
 
-  virtual void ExtensiveBookmarkChangesBeginning(
-      BookmarkModel* model) OVERRIDE {
+  void ExtensiveBookmarkChangesBeginning(BookmarkModel* model) override {
     importing_ = true;
   }
 
   // Invoked after a batch import finishes.  This tells observers to update
   // themselves if they were waiting for the update to finish.
-  virtual void ExtensiveBookmarkChangesEnded(BookmarkModel* model) OVERRIDE {
+  void ExtensiveBookmarkChangesEnded(BookmarkModel* model) override {
     importing_ = false;
     [controller_ modelChangedPreserveSelection:YES];
   }

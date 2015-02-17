@@ -5,7 +5,7 @@
 #include "components/feedback/feedback_data.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/string_util.h"
@@ -92,11 +92,8 @@ void FeedbackData::AttachAndCompressFileData(
   if (!attached_filedata.get() || attached_filedata->empty())
     return;
   ++pending_op_count_;
-#if defined(OS_WIN)
-  base::FilePath attached_file(base::UTF8ToWide(attached_filename_));
-#else
-  base::FilePath attached_file(attached_filename_);
-#endif
+  base::FilePath attached_file =
+                  base::FilePath::FromUTF8Unsafe(attached_filename_);
   BrowserThread::PostBlockingPoolTaskAndReply(
       FROM_HERE,
       base::Bind(&FeedbackCommon::CompressFile,

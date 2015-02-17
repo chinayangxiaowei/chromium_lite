@@ -10,14 +10,17 @@
 #include "base/memory/scoped_vector.h"
 #include "base/message_loop/message_loop.h"
 #include "base/metrics/field_trial.h"
+#include "base/prefs/pref_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
+#include "chrome/browser/net/prediction_options.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_handle.h"
 #include "chrome/browser/prerender/prerender_link_manager.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_origin.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/prerender_types.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -47,23 +50,22 @@ class DummyPrerenderContents : public PrerenderContents {
                          Origin origin,
                          FinalStatus expected_final_status);
 
-  virtual ~DummyPrerenderContents();
+  ~DummyPrerenderContents() override;
 
-  virtual void StartPrerendering(
-      int ALLOW_UNUSED creator_child_id,
-      const gfx::Size& ALLOW_UNUSED size,
-      content::SessionStorageNamespace* ALLOW_UNUSED session_storage_namespace,
-      net::URLRequestContextGetter* ALLOW_UNUSED request_context)
-      OVERRIDE;
+  void StartPrerendering(
+      int creator_child_id,
+      const gfx::Size& size,
+      content::SessionStorageNamespace* session_storage_namespace,
+      net::URLRequestContextGetter* request_context) override;
 
-  virtual bool GetChildId(int* child_id) const OVERRIDE {
+  bool GetChildId(int* child_id) const override {
     // Having a default child_id of -1 forces pending prerenders not to fail
     // on session storage and cross domain checking.
     *child_id = -1;
     return true;
   }
 
-  virtual bool GetRouteId(int* route_id) const OVERRIDE {
+  bool GetRouteId(int* route_id) const override {
     *route_id = route_id_;
     return true;
   }
@@ -105,19 +107,18 @@ class UnitTestPrerenderManager : public PrerenderManager {
     OnCookieStoreLoaded();
   }
 
-  virtual ~UnitTestPrerenderManager() {
-  }
+  ~UnitTestPrerenderManager() override {}
 
   // From KeyedService, via PrererenderManager:
-  virtual void Shutdown() OVERRIDE {
+  void Shutdown() override {
     if (next_prerender_contents())
       next_prerender_contents_->Destroy(FINAL_STATUS_MANAGER_SHUTDOWN);
     PrerenderManager::Shutdown();
   }
 
   // From PrerenderManager:
-  virtual void MoveEntryToPendingDelete(PrerenderContents* entry,
-                                        FinalStatus final_status) OVERRIDE {
+  void MoveEntryToPendingDelete(PrerenderContents* entry,
+                                FinalStatus final_status) override {
     if (entry == next_prerender_contents_.get())
       return;
     PrerenderManager::MoveEntryToPendingDelete(entry, final_status);
@@ -201,16 +202,12 @@ class UnitTestPrerenderManager : public PrerenderManager {
   }
 
   // from PrerenderManager
-  virtual Time GetCurrentTime() const OVERRIDE {
-    return time_;
-  }
+  Time GetCurrentTime() const override { return time_; }
 
-  virtual TimeTicks GetCurrentTimeTicks() const OVERRIDE {
-    return time_ticks_;
-  }
+  TimeTicks GetCurrentTimeTicks() const override { return time_ticks_; }
 
-  virtual PrerenderContents* GetPrerenderContentsForRoute(
-      int child_id, int route_id) const OVERRIDE {
+  PrerenderContents* GetPrerenderContentsForRoute(int child_id,
+                                                  int route_id) const override {
     // Overridden for the PrerenderLinkManager's pending prerender logic.
     PrerenderContentsMap::const_iterator iter = prerender_contents_map_.find(
         std::make_pair(child_id, route_id));
@@ -232,9 +229,7 @@ class UnitTestPrerenderManager : public PrerenderManager {
   }
 
  protected:
-  virtual net::URLRequestContextGetter* GetURLRequestContext() OVERRIDE {
-    return NULL;
-  }
+  net::URLRequestContextGetter* GetURLRequestContext() override { return NULL; }
 
  private:
   void SetNextPrerenderContents(DummyPrerenderContents* prerender_contents) {
@@ -244,12 +239,10 @@ class UnitTestPrerenderManager : public PrerenderManager {
       used_prerender_contents_.push_back(prerender_contents);
   }
 
-
-  virtual PrerenderContents* CreatePrerenderContents(
-      const GURL& url,
-      const Referrer& referrer,
-      Origin origin,
-      uint8 experiment_id) OVERRIDE {
+  PrerenderContents* CreatePrerenderContents(const GURL& url,
+                                             const Referrer& referrer,
+                                             Origin origin,
+                                             uint8 experiment_id) override {
     CHECK(next_prerender_contents_.get());
     EXPECT_EQ(url, next_prerender_contents_->prerender_url());
     EXPECT_EQ(origin, next_prerender_contents_->origin());
@@ -301,10 +294,10 @@ DummyPrerenderContents::~DummyPrerenderContents() {
 }
 
 void DummyPrerenderContents::StartPrerendering(
-    int ALLOW_UNUSED creator_child_id,
-    const gfx::Size& ALLOW_UNUSED size,
-    content::SessionStorageNamespace* ALLOW_UNUSED session_storage_namespace,
-    net::URLRequestContextGetter* ALLOW_UNUSED request_context) {
+    int creator_child_id,
+    const gfx::Size& size,
+    content::SessionStorageNamespace* session_storage_namespace,
+    net::URLRequestContextGetter* request_context) {
   // In the base PrerenderContents implementation, StartPrerendering will
   // be called even when the PrerenderManager is part of the control group,
   // but it will early exit before actually creating a new RenderView if
@@ -335,7 +328,7 @@ class PrerenderTest : public testing::Test {
         switches::kPrerenderFromOmniboxSwitchValueEnabled);
   }
 
-  virtual ~PrerenderTest() {
+  ~PrerenderTest() override {
     prerender_link_manager_->OnChannelClosing(kDefaultChildId);
     prerender_link_manager_->Shutdown();
     prerender_manager_->Shutdown();
@@ -391,6 +384,12 @@ class PrerenderTest : public testing::Test {
         kDefaultChildId, GetNextPrerenderID(), url, kDefaultRelTypes,
         content::Referrer(), kSize, kDefaultRenderViewRouteId);
     return LauncherHasRunningPrerender(kDefaultChildId, last_prerender_id());
+  }
+
+  void DisablePrerender() {
+    profile_.GetPrefs()->SetInteger(
+        prefs::kNetworkPredictionOptions,
+        chrome_browser_net::NETWORK_PREDICTION_NEVER);
   }
 
  private:
@@ -609,7 +608,7 @@ TEST_F(PrerenderTest, MaxConcurrencyTest) {
   DummyPrerenderContents* null = NULL;
   GURL url_to_delay("http://www.google.com/delayme");
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(concurrencies_to_test); ++i) {
+  for (size_t i = 0; i < arraysize(concurrencies_to_test); ++i) {
     prerender_manager()->mutable_config().max_link_concurrency =
         concurrencies_to_test[i].max_link_concurrency;
     prerender_manager()->mutable_config().max_link_concurrency_per_launcher =
@@ -907,6 +906,10 @@ TEST_F(PrerenderTest, NotSoRecentlyVisited) {
 
 // Tests that our PPLT dummy prerender gets created properly.
 TEST_F(PrerenderTest, PPLTDummy) {
+  RestorePrerenderMode restore_prerender_mode;
+  PrerenderManager::SetMode(
+      PrerenderManager::PRERENDER_MODE_EXPERIMENT_MATCH_COMPLETE_GROUP);
+
   GURL url("http://www.google.com/");
   DummyPrerenderContents* prerender_contents =
       prerender_manager()->CreateNextPrerenderContents(
@@ -930,6 +933,10 @@ TEST_F(PrerenderTest, PPLTDummy) {
 // Tests that our PPLT dummy prerender gets created properly, even
 // when navigating to a page that has been recently navigated to.
 TEST_F(PrerenderTest, RecentlyVisitedPPLTDummy) {
+  RestorePrerenderMode restore_prerender_mode;
+  PrerenderManager::SetMode(
+      PrerenderManager::PRERENDER_MODE_EXPERIMENT_MATCH_COMPLETE_GROUP);
+
   GURL url("http://www.google.com/");
   DummyPrerenderContents* prerender_contents =
       prerender_manager()->CreateNextPrerenderContents(
@@ -948,6 +955,10 @@ TEST_F(PrerenderTest, RecentlyVisitedPPLTDummy) {
 }
 
 TEST_F(PrerenderTest, PPLTLateCancel) {
+  RestorePrerenderMode restore_prerender_mode;
+  PrerenderManager::SetMode(
+      PrerenderManager::PRERENDER_MODE_EXPERIMENT_MATCH_COMPLETE_GROUP);
+
   GURL url("http://www.google.com");
   DummyPrerenderContents* prerender_contents =
       prerender_manager()->CreateNextPrerenderContents(
@@ -1030,13 +1041,13 @@ TEST_F(PrerenderTest, CancelAllTest) {
 }
 
 TEST_F(PrerenderTest, OmniboxNotAllowedWhenDisabled) {
-  prerender_manager()->set_enabled(false);
+  DisablePrerender();
   EXPECT_FALSE(prerender_manager()->AddPrerenderFromOmnibox(
       GURL("http://www.example.com"), NULL, gfx::Size()));
 }
 
 TEST_F(PrerenderTest, LinkRelNotAllowedWhenDisabled) {
-  prerender_manager()->set_enabled(false);
+  DisablePrerender();
   EXPECT_FALSE(AddSimplePrerender(
       GURL("http://www.example.com")));
 }
@@ -1544,7 +1555,7 @@ TEST_F(PrerenderTest, InstantSearchNotAllowedWhenDisabled) {
   ASSERT_TRUE(base::FieldTrialList::CreateFieldTrial(
       "EmbeddedSearch",
       "Group82 espv:8 use_cacheable_ntp:1 prefetch_results:1"));
-  prerender_manager()->set_enabled(false);
+  DisablePrerender();
   EXPECT_FALSE(prerender_manager()->AddPrerenderForInstant(
       GURL("http://www.example.com/instant_search"), NULL, gfx::Size()));
 }

@@ -13,8 +13,9 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_paths.h"
 #include "extensions/test/test_extensions_client.h"
-#include "mojo/embedder/embedder.h"
+#include "mojo/edk/embedder/test_embedder.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gl/gl_surface.h"
 
 namespace {
 
@@ -25,12 +26,12 @@ namespace {
 class ExtensionsContentClient : public content::ContentClient {
  public:
   ExtensionsContentClient() {}
-  virtual ~ExtensionsContentClient() {}
+  ~ExtensionsContentClient() override {}
 
   // content::ContentClient overrides:
-  virtual void AddAdditionalSchemes(
+  void AddAdditionalSchemes(
       std::vector<std::string>* standard_schemes,
-      std::vector<std::string>* savable_schemes) OVERRIDE {
+      std::vector<std::string>* savable_schemes) override {
     standard_schemes->push_back(extensions::kExtensionScheme);
     savable_schemes->push_back(extensions::kExtensionScheme);
     standard_schemes->push_back(extensions::kExtensionResourceScheme);
@@ -45,12 +46,12 @@ class ExtensionsContentClient : public content::ContentClient {
 class ExtensionsTestSuite : public content::ContentTestSuiteBase {
  public:
   ExtensionsTestSuite(int argc, char** argv);
-  virtual ~ExtensionsTestSuite();
+  ~ExtensionsTestSuite() override;
 
  private:
   // base::TestSuite:
-  virtual void Initialize() OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
+  void Initialize() override;
+  void Shutdown() override;
 
   scoped_ptr<extensions::TestExtensionsClient> client_;
 
@@ -64,6 +65,7 @@ ExtensionsTestSuite::~ExtensionsTestSuite() {}
 
 void ExtensionsTestSuite::Initialize() {
   content::ContentTestSuiteBase::Initialize();
+  gfx::GLSurface::InitializeOneOffForTests();
 
   // Register the chrome-extension:// scheme via this circuitous path. Note
   // that this does not persistently set up a ContentClient; individual tests
@@ -98,7 +100,7 @@ void ExtensionsTestSuite::Shutdown() {
 int main(int argc, char** argv) {
   content::UnitTestTestSuite test_suite(new ExtensionsTestSuite(argc, argv));
 
-  mojo::embedder::Init();
+  mojo::embedder::test::InitWithSimplePlatformSupport();
   return base::LaunchUnitTests(argc,
                                argv,
                                base::Bind(&content::UnitTestTestSuite::Run,

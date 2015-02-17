@@ -12,6 +12,7 @@
 #include "base/strings/string16.h"
 #include "components/omnibox/autocomplete_match.h"
 #include "components/omnibox/autocomplete_match_type.h"
+#include "components/omnibox/suggestion_answer.h"
 #include "url/gurl.h"
 
 class AutocompleteInput;
@@ -54,6 +55,13 @@ class SearchSuggestionParser {
     AutocompleteMatchType::Type type() const { return type_; }
     int relevance() const { return relevance_; }
     void set_relevance(int relevance) { relevance_ = relevance; }
+    bool received_after_last_keystroke() const {
+      return received_after_last_keystroke_;
+    }
+    void set_received_after_last_keystroke(
+        bool received_after_last_keystroke) {
+      received_after_last_keystroke_ = received_after_last_keystroke;
+    }
 
     bool relevance_from_server() const { return relevance_from_server_; }
     void set_relevance_from_server(bool relevance_from_server) {
@@ -90,6 +98,11 @@ class SearchSuggestionParser {
     // there.
     bool relevance_from_server_;
 
+    // Whether this result was received asynchronously after the last
+    // keystroke, otherwise it must have come from prior cached results
+    // or from a synchronous provider.
+    bool received_after_last_keystroke_;
+
     // Optional deletion URL provided with suggestions. Fetching this URL
     // should result in some reasonable deletion behaviour on the server,
     // e.g. deleting this term out of a user's server-side search history.
@@ -105,6 +118,7 @@ class SearchSuggestionParser {
                   const base::string16& annotation,
                   const base::string16& answer_contents,
                   const base::string16& answer_type,
+                  scoped_ptr<SuggestionAnswer> answer,
                   const std::string& suggest_query_params,
                   const std::string& deletion_url,
                   bool from_keyword_provider,
@@ -112,7 +126,10 @@ class SearchSuggestionParser {
                   bool relevance_from_server,
                   bool should_prefetch,
                   const base::string16& input_text);
-    virtual ~SuggestResult();
+    SuggestResult(const SuggestResult& result);
+    ~SuggestResult() override;
+
+    SuggestResult& operator=(const SuggestResult& rhs);
 
     const base::string16& suggestion() const { return suggestion_; }
     const base::string16& match_contents_prefix() const {
@@ -125,6 +142,7 @@ class SearchSuggestionParser {
 
     const base::string16& answer_contents() const { return answer_contents_; }
     const base::string16& answer_type() const { return answer_type_; }
+    const SuggestionAnswer* answer() const { return answer_.get(); }
 
     bool should_prefetch() const { return should_prefetch_; }
 
@@ -136,9 +154,8 @@ class SearchSuggestionParser {
                                const base::string16& input_text);
 
     // Result:
-    virtual int CalculateRelevance(
-        const AutocompleteInput& input,
-        bool keyword_provider_requested) const OVERRIDE;
+    int CalculateRelevance(const AutocompleteInput& input,
+                           bool keyword_provider_requested) const override;
 
    private:
     // The search terms to be used for this suggestion.
@@ -158,11 +175,16 @@ class SearchSuggestionParser {
     // Optional additional parameters to be added to the search URL.
     std::string suggest_query_params_;
 
+    // TODO(jdonnelly): Remove the following two properties once the downstream
+    // clients are using the SuggestionAnswer.
     // Optional formatted Answers result.
     base::string16 answer_contents_;
 
     // Type of optional formatted Answers result.
     base::string16 answer_type_;
+
+    // Optional short answer to the input that produced this suggestion.
+    scoped_ptr<SuggestionAnswer> answer_;
 
     // Should this result be prefetched?
     bool should_prefetch_;
@@ -180,7 +202,7 @@ class SearchSuggestionParser {
                      bool relevance_from_server,
                      const base::string16& input_text,
                      const std::string& languages);
-    virtual ~NavigationResult();
+    ~NavigationResult() override;
 
     const GURL& url() const { return url_; }
     const base::string16& description() const { return description_; }
@@ -196,9 +218,8 @@ class SearchSuggestionParser {
                                            const std::string& languages);
 
     // Result:
-    virtual int CalculateRelevance(
-        const AutocompleteInput& input,
-        bool keyword_provider_requested) const OVERRIDE;
+    int CalculateRelevance(const AutocompleteInput& input,
+                           bool keyword_provider_requested) const override;
 
    private:
     // The suggested url for navigation.
@@ -253,7 +274,7 @@ class SearchSuggestionParser {
     bool relevances_from_server;
 
     // URLs of any images in Answers results.
-    std::vector<GURL> answers_image_urls;
+    SuggestionAnswer::URLs answers_image_urls;
 
    private:
     DISALLOW_COPY_AND_ASSIGN(Results);
@@ -281,10 +302,6 @@ class SearchSuggestionParser {
       Results* results);
 
  private:
-  // Gets URLs of any images in Answers results.
-  static void GetAnswersImageURLs(const base::DictionaryValue* answer_json,
-                                  std::vector<GURL>* urls);
-
   DISALLOW_COPY_AND_ASSIGN(SearchSuggestionParser);
 };
 

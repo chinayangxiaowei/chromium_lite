@@ -7,6 +7,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "components/password_manager/content/browser/content_credential_manager_dispatcher.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -25,6 +26,7 @@ class WebContents;
 }
 
 namespace password_manager {
+struct CredentialInfo;
 class PasswordGenerationManager;
 class PasswordManager;
 }
@@ -35,36 +37,34 @@ class ChromePasswordManagerClient
       public content::WebContentsObserver,
       public content::WebContentsUserData<ChromePasswordManagerClient> {
  public:
-  virtual ~ChromePasswordManagerClient();
+  ~ChromePasswordManagerClient() override;
 
   // PasswordManagerClient implementation.
-  virtual bool IsAutomaticPasswordSavingEnabled() const OVERRIDE;
-  virtual bool IsPasswordManagerEnabledForCurrentPage() const OVERRIDE;
-  virtual bool ShouldFilterAutofillResult(
-      const autofill::PasswordForm& form) OVERRIDE;
-  virtual bool IsSyncAccountCredential(
-      const std::string& username, const std::string& origin) const OVERRIDE;
-  virtual void AutofillResultsComputed() OVERRIDE;
-  virtual void PromptUserToSavePassword(
-      scoped_ptr<password_manager::PasswordFormManager> form_to_save) OVERRIDE;
-  virtual void AutomaticPasswordSave(
-      scoped_ptr<password_manager::PasswordFormManager> saved_form_manager)
-      OVERRIDE;
-  virtual void PasswordWasAutofilled(
-      const autofill::PasswordFormMap& best_matches) const OVERRIDE;
-  virtual void PasswordAutofillWasBlocked(
-      const autofill::PasswordFormMap& best_matches) const OVERRIDE;
-  virtual void AuthenticateAutofillAndFillForm(
-      scoped_ptr<autofill::PasswordFormFillData> fill_data) OVERRIDE;
-  virtual PrefService* GetPrefs() OVERRIDE;
-  virtual password_manager::PasswordStore* GetPasswordStore() OVERRIDE;
-  virtual password_manager::PasswordManagerDriver* GetDriver() OVERRIDE;
-  virtual base::FieldTrial::Probability GetProbabilityForExperiment(
-      const std::string& experiment_name) OVERRIDE;
-  virtual bool IsPasswordSyncEnabled() OVERRIDE;
-  virtual void OnLogRouterAvailabilityChanged(bool router_can_be_used) OVERRIDE;
-  virtual void LogSavePasswordProgress(const std::string& text) OVERRIDE;
-  virtual bool IsLoggingActive() const OVERRIDE;
+  bool IsAutomaticPasswordSavingEnabled() const override;
+  bool IsPasswordManagerEnabledForCurrentPage() const override;
+  bool ShouldFilterAutofillResult(const autofill::PasswordForm& form) override;
+  std::string GetSyncUsername() const override;
+  bool IsSyncAccountCredential(const std::string& username,
+                               const std::string& origin) const override;
+  void AutofillResultsComputed() override;
+  bool PromptUserToSavePassword(
+      scoped_ptr<password_manager::PasswordFormManager> form_to_save) override;
+  void AutomaticPasswordSave(scoped_ptr<password_manager::PasswordFormManager>
+                                 saved_form_manager) override;
+  void PasswordWasAutofilled(
+      const autofill::PasswordFormMap& best_matches) const override;
+  void PasswordAutofillWasBlocked(
+      const autofill::PasswordFormMap& best_matches) const override;
+  PrefService* GetPrefs() override;
+  password_manager::PasswordStore* GetPasswordStore() override;
+  password_manager::PasswordManagerDriver* GetDriver() override;
+  base::FieldTrial::Probability GetProbabilityForExperiment(
+      const std::string& experiment_name) override;
+  bool IsPasswordSyncEnabled(
+      password_manager::CustomPassphraseState state) override;
+  void OnLogRouterAvailabilityChanged(bool router_can_be_used) override;
+  void LogSavePasswordProgress(const std::string& text) override;
+  bool IsLoggingActive() const override;
 
   // Hides any visible generation UI.
   void HidePasswordGenerationPopup();
@@ -108,12 +108,7 @@ class ChromePasswordManagerClient
   friend class content::WebContentsUserData<ChromePasswordManagerClient>;
 
   // content::WebContentsObserver overrides.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-
-  // Callback method to be triggered when authentication is successful for a
-  // given password authentication request.  If authentication is disabled or
-  // not supported, this will be triggered directly.
-  void CommitFillPasswordForm(autofill::PasswordFormFillData* fill_data);
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   // Given |bounds| in the renderers coordinate system, return the same bounds
   // in the screens coordinate system.
@@ -149,15 +144,15 @@ class ChromePasswordManagerClient
 
   password_manager::ContentPasswordManagerDriver driver_;
 
+  password_manager::ContentCredentialManagerDispatcher
+      credential_manager_dispatcher_;
+
   // Observer for password generation popup.
   autofill::PasswordGenerationPopupObserver* observer_;
 
   // Controls the popup
   base::WeakPtr<
     autofill::PasswordGenerationPopupControllerImpl> popup_controller_;
-
-  // Allows authentication callbacks to be destroyed when this client is gone.
-  base::WeakPtrFactory<ChromePasswordManagerClient> weak_factory_;
 
   // True if |this| is registered with some LogRouter which can accept logs.
   bool can_use_log_router_;

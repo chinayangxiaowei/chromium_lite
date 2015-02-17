@@ -18,10 +18,10 @@
 #include "base/strings/string_util.h"
 #include "base/tracked_objects.h"
 #include "base/values.h"
-#include "chrome/browser/metrics/tracking_synchronizer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_profiler/task_profiler_data_serializer.h"
 #include "chrome/common/url_constants.h"
+#include "components/metrics/profiler/tracking_synchronizer.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
@@ -29,19 +29,18 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 
 #ifdef USE_SOURCE_FILES_DIRECTLY
 #include "base/base_paths.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
 #endif  //  USE_SOURCE_FILES_DIRECTLY
 
-using chrome_browser_metrics::TrackingSynchronizer;
 using content::BrowserThread;
 using content::WebContents;
 using content::WebUIMessageHandler;
+using metrics::TrackingSynchronizer;
 
 namespace {
 
@@ -54,11 +53,11 @@ class ProfilerWebUIDataSource : public content::URLDataSource {
 
  protected:
   // content::URLDataSource implementation.
-  virtual std::string GetSource() OVERRIDE {
+  virtual std::string GetSource() override {
     return chrome::kChromeUIProfilerHost;
   }
 
-  virtual std::string GetMimeType(const std::string& path) const OVERRIDE {
+  virtual std::string GetMimeType(const std::string& path) const override {
     if (EndsWith(path, ".js", false))
       return "application/javascript";
     return "text/html";
@@ -67,7 +66,7 @@ class ProfilerWebUIDataSource : public content::URLDataSource {
   virtual void StartDataRequest(
       const std::string& path,
       bool is_incognito,
-      const content::URLDataSource::GotDataCallback& callback) OVERRIDE {
+      const content::URLDataSource::GotDataCallback& callback) override {
     base::FilePath base_path;
     PathService::Get(base::DIR_SOURCE_ROOT, &base_path);
     base_path = base_path.AppendASCII("chrome");
@@ -118,7 +117,7 @@ class ProfilerMessageHandler : public WebUIMessageHandler {
   ProfilerMessageHandler() {}
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  void RegisterMessages() override;
 
   // Messages.
   void OnGetData(const base::ListValue* list);

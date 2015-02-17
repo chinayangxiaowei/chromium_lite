@@ -6,7 +6,6 @@
 #define UI_OZONE_PLATFORM_DRI_GBM_SURFACE_H_
 
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/ozone/platform/dri/gbm_surfaceless.h"
 #include "ui/ozone/public/surface_ozone_egl.h"
@@ -19,6 +18,7 @@ namespace ui {
 
 class DriBuffer;
 class DriWrapper;
+class DriWindowDelegate;
 
 // Extends the GBM surfaceless functionality and adds an implicit surface for
 // the primary plane. Arbitrary buffers can still be allocated and displayed as
@@ -26,17 +26,17 @@ class DriWrapper;
 // surface and is updated via an EGLSurface.
 class GbmSurface : public GbmSurfaceless {
  public:
-  GbmSurface(const base::WeakPtr<HardwareDisplayController>& controller,
+  GbmSurface(DriWindowDelegate* window_delegate,
              gbm_device* device,
              DriWrapper* dri);
-  virtual ~GbmSurface();
+  ~GbmSurface() override;
 
   bool Initialize();
 
   // GbmSurfaceless:
-  virtual intptr_t GetNativeWindow() OVERRIDE;
-  virtual bool ResizeNativeWindow(const gfx::Size& viewport_size) OVERRIDE;
-  virtual bool OnSwapBuffers() OVERRIDE;
+  intptr_t GetNativeWindow() override;
+  bool ResizeNativeWindow(const gfx::Size& viewport_size) override;
+  bool OnSwapBuffers() override;
 
  private:
   gbm_device* gbm_device_;

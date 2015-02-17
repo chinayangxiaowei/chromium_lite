@@ -8,19 +8,23 @@
 #include "base/files/file_path.h"
 #include "chrome/browser/chromeos/drive/file_system_util.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
+#include "chrome/browser/chromeos/file_manager/filesystem_api_util.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/file_chooser_file_info.h"
 #include "extensions/common/extension.h"
 #include "google_apis/drive/task_util.h"
 #include "net/base/escape.h"
+#include "storage/browser/fileapi/file_system_context.h"
+#include "storage/browser/fileapi/isolated_context.h"
+#include "storage/browser/fileapi/open_file_system_mode.h"
+#include "storage/common/fileapi/file_system_util.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "url/gurl.h"
-#include "webkit/browser/fileapi/file_system_context.h"
-#include "webkit/browser/fileapi/open_file_system_mode.h"
-#include "webkit/common/fileapi/file_system_util.h"
 
 using content::BrowserThread;
 
@@ -31,9 +35,9 @@ namespace {
 
 GURL ConvertRelativeFilePathToFileSystemUrl(const base::FilePath& relative_path,
                                             const std::string& extension_id) {
-  GURL base_url = fileapi::GetFileSystemRootURI(
+  GURL base_url = storage::GetFileSystemRootURI(
       extensions::Extension::GetBaseURLFromExtensionId(extension_id),
-      fileapi::kFileSystemTypeExternal);
+      storage::kFileSystemTypeExternal);
   return GURL(base_url.spec() +
               net::EscapeUrlEncodedData(relative_path.AsUTF8Unsafe(),
                                         false));  // Space to %20 instead of +.
@@ -74,9 +78,9 @@ class FileDefinitionListConverter {
   void OnResolvedURL(scoped_ptr<FileDefinitionListConverter> self_deleter,
                      FileDefinitionList::const_iterator iterator,
                      base::File::Error error,
-                     const fileapi::FileSystemInfo& info,
+                     const storage::FileSystemInfo& info,
                      const base::FilePath& file_path,
-                     fileapi::FileSystemContext::ResolvedEntryType type);
+                     storage::FileSystemContext::ResolvedEntryType type);
 
   // Called when the iterator is converted. Adds the |entry_definition| to
   // |results_| and calls ConvertNextIterator() for the next element.
@@ -84,7 +88,7 @@ class FileDefinitionListConverter {
                            FileDefinitionList::const_iterator iterator,
                            const EntryDefinition& entry_definition);
 
-  scoped_refptr<fileapi::FileSystemContext> file_system_context_;
+  scoped_refptr<storage::FileSystemContext> file_system_context_;
   const std::string extension_id_;
   const FileDefinitionList file_definition_list_;
   const EntryDefinitionListCallback callback_;
@@ -135,9 +139,9 @@ void FileDefinitionListConverter::ConvertNextIterator(
     return;
   }
 
-  fileapi::FileSystemURL url = file_system_context_->CreateCrackedFileSystemURL(
+  storage::FileSystemURL url = file_system_context_->CreateCrackedFileSystemURL(
       extensions::Extension::GetBaseURLFromExtensionId(extension_id_),
-      fileapi::kFileSystemTypeExternal,
+      storage::kFileSystemTypeExternal,
       iterator->virtual_path);
   DCHECK(url.is_valid());
 
@@ -155,9 +159,9 @@ void FileDefinitionListConverter::OnResolvedURL(
     scoped_ptr<FileDefinitionListConverter> self_deleter,
     FileDefinitionList::const_iterator iterator,
     base::File::Error error,
-    const fileapi::FileSystemInfo& info,
+    const storage::FileSystemInfo& info,
     const base::FilePath& file_path,
-    fileapi::FileSystemContext::ResolvedEntryType type) {
+    storage::FileSystemContext::ResolvedEntryType type) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (error != base::File::FILE_OK) {
@@ -171,13 +175,13 @@ void FileDefinitionListConverter::OnResolvedURL(
   entry_definition.file_system_root_url = info.root_url.spec();
   entry_definition.file_system_name = info.name;
   switch (type) {
-    case fileapi::FileSystemContext::RESOLVED_ENTRY_FILE:
+    case storage::FileSystemContext::RESOLVED_ENTRY_FILE:
       entry_definition.is_directory = false;
       break;
-    case fileapi::FileSystemContext::RESOLVED_ENTRY_DIRECTORY:
+    case storage::FileSystemContext::RESOLVED_ENTRY_DIRECTORY:
       entry_definition.is_directory = true;
       break;
-    case fileapi::FileSystemContext::RESOLVED_ENTRY_NOT_FOUND:
+    case storage::FileSystemContext::RESOLVED_ENTRY_NOT_FOUND:
       entry_definition.is_directory = iterator->is_directory;
       break;
   }
@@ -215,15 +219,200 @@ void OnConvertFileDefinitionDone(
 
 // Used to implement CheckIfDirectoryExists().
 void CheckIfDirectoryExistsOnIOThread(
-    scoped_refptr<fileapi::FileSystemContext> file_system_context,
+    scoped_refptr<storage::FileSystemContext> file_system_context,
     const GURL& url,
-    const fileapi::FileSystemOperationRunner::StatusCallback& callback) {
+    const storage::FileSystemOperationRunner::StatusCallback& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
-  fileapi::FileSystemURL file_system_url = file_system_context->CrackURL(url);
+  storage::FileSystemURL file_system_url = file_system_context->CrackURL(url);
   file_system_context->operation_runner()->DirectoryExists(
       file_system_url, callback);
 }
+
+// Checks if the |file_path| points non-native location or not.
+bool IsUnderNonNativeLocalPath(const storage::FileSystemContext& context,
+                               const base::FilePath& file_path) {
+  base::FilePath virtual_path;
+  if (!context.external_backend()->GetVirtualPath(file_path, &virtual_path))
+    return false;
+
+  const storage::FileSystemURL url = context.CreateCrackedFileSystemURL(
+      GURL(), storage::kFileSystemTypeExternal, virtual_path);
+  if (!url.is_valid())
+    return false;
+
+  return IsNonNativeFileSystemType(url.type());
+}
+
+// Helper class to convert SelectedFileInfoList into ChooserFileInfoList.
+class ConvertSelectedFileInfoListToFileChooserFileInfoListImpl {
+ public:
+  // The scoped pointer to control lifetime of the instance itself. The pointer
+  // is passed to callback functions and binds the lifetime of the instance to
+  // the callback's lifetime.
+  typedef scoped_ptr<ConvertSelectedFileInfoListToFileChooserFileInfoListImpl>
+      Lifetime;
+
+  ConvertSelectedFileInfoListToFileChooserFileInfoListImpl(
+      storage::FileSystemContext* context,
+      const GURL& origin,
+      const SelectedFileInfoList& selected_info_list,
+      const FileChooserFileInfoListCallback& callback)
+      : context_(context),
+        chooser_info_list_(new FileChooserFileInfoList),
+        callback_(callback) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+    Lifetime lifetime(this);
+    bool need_fill_metadata = false;
+
+    for (size_t i = 0; i < selected_info_list.size(); ++i) {
+      content::FileChooserFileInfo chooser_info;
+
+      // Native file.
+      if (!IsUnderNonNativeLocalPath(*context,
+                                     selected_info_list[i].file_path)) {
+        chooser_info.file_path = selected_info_list[i].file_path;
+        chooser_info.display_name = selected_info_list[i].display_name;
+        chooser_info_list_->push_back(chooser_info);
+        continue;
+      }
+
+      // Non-native file, but it has a native snapshot file.
+      if (!selected_info_list[i].local_path.empty()) {
+        chooser_info.file_path = selected_info_list[i].local_path;
+        chooser_info.display_name = selected_info_list[i].display_name;
+        chooser_info_list_->push_back(chooser_info);
+        continue;
+      }
+
+      // Non-native file without a snapshot file.
+      base::FilePath virtual_path;
+      if (!context->external_backend()->GetVirtualPath(
+              selected_info_list[i].file_path, &virtual_path)) {
+        NotifyError(lifetime.Pass());
+        return;
+      }
+
+      const GURL url = CreateIsolatedURLFromVirtualPath(
+                           *context_, origin, virtual_path).ToGURL();
+      if (!url.is_valid()) {
+        NotifyError(lifetime.Pass());
+        return;
+      }
+
+      chooser_info.file_path = selected_info_list[i].file_path;
+      chooser_info.file_system_url = url;
+      chooser_info_list_->push_back(chooser_info);
+      need_fill_metadata = true;
+    }
+
+    // If the list includes at least one non-native file (wihtout a snapshot
+    // file), move to IO thread to obtian metadata for the non-native file.
+    if (need_fill_metadata) {
+      BrowserThread::PostTask(
+          BrowserThread::IO,
+          FROM_HERE,
+          base::Bind(&ConvertSelectedFileInfoListToFileChooserFileInfoListImpl::
+                         FillMetadataOnIOThread,
+                     base::Unretained(this),
+                     base::Passed(&lifetime),
+                     chooser_info_list_->begin()));
+      return;
+    }
+
+    NotifyComplete(lifetime.Pass());
+  }
+
+  ~ConvertSelectedFileInfoListToFileChooserFileInfoListImpl() {
+    if (chooser_info_list_) {
+      for (size_t i = 0; i < chooser_info_list_->size(); ++i) {
+        if (chooser_info_list_->at(i).file_system_url.is_valid()) {
+          storage::IsolatedContext::GetInstance()->RevokeFileSystem(
+              context_->CrackURL(chooser_info_list_->at(i).file_system_url)
+                  .mount_filesystem_id());
+        }
+      }
+    }
+  }
+
+ private:
+  // Obtains metadata for the non-native file |it|.
+  void FillMetadataOnIOThread(Lifetime lifetime,
+                              const FileChooserFileInfoList::iterator& it) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+    if (it == chooser_info_list_->end()) {
+      BrowserThread::PostTask(
+          BrowserThread::UI,
+          FROM_HERE,
+          base::Bind(&ConvertSelectedFileInfoListToFileChooserFileInfoListImpl::
+                         NotifyComplete,
+                     base::Unretained(this),
+                     base::Passed(&lifetime)));
+      return;
+    }
+
+    if (!it->file_system_url.is_valid()) {
+      FillMetadataOnIOThread(lifetime.Pass(), it + 1);
+      return;
+    }
+
+    context_->operation_runner()->GetMetadata(
+        context_->CrackURL(it->file_system_url),
+        base::Bind(&ConvertSelectedFileInfoListToFileChooserFileInfoListImpl::
+                       OnGotMetadataOnIOThread,
+                   base::Unretained(this),
+                   base::Passed(&lifetime),
+                   it));
+  }
+
+  // Callback invoked after GetMetadata.
+  void OnGotMetadataOnIOThread(Lifetime lifetime,
+                               const FileChooserFileInfoList::iterator& it,
+                               base::File::Error result,
+                               const base::File::Info& file_info) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+    if (result != base::File::FILE_OK) {
+      BrowserThread::PostTask(
+          BrowserThread::UI,
+          FROM_HERE,
+          base::Bind(&ConvertSelectedFileInfoListToFileChooserFileInfoListImpl::
+                         NotifyError,
+                     base::Unretained(this),
+                     base::Passed(&lifetime)));
+      return;
+    }
+
+    it->length = file_info.size;
+    it->modification_time = file_info.last_modified;
+    it->is_directory = file_info.is_directory;
+    FillMetadataOnIOThread(lifetime.Pass(), it + 1);
+  }
+
+  // Returns a result to the |callback_|.
+  void NotifyComplete(Lifetime /* lifetime */) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    callback_.Run(*chooser_info_list_);
+    // Reset the list so that the file systems are not revoked at the
+    // destructor.
+    chooser_info_list_.reset();
+  }
+
+  // Returns an empty list to the |callback_|.
+  void NotifyError(Lifetime /* lifetime */) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    callback_.Run(FileChooserFileInfoList());
+  }
+
+  scoped_refptr<storage::FileSystemContext> context_;
+  scoped_ptr<FileChooserFileInfoList> chooser_info_list_;
+  const FileChooserFileInfoListCallback callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(
+      ConvertSelectedFileInfoListToFileChooserFileInfoListImpl);
+};
 
 }  // namespace
 
@@ -233,7 +422,7 @@ EntryDefinition::EntryDefinition() {
 EntryDefinition::~EntryDefinition() {
 }
 
-fileapi::FileSystemContext* GetFileSystemContextForExtensionId(
+storage::FileSystemContext* GetFileSystemContextForExtensionId(
     Profile* profile,
     const std::string& extension_id) {
   GURL site = extensions::util::GetSiteForExtensionId(extension_id, profile);
@@ -241,7 +430,7 @@ fileapi::FileSystemContext* GetFileSystemContextForExtensionId(
       GetFileSystemContext();
 }
 
-fileapi::FileSystemContext* GetFileSystemContextForRenderViewHost(
+storage::FileSystemContext* GetFileSystemContextForRenderViewHost(
     Profile* profile,
     content::RenderViewHost* render_view_host) {
   content::SiteInstance* site_instance = render_view_host->GetSiteInstance();
@@ -301,9 +490,10 @@ bool ConvertAbsoluteFilePathToRelativeFileSystemPath(
   // extension's site is the one in whose file system context the virtual path
   // should be found.
   GURL site = extensions::util::GetSiteForExtensionId(extension_id, profile);
-  fileapi::ExternalFileSystemBackend* backend =
-      content::BrowserContext::GetStoragePartitionForSite(profile, site)->
-          GetFileSystemContext()->external_backend();
+  storage::ExternalFileSystemBackend* backend =
+      content::BrowserContext::GetStoragePartitionForSite(profile, site)
+          ->GetFileSystemContext()
+          ->external_backend();
   if (!backend)
     return false;
 
@@ -342,15 +532,25 @@ void ConvertFileDefinitionToEntryDefinition(
       base::Bind(&OnConvertFileDefinitionDone, callback));
 }
 
+void ConvertSelectedFileInfoListToFileChooserFileInfoList(
+    storage::FileSystemContext* context,
+    const GURL& origin,
+    const SelectedFileInfoList& selected_info_list,
+    const FileChooserFileInfoListCallback& callback) {
+  // The object deletes itself.
+  new ConvertSelectedFileInfoListToFileChooserFileInfoListImpl(
+      context, origin, selected_info_list, callback);
+}
+
 void CheckIfDirectoryExists(
-    scoped_refptr<fileapi::FileSystemContext> file_system_context,
+    scoped_refptr<storage::FileSystemContext> file_system_context,
     const GURL& url,
-    const fileapi::FileSystemOperationRunner::StatusCallback& callback) {
+    const storage::FileSystemOperationRunner::StatusCallback& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Check the existence of directory using file system API implementation on
   // behalf of the file manager app. We need to grant access beforehand.
-  fileapi::ExternalFileSystemBackend* backend =
+  storage::ExternalFileSystemBackend* backend =
       file_system_context->external_backend();
   DCHECK(backend);
   backend->GrantFullAccessToExtension(kFileManagerAppId);
@@ -361,6 +561,29 @@ void CheckIfDirectoryExists(
                  file_system_context,
                  url,
                  google_apis::CreateRelayCallback(callback)));
+}
+
+storage::FileSystemURL CreateIsolatedURLFromVirtualPath(
+    const storage::FileSystemContext& context,
+    const GURL& origin,
+    const base::FilePath& virtual_path) {
+  const storage::FileSystemURL original_url =
+      context.CreateCrackedFileSystemURL(
+          origin, storage::kFileSystemTypeExternal, virtual_path);
+
+  std::string register_name;
+  const std::string isolated_file_system_id =
+      storage::IsolatedContext::GetInstance()->RegisterFileSystemForPath(
+          original_url.type(),
+          original_url.filesystem_id(),
+          original_url.path(),
+          &register_name);
+  const storage::FileSystemURL isolated_url =
+      context.CreateCrackedFileSystemURL(
+          origin,
+          storage::kFileSystemTypeIsolated,
+          base::FilePath(isolated_file_system_id).Append(register_name));
+  return isolated_url;
 }
 
 }  // namespace util

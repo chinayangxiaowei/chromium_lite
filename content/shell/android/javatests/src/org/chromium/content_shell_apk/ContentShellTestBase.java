@@ -17,11 +17,13 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.ContentView;
 import org.chromium.content.browser.ContentViewCore;
-import org.chromium.content.browser.LoadUrlParams;
 import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer;
+import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_shell.Shell;
 
 import java.lang.annotation.ElementType;
@@ -66,7 +68,7 @@ public class ContentShellTestBase extends ActivityInstrumentationTestCase2<Conte
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (url != null) intent.setData(Uri.parse(url));
         intent.setComponent(new ComponentName(getInstrumentation().getTargetContext(),
-              ContentShellActivity.class));
+                ContentShellActivity.class));
         if (commandLineArgs != null) {
             intent.putExtra(ContentShellActivity.COMMAND_LINE_ARGS_KEY, commandLineArgs);
         }
@@ -86,7 +88,7 @@ public class ContentShellTestBase extends ActivityInstrumentationTestCase2<Conte
         launchContentShellWithUrl(UrlUtils.getTestFileUrl(url));
         assertNotNull(getActivity());
         assertTrue(waitForActiveShellToBeDoneLoading());
-        assertEquals(UrlUtils.getTestFileUrl(url), getContentViewCore().getUrl());
+        assertEquals(UrlUtils.getTestFileUrl(url), getContentViewCore().getWebContents().getUrl());
     }
 
     /**
@@ -109,6 +111,13 @@ public class ContentShellTestBase extends ActivityInstrumentationTestCase2<Conte
      */
     protected ContentViewCore getContentViewCore() {
         return getActivity().getActiveShell().getContentViewCore();
+    }
+
+    /**
+     * Returns the WebContents of this Shell.
+     */
+    protected WebContents getWebContents() {
+        return getActivity().getActiveShell().getWebContents();
     }
 
     /**
@@ -138,7 +147,8 @@ public class ContentShellTestBase extends ActivityInstrumentationTestCase2<Conte
                                 // loading because it has no URL set yet.  The second is that
                                 // we've set a URL and it actually is loading.
                                 isLoaded.set(!shell.isLoading()
-                                        && !TextUtils.isEmpty(shell.getContentViewCore().getUrl()));
+                                        && !TextUtils.isEmpty(shell.getContentViewCore()
+                                                .getWebContents().getUrl()));
                             } else {
                                 isLoaded.set(false);
                             }
@@ -161,14 +171,15 @@ public class ContentShellTestBase extends ActivityInstrumentationTestCase2<Conte
      * @param params The URL params to use.
      */
     protected void loadUrl(
-            final ContentViewCore viewCore, TestCallbackHelperContainer callbackHelperContainer,
+            final NavigationController navigationController,
+            TestCallbackHelperContainer callbackHelperContainer,
             final LoadUrlParams params) throws Throwable {
         handleBlockingCallbackAction(
                 callbackHelperContainer.getOnPageFinishedHelper(),
                 new Runnable() {
                     @Override
                     public void run() {
-                        viewCore.loadUrl(params);
+                        navigationController.loadUrl(params);
                     }
                 });
     }

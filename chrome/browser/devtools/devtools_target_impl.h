@@ -21,24 +21,32 @@ class WebContents;
 
 class DevToolsTargetImpl : public content::DevToolsTarget {
  public:
+  static const char kTargetTypeApp[];
+  static const char kTargetTypeBackgroundPage[];
+  static const char kTargetTypePage[];
+  static const char kTargetTypeWorker[];
+  static const char kTargetTypeWebView[];
+  static const char kTargetTypeIFrame[];
+  static const char kTargetTypeOther[];
+  static const char kTargetTypeServiceWorker[];
+
   explicit DevToolsTargetImpl(
       scoped_refptr<content::DevToolsAgentHost> agent_host);
-  virtual ~DevToolsTargetImpl();
+  ~DevToolsTargetImpl() override;
 
   // content::DevToolsTarget overrides:
-  virtual std::string GetId() const OVERRIDE;
-  virtual std::string GetParentId() const OVERRIDE;
-  virtual std::string GetType() const OVERRIDE;
-  virtual std::string GetTitle() const OVERRIDE;
-  virtual std::string GetDescription() const OVERRIDE;
-  virtual GURL GetURL() const OVERRIDE;
-  virtual GURL GetFaviconURL() const OVERRIDE;
-  virtual base::TimeTicks GetLastActivityTime() const OVERRIDE;
-  virtual scoped_refptr<content::DevToolsAgentHost>
-      GetAgentHost() const OVERRIDE;
-  virtual bool IsAttached() const OVERRIDE;
-  virtual bool Activate() const OVERRIDE;
-  virtual bool Close() const OVERRIDE;
+  std::string GetId() const override;
+  std::string GetParentId() const override;
+  std::string GetType() const override;
+  std::string GetTitle() const override;
+  std::string GetDescription() const override;
+  GURL GetURL() const override;
+  GURL GetFaviconURL() const override;
+  base::TimeTicks GetLastActivityTime() const override;
+  scoped_refptr<content::DevToolsAgentHost> GetAgentHost() const override;
+  bool IsAttached() const override;
+  bool Activate() const override;
+  bool Close() const override;
 
   // Returns the WebContents associated with the target on NULL if there is
   // not any.
@@ -75,8 +83,6 @@ class DevToolsTargetImpl : public content::DevToolsTarget {
   typedef std::vector<DevToolsTargetImpl*> List;
   typedef base::Callback<void(const List&)> Callback;
 
-  static List EnumerateWebContentsTargets();
-  static void EnumerateWorkerTargets(Callback callback);
   static void EnumerateAllTargets(Callback callback);
 
  private:

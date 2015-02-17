@@ -8,6 +8,12 @@
 
 'use strict';
 
+/** @const */
+var BROWSER_SUPPORTS_TLS_CHANNEL_ID = true;
+
+/** @const */
+var LOG_SAVER_EXTENSION_ID = 'fjajfjhkeibgmiggdfehjplbhmfkialk';
+
 // Singleton tracking available devices.
 var gnubbies = new Gnubbies();
 HidGnubbyDevice.register(gnubbies);
@@ -16,6 +22,7 @@ UsbGnubbyDevice.register(gnubbies);
 var TIMER_FACTORY = new CountdownTimerFactory();
 
 var FACTORY_REGISTRY = new FactoryRegistry(
+    new GoogleApprovedOrigins(),
     TIMER_FACTORY,
     new GstaticOriginChecker(),
     new UsbHelper(),
@@ -23,44 +30,31 @@ var FACTORY_REGISTRY = new FactoryRegistry(
 
 var DEVICE_FACTORY_REGISTRY = new DeviceFactoryRegistry(
     new UsbGnubbyFactory(gnubbies),
-    TIMER_FACTORY);
+    TIMER_FACTORY,
+    new GoogleCorpIndividualAttestation());
 
 /**
- * @param {Object} request Request object
- * @param {MessageSender} sender Sender frame
- * @param {Function} sendResponse Response callback
- * @return {?Closeable} Optional handler object that should be closed when port
- *     closes
+ * Listen to individual messages sent from (whitelisted) webpages via
+ * chrome.runtime.sendMessage
+ * @param {*} request The received request
+ * @param {!MessageSender} sender The message sender
+ * @param {function(*): void} sendResponse A callback that delivers a response
+ * @return {boolean}
  */
-function handleWebPageRequest(request, sender, sendResponse) {
-  switch (request.type) {
-    case GnubbyMsgTypes.ENROLL_WEB_REQUEST:
-      return handleWebEnrollRequest(sender, request, sendResponse);
-
-    case GnubbyMsgTypes.SIGN_WEB_REQUEST:
-      return handleWebSignRequest(sender, request, sendResponse);
-
-    case MessageTypes.U2F_REGISTER_REQUEST:
-      return handleU2fEnrollRequest(sender, request, sendResponse);
-
-    case MessageTypes.U2F_SIGN_REQUEST:
-      return handleU2fSignRequest(sender, request, sendResponse);
-
-    default:
-      sendResponse(
-          makeU2fErrorResponse(request, ErrorCodes.BAD_REQUEST, undefined,
-              MessageTypes.U2F_REGISTER_RESPONSE));
-      return null;
-  }
-}
-
-// Listen to individual messages sent from (whitelisted) webpages via
-// chrome.runtime.sendMessage
 function messageHandlerExternal(request, sender, sendResponse) {
-  var closeable = handleWebPageRequest(request, sender, function(response) {
+  if (sender.id && sender.id === LOG_SAVER_EXTENSION_ID) {
+    return handleLogSaverMessage(request);
+  }
+  var closeable = handleWebPageRequest(/** @type {Object} */(request),
+      sender, function(response) {
     response['requestId'] = request['requestId'];
-    sendResponse(response);
+    try {
+      sendResponse(response);
+    } catch (e) {
+      console.warn(UTIL_fmt('caught: ' + e.message));
+    }
   });
+  return true;  // Tell Chrome not to destroy sendResponse yet
 }
 chrome.runtime.onMessageExternal.addListener(messageHandlerExternal);
 
@@ -80,3 +74,33 @@ chrome.runtime.onConnectExternal.addListener(function(port) {
     }
   });
 });
+
+/**
+ * Handles messages from the log-saver app. Temporarily replaces UTIL_fmt with
+ * a wrapper that also sends formatted messages to the app.
+ * @param {*} request The message received from the app
+ * @return {boolean} Used as chrome.runtime.onMessage handler return value
+ */
+function handleLogSaverMessage(request) {
+  if (request === 'start') {
+    if (originalUtilFmt_) {
+      // We're already sending
+      return false;
+    }
+    originalUtilFmt_ = UTIL_fmt;
+    UTIL_fmt = function(s) {
+      var line = originalUtilFmt_(s);
+      chrome.runtime.sendMessage(LOG_SAVER_EXTENSION_ID, line);
+      return line;
+    };
+  } else if (request === 'stop') {
+    if (originalUtilFmt_) {
+      UTIL_fmt = originalUtilFmt_;
+      originalUtilFmt_ = null;
+    }
+  }
+  return false;
+}
+
+/** @private */
+var originalUtilFmt_ = null;

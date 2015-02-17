@@ -44,11 +44,11 @@
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "storage/browser/fileapi/file_system_backend.h"
+#include "storage/browser/fileapi/file_system_context.h"
+#include "storage/common/fileapi/file_system_info.h"
+#include "storage/common/fileapi/file_system_util.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
-#include "webkit/browser/fileapi/file_system_backend.h"
-#include "webkit/browser/fileapi/file_system_context.h"
-#include "webkit/common/fileapi/file_system_info.h"
-#include "webkit/common/fileapi/file_system_util.h"
 
 using content::BrowserThread;
 using extensions::api::file_browser_handler_internal::FileEntryInfo;
@@ -100,7 +100,7 @@ class FileSelectorImpl : public FileSelector,
                          public ui::SelectFileDialog::Listener {
  public:
   FileSelectorImpl();
-  virtual ~FileSelectorImpl() OVERRIDE;
+  virtual ~FileSelectorImpl() override;
 
  protected:
   // file_manager::FileSelectr overrides.
@@ -115,15 +115,15 @@ class FileSelectorImpl : public FileSelector,
       const base::FilePath& suggested_name,
       const std::vector<std::string>& allowed_extensions,
       Browser* browser,
-      FileBrowserHandlerInternalSelectFileFunction* function) OVERRIDE;
+      FileBrowserHandlerInternalSelectFileFunction* function) override;
 
   // ui::SelectFileDialog::Listener overrides.
   virtual void FileSelected(const base::FilePath& path,
                             int index,
-                            void* params) OVERRIDE;
+                            void* params) override;
   virtual void MultiFilesSelected(const std::vector<base::FilePath>& files,
-                                  void* params) OVERRIDE;
-  virtual void FileSelectionCanceled(void* params) OVERRIDE;
+                                  void* params) override;
+  virtual void FileSelectionCanceled(void* params) override;
 
  private:
   // Initiates and shows 'save as' dialog which will be used to prompt user to
@@ -256,7 +256,7 @@ class FileSelectorFactoryImpl : public FileSelectorFactory {
 
   // FileSelectorFactory implementation.
   // Creates new FileSelectorImplementation for the function.
-  virtual FileSelector* CreateFileSelector() const OVERRIDE {
+  virtual FileSelector* CreateFileSelector() const override {
     return new FileSelectorImpl();
   }
 
@@ -315,7 +315,7 @@ void FileBrowserHandlerInternalSelectFileFunction::OnFilePathSelected(
     return;
   }
 
-  fileapi::ExternalFileSystemBackend* external_backend =
+  storage::ExternalFileSystemBackend* external_backend =
       file_manager::util::GetFileSystemContextForRenderViewHost(
           GetProfile(), render_view_host())->external_backend();
   DCHECK(external_backend);

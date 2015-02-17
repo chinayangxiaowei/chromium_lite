@@ -26,7 +26,7 @@ class ConnectionToClientTest : public testing::Test {
   }
 
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     session_ = new FakeSession();
 
     // Allocate a ClientConnection object with the mock objects.
@@ -42,7 +42,7 @@ class ConnectionToClientTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     viewer_.reset();
     base::RunLoop().RunUntilIdle();
   }
@@ -69,9 +69,10 @@ TEST_F(ConnectionToClientTest, SendUpdateStream) {
 
   // Verify that something has been written.
   // TODO(sergeyu): Verify that the correct data has been written.
-  ASSERT_TRUE(session_->GetStreamChannel(kVideoChannelName));
-  EXPECT_GT(session_->GetStreamChannel(kVideoChannelName)->
-            written_data().size(), 0u);
+  ASSERT_TRUE(
+      session_->fake_channel_factory().GetFakeChannel(kVideoChannelName));
+  EXPECT_FALSE(session_->fake_channel_factory()
+                   .GetFakeChannel(kVideoChannelName)->written_data().empty());
 
   // And then close the connection to ConnectionToClient.
   viewer_->Disconnect();

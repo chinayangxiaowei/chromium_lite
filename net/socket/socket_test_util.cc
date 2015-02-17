@@ -683,7 +683,7 @@ MockClientSocketFactory::CreateDatagramClientSocket(
   data_provider->set_socket(socket.get());
   if (bind_type == DatagramSocket::RANDOM_BIND)
     socket->set_source_port(rand_int_cb.Run(1025, 65535));
-  return socket.PassAs<DatagramClientSocket>();
+  return socket.Pass();
 }
 
 scoped_ptr<StreamSocket> MockClientSocketFactory::CreateTransportClientSocket(
@@ -694,7 +694,7 @@ scoped_ptr<StreamSocket> MockClientSocketFactory::CreateTransportClientSocket(
   scoped_ptr<MockTCPClientSocket> socket(
       new MockTCPClientSocket(addresses, net_log, data_provider));
   data_provider->set_socket(socket.get());
-  return socket.PassAs<StreamSocket>();
+  return socket.Pass();
 }
 
 scoped_ptr<SSLClientSocket> MockClientSocketFactory::CreateSSLClientSocket(
@@ -708,7 +708,7 @@ scoped_ptr<SSLClientSocket> MockClientSocketFactory::CreateSSLClientSocket(
                               ssl_config,
                               mock_ssl_data_.GetNext()));
   ssl_client_sockets_.push_back(socket.get());
-  return socket.PassAs<SSLClientSocket>();
+  return socket.Pass();
 }
 
 void MockClientSocketFactory::ClearSSLSessionCache() {
@@ -762,6 +762,11 @@ int MockClientSocket::GetLocalAddress(IPEndPoint* address) const {
 
 const BoundNetLog& MockClientSocket::NetLog() const {
   return net_log_;
+}
+
+std::string MockClientSocket::GetSessionCacheKey() const {
+  NOTIMPLEMENTED();
+  return std::string();
 }
 
 bool MockClientSocket::InSessionCache() const {
@@ -852,7 +857,7 @@ int MockTCPClientSocket::Read(IOBuffer* buf, int buf_len,
     return ERR_UNEXPECTED;
 
   // If the buffer is already in use, a read is already in progress!
-  DCHECK(pending_buf_ == NULL);
+  DCHECK(pending_buf_.get() == NULL);
 
   // Store our async IO data.
   pending_buf_ = buf;
@@ -960,7 +965,7 @@ bool MockTCPClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
 
 void MockTCPClientSocket::OnReadComplete(const MockRead& data) {
   // There must be a read pending.
-  DCHECK(pending_buf_);
+  DCHECK(pending_buf_.get());
   // You can't complete a read with another ERR_IO_PENDING status code.
   DCHECK_NE(ERR_IO_PENDING, data.result);
   // Since we've been waiting for data, need_read_data_ should be true.
@@ -984,7 +989,7 @@ void MockTCPClientSocket::OnConnectComplete(const MockConnect& data) {
 }
 
 int MockTCPClientSocket::CompleteRead() {
-  DCHECK(pending_buf_);
+  DCHECK(pending_buf_.get());
   DCHECK(pending_buf_len_ > 0);
 
   was_used_to_convey_data_ = true;
@@ -1322,6 +1327,7 @@ MockSSLClientSocket::MockSSLClientSocket(
           // tests.
           transport_socket->socket()->NetLog()),
       transport_(transport_socket.Pass()),
+      host_port_pair_(host_port_pair),
       data_(data),
       is_npn_state_set_(false),
       new_npn_value_(false),
@@ -1387,6 +1393,12 @@ bool MockSSLClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
   ssl_info->channel_id_sent = data_->channel_id_sent;
   ssl_info->connection_status = data_->connection_status;
   return true;
+}
+
+std::string MockSSLClientSocket::GetSessionCacheKey() const {
+  // For the purposes of these tests, |host_and_port| will serve as the
+  // cache key.
+  return host_port_pair_.ToString();
 }
 
 bool MockSSLClientSocket::InSessionCache() const {
@@ -1548,7 +1560,7 @@ int MockUDPClientSocket::Read(IOBuffer* buf,
     return ERR_UNEXPECTED;
 
   // If the buffer is already in use, a read is already in progress!
-  DCHECK(pending_buf_ == NULL);
+  DCHECK(pending_buf_.get() == NULL);
 
   // Store our async IO data.
   pending_buf_ = buf;
@@ -1625,7 +1637,7 @@ int MockUDPClientSocket::Connect(const IPEndPoint& address) {
 
 void MockUDPClientSocket::OnReadComplete(const MockRead& data) {
   // There must be a read pending.
-  DCHECK(pending_buf_);
+  DCHECK(pending_buf_.get());
   // You can't complete a read with another ERR_IO_PENDING status code.
   DCHECK_NE(ERR_IO_PENDING, data.result);
   // Since we've been waiting for data, need_read_data_ should be true.
@@ -1648,7 +1660,7 @@ void MockUDPClientSocket::OnConnectComplete(const MockConnect& data) {
 }
 
 int MockUDPClientSocket::CompleteRead() {
-  DCHECK(pending_buf_);
+  DCHECK(pending_buf_.get());
   DCHECK(pending_buf_len_ > 0);
 
   // Save the pending async IO data and reset our |pending_| state.
@@ -1906,7 +1918,7 @@ DeterministicMockClientSocketFactory::CreateDatagramClientSocket(
   udp_client_sockets().push_back(socket.get());
   if (bind_type == DatagramSocket::RANDOM_BIND)
     socket->set_source_port(rand_int_cb.Run(1025, 65535));
-  return socket.PassAs<DatagramClientSocket>();
+  return socket.Pass();
 }
 
 scoped_ptr<StreamSocket>
@@ -1919,7 +1931,7 @@ DeterministicMockClientSocketFactory::CreateTransportClientSocket(
       new DeterministicMockTCPClientSocket(net_log, data_provider));
   data_provider->set_delegate(socket->AsWeakPtr());
   tcp_client_sockets().push_back(socket.get());
-  return socket.PassAs<StreamSocket>();
+  return socket.Pass();
 }
 
 scoped_ptr<SSLClientSocket>
@@ -1933,7 +1945,7 @@ DeterministicMockClientSocketFactory::CreateSSLClientSocket(
                               host_and_port, ssl_config,
                               mock_ssl_data_.GetNext()));
   ssl_client_sockets_.push_back(socket.get());
-  return socket.PassAs<SSLClientSocket>();
+  return socket.Pass();
 }
 
 void DeterministicMockClientSocketFactory::ClearSSLSessionCache() {

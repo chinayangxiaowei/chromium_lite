@@ -9,8 +9,8 @@
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/command_line.h"
 #include "chrome/browser/extensions/extension_ui_util.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/install_tracker.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -18,7 +18,6 @@
 #include "chrome/browser/ui/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ui/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ui/app_list/extension_app_item.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -39,7 +38,6 @@ ExtensionAppModelBuilder::ExtensionAppModelBuilder(
       profile_(NULL),
       controller_(controller),
       model_(NULL),
-      highlighted_app_pending_(false),
       tracker_(NULL),
       extension_registry_(NULL) {
 }
@@ -81,8 +79,7 @@ void ExtensionAppModelBuilder::InitializePrefChangeRegistrars() {
       base::Bind(&ExtensionAppModelBuilder::OnProfilePreferenceChanged,
                  base::Unretained(this)));
 
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableStreamlinedHostedApps))
+  if (!extensions::util::IsStreamlinedHostedAppsEnabled())
     return;
 
   // TODO(calamity): analyze the performance impact of doing this every
@@ -104,7 +101,7 @@ void ExtensionAppModelBuilder::OnProfilePreferenceChanged() {
   for (extensions::ExtensionSet::const_iterator app = extensions.begin();
        app != extensions.end(); ++app) {
     bool should_display =
-        extensions::ui_util::ShouldDisplayInAppLauncher(*app, profile_);
+        extensions::ui_util::ShouldDisplayInAppLauncher(app->get(), profile_);
     bool does_display = GetExtensionAppItem((*app)->id()) != NULL;
 
     if (should_display == does_display)
@@ -153,7 +150,6 @@ void ExtensionAppModelBuilder::OnBeginExtensionInstall(
                           params.extension_name,
                           resized,
                           params.is_platform_app));
-  SetHighlightedApp(params.extension_id);
 }
 
 void ExtensionAppModelBuilder::OnDownloadProgress(
@@ -190,7 +186,6 @@ void ExtensionAppModelBuilder::OnExtensionLoaded(
                           "",
                           gfx::ImageSkia(),
                           extension->is_platform_app()));
-  UpdateHighlight();
 }
 
 void ExtensionAppModelBuilder::OnExtensionUnloaded(
@@ -224,11 +219,6 @@ void ExtensionAppModelBuilder::OnDisabledExtensionUpdated(
   ExtensionAppItem* existing_item = GetExtensionAppItem(extension->id());
   if (existing_item)
     existing_item->Reload();
-}
-
-void ExtensionAppModelBuilder::OnAppInstalledToAppList(
-    const std::string& extension_id) {
-  SetHighlightedApp(extension_id);
 }
 
 void ExtensionAppModelBuilder::OnShutdown() {
@@ -269,7 +259,6 @@ void ExtensionAppModelBuilder::BuildModel() {
   extension_registry_ = extensions::ExtensionRegistry::Get(profile_);
 
   PopulateApps();
-  UpdateHighlight();
 
   // Start observing after model is built.
   if (tracker_)
@@ -285,7 +274,7 @@ void ExtensionAppModelBuilder::PopulateApps() {
 
   for (extensions::ExtensionSet::const_iterator app = extensions.begin();
        app != extensions.end(); ++app) {
-    if (!extensions::ui_util::ShouldDisplayInAppLauncher(*app, profile_))
+    if (!extensions::ui_util::ShouldDisplayInAppLauncher(app->get(), profile_))
       continue;
     InsertApp(CreateAppItem((*app)->id(),
                             "",
@@ -296,24 +285,10 @@ void ExtensionAppModelBuilder::PopulateApps() {
 
 void ExtensionAppModelBuilder::InsertApp(scoped_ptr<ExtensionAppItem> app) {
   if (service_) {
-    service_->AddItem(app.PassAs<app_list::AppListItem>());
+    service_->AddItem(app.Pass());
     return;
   }
-  model_->AddItem(app.PassAs<app_list::AppListItem>());
-}
-
-void ExtensionAppModelBuilder::SetHighlightedApp(
-    const std::string& extension_id) {
-  if (extension_id == highlight_app_id_)
-    return;
-  ExtensionAppItem* old_app = GetExtensionAppItem(highlight_app_id_);
-  if (old_app)
-    old_app->SetHighlighted(false);
-  highlight_app_id_ = extension_id;
-  ExtensionAppItem* new_app = GetExtensionAppItem(highlight_app_id_);
-  highlighted_app_pending_ = !new_app;
-  if (new_app)
-    new_app->SetHighlighted(true);
+  model_->AddItem(app.Pass());
 }
 
 ExtensionAppItem* ExtensionAppModelBuilder::GetExtensionAppItem(
@@ -324,17 +299,6 @@ ExtensionAppItem* ExtensionAppModelBuilder::GetExtensionAppItem(
       << "App Item matching id: " << extension_id
       << " has incorrect type: '" << item->GetItemType() << "'";
   return static_cast<ExtensionAppItem*>(item);
-}
-
-void ExtensionAppModelBuilder::UpdateHighlight() {
-  DCHECK(model_);
-  if (!highlighted_app_pending_ || highlight_app_id_.empty())
-    return;
-  ExtensionAppItem* item = GetExtensionAppItem(highlight_app_id_);
-  if (!item)
-    return;
-  item->SetHighlighted(true);
-  highlighted_app_pending_ = false;
 }
 
 void ExtensionAppModelBuilder::OnListItemMoved(size_t from_index,

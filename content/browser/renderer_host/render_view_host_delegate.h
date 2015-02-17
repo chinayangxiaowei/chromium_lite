@@ -13,7 +13,6 @@
 #include "base/strings/string16.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/common/content_export.h"
-#include "content/public/common/page_transition_types.h"
 #include "net/base/load_states.h"
 #include "third_party/WebKit/public/web/WebPopupType.h"
 #include "ui/base/window_open_disposition.h"
@@ -110,8 +109,8 @@ class CONTENT_EXPORT RenderViewHostDelegate {
                            int32 page_id,
                            const PageState& state) {}
 
-  // The destination URL has changed should be updated
-  virtual void UpdateTargetURL(int32 page_id, const GURL& url) {}
+  // The destination URL has changed should be updated.
+  virtual void UpdateTargetURL(const GURL& url) {}
 
   // The page is trying to close the RenderView's representation in the client.
   virtual void Close(RenderViewHost* render_view_host) {}
@@ -156,9 +155,7 @@ class CONTENT_EXPORT RenderViewHostDelegate {
 
   // Notification that the renderer has become unresponsive. The
   // delegate can use this notification to show a warning to the user.
-  virtual void RendererUnresponsive(RenderViewHost* render_view_host,
-                                    bool is_during_before_unload,
-                                    bool is_during_unload) {}
+  virtual void RendererUnresponsive(RenderViewHost* render_view_host) {}
 
   // Notification that a previously unresponsive renderer has become
   // responsive again. The delegate can use this notification to end the

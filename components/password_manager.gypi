@@ -25,6 +25,7 @@
         # Note: sources list duplicated in GN build.
         'password_manager/core/browser/browser_save_password_progress_logger.cc',
         'password_manager/core/browser/browser_save_password_progress_logger.h',
+        'password_manager/core/browser/credential_manager_dispatcher.h',
         'password_manager/core/browser/log_receiver.h',
         'password_manager/core/browser/log_router.cc',
         'password_manager/core/browser/log_router.h',
@@ -138,12 +139,15 @@
       'target_name': 'password_manager_core_common',
       'type': 'static_library',
       'dependencies': [
+        '../base/base.gyp:base',
       ],
       'include_dirs': [
         '..',
       ],
       'sources': [
         # Note: sources list duplicated in GN build.
+        'password_manager/core/common/experiments.cc',
+        'password_manager/core/common/experiments.h',
         'password_manager/core/common/password_manager_pref_names.cc',
         'password_manager/core/common/password_manager_pref_names.h',
         'password_manager/core/common/password_manager_switches.cc',
@@ -157,28 +161,75 @@
     ['OS != "ios"', {
       'targets': [
         {
+          # GN version: //components/password_manager/content/common
+          'target_name': 'password_manager_content_common',
+          'type': 'static_library',
+          'dependencies': [
+            '../base/base.gyp:base',
+            '../content/content.gyp:content_common',
+            '../ipc/ipc.gyp:ipc',
+            '../third_party/WebKit/public/blink.gyp:blink_minimal',
+            'password_manager_core_common',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'sources': [
+            'password_manager/content/common/credential_manager_message_generator.cc',
+            'password_manager/content/common/credential_manager_message_generator.h',
+            'password_manager/content/common/credential_manager_messages.h',
+            'password_manager/content/common/credential_manager_types.cc',
+            'password_manager/content/common/credential_manager_types.h',
+          ],
+        },
+        {
+          # GN version: //components/password_manager/content/renderer
+          'target_name': 'password_manager_content_renderer',
+          'type': 'static_library',
+          'dependencies': [
+            '../base/base.gyp:base',
+            '../content/content.gyp:content_common',
+            '../ipc/ipc.gyp:ipc',
+            '../third_party/WebKit/public/blink.gyp:blink',
+            'password_manager_core_common',
+            'password_manager_content_common',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'sources': [
+            'password_manager/content/renderer/credential_manager_client.cc',
+            'password_manager/content/renderer/credential_manager_client.h',
+          ],
+        },
+        {
           # GN version: //components/password_manager/content/browser
           'target_name': 'password_manager_content_browser',
           'type': 'static_library',
           'dependencies': [
-            'autofill_content_browser',
-            'autofill_content_common',
-            'autofill_core_common',
-            'keyed_service_content',
-            'password_manager_core_browser',
             '../base/base.gyp:base',
             '../content/content.gyp:content_browser',
             '../content/content.gyp:content_common',
             '../ipc/ipc.gyp:ipc',
             '../net/net.gyp:net',
+            'autofill_content_browser',
+            'autofill_content_common',
+            'autofill_core_common',
+            'keyed_service_content',
+            'password_manager_core_browser',
+            'password_manager_content_common',
           ],
           'include_dirs': [
             '..',
           ],
           'sources': [
             # Note: sources list duplicated in GN build.
+            'password_manager/content/browser/content_credential_manager_dispatcher.cc',
+            'password_manager/content/browser/content_credential_manager_dispatcher.h',
             'password_manager/content/browser/content_password_manager_driver.cc',
             'password_manager/content/browser/content_password_manager_driver.h',
+            'password_manager/content/browser/credential_manager_password_form_manager.cc',
+            'password_manager/content/browser/credential_manager_password_form_manager.h',
             'password_manager/content/browser/password_manager_internals_service_factory.cc',
             'password_manager/content/browser/password_manager_internals_service_factory.h',
           ],

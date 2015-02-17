@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "apps/app_window_registry.h"
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
@@ -22,6 +21,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
@@ -47,7 +47,7 @@ Profile* WaitForProfile() {
 
 bool VerifyDemoAppLaunch() {
   Profile* profile = WaitForProfile();
-  return AppWindowWaiter(apps::AppWindowRegistry::Get(profile),
+  return AppWindowWaiter(extensions::AppWindowRegistry::Get(profile),
                          DemoAppLauncher::kDemoAppId).Wait() != NULL;
 }
 
@@ -66,7 +66,7 @@ class DemoAppLauncherTest : public ExtensionBrowserTest {
 
   virtual ~DemoAppLauncherTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kLoginManager);
     command_line->AppendSwitch(switches::kForceLoginManagerInTests);
     command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
@@ -76,7 +76,7 @@ class DemoAppLauncherTest : public ExtensionBrowserTest {
     command_line->AppendSwitchASCII(switches::kDerelictDetectionTimeout, "0");
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     chromeos::DemoAppLauncher::SetDemoAppPathForTesting(GetTestDemoAppPath());
     ExtensionBrowserTest::SetUp();
   }

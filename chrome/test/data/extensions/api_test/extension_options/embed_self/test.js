@@ -13,6 +13,13 @@ function optionsPageLoaded() {
   return hasLoaded;
 }
 
+function assertSenderIsOptionsPage(sender) {
+  chrome.test.assertEq({
+    'id': chrome.runtime.id,
+    'url': chrome.runtime.getURL('options.html')
+  }, sender);
+}
+
 chrome.test.runTests([
   // Basic tests that ensure that the <extensionoptions> guest view is created
   // and loaded, and that the load event is accurate.
@@ -54,6 +61,7 @@ chrome.test.runTests([
   function canCommunicateWithGuest() {
     var done = chrome.test.listenForever(chrome.runtime.onMessage,
         function(message, sender, sendResponse) {
+      assertSenderIsOptionsPage(sender);
       if (message == 'ready') {
         sendResponse('canCommunicateWithGuest');
       } else if (message == 'done') {
@@ -89,6 +97,8 @@ chrome.test.runTests([
     // Listens for messages from the options page.
     var done = chrome.test.listenForever(chrome.runtime.onMessage,
         function(message, sender, sendResponse) {
+      assertSenderIsOptionsPage(sender);
+
       // Options page is waiting for a command
       if (message == 'ready') {
         sendResponse('guestCanAccessStorage');
@@ -125,16 +135,41 @@ chrome.test.runTests([
 
     extensionoptions.onsizechanged = function(evt) {
       try {
-        chrome.test.assertTrue(evt.width >= 499);
-        chrome.test.assertTrue(evt.height >= 499);
-        chrome.test.assertTrue(evt.width <= 501);
-        chrome.test.assertTrue(evt.height <= 501);
+        chrome.test.assertTrue(evt.newWidth >= 499);
+        chrome.test.assertTrue(evt.newHeight >= 499);
+        chrome.test.assertTrue(evt.newWidth <= 501);
+        chrome.test.assertTrue(evt.newHeight <= 501);
         done();
       } finally {
         document.body.removeChild(extensionoptions);
       }
     };
 
+    document.body.appendChild(extensionoptions);
+  },
+
+  function externalLinksOpenInNewTab() {
+    var done = chrome.test.listenForever(chrome.runtime.onMessage,
+        function(message, sender, sendResponse) {
+      assertSenderIsOptionsPage(sender);
+
+      if (message == 'ready') {
+        sendResponse('externalLinksOpenInNewTab');
+      } else if (message == 'done') {
+        try {
+          chrome.tabs.query({url: 'http://www.chromium.org/'}, function(tabs) {
+            chrome.test.assertEq(1, tabs.length);
+            chrome.test.assertEq('http://www.chromium.org/', tabs[0].url);
+            done();
+          });
+        } finally {
+          document.body.removeChild(extensionoptions);
+        }
+      }
+    });
+
+    var extensionoptions = document.createElement('extensionoptions');
+    extensionoptions.setAttribute('extension', chrome.runtime.id);
     document.body.appendChild(extensionoptions);
   }
 ]);

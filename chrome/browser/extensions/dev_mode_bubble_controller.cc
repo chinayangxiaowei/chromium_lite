@@ -14,11 +14,11 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/feature_switch.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
+#include "grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -35,33 +35,28 @@ class DevModeBubbleDelegate
     : public ExtensionMessageBubbleController::Delegate {
  public:
   explicit DevModeBubbleDelegate(Profile* profile);
-  virtual ~DevModeBubbleDelegate();
+  ~DevModeBubbleDelegate() override;
 
   // ExtensionMessageBubbleController::Delegate methods.
-  virtual bool ShouldIncludeExtension(const std::string& extension_id) OVERRIDE;
-  virtual void AcknowledgeExtension(
+  bool ShouldIncludeExtension(const std::string& extension_id) override;
+  void AcknowledgeExtension(
       const std::string& extension_id,
-      ExtensionMessageBubbleController::BubbleAction user_action) OVERRIDE;
-  virtual void PerformAction(const ExtensionIdList& list) OVERRIDE;
-  virtual void OnClose() OVERRIDE;
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual base::string16 GetMessageBody(
-      bool anchored_to_browser_action) const OVERRIDE;
-  virtual base::string16 GetOverflowText(
-      const base::string16& overflow_count) const OVERRIDE;
-  virtual base::string16 GetLearnMoreLabel() const OVERRIDE;
-  virtual GURL GetLearnMoreUrl() const OVERRIDE;
-  virtual base::string16 GetActionButtonLabel() const OVERRIDE;
-  virtual base::string16 GetDismissButtonLabel() const OVERRIDE;
-  virtual bool ShouldShowExtensionList() const OVERRIDE;
-  virtual void LogExtensionCount(size_t count) OVERRIDE;
-  virtual void LogAction(
-      ExtensionMessageBubbleController::BubbleAction action) OVERRIDE;
+      ExtensionMessageBubbleController::BubbleAction user_action) override;
+  void PerformAction(const ExtensionIdList& list) override;
+  void OnClose() override;
+  base::string16 GetTitle() const override;
+  base::string16 GetMessageBody(bool anchored_to_browser_action) const override;
+  base::string16 GetOverflowText(
+      const base::string16& overflow_count) const override;
+  GURL GetLearnMoreUrl() const override;
+  base::string16 GetActionButtonLabel() const override;
+  base::string16 GetDismissButtonLabel() const override;
+  bool ShouldShowExtensionList() const override;
+  void LogExtensionCount(size_t count) override;
+  void LogAction(
+      ExtensionMessageBubbleController::BubbleAction action) override;
 
  private:
-  // The associated profile (weak).
-  Profile* profile_;
-
   // Our extension service. Weak, not owned by us.
   ExtensionService* service_;
 
@@ -69,8 +64,9 @@ class DevModeBubbleDelegate
 };
 
 DevModeBubbleDelegate::DevModeBubbleDelegate(Profile* profile)
-    : profile_(profile),
-      service_(ExtensionSystem::Get(profile)->extension_service()) {}
+    : ExtensionMessageBubbleController::Delegate(profile),
+      service_(ExtensionSystem::Get(profile)->extension_service()) {
+}
 
 DevModeBubbleDelegate::~DevModeBubbleDelegate() {
 }
@@ -94,7 +90,7 @@ void DevModeBubbleDelegate::PerformAction(const ExtensionIdList& list) {
 }
 
 void DevModeBubbleDelegate::OnClose() {
-  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(profile_);
+  ExtensionToolbarModel* toolbar_model = ExtensionToolbarModel::Get(profile());
   if (toolbar_model)
     toolbar_model->StopHighlighting();
 }
@@ -113,10 +109,6 @@ base::string16 DevModeBubbleDelegate::GetOverflowText(
   return l10n_util::GetStringFUTF16(
             IDS_EXTENSIONS_DISABLED_AND_N_MORE,
             overflow_count);
-}
-
-base::string16 DevModeBubbleDelegate::GetLearnMoreLabel() const {
-  return l10n_util::GetStringUTF16(IDS_LEARN_MORE);
 }
 
 GURL DevModeBubbleDelegate::GetLearnMoreUrl() const {

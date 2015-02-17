@@ -19,7 +19,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "grit/browser_resources.h"
 #include "grit/translate_internals_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -47,7 +46,6 @@ content::WebUIDataSource* CreateTranslateInternalsHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUITranslateInternalsHost);
 
-  source->SetUseJsonJSFormatV2();
   source->SetDefaultResource(IDR_TRANSLATE_INTERNALS_TRANSLATE_INTERNALS_HTML);
   source->SetJsonPath("strings.js");
   source->AddResourcePath("translate_internals.js",

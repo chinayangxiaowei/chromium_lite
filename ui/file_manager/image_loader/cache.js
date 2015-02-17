@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Persistent cache storing images in an indexed database on the hard disk.
  * @constructor
@@ -55,12 +53,13 @@ Cache.EVICTION_CHUNK_SIZE = 50 * 1024 * 1024;  // 50 MB.
  * @return {string} Cache key.
  */
 Cache.createKey = function(request) {
-  return JSON.stringify({url: request.url,
-                         scale: request.scale,
-                         width: request.width,
-                         height: request.height,
-                         maxWidth: request.maxWidth,
-                         maxHeight: request.maxHeight});
+  return JSON.stringify({
+    url: request.url,
+    scale: request.scale,
+    width: request.width,
+    height: request.height,
+    maxWidth: request.maxWidth,
+    maxHeight: request.maxHeight});
 };
 
 /**
@@ -195,7 +194,7 @@ Cache.prototype.evictCache_ = function(
     }.bind(this);
 
     metadataStore.openCursor().onsuccess = function(e) {
-      var cursor = event.target.result;
+      var cursor = e.target.result;
       if (cursor) {
         metadataEntries.push(cursor.value);
         cursor.continue();
@@ -223,15 +222,15 @@ Cache.prototype.saveImage = function(key, data, timestamp) {
   }
 
   var onNotFoundInCache = function() {
-    var metadataEntry = {key: key,
-                         timestamp: timestamp,
-                         size: data.length,
-                         lastLoadTimestamp: Date.now()};
-    var dataEntry = {key: key,
-                     data: data};
+    var metadataEntry = {
+      key: key,
+      timestamp: timestamp,
+      size: data.length,
+      lastLoadTimestamp: Date.now()};
+    var dataEntry = {key: key, data: data};
 
     var transaction = this.db_.transaction(['settings', 'metadata', 'data'],
-                                          'readwrite');
+                                           'readwrite');
     var metadataStore = transaction.objectStore('metadata');
     var dataStore = transaction.objectStore('data');
 
@@ -254,7 +253,7 @@ Cache.prototype.saveImage = function(key, data, timestamp) {
  * @param {string} key Cache key.
  * @param {number} timestamp Last modification timestamp. If different
  *     that the one in cache, then the entry will be invalidated.
- * @param {function(<string>)} onSuccess Success callback with the image's data.
+ * @param {function(string)} onSuccess Success callback with the image's data.
  * @param {function()} onFailure Failure callback.
  */
 Cache.prototype.loadImage = function(key, timestamp, onSuccess, onFailure) {
@@ -366,7 +365,7 @@ Cache.prototype.removeImage = function(
     // an error.
     if (cacheSize === null || !metadataEntry) {
       if (opt_onFailure)
-        onFailure();
+        opt_onFailure();
       return;
     }
 

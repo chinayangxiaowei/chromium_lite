@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -65,7 +65,7 @@ const char kTypicalPage[] = "/focus/typical_page.html";
 class BrowserFocusTest : public InProcessBrowserTest {
  public:
    // InProcessBrowserTest overrides:
-   virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
      ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
    }
 
@@ -97,9 +97,22 @@ class BrowserFocusTest : public InProcessBrowserTest {
     for (size_t i = 0; i < 2; ++i) {
       SCOPED_TRACE(base::StringPrintf("focus outer loop: %" PRIuS, i));
       ASSERT_TRUE(IsViewFocused(VIEW_ID_OMNIBOX));
+
       // Mac requires an extra Tab key press to traverse the app menu button
-      // iff "Full Keyboard Access" is enabled. This test code should probably
-      // check the setting via NSApplication's isFullKeyboardAccessEnabled.
+      // iff "Full Keyboard Access" is enabled. In reverse, four Tab key presses
+      // are required to traverse the back/forward buttons and the tab strip.
+#if defined(OS_MACOSX)
+      if (ui_controls::IsFullKeyboardAccessEnabled()) {
+        ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+            browser(), key, false, reverse, false, false));
+        if (reverse) {
+          for (int j = 0; j < 3; ++j) {
+            ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
+                browser(), key, false, reverse, false, false));
+          }
+        }
+      }
+#endif
 
       for (size_t j = 0; j < arraysize(kExpectedIDs); ++j) {
         SCOPED_TRACE(base::StringPrintf("focus inner loop %" PRIuS, j));
@@ -136,23 +149,6 @@ class BrowserFocusTest : public InProcessBrowserTest {
   }
 };
 
-// A helper class that waits for an interstitial page to attach.
-class WaitForInterstitial : public content::WebContentsObserver {
- public:
-  explicit WaitForInterstitial(content::WebContents* tab)
-      : WebContentsObserver(tab),
-        runner_(new content::MessageLoopRunner) {
-    runner_->Run();
-  }
-
-  virtual void DidAttachInterstitialPage() OVERRIDE { runner_->Quit(); }
-  virtual void DidDetachInterstitialPage() OVERRIDE { NOTREACHED(); }
-
- private:
-  scoped_refptr<content::MessageLoopRunner> runner_;
-  DISALLOW_COPY_AND_ASSIGN(WaitForInterstitial);
-};
-
 // A test interstitial page with typical HTML contents.
 class TestInterstitialPage : public content::InterstitialPageDelegate {
  public:
@@ -168,11 +164,12 @@ class TestInterstitialPage : public content::InterstitialPageDelegate {
 
     // Show the interstitial and delay return until it has attached.
     interstitial_page_->Show();
-    WaitForInterstitial wait(tab);
+    content::WaitForInterstitialAttach(tab);
+
     EXPECT_TRUE(tab->ShowingInterstitialPage());
   }
 
-  virtual std::string GetHTMLContents() OVERRIDE { return html_contents_; }
+  std::string GetHTMLContents() override { return html_contents_; }
 
   RenderViewHost* render_view_host() {
     return interstitial_page_->GetRenderViewHostForTesting();
@@ -248,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, DISABLED_TabsRememberFocus) {
   // Create several tabs.
   for (int i = 0; i < 4; ++i) {
     chrome::AddSelectedTabWithURL(browser(), url,
-                                  content::PAGE_TRANSITION_TYPED);
+                                  ui::PAGE_TRANSITION_TYPED);
   }
 
   // Alternate focus for the tab.
@@ -321,7 +318,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, MAYBE_TabsRememberFocusFindInPage) {
   chrome::FocusLocationBar(browser());
 
   // Create a 2nd tab.
-  chrome::AddSelectedTabWithURL(browser(), url, content::PAGE_TRANSITION_TYPED);
+  chrome::AddSelectedTabWithURL(browser(), url, ui::PAGE_TRANSITION_TYPED);
 
   // Focus should be on the recently opened tab page.
   ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER));
@@ -471,7 +468,12 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, InterstitialFocus) {
 }
 
 // Test that find-in-page UI can request focus, even when it is already open.
-IN_PROC_BROWSER_TEST_F(BrowserFocusTest, FindFocusTest) {
+#if defined(OS_MACOSX)
+#define MAYBE_FindFocusTest DISABLED_FindFocusTest
+#else
+#define MAYBE_FindFocusTest FindFocusTest
+#endif
+IN_PROC_BROWSER_TEST_F(BrowserFocusTest, MAYBE_FindFocusTest) {
   chrome::DisableFindBarAnimationsDuringTesting(true);
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   const GURL url = embedded_test_server()->GetURL(kTypicalPage);
@@ -520,7 +522,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, DISABLED_TabInitialFocus) {
 
   // Open about:blank, focus should be on the location bar.
   chrome::AddSelectedTabWithURL(
-      browser(), GURL(url::kAboutBlankURL), content::PAGE_TRANSITION_LINK);
+      browser(), GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK);
   ASSERT_NO_FATAL_FAILURE(content::WaitForLoadStop(
       browser()->tab_strip_model()->GetActiveWebContents()));
   EXPECT_TRUE(IsViewFocused(VIEW_ID_OMNIBOX));
@@ -621,7 +623,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, NavigateFromOmniboxIntoNewTab) {
   GURL url2("http://maps.google.com/");
 
   // Navigate to url.
-  chrome::NavigateParams p(browser(), url, content::PAGE_TRANSITION_LINK);
+  chrome::NavigateParams p(browser(), url, ui::PAGE_TRANSITION_LINK);
   p.window_action = chrome::NavigateParams::SHOW_WINDOW;
   p.disposition = CURRENT_TAB;
   chrome::Navigate(&p);
@@ -634,7 +636,7 @@ IN_PROC_BROWSER_TEST_F(BrowserFocusTest, NavigateFromOmniboxIntoNewTab) {
 
   // Simulate an alt-enter.
   controller->OnAutocompleteAccept(url2, NEW_FOREGROUND_TAB,
-                                   content::PAGE_TRANSITION_TYPED);
+                                   ui::PAGE_TRANSITION_TYPED);
 
   // Make sure the second tab is selected.
   EXPECT_EQ(1, browser()->tab_strip_model()->active_index());

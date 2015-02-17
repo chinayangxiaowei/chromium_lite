@@ -46,10 +46,10 @@ class SerialConnection : public ApiResource,
 
   SerialConnection(const std::string& port,
                    const std::string& owner_extension_id);
-  virtual ~SerialConnection();
+  ~SerialConnection() override;
 
   // ApiResource override.
-  virtual bool IsPersistent() const OVERRIDE;
+  bool IsPersistent() const override;
 
   void set_persistent(bool persistent) { persistent_ = persistent; }
   bool persistent() const { return persistent_; }
@@ -196,18 +196,16 @@ class SerialConnection : public ApiResource,
 namespace mojo {
 
 template <>
-class TypeConverter<device::serial::HostControlSignalsPtr,
-                    extensions::core_api::serial::HostControlSignals> {
- public:
-  static device::serial::HostControlSignalsPtr ConvertFrom(
+struct TypeConverter<device::serial::HostControlSignalsPtr,
+                     extensions::core_api::serial::HostControlSignals> {
+  static device::serial::HostControlSignalsPtr Convert(
       const extensions::core_api::serial::HostControlSignals& input);
 };
 
 template <>
-class TypeConverter<device::serial::ConnectionOptionsPtr,
-                    extensions::core_api::serial::ConnectionOptions> {
- public:
-  static device::serial::ConnectionOptionsPtr ConvertFrom(
+struct TypeConverter<device::serial::ConnectionOptionsPtr,
+                     extensions::core_api::serial::ConnectionOptions> {
+  static device::serial::ConnectionOptionsPtr Convert(
       const extensions::core_api::serial::ConnectionOptions& input);
 };
 

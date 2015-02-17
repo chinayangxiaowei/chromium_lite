@@ -13,12 +13,16 @@
 
 #include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop_proxy.h"
 #include "content/browser/appcache/appcache_database.h"
 #include "content/browser/appcache/appcache_disk_cache.h"
 #include "content/browser/appcache/appcache_storage.h"
 #include "content/common/content_export.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}  // namespace base
 
 namespace content {
 class AppCacheStorageImplTest;
@@ -27,42 +31,43 @@ class ChromeAppCacheServiceTest;
 class AppCacheStorageImpl : public AppCacheStorage {
  public:
   explicit AppCacheStorageImpl(AppCacheServiceImpl* service);
-  virtual ~AppCacheStorageImpl();
+  ~AppCacheStorageImpl() override;
 
-  void Initialize(const base::FilePath& cache_directory,
-                  base::MessageLoopProxy* db_thread,
-                  base::MessageLoopProxy* cache_thread);
+  void Initialize(
+      const base::FilePath& cache_directory,
+      const scoped_refptr<base::SingleThreadTaskRunner>& db_thread,
+      const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread);
   void Disable();
   bool is_disabled() const { return is_disabled_; }
 
   // AppCacheStorage methods, see the base class for doc comments.
-  virtual void GetAllInfo(Delegate* delegate) OVERRIDE;
-  virtual void LoadCache(int64 id, Delegate* delegate) OVERRIDE;
-  virtual void LoadOrCreateGroup(const GURL& manifest_url,
-                                 Delegate* delegate) OVERRIDE;
-  virtual void StoreGroupAndNewestCache(AppCacheGroup* group,
-                                        AppCache* newest_cache,
-                                        Delegate* delegate) OVERRIDE;
-  virtual void FindResponseForMainRequest(const GURL& url,
-                                          const GURL& preferred_manifest_url,
-                                          Delegate* delegate) OVERRIDE;
-  virtual void FindResponseForSubRequest(
-      AppCache* cache, const GURL& url,
-      AppCacheEntry* found_entry, AppCacheEntry* found_fallback_entry,
-      bool* found_network_namespace) OVERRIDE;
-  virtual void MarkEntryAsForeign(const GURL& entry_url,
-                                  int64 cache_id) OVERRIDE;
-  virtual void MakeGroupObsolete(AppCacheGroup* group,
-                                 Delegate* delegate,
-                                 int response_code) OVERRIDE;
-  virtual AppCacheResponseReader* CreateResponseReader(
-      const GURL& manifest_url, int64 group_id, int64 response_id) OVERRIDE;
-  virtual AppCacheResponseWriter* CreateResponseWriter(
-      const GURL& manifest_url, int64 group_id) OVERRIDE;
-  virtual void DoomResponses(const GURL& manifest_url,
-                             const std::vector<int64>& response_ids) OVERRIDE;
-  virtual void DeleteResponses(const GURL& manifest_url,
-                               const std::vector<int64>& response_ids) OVERRIDE;
+  void GetAllInfo(Delegate* delegate) override;
+  void LoadCache(int64 id, Delegate* delegate) override;
+  void LoadOrCreateGroup(const GURL& manifest_url, Delegate* delegate) override;
+  void StoreGroupAndNewestCache(AppCacheGroup* group,
+                                AppCache* newest_cache,
+                                Delegate* delegate) override;
+  void FindResponseForMainRequest(const GURL& url,
+                                  const GURL& preferred_manifest_url,
+                                  Delegate* delegate) override;
+  void FindResponseForSubRequest(AppCache* cache,
+                                 const GURL& url,
+                                 AppCacheEntry* found_entry,
+                                 AppCacheEntry* found_fallback_entry,
+                                 bool* found_network_namespace) override;
+  void MarkEntryAsForeign(const GURL& entry_url, int64 cache_id) override;
+  void MakeGroupObsolete(AppCacheGroup* group,
+                         Delegate* delegate,
+                         int response_code) override;
+  AppCacheResponseReader* CreateResponseReader(const GURL& manifest_url,
+                                               int64 group_id,
+                                               int64 response_id) override;
+  AppCacheResponseWriter* CreateResponseWriter(const GURL& manifest_url,
+                                               int64 group_id) override;
+  void DoomResponses(const GURL& manifest_url,
+                     const std::vector<int64>& response_ids) override;
+  void DeleteResponses(const GURL& manifest_url,
+                       const std::vector<int64>& response_ids) override;
 
  private:
   // The AppCacheStorageImpl class methods and datamembers may only be
@@ -137,9 +142,9 @@ class AppCacheStorageImpl : public AppCacheStorage {
 
   // This class operates primarily on the IO thread, but schedules
   // its DatabaseTasks on the db thread. Separately, the disk_cache uses
-  // the cache_thread.
-  scoped_refptr<base::MessageLoopProxy> db_thread_;
-  scoped_refptr<base::MessageLoopProxy> cache_thread_;
+  // the cache thread.
+  scoped_refptr<base::SingleThreadTaskRunner> db_thread_;
+  scoped_refptr<base::SingleThreadTaskRunner> cache_thread_;
 
   // Structures to keep track of DatabaseTasks that are in-flight.
   DatabaseTaskQueue scheduled_database_tasks_;

@@ -7,7 +7,6 @@
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -24,17 +23,18 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_host.h"
-#include "extensions/browser/extension_system.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/switches.h"
+#include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/result_catcher.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(USE_ASH)
-#include "apps/app_window_registry.h"
+#include "extensions/browser/app_window/app_window_registry.h"
 #endif
 
 #if defined(USE_ASH) && defined(OS_CHROMEOS)
@@ -51,7 +51,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_WindowOpen) {
   CommandLine::ForCurrentProcess()->AppendSwitch(
       extensions::switches::kEnableExperimentalExtensionApis);
 
-  ResultCatcher catcher;
+  extensions::ResultCatcher catcher;
   ASSERT_TRUE(LoadExtensionIncognito(test_data_dir_
       .AppendASCII("window_open").AppendASCII("spanning")));
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
@@ -59,8 +59,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_WindowOpen) {
 
 int GetPanelCount(Browser* browser) {
 #if defined(USE_ASH_PANELS)
-  return static_cast<int>(
-      apps::AppWindowRegistry::Get(browser->profile())->app_windows().size());
+  return static_cast<int>(extensions::AppWindowRegistry::Get(
+      browser->profile())->app_windows().size());
 #else
   return PanelManager::GetInstance()->num_panels();
 #endif
@@ -147,8 +147,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, WindowOpenPopupIframe) {
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("window_open").AppendASCII("popup_iframe")));
 
-  const int num_tabs = 0;
-  const int num_popups = 1;
+  const int num_tabs = 1;
+  const int num_popups = 0;
   EXPECT_TRUE(WaitForTabsAndPopups(browser(), num_tabs, num_popups, 0));
 }
 
@@ -218,11 +218,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, PopupBlockingHostedApp) {
           .ReplaceComponents(replace_host);
 
   browser()->OpenURL(OpenURLParams(
-      open_tab, Referrer(), NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_TYPED,
+      open_tab, Referrer(), NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_TYPED,
       false));
   browser()->OpenURL(OpenURLParams(
       open_popup, Referrer(), NEW_FOREGROUND_TAB,
-      content::PAGE_TRANSITION_TYPED, false));
+      ui::PAGE_TRANSITION_TYPED, false));
 
   EXPECT_TRUE(WaitForTabsAndPopups(browser(), 3, 1, 0));
 }
@@ -232,7 +232,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, WindowArgumentsOverflow) {
 }
 
 class WindowOpenPanelDisabledTest : public ExtensionApiTest {
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     // TODO(jennb): Re-enable when panels are enabled by default.
     // command_line->AppendSwitch(switches::kDisablePanels);
@@ -245,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(WindowOpenPanelDisabledTest,
 }
 
 class WindowOpenPanelTest : public ExtensionApiTest {
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kEnablePanels);
   }
@@ -398,8 +398,8 @@ IN_PROC_BROWSER_TEST_F(WindowOpenPanelTest, ClosePanelsOnExtensionCrash) {
 
   // Crash the extension.
   extensions::ExtensionHost* extension_host =
-      extensions::ExtensionSystem::Get(browser()->profile())->
-          process_manager()->GetBackgroundHostForExtension(extension->id());
+      extensions::ProcessManager::Get(browser()->profile())
+          ->GetBackgroundHostForExtension(extension->id());
   ASSERT_TRUE(extension_host);
   base::KillProcess(extension_host->render_process_host()->GetHandle(),
                     content::RESULT_CODE_KILLED, false);

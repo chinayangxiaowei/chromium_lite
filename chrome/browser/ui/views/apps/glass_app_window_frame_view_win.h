@@ -8,7 +8,7 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/window/non_client_view.h"
 
-namespace apps {
+namespace extensions {
 class NativeAppWindow;
 }
 
@@ -17,7 +17,7 @@ class GlassAppWindowFrameViewWin : public views::NonClientFrameView {
  public:
   static const char kViewClassName[];
 
-  explicit GlassAppWindowFrameViewWin(apps::NativeAppWindow* window,
+  explicit GlassAppWindowFrameViewWin(extensions::NativeAppWindow* window,
                                       views::Widget* widget);
   virtual ~GlassAppWindowFrameViewWin();
 
@@ -25,23 +25,24 @@ class GlassAppWindowFrameViewWin : public views::NonClientFrameView {
 
  private:
   // views::NonClientFrameView implementation.
-  virtual gfx::Rect GetBoundsForClientView() const OVERRIDE;
+  virtual gfx::Rect GetBoundsForClientView() const override;
   virtual gfx::Rect GetWindowBoundsForClientBounds(
-      const gfx::Rect& client_bounds) const OVERRIDE;
-  virtual int NonClientHitTest(const gfx::Point& point) OVERRIDE;
+      const gfx::Rect& client_bounds) const override;
+  virtual int NonClientHitTest(const gfx::Point& point) override;
   virtual void GetWindowMask(const gfx::Size& size,
-                             gfx::Path* window_mask) OVERRIDE;
-  virtual void ResetWindowControls() OVERRIDE {}
-  virtual void UpdateWindowIcon() OVERRIDE {}
-  virtual void UpdateWindowTitle() OVERRIDE {}
+                             gfx::Path* window_mask) override;
+  virtual void ResetWindowControls() override {}
+  virtual void UpdateWindowIcon() override {}
+  virtual void UpdateWindowTitle() override {}
+  virtual void SizeConstraintsChanged() override {}
 
   // views::View implementation.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual const char* GetClassName() const OVERRIDE;
-  virtual gfx::Size GetMinimumSize() const OVERRIDE;
-  virtual gfx::Size GetMaximumSize() const OVERRIDE;
+  virtual gfx::Size GetPreferredSize() const override;
+  virtual const char* GetClassName() const override;
+  virtual gfx::Size GetMinimumSize() const override;
+  virtual gfx::Size GetMaximumSize() const override;
 
-  apps::NativeAppWindow* window_;
+  extensions::NativeAppWindow* window_;
   views::Widget* widget_;
 
   DISALLOW_COPY_AND_ASSIGN(GlassAppWindowFrameViewWin);

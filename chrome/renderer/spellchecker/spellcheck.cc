@@ -22,6 +22,7 @@
 #include "third_party/WebKit/public/web/WebView.h"
 
 using blink::WebVector;
+using blink::WebString;
 using blink::WebTextCheckingResult;
 using blink::WebTextDecorationType;
 
@@ -30,7 +31,7 @@ namespace {
 class UpdateSpellcheckEnabled : public content::RenderViewVisitor {
  public:
   explicit UpdateSpellcheckEnabled(bool enabled) : enabled_(enabled) {}
-  virtual bool Visit(content::RenderView* render_view) OVERRIDE;
+  bool Visit(content::RenderView* render_view) override;
 
  private:
   bool enabled_;  // New spellcheck-enabled state.
@@ -47,9 +48,9 @@ bool UpdateSpellcheckEnabled::Visit(content::RenderView* render_view) {
 class DocumentMarkersCollector : public content::RenderViewVisitor {
  public:
   DocumentMarkersCollector() {}
-  virtual ~DocumentMarkersCollector() {}
+  ~DocumentMarkersCollector() override {}
   const std::vector<uint32>& markers() const { return markers_; }
-  virtual bool Visit(content::RenderView* render_view) OVERRIDE;
+  bool Visit(content::RenderView* render_view) override;
 
  private:
   std::vector<uint32> markers_;
@@ -64,6 +65,30 @@ bool DocumentMarkersCollector::Visit(content::RenderView* render_view) {
   for (size_t i = 0; i < markers.size(); ++i)
     markers_.push_back(markers[i]);
   // Visit all render views.
+  return true;
+}
+
+class DocumentMarkersRemover : public content::RenderViewVisitor {
+ public:
+  explicit DocumentMarkersRemover(const std::vector<std::string>& words);
+  ~DocumentMarkersRemover() override {}
+  bool Visit(content::RenderView* render_view) override;
+
+ private:
+  WebVector<WebString> words_;
+  DISALLOW_COPY_AND_ASSIGN(DocumentMarkersRemover);
+};
+
+DocumentMarkersRemover::DocumentMarkersRemover(
+    const std::vector<std::string>& words)
+    : words_(words.size()) {
+  for (size_t i = 0; i < words.size(); ++i)
+    words_[i] = WebString::fromUTF8(words[i]);
+}
+
+bool DocumentMarkersRemover::Visit(content::RenderView* render_view) {
+  if (render_view && render_view->GetWebView())
+    render_view->GetWebView()->removeSpellingMarkersUnderWords(words_);
   return true;
 }
 
@@ -146,6 +171,10 @@ void SpellCheck::OnCustomDictionaryChanged(
     const std::vector<std::string>& words_added,
     const std::vector<std::string>& words_removed) {
   custom_dictionary_.OnCustomDictionaryChanged(words_added, words_removed);
+  if (words_added.empty())
+    return;
+  DocumentMarkersRemover markersRemover(words_added);
+  content::RenderView::ForEach(&markersRemover);
 }
 
 void SpellCheck::OnEnableAutoSpellCorrect(bool enable) {

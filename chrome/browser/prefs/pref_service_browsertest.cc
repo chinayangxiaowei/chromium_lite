@@ -5,7 +5,7 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
@@ -54,7 +54,7 @@ class PreferenceServiceTest : public InProcessBrowserTest {
   explicit PreferenceServiceTest(bool new_profile) : new_profile_(new_profile) {
   }
 
-  virtual bool SetUpUserDataDirectory() OVERRIDE {
+  bool SetUpUserDataDirectory() override {
     base::FilePath user_data_directory;
     PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
 

@@ -5,7 +5,7 @@
 #include "chrome/browser/extensions/extension_service_test_base.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -168,11 +168,6 @@ void ExtensionServiceTestBase::InitializeExtensionServiceWithUpdater() {
   params.autoupdate_enabled = true;
   InitializeExtensionService(params);
   service_->updater()->Start();
-}
-
-void ExtensionServiceTestBase::InitializeProcessManager() {
-  static_cast<extensions::TestExtensionSystem*>(
-      ExtensionSystem::Get(profile_.get()))->CreateProcessManager();
 }
 
 void ExtensionServiceTestBase::SetUp() {

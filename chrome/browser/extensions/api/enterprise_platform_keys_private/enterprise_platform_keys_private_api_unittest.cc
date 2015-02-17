@@ -25,6 +25,7 @@
 #include "chromeos/dbus/mock_cryptohome_client.h"
 #include "chromeos/settings/cros_settings_provider.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "extensions/common/test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -138,8 +139,7 @@ void GetCertificateCallbackFalse(
 
 class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
  protected:
-  EPKPChallengeKeyTestBase()
-      : extension_(utils::CreateEmptyExtension("")) {
+  EPKPChallengeKeyTestBase() : extension_(test_util::CreateEmptyExtension()) {
     // Set up the default behavior of mocks.
     ON_CALL(mock_cryptohome_client_, TpmAttestationDoesKeyExist(_, _, _, _))
         .WillByDefault(WithArgs<3>(Invoke(FakeBoolDBusMethod(
@@ -182,7 +182,7 @@ class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
         AddSettingsProvider(device_settings_provider_);
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
 
     // Set the user preferences.
@@ -353,7 +353,7 @@ class EPKPChallengeUserKeyTest : public EPKPChallengeKeyTestBase {
     func_->set_extension(extension_.get());
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     EPKPChallengeKeyTestBase::SetUp();
 
     // Set the user preferences.

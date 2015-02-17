@@ -45,10 +45,8 @@ void SetPostContentType(JNIEnv* env,
   request->SetMethod(method_post);
 
   std::string content_type_header("Content-Type");
-
-  const char* content_type_utf8 = env->GetStringUTFChars(content_type, NULL);
-  std::string content_type_string(content_type_utf8);
-  env->ReleaseStringUTFChars(content_type, content_type_utf8);
+  std::string content_type_string(
+      base::android::ConvertJavaStringToUTF8(env, content_type));
 
   request->AddHeader(content_type_header, content_type_string);
 }
@@ -61,12 +59,12 @@ class JniURLRequestAdapterDelegate
     owner_ = env->NewGlobalRef(owner);
   }
 
-  virtual void OnResponseStarted(URLRequestAdapter* request) OVERRIDE {
+  virtual void OnResponseStarted(URLRequestAdapter* request) override {
     JNIEnv* env = base::android::AttachCurrentThread();
     cronet::Java_ChromiumUrlRequest_onResponseStarted(env, owner_);
   }
 
-  virtual void OnBytesRead(URLRequestAdapter* request) OVERRIDE {
+  virtual void OnBytesRead(URLRequestAdapter* request) override {
     int bytes_read = request->bytes_read();
     if (bytes_read != 0) {
       JNIEnv* env = base::android::AttachCurrentThread();
@@ -77,13 +75,13 @@ class JniURLRequestAdapterDelegate
     }
   }
 
-  virtual void OnRequestFinished(URLRequestAdapter* request) OVERRIDE {
+  virtual void OnRequestFinished(URLRequestAdapter* request) override {
     JNIEnv* env = base::android::AttachCurrentThread();
     cronet::Java_ChromiumUrlRequest_finish(env, owner_);
   }
 
   virtual int ReadFromUploadChannel(net::IOBuffer* buf,
-                                    int buf_length) OVERRIDE {
+                                    int buf_length) override {
     JNIEnv* env = base::android::AttachCurrentThread();
     base::android::ScopedJavaLocalRef<jobject> java_buffer(
         env, env->NewDirectByteBuffer(buf->data(), buf_length));
@@ -120,13 +118,9 @@ static jlong CreateRequestAdapter(JNIEnv* env,
       reinterpret_cast<URLRequestContextAdapter*>(urlRequestContextAdapter);
   DCHECK(context != NULL);
 
-  const char* url_utf8 = env->GetStringUTFChars(url_string, NULL);
+  GURL url(base::android::ConvertJavaStringToUTF8(env, url_string));
 
-  VLOG(1) << "New chromium network request. URL:" << url_utf8;
-
-  GURL url(url_utf8);
-
-  env->ReleaseStringUTFChars(url_string, url_utf8);
+  VLOG(1) << "New chromium network request: " << url.possibly_invalid_spec();
 
   URLRequestAdapter* adapter =
       new URLRequestAdapter(context,
@@ -199,6 +193,32 @@ static void SetUploadChannel(JNIEnv* env,
   request->SetUploadChannel(env, content_length);
 }
 
+static void EnableChunkedUpload(JNIEnv* env,
+                               jobject object,
+                               jlong urlRequestAdapter,
+                               jstring content_type) {
+  URLRequestAdapter* request =
+      reinterpret_cast<URLRequestAdapter*>(urlRequestAdapter);
+  SetPostContentType(env, request, content_type);
+
+  request->EnableChunkedUpload();
+}
+
+static void AppendChunk(JNIEnv* env,
+                        jobject object,
+                        jlong urlRequestAdapter,
+                        jobject chunk_byte_buffer,
+                        jint chunk_size,
+                        jboolean is_last_chunk) {
+  URLRequestAdapter* request =
+      reinterpret_cast<URLRequestAdapter*>(urlRequestAdapter);
+  DCHECK(chunk_byte_buffer != NULL);
+
+  void* chunk = env->GetDirectBufferAddress(chunk_byte_buffer);
+  request->AppendChunk(
+      reinterpret_cast<const char*>(chunk), chunk_size, is_last_chunk);
+}
+
 /* synchronized */
 static void Start(JNIEnv* env, jobject object, jlong urlRequestAdapter) {
   URLRequestAdapter* request =
@@ -260,6 +280,8 @@ static jint GetErrorCode(JNIEnv* env, jobject object, jlong urlRequestAdapter) {
 
     case net::ERR_NAME_NOT_RESOLVED:
       return REQUEST_ERROR_UNKNOWN_HOST;
+    case net::ERR_TOO_MANY_REDIRECTS:
+      return REQUEST_ERROR_TOO_MANY_REDIRECTS;
   }
   return REQUEST_ERROR_UNKNOWN;
 }
@@ -286,6 +308,14 @@ static jint GetHttpStatusCode(JNIEnv* env,
   URLRequestAdapter* request =
       reinterpret_cast<URLRequestAdapter*>(urlRequestAdapter);
   return request->http_status_code();
+}
+
+static jstring GetHttpStatusText(JNIEnv* env,
+                                 jobject object,
+                                 jlong urlRequestAdapter) {
+  URLRequestAdapter* request =
+      reinterpret_cast<URLRequestAdapter*>(urlRequestAdapter);
+  return ConvertUTF8ToJavaString(env, request->http_status_text()).Release();
 }
 
 static jstring GetContentType(JNIEnv* env,
@@ -365,6 +395,26 @@ static void GetAllHeaders(JNIEnv* env,
       ConvertUTF8ToJavaString(env, headers->GetStatusLine());
   Java_ChromiumUrlRequest_onAppendResponseHeader(
       env, object, headersMap, NULL, status_line.Release());
+}
+
+static jstring GetNegotiatedProtocol(JNIEnv* env,
+                                     jobject object,
+                                     jlong urlRequestAdapter) {
+  URLRequestAdapter* request =
+      reinterpret_cast<URLRequestAdapter*>(urlRequestAdapter);
+  if (request == NULL)
+    return ConvertUTF8ToJavaString(env, "").Release();
+
+  std::string negotiated_protocol = request->GetNegotiatedProtocol();
+  return ConvertUTF8ToJavaString(env, negotiated_protocol.c_str()).Release();
+}
+
+static void DisableRedirects(JNIEnv* env, jobject jcaller,
+                             jlong jrequest_adapter) {
+  URLRequestAdapter* request_adapter =
+      reinterpret_cast<URLRequestAdapter*>(jrequest_adapter);
+  if (request_adapter != NULL)
+    request_adapter->DisableRedirects();
 }
 
 }  // namespace cronet

@@ -16,11 +16,10 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/containers/stack_container.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_restrictions.h"
@@ -149,11 +148,11 @@ class VisitedLinkMaster::TableBuilder
   void DisownMaster();
 
   // VisitedLinkDelegate::URLEnumerator
-  virtual void OnURL(const GURL& url) OVERRIDE;
-  virtual void OnComplete(bool succeed) OVERRIDE;
+  void OnURL(const GURL& url) override;
+  void OnComplete(bool succeed) override;
 
  private:
-  virtual ~TableBuilder() {}
+  ~TableBuilder() override {}
 
   // OnComplete mashals to this function on the main thread to do the
   // notification.

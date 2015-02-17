@@ -65,7 +65,7 @@ class AppPackUpdater : public chromeos::ExternalCache::Delegate {
  private:
   // Implementation of ExternalCache::Delegate:
   virtual void OnExtensionListsUpdated(
-      const base::DictionaryValue* prefs) OVERRIDE;
+      const base::DictionaryValue* prefs) override;
 
   // Called when the app pack device setting changes.
   void AppPackChanged();
@@ -80,8 +80,6 @@ class AppPackUpdater : public chromeos::ExternalCache::Delegate {
   // Sets |screen_saver_path_| and invokes |screen_saver_update_callback_| if
   // appropriate.
   void SetScreenSaverPath(const base::FilePath& path);
-
-  base::WeakPtrFactory<AppPackUpdater> weak_ptr_factory_;
 
   // The extension ID and path of the CRX file of the screen saver extension,
   // if it is configured by the policy. Otherwise these fields are empty.
@@ -105,6 +103,8 @@ class AppPackUpdater : public chromeos::ExternalCache::Delegate {
 
   scoped_ptr<chromeos::CrosSettings::ObserverSubscription>
       app_pack_subscription_;
+
+  base::WeakPtrFactory<AppPackUpdater> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AppPackUpdater);
 };

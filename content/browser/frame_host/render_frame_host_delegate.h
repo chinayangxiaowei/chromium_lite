@@ -26,6 +26,7 @@ class Message;
 }
 
 namespace content {
+class GeolocationServiceContext;
 class RenderFrameHost;
 class WebContents;
 struct AXEventNotificationDetails;
@@ -130,12 +131,25 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       const MediaStreamRequest& request,
       const MediaResponseCallback& callback);
 
+  // Checks if we have permission to access the microphone or camera. Note that
+  // this does not query the user. |type| must be MEDIA_DEVICE_AUDIO_CAPTURE
+  // or MEDIA_DEVICE_VIDEO_CAPTURE.
+  virtual bool CheckMediaAccessPermission(const GURL& security_origin,
+                                          MediaStreamType type);
+
   // Get the accessibility mode for the WebContents that owns this frame.
   virtual AccessibilityMode GetAccessibilityMode() const;
 
   // Invoked when an accessibility event is received from the renderer.
   virtual void AccessibilityEventReceived(
       const std::vector<AXEventNotificationDetails>& details) {}
+
+  // Find a guest RenderFrameHost by its browser plugin instance id.
+  virtual RenderFrameHost* GetGuestByInstanceID(
+      int browser_plugin_instance_id);
+
+  // Gets the GeolocationServiceContext associated with this delegate.
+  virtual GeolocationServiceContext* GetGeolocationServiceContext();
 
 #if defined(OS_WIN)
   // Returns the frame's parent's NativeViewAccessible.

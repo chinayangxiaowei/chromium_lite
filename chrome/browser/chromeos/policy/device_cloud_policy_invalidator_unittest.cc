@@ -22,7 +22,6 @@
 #include "chrome/browser/chromeos/settings/device_oauth2_token_service_factory.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
-#include "chrome/browser/chromeos/settings/mock_owner_key_util.h"
 #include "chrome/browser/invalidation/fake_invalidation_service.h"
 #include "chrome/browser/invalidation/profile_invalidation_provider_factory.h"
 #include "chrome/browser/policy/cloud/cloud_policy_invalidator.h"
@@ -36,6 +35,7 @@
 #include "components/invalidation/profile_invalidation_provider.h"
 #include "components/invalidation/ticl_invalidation_service.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/ownership/mock_owner_key_util.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
@@ -65,7 +65,7 @@ KeyedService* BuildProfileInvalidationProvider(
   invalidation_service->SetInvalidatorState(
       syncer::TRANSIENT_INVALIDATION_ERROR);
   return new invalidation::ProfileInvalidationProvider(
-      invalidation_service.PassAs<invalidation::InvalidationService>());
+      invalidation_service.Pass());
 }
 
 }  // namespace
@@ -76,8 +76,8 @@ class DeviceCloudPolicyInvalidatorTest : public testing::Test {
   virtual ~DeviceCloudPolicyInvalidatorTest();
 
   // testing::Test:
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  virtual void SetUp() override;
+  virtual void TearDown() override;
 
   // Ownership is not passed. The Profile is owned by the global ProfileManager.
   Profile *LogInAndReturnProfile(const std::string& user_id);
@@ -100,7 +100,6 @@ class DeviceCloudPolicyInvalidatorTest : public testing::Test {
  private:
   content::TestBrowserThreadBundle thread_bundle_;
   scoped_refptr<net::URLRequestContextGetter> system_request_context_;
-  TestingProfileManager profile_manager_;
   chromeos::FakeUserManager* fake_user_manager_;
   chromeos::ScopedUserManagerEnabler user_manager_enabler_;
   ScopedStubEnterpriseInstallAttributes install_attributes_;
@@ -108,6 +107,7 @@ class DeviceCloudPolicyInvalidatorTest : public testing::Test {
       test_device_settings_service_;
   scoped_ptr<chromeos::ScopedTestCrosSettings> test_cros_settings_;
   chromeos::DeviceSettingsTestHelper device_settings_test_helper_;
+  TestingProfileManager profile_manager_;
 
   scoped_ptr<DeviceCloudPolicyInvalidator> invalidator_;
 };
@@ -116,13 +116,13 @@ DeviceCloudPolicyInvalidatorTest::DeviceCloudPolicyInvalidatorTest()
     : thread_bundle_(content::TestBrowserThreadBundle::IO_MAINLOOP),
       system_request_context_(new net::TestURLRequestContextGetter(
           base::MessageLoopProxy::current())),
-      profile_manager_(TestingBrowserProcess::GetGlobal()),
       fake_user_manager_(new chromeos::FakeUserManager),
       user_manager_enabler_(fake_user_manager_),
       install_attributes_("example.com",
                           "user@example.com",
                           "device_id",
-                          DEVICE_MODE_ENTERPRISE) {
+                          DEVICE_MODE_ENTERPRISE),
+      profile_manager_(TestingBrowserProcess::GetGlobal()) {
 }
 
 DeviceCloudPolicyInvalidatorTest::~DeviceCloudPolicyInvalidatorTest() {
@@ -130,7 +130,7 @@ DeviceCloudPolicyInvalidatorTest::~DeviceCloudPolicyInvalidatorTest() {
 
 void DeviceCloudPolicyInvalidatorTest::SetUp() {
   chromeos::SystemSaltGetter::Initialize();
-  chromeos::DBusThreadManager::InitializeWithStub();
+  chromeos::DBusThreadManager::Initialize();
   chromeos::DeviceOAuth2TokenServiceFactory::Initialize();
   TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(
       system_request_context_.get());
@@ -139,8 +139,8 @@ void DeviceCloudPolicyInvalidatorTest::SetUp() {
   test_device_settings_service_.reset(new
       chromeos::ScopedTestDeviceSettingsService);
   test_cros_settings_.reset(new chromeos::ScopedTestCrosSettings);
-  scoped_refptr<chromeos::MockOwnerKeyUtil> owner_key_util(
-      new chromeos::MockOwnerKeyUtil);
+  scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util(
+      new ownership::MockOwnerKeyUtil);
   owner_key_util->SetPublicKeyFromPrivateKey(
       *device_policy_.GetSigningKey());
   chromeos::DeviceSettingsService::Get()->SetSessionManager(
@@ -158,7 +158,7 @@ void DeviceCloudPolicyInvalidatorTest::SetUp() {
   CloudPolicyCore* core = TestingBrowserProcess::GetGlobal()->platform_part()->
       browser_policy_connector_chromeos()->GetDeviceCloudPolicyManager()->
           core();
-  core->Connect(policy_client.PassAs<CloudPolicyClient>());
+  core->Connect(policy_client.Pass());
   core->StartRefreshScheduler();
 
   invalidation::ProfileInvalidationProviderFactory::GetInstance()->

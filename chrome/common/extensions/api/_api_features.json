@@ -42,7 +42,9 @@
     "blacklist": [
       "2FC374607C2DF285634B67C64A2E356C607091C3",  // Quickoffice
       "3727DD3E564B6055387425027AD74C58784ACC15",  // Quickoffice internal
-      "12E618C3C6E97495AAECF2AC12DEB082353241C6"   // QO component extension
+      "12E618C3C6E97495AAECF2AC12DEB082353241C6",  // QO component extension
+      "06BE211D5F014BAB34BC22D9DDA09C63A81D828E",  // Official xkb extension
+      "F94EE6AB36D6C6588670B2B01EB65212D9C64E33"   // Open source xkb extension
     ],
     "channel": "stable",
     "extension_types": ["hosted_app", "extension", "legacy_packaged_app"],
@@ -55,35 +57,6 @@
     ],
     // Any webpage can use the app API.
     "matches": ["<all_urls>"]
-  },
-  // The API for the *embedder* of appview. Appview has both an embedder and
-  // guest API, which are different.
-  "appViewEmbedderInternal": {
-    "internal": true,
-    "contexts": ["blessed_extension"],
-    "dependencies": ["permission:appview"]
-  },
-  // TODO(fsamuel,kalman): Rename this appViewGuestInternal.
-  "appViewInternal": {
-    "internal": true,
-    "channel": "dev",
-    "contexts": ["blessed_extension"]
-  },
-  "app.window": {
-    "channel": "stable",
-    "contexts": ["blessed_extension"],
-    "extension_types": ["platform_app"],
-    "noparent": true
-  },
-  "app.currentWindowInternal": {
-    "noparent": true,
-    "internal": true,
-    "channel": "stable",
-    "contexts": ["blessed_extension"]
-  },
-  "app.currentWindowInternal.setShape": {
-    "dependencies": ["permission:app.window.shape"],
-    "contexts": ["blessed_extension"]
   },
   "app.getDetails": {
     "contexts": ["blessed_extension", "unblessed_extension", "content_script"],
@@ -120,22 +93,6 @@
   },
   "autotestPrivate": {
     "dependencies": ["permission:autotestPrivate"],
-    "contexts": ["blessed_extension"]
-  },
-  "bluetooth": {
-    "dependencies": ["manifest:bluetooth"],
-    "contexts": ["blessed_extension"]
-  },
-  "bluetoothLowEnergy": {
-    "dependencies": ["manifest:bluetooth"],
-    "contexts": ["blessed_extension"]
-  },
-  "bluetoothPrivate": {
-    "dependencies": ["permission:bluetoothPrivate"],
-    "contexts": ["blessed_extension"]
-  },
-  "bluetoothSocket": {
-    "dependencies": ["manifest:bluetooth"],
     "contexts": ["blessed_extension"]
   },
   "bookmarkManagerPrivate": {
@@ -209,6 +166,16 @@
     "dependencies": ["permission:chromeosInfoPrivate"],
     "contexts": ["blessed_extension"]
   },
+  "chromeWebViewInternal": [{
+    "internal": true,
+    "dependencies": ["permission:webview"],
+    "contexts": ["blessed_extension"]
+  }, {
+    "internal": true,
+    "channel": "dev",
+    "contexts": ["webui"],
+    "matches": ["chrome://chrome-signin/*"]
+  }],
   "cloudPrintPrivate": {
     "dependencies": ["permission:cloudPrintPrivate"],
     "contexts": ["blessed_extension"]
@@ -254,10 +221,6 @@
     "dependencies": ["permission:declarativeContent"],
     "contexts": ["blessed_extension"]
   },
-  "declarativeWebRequest": {
-    "dependencies": ["permission:declarativeWebRequest"],
-    "contexts": ["blessed_extension"]
-  },
   "desktopCapture": {
     "dependencies": ["permission:desktopCapture"],
     "contexts": ["blessed_extension"]
@@ -285,6 +248,11 @@
   },
   "dial": {
     "dependencies": ["permission:dial"],
+    "contexts": ["blessed_extension"]
+  },
+  "documentScan": {
+    "platforms": ["chromeos"],
+    "dependencies": ["permission:documentScan"],
     "contexts": ["blessed_extension"]
   },
   "downloads": {
@@ -316,13 +284,6 @@
   "enterprise.platformKeysPrivate": {
     "dependencies": ["permission:enterprise.platformKeysPrivate"],
     "contexts": ["blessed_extension"]
-  },
-  "events": {
-    "internal": true,
-    "channel": "stable",
-    "extension_types": ["platform_app", "extension"],
-    "contexts": "all",
-    "matches": ["<all_urls>"]
   },
   "experienceSamplingPrivate": {
     "dependencies": ["permission:experienceSamplingPrivate"],
@@ -410,13 +371,13 @@
     "extension_types": ["platform_app"],
     "contexts": ["blessed_extension", "unblessed_extension"]
   },
-  "fileBrowserPrivate": {
-    "dependencies": ["permission:fileBrowserPrivate"],
+  "fileManagerPrivate": {
+    "dependencies": ["permission:fileManagerPrivate"],
     "contexts": ["blessed_extension"]
   },
-  "fileBrowserPrivateInternal": {
+  "fileManagerPrivateInternal": {
     "internal": true,
-    "dependencies": ["permission:fileBrowserPrivate"],
+    "dependencies": ["permission:fileManagerPrivate"],
     "contexts": ["blessed_extension"]
   },
   "fileSystem": {
@@ -448,22 +409,6 @@
     "dependencies": ["permission:gcm"],
     "contexts": ["blessed_extension"]
   },
-  "guestViewInternal": [{
-    "internal": true,
-    "channel": "stable",
-    "contexts": ["blessed_extension"]
-  }, {
-    // Component extensions can use the guestViewInternal API from iframes.
-    "location": "component",
-    "internal": true,
-    "dependencies": ["permission:webview"],
-    "contexts": ["unblessed_extension"]
-  }, {
-    "internal": true,
-    "channel": "trunk",
-    "contexts": ["webui"],
-    "matches": ["chrome://extensions-frame/*", "chrome://extensions/*"]
-  }],
   "hangoutsPrivate": {
     "channel": "stable",
     "contexts": ["blessed_extension"],
@@ -523,10 +468,6 @@
     "dependencies": ["permission:inputMethodPrivate"],
     "contexts": ["blessed_extension"]
   },
-  "ledger": {
-    "dependencies": ["permission:ledger"],
-    "contexts": ["blessed_extension"]
-  },
   "location": {
     "dependencies": ["permission:location"],
     "contexts": ["blessed_extension"]
@@ -538,20 +479,6 @@
   "webcamPrivate": {
     "dependencies": ["permission:webcamPrivate"],
     "contexts": ["blessed_extension"]
-  },
-  "management": {
-    "dependencies": ["permission:management"],
-    "contexts": ["blessed_extension"]
-  },
-  "management.getPermissionWarningsByManifest": {
-    "dependencies": [],
-    "channel": "stable",
-    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
-  },
-  "management.uninstallSelf": {
-    "dependencies": [],
-    "channel": "stable",
-    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
   },
   // This is not a real API, only here for documentation purposes.
   // See http://crbug.com/275944 for background.
@@ -580,6 +507,12 @@
     "dependencies": ["permission:mdns"],
     "contexts": ["blessed_extension"]
   },
+  "mimeHandlerViewGuestInternal": {
+    "internal": true,
+    "contexts": "all",
+    "channel": "dev",
+    "matches": ["<all_urls>"]
+  },
   "musicManagerPrivate": {
     "dependencies": ["permission:musicManagerPrivate"],
     "contexts": ["blessed_extension"]
@@ -602,10 +535,6 @@
   },
   "pageAction": {
     "dependencies": ["manifest:page_action"],
-    "contexts": ["blessed_extension"]
-  },
-  "pageActions": {
-    "dependencies": ["manifest:page_actions"],
     "contexts": ["blessed_extension"]
   },
   "pageCapture": {
@@ -682,29 +611,6 @@
     "dependencies": ["manifest:system_indicator"],
     "contexts": ["blessed_extension"]
   },
-  "system.cpu": {
-    "dependencies": ["permission:system.cpu"],
-    "contexts": ["blessed_extension"]
-  },
-  "system.display": {
-    "dependencies": ["permission:system.display"],
-    "contexts": ["blessed_extension"]
-  },
-  "system.memory": {
-    "dependencies": ["permission:system.memory"],
-    "contexts": ["blessed_extension"]
-  },
-  "system.network": {
-    "dependencies": ["permission:system.network"],
-    "contexts": ["blessed_extension"]
-  },
-  "system.storage": {
-    "dependencies": ["permission:system.storage"],
-    "contexts": ["blessed_extension"]
-  },
-  "system.storage.getAvailableCapacity": {
-    "channel": "dev"
-  },
   "systemPrivate": {
     "dependencies": ["permission:systemPrivate"],
     "contexts": ["blessed_extension"]
@@ -762,21 +668,6 @@
     "dependencies": ["permission:webNavigation"],
     "contexts": ["blessed_extension"]
   },
-  "webRequest": {
-    "dependencies": ["permission:webRequest"],
-    "contexts": ["blessed_extension"]
-  },
-  "webRequestInternal": [{
-    "internal": true,
-    "channel": "stable",
-    "contexts": ["blessed_extension"]
-  }, {
-    // webview uses webRequestInternal API.
-    "channel": "stable",
-    "internal": true,
-    "dependencies": ["permission:webview"],
-    "contexts": ["unblessed_extension"]
-  }],
   "webrtcAudioPrivate": {
     "dependencies": ["permission:webrtcAudioPrivate"],
     "contexts": ["blessed_extension"]
@@ -804,26 +695,6 @@
     // given the blessed_extension denomination. Confusing.
     "contexts": ["blessed_extension"]
   },
-  "webViewInternal": [{
-    "internal": true,
-    "dependencies": ["permission:webview"],
-    "contexts": ["blessed_extension"]
-  }, {
-    // Component extensions can use the webViewInternal API from iframes.
-    "location": "component",
-    "internal": true,
-    "dependencies": ["permission:webview"],
-    "contexts": ["unblessed_extension"]
-  }],
-  "webViewRequest": [{
-    "dependencies": ["permission:webview"],
-    "contexts": ["blessed_extension"]
-  }, {
-    // Component extensions can use the webViewRequest API from iframes.
-    "location": "component",
-    "dependencies": ["permission:webview"],
-    "contexts": ["unblessed_extension"]
-  }],
   "webviewTag": {
     "internal": true,
     "channel": "stable",

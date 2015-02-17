@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/lazy_instance.h"
@@ -99,7 +99,7 @@ GnubbyAuthHandlerPosix::~GnubbyAuthHandlerPosix() {
 // static
 scoped_ptr<GnubbyAuthHandler> GnubbyAuthHandler::Create(
     protocol::ClientStub* client_stub) {
-  return scoped_ptr<GnubbyAuthHandler>(new GnubbyAuthHandlerPosix(client_stub));
+  return make_scoped_ptr(new GnubbyAuthHandlerPosix(client_stub));
 }
 
 // static

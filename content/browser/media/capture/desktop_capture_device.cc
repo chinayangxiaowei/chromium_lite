@@ -53,7 +53,7 @@ class DesktopCaptureDevice::Core : public webrtc::DesktopCapturer::Callback {
   Core(scoped_refptr<base::SingleThreadTaskRunner> task_runner,
        scoped_ptr<webrtc::DesktopCapturer> capturer,
        DesktopMediaID::Type type);
-  virtual ~Core();
+  ~Core() override;
 
   // Implementation of VideoCaptureDevice methods.
   void AllocateAndStart(const media::VideoCaptureParams& params,
@@ -64,8 +64,8 @@ class DesktopCaptureDevice::Core : public webrtc::DesktopCapturer::Callback {
  private:
 
   // webrtc::DesktopCapturer::Callback interface
-  virtual webrtc::SharedMemory* CreateSharedMemory(size_t size) OVERRIDE;
-  virtual void OnCaptureCompleted(webrtc::DesktopFrame* frame) OVERRIDE;
+  webrtc::SharedMemory* CreateSharedMemory(size_t size) override;
+  void OnCaptureCompleted(webrtc::DesktopFrame* frame) override;
 
   // Chooses new output properties based on the supplied source size and the
   // properties requested to Allocate(), and dispatches OnFrameInfo[Changed]
@@ -220,10 +220,14 @@ void DesktopCaptureDevice::Core::OnCaptureCompleted(
 
   base::TimeDelta capture_time(
       base::TimeDelta::FromMilliseconds(frame->capture_time_ms()));
-  UMA_HISTOGRAM_TIMES(
-      capturer_type_ == DesktopMediaID::TYPE_SCREEN ? kUmaScreenCaptureTime
-                                                    : kUmaWindowCaptureTime,
-      capture_time);
+
+  // The two UMA_ blocks must be put in its own scope since it creates a static
+  // variable which expected constant histogram name.
+  if (capturer_type_ == DesktopMediaID::TYPE_SCREEN) {
+    UMA_HISTOGRAM_TIMES(kUmaScreenCaptureTime, capture_time);
+  } else {
+    UMA_HISTOGRAM_TIMES(kUmaWindowCaptureTime, capture_time);
+  }
 
   scoped_ptr<webrtc::DesktopFrame> owned_frame(frame);
 
@@ -315,7 +319,8 @@ void DesktopCaptureDevice::Core::RefreshCaptureFormat(
   output_frame_.reset();
 
   if (previous_frame_size_.is_empty() ||
-      requested_params_.allow_resolution_change) {
+      requested_params_.resolution_change_policy ==
+      media::RESOLUTION_POLICY_DYNAMIC_WITHIN_LIMIT) {
     // If this is the first frame, or the receiver supports variable resolution
     // then determine the output size by treating the requested width & height
     // as maxima.

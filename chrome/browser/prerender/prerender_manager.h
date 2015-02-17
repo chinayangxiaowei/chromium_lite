@@ -65,7 +65,6 @@ class URLRequestContextGetter;
 
 namespace prerender {
 
-class PrerenderCondition;
 class PrerenderHandle;
 class PrerenderHistory;
 class PrerenderLocalPredictor;
@@ -90,6 +89,7 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
     PRERENDER_MODE_EXPERIMENT_NO_USE_GROUP = 5,
     PRERENDER_MODE_EXPERIMENT_MULTI_PRERENDER_GROUP = 6,
     PRERENDER_MODE_EXPERIMENT_15MIN_TTL_GROUP = 7,
+    PRERENDER_MODE_EXPERIMENT_MATCH_COMPLETE_GROUP = 8,
     PRERENDER_MODE_MAX
   };
 
@@ -109,10 +109,10 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // Owned by a Profile object for the lifetime of the profile.
   PrerenderManager(Profile* profile, PrerenderTracker* prerender_tracker);
 
-  virtual ~PrerenderManager();
+  ~PrerenderManager() override;
 
   // From KeyedService:
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // Entry points for adding prerenders.
 
@@ -193,12 +193,6 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
       base::TimeDelta perceived_page_load_time,
       double fraction_plt_elapsed_at_swap_in,
       const GURL& url);
-
-  // Set whether prerendering is currently enabled for this manager.
-  // Must be called on the UI thread.
-  // If |enabled| is false, existing prerendered pages will still persist until
-  // they time out, but new ones will not be generated.
-  void set_enabled(bool enabled);
 
   static PrerenderManagerMode GetMode();
   static void SetMode(PrerenderManagerMode mode);
@@ -285,13 +279,13 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
                             int cookie_send_type) const;
 
   // content::NotificationObserver
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // MediaCaptureDevicesDispatcher::Observer
-  virtual void OnCreatingAudioStream(int render_process_id,
-                                     int render_frame_id) OVERRIDE;
+  void OnCreatingAudioStream(int render_process_id,
+                             int render_frame_id) override;
 
   const Config& config() const { return config_; }
   Config& mutable_config() { return config_; }
@@ -299,9 +293,6 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   PrerenderTracker* prerender_tracker() { return prerender_tracker_; }
 
   bool cookie_store_loaded() { return cookie_store_loaded_; }
-
-  // Adds a condition. This is owned by the PrerenderManager.
-  void AddCondition(const PrerenderCondition* condition);
 
   // Records that some visible tab navigated (or was redirected) to the
   // provided URL.
@@ -377,8 +368,7 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   bool MayReuseProcessHost(content::RenderProcessHost* process_host);
 
   // content::RenderProcessHostObserver implementation.
-  virtual void RenderProcessHostDestroyed(
-      content::RenderProcessHost* host) OVERRIDE;
+  void RenderProcessHostDestroyed(content::RenderProcessHost* host) override;
 
   // To be called once the cookie store for this profile has been loaded.
   void OnCookieStoreLoaded();
@@ -476,9 +466,8 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
                 PrerenderData* prerender_data,
                 const GURL& url,
                 bool should_replace_current_entry);
-    virtual ~PendingSwap();
+    ~PendingSwap() override;
 
-    content::WebContents* target_contents() const;
     void set_swap_successful(bool swap_successful) {
       swap_successful_ = swap_successful;
     }
@@ -486,21 +475,23 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
     void BeginSwap();
 
     // content::WebContentsObserver implementation.
-    virtual void AboutToNavigateRenderView(
-        content::RenderViewHost* render_view_host) OVERRIDE;
-    virtual void ProvisionalChangeToMainFrameUrl(
-        const GURL& url,
-        content::RenderFrameHost* render_frame_host) OVERRIDE;
-    virtual void DidCommitProvisionalLoadForFrame(
+    void AboutToNavigateRenderView(
+        content::RenderViewHost* render_view_host) override;
+    void DidStartProvisionalLoadForFrame(
         content::RenderFrameHost* render_frame_host,
         const GURL& validated_url,
-        content::PageTransition transition_type) OVERRIDE;
-    virtual void DidFailProvisionalLoad(
+        bool is_error_page,
+        bool is_iframe_srcdoc) override;
+    void DidCommitProvisionalLoadForFrame(
+        content::RenderFrameHost* render_frame_host,
+        const GURL& validated_url,
+        ui::PageTransition transition_type) override;
+    void DidFailProvisionalLoad(
         content::RenderFrameHost* render_frame_host,
         const GURL& validated_url,
         int error_code,
-        const base::string16& error_description) OVERRIDE;
-    virtual void WebContentsDestroyed() OVERRIDE;
+        const base::string16& error_description) override;
+    void WebContentsDestroyed() override;
 
    private:
     void RecordEvent(PrerenderEvent event) const;
@@ -677,11 +668,6 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   // The configuration.
   Config config_;
 
-  // Specifies whether prerendering is currently enabled for this
-  // manager. The value can change dynamically during the lifetime
-  // of the PrerenderManager.
-  bool enabled_;
-
   // The profile that owns this PrerenderManager.
   Profile* profile_;
 
@@ -717,8 +703,6 @@ class PrerenderManager : public base::SupportsWeakPtr<PrerenderManager>,
   ScopedVector<OnCloseWebContentsDeleter> on_close_web_contents_deleters_;
 
   scoped_ptr<PrerenderHistory> prerender_history_;
-
-  std::list<const PrerenderCondition*> prerender_conditions_;
 
   scoped_ptr<PrerenderHistograms> histograms_;
 

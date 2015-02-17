@@ -10,7 +10,7 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/renderer/render_process_observer.h"
 
 class ChromeContentRendererClient;
@@ -29,13 +29,9 @@ class ChromeRenderProcessObserver : public content::RenderProcessObserver {
  public:
   explicit ChromeRenderProcessObserver(
       ChromeContentRendererClient* client);
-  virtual ~ChromeRenderProcessObserver();
+  ~ChromeRenderProcessObserver() override;
 
   static bool is_incognito_process() { return is_incognito_process_; }
-
-  // Needs to be called by RenderViews in case of navigations to execute
-  // any 'clear cache' commands that were delayed until the next navigation.
-  void ExecutePendingClearCache();
 
   // Returns a pointer to the content setting rules owned by
   // |ChromeRenderProcessObserver|.
@@ -43,20 +39,14 @@ class ChromeRenderProcessObserver : public content::RenderProcessObserver {
 
  private:
   // RenderProcessObserver implementation.
-  virtual bool OnControlMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void WebKitInitialized() OVERRIDE;
-  virtual void OnRenderProcessShutdown() OVERRIDE;
+  bool OnControlMessageReceived(const IPC::Message& message) override;
+  void WebKitInitialized() override;
+  void OnRenderProcessShutdown() override;
 
   void OnSetIsIncognitoProcess(bool is_incognito_process);
   void OnSetContentSettingsForCurrentURL(
       const GURL& url, const ContentSettings& content_settings);
   void OnSetContentSettingRules(const RendererContentSettingRules& rules);
-  void OnSetCacheCapacities(size_t min_dead_capacity,
-                            size_t max_dead_capacity,
-                            size_t capacity);
-  // If |on_navigation| is true, the clearing is delayed until the next
-  // navigation event.
-  void OnClearCache(bool on_navigation);
   void OnGetCacheResourceStats();
   void OnSetFieldTrialGroup(const std::string& fiel_trial_name,
                             const std::string& group_name);
@@ -70,9 +60,6 @@ class ChromeRenderProcessObserver : public content::RenderProcessObserver {
   RendererContentSettingRules content_setting_rules_;
 
   bool webkit_initialized_;
-  size_t pending_cache_min_dead_capacity_;
-  size_t pending_cache_max_dead_capacity_;
-  size_t pending_cache_capacity_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeRenderProcessObserver);
 };

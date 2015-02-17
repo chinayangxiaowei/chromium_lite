@@ -16,15 +16,15 @@ class LocationBarView;
 class LocationIconView : public views::ImageView {
  public:
   explicit LocationIconView(LocationBarView* location_bar);
-  virtual ~LocationIconView();
+  ~LocationIconView() override;
 
   // views::ImageView:
-  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnMouseReleased(const ui::MouseEvent& event) override;
+  bool OnMouseDragged(const ui::MouseEvent& event) override;
 
   // ui::EventHandler:
-  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
+  void OnGestureEvent(ui::GestureEvent* event) override;
 
   // Whether we should show the tooltip for this icon or not.
   void ShowTooltip(bool show);
@@ -35,6 +35,11 @@ class LocationIconView : public views::ImageView {
   // Handles both click and gesture events by delegating to the page info
   // helper in the appropriate circumstances.
   void OnClickOrTap(const ui::LocatedEvent& event);
+
+  // Set to true when the bubble is already showing at the time the icon is
+  // clicked. This suppresses re-showing the bubble on mouse release, so that
+  // clicking the icon repeatedly will appear to toggle the bubble on and off.
+  bool suppress_mouse_released_action_;
 
   PageInfoHelper page_info_helper_;
 

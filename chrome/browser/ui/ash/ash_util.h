@@ -9,13 +9,13 @@
 
 namespace chrome {
 
+// Returns true if Ash should be run at startup.
+bool ShouldOpenAshOnStartup();
+
 // Returns true if |native_view/native_window| exists within the Ash
 // environment.
 bool IsNativeViewInAsh(gfx::NativeView native_view);
 bool IsNativeWindowInAsh(gfx::NativeWindow native_window);
-
-// Opens the Ash desktop if it's closed; otherwise, closes it.
-void ToggleAshDesktop();
 
 }  // namespace chrome
 

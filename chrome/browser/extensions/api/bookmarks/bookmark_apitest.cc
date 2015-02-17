@@ -28,7 +28,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_Bookmarks) {
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile);
   ChromeBookmarkClient* client =
       ChromeBookmarkClientFactory::GetForProfile(profile);
-  test::WaitForBookmarkModelToLoad(model);
+  bookmarks::test::WaitForBookmarkModelToLoad(model);
 
   base::ListValue list;
   base::DictionaryValue* node = new base::DictionaryValue();
@@ -39,7 +39,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_Bookmarks) {
   node->SetString("name", "Managed Folder");
   node->Set("children", new base::ListValue());
   list.Append(node);
-  profile->GetPrefs()->Set(prefs::kManagedBookmarks, list);
+  profile->GetPrefs()->Set(bookmarks::prefs::kManagedBookmarks, list);
   ASSERT_EQ(2, client->managed_node()->child_count());
 
   ASSERT_TRUE(RunExtensionTest("bookmarks")) << message_;

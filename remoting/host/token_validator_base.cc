@@ -146,7 +146,7 @@ void TokenValidatorBase::OnCertificatesSelected(
     for (size_t i = 0; i < selected_certs->size(); ++i) {
       if (issuer == kCertIssuerWildCard ||
           issuer == (*selected_certs)[i]->issuer().common_name) {
-        request_->ContinueWithCertificate((*selected_certs)[i]);
+        request_->ContinueWithCertificate((*selected_certs)[i].get());
         return;
       }
     }
@@ -178,8 +178,7 @@ std::string TokenValidatorBase::ProcessResponse() {
   // Decode the JSON data from the response.
   scoped_ptr<base::Value> value(base::JSONReader::Read(data_));
   base::DictionaryValue* dict;
-  if (!value.get() || value->GetType() != base::Value::TYPE_DICTIONARY ||
-      !value->GetAsDictionary(&dict)) {
+  if (!value || !value->GetAsDictionary(&dict)) {
     LOG(ERROR) << "Invalid token validation response: '" << data_ << "'";
     return std::string();
   }

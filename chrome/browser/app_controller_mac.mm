@@ -4,8 +4,6 @@
 
 #import "chrome/browser/app_controller_mac.h"
 
-#include "apps/app_shim/extension_app_shim_handler_mac.h"
-#include "apps/app_window_registry.h"
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/command_line.h"
@@ -14,11 +12,14 @@
 #include "base/mac/mac_util.h"
 #include "base/mac/sdk_forward_declarations.h"
 #include "base/message_loop/message_loop.h"
+#include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/apps/app_shim/extension_app_shim_handler_mac.h"
+#include "chrome/browser/apps/app_window_registry_util.h"
 #include "chrome/browser/background/background_application_list_model.h"
 #include "chrome/browser/background/background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
@@ -30,6 +31,7 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/mac/handoff_utility.h"
 #include "chrome/browser/mac/mac_startup_profiler.h"
 #include "chrome/browser/profiles/profile_info_cache_observer.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -70,6 +72,7 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/cloud_print/cloud_print_class_mac.h"
@@ -77,8 +80,10 @@
 #include "chrome/common/mac/app_mode_common.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "components/signin/core/common/profile_management_switches.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/signin/core/browser/signin_manager.h"
+#include "components/signin/core/common/profile_management_switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/notification_service.h"
@@ -86,8 +91,6 @@
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/user_metrics.h"
 #include "extensions/browser/extension_system.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "net/base/filename_util.h"
 #include "ui/base/cocoa/focus_window_set.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -212,17 +215,29 @@ bool IsProfileSignedOut(Profile* profile) {
 - (void)updateConfirmToQuitPrefMenuItem:(NSMenuItem*)item;
 - (void)updateDisplayMessageCenterPrefMenuItem:(NSMenuItem*)item;
 - (void)registerServicesMenuTypesTo:(NSApplication*)app;
-- (void)openUrls:(const std::vector<GURL>&)urls;
 - (void)getUrl:(NSAppleEventDescriptor*)event
      withReply:(NSAppleEventDescriptor*)reply;
 - (void)windowLayeringDidChange:(NSNotification*)inNotification;
 - (void)activeSpaceDidChange:(NSNotification*)inNotification;
-- (void)windowChangedToProfile:(Profile*)profile;
 - (void)checkForAnyKeyWindows;
 - (BOOL)userWillWaitForInProgressDownloads:(int)downloadCount;
 - (BOOL)shouldQuitWithInProgressDownloads;
 - (void)executeApplication:(id)sender;
 - (void)profileWasRemoved:(const base::FilePath&)profilePath;
+
+// Opens a tab for each GURL in |urls|.
+- (void)openUrls:(const std::vector<GURL>&)urls;
+
+// This class cannot open urls until startup has finished. The urls that cannot
+// be opened are cached in |startupUrls_|. This method must be called exactly
+// once after startup has completed. It opens the urls in |startupUrls_|, and
+// clears |startupUrls_|.
+- (void)openStartupUrls;
+
+// Opens a tab for each GURL in |urls|. If there is exactly one tab open before
+// this method is called, and that tab is the NTP, then this method closes the
+// NTP after all the |urls| have been opened.
+- (void)openUrlsReplacingNTP:(const std::vector<GURL>&)urls;
 @end
 
 class AppControllerProfileObserver : public ProfileInfoCacheObserver {
@@ -236,7 +251,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
     profile_manager_->GetProfileInfoCache().AddObserver(this);
   }
 
-  virtual ~AppControllerProfileObserver() {
+  ~AppControllerProfileObserver() override {
     DCHECK(profile_manager_);
     profile_manager_->GetProfileInfoCache().RemoveObserver(this);
   }
@@ -244,29 +259,21 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
  private:
   // ProfileInfoCacheObserver implementation:
 
-  virtual void OnProfileAdded(const base::FilePath& profile_path) OVERRIDE {
-  }
+  void OnProfileAdded(const base::FilePath& profile_path) override {}
 
-  virtual void OnProfileWasRemoved(
-      const base::FilePath& profile_path,
-      const base::string16& profile_name) OVERRIDE {
+  void OnProfileWasRemoved(const base::FilePath& profile_path,
+                           const base::string16& profile_name) override {
     // When a profile is deleted we need to notify the AppController,
     // so it can correctly update its pointer to the last used profile.
     [app_controller_ profileWasRemoved:profile_path];
   }
 
-  virtual void OnProfileWillBeRemoved(
-      const base::FilePath& profile_path) OVERRIDE {
-  }
+  void OnProfileWillBeRemoved(const base::FilePath& profile_path) override {}
 
-  virtual void OnProfileNameChanged(
-      const base::FilePath& profile_path,
-      const base::string16& old_profile_name) OVERRIDE {
-  }
+  void OnProfileNameChanged(const base::FilePath& profile_path,
+                            const base::string16& old_profile_name) override {}
 
-  virtual void OnProfileAvatarChanged(
-      const base::FilePath& profile_path) OVERRIDE {
-  }
+  void OnProfileAvatarChanged(const base::FilePath& profile_path) override {}
 
   ProfileManager* profile_manager_;
 
@@ -393,8 +400,8 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
 
   // Check for active apps. If quitting is prevented, only close browsers and
   // sessions.
-  if (!browser_shutdown::IsTryingToQuit() &&
-      quitWithAppsController_ && !quitWithAppsController_->ShouldQuit()) {
+  if (!browser_shutdown::IsTryingToQuit() && quitWithAppsController_.get() &&
+      !quitWithAppsController_->ShouldQuit()) {
     content::NotificationService::current()->Notify(
         chrome::NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
         content::NotificationService::AllSources(),
@@ -433,7 +440,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)app {
   // If there are no windows, quit immediately.
   if (chrome::BrowserIterator().done() &&
-      !apps::AppWindowRegistry::IsAppWindowRegisteredInAnyProfile(0)) {
+      !AppWindowRegistryUtil::IsAppWindowRegisteredInAnyProfile(0)) {
     return NSTerminateNow;
   }
 
@@ -639,44 +646,6 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   [self fixCloseMenuItemKeyEquivalents];
 }
 
-// Called when the user has changed browser windows, meaning the backing profile
-// may have changed. This can cause a rebuild of the user-data menus. This is a
-// no-op if the new profile is the same as the current one. This will always be
-// the original profile and never incognito.
-- (void)windowChangedToProfile:(Profile*)profile {
-  if (lastProfile_ == profile)
-    return;
-
-  // Before tearing down the menu controller bridges, return the Cocoa menus to
-  // their initial state.
-  if (bookmarkMenuBridge_.get())
-    bookmarkMenuBridge_->ResetMenu();
-  if (historyMenuBridge_.get())
-    historyMenuBridge_->ResetMenu();
-
-  // Rebuild the menus with the new profile.
-  lastProfile_ = profile;
-
-  bookmarkMenuBridge_.reset(new BookmarkMenuBridge(lastProfile_,
-      [[[NSApp mainMenu] itemWithTag:IDC_BOOKMARKS_MENU] submenu]));
-  // No need to |BuildMenu| here.  It is done lazily upon menu access.
-
-  historyMenuBridge_.reset(new HistoryMenuBridge(lastProfile_));
-  historyMenuBridge_->BuildMenu();
-
-  chrome::BrowserCommandController::
-      UpdateSharedCommandsForIncognitoAvailability(
-          menuState_.get(), lastProfile_);
-  profilePrefRegistrar_.reset(new PrefChangeRegistrar());
-  profilePrefRegistrar_->Init(lastProfile_->GetPrefs());
-  profilePrefRegistrar_->Add(
-      prefs::kIncognitoModeAvailability,
-      base::Bind(&chrome::BrowserCommandController::
-                     UpdateSharedCommandsForIncognitoAvailability,
-                 menuState_.get(),
-                 lastProfile_));
-}
-
 - (void)checkForAnyKeyWindows {
   if ([NSApp keyWindow])
     return;
@@ -706,6 +675,15 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
 }
 
 - (void)openStartupUrls {
+  DCHECK(startupComplete_);
+  [self openUrlsReplacingNTP:startupUrls_];
+  startupUrls_.clear();
+}
+
+- (void)openUrlsReplacingNTP:(const std::vector<GURL>&)urls {
+  if (urls.empty())
+    return;
+
   // On Mac, the URLs are passed in via Cocoa, not command line. The Chrome
   // NSApplication is created in MainMessageLoop, and then the shortcut urls
   // are passed in via Apple events. At this point, the first browser is
@@ -713,8 +691,12 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   // before PreMainMessageLoop to capture shortcut URL events, it may cause
   // more problems because it relies on things created in PreMainMessageLoop
   // and may break existing message loop design.
-  if (startupUrls_.empty())
+
+  // If the browser hasn't started yet, just queue up the URLs.
+  if (!startupComplete_) {
+    startupUrls_.insert(startupUrls_.end(), urls.begin(), urls.end());
     return;
+  }
 
   // If there's only 1 tab and the tab is NTP, close this NTP tab and open all
   // startup urls in new tabs, because the omnibox will stay focused if we
@@ -728,10 +710,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
     startupContent = browser->tab_strip_model()->GetActiveWebContents();
   }
 
-  if (startupUrls_.size()) {
-    [self openUrls:startupUrls_];
-    startupUrls_.clear();
-  }
+  [self openUrls:urls];
 
   if (startupIndex != TabStripModel::kNoTab &&
       startupContent->GetVisibleURL() == GURL(chrome::kChromeUINewTabURL)) {
@@ -827,9 +806,8 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
         IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_EXPLANATION);
   } else {
     // Dialog text: warning and explanation.
-    titleText = l10n_util::GetNSStringF(
-        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_TITLE,
-        base::IntToString16(downloadCount));
+    titleText = l10n_util::GetNSString(
+        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_TITLE);
     explanationText = l10n_util::GetNSString(
         IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_EXPLANATION);
   }
@@ -1046,7 +1024,9 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   // for a locked profile, we have to show the User Manager instead as the
   // locked profile needs authentication.
   if (IsProfileSignedOut(lastProfile)) {
-    chrome::ShowUserManager(lastProfile->GetPath());
+    UserManager::Show(base::FilePath(),
+                      profiles::USER_MANAGER_NO_TUTORIAL,
+                      profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
     return;
   }
 
@@ -1139,8 +1119,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
       }
       break;
     case IDC_TASK_MANAGER:
-      content::RecordAction(UserMetricsAction("TaskManager"));
-      TaskManagerMac::Show();
+      chrome::OpenTaskManager(NULL);
       break;
     case IDC_OPTIONS:
       [self showPreferences:sender];
@@ -1247,10 +1226,13 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   // implemented as forced incognito, we can't open a new guest browser either,
   // so we have to show the User Manager as well.
   Profile* lastProfile = [self lastProfile];
-  if (lastProfile->IsGuestSession() || IsProfileSignedOut(lastProfile))
-    chrome::ShowUserManager(lastProfile->GetPath());
-  else
+  if (lastProfile->IsGuestSession() || IsProfileSignedOut(lastProfile)) {
+    UserManager::Show(base::FilePath(),
+                      profiles::USER_MANAGER_NO_TUTORIAL,
+                      profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
+  } else {
     CreateBrowser(lastProfile);
+  }
 
   // We've handled the reopen event, so return NO to tell AppKit not
   // to do anything.
@@ -1353,13 +1335,20 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   return profile;
 }
 
+// Returns true if a browser window may be opened for the last active profile.
+- (bool)canOpenNewBrowser {
+  Profile* profile = [self safeLastProfileForNewWindows];
+
+  const PrefService* prefs = g_browser_process->local_state();
+  return !profile->IsGuestSession() ||
+         prefs->GetBoolean(prefs::kBrowserGuestModeEnabled);
+}
+
 // Various methods to open URLs that we get in a native fashion. We use
 // StartupBrowserCreator here because on the other platforms, URLs to open come
 // through the ProcessSingleton, and it calls StartupBrowserCreator. It's best
 // to bottleneck the openings through that for uniform handling.
-
 - (void)openUrls:(const std::vector<GURL>&)urls {
-  // If the browser hasn't started yet, just queue up the URLs.
   if (!startupComplete_) {
     startupUrls_.insert(startupUrls_.end(), urls.begin(), urls.end());
     return;
@@ -1389,7 +1378,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   std::vector<GURL> gurlVector;
   gurlVector.push_back(gurl);
 
-  [self openUrls:gurlVector];
+  [self openUrlsReplacingNTP:gurlVector];
 }
 
 - (void)application:(NSApplication*)sender
@@ -1401,7 +1390,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
     gurlVector.push_back(gurl);
   }
   if (!gurlVector.empty())
-    [self openUrls:gurlVector];
+    [self openUrlsReplacingNTP:gurlVector];
   else
     NOTREACHED() << "Nothing to open!";
 
@@ -1414,18 +1403,28 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   if (Browser* browser = ActivateBrowser([self lastProfile])) {
     // Show options tab in the active browser window.
     chrome::ShowSettings(browser);
-  } else {
+  } else if ([self canOpenNewBrowser]) {
     // No browser window, so create one for the options tab.
     chrome::OpenOptionsWindow([self safeLastProfileForNewWindows]);
+  } else {
+    // No way to create a browser, default to the User Manager.
+    UserManager::Show(base::FilePath(),
+                      profiles::USER_MANAGER_NO_TUTORIAL,
+                      profiles::USER_MANAGER_SELECT_PROFILE_CHROME_SETTINGS);
   }
 }
 
 - (IBAction)orderFrontStandardAboutPanel:(id)sender {
   if (Browser* browser = ActivateBrowser([self lastProfile])) {
     chrome::ShowAboutChrome(browser);
-  } else {
-    // No browser window, so create one for the about tab.
+  } else if ([self canOpenNewBrowser]) {
+    // No browser window, so create one for the options tab.
     chrome::OpenAboutWindow([self safeLastProfileForNewWindows]);
+  } else {
+    // No way to create a browser, default to the User Manager.
+    UserManager::Show(base::FilePath(),
+                      profiles::USER_MANAGER_NO_TUTORIAL,
+                      profiles::USER_MANAGER_SELECT_PROFILE_ABOUT_CHROME);
   }
 }
 
@@ -1534,6 +1533,40 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
     appShimMenuController_.reset([[AppShimMenuController alloc] init]);
 }
 
+- (void)windowChangedToProfile:(Profile*)profile {
+  if (lastProfile_ == profile)
+    return;
+
+  // Before tearing down the menu controller bridges, return the Cocoa menus to
+  // their initial state.
+  if (bookmarkMenuBridge_.get())
+    bookmarkMenuBridge_->ResetMenu();
+  if (historyMenuBridge_.get())
+    historyMenuBridge_->ResetMenu();
+
+  // Rebuild the menus with the new profile.
+  lastProfile_ = profile;
+
+  bookmarkMenuBridge_.reset(new BookmarkMenuBridge(lastProfile_,
+      [[[NSApp mainMenu] itemWithTag:IDC_BOOKMARKS_MENU] submenu]));
+  // No need to |BuildMenu| here.  It is done lazily upon menu access.
+
+  historyMenuBridge_.reset(new HistoryMenuBridge(lastProfile_));
+  historyMenuBridge_->BuildMenu();
+
+  chrome::BrowserCommandController::
+      UpdateSharedCommandsForIncognitoAvailability(
+          menuState_.get(), lastProfile_);
+  profilePrefRegistrar_.reset(new PrefChangeRegistrar());
+  profilePrefRegistrar_->Init(lastProfile_->GetPrefs());
+  profilePrefRegistrar_->Add(
+      prefs::kIncognitoModeAvailability,
+      base::Bind(&chrome::BrowserCommandController::
+                     UpdateSharedCommandsForIncognitoAvailability,
+                 menuState_.get(),
+                 lastProfile_));
+}
+
 - (void)applicationDidChangeScreenParameters:(NSNotification*)notification {
   // During this callback the working area is not always already updated. Defer.
   [self performSelector:@selector(delayedScreenParametersUpdate)
@@ -1559,6 +1592,12 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
     return NO;
   }
 
+  NSString* originString = base::mac::ObjCCast<NSString>(
+      [userActivity.userInfo objectForKey:handoff::kOriginKey]);
+  handoff::Origin origin = handoff::OriginFromString(originString);
+  UMA_HISTOGRAM_ENUMERATION(
+      "OSX.Handoff.Origin", origin, handoff::ORIGIN_COUNT);
+
   NSURL* url = userActivity.webPageURL;
   if (!url)
     return NO;
@@ -1567,7 +1606,7 @@ class AppControllerProfileObserver : public ProfileInfoCacheObserver {
   std::vector<GURL> gurlVector;
   gurlVector.push_back(gurl);
 
-  [self openUrls:gurlVector];
+  [self openUrlsReplacingNTP:gurlVector];
   return YES;
 }
 

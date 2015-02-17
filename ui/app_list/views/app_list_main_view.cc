@@ -26,6 +26,7 @@
 #include "ui/app_list/views/contents_switcher_view.h"
 #include "ui/app_list/views/contents_view.h"
 #include "ui/app_list/views/search_box_view.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -35,37 +36,8 @@ namespace app_list {
 
 namespace {
 
-// Inner padding space in pixels of bubble contents.
-const int kInnerPadding = 1;
-
 // The maximum allowed time to wait for icon loading in milliseconds.
 const int kMaxIconLoadingWaitTimeInMs = 50;
-
-// A view that holds another view and takes its preferred size. This is used for
-// wrapping the search box view so it still gets laid out while hidden. This is
-// a separate class so it can notify the main view on search box visibility
-// change.
-class SearchBoxContainerView : public views::View {
- public:
-  SearchBoxContainerView(AppListMainView* host, SearchBoxView* search_box)
-      : host_(host), search_box_(search_box) {
-    SetLayoutManager(new views::FillLayout());
-    AddChildView(search_box);
-  }
-  virtual ~SearchBoxContainerView() {}
-
- private:
-  // Overridden from views::View:
-  virtual void ChildVisibilityChanged(views::View* child) OVERRIDE {
-    DCHECK_EQ(search_box_, child);
-    host_->NotifySearchBoxVisibilityChanged();
-  }
-
-  AppListMainView* host_;
-  SearchBoxView* search_box_;
-
-  DISALLOW_COPY_AND_ASSIGN(SearchBoxContainerView);
-};
 
 }  // namespace
 
@@ -85,20 +57,14 @@ class AppListMainView::IconLoader : public AppListItemObserver {
     item_->icon().GetRepresentation(scale);
   }
 
-  virtual ~IconLoader() {
-    item_->RemoveObserver(this);
-  }
+  ~IconLoader() override { item_->RemoveObserver(this); }
 
  private:
   // AppListItemObserver overrides:
-  virtual void ItemIconChanged() OVERRIDE {
+  void ItemIconChanged() override {
     owner_->OnItemIconLoaded(this);
     // Note that IconLoader is released here.
   }
-  virtual void ItemNameChanged() OVERRIDE {}
-  virtual void ItemHighlightedChanged() OVERRIDE {}
-  virtual void ItemIsInstallingChanged() OVERRIDE {}
-  virtual void ItemPercentDownloadedChanged() OVERRIDE {}
 
   AppListMainView* owner_;
   AppListItem* item_;
@@ -109,22 +75,24 @@ class AppListMainView::IconLoader : public AppListItemObserver {
 ////////////////////////////////////////////////////////////////////////////////
 // AppListMainView:
 
-AppListMainView::AppListMainView(AppListViewDelegate* delegate,
-                                 int initial_apps_page,
-                                 gfx::NativeView parent)
+AppListMainView::AppListMainView(AppListViewDelegate* delegate)
     : delegate_(delegate),
       model_(delegate->GetModel()),
       search_box_view_(NULL),
       contents_view_(NULL),
       contents_switcher_view_(NULL),
       weak_ptr_factory_(this) {
-  SetLayoutManager(new views::BoxLayout(views::BoxLayout::kVertical,
-                                        kInnerPadding,
-                                        kInnerPadding,
-                                        kInnerPadding));
+  SetLayoutManager(new views::BoxLayout(views::BoxLayout::kVertical, 0, 0, 0));
+}
 
-  search_box_view_ = new SearchBoxView(this, delegate);
-  AddChildView(new SearchBoxContainerView(this, search_box_view_));
+AppListMainView::~AppListMainView() {
+  pending_icon_loaders_.clear();
+}
+
+void AppListMainView::Init(gfx::NativeView parent,
+                           int initial_apps_page,
+                           SearchBoxView* search_box_view) {
+  search_box_view_ = search_box_view;
   AddContentsViews();
 
   // Switch the apps grid view to the specified page.
@@ -137,27 +105,26 @@ AppListMainView::AppListMainView(AppListViewDelegate* delegate,
 }
 
 void AppListMainView::AddContentsViews() {
+  DCHECK(search_box_view_);
+
   contents_view_ = new ContentsView(this);
   if (app_list::switches::IsExperimentalAppListEnabled()) {
     contents_switcher_view_ = new ContentsSwitcherView(contents_view_);
     contents_view_->SetContentsSwitcherView(contents_switcher_view_);
   }
-  contents_view_->InitNamedPages(model_, delegate_);
+  contents_view_->Init(model_, delegate_);
   AddChildView(contents_view_);
   if (contents_switcher_view_)
     AddChildView(contents_switcher_view_);
 
   search_box_view_->set_contents_view(contents_view_);
+  UpdateSearchBoxVisibility();
 
   contents_view_->SetPaintToLayer(true);
   contents_view_->SetFillsBoundsOpaquely(false);
   contents_view_->layer()->SetMasksToBounds(true);
 
   delegate_->StartSearch();
-}
-
-AppListMainView::~AppListMainView() {
-  pending_icon_loaders_.clear();
 }
 
 void AppListMainView::ShowAppListWhenReady() {
@@ -177,6 +144,10 @@ void AppListMainView::ShowAppListWhenReady() {
 }
 
 void AppListMainView::ResetForShow() {
+  if (switches::IsExperimentalAppListEnabled()) {
+    contents_view_->SetActivePage(
+        contents_view_->GetPageIndexForState(AppListModel::STATE_START));
+  }
   contents_view_->apps_container_view()->ResetForShowApps();
   // We clear the search when hiding so when app list appears it is not showing
   // search results.
@@ -207,9 +178,8 @@ void AppListMainView::ModelChanged() {
 }
 
 void AppListMainView::UpdateSearchBoxVisibility() {
-  bool visible =
-      !contents_view_->IsNamedPageActive(ContentsView::NAMED_PAGE_START) ||
-      contents_view_->IsShowingSearchResults();
+  bool visible = !contents_view_->IsStateActive(AppListModel::STATE_START) ||
+                 contents_view_->IsShowingSearchResults();
   search_box_view_->SetVisible(visible);
   if (visible && GetWidget() && GetWidget()->IsVisible())
     search_box_view_->search_box()->RequestFocus();

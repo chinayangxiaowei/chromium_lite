@@ -29,7 +29,7 @@ Error MemFs::Init(const FsInitArgs& args) {
   if (error)
     return error;
 
-  root_.reset(new DirNode(this));
+  root_.reset(new DirNode(this, S_IRALL | S_IWALL | S_IXALL));
   error = root_->Init(0);
   if (error) {
     root_.reset(NULL);
@@ -75,24 +75,8 @@ Error MemFs::FindNode(const Path& path, int type, ScopedNode* out_node) {
   return 0;
 }
 
-Error MemFs::Access(const Path& path, int a_mode) {
-  ScopedNode node;
-  Error error = FindNode(path, 0, &node);
-
-  if (error)
-    return error;
-
-  int obj_mode = node->GetMode();
-  if (((a_mode & R_OK) && !(obj_mode & S_IREAD)) ||
-      ((a_mode & W_OK) && !(obj_mode & S_IWRITE)) ||
-      ((a_mode & X_OK) && !(obj_mode & S_IEXEC))) {
-    return EACCES;
-  }
-
-  return 0;
-}
-
-Error MemFs::Open(const Path& path, int open_flags, ScopedNode* out_node) {
+Error MemFs::OpenWithMode(const Path& path, int open_flags, mode_t mode,
+                          ScopedNode* out_node) {
   out_node->reset(NULL);
   ScopedNode node;
 
@@ -112,6 +96,7 @@ Error MemFs::Open(const Path& path, int open_flags, ScopedNode* out_node) {
     error = node->Init(open_flags);
     if (error)
       return error;
+    node->SetMode(mode);
 
     error = parent->AddChild(path.Basename(), node);
     if (error)
@@ -120,16 +105,12 @@ Error MemFs::Open(const Path& path, int open_flags, ScopedNode* out_node) {
   } else {
     // Opening an existing file.
 
-    // Directories can only be opened read-only.
-    if (node->IsaDir() && (open_flags & 3) != O_RDONLY)
-      return EISDIR;
-
     // If we were expected to create it exclusively, fail
     if (open_flags & O_EXCL)
       return EEXIST;
 
     if (open_flags & O_TRUNC)
-      static_cast<MemFsNode*>(node.get())->Resize(0);
+      node->FTruncate(0);
   }
 
   *out_node = node;
@@ -161,7 +142,7 @@ Error MemFs::Mkdir(const Path& path, int mode) {
   // Allocate a node, with a RefCount of 1.  If added to the parent
   // it will get ref counted again.  In either case, release the
   // recount we have on exit.
-  node.reset(new DirNode(this));
+  node.reset(new DirNode(this, mode));
   error = node->Init(0);
   if (error)
     return error;

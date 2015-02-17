@@ -9,7 +9,7 @@
 
 #include "base/command_line.h"
 #include "base/environment.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -115,7 +115,7 @@ void PrintArgHelp(const base::StringPiece& name, const Value& value) {
 int ListArgs(const std::string& build_dir) {
   Setup* setup = new Setup;
   setup->set_check_for_bad_items(false);
-  if (!setup->DoSetup(build_dir) || !setup->Run())
+  if (!setup->DoSetup(build_dir, false) || !setup->Run())
     return 1;
 
   Scope::KeyValueMap build_args;
@@ -128,9 +128,8 @@ int ListArgs(const std::string& build_dir) {
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(kSwitchList);
   if (list_value.empty()) {
     // List all values.
-    for (Scope::KeyValueMap::const_iterator i = build_args.begin();
-         i != build_args.end(); ++i)
-      sorted_args.insert(*i);
+    for (const auto& arg : build_args)
+      sorted_args.insert(arg);
   } else {
     // List just the one specified as the parameter to --list.
     Scope::KeyValueMap::const_iterator found_arg = build_args.find(list_value);
@@ -145,20 +144,18 @@ int ListArgs(const std::string& build_dir) {
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(kSwitchShort)) {
     // Short key=value output.
-    for (std::map<base::StringPiece, Value>::iterator i = sorted_args.begin();
-         i != sorted_args.end(); ++i) {
-      OutputString(i->first.as_string());
+    for (const auto& arg : sorted_args) {
+      OutputString(arg.first.as_string());
       OutputString(" = ");
-      OutputString(i->second.ToString(true));
+      OutputString(arg.second.ToString(true));
       OutputString("\n");
     }
     return 0;
   }
 
   // Long output.
-  for (std::map<base::StringPiece, Value>::iterator i = sorted_args.begin();
-       i != sorted_args.end(); ++i) {
-    PrintArgHelp(i->first, i->second);
+  for (const auto& arg : sorted_args) {
+    PrintArgHelp(arg.first, arg.second);
     OutputString("\n");
   }
 
@@ -199,8 +196,9 @@ bool RunEditor(const base::FilePath& file_to_edit) {
 #else  // POSIX
 
 bool RunEditor(const base::FilePath& file_to_edit) {
-  // Prefer $VISUAL, then $EDITOR, then vi.
   const char* editor_ptr = getenv("VISUAL");
+  if (!editor_ptr)
+    editor_ptr = getenv("GN_EDITOR");
   if (!editor_ptr)
     editor_ptr = getenv("EDITOR");
   if (!editor_ptr)
@@ -233,7 +231,7 @@ int EditArgsFile(const std::string& build_dir) {
     // Don't fill build arguments. We're about to edit the file which supplies
     // these in the first place.
     setup.set_fill_arguments(false);
-    if (!setup.DoSetup(build_dir))
+    if (!setup.DoSetup(build_dir, true))
       return 1;
 
     // Ensure the file exists. Need to normalize path separators since on

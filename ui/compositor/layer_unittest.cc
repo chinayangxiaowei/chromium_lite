@@ -6,8 +6,8 @@
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/debug/trace_event.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
@@ -59,17 +59,16 @@ class ColoredLayer : public Layer, public LayerDelegate {
     set_delegate(this);
   }
 
-  virtual ~ColoredLayer() { }
+  ~ColoredLayer() override {}
 
   // Overridden from LayerDelegate:
-  virtual void OnPaintLayer(gfx::Canvas* canvas) OVERRIDE {
-    canvas->DrawColor(color_);
-  }
+  void OnPaintLayer(gfx::Canvas* canvas) override { canvas->DrawColor(color_); }
 
-  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {
-  }
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
 
-  virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE {
+  void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
+
+  base::Closure PrepareForLayerBoundsChange() override {
     return base::Closure();
   }
 
@@ -86,10 +85,10 @@ class LayerWithRealCompositorTest : public testing::Test {
       LOG(ERROR) << "Could not open test data directory.";
     }
   }
-  virtual ~LayerWithRealCompositorTest() {}
+  ~LayerWithRealCompositorTest() override {}
 
   // Overridden from testing::Test:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     bool enable_pixel_output = true;
     ui::ContextFactory* context_factory =
         InitializeContextFactoryForTests(enable_pixel_output);
@@ -100,7 +99,7 @@ class LayerWithRealCompositorTest : public testing::Test {
     compositor_host_->Show();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     compositor_host_.reset();
     TerminateContextFactoryForTests();
   }
@@ -129,11 +128,11 @@ class LayerWithRealCompositorTest : public testing::Test {
     WaitForDraw();
   }
 
-  bool ReadPixels(SkBitmap* bitmap) {
-    return ReadPixels(bitmap, gfx::Rect(GetCompositor()->size()));
+  void ReadPixels(SkBitmap* bitmap) {
+    ReadPixels(bitmap, gfx::Rect(GetCompositor()->size()));
   }
 
-  bool ReadPixels(SkBitmap* bitmap, gfx::Rect source_rect) {
+  void ReadPixels(SkBitmap* bitmap, gfx::Rect source_rect) {
     scoped_refptr<ReadbackHolder> holder(new ReadbackHolder);
     scoped_ptr<cc::CopyOutputRequest> request =
         cc::CopyOutputRequest::CreateBitmapRequest(
@@ -150,14 +149,10 @@ class LayerWithRealCompositorTest : public testing::Test {
       WaitForDraw();
     }
 
-    if (holder->completed()) {
-      *bitmap = holder->result();
-      return true;
-    }
+    // Waits for the callback to finish run and return result.
+    holder->WaitForReadback();
 
-    // Callback never called.
-    NOTREACHED();
-    return false;
+    *bitmap = holder->result();
   }
 
   void WaitForDraw() { ui::DrawWaiterForTest::Wait(GetCompositor()); }
@@ -179,16 +174,15 @@ class LayerWithRealCompositorTest : public testing::Test {
  private:
   class ReadbackHolder : public base::RefCountedThreadSafe<ReadbackHolder> {
    public:
-    ReadbackHolder() : completed_(false) {}
+    ReadbackHolder() : run_loop_(new base::RunLoop) {}
 
     void OutputRequestCallback(scoped_ptr<cc::CopyOutputResult> result) {
-      DCHECK(!completed_);
       result_ = result->TakeBitmap();
-      completed_ = true;
+      run_loop_->Quit();
     }
-    bool completed() const {
-      return completed_;
-    };
+
+    void WaitForReadback() { run_loop_->Run(); }
+
     const SkBitmap& result() const { return *result_; }
 
    private:
@@ -197,7 +191,7 @@ class LayerWithRealCompositorTest : public testing::Test {
     virtual ~ReadbackHolder() {}
 
     scoped_ptr<SkBitmap> result_;
-    bool completed_;
+    scoped_ptr<base::RunLoop> run_loop_;
   };
 
   scoped_ptr<TestCompositorHost> compositor_host_;
@@ -212,7 +206,7 @@ class LayerWithRealCompositorTest : public testing::Test {
 class TestLayerDelegate : public LayerDelegate {
  public:
   explicit TestLayerDelegate() { reset(); }
-  virtual ~TestLayerDelegate() {}
+  ~TestLayerDelegate() override {}
 
   void AddColor(SkColor color) {
     colors_.push_back(color);
@@ -230,21 +224,23 @@ class TestLayerDelegate : public LayerDelegate {
   }
 
   // Overridden from LayerDelegate:
-  virtual void OnPaintLayer(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaintLayer(gfx::Canvas* canvas) override {
     SkISize size = canvas->sk_canvas()->getBaseLayerSize();
     paint_size_ = gfx::Size(size.width(), size.height());
-    canvas->FillRect(gfx::Rect(paint_size_), colors_[color_index_]);
+    canvas->DrawColor(colors_[color_index_]);
     color_index_ = (color_index_ + 1) % static_cast<int>(colors_.size());
     const SkMatrix& matrix = canvas->sk_canvas()->getTotalMatrix();
     scale_x_ = matrix.getScaleX();
     scale_y_ = matrix.getScaleY();
   }
 
-  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
+
+  void OnDeviceScaleFactorChanged(float device_scale_factor) override {
     device_scale_factor_ = device_scale_factor;
   }
 
-  virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE {
+  base::Closure PrepareForLayerBoundsChange() override {
     return base::Closure();
   }
 
@@ -270,7 +266,7 @@ class TestLayerDelegate : public LayerDelegate {
 class DrawTreeLayerDelegate : public LayerDelegate {
  public:
   DrawTreeLayerDelegate() : painted_(false) {}
-  virtual ~DrawTreeLayerDelegate() {}
+  ~DrawTreeLayerDelegate() override {}
 
   void Reset() {
     painted_ = false;
@@ -280,12 +276,13 @@ class DrawTreeLayerDelegate : public LayerDelegate {
 
  private:
   // Overridden from LayerDelegate:
-  virtual void OnPaintLayer(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaintLayer(gfx::Canvas* canvas) override {
     painted_ = true;
+    canvas->DrawColor(SK_ColorWHITE);
   }
-  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {
-  }
-  virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE {
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
+  void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
+  base::Closure PrepareForLayerBoundsChange() override {
     return base::Closure();
   }
 
@@ -298,15 +295,14 @@ class DrawTreeLayerDelegate : public LayerDelegate {
 class NullLayerDelegate : public LayerDelegate {
  public:
   NullLayerDelegate() {}
-  virtual ~NullLayerDelegate() {}
+  ~NullLayerDelegate() override {}
 
  private:
   // Overridden from LayerDelegate:
-  virtual void OnPaintLayer(gfx::Canvas* canvas) OVERRIDE {
-  }
-  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {
-  }
-  virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE {
+  void OnPaintLayer(gfx::Canvas* canvas) override {}
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
+  void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
+  base::Closure PrepareForLayerBoundsChange() override {
     return base::Closure();
   }
 
@@ -331,25 +327,22 @@ class TestCompositorObserver : public CompositorObserver {
   }
 
  private:
-  virtual void OnCompositingDidCommit(Compositor* compositor) OVERRIDE {
+  void OnCompositingDidCommit(Compositor* compositor) override {
     committed_ = true;
   }
 
-  virtual void OnCompositingStarted(Compositor* compositor,
-                                    base::TimeTicks start_time) OVERRIDE {
+  void OnCompositingStarted(Compositor* compositor,
+                            base::TimeTicks start_time) override {
     started_ = true;
   }
 
-  virtual void OnCompositingEnded(Compositor* compositor) OVERRIDE {
-    ended_ = true;
-  }
+  void OnCompositingEnded(Compositor* compositor) override { ended_ = true; }
 
-  virtual void OnCompositingAborted(Compositor* compositor) OVERRIDE {
+  void OnCompositingAborted(Compositor* compositor) override {
     aborted_ = true;
   }
 
-  virtual void OnCompositingLockStateChanged(Compositor* compositor) OVERRIDE {
-  }
+  void OnCompositingLockStateChanged(Compositor* compositor) override {}
 
   bool committed_;
   bool started_;
@@ -393,10 +386,10 @@ TEST_F(LayerWithRealCompositorTest, Hierarchy) {
 class LayerWithDelegateTest : public testing::Test {
  public:
   LayerWithDelegateTest() {}
-  virtual ~LayerWithDelegateTest() {}
+  ~LayerWithDelegateTest() override {}
 
   // Overridden from testing::Test:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     bool enable_pixel_output = false;
     ui::ContextFactory* context_factory =
         InitializeContextFactoryForTests(enable_pixel_output);
@@ -407,7 +400,7 @@ class LayerWithDelegateTest : public testing::Test {
     compositor_host_->Show();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     compositor_host_.reset();
     TerminateContextFactoryForTests();
   }
@@ -602,14 +595,14 @@ TEST_F(LayerWithRealCompositorTest, HierarchyNoTexture) {
 class LayerWithNullDelegateTest : public LayerWithDelegateTest {
  public:
   LayerWithNullDelegateTest() {}
-  virtual ~LayerWithNullDelegateTest() {}
+  ~LayerWithNullDelegateTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     LayerWithDelegateTest::SetUp();
     default_layer_delegate_.reset(new NullLayerDelegate());
   }
 
-  virtual Layer* CreateLayer(LayerType type) OVERRIDE {
+  Layer* CreateLayer(LayerType type) override {
     Layer* layer = new Layer(type);
     layer->set_delegate(default_layer_delegate_.get());
     return layer;
@@ -627,7 +620,7 @@ class LayerWithNullDelegateTest : public LayerWithDelegateTest {
     return layer;
   }
 
-  virtual Layer* CreateNoTextureLayer(const gfx::Rect& bounds) OVERRIDE {
+  Layer* CreateNoTextureLayer(const gfx::Rect& bounds) override {
     Layer* layer = CreateLayer(LAYER_NOT_DRAWN);
     layer->SetBounds(bounds);
     return layer;
@@ -645,7 +638,7 @@ TEST_F(LayerWithNullDelegateTest, EscapedDebugNames) {
   layer->set_name(name);
   scoped_refptr<base::debug::ConvertableToTraceFormat> debug_info =
     layer->TakeDebugInfo();
-  EXPECT_TRUE(!!debug_info);
+  EXPECT_TRUE(!!debug_info.get());
   std::string json;
   debug_info->AppendAsTraceFormat(&json);
   base::JSONReader json_reader;
@@ -664,8 +657,7 @@ void ReturnMailbox(bool* run, uint32 sync_point, bool is_lost) {
 }
 
 TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
-  scoped_ptr<Layer> l1(CreateColorLayer(SK_ColorRED,
-                                        gfx::Rect(20, 20, 400, 400)));
+  scoped_ptr<Layer> l1(CreateLayer(LAYER_SOLID_COLOR));
   l1->SetFillsBoundsOpaquely(true);
   l1->SetForceRenderSurface(true);
   l1->SetVisible(false);
@@ -703,7 +695,7 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   EXPECT_TRUE(callback1_run);
   EXPECT_FALSE(callback2_run);
 
-  l1->SetShowPaintedContent();
+  l1->SetShowSolidColorContent();
   EXPECT_EQ(gfx::Point3F(), l1->cc_layer()->transform_origin());
   EXPECT_TRUE(l1->cc_layer()->DrawsContent());
   EXPECT_TRUE(l1->cc_layer()->contents_opaque());
@@ -876,7 +868,7 @@ TEST_F(LayerWithRealCompositorTest, DrawPixels) {
   DrawTree(layer.get());
 
   SkBitmap bitmap;
-  ASSERT_TRUE(ReadPixels(&bitmap, gfx::Rect(viewport_size)));
+  ReadPixels(&bitmap, gfx::Rect(viewport_size));
   ASSERT_FALSE(bitmap.empty());
 
   SkAutoLockPixels lock(bitmap);
@@ -914,7 +906,7 @@ TEST_F(LayerWithRealCompositorTest, DrawAlphaBlendedPixels) {
   DrawTree(background_layer.get());
 
   SkBitmap bitmap;
-  ASSERT_TRUE(ReadPixels(&bitmap, gfx::Rect(viewport_size)));
+  ReadPixels(&bitmap, gfx::Rect(viewport_size));
   ASSERT_FALSE(bitmap.empty());
 
   SkAutoLockPixels lock(bitmap);
@@ -955,7 +947,7 @@ TEST_F(LayerWithRealCompositorTest, DrawAlphaThresholdFilterPixels) {
   DrawTree(background_layer.get());
 
   SkBitmap bitmap;
-  ASSERT_TRUE(ReadPixels(&bitmap, gfx::Rect(viewport_size)));
+  ReadPixels(&bitmap, gfx::Rect(viewport_size));
   ASSERT_FALSE(bitmap.empty());
 
   SkAutoLockPixels lock(bitmap);
@@ -1101,14 +1093,14 @@ TEST_F(LayerWithRealCompositorTest, ModifyHierarchy) {
   l11->Add(l21.get());
   l0->Add(l12.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   // WritePNGFile(bitmap, ref_img1);
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img1, cc::ExactPixelComparator(true)));
 
   l0->StackAtTop(l11.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   // WritePNGFile(bitmap, ref_img2);
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img2, cc::ExactPixelComparator(true)));
@@ -1116,28 +1108,28 @@ TEST_F(LayerWithRealCompositorTest, ModifyHierarchy) {
   // should restore to original configuration
   l0->StackAbove(l12.get(), l11.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img1, cc::ExactPixelComparator(true)));
 
   // l11 back to front
   l0->StackAtTop(l11.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img2, cc::ExactPixelComparator(true)));
 
   // should restore to original configuration
   l0->StackAbove(l12.get(), l11.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img1, cc::ExactPixelComparator(true)));
 
   // l11 back to front
   l0->StackAbove(l11.get(), l12.get());
   DrawTree(l0.get());
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img2, cc::ExactPixelComparator(true)));
 }
@@ -1160,7 +1152,7 @@ TEST_F(LayerWithRealCompositorTest, Opacity) {
   l0->Add(l11.get());
   DrawTree(l0.get());
   SkBitmap bitmap;
-  ASSERT_TRUE(ReadPixels(&bitmap));
+  ReadPixels(&bitmap);
   ASSERT_FALSE(bitmap.empty());
   // WritePNGFile(bitmap, ref_img);
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img, cc::ExactPixelComparator(true)));
@@ -1172,7 +1164,7 @@ class SchedulePaintLayerDelegate : public LayerDelegate {
  public:
   SchedulePaintLayerDelegate() : paint_count_(0), layer_(NULL) {}
 
-  virtual ~SchedulePaintLayerDelegate() {}
+  ~SchedulePaintLayerDelegate() override {}
 
   void set_layer(Layer* layer) {
     layer_ = layer;
@@ -1193,7 +1185,7 @@ class SchedulePaintLayerDelegate : public LayerDelegate {
 
  private:
   // Overridden from LayerDelegate:
-  virtual void OnPaintLayer(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaintLayer(gfx::Canvas* canvas) override {
     paint_count_++;
     if (!schedule_paint_rect_.IsEmpty()) {
       layer_->SchedulePaint(schedule_paint_rect_);
@@ -1204,10 +1196,11 @@ class SchedulePaintLayerDelegate : public LayerDelegate {
       last_clip_rect_ = gfx::SkRectToRectF(sk_clip_rect);
   }
 
-  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {
-  }
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {}
 
-  virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE {
+  void OnDeviceScaleFactorChanged(float device_scale_factor) override {}
+
+  base::Closure PrepareForLayerBoundsChange() override {
     return base::Closure();
   }
 
@@ -1425,7 +1418,7 @@ static scoped_ptr<cc::DelegatedFrameData> MakeFrameData(gfx::Size size) {
   scoped_ptr<cc::DelegatedFrameData> frame_data(new cc::DelegatedFrameData);
   scoped_ptr<cc::RenderPass> render_pass(cc::RenderPass::Create());
   render_pass->SetNew(
-      cc::RenderPass::Id(1, 1), gfx::Rect(size), gfx::Rect(), gfx::Transform());
+      cc::RenderPassId(1, 1), gfx::Rect(size), gfx::Rect(), gfx::Transform());
   frame_data->render_pass_list.push_back(render_pass.Pass());
   return frame_data.Pass();
 }
@@ -1447,7 +1440,7 @@ TEST_F(LayerWithDelegateTest, DelegatedLayer) {
   // Content matches layer size.
   frame_provider = new cc::DelegatedFrameProvider(
       resource_collection.get(), MakeFrameData(gfx::Size(10, 10)));
-  child->SetShowDelegatedContent(frame_provider, gfx::Size(10, 10));
+  child->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
   EXPECT_EQ(child->cc_layer()->bounds().ToString(),
             gfx::Size(10, 10).ToString());
 
@@ -1460,13 +1453,13 @@ TEST_F(LayerWithDelegateTest, DelegatedLayer) {
   child->SetBounds(gfx::Rect(0, 0, 10, 10));
   frame_provider = new cc::DelegatedFrameProvider(
       resource_collection.get(), MakeFrameData(gfx::Size(5, 5)));
-  child->SetShowDelegatedContent(frame_provider, gfx::Size(5, 5));
+  child->SetShowDelegatedContent(frame_provider.get(), gfx::Size(5, 5));
   EXPECT_EQ(child->cc_layer()->bounds().ToString(), gfx::Size(5, 5).ToString());
 
   // Hi-DPI content on low-DPI layer.
   frame_provider = new cc::DelegatedFrameProvider(
       resource_collection.get(), MakeFrameData(gfx::Size(20, 20)));
-  child->SetShowDelegatedContent(frame_provider, gfx::Size(10, 10));
+  child->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
   EXPECT_EQ(child->cc_layer()->bounds().ToString(),
             gfx::Size(10, 10).ToString());
 
@@ -1478,24 +1471,25 @@ TEST_F(LayerWithDelegateTest, DelegatedLayer) {
   // Low-DPI content on hi-DPI layer.
   frame_provider = new cc::DelegatedFrameProvider(
       resource_collection.get(), MakeFrameData(gfx::Size(10, 10)));
-  child->SetShowDelegatedContent(frame_provider, gfx::Size(10, 10));
+  child->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
   EXPECT_EQ(child->cc_layer()->bounds().ToString(),
             gfx::Size(10, 10).ToString());
 }
 
 TEST_F(LayerWithDelegateTest, ExternalContent) {
   scoped_ptr<Layer> root(CreateNoTextureLayer(gfx::Rect(0, 0, 1000, 1000)));
-  scoped_ptr<Layer> child(CreateLayer(LAYER_TEXTURED));
+  scoped_ptr<Layer> child(CreateLayer(LAYER_SOLID_COLOR));
 
   child->SetBounds(gfx::Rect(0, 0, 10, 10));
   child->SetVisible(true);
   root->Add(child.get());
 
-  // The layer is already showing painted content, so the cc layer won't change.
+  // The layer is already showing solid color content, so the cc layer won't
+  // change.
   scoped_refptr<cc::Layer> before = child->cc_layer();
-  child->SetShowPaintedContent();
+  child->SetShowSolidColorContent();
   EXPECT_TRUE(child->cc_layer());
-  EXPECT_EQ(before, child->cc_layer());
+  EXPECT_EQ(before.get(), child->cc_layer());
 
   scoped_refptr<cc::DelegatedFrameResourceCollection> resource_collection =
       new cc::DelegatedFrameResourceCollection;
@@ -1505,15 +1499,42 @@ TEST_F(LayerWithDelegateTest, ExternalContent) {
 
   // Showing delegated content changes the underlying cc layer.
   before = child->cc_layer();
-  child->SetShowDelegatedContent(frame_provider, gfx::Size(10, 10));
+  child->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
   EXPECT_TRUE(child->cc_layer());
-  EXPECT_NE(before, child->cc_layer());
+  EXPECT_NE(before.get(), child->cc_layer());
 
   // Changing to painted content should change the underlying cc layer.
   before = child->cc_layer();
-  child->SetShowPaintedContent();
+  child->SetShowSolidColorContent();
   EXPECT_TRUE(child->cc_layer());
-  EXPECT_NE(before, child->cc_layer());
+  EXPECT_NE(before.get(), child->cc_layer());
+}
+
+// Verifies that layer filters still attached after changing implementation
+// layer.
+TEST_F(LayerWithDelegateTest, LayerFiltersSurvival) {
+  scoped_ptr<Layer> layer(CreateLayer(LAYER_TEXTURED));
+  layer->SetBounds(gfx::Rect(0, 0, 10, 10));
+  EXPECT_TRUE(layer->cc_layer());
+  EXPECT_EQ(0u, layer->cc_layer()->filters().size());
+
+  layer->SetLayerGrayscale(0.5f);
+  EXPECT_EQ(layer->layer_grayscale(), 0.5f);
+  EXPECT_EQ(1u, layer->cc_layer()->filters().size());
+
+  scoped_refptr<cc::DelegatedFrameResourceCollection> resource_collection =
+      new cc::DelegatedFrameResourceCollection;
+  scoped_refptr<cc::DelegatedFrameProvider> frame_provider =
+      new cc::DelegatedFrameProvider(resource_collection.get(),
+                                     MakeFrameData(gfx::Size(10, 10)));
+
+  // Showing delegated content changes the underlying cc layer.
+  scoped_refptr<cc::Layer> before = layer->cc_layer();
+  layer->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
+  EXPECT_EQ(layer->layer_grayscale(), 0.5f);
+  EXPECT_TRUE(layer->cc_layer());
+  EXPECT_NE(before.get(), layer->cc_layer());
+  EXPECT_EQ(1u, layer->cc_layer()->filters().size());
 }
 
 // Tests Layer::AddThreadedAnimation and Layer::RemoveThreadedAnimation.
@@ -1672,6 +1693,48 @@ TEST_F(LayerWithRealCompositorTest, SnapLayerToPixels) {
   // 0.5 / 1.5 = 0.333...
   EXPECT_EQ("0.33 0.33",
             Vector2dFTo100thPercisionString(c11->subpixel_position_offset()));
+}
+
+class FrameDamageCheckingDelegate : public TestLayerDelegate {
+ public:
+  FrameDamageCheckingDelegate() : delegated_frame_damage_called_(false) {}
+
+  void OnDelegatedFrameDamage(const gfx::Rect& damage_rect_in_dip) override {
+    delegated_frame_damage_called_ = true;
+    delegated_frame_damage_rect_ = damage_rect_in_dip;
+  }
+
+  const gfx::Rect& delegated_frame_damage_rect() const {
+    return delegated_frame_damage_rect_;
+  }
+  bool delegated_frame_damage_called() const {
+    return delegated_frame_damage_called_;
+  }
+
+ private:
+  gfx::Rect delegated_frame_damage_rect_;
+  bool delegated_frame_damage_called_;
+
+  DISALLOW_COPY_AND_ASSIGN(FrameDamageCheckingDelegate);
+};
+
+TEST(LayerDelegateTest, DelegatedFrameDamage) {
+  scoped_ptr<Layer> layer(new Layer(LAYER_TEXTURED));
+  gfx::Rect damage_rect(2, 1, 5, 3);
+
+  FrameDamageCheckingDelegate delegate;
+  layer->set_delegate(&delegate);
+  scoped_refptr<cc::DelegatedFrameResourceCollection> resource_collection =
+      new cc::DelegatedFrameResourceCollection;
+  scoped_refptr<cc::DelegatedFrameProvider> frame_provider(
+      new cc::DelegatedFrameProvider(resource_collection.get(),
+                                     MakeFrameData(gfx::Size(10, 10))));
+  layer->SetShowDelegatedContent(frame_provider.get(), gfx::Size(10, 10));
+
+  EXPECT_FALSE(delegate.delegated_frame_damage_called());
+  layer->OnDelegatedFrameDamage(damage_rect);
+  EXPECT_TRUE(delegate.delegated_frame_damage_called());
+  EXPECT_EQ(damage_rect, delegate.delegated_frame_damage_rect());
 }
 
 }  // namespace ui

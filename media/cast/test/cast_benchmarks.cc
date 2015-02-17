@@ -108,57 +108,53 @@ class CastTransportSenderWrapper : public CastTransportSender {
     encoded_audio_bytes_ = encoded_audio_bytes;
   }
 
-  virtual void InitializeAudio(
-      const CastTransportRtpConfig& config,
-      const RtcpCastMessageCallback& cast_message_cb,
-      const RtcpRttCallback& rtt_cb) OVERRIDE {
+  void InitializeAudio(const CastTransportRtpConfig& config,
+                       const RtcpCastMessageCallback& cast_message_cb,
+                       const RtcpRttCallback& rtt_cb) override {
+    audio_ssrc_ = config.ssrc;
     transport_->InitializeAudio(config, cast_message_cb, rtt_cb);
   }
 
-  virtual void InitializeVideo(
-      const CastTransportRtpConfig& config,
-      const RtcpCastMessageCallback& cast_message_cb,
-      const RtcpRttCallback& rtt_cb) OVERRIDE {
+  void InitializeVideo(const CastTransportRtpConfig& config,
+                       const RtcpCastMessageCallback& cast_message_cb,
+                       const RtcpRttCallback& rtt_cb) override {
+    video_ssrc_ = config.ssrc;
     transport_->InitializeVideo(config, cast_message_cb, rtt_cb);
   }
 
-  virtual void InsertCodedAudioFrame(
-      const EncodedFrame& audio_frame) OVERRIDE {
-    *encoded_audio_bytes_ += audio_frame.data.size();
-    transport_->InsertCodedAudioFrame(audio_frame);
+  void InsertFrame(uint32 ssrc, const EncodedFrame& frame) override {
+    if (ssrc == audio_ssrc_) {
+      *encoded_audio_bytes_ += frame.data.size();
+    } else if (ssrc == video_ssrc_) {
+      *encoded_video_bytes_ += frame.data.size();
+    }
+    transport_->InsertFrame(ssrc, frame);
   }
 
-  virtual void InsertCodedVideoFrame(
-      const EncodedFrame& video_frame) OVERRIDE {
-    *encoded_video_bytes_ += video_frame.data.size();
-    transport_->InsertCodedVideoFrame(video_frame);
-  }
-
-  virtual void SendSenderReport(
-      uint32 ssrc,
-      base::TimeTicks current_time,
-      uint32 current_time_as_rtp_timestamp) OVERRIDE {
+  void SendSenderReport(uint32 ssrc,
+                        base::TimeTicks current_time,
+                        uint32 current_time_as_rtp_timestamp) override {
     transport_->SendSenderReport(ssrc,
                                  current_time,
                                  current_time_as_rtp_timestamp);
   }
 
-  // Retransmission request.
-  virtual void ResendPackets(
-      bool is_audio,
-      const MissingFramesAndPacketsMap& missing_packets,
-      bool cancel_rtx_if_not_in_list,
-      base::TimeDelta dedupe_window) OVERRIDE {
-    transport_->ResendPackets(
-        is_audio, missing_packets, cancel_rtx_if_not_in_list, dedupe_window);
+  void CancelSendingFrames(uint32 ssrc,
+                           const std::vector<uint32>& frame_ids) override {
+    transport_->CancelSendingFrames(ssrc, frame_ids);
   }
 
-  virtual PacketReceiverCallback PacketReceiverForTesting() OVERRIDE {
+  void ResendFrameForKickstart(uint32 ssrc, uint32 frame_id) override {
+    transport_->ResendFrameForKickstart(ssrc, frame_id);
+  }
+
+  PacketReceiverCallback PacketReceiverForTesting() override {
     return transport_->PacketReceiverForTesting();
   }
 
  private:
   scoped_ptr<CastTransportSender> transport_;
+  uint32 audio_ssrc_, video_ssrc_;
   uint64* encoded_video_bytes_;
   uint64* encoded_audio_bytes_;
 };
@@ -223,7 +219,7 @@ class RunOneBenchmark {
                  int max_number_of_video_buffers_used) {
     audio_sender_config_.ssrc = 1;
     audio_sender_config_.incoming_feedback_ssrc = 2;
-    audio_sender_config_.target_playout_delay =
+    audio_sender_config_.max_playout_delay =
         base::TimeDelta::FromMilliseconds(kTargetPlayoutDelayMs);
     audio_sender_config_.rtp_payload_type = 96;
     audio_sender_config_.use_external_encoder = false;
@@ -245,7 +241,7 @@ class RunOneBenchmark {
 
     video_sender_config_.ssrc = 3;
     video_sender_config_.incoming_feedback_ssrc = 4;
-    video_sender_config_.target_playout_delay =
+    video_sender_config_.max_playout_delay =
         base::TimeDelta::FromMilliseconds(kTargetPlayoutDelayMs);
     video_sender_config_.rtp_payload_type = 97;
     video_sender_config_.use_external_encoder = false;
@@ -300,6 +296,7 @@ class RunOneBenchmark {
             NULL,
             testing_clock_sender_,
             dummy_endpoint,
+            make_scoped_ptr(new base::DictionaryValue),
             base::Bind(&UpdateCastTransportStatus),
             base::Bind(&IgnoreRawEvents),
             base::TimeDelta::FromSeconds(1),

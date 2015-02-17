@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/app_list/app_list_service_views.h"
 
+#include "chrome/browser/apps/scoped_keep_alive.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
-#include "chrome/browser/ui/app_list/scoped_keep_alive.h"
+#include "ui/app_list/views/app_list_view.h"
 
 AppListServiceViews::AppListServiceViews(
     scoped_ptr<AppListControllerDelegate> controller_delegate)
@@ -25,18 +26,13 @@ void AppListServiceViews::Init(Profile* initial_profile) {
   PerformStartupChecks(initial_profile);
 }
 
-void AppListServiceViews::CreateForProfile(Profile* requested_profile) {
-  shower_.CreateViewForProfile(requested_profile);
-}
-
 void AppListServiceViews::ShowForProfile(Profile* requested_profile) {
   DCHECK(requested_profile);
 
   ScopedKeepAlive keep_alive;
 
-  InvalidatePendingProfileLoads();
-  SetProfilePath(requested_profile->GetPath());
-  shower_.ShowForProfile(requested_profile);
+  CreateForProfile(requested_profile);
+  shower_.ShowForCurrentProfile();
   RecordAppListLaunch();
 }
 
@@ -63,7 +59,23 @@ AppListControllerDelegate* AppListServiceViews::GetControllerDelegate() {
   return controller_delegate_.get();
 }
 
-AppListControllerDelegate*
-AppListServiceViews::GetControllerDelegateForCreate() {
-  return controller_delegate_.get();
+void AppListServiceViews::CreateForProfile(Profile* requested_profile) {
+  DCHECK(requested_profile);
+  InvalidatePendingProfileLoads();
+  shower_.CreateViewForProfile(requested_profile);
+  SetProfilePath(shower_.profile()->GetPath());
+}
+
+void AppListServiceViews::DestroyAppList() {
+  if (!shower_.HasView())
+    return;
+
+  // Use CloseNow(). This can't be asynchronous because the profile will be
+  // deleted once this function returns.
+  shower_.app_list()->GetWidget()->CloseNow();
+  DCHECK(!shower_.HasView());
+}
+
+AppListViewDelegate* AppListServiceViews::GetViewDelegateForCreate() {
+  return GetViewDelegate(shower_.profile());
 }

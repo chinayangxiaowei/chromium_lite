@@ -95,7 +95,17 @@ bool GCMDriverAndroid::RegisterBindings(JNIEnv* env) {
 void GCMDriverAndroid::OnSignedIn() {
 }
 
+void GCMDriverAndroid::OnSignedOut() {
+}
+
 void GCMDriverAndroid::Purge() {
+}
+
+void GCMDriverAndroid::AddConnectionObserver(GCMConnectionObserver* observer) {
+}
+
+void GCMDriverAndroid::RemoveConnectionObserver(
+    GCMConnectionObserver* observer) {
 }
 
 void GCMDriverAndroid::Enable() {
@@ -126,6 +136,29 @@ void GCMDriverAndroid::GetGCMStatistics(
 
 void GCMDriverAndroid::SetGCMRecording(const GetGCMStatisticsCallback& callback,
                                        bool recording) {
+  NOTIMPLEMENTED();
+}
+
+void GCMDriverAndroid::SetAccountTokens(
+    const std::vector<GCMClient::AccountTokenInfo>& account_tokens) {
+  NOTIMPLEMENTED();
+}
+
+void GCMDriverAndroid::UpdateAccountMapping(
+    const AccountMapping& account_mapping) {
+  NOTIMPLEMENTED();
+}
+
+void GCMDriverAndroid::RemoveAccountMapping(const std::string& account_id) {
+  NOTIMPLEMENTED();
+}
+
+base::Time GCMDriverAndroid::GetLastTokenFetchTime() {
+  NOTIMPLEMENTED();
+  return base::Time();
+}
+
+void GCMDriverAndroid::SetLastTokenFetchTime(const base::Time& time) {
   NOTIMPLEMENTED();
 }
 

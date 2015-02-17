@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Called from the main frame when unloading.
  * @param {boolean=} opt_exiting True if the app is exiting.
@@ -65,14 +63,17 @@ GalleryDataModel.prototype = {
 /**
  * Saves new image.
  *
+ * @param {VolumeManager} volumeManager Volume manager instance.
  * @param {Gallery.Item} item Original gallery item.
- * @param {Canvas} canvas Canvas containing new image.
+ * @param {HTMLCanvasElement} canvas Canvas containing new image.
  * @param {boolean} overwrite Whether to overwrite the image to the item or not.
  * @return {Promise} Promise to be fulfilled with when the operation completes.
  */
-GalleryDataModel.prototype.saveItem = function(item, canvas, overwrite) {
+GalleryDataModel.prototype.saveItem = function(
+    volumeManager, item, canvas, overwrite) {
   var oldEntry = item.getEntry();
   var oldMetadata = item.getMetadata();
+  var oldLocationInfo = item.getLocationInfo();
   var metadataEncoder = ImageEncoder.encodeMetadata(
       item.getMetadata(), canvas, 1 /* quality */);
   var newMetadata = ContentProvider.ConvertContentMetadata(
@@ -80,11 +81,12 @@ GalleryDataModel.prototype.saveItem = function(item, canvas, overwrite) {
       MetadataCache.cloneMetadata(item.getMetadata()));
   if (newMetadata.filesystem)
     newMetadata.filesystem.modificationTime = new Date();
-  if (newMetadata.drive)
-    newMetadata.drive.present = true;
+  if (newMetadata.external)
+    newMetadata.external.present = true;
 
   return new Promise(function(fulfill, reject) {
     item.saveToFile(
+        volumeManager,
         this.fallbackSaveDirectory,
         overwrite,
         canvas,
@@ -117,10 +119,10 @@ GalleryDataModel.prototype.saveItem = function(item, canvas, overwrite) {
             // Add another item for the old entry.
             var anotherItem = new Gallery.Item(
                 oldEntry,
+                oldLocationInfo,
                 oldMetadata,
                 this.metadataCache_,
-                item.isOriginal(),
-                item.isReadOnly());
+                item.isOriginal());
             // The item must be added behind the existing item so that it does
             // not change the index of the existing item.
             // TODO(hirono): Update the item index of the selection model
@@ -207,7 +209,8 @@ function Gallery(volumeManager) {
   this.metadataCacheObserverId_ = null;
   this.onExternallyUnmountedBound_ = this.onExternallyUnmounted_.bind(this);
 
-  this.dataModel_ = new GalleryDataModel(this.context_.metadataCache);
+  this.dataModel_ = new GalleryDataModel(
+      this.context_.metadataCache);
   var downloadVolumeInfo = this.volumeManager_.getCurrentProfileVolumeInfo(
       VolumeManagerCommon.VolumeType.DOWNLOADS);
   downloadVolumeInfo.resolveDisplayRoot().then(function(entry) {
@@ -232,7 +235,7 @@ Gallery.prototype.__proto__ = cr.EventTarget.prototype;
  * @const
  * @type {number}
  */
-Gallery.FADE_TIMEOUT = 3000;
+Gallery.FADE_TIMEOUT = 2000;
 
 /**
  * First time tools fade-out timeout in milliseconds.
@@ -254,7 +257,7 @@ Gallery.MOSAIC_BACKGROUND_INIT_DELAY = 1000;
  * @const
  * @type {string}
  */
-Gallery.METADATA_TYPE = 'thumbnail|filesystem|media|streaming|drive';
+Gallery.METADATA_TYPE = 'thumbnail|filesystem|media|external';
 
 /**
  * Initializes listeners.
@@ -365,10 +368,13 @@ Gallery.prototype.initDom_ = function() {
 
   this.prompt_ = new ImageEditor.Prompt(this.container_, strf);
 
+  this.errorBanner_ = new ErrorBanner(this.container_);
+
   this.modeButton_ = this.toolbar_.querySelector('button.mode');
   this.modeButton_.addEventListener('click', this.toggleMode_.bind(this, null));
 
   this.mosaicMode_ = new MosaicMode(content,
+                                    this.errorBanner_,
                                     this.dataModel_,
                                     this.selectionModel_,
                                     this.volumeManager_,
@@ -378,9 +384,11 @@ Gallery.prototype.initDom_ = function() {
                                   content,
                                   this.toolbar_,
                                   this.prompt_,
+                                  this.errorBanner_,
                                   this.dataModel_,
                                   this.selectionModel_,
                                   this.context_,
+                                  this.volumeManager_,
                                   this.toggleMode_.bind(this),
                                   str);
 
@@ -391,8 +399,8 @@ Gallery.prototype.initDom_ = function() {
     cr.dispatchSimpleEvent(this, 'image-saved');
   }.bind(this));
 
-  var deleteButton = this.initToolbarButton_('delete', 'GALLERY_DELETE');
-  deleteButton.addEventListener('click', this.delete_.bind(this));
+  this.deleteButton_ = this.initToolbarButton_('delete', 'GALLERY_DELETE');
+  this.deleteButton_.addEventListener('click', this.delete_.bind(this));
 
   this.shareButton_ = this.initToolbarButton_('share', 'GALLERY_SHARE');
   this.shareButton_.addEventListener(
@@ -489,15 +497,18 @@ Gallery.prototype.load = function(entries, selectedEntries) {
         return Promise.reject('Failed to load metadata.');
 
       // Add items to the model.
-      var items = chunk.map(function(chunkItem, index) {
-        var volumeInfo = self.volumeManager_.getVolumeInfo(chunkItem.entry);
+      var items = [];
+      chunk.forEach(function(chunkItem, index) {
+        var locationInfo = self.volumeManager_.getLocationInfo(chunkItem.entry);
+        if (!locationInfo)  // Skip the item, since gone.
+          return;
         var clonedMetadata = MetadataCache.cloneMetadata(metadataList[index]);
-        return new Gallery.Item(
+        items.push(new Gallery.Item(
             chunkItem.entry,
+            locationInfo,
             clonedMetadata,
             self.metadataCache_,
-            /* original */ true,
-            /* readonly */ !!(volumeInfo && volumeInfo.isReadOnly));
+            /* original */ true));
       });
       self.dataModel_.push.apply(self.dataModel_, items);
 
@@ -581,17 +592,17 @@ Gallery.prototype.onMinimize_ = function() {
 
 /**
  * Executes a function when the editor is done with the modifications.
- * @param {function} callback Function to execute.
+ * @param {function()} callback Function to execute.
  */
 Gallery.prototype.executeWhenReady = function(callback) {
   this.currentMode_.executeWhenReady(callback);
 };
 
 /**
- * @return {Object} File browser private API.
+ * @return {Object} File manager private API.
  */
-Gallery.getFileBrowserPrivate = function() {
-  return chrome.fileBrowserPrivate || window.top.chrome.fileBrowserPrivate;
+Gallery.getFileManagerPrivate = function() {
+  return chrome.fileManagerPrivate || window.top.chrome.fileManagerPrivate;
 };
 
 /**
@@ -628,7 +639,7 @@ Gallery.prototype.setCurrentMode_ = function(mode) {
 
 /**
  * Mode toggle event handler.
- * @param {function=} opt_callback Callback.
+ * @param {function()=} opt_callback Callback.
  * @param {Event=} opt_event Event that caused this call.
  * @private
  */
@@ -703,7 +714,8 @@ Gallery.prototype.delete_ = function() {
 
     var entry = itemsToRemove.pop().getEntry();
     entry.remove(deleteNext, function() {
-      util.flog('Error deleting: ' + entry.name, deleteNext);
+      console.error('Error deleting: ' + entry.name);
+      deleteNext();
     });
   }
 
@@ -837,6 +849,12 @@ Gallery.prototype.updateSelectionAndState_ = function() {
 
   // If it's selecting something, update the variable values.
   if (numSelectedItems) {
+    // Delete button is available when all images are NOT readOnly.
+    this.deleteButton_.disabled = !this.selectionModel_.selectedIndexes
+        .every(function(i) {
+          return !this.dataModel_.item(i).getLocationInfo().isReadOnly;
+        }, this);
+
     // Obtains selected item.
     var selectedItem =
         this.dataModel_.item(this.selectionModel_.selectedIndex);
@@ -850,10 +868,10 @@ Gallery.prototype.updateSelectionAndState_ = function() {
     // Update the title and the display name.
     if (numSelectedItems === 1) {
       document.title = this.selectedEntry_.name;
-      this.filenameEdit_.disabled = selectedItem.isReadOnly();
+      this.filenameEdit_.disabled = selectedItem.getLocationInfo().isReadOnly;
       this.filenameEdit_.value =
           ImageUtil.getDisplayNameFromName(this.selectedEntry_.name);
-      this.shareButton_.hidden = !selectedItem.isOnDrive();
+      this.shareButton_.hidden = !selectedItem.getLocationInfo().isDriveBased;
     } else {
       if (this.context_.curDirEntry) {
         // If the Gallery was opened on search results the search query will not
@@ -871,6 +889,7 @@ Gallery.prototype.updateSelectionAndState_ = function() {
   } else {
     document.title = '';
     this.filenameEdit_.disabled = true;
+    this.deleteButton_.disabled = true;
     this.filenameEdit_.value = '';
     this.shareButton_.hidden = true;
   }
@@ -896,7 +915,7 @@ Gallery.prototype.onFilenameFocus_ = function() {
  * Blur event handler on filename edit box.
  *
  * @param {Event} event Blur event.
- * @return {boolean} if default action should be prevented.
+ * @return {Promise} Promise fulfilled on renaming completed.
  * @private
  */
 Gallery.prototype.onFilenameEditBlur_ = function(event) {
@@ -912,7 +931,7 @@ Gallery.prototype.onFilenameEditBlur_ = function(event) {
       this.dataModel_.dispatchEvent(event);
     }.bind(this), function(error) {
       if (error === 'NOT_CHANGED')
-        return;
+        return Promise.resolve();
       this.filenameEdit_.value =
           ImageUtil.getDisplayNameFromName(item.getEntry().name);
       this.filenameEdit_.focus();
@@ -927,6 +946,7 @@ Gallery.prototype.onFilenameEditBlur_ = function(event) {
 
   ImageUtil.setAttribute(this.filenameSpacer_, 'renaming', false);
   this.onUserAction_();
+  return Promise.resolve();
 };
 
 /**
@@ -1019,6 +1039,8 @@ window.initialize = function(backgroundComponents) {
 
 /**
  * Loads entries.
+ * @param {!Array.<Entry>} entries Array of entries.
+ * @param {!Array.<Entry>} selectedEntries Array of selected entries.
  */
 window.loadEntries = function(entries, selectedEntries) {
   gallery.load(entries, selectedEntries);

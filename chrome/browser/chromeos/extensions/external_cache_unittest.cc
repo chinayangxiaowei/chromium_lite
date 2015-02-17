@@ -8,16 +8,16 @@
 #include <set>
 #include <string>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/test/sequenced_worker_pool_owner.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "extensions/common/extension_urls.h"
 #include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_fetcher_impl.h"
 #include "net/url_request/url_request_test_util.h"
@@ -56,7 +56,7 @@ class ExternalCacheTest : public testing::Test,
   }
 
   // testing::Test overrides:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     request_context_getter_ = new net::TestURLRequestContextGetter(
         content::BrowserThread::GetMessageLoopProxyForThread(
             content::BrowserThread::IO));
@@ -68,19 +68,19 @@ class ExternalCacheTest : public testing::Test,
         pool_owner_->pool()->GetNamedSequenceToken("background"));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     pool_owner_->pool()->Shutdown();
     base::RunLoop().RunUntilIdle();
   }
 
   // ExternalCache::Delegate:
   virtual void OnExtensionListsUpdated(
-      const base::DictionaryValue* prefs) OVERRIDE {
+      const base::DictionaryValue* prefs) override {
     prefs_.reset(prefs->DeepCopy());
   }
 
   virtual std::string GetInstalledExtensionVersion(
-      const std::string& id) OVERRIDE {
+      const std::string& id) override {
     std::map<std::string, std::string>::iterator it =
         installed_extensions_.find(id);
     return it != installed_extensions_.end() ? it->second : std::string();

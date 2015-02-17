@@ -275,6 +275,29 @@ bool HttpUtil::ParseRangeHeader(const std::string& ranges_specifier,
 }
 
 // static
+bool HttpUtil::ParseRetryAfterHeader(const std::string& retry_after_string,
+                                     base::Time now,
+                                     base::TimeDelta* retry_after) {
+  int seconds;
+  base::Time time;
+  base::TimeDelta interval;
+
+  if (base::StringToInt(retry_after_string, &seconds)) {
+    interval = base::TimeDelta::FromSeconds(seconds);
+  } else if (base::Time::FromUTCString(retry_after_string.c_str(), &time)) {
+    interval = time - now;
+  } else {
+    return false;
+  }
+
+  if (interval < base::TimeDelta::FromSeconds(0))
+    return false;
+
+  *retry_after = interval;
+  return true;
+}
+
+// static
 bool HttpUtil::HasHeader(const std::string& headers, const char* name) {
   size_t name_len = strlen(name);
   std::string::const_iterator it =
@@ -337,6 +360,19 @@ bool HttpUtil::IsSafeHeader(const std::string& name) {
       return false;
   }
   return true;
+}
+
+// static
+bool HttpUtil::IsValidHeaderName(const std::string& name) {
+  // Check whether the header name is RFC 2616-compliant.
+  return HttpUtil::IsToken(name);
+}
+
+// static
+bool HttpUtil::IsValidHeaderValue(const std::string& value) {
+  // Just a sanity check: disallow NUL and CRLF.
+  return value.find('\0') == std::string::npos &&
+      value.find("\r\n") == std::string::npos;
 }
 
 // static

@@ -22,20 +22,20 @@ class FakeUpdateEngineClient : public UpdateEngineClient {
   virtual ~FakeUpdateEngineClient();
 
   // UpdateEngineClient overrides
-  virtual void Init(dbus::Bus* bus) OVERRIDE;
-  virtual void AddObserver(Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(Observer* observer) OVERRIDE;
-  virtual bool HasObserver(Observer* observer) OVERRIDE;
-  virtual void RequestUpdateCheck(const UpdateCheckCallback& callback) OVERRIDE;
-  virtual void RebootAfterUpdate() OVERRIDE;
-  virtual void Rollback() OVERRIDE;
+  virtual void Init(dbus::Bus* bus) override;
+  virtual void AddObserver(Observer* observer) override;
+  virtual void RemoveObserver(Observer* observer) override;
+  virtual bool HasObserver(Observer* observer) override;
+  virtual void RequestUpdateCheck(const UpdateCheckCallback& callback) override;
+  virtual void RebootAfterUpdate() override;
+  virtual void Rollback() override;
   virtual void CanRollbackCheck(
-      const RollbackCheckCallback& callback) OVERRIDE;
-  virtual Status GetLastStatus() OVERRIDE;
+      const RollbackCheckCallback& callback) override;
+  virtual Status GetLastStatus() override;
   virtual void SetChannel(const std::string& target_channel,
-                          bool is_powerwash_allowed) OVERRIDE;
+                          bool is_powerwash_allowed) override;
   virtual void GetChannel(bool get_current_channel,
-                          const GetChannelCallback& callback) OVERRIDE;
+                          const GetChannelCallback& callback) override;
 
   // Pushes UpdateEngineClient::Status in the queue to test changing status.
   // GetLastStatus() returns the status set by this method in FIFO order.
@@ -65,6 +65,11 @@ class FakeUpdateEngineClient : public UpdateEngineClient {
       return reboot_after_update_call_count_;
   }
 
+  // Returns how many times RequestUpdateCheck() is called.
+  int request_update_check_call_count() const {
+    return request_update_check_call_count_;
+  }
+
   // Returns how many times Rollback() is called.
   int rollback_call_count() const { return rollback_call_count_; }
 
@@ -78,6 +83,7 @@ class FakeUpdateEngineClient : public UpdateEngineClient {
   UpdateEngineClient::UpdateCheckResult update_check_result_;
   bool can_rollback_stub_result_;
   int reboot_after_update_call_count_;
+  int request_update_check_call_count_;
   int rollback_call_count_;
   int can_rollback_call_count_;
 };

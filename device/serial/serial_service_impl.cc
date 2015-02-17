@@ -28,10 +28,12 @@ SerialServiceImpl::~SerialServiceImpl() {
 // static
 void SerialServiceImpl::Create(
     scoped_refptr<base::MessageLoopProxy> io_message_loop,
+    scoped_refptr<base::MessageLoopProxy> ui_message_loop,
     mojo::InterfaceRequest<serial::SerialService> request) {
   mojo::BindToRequest(new SerialServiceImpl(new SerialConnectionFactory(
                           base::Bind(SerialIoHandler::Create,
-                                     base::MessageLoopProxy::current()),
+                                     base::MessageLoopProxy::current(),
+                                     ui_message_loop),
                           io_message_loop)),
                       &request);
 }
@@ -40,11 +42,13 @@ void SerialServiceImpl::Create(
 void SerialServiceImpl::CreateOnMessageLoop(
     scoped_refptr<base::MessageLoopProxy> message_loop,
     scoped_refptr<base::MessageLoopProxy> io_message_loop,
+    scoped_refptr<base::MessageLoopProxy> ui_message_loop,
     mojo::InterfaceRequest<serial::SerialService> request) {
-  message_loop->PostTask(
-      FROM_HERE,
-      base::Bind(
-          &SerialServiceImpl::Create, io_message_loop, base::Passed(&request)));
+  message_loop->PostTask(FROM_HERE,
+                         base::Bind(&SerialServiceImpl::Create,
+                                    io_message_loop,
+                                    ui_message_loop,
+                                    base::Passed(&request)));
 }
 
 void SerialServiceImpl::GetDevices(
@@ -55,11 +59,16 @@ void SerialServiceImpl::GetDevices(
 void SerialServiceImpl::Connect(
     const mojo::String& path,
     serial::ConnectionOptionsPtr options,
-    mojo::InterfaceRequest<serial::Connection> connection_request) {
+    mojo::InterfaceRequest<serial::Connection> connection_request,
+    mojo::InterfaceRequest<serial::DataSink> sink,
+    mojo::InterfaceRequest<serial::DataSource> source) {
   if (!IsValidPath(path))
     return;
-  connection_factory_->CreateConnection(
-      path, options.Pass(), connection_request.Pass());
+  connection_factory_->CreateConnection(path,
+                                        options.Pass(),
+                                        connection_request.Pass(),
+                                        sink.Pass(),
+                                        source.Pass());
 }
 
 SerialDeviceEnumerator* SerialServiceImpl::GetDeviceEnumerator() {
@@ -76,12 +85,6 @@ bool SerialServiceImpl::IsValidPath(const mojo::String& path) {
       return true;
   }
   return false;
-}
-
-void SerialServiceImpl::OnConnected(
-    const mojo::Callback<void(serial::ConnectionInfoPtr)>& callback,
-    serial::ConnectionInfoPtr result) {
-  callback.Run(result.Pass());
 }
 
 }  // namespace device

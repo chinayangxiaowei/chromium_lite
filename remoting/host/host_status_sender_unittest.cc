@@ -14,7 +14,7 @@
 #include "remoting/signaling/mock_signal_strategy.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 using buzz::QName;
 using buzz::XmlElement;
@@ -41,7 +41,7 @@ const char kTestExitCodeString[] = "INVALID_HOST_CONFIGURATION";
 class HostStatusSenderTest
     : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     key_pair_ = RsaKeyPair::FromString(kTestRsaKeyPair);
     ASSERT_TRUE(key_pair_.get());
 
@@ -49,9 +49,7 @@ class HostStatusSenderTest
         kHostId, &signal_strategy_, key_pair_, kTestBotJid));
   }
 
-  virtual void TearDown() OVERRIDE {
-    host_status_sender_.reset();
-  }
+  void TearDown() override { host_status_sender_.reset(); }
 
   void ValidateHostStatusStanza(XmlElement* stanza,
                                 HostStatusSender::HostStatus status);

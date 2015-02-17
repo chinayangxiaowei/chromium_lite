@@ -15,12 +15,12 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 
 using content::OpenURLParams;
 using content::Referrer;
@@ -37,7 +37,7 @@ void SimulateRendererCrash(Browser* browser) {
       content::NotificationService::AllSources());
   browser->OpenURL(OpenURLParams(
       GURL(content::kChromeUICrashURL), Referrer(), CURRENT_TAB,
-      content::PAGE_TRANSITION_TYPED, false));
+      ui::PAGE_TRANSITION_TYPED, false));
   observer.Wait();
 }
 
@@ -60,7 +60,7 @@ class CacheMaxAgeHandler {
                                              request_count_));
     response->set_content_type("text/html");
     response->AddCustomHeader("Cache-Control", "max-age=99999");
-    return response.PassAs<net::test_server::HttpResponse>();
+    return response.Pass();
   }
  private:
   std::string path_;
@@ -76,7 +76,7 @@ class CrashRecoveryBrowserTest : public InProcessBrowserTest {
   }
 
  private:
-  virtual void SetUpCommandLine(base::CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kDisableBreakpad);
   }
 };

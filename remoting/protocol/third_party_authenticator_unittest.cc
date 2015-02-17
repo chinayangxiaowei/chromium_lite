@@ -15,7 +15,7 @@
 #include "remoting/protocol/token_validator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 using testing::_;
 using testing::DeleteArg;
@@ -40,10 +40,10 @@ namespace protocol {
 class ThirdPartyAuthenticatorTest : public AuthenticatorTestBase {
   class FakeTokenFetcher : public ThirdPartyClientAuthenticator::TokenFetcher {
    public:
-    virtual void FetchThirdPartyToken(
+    void FetchThirdPartyToken(
         const GURL& token_url,
         const std::string& scope,
-        const TokenFetchedCallback& token_fetched_callback) OVERRIDE {
+        const TokenFetchedCallback& token_fetched_callback) override {
      ASSERT_EQ(token_url.spec(), kTokenUrl);
      ASSERT_EQ(scope, kTokenScope);
      ASSERT_FALSE(token_fetched_callback.is_null());
@@ -68,11 +68,11 @@ class ThirdPartyAuthenticatorTest : public AuthenticatorTestBase {
      : token_url_(kTokenUrl),
        token_scope_(kTokenScope) {}
 
-    virtual ~FakeTokenValidator() {}
+    ~FakeTokenValidator() override {}
 
-    virtual void ValidateThirdPartyToken(
+    void ValidateThirdPartyToken(
         const std::string& token,
-        const TokenValidatedCallback& token_validated_callback) OVERRIDE {
+        const TokenValidatedCallback& token_validated_callback) override {
       ASSERT_FALSE(token_validated_callback.is_null());
       on_token_validated_ = token_validated_callback;
     }
@@ -84,13 +84,9 @@ class ThirdPartyAuthenticatorTest : public AuthenticatorTestBase {
       on_token_validated.Run(shared_secret);
     }
 
-    virtual const GURL& token_url() const OVERRIDE {
-      return token_url_;
-    }
+    const GURL& token_url() const override { return token_url_; }
 
-    virtual const std::string& token_scope() const OVERRIDE {
-      return token_scope_;
-    }
+    const std::string& token_scope() const override { return token_scope_; }
 
    private:
     GURL token_url_;
@@ -100,7 +96,7 @@ class ThirdPartyAuthenticatorTest : public AuthenticatorTestBase {
 
  public:
   ThirdPartyAuthenticatorTest() {}
-  virtual ~ThirdPartyAuthenticatorTest() {}
+  ~ThirdPartyAuthenticatorTest() override {}
 
  protected:
   void InitAuthenticators() {
@@ -121,14 +117,7 @@ class ThirdPartyAuthenticatorTest : public AuthenticatorTestBase {
   DISALLOW_COPY_AND_ASSIGN(ThirdPartyAuthenticatorTest);
 };
 
-// These tests use net::SSLServerSocket which is not implemented for OpenSSL.
-#if defined(USE_OPENSSL)
-#define MAYBE(x) DISABLED_##x
-#else
-#define MAYBE(x) x
-#endif
-
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(SuccessfulAuth)) {
+TEST_F(ThirdPartyAuthenticatorTest, SuccessfulAuth) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());
@@ -155,7 +144,7 @@ TEST_F(ThirdPartyAuthenticatorTest, MAYBE(SuccessfulAuth)) {
   tester.CheckResults();
 }
 
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(ClientNoSecret)) {
+TEST_F(ThirdPartyAuthenticatorTest, ClientNoSecret) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());
@@ -167,7 +156,7 @@ TEST_F(ThirdPartyAuthenticatorTest, MAYBE(ClientNoSecret)) {
   ASSERT_EQ(Authenticator::REJECTED, client_->state());
 }
 
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(InvalidToken)) {
+TEST_F(ThirdPartyAuthenticatorTest, InvalidToken) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());
@@ -180,7 +169,7 @@ TEST_F(ThirdPartyAuthenticatorTest, MAYBE(InvalidToken)) {
   ASSERT_EQ(Authenticator::REJECTED, host_->state());
 }
 
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(CannotFetchToken)) {
+TEST_F(ThirdPartyAuthenticatorTest, CannotFetchToken) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());
@@ -193,7 +182,7 @@ TEST_F(ThirdPartyAuthenticatorTest, MAYBE(CannotFetchToken)) {
 }
 
 // Test that negotiation stops when the fake authentication is rejected.
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(HostBadSecret)) {
+TEST_F(ThirdPartyAuthenticatorTest, HostBadSecret) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());
@@ -207,7 +196,7 @@ TEST_F(ThirdPartyAuthenticatorTest, MAYBE(HostBadSecret)) {
   ASSERT_EQ(Authenticator::REJECTED, client_->state());
 }
 
-TEST_F(ThirdPartyAuthenticatorTest, MAYBE(ClientBadSecret)) {
+TEST_F(ThirdPartyAuthenticatorTest, ClientBadSecret) {
   ASSERT_NO_FATAL_FAILURE(InitAuthenticators());
   ASSERT_NO_FATAL_FAILURE(RunHostInitiatedAuthExchange());
   ASSERT_EQ(Authenticator::PROCESSING_MESSAGE, client_->state());

@@ -11,7 +11,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gmock_mutant.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 using buzz::XmlElement;
 using buzz::QName;
@@ -125,7 +125,7 @@ MATCHER(IsClientDisconnected, "") {
 class HostStatusLoggerTest : public testing::Test {
  public:
   HostStatusLoggerTest() {}
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     message_loop_proxy_ = base::MessageLoopProxy::current();
     EXPECT_CALL(signal_strategy_, AddListener(_));
     host_status_logger_.reset(

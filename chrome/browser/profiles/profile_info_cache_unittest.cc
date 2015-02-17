@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/prefs/testing_pref_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -516,7 +516,7 @@ TEST_F(ProfileInfoCacheTest, AddStubProfile) {
     { "path_test3", "name_3" },
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTestCases); ++i) {
+  for (size_t i = 0; i < arraysize(kTestCases); ++i) {
     base::FilePath profile_path = GetProfilePath(kTestCases[i].profile_path);
     base::string16 profile_name = ASCIIToUTF16(kTestCases[i].profile_name);
 
@@ -639,6 +639,8 @@ TEST_F(ProfileInfoCacheTest, MigrateLegacyProfileNamesWithNewAvatarMenu) {
 
 TEST_F(ProfileInfoCacheTest,
        DontMigrateLegacyProfileNamesWithoutNewAvatarMenu) {
+  switches::DisableNewAvatarMenuForTesting(CommandLine::ForCurrentProcess());
+
   EXPECT_EQ(0U, GetCache()->GetNumberOfProfiles());
 
   base::string16 name_1 = ASCIIToUTF16("Default Profile");

@@ -4,14 +4,19 @@
 
 #include "extensions/common/common_manifest_handlers.h"
 
+#include "extensions/common/api/bluetooth/bluetooth_manifest_handler.h"
+#include "extensions/common/api/sockets/sockets_manifest_handler.h"
 #include "extensions/common/manifest_handler.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/csp_info.h"
+#include "extensions/common/manifest_handlers/externally_connectable.h"
 #include "extensions/common/manifest_handlers/file_handler_info.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/manifest_handlers/incognito_info.h"
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
+#include "extensions/common/manifest_handlers/launcher_page_info.h"
 #include "extensions/common/manifest_handlers/nacl_modules_handler.h"
+#include "extensions/common/manifest_handlers/oauth2_manifest_handler.h"
 #include "extensions/common/manifest_handlers/offline_enabled_info.h"
 #include "extensions/common/manifest_handlers/sandboxed_page_info.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
@@ -23,18 +28,23 @@ namespace extensions {
 void RegisterCommonManifestHandlers() {
   DCHECK(!ManifestHandler::IsRegistrationFinalized());
   (new BackgroundManifestHandler)->Register();
+  (new BluetoothManifestHandler)->Register();
   (new CSPHandler(false))->Register();
   (new CSPHandler(true))->Register();
+  (new ExternallyConnectableHandler)->Register();
   (new FileHandlersParser)->Register();
   (new IconsHandler)->Register();
   (new IncognitoHandler)->Register();
   (new KioskModeHandler)->Register();
+  (new LauncherPageHandler)->Register();
 #if !defined(DISABLE_NACL)
   (new NaClModulesHandler)->Register();
 #endif
+  (new OAuth2ManifestHandler)->Register();
   (new OfflineEnabledHandler)->Register();
   (new SandboxedPageHandler)->Register();
   (new SharedModuleHandler)->Register();
+  (new SocketsManifestHandler)->Register();
   (new WebAccessibleResourcesHandler)->Register();
   (new WebviewHandler)->Register();
 }

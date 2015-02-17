@@ -73,6 +73,8 @@ p {
   }
   &.caption {
     text-align: left;
+    margin-top: 9px;
+    font-weight: bold;
     .lightbox & {
       color: $white;
     }
@@ -112,6 +114,18 @@ footer[role="contentinfo"] {
       color: $link-hover-color;
     }
   }
+}
+
+table {
+  font-size: $body-font-size;
+}
+
+td dl {
+  margin: 0.4em 0;
+}
+
+td dt {
+  margin: 0 0 0.4em 0;
 }
 
 em {

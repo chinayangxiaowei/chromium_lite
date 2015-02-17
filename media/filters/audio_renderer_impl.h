@@ -29,6 +29,7 @@
 #include "media/base/audio_renderer.h"
 #include "media/base/audio_renderer_sink.h"
 #include "media/base/decryptor.h"
+#include "media/base/media_log.h"
 #include "media/base/time_source.h"
 #include "media/filters/audio_renderer_algorithm.h"
 #include "media/filters/decoder_stream.h"
@@ -64,28 +65,29 @@ class MEDIA_EXPORT AudioRendererImpl
       AudioRendererSink* sink,
       ScopedVector<AudioDecoder> decoders,
       const SetDecryptorReadyCB& set_decryptor_ready_cb,
-      AudioHardwareConfig* hardware_params);
-  virtual ~AudioRendererImpl();
+      const AudioHardwareConfig& hardware_params,
+      const scoped_refptr<MediaLog>& media_log);
+  ~AudioRendererImpl() override;
 
   // TimeSource implementation.
-  virtual void StartTicking() OVERRIDE;
-  virtual void StopTicking() OVERRIDE;
-  virtual void SetPlaybackRate(float rate) OVERRIDE;
-  virtual void SetMediaTime(base::TimeDelta time) OVERRIDE;
-  virtual base::TimeDelta CurrentMediaTime() OVERRIDE;
+  void StartTicking() override;
+  void StopTicking() override;
+  void SetPlaybackRate(float rate) override;
+  void SetMediaTime(base::TimeDelta time) override;
+  base::TimeDelta CurrentMediaTime() override;
+  base::TimeDelta CurrentMediaTimeForSyncingVideo() override;
 
   // AudioRenderer implementation.
-  virtual void Initialize(DemuxerStream* stream,
-                          const PipelineStatusCB& init_cb,
-                          const StatisticsCB& statistics_cb,
-                          const TimeCB& time_cb,
-                          const BufferingStateCB& buffering_state_cb,
-                          const base::Closure& ended_cb,
-                          const PipelineStatusCB& error_cb) OVERRIDE;
-  virtual TimeSource* GetTimeSource() OVERRIDE;
-  virtual void Flush(const base::Closure& callback) OVERRIDE;
-  virtual void StartPlaying() OVERRIDE;
-  virtual void SetVolume(float volume) OVERRIDE;
+  void Initialize(DemuxerStream* stream,
+                  const PipelineStatusCB& init_cb,
+                  const StatisticsCB& statistics_cb,
+                  const BufferingStateCB& buffering_state_cb,
+                  const base::Closure& ended_cb,
+                  const PipelineStatusCB& error_cb) override;
+  TimeSource* GetTimeSource() override;
+  void Flush(const base::Closure& callback) override;
+  void StartPlaying() override;
+  void SetVolume(float volume) override;
 
  private:
   friend class AudioRendererImplTest;
@@ -149,9 +151,8 @@ class MEDIA_EXPORT AudioRendererImpl
   // timestamp in the pipeline will be ahead of the actual audio playback. In
   // this case |audio_delay_milliseconds| should be used to indicate when in the
   // future should the filled buffer be played.
-  virtual int Render(AudioBus* audio_bus,
-                     int audio_delay_milliseconds) OVERRIDE;
-  virtual void OnRenderError() OVERRIDE;
+  int Render(AudioBus* audio_bus, int audio_delay_milliseconds) override;
+  void OnRenderError() override;
 
   // Helper methods that schedule an asynchronous read from the decoder as long
   // as there isn't a pending read.
@@ -206,14 +207,13 @@ class MEDIA_EXPORT AudioRendererImpl
   scoped_ptr<AudioBufferStream> audio_buffer_stream_;
 
   // Interface to the hardware audio params.
-  const AudioHardwareConfig* const hardware_config_;
+  const AudioHardwareConfig& hardware_config_;
 
   // Cached copy of hardware params from |hardware_config_|.
   AudioParameters audio_parameters_;
 
   // Callbacks provided during Initialize().
   PipelineStatusCB init_cb_;
-  TimeCB time_cb_;
   BufferingStateCB buffering_state_cb_;
   base::Closure ended_cb_;
   PipelineStatusCB error_cb_;
@@ -248,8 +248,17 @@ class MEDIA_EXPORT AudioRendererImpl
 
   scoped_ptr<AudioClock> audio_clock_;
 
+  // The media timestamp to begin playback at after seeking. Set via
+  // SetMediaTime().
   base::TimeDelta start_timestamp_;
-  base::TimeDelta last_timestamp_update_;
+
+  // The media timestamp to signal end of audio playback. Determined during
+  // Render() when writing the final frames of decoded audio data.
+  base::TimeDelta ended_timestamp_;
+
+  // Set every Render() and used to provide an interpolated time value to
+  // CurrentMediaTimeForSyncingVideo().
+  base::TimeTicks last_render_ticks_;
 
   // End variables which must be accessed under |lock_|. ----------------------
 

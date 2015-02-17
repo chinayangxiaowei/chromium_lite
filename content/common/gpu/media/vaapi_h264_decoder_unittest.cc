@@ -10,7 +10,7 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "content/common/gpu/media/vaapi_h264_decoder.h"
 #include "media/base/video_decoder_config.h"
@@ -249,8 +249,7 @@ bool VaapiH264DecoderLoop::ProcessVideoFrame(
     int to_write = media::VideoFrame::PlaneAllocationSize(
         frame->format(), i, frame->coded_size());
     const char* buf = reinterpret_cast<const char*>(frame->data(i));
-    int written = base::AppendToFile(output_file_, buf, to_write);
-    if (written != to_write)
+    if (!base::AppendToFile(output_file_, buf, to_write))
       return false;
   }
   return true;

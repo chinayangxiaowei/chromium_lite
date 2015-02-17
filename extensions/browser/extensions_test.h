@@ -11,9 +11,9 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
+class BrowserContext;
 class ContentClient;
 class ContentBrowserClient;
-class TestBrowserContext;
 }
 
 namespace extensions {
@@ -30,23 +30,26 @@ class TestExtensionsBrowserClient;
 class ExtensionsTest : public testing::Test {
  public:
   ExtensionsTest();
-  virtual ~ExtensionsTest();
+  ~ExtensionsTest() override;
 
-  content::TestBrowserContext* browser_context() {
-    return browser_context_.get();
-  }
+  // Returned as a BrowserContext since most users don't need methods from
+  // TestBrowserContext.
+  content::BrowserContext* browser_context() { return browser_context_.get(); }
+
+  // Returned as a TestExtensionsBrowserClient since most users need to call
+  // test-specific methods on it.
   TestExtensionsBrowserClient* extensions_browser_client() {
     return extensions_browser_client_.get();
   }
 
   // testing::Test overrides:
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  void SetUp() override;
+  void TearDown() override;
 
  private:
   scoped_ptr<content::ContentClient> content_client_;
   scoped_ptr<content::ContentBrowserClient> content_browser_client_;
-  scoped_ptr<content::TestBrowserContext> browser_context_;
+  scoped_ptr<content::BrowserContext> browser_context_;
   scoped_ptr<TestExtensionsBrowserClient> extensions_browser_client_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionsTest);

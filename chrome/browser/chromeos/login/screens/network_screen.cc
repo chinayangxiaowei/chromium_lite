@@ -11,11 +11,11 @@
 #include "chrome/browser/chromeos/login/help_app_launcher.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/login_utils.h"
-#include "chrome/browser/chromeos/login/screens/screen_observer.h"
+#include "chrome/browser/chromeos/login/screen_manager.h"
+#include "chrome/browser/chromeos/login/screens/base_screen_delegate.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "chromeos/network/network_handler.h"
 #include "chromeos/network/network_state_handler.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -32,9 +32,15 @@ namespace chromeos {
 ///////////////////////////////////////////////////////////////////////////////
 // NetworkScreen, public:
 
-NetworkScreen::NetworkScreen(ScreenObserver* screen_observer,
+// static
+NetworkScreen* NetworkScreen::Get(ScreenManager* manager) {
+  return static_cast<NetworkScreen*>(
+      manager->GetScreen(WizardController::kNetworkScreenName));
+}
+
+NetworkScreen::NetworkScreen(BaseScreenDelegate* base_screen_delegate,
                              NetworkScreenActor* actor)
-    : WizardScreen(screen_observer),
+    : BaseScreen(base_screen_delegate),
       is_network_subscribed_(false),
       continue_pressed_(false),
       actor_(actor),
@@ -52,7 +58,7 @@ NetworkScreen::~NetworkScreen() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// NetworkScreen, WizardScreen implementation:
+// NetworkScreen, BaseScreen implementation:
 
 void NetworkScreen::PrepareToShow() {
   if (actor_)
@@ -138,7 +144,7 @@ void NetworkScreen::NotifyOnConnection() {
   // TODO(nkostylev): Check network connectivity.
   UnsubscribeNetworkNotification();
   connection_timer_.Stop();
-  get_screen_observer()->OnExit(ScreenObserver::NETWORK_CONNECTED);
+  get_base_screen_delegate()->OnExit(BaseScreenDelegate::NETWORK_CONNECTED);
 }
 
 void NetworkScreen::OnConnectionTimeout() {

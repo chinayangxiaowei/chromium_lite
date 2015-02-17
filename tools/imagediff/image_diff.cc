@@ -16,8 +16,8 @@
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/containers/hash_tables.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/numerics/safe_conversions.h"
@@ -397,7 +397,7 @@ int DiffImages(const base::FilePath& file1, const base::FilePath& file2,
 // paths as non-wide strings anyway.
 base::FilePath FilePathFromASCII(const std::string& str) {
 #if defined(OS_WIN)
-  return base::FilePath(base::ASCIIToWide(str));
+  return base::FilePath(base::ASCIIToUTF16(str));
 #else
   return base::FilePath(str);
 #endif

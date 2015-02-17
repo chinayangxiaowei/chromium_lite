@@ -13,6 +13,7 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/metrics/stats_counters.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/rand_util.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
@@ -143,6 +144,11 @@ void UDPSocketWin::Core::WatchForWrite() {
 }
 
 void UDPSocketWin::Core::ReadDelegate::OnObjectSignaled(HANDLE object) {
+  // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is fixed.
+  tracked_objects::ScopedTracker tracking_profile(
+      FROM_HERE_WITH_EXPLICIT_FUNCTION(
+          "UDPSocketWin_Core_ReadDelegate_OnObjectSignaled"));
+
   DCHECK_EQ(object, core_->read_overlapped_.hEvent);
   if (core_->socket_)
     core_->socket_->DidCompleteRead();
@@ -151,6 +157,11 @@ void UDPSocketWin::Core::ReadDelegate::OnObjectSignaled(HANDLE object) {
 }
 
 void UDPSocketWin::Core::WriteDelegate::OnObjectSignaled(HANDLE object) {
+  // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is fixed.
+  tracked_objects::ScopedTracker tracking_profile(
+      FROM_HERE_WITH_EXPLICIT_FUNCTION(
+          "UDPSocketWin_Core_WriteDelegate_OnObjectSignaled"));
+
   DCHECK_EQ(object, core_->write_overlapped_.hEvent);
   if (core_->socket_)
     core_->socket_->DidCompleteWrite();
@@ -345,7 +356,7 @@ int UDPSocketWin::RecvFrom(IOBuffer* buf,
                            const CompletionCallback& callback) {
   DCHECK(CalledOnValidThread());
   DCHECK_NE(INVALID_SOCKET, socket_);
-  DCHECK(read_callback_.is_null());
+  CHECK(read_callback_.is_null());
   DCHECK(!recv_from_address_);
   DCHECK(!callback.is_null());  // Synchronous operation not supported.
   DCHECK_GT(buf_len, 0);
@@ -378,7 +389,7 @@ int UDPSocketWin::SendToOrWrite(IOBuffer* buf,
                                 const CompletionCallback& callback) {
   DCHECK(CalledOnValidThread());
   DCHECK_NE(INVALID_SOCKET, socket_);
-  DCHECK(write_callback_.is_null());
+  CHECK(write_callback_.is_null());
   DCHECK(!callback.is_null());  // Synchronous operation not supported.
   DCHECK_GT(buf_len, 0);
   DCHECK(!send_to_address_.get());

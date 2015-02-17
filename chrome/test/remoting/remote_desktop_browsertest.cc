@@ -5,7 +5,7 @@
 #include "chrome/test/remoting/remote_desktop_browsertest.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/path_service.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -152,7 +152,7 @@ void RemoteDesktopBrowserTest::VerifyChromotingLoaded(bool expected) {
 
   if (installed) {
     if (extension_)
-      EXPECT_EQ(extension, extension_);
+      EXPECT_EQ(extension.get(), extension_);
     else
       extension_ = extension.get();
 
@@ -309,9 +309,8 @@ void RemoteDesktopBrowserTest::Approve() {
               &RemoteDesktopBrowserTest::IsAuthenticatedInWindow,
               browser()->tab_strip_model()->GetActiveWebContents()));
 
-    ExecuteScript(
-        "lso.approveButtonAction();"
-        "document.forms[\"connect-approve\"].submit();");
+    // Click to Approve the web-app.
+    ClickOnControl("submit_approve_access");
 
     observer.Wait();
 
@@ -468,13 +467,16 @@ void RemoteDesktopBrowserTest::SetUpTestForMe2Me() {
   VerifyInternetAccess();
   Install();
   LaunchChromotingApp();
-  LoadScript(app_web_content(), FILE_PATH_LITERAL("browser_test.js"));
   Auth();
+  LoadScript(app_web_content(), FILE_PATH_LITERAL("browser_test.js"));
   ExpandMe2Me();
   EnsureRemoteConnectionEnabled();
 }
 
 void RemoteDesktopBrowserTest::Auth() {
+  // For this test, we must be given the user-name and password.
+  ASSERT_TRUE(!username_.empty() && !password_.empty());
+
   Authorize();
   Authenticate();
   Approve();
@@ -573,8 +575,25 @@ void RemoteDesktopBrowserTest::ParseCommandLine() {
                                    override_user_data_dir);
   }
 
-  username_ = command_line->GetSwitchValueASCII(kUsername);
-  password_ = command_line->GetSwitchValueASCII(kkPassword);
+  CommandLine::StringType accounts_file =
+      command_line->GetSwitchValueNative(kAccountsFile);
+  std::string account_type = command_line->GetSwitchValueASCII(kAccountType);
+  if (!accounts_file.empty()) {
+    // We've been passed in a file containing accounts information.
+    // In this case, we'll obtain the user-name and password information from
+    // the specified file, even if user-name and password have been specified
+    // on the command-line.
+    base::FilePath accounts_file_path((base::FilePath(accounts_file)));
+    ASSERT_FALSE(account_type.empty());
+    ASSERT_TRUE(base::PathExists((base::FilePath(accounts_file))));
+    SetUserNameAndPassword((base::FilePath(accounts_file)), account_type);
+  } else {
+    // No file for accounts specified. Read user-name and password from command
+    // line.
+    username_ = command_line->GetSwitchValueASCII(kUserName);
+    password_ = command_line->GetSwitchValueASCII(kUserPassword);
+  }
+
   me2me_pin_ = command_line->GetSwitchValueASCII(kMe2MePin);
   remote_host_name_ = command_line->GetSwitchValueASCII(kRemoteHostName);
   extension_name_ = command_line->GetSwitchValueASCII(kExtensionName);
@@ -708,6 +727,20 @@ void RemoteDesktopBrowserTest::RunJavaScriptTest(
 void RemoteDesktopBrowserTest::ClickOnControl(const std::string& name) {
   ASSERT_TRUE(HtmlElementVisible(name));
 
+  std::string has_disabled_attribute =
+    "document.getElementById('" + name + "').hasAttribute('disabled')";
+
+  if (ExecuteScriptAndExtractBool(active_web_contents(),
+                                  has_disabled_attribute)) {
+    // This element has a disabled attribute. Wait for it become enabled.
+    ConditionalTimeoutWaiter waiter(
+          base::TimeDelta::FromSeconds(5),
+          base::TimeDelta::FromMilliseconds(500),
+          base::Bind(&RemoteDesktopBrowserTest::IsEnabled,
+            active_web_contents(), name));
+    ASSERT_TRUE(waiter.Wait());
+  }
+
   ExecuteScript("document.getElementById(\"" + name + "\").click();");
 }
 
@@ -785,6 +818,28 @@ void RemoteDesktopBrowserTest::DismissHostVersionWarningIfVisible() {
     ClickOnControl("host-needs-update-connect-button");
 }
 
+void RemoteDesktopBrowserTest::SetUserNameAndPassword(
+    const base::FilePath &accounts_file_path, const std::string& account_type) {
+
+  // Read contents of accounts file, using its absolute path.
+  base::FilePath absolute_path = base::MakeAbsoluteFilePath(accounts_file_path);
+  std::string accounts_info;
+  ASSERT_TRUE(base::ReadFileToString(absolute_path, &accounts_info));
+
+  // Get the root dictionary from the input json file contents.
+  scoped_ptr<base::Value> root(
+      base::JSONReader::Read(accounts_info, base::JSON_ALLOW_TRAILING_COMMAS));
+
+  const base::DictionaryValue* root_dict = NULL;
+  ASSERT_TRUE(root.get() && root->GetAsDictionary(&root_dict));
+
+  // Now get the dictionary for the specified account type.
+  const base::DictionaryValue* account_dict = NULL;
+  ASSERT_TRUE(root_dict->GetDictionary(account_type, &account_dict));
+  ASSERT_TRUE(account_dict->GetString(kUserName, &username_));
+  ASSERT_TRUE(account_dict->GetString(kUserPassword, &password_));
+}
+
 // static
 bool RemoteDesktopBrowserTest::IsAuthenticatedInWindow(
     content::WebContents* web_contents) {
@@ -799,6 +854,15 @@ bool RemoteDesktopBrowserTest::IsHostActionComplete(
   return ExecuteScriptAndExtractBool(
       client_web_content,
       host_action_var);
+}
+
+// static
+bool RemoteDesktopBrowserTest::IsEnabled(
+    content::WebContents* client_web_content,
+    const std::string& element_name) {
+  return !ExecuteScriptAndExtractBool(
+    client_web_content,
+    "document.getElementById(\"" + element_name + "\").disabled");
 }
 
 }  // namespace remoting

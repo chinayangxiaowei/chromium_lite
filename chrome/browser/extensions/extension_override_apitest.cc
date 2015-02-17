@@ -10,12 +10,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/extensions/chrome_manifest_url_handlers.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/constants.h"
+#include "extensions/test/result_catcher.h"
 
 using content::WebContents;
 
@@ -50,7 +51,7 @@ class ExtensionOverrideTest : public ExtensionApiTest {
 IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideNewtab) {
   ASSERT_TRUE(RunExtensionTest("override/newtab")) << message_;
   {
-    ResultCatcher catcher;
+    extensions::ResultCatcher catcher;
     // Navigate to the new tab page.  The overridden new tab page
     // will call chrome.test.notifyPass() .
     ui_test_utils::NavigateToURL(browser(), GURL("chrome://newtab/"));
@@ -95,7 +96,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, MAYBE_OverrideNewtabIncognito) {
 IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, MAYBE_OverrideHistory) {
   ASSERT_TRUE(RunExtensionTest("override/history")) << message_;
   {
-    ResultCatcher catcher;
+    extensions::ResultCatcher catcher;
     // Navigate to the history page.  The overridden history page
     // will call chrome.test.notifyPass() .
     ui_test_utils::NavigateToURL(browser(), GURL("chrome://history/"));

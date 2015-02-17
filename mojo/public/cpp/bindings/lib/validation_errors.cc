@@ -10,7 +10,9 @@ namespace mojo {
 namespace internal {
 namespace {
 
-ValidationErrorObserverForTesting* g_validation_error_observer = NULL;
+ValidationErrorObserverForTesting* g_validation_error_observer = nullptr;
+SerializationWarningObserverForTesting* g_serialization_warning_observer =
+    nullptr;
 
 }  // namespace
 
@@ -38,33 +40,54 @@ const char* ValidationErrorToString(ValidationError error) {
       return "VALIDATION_ERROR_MESSAGE_HEADER_INVALID_FLAG_COMBINATION";
     case VALIDATION_ERROR_MESSAGE_HEADER_MISSING_REQUEST_ID:
       return "VALIDATION_ERROR_MESSAGE_HEADER_MISSING_REQUEST_ID";
+    case VALIDATION_ERROR_DIFFERENT_SIZED_ARRAYS_IN_MAP:
+      return "VALIDATION_ERROR_DIFFERENT_SIZED_ARRAYS_IN_MAP";
   }
 
   return "Unknown error";
 }
 
-void ReportValidationError(ValidationError error) {
-  if (g_validation_error_observer)
+void ReportValidationError(ValidationError error, const char* description) {
+  if (g_validation_error_observer) {
     g_validation_error_observer->set_last_error(error);
-  else
+  } else if (description) {
+    MOJO_LOG(ERROR) << "Invalid message: " << ValidationErrorToString(error)
+                    << " (" << description << ")";
+  } else {
     MOJO_LOG(ERROR) << "Invalid message: " << ValidationErrorToString(error);
+  }
 }
 
 ValidationErrorObserverForTesting::ValidationErrorObserverForTesting()
     : last_error_(VALIDATION_ERROR_NONE) {
   MOJO_DCHECK(!g_validation_error_observer);
   g_validation_error_observer = this;
-  MOJO_LOG(WARNING) << "Non-nullable validation is turned on for testing but "
-                    << "not for production code yet!";
 }
 
 ValidationErrorObserverForTesting::~ValidationErrorObserverForTesting() {
   MOJO_DCHECK(g_validation_error_observer == this);
-  g_validation_error_observer = NULL;
+  g_validation_error_observer = nullptr;
 }
 
-bool IsNonNullableValidationEnabled() {
-  return !!g_validation_error_observer;
+bool ReportSerializationWarning(ValidationError error) {
+  if (g_serialization_warning_observer) {
+    g_serialization_warning_observer->set_last_warning(error);
+    return true;
+  }
+
+  return false;
+}
+
+SerializationWarningObserverForTesting::SerializationWarningObserverForTesting()
+    : last_warning_(VALIDATION_ERROR_NONE) {
+  MOJO_DCHECK(!g_serialization_warning_observer);
+  g_serialization_warning_observer = this;
+}
+
+SerializationWarningObserverForTesting::
+    ~SerializationWarningObserverForTesting() {
+  MOJO_DCHECK(g_serialization_warning_observer == this);
+  g_serialization_warning_observer = nullptr;
 }
 
 }  // namespace internal

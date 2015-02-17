@@ -8,13 +8,19 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/prefs/pref_registry_simple.h"
-#include "base/prefs/testing_pref_service.h"
+#include "base/prefs/pref_service.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/policy/device_policy_builder.h"
+#include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/mock_cryptohome_client.h"
+#include "policy/proto/device_management_backend.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -22,19 +28,19 @@ using testing::Invoke;
 using testing::NiceMock;
 using testing::_;
 
+namespace em = enterprise_management;
+
 namespace {
-const char* kAttributeOwnerId = "consumer_management.owner_id";
-const char* kTestOwner = "test@chromium.org.test";
+const char kAttributeOwnerId[] = "consumer_management.owner_id";
+const char kTestOwner[] = "test@chromium.org.test";
 }
 
 namespace policy {
 
-class ConsumerManagementServiceTest : public testing::Test {
+class ConsumerManagementServiceTest : public BrowserWithTestWindowTest {
  public:
   ConsumerManagementServiceTest()
-      : testing_local_state_(TestingBrowserProcess::GetGlobal()),
-        service_(new ConsumerManagementService(&mock_cryptohome_client_)),
-        cryptohome_result_(false),
+      : cryptohome_result_(false),
         set_owner_status_(false) {
     ON_CALL(mock_cryptohome_client_, GetBootAttribute(_, _))
         .WillByDefault(
@@ -47,6 +53,34 @@ class ConsumerManagementServiceTest : public testing::Test {
             Invoke(this,
                    &ConsumerManagementServiceTest::
                        MockFlushAndSignBootAttributes));
+  }
+
+  virtual void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+
+    testing_profile_manager_.reset(new TestingProfileManager(
+        TestingBrowserProcess::GetGlobal()));
+    ASSERT_TRUE(testing_profile_manager_->SetUp());
+    service_.reset(new ConsumerManagementService(&mock_cryptohome_client_,
+                                                 NULL));
+  }
+
+  virtual void TearDown() override {
+    testing_profile_manager_.reset();
+    service_.reset();
+
+    BrowserWithTestWindowTest::TearDown();
+  }
+
+  ConsumerManagementService::EnrollmentStage GetEnrollmentStage() {
+    return static_cast<ConsumerManagementService::EnrollmentStage>(
+        g_browser_process->local_state()->GetInteger(
+            prefs::kConsumerManagementEnrollmentStage));
+  }
+
+  void SetEnrollmentStage(ConsumerManagementService::EnrollmentStage stage) {
+    g_browser_process->local_state()->SetInteger(
+        prefs::kConsumerManagementEnrollmentStage, stage);
   }
 
   void MockGetBootAttribute(
@@ -77,42 +111,40 @@ class ConsumerManagementServiceTest : public testing::Test {
     set_owner_status_ = status;
   }
 
-  ScopedTestingLocalState testing_local_state_;
   NiceMock<chromeos::MockCryptohomeClient> mock_cryptohome_client_;
   scoped_ptr<ConsumerManagementService> service_;
+  scoped_ptr<TestingProfileManager> testing_profile_manager_;
 
+  // Variables for setting the return value or catching the arguments of mock
+  // functions.
   chromeos::DBusMethodCallStatus cryptohome_status_;
   bool cryptohome_result_;
   cryptohome::BaseReply cryptohome_reply_;
   cryptohome::GetBootAttributeRequest get_boot_attribute_request_;
   cryptohome::SetBootAttributeRequest set_boot_attribute_request_;
-
   std::string owner_;
   bool set_owner_status_;
 };
 
-TEST_F(ConsumerManagementServiceTest, CanGetEnrollmentState) {
-  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_NONE,
-            service_->GetEnrollmentState());
+TEST_F(ConsumerManagementServiceTest, CanGetEnrollmentStage) {
+  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_STAGE_NONE,
+            service_->GetEnrollmentStage());
 
-  testing_local_state_.Get()->SetInteger(
-      prefs::kConsumerManagementEnrollmentState,
-      ConsumerManagementService::ENROLLMENT_ENROLLING);
+  SetEnrollmentStage(ConsumerManagementService::ENROLLMENT_STAGE_REQUESTED);
 
-  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_ENROLLING,
-            service_->GetEnrollmentState());
+  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_STAGE_REQUESTED,
+            service_->GetEnrollmentStage());
 }
 
-TEST_F(ConsumerManagementServiceTest, CanSetEnrollmentState) {
-  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_NONE,
-            testing_local_state_.Get()->GetInteger(
-                prefs::kConsumerManagementEnrollmentState));
+TEST_F(ConsumerManagementServiceTest, CanSetEnrollmentStage) {
+  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_STAGE_NONE,
+            GetEnrollmentStage());
 
-  service_->SetEnrollmentState(ConsumerManagementService::ENROLLMENT_ENROLLING);
+  service_->SetEnrollmentStage(
+      ConsumerManagementService::ENROLLMENT_STAGE_REQUESTED);
 
-  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_ENROLLING,
-            testing_local_state_.Get()->GetInteger(
-                prefs::kConsumerManagementEnrollmentState));
+  EXPECT_EQ(ConsumerManagementService::ENROLLMENT_STAGE_REQUESTED,
+            GetEnrollmentStage());
 }
 
 TEST_F(ConsumerManagementServiceTest, CanGetOwner) {
@@ -162,6 +194,58 @@ TEST_F(ConsumerManagementServiceTest, SetOwnerReturnsFalseWhenItFails) {
                                 base::Unretained(this)));
 
   EXPECT_FALSE(set_owner_status_);
+}
+
+class ConsumerManagementServiceStatusTest
+    : public chromeos::DeviceSettingsTestBase {
+ public:
+  ConsumerManagementServiceStatusTest()
+      : testing_local_state_(TestingBrowserProcess::GetGlobal()),
+        service_(NULL, &device_settings_service_) {
+  }
+
+  void SetEnrollmentStage(ConsumerManagementService::EnrollmentStage stage) {
+    testing_local_state_.Get()->SetInteger(
+        prefs::kConsumerManagementEnrollmentStage, stage);
+  }
+
+  void SetManagementMode(em::PolicyData::ManagementMode mode) {
+    device_policy_.policy_data().set_management_mode(mode);
+    device_policy_.Build();
+    device_settings_test_helper_.set_policy_blob(device_policy_.GetBlob());
+    ReloadDeviceSettings();
+  }
+
+  ScopedTestingLocalState testing_local_state_;
+  ConsumerManagementService service_;
+};
+
+TEST_F(ConsumerManagementServiceStatusTest,
+       GetStatusGetStatusStringAndHasPendingEnrollmentNotificationWork) {
+  EXPECT_EQ(ConsumerManagementService::STATUS_UNKNOWN, service_.GetStatus());
+  EXPECT_EQ("StatusUnknown", service_.GetStatusString());
+
+  SetManagementMode(em::PolicyData::NOT_MANAGED);
+  SetEnrollmentStage(ConsumerManagementService::ENROLLMENT_STAGE_NONE);
+
+  EXPECT_EQ(ConsumerManagementService::STATUS_UNENROLLED, service_.GetStatus());
+  EXPECT_EQ("StatusUnenrolled", service_.GetStatusString());
+  EXPECT_FALSE(service_.HasPendingEnrollmentNotification());
+
+  SetEnrollmentStage(ConsumerManagementService::ENROLLMENT_STAGE_REQUESTED);
+
+  EXPECT_EQ(ConsumerManagementService::STATUS_ENROLLING, service_.GetStatus());
+  EXPECT_EQ("StatusEnrolling", service_.GetStatusString());
+
+  SetManagementMode(em::PolicyData::CONSUMER_MANAGED);
+  SetEnrollmentStage(ConsumerManagementService::ENROLLMENT_STAGE_SUCCESS);
+
+  EXPECT_EQ(ConsumerManagementService::STATUS_ENROLLED, service_.GetStatus());
+  EXPECT_EQ("StatusEnrolled", service_.GetStatusString());
+  EXPECT_TRUE(service_.HasPendingEnrollmentNotification());
+
+  // TODO(davidyu): Test for STATUS_UNENROLLING when it is implemented.
+  // http://crbug.com/353050.
 }
 
 }  // namespace policy

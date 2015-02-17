@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
@@ -22,8 +22,8 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "chrome/browser/prefs/mock_validation_delegate.h"
-#include "chrome/browser/prefs/pref_hash_filter.h"
+#include "chrome/browser/prefs/tracked/mock_validation_delegate.h"
+#include "chrome/browser/prefs/tracked/pref_hash_filter.h"
 #include "chrome/browser/prefs/tracked/pref_service_hash_store_contents.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
@@ -51,7 +51,7 @@ class RegistryVerifier : public PrefStore::Observer {
       : pref_registry_(pref_registry) {}
 
   // PrefStore::Observer implementation
-  virtual void OnPrefValueChanged(const std::string& key) OVERRIDE {
+  void OnPrefValueChanged(const std::string& key) override {
     EXPECT_TRUE(pref_registry_->end() !=
                 std::find_if(pref_registry_->begin(),
                              pref_registry_->end(),
@@ -59,7 +59,7 @@ class RegistryVerifier : public PrefStore::Observer {
         << "Unregistered key " << key << " was changed.";
   }
 
-  virtual void OnInitializationCompleted(bool succeeded) OVERRIDE {}
+  void OnInitializationCompleted(bool succeeded) override {}
 
  private:
   scoped_refptr<PrefRegistry> pref_registry_;
@@ -91,13 +91,13 @@ class ProfilePrefStoreManagerTest : public testing::Test {
       : configuration_(kConfiguration,
                        kConfiguration + arraysize(kConfiguration)),
         profile_pref_registry_(new user_prefs::PrefRegistrySyncable),
-        registry_verifier_(profile_pref_registry_),
+        registry_verifier_(profile_pref_registry_.get()),
         seed_("seed"),
         reset_recorded_(false) {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ProfilePrefStoreManager::RegisterPrefs(local_state_.registry());
-    ProfilePrefStoreManager::RegisterProfilePrefs(profile_pref_registry_);
+    ProfilePrefStoreManager::RegisterProfilePrefs(profile_pref_registry_.get());
     for (const PrefHashFilter::TrackedPreferenceMetadata* it = kConfiguration;
          it != kConfiguration + arraysize(kConfiguration);
          ++it) {
@@ -140,7 +140,7 @@ class ProfilePrefStoreManagerTest : public testing::Test {
                                                &local_state_));
   }
 
-  virtual void TearDown() OVERRIDE { DestroyPrefStore(); }
+  void TearDown() override { DestroyPrefStore(); }
 
  protected:
   // Verifies whether a reset was reported via the RecordReset() hook. Also
@@ -152,7 +152,7 @@ class ProfilePrefStoreManagerTest : public testing::Test {
     pref_service_factory.set_user_prefs(pref_store_);
 
     scoped_ptr<PrefService> pref_service(
-        pref_service_factory.Create(profile_pref_registry_));
+        pref_service_factory.Create(profile_pref_registry_.get()));
 
     EXPECT_EQ(
         reset_expected,
@@ -166,7 +166,7 @@ class ProfilePrefStoreManagerTest : public testing::Test {
     pref_service_factory.set_user_prefs(pref_store_);
 
     scoped_ptr<PrefService> pref_service(
-        pref_service_factory.Create(profile_pref_registry_));
+        pref_service_factory.Create(profile_pref_registry_.get()));
 
     ProfilePrefStoreManager::ClearResetTime(pref_service.get());
   }
@@ -180,13 +180,13 @@ class ProfilePrefStoreManagerTest : public testing::Test {
             base::Bind(&ProfilePrefStoreManagerTest::RecordReset,
                        base::Unretained(this)),
             &mock_validation_delegate_);
-    InitializePrefStore(pref_store);
+    InitializePrefStore(pref_store.get());
     pref_store = NULL;
     base::RunLoop().RunUntilIdle();
   }
 
   void DestroyPrefStore() {
-    if (pref_store_) {
+    if (pref_store_.get()) {
       ClearResetRecorded();
       // Force everything to be written to disk, triggering the PrefHashFilter
       // while our RegistryVerifier is watching.
@@ -205,7 +205,7 @@ class ProfilePrefStoreManagerTest : public testing::Test {
     scoped_refptr<PersistentPrefStore> pref_store =
         manager_->CreateDeprecatedCombinedProfilePrefStore(
             main_message_loop_.message_loop_proxy());
-    InitializePrefStore(pref_store);
+    InitializePrefStore(pref_store.get());
     pref_store = NULL;
     base::RunLoop().RunUntilIdle();
   }

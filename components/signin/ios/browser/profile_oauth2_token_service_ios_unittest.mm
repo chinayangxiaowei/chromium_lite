@@ -26,18 +26,17 @@ class ProfileOAuth2TokenServiceIOSTest : public testing::Test,
         access_token_failure_(0),
         last_access_token_error_(GoogleServiceAuthError::NONE) {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     factory_.SetFakeResponse(GaiaUrls::GetInstance()->oauth2_revoke_url(),
                              "",
                              net::HTTP_OK,
                              net::URLRequestStatus::SUCCESS);
     fake_provider_ = client_.GetIOSProviderAsFake();
-    fake_provider_->set_using_shared_authentication(true);
     oauth2_service_.Initialize(&client_);
     oauth2_service_.AddObserver(this);
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     oauth2_service_.RemoveObserver(this);
     oauth2_service_.Shutdown();
   }
@@ -45,24 +44,24 @@ class ProfileOAuth2TokenServiceIOSTest : public testing::Test,
   // OAuth2TokenService::Consumer implementation.
   virtual void OnGetTokenSuccess(const OAuth2TokenService::Request* request,
                                  const std::string& access_token,
-                                 const base::Time& expiration_time) OVERRIDE {
+                                 const base::Time& expiration_time) override {
     ++access_token_success_;
   }
 
   virtual void OnGetTokenFailure(const OAuth2TokenService::Request* request,
-                                 const GoogleServiceAuthError& error) OVERRIDE {
+                                 const GoogleServiceAuthError& error) override {
     ++access_token_failure_;
     last_access_token_error_ = error;
   };
 
   // OAuth2TokenService::Observer implementation.
-  virtual void OnRefreshTokenAvailable(const std::string& account_id) OVERRIDE {
+  virtual void OnRefreshTokenAvailable(const std::string& account_id) override {
     ++token_available_count_;
   }
-  virtual void OnRefreshTokenRevoked(const std::string& account_id) OVERRIDE {
+  virtual void OnRefreshTokenRevoked(const std::string& account_id) override {
     ++token_revoked_count_;
   }
-  virtual void OnRefreshTokensLoaded() OVERRIDE { ++tokens_loaded_count_; }
+  virtual void OnRefreshTokensLoaded() override { ++tokens_loaded_count_; }
 
   void ResetObserverCounts() {
     token_available_count_ = 0;
@@ -196,81 +195,4 @@ TEST_F(ProfileOAuth2TokenServiceIOSTest, StartRequestFailure) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(0, access_token_success_);
   EXPECT_EQ(1, access_token_failure_);
-}
-
-TEST_F(ProfileOAuth2TokenServiceIOSTest, Migration) {
-  fake_provider_->set_using_shared_authentication(false);
-  oauth2_service_.LoadCredentials("account_id_1");
-  base::RunLoop().RunUntilIdle();
-
-  ResetObserverCounts();
-  oauth2_service_.UpdateCredentials("account_id_1", "pre_sso_refresh_token_1");
-  oauth2_service_.UpdateCredentials("account_id_2", "pre_sso_refresh_token_2");
-  EXPECT_EQ(2, token_available_count_);
-  EXPECT_EQ(0, tokens_loaded_count_);
-  EXPECT_EQ(0, token_revoked_count_);
-  EXPECT_EQ(2U, oauth2_service_.GetAccounts().size());
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_2"));
-  EXPECT_EQ("pre_sso_refresh_token_1",
-            oauth2_service_.GetRefreshTokenWhenNotUsingSharedAuthentication(
-                "account_id_1"));
-  EXPECT_EQ("pre_sso_refresh_token_2",
-            oauth2_service_.GetRefreshTokenWhenNotUsingSharedAuthentication(
-                "account_id_2"));
-
-  ResetObserverCounts();
-  oauth2_service_.StartUsingSharedAuthentication();
-  EXPECT_EQ(0, token_available_count_);
-  EXPECT_EQ(0, tokens_loaded_count_);
-  EXPECT_EQ(2, token_revoked_count_);
-  EXPECT_EQ(0U, oauth2_service_.GetAccounts().size());
-  EXPECT_FALSE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
-  EXPECT_FALSE(oauth2_service_.RefreshTokenIsAvailable("account_id_2"));
-
-  ResetObserverCounts();
-  fake_provider_->AddAccount("account_id_1");
-  oauth2_service_.ReloadCredentials();
-  EXPECT_EQ(1, token_available_count_);
-  EXPECT_EQ(0, tokens_loaded_count_);
-  EXPECT_EQ(0, token_revoked_count_);
-  EXPECT_EQ(1U, oauth2_service_.GetAccounts().size());
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
-  EXPECT_FALSE(oauth2_service_.RefreshTokenIsAvailable("account_id_2"));
-}
-
-TEST_F(ProfileOAuth2TokenServiceIOSTest, ForceInvalidGrantResponses) {
-  fake_provider_->set_using_shared_authentication(false);
-  oauth2_service_.LoadCredentials("account_id_1");
-  base::RunLoop().RunUntilIdle();
-  oauth2_service_.UpdateCredentials("account_id_1", "pre_sso_refresh_token_1");
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
-
-  // First call revokes the existing token and then updates the credentials
-  // with a fake token.
-  ResetObserverCounts();
-  oauth2_service_.ForceInvalidGrantResponses();
-  EXPECT_EQ(1, token_available_count_);
-  EXPECT_EQ(0, tokens_loaded_count_);
-  EXPECT_EQ(1, token_revoked_count_);
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
-
-  // Fetching access tokens fails with invalid grant responses.
-  OAuth2TokenService::ScopeSet scopes;
-  scopes.insert("scope");
-  scoped_ptr<OAuth2TokenService::Request> request(
-      oauth2_service_.StartRequest("account_id_1", scopes, this));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(0, access_token_success_);
-  EXPECT_EQ(1, access_token_failure_);
-  EXPECT_EQ(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS,
-            last_access_token_error_.state());
-
-  // Second call to force invalid grant responses is ignored.
-  ResetObserverCounts();
-  oauth2_service_.ForceInvalidGrantResponses();
-  EXPECT_EQ(0, token_available_count_);
-  EXPECT_EQ(0, tokens_loaded_count_);
-  EXPECT_EQ(0, token_revoked_count_);
-  EXPECT_TRUE(oauth2_service_.RefreshTokenIsAvailable("account_id_1"));
 }

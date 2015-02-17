@@ -4,9 +4,9 @@
 
 #include "athena/virtual_keyboard/public/virtual_keyboard_manager.h"
 
-#include "athena/common/container_priorities.h"
-#include "athena/common/fill_layout_manager.h"
 #include "athena/screen/public/screen_manager.h"
+#include "athena/util/container_priorities.h"
+#include "athena/util/fill_layout_manager.h"
 #include "base/bind.h"
 #include "base/memory/singleton.h"
 #include "base/values.h"
@@ -32,10 +32,10 @@ class BasicKeyboardControllerProxy : public keyboard::KeyboardControllerProxy {
   BasicKeyboardControllerProxy(content::BrowserContext* context,
                                aura::Window* root_window)
       : browser_context_(context), root_window_(root_window) {}
-  virtual ~BasicKeyboardControllerProxy() {}
+  ~BasicKeyboardControllerProxy() override {}
 
   // keyboard::KeyboardControllerProxy:
-  virtual ui::InputMethod* GetInputMethod() OVERRIDE {
+  virtual ui::InputMethod* GetInputMethod() override {
     ui::InputMethod* input_method =
         root_window_->GetProperty(aura::client::kRootWindowInputMethodKey);
     return input_method;
@@ -44,13 +44,13 @@ class BasicKeyboardControllerProxy : public keyboard::KeyboardControllerProxy {
   virtual void RequestAudioInput(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback) OVERRIDE {}
+      const content::MediaResponseCallback& callback) override {}
 
-  virtual content::BrowserContext* GetBrowserContext() OVERRIDE {
+  virtual content::BrowserContext* GetBrowserContext() override {
     return browser_context_;
   }
 
-  virtual void SetUpdateInputType(ui::TextInputType type) OVERRIDE {}
+  virtual void SetUpdateInputType(ui::TextInputType type) override {}
 
  private:
   content::BrowserContext* browser_context_;
@@ -62,18 +62,17 @@ class BasicKeyboardControllerProxy : public keyboard::KeyboardControllerProxy {
 class VirtualKeyboardManagerImpl : public VirtualKeyboardManager {
  public:
   explicit VirtualKeyboardManagerImpl(content::BrowserContext* browser_context)
-      : browser_context_(browser_context),
-        container_(NULL) {
+      : browser_context_(browser_context), container_(nullptr) {
     CHECK(!instance);
     instance = this;
     Init();
   }
 
-  virtual ~VirtualKeyboardManagerImpl() {
+  ~VirtualKeyboardManagerImpl() override {
     CHECK_EQ(this, instance);
-    instance = NULL;
+    instance = nullptr;
 
-    keyboard::KeyboardController::ResetInstance(NULL);
+    keyboard::KeyboardController::ResetInstance(nullptr);
   }
 
  private:
@@ -83,18 +82,18 @@ class VirtualKeyboardManagerImpl : public VirtualKeyboardManager {
     container_ = athena::ScreenManager::Get()->CreateContainer(params);
     container_->SetLayoutManager(new FillLayoutManager(container_));
 
-    keyboard_controller_.reset(new keyboard::KeyboardController(
+    keyboard::KeyboardController* controller = new keyboard::KeyboardController(
         new BasicKeyboardControllerProxy(browser_context_,
-                                         container_->GetRootWindow())));
-    keyboard::KeyboardController::ResetInstance(keyboard_controller_.get());
-    aura::Window* kb_container = keyboard_controller_->GetContainerWindow();
+                                         container_->GetRootWindow()));
+    // ResetInstance takes ownership.
+    keyboard::KeyboardController::ResetInstance(controller);
+    aura::Window* kb_container = controller->GetContainerWindow();
     container_->AddChild(kb_container);
     kb_container->Show();
   }
 
   content::BrowserContext* browser_context_;
   aura::Window* container_;
-  scoped_ptr<keyboard::KeyboardController> keyboard_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(VirtualKeyboardManagerImpl);
 };

@@ -8,7 +8,7 @@ from telemetry.page import test_expectations
 #
 # Operating systems:
 #     win, xp, vista, win7, mac, leopard, snowleopard, lion, mountainlion,
-#     linux, chromeos, android
+#     mavericks, yosemite, linux, chromeos, android
 #
 # GPU vendors:
 #     amd, arm, broadcom, hisilicon, intel, imagination, nvidia, qualcomm,
@@ -25,25 +25,40 @@ class WebGLConformanceExpectations(test_expectations.TestExpectations):
     #     ['mac', 'amd', ('nvidia', 0x1234)], bug=123)
 
     # Fails on all platforms
-    self.Fail('conformance/glsl/misc/shaders-with-uniform-structs.html',
-        bug=351396)
-
-    # Flaky on Win
-    self.Fail('conformance/extensions/webgl-draw-buffers.html',
-        ['win'], bug=369349)
+    self.Fail('conformance/glsl/misc/shaders-with-invariance.html',
+        bug=421710)
+    self.Fail('conformance/glsl/bugs/essl3-shaders-with-webgl1.html',
+        bug=428845)
+    self.Fail('conformance/glsl/misc/expression-list-in-declarator-initializer.html',
+        bug=428845)
 
     # Win failures
     self.Fail('conformance/glsl/misc/struct-equals.html',
         ['win'], bug=391957)
     self.Fail('conformance/glsl/bugs/conditional-discard-in-loop.html',
         ['win'], bug=402195)
-    self.Fail('conformance/rendering/negative-one-index.html',
-        ['win'], bug=396058)
+    self.Fail('conformance/textures/tex-image-and-sub-image-2d-with-webgl-canvas.html',
+        ['win'], bug=420357)
+    self.Fail('conformance/textures/tex-image-and-sub-image-2d-with-webgl-canvas-rgb565.html',
+        ['win'], bug=420357)
+    self.Fail('conformance/textures/tex-image-and-sub-image-2d-with-webgl-canvas-rgba4444.html',
+        ['win'], bug=420357)
+    self.Fail('conformance/textures/tex-image-and-sub-image-2d-with-webgl-canvas-rgba5551.html',
+        ['win'], bug=420357)
+    self.Fail('conformance/glsl/misc/ternary-operators-in-global-initializers.html',
+        ['win'], bug=415694)
+    # This test still causes itself and any tests afterwards to time out
+    # in Win Debug bots.
+    self.Skip('conformance/textures/texture-copying-feedback-loops.html',
+        ['Win'], bug=421695)
+    # Flaky on Win
+    self.Fail('conformance/extensions/webgl-draw-buffers.html',
+        ['win'], bug=369349)
 
-    # Win D3D9 failures (unfortunately can not target just this
-    # configuration with test expectations)
-    self.Fail('conformance/extensions/angle-instanced-arrays.html',
-        ['win'], bug=401713)
+    self.Fail('conformance/rendering/framebuffer-switch.html',
+        ['win'], bug=428849)
+    self.Fail('conformance/rendering/framebuffer-texture-switch.html',
+        ['win'], bug=428849)
 
     # Win7 / Intel failures
     self.Fail('conformance/rendering/gl-scissor-test.html',
@@ -56,10 +71,6 @@ class WebGLConformanceExpectations(test_expectations.TestExpectations):
         ['win7', 'intel'], bug=372511)
     self.Fail('conformance/glsl/misc/shader-with-array-of-structs-uniform.html',
         ['win7', 'intel', 'nvidia'], bug=373972)
-
-    # Mac failures
-    self.Fail('conformance/glsl/misc/shader-struct-scope.html',
-        ['mac'], bug=368910)
 
     # Mac / Intel failures
     # Radar 13499466
@@ -84,6 +95,12 @@ class WebGLConformanceExpectations(test_expectations.TestExpectations):
         ['mountainlion', ('intel', 0x116)], bug=314997)
     self.Fail('conformance/ogles/GL/operators/operators_009_to_016.html',
         ['mountainlion', ('intel', 0x116)], bug=322795)
+
+    # Mac 10.9 / Intel HD 3000 failures
+    self.Fail('conformance/ogles/GL/operators/operators_009_to_016.html',
+        ['mavericks', ('intel', 0x116)], bug=417415)
+    self.Fail('conformance/rendering/gl-scissor-test.html',
+        ['mavericks', ('intel', 0x116)], bug=417415)
 
     # Mac Retina failures
     self.Fail(
@@ -133,30 +150,9 @@ class WebGLConformanceExpectations(test_expectations.TestExpectations):
     self.Fail('conformance/extensions/webgl-compressed-texture-size-limit.html',
         ['lion', 'intel'], bug=393331)
 
-    # Linux NVIDIA failures
-    self.Fail('conformance/glsl/constructors/glsl-construct-bvec2.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-bvec3.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-bvec4.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-ivec2.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-ivec3.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-ivec4.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-vec2.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-vec3.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail('conformance/glsl/constructors/glsl-construct-vec4.html',
-        ['linux', 'nvidia'], bug=391960)
-    self.Fail(
-        'conformance/glsl/constructors/' +
-        'glsl-construct-vec-mat-corner-cases.html',
-        ['linux', 'nvidia'], bug=391960)
-
+    # Linux failures
+    self.Fail('conformance/textures/default-texture.html',
+        ['linux', ('nvidia', 0x104a)], bug=422152)
 
     # Android failures
     # The following test is very slow and therefore times out on Android bot.

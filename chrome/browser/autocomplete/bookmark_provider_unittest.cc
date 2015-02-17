@@ -33,8 +33,8 @@ struct BookmarksTestInfo {
   { "abc def", "http://www.catsanddogs.com/a" },
   { "abcde", "http://www.catsanddogs.com/b" },
   { "abcdef", "http://www.catsanddogs.com/c" },
-  { "a definition", "http://www.catsanddogs.com/d" },
-  { "carry carbon carefully", "http://www.catsanddogs.com/e" },
+  { "carry carbon carefully", "http://www.catsanddogs.com/d" },
+  { "a definition", "http://www.catsanddogs.com/e" },
   { "ghi jkl", "http://www.catsanddogs.com/f" },
   { "jkl ghi", "http://www.catsanddogs.com/g" },
   { "frankly frankly frank", "http://www.catsanddogs.com/h" },
@@ -48,20 +48,21 @@ struct BookmarksTestInfo {
   { "chrome://version", "chrome://version" },
   { "chrome://omnibox", "chrome://omnibox" },
   // For testing ranking with different URLs.
-  {"achlorhydric featherheads resuscitates mockingbirds",
-   "http://www.featherheads.com/a" },
-  {"achlorhydric mockingbirds resuscitates featherhead",
-   "http://www.featherheads.com/b" },
-  {"featherhead resuscitates achlorhydric mockingbirds",
-   "http://www.featherheads.com/c" },
-  {"mockingbirds resuscitates featherheads achlorhydric",
-   "http://www.featherheads.com/d" },
-  // For testing URL boosting.
-  {"burning worms #1", "http://www.burned.com/" },
-  {"burning worms #2", "http://www.worms.com/" },
-  {"worming burns #10", "http://www.burned.com/" },
-  {"worming burns #20", "http://www.worms.com/" },
-  {"jive music", "http://www.worms.com/" },
+  { "achlorhydric featherheads resuscitates mockingbirds",
+    "http://www.manylongwords.com/1a" },
+  { "achlorhydric mockingbirds resuscitates featherhead",
+    "http://www.manylongwords.com/2b" },
+  { "featherhead resuscitates achlorhydric mockingbirds",
+    "http://www.manylongwords.com/3c" },
+  { "mockingbirds resuscitates featherheads achlorhydric",
+    "http://www.manylongwords.com/4d" },
+  // For testing URL boosting.  (URLs referenced multiple times are boosted.)
+  { "burning worms #1",  "http://www.burns.com/" },
+  { "burning worms #2",  "http://www.worms.com/" },
+  { "worming burns #10", "http://www.burns.com/" },
+  // For testing strange spacing in bookmark titles.
+  { " hello1  hello2  ", "http://whatever.com/" },
+  { "",                  "http://emptytitle.com/" },
 };
 
 class BookmarkProviderTest : public testing::Test {
@@ -69,9 +70,9 @@ class BookmarkProviderTest : public testing::Test {
   BookmarkProviderTest();
 
  protected:
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
-  test::TestBookmarkClient client_;
+  bookmarks::TestBookmarkClient client_;
   scoped_ptr<TestingProfile> profile_;
   scoped_ptr<BookmarkModel> model_;
   scoped_refptr<BookmarkProvider> provider_;
@@ -81,7 +82,7 @@ class BookmarkProviderTest : public testing::Test {
 };
 
 BookmarkProviderTest::BookmarkProviderTest() {
-  model_ = client_.CreateModel(false);
+  model_ = client_.CreateModel();
 }
 
 void BookmarkProviderTest::SetUp() {
@@ -92,7 +93,7 @@ void BookmarkProviderTest::SetUp() {
   provider_->set_bookmark_model_for_testing(model_.get());
 
   const BookmarkNode* other_node = model_->other_node();
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(bookmark_provider_test_data); ++i) {
+  for (size_t i = 0; i < arraysize(bookmark_provider_test_data); ++i) {
     const BookmarksTestInfo& cur(bookmark_provider_test_data[i]);
     const GURL url(cur.url);
     model_->AddURL(other_node, other_node->child_count(),
@@ -233,11 +234,12 @@ TEST_F(BookmarkProviderTest, Positions) {
                                   {{4, 7}, {0, 0}}}},
     {"ghi jkl",               2, {{{0, 3}, {4, 7}, {0, 0}},
                                   {{0, 3}, {4, 7}, {0, 0}}}},
-    // NB: GetBookmarksWithTitlesMatching(...) uses exact match for "a".
-    {"a",                     1, {{{0, 1}, {0, 0}}}},
+    // NB: GetBookmarksMatching(...) uses exact match for "a" in title or URL.
+    {"a",                     2, {{{0, 1}, {0, 0}},
+                                  {{0, 0}}}},
     {"a d",                   0, {{{0, 0}}}},
     {"carry carbon",          1, {{{0, 5}, {6, 12}, {0, 0}}}},
-    // NB: GetBookmarksWithTitlesMatching(...) sorts the match positions.
+    // NB: GetBookmarksMatching(...) sorts the match positions.
     {"carbon carry",          1, {{{0, 5}, {6, 12}, {0, 0}}}},
     {"arbon",                 0, {{{0, 0}}}},
     {"ar",                    0, {{{0, 0}}}},
@@ -253,11 +255,15 @@ TEST_F(BookmarkProviderTest, Positions) {
     {"frankly frankly",       1, {{{0, 7}, {8, 15}, {0, 0}}}},
     {"foobar foo",            1, {{{0, 6}, {7, 13}, {0, 0}}}},
     {"foo foobar",            1, {{{0, 6}, {7, 13}, {0, 0}}}},
+    // This ensures that leading whitespace in the title is removed.
+    {"hello",                 1, {{{0, 5}, {7, 12}, {0, 0}}}},
+    // This ensures that empty titles yield empty classifications.
+    {"emptytitle",            1, {}},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(query_data); ++i) {
+  for (size_t i = 0; i < arraysize(query_data); ++i) {
     AutocompleteInput input(base::ASCIIToUTF16(query_data[i].query),
-                            base::string16::npos, base::string16(), GURL(),
+                            base::string16::npos, std::string(), GURL(),
                             metrics::OmniboxEventProto::INVALID_SPEC, false,
                             false, false, true,
                             ChromeAutocompleteSchemeClassifier(profile_.get()));
@@ -322,20 +328,23 @@ TEST_F(BookmarkProviderTest, Rankings) {
                   3, {"mockingbirds resuscitates featherheads achlorhydric",
                       "achlorhydric mockingbirds resuscitates featherhead",
                       "featherhead resuscitates achlorhydric mockingbirds"}},
-    // Ranking of exact-word matches with URL boost.
-    {"worms",     2, {"burning worms #2",    // boosted
-                      "burning worms #1",    // not boosted
+    // Ranking of exact-word matches with URL boosts.
+    {"worms",     2, {"burning worms #1",    // boosted
+                      "burning worms #2",    // not boosted
                       ""}},
-    // Ranking of prefix matches with URL boost. Note that a query of
-    // "worm burn" will have the same results.
-    {"burn worm", 3, {"burning worms #2",    // boosted
-                      "worming burns #20",   // boosted
-                      "burning worms #1"}},  // not boosted but shorter
+    // Ranking of prefix matches with URL boost.
+    {"burn worm", 3, {"burning worms #1",    // boosted
+                      "worming burns #10",   // boosted but longer title
+                      "burning worms #2"}},  // not boosted
+    // A query of "worm burn" will have the same results.
+    {"worm burn", 3, {"burning worms #1",    // boosted
+                      "worming burns #10",   // boosted but longer title
+                      "burning worms #2"}},  // not boosted
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(query_data); ++i) {
+  for (size_t i = 0; i < arraysize(query_data); ++i) {
     AutocompleteInput input(base::ASCIIToUTF16(query_data[i].query),
-                            base::string16::npos, base::string16(), GURL(),
+                            base::string16::npos, std::string(), GURL(),
                             metrics::OmniboxEventProto::INVALID_SPEC, false,
                             false, false, true,
                             ChromeAutocompleteSchemeClassifier(profile_.get()));
@@ -388,11 +397,11 @@ TEST_F(BookmarkProviderTest, InlineAutocompletion) {
     // actually bookmarked.
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(query_data); ++i) {
+  for (size_t i = 0; i < arraysize(query_data); ++i) {
     const std::string description = "for query=" + query_data[i].query +
         " and url=" + query_data[i].url;
     AutocompleteInput input(base::ASCIIToUTF16(query_data[i].query),
-                            base::string16::npos, base::string16(), GURL(),
+                            base::string16::npos, std::string(), GURL(),
                             metrics::OmniboxEventProto::INVALID_SPEC, false,
                             false, false, true,
                             ChromeAutocompleteSchemeClassifier(profile_.get()));
@@ -432,14 +441,10 @@ TEST_F(BookmarkProviderTest, StripHttpAndAdjustOffsets) {
     { "versi",     "chrome://version",           "0:1,9:3,14:1"          }
   };
 
-  // Reload the bookmarks index with |index_urls| == true.
-  model_ = client_.CreateModel(true);
-  SetUp();
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(query_data); ++i) {
+  for (size_t i = 0; i < arraysize(query_data); ++i) {
     std::string description = "for query=" + query_data[i].query;
     AutocompleteInput input(base::ASCIIToUTF16(query_data[i].query),
-                            base::string16::npos, base::string16(), GURL(),
+                            base::string16::npos, std::string(), GURL(),
                             metrics::OmniboxEventProto::INVALID_SPEC, false,
                             false, false, true,
                             ChromeAutocompleteSchemeClassifier(profile_.get()));

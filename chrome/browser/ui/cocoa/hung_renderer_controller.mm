@@ -20,10 +20,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/result_codes.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/google_toolbox_for_mac/src/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #include "ui/base/l10n/l10n_util_mac.h"
@@ -49,12 +46,10 @@ class HungRendererWebContentsObserverBridge
 
  protected:
   // WebContentsObserver overrides:
-  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE {
+  void RenderProcessGone(base::TerminationStatus status) override {
     [controller_ renderProcessGone];
   }
-  virtual void WebContentsDestroyed() OVERRIDE {
-    [controller_ renderProcessGone];
-  }
+  void WebContentsDestroyed() override { [controller_ renderProcessGone]; }
 
  private:
   HungRendererController* controller_;  // weak

@@ -30,11 +30,8 @@ struct BookmarkMatch;
 // BookmarkNodes that contain that string in their title or URL.
 class BookmarkIndex {
  public:
-  // |index_urls| says whether URLs should be stored in the index in addition
-  // to bookmark titles.  |languages| used to help parse IDNs in URLs for the
-  // bookmark index.
+  // |languages| is used to help parse IDNs in URLs for the bookmark index.
   BookmarkIndex(BookmarkClient* client,
-                bool index_urls,
                 const std::string& languages);
   ~BookmarkIndex();
 
@@ -44,12 +41,12 @@ class BookmarkIndex {
   // Invoked when a bookmark has been removed from the model.
   void Remove(const BookmarkNode* node);
 
-  // Returns up to |max_count| of bookmarks containing each term from
-  // the text |query| in either the title or the URL.
-  void GetBookmarksMatching(
-      const base::string16& query,
-      size_t max_count,
-      std::vector<BookmarkMatch>* results);
+  // Returns up to |max_count| of bookmarks containing each term from the text
+  // |query| in either the title or the URL.
+  void GetBookmarksMatching(const base::string16& query,
+                            size_t max_count,
+                            query_parser::MatchingAlgorithm matching_algorithm,
+                            std::vector<BookmarkMatch>* results);
 
  private:
   typedef std::vector<const BookmarkNode*> Nodes;
@@ -73,9 +70,11 @@ class BookmarkIndex {
   // Populates |matches| for the specified term. If |first_term| is true, this
   // is the first term in the query. Returns true if there is at least one node
   // matching the term.
-  bool GetBookmarksMatchingTerm(const base::string16& term,
-                                bool first_term,
-                                Matches* matches);
+  bool GetBookmarksMatchingTerm(
+      const base::string16& term,
+      bool first_term,
+      query_parser::MatchingAlgorithm matching_algorithm,
+      Matches* matches);
 
   // Iterates over |matches| updating each Match's nodes to contain the
   // intersection of the Match's current nodes and the nodes at |index_i|.
@@ -113,9 +112,6 @@ class BookmarkIndex {
 
   // Languages used to help parse IDNs in URLs for the bookmark index.
   const std::string languages_;
-
-  // True if URLs are stored in the index as well as bookmark titles.
-  const bool index_urls_;
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkIndex);
 };

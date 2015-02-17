@@ -55,11 +55,11 @@ class UsbMidiDeviceFactoryAndroid {
     private long mNativePointer;
 
     private static final String ACTION_USB_PERMISSION =
-        "org.chromium.media.USB_PERMISSION";
+            "org.chromium.media.USB_PERMISSION";
 
     /**
      * Constructs a UsbMidiDeviceAndroid.
-     * @param natviePointer The native pointer to which the created factory is associated.
+     * @param nativePointer The native pointer to which the created factory is associated.
      */
     UsbMidiDeviceFactoryAndroid(long nativePointer) {
         mNativePointer = nativePointer;
@@ -85,7 +85,7 @@ class UsbMidiDeviceFactoryAndroid {
      */
     @CalledByNative
     boolean enumerateDevices(Context context) {
-        mUsbManager = (UsbManager)context.getSystemService(Context.USB_SERVICE);
+        mUsbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         Map<String, UsbDevice> devices = mUsbManager.getDeviceList();
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
                 context, 0, new Intent(ACTION_USB_PERMISSION), 0);
@@ -95,7 +95,7 @@ class UsbMidiDeviceFactoryAndroid {
             for (int i = 0; i < device.getInterfaceCount() && !found; ++i) {
                 UsbInterface iface = device.getInterface(i);
                 if (iface.getInterfaceClass() == UsbConstants.USB_CLASS_AUDIO &&
-                    iface.getInterfaceSubclass() == UsbMidiDeviceAndroid.MIDI_SUBCLASS) {
+                        iface.getInterfaceSubclass() == UsbMidiDeviceAndroid.MIDI_SUBCLASS) {
                     found = true;
                 }
             }
@@ -111,6 +111,7 @@ class UsbMidiDeviceFactoryAndroid {
 
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         mReceiver = new BroadcastReceiver() {
+            @Override
             public void onReceive(Context context, Intent intent) {
                 if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
                     onRequestDone(context, intent);
@@ -128,7 +129,7 @@ class UsbMidiDeviceFactoryAndroid {
      * nativeOnUsbMidiDeviceRequestDone with the accessible USB-MIDI devices.
      */
     private void onRequestDone(Context context, Intent intent) {
-        UsbDevice device = (UsbDevice)intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+        UsbDevice device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
         if (!mRequestedDevices.contains(device)) {
             // We are not interested in the device.
             return;

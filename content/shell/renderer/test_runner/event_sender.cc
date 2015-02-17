@@ -8,9 +8,9 @@
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "content/public/common/page_zoom.h"
-#include "content/shell/renderer/test_runner/WebTestDelegate.h"
 #include "content/shell/renderer/test_runner/mock_spell_check.h"
 #include "content/shell/renderer/test_runner/test_interfaces.h"
+#include "content/shell/renderer/test_runner/web_test_delegate.h"
 #include "content/shell/renderer/test_runner/web_test_proxy.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
@@ -124,6 +124,7 @@ const double kMultipleClickTimeSec = 1;
 const int kMultipleClickRadiusPixels = 5;
 const char kSubMenuDepthIdentifier[] = "_";
 const char kSubMenuIdentifier[] = " >";
+const char kSeparatorIdentifier[] = "---------";
 
 bool OutsideMultiClickRadius(const WebPoint& a, const WebPoint& b) {
   return ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)) >
@@ -133,7 +134,9 @@ bool OutsideMultiClickRadius(const WebPoint& a, const WebPoint& b) {
 void PopulateCustomItems(const WebVector<WebMenuItemInfo>& customItems,
     const std::string& prefix, std::vector<std::string>* strings) {
   for (size_t i = 0; i < customItems.size(); ++i) {
-    if (customItems[i].type == blink::WebMenuItemInfo::SubMenu) {
+    if (customItems[i].type == blink::WebMenuItemInfo::Separator) {
+      strings->push_back(prefix + kSeparatorIdentifier);
+    } else if (customItems[i].type == blink::WebMenuItemInfo::SubMenu) {
       strings->push_back(prefix + customItems[i].label.utf8() +
           kSubMenuIdentifier);
       PopulateCustomItems(customItems[i].subMenuItems, prefix +
@@ -230,9 +233,7 @@ class MouseDownTask : public WebMethodTask<EventSender> {
         button_number_(button_number),
         modifiers_(modifiers) {}
 
-  virtual void runIfValid() OVERRIDE {
-    m_object->MouseDown(button_number_, modifiers_);
-  }
+  void RunIfValid() override { object_->MouseDown(button_number_, modifiers_); }
 
  private:
   int button_number_;
@@ -246,9 +247,7 @@ class MouseUpTask : public WebMethodTask<EventSender> {
         button_number_(button_number),
         modifiers_(modifiers) {}
 
-  virtual void runIfValid() OVERRIDE {
-    m_object->MouseUp(button_number_, modifiers_);
-  }
+  void RunIfValid() override { object_->MouseUp(button_number_, modifiers_); }
 
  private:
   int button_number_;
@@ -266,8 +265,8 @@ class KeyDownTask : public WebMethodTask<EventSender> {
         modifiers_(modifiers),
         location_(location) {}
 
-  virtual void runIfValid() OVERRIDE {
-    m_object->KeyDown(code_str_, modifiers_, location_);
+  void RunIfValid() override {
+    object_->KeyDown(code_str_, modifiers_, location_);
   }
 
  private:
@@ -341,11 +340,11 @@ class EventSenderBindings : public gin::Wrappable<EventSenderBindings> {
 
  private:
   explicit EventSenderBindings(base::WeakPtr<EventSender> sender);
-  virtual ~EventSenderBindings();
+  ~EventSenderBindings() override;
 
   // gin::Wrappable:
-  virtual gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) OVERRIDE;
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) override;
 
   // Bound methods:
   void EnableDOMUIEventLogging();
@@ -358,6 +357,7 @@ class EventSenderBindings : public gin::Wrappable<EventSenderBindings> {
   void ZoomPageOut();
   void SetPageZoomFactor(double factor);
   void SetPageScaleFactor(gin::Arguments* args);
+  void SetPageScaleFactorLimits(gin::Arguments* args);
   void ClearTouchPoints();
   void ReleaseTouchPoint(unsigned index);
   void UpdateTouchPoint(unsigned index, double x, double y);
@@ -484,6 +484,8 @@ EventSenderBindings::GetObjectTemplateBuilder(v8::Isolate* isolate) {
       .SetMethod("zoomPageOut", &EventSenderBindings::ZoomPageOut)
       .SetMethod("setPageZoomFactor", &EventSenderBindings::SetPageZoomFactor)
       .SetMethod("setPageScaleFactor", &EventSenderBindings::SetPageScaleFactor)
+      .SetMethod("setPageScaleFactorLimits",
+                 &EventSenderBindings::SetPageScaleFactorLimits)
       .SetMethod("clearTouchPoints", &EventSenderBindings::ClearTouchPoints)
       .SetMethod("releaseTouchPoint", &EventSenderBindings::ReleaseTouchPoint)
       .SetMethod("updateTouchPoint", &EventSenderBindings::UpdateTouchPoint)
@@ -639,6 +641,20 @@ void EventSenderBindings::SetPageScaleFactor(gin::Arguments* args) {
   args->GetNext(&y);
   sender_->SetPageScaleFactor(scale_factor,
                               static_cast<int>(x), static_cast<int>(y));
+}
+
+void EventSenderBindings::SetPageScaleFactorLimits(gin::Arguments* args) {
+  if (!sender_)
+    return;
+  float min_scale_factor;
+  float max_scale_factor;
+  if (args->PeekNext().IsEmpty())
+    return;
+  args->GetNext(&min_scale_factor);
+  if (args->PeekNext().IsEmpty())
+    return;
+  args->GetNext(&max_scale_factor);
+  sender_->SetPageScaleFactorLimits(min_scale_factor, max_scale_factor);
 }
 
 void EventSenderBindings::ClearTouchPoints() {
@@ -1109,7 +1125,7 @@ void EventSender::Reset() {
   last_button_type_ = WebMouseEvent::ButtonNone;
   touch_points_.clear();
   last_context_menu_data_.reset();
-  task_list_.revokeAll();
+  task_list_.RevokeAll();
   current_gesture_location_ = WebPoint(0, 0);
   mouse_event_queue_.clear();
 
@@ -1267,6 +1283,10 @@ void EventSender::KeyDown(const std::string& code_str,
     code = ui::VKEY_RMENU;
   } else if ("numLock" == code_str) {
     code = ui::VKEY_NUMLOCK;
+  } else if ("backspace" == code_str) {
+    code = ui::VKEY_BACK;
+  } else if ("escape" == code_str) {
+    code = ui::VKEY_ESCAPE;
   } else {
     // Compare the input string with the function-key names defined by the
     // DOM spec (i.e. "F1",...,"F24"). If the input string is a function-key
@@ -1337,7 +1357,7 @@ void EventSender::KeyDown(const std::string& code_str,
   // We just simulate the same behavior here.
   std::string edit_command;
   if (GetEditCommand(event_down, &edit_command))
-    delegate_->setEditCommand(edit_command, "");
+    delegate_->SetEditCommand(edit_command, "");
 
   view_->handleInputEvent(event_down);
 
@@ -1353,12 +1373,16 @@ void EventSender::KeyDown(const std::string& code_str,
     FinishDragAndDrop(event, blink::WebDragOperationNone);
   }
 
-  delegate_->clearEditCommand();
+  delegate_->ClearEditCommand();
 
   if (generate_char) {
     WebKeyboardEvent event_char = event_up;
     event_char.type = WebInputEvent::Char;
-    event_char.keyIdentifier[0] = '\0';
+    // keyIdentifier is an empty string, unless the Enter key was pressed.
+    // This behavior is not standard (keyIdentifier itself is not even a
+    // standard any more), but it matches the actual behavior in Blink.
+    if (code != ui::VKEY_RETURN)
+      event_char.keyIdentifier[0] = '\0';
     view_->handleInputEvent(event_char);
   }
 
@@ -1456,8 +1480,11 @@ void EventSender::SetPageZoomFactor(double zoom_factor) {
 }
 
 void EventSender::SetPageScaleFactor(float scale_factor, int x, int y) {
-  view_->setPageScaleFactorLimits(scale_factor, scale_factor);
   view_->setPageScaleFactor(scale_factor, WebPoint(x, y));
+}
+
+void EventSender::SetPageScaleFactorLimits(float min_scale, float max_scale) {
+  view_->setPageScaleFactorLimits(min_scale, max_scale);
 }
 
 void EventSender::ClearTouchPoints() {
@@ -1533,7 +1560,7 @@ void EventSender::DumpFilenameBeingDragged() {
       break;
     }
   }
-  delegate_->printMessage(std::string("Filename being dragged: ") +
+  delegate_->PrintMessage(std::string("Filename being dragged: ") +
                           filename.utf8().data() + "\n");
 }
 
@@ -1608,12 +1635,12 @@ void EventSender::BeginDragWithFiles(const std::vector<std::string>& files) {
   for (size_t i = 0; i < files.size(); ++i) {
     WebDragData::Item item;
     item.storageType = WebDragData::Item::StorageTypeFilename;
-    item.filenameData = delegate_->getAbsoluteWebStringFromUTF8Path(files[i]);
+    item.filenameData = delegate_->GetAbsoluteWebStringFromUTF8Path(files[i]);
     current_drag_data_.addItem(item);
     absolute_filenames[i] = item.filenameData;
   }
   current_drag_data_.setFilesystemId(
-      delegate_->registerIsolatedFileSystem(absolute_filenames));
+      delegate_->RegisterIsolatedFileSystem(absolute_filenames));
   current_drag_effects_allowed_ = blink::WebDragOperationCopy;
 
   // Provide a drag source.
@@ -1633,8 +1660,10 @@ void EventSender::BeginDragWithFiles(const std::vector<std::string>& files) {
 void EventSender::AddTouchPoint(gin::Arguments* args) {
   double x;
   double y;
-  args->GetNext(&x);
-  args->GetNext(&y);
+  if (!args->GetNext(&x) || !args->GetNext(&y)) {
+    args->ThrowError();
+    return;
+  }
 
   WebTouchPoint touch_point;
   touch_point.state = WebTouchPoint::StatePressed;
@@ -1754,8 +1783,10 @@ void EventSender::MouseMoveTo(gin::Arguments* args) {
 
   double x;
   double y;
-  args->GetNext(&x);
-  args->GetNext(&y);
+  if (!args->GetNext(&x) || !args->GetNext(&y)) {
+    args->ThrowError();
+    return;
+  }
   WebPoint mouse_pos(static_cast<int>(x), static_cast<int>(y));
 
   int modifiers = 0;
@@ -1869,18 +1900,18 @@ void EventSender::MouseMomentumEnd() {
 }
 
 void EventSender::ScheduleAsynchronousClick(int button_number, int modifiers) {
-  delegate_->postTask(new MouseDownTask(this, button_number, modifiers));
-  delegate_->postTask(new MouseUpTask(this, button_number, modifiers));
+  delegate_->PostTask(new MouseDownTask(this, button_number, modifiers));
+  delegate_->PostTask(new MouseUpTask(this, button_number, modifiers));
 }
 
 void EventSender::ScheduleAsynchronousKeyDown(const std::string& code_str,
                                               int modifiers,
                                               KeyLocationCode location) {
-  delegate_->postTask(new KeyDownTask(this, code_str, modifiers, location));
+  delegate_->PostTask(new KeyDownTask(this, code_str, modifiers, location));
 }
 
 double EventSender::GetCurrentEventTimeSec() {
-  return (delegate_->getCurrentTimeInMillisecond() + time_offset_ms_) / 1000.0;
+  return (delegate_->GetCurrentTimeInMillisecond() + time_offset_ms_) / 1000.0;
 }
 
 void EventSender::DoLeapForward(int milliseconds) {
@@ -1917,9 +1948,10 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
                                gin::Arguments* args) {
   double x;
   double y;
-  args->GetNext(&x);
-  args->GetNext(&y);
-  WebPoint point(x, y);
+  if (!args->GetNext(&x) || !args->GetNext(&y)) {
+    args->ThrowError();
+    return;
+  }
 
   WebGestureEvent event;
   event.type = type;
@@ -1937,7 +1969,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
           current_gesture_location_.y + event.data.scrollUpdate.deltaY;
       break;
     case WebInputEvent::GestureScrollBegin:
-      current_gesture_location_ = WebPoint(point.x, point.y);
+      current_gesture_location_ = WebPoint(x, y);
       event.x = current_gesture_location_.x;
       event.y = current_gesture_location_.y;
       break;
@@ -1946,7 +1978,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       event.x = current_gesture_location_.x;
       event.y = current_gesture_location_.y;
       break;
-    case WebInputEvent::GestureTap: 
+    case WebInputEvent::GestureTap:
     {
       float tap_count = 1;
       float width = 30;
@@ -1972,8 +2004,8 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       event.data.tap.tapCount = tap_count;
       event.data.tap.width = width;
       event.data.tap.height = height;
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       break;
     }
     case WebInputEvent::GestureTapUnconfirmed:
@@ -1987,8 +2019,8 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       } else {
         event.data.tap.tapCount = 1;
       }
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       break;
     case WebInputEvent::GestureTapDown:
     {
@@ -2006,8 +2038,8 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
           return;
         }
       }
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       event.data.tapDown.width = width;
       event.data.tapDown.height = height;
       break;
@@ -2028,19 +2060,19 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
           }
         }
       }
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       event.data.showPress.width = width;
       event.data.showPress.height = height;
       break;
     }
     case WebInputEvent::GestureTapCancel:
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       break;
     case WebInputEvent::GestureLongPress:
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       if (!args->PeekNext().IsEmpty()) {
         float width;
         if (!args->GetNext(&width)) {
@@ -2059,8 +2091,8 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       }
       break;
     case WebInputEvent::GestureLongTap:
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       if (!args->PeekNext().IsEmpty()) {
         float width;
         if (!args->GetNext(&width)) {
@@ -2079,8 +2111,8 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
       }
       break;
     case WebInputEvent::GestureTwoFingerTap:
-      event.x = point.x;
-      event.y = point.y;
+      event.x = x;
+      event.y = y;
       if (!args->PeekNext().IsEmpty()) {
         float first_finger_width;
         if (!args->GetNext(&first_finger_width)) {
@@ -2116,7 +2148,7 @@ void EventSender::GestureEvent(WebInputEvent::Type type,
     WebMouseEvent mouse_event;
     InitMouseEvent(WebInputEvent::MouseDown,
                    pressed_button_,
-                   point,
+                   WebPoint(x, y),
                    GetCurrentEventTimeSec(),
                    click_count_,
                    0,

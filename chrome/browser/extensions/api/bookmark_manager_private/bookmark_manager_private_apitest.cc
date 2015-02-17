@@ -32,7 +32,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_BookmarkManager) {
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile);
   ChromeBookmarkClient* client =
       ChromeBookmarkClientFactory::GetForProfile(profile);
-  test::WaitForBookmarkModelToLoad(model);
+  bookmarks::test::WaitForBookmarkModelToLoad(model);
 
   base::ListValue list;
   base::DictionaryValue* node = new base::DictionaryValue();
@@ -43,7 +43,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, MAYBE_BookmarkManager) {
   node->SetString("name", "Managed Folder");
   node->Set("children", new base::ListValue());
   list.Append(node);
-  profile->GetPrefs()->Set(prefs::kManagedBookmarks, list);
+  profile->GetPrefs()->Set(bookmarks::prefs::kManagedBookmarks, list);
   ASSERT_EQ(2, client->managed_node()->child_count());
 
   ASSERT_TRUE(RunComponentExtensionTest("bookmark_manager/standard"))
@@ -56,7 +56,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, BookmarkManagerEditDisabled) {
   // Provide some testing data here, since bookmark editing will be disabled
   // within the extension.
   BookmarkModel* model = BookmarkModelFactory::GetForProfile(profile);
-  test::WaitForBookmarkModelToLoad(model);
+  bookmarks::test::WaitForBookmarkModelToLoad(model);
   const BookmarkNode* bar = model->bookmark_bar_node();
   const BookmarkNode* folder =
       model->AddFolder(bar, 0, base::ASCIIToUTF16("Folder"));
@@ -66,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, BookmarkManagerEditDisabled) {
                 GURL("http://bbb.example.com"));
 
   PrefService* prefs = user_prefs::UserPrefs::Get(profile);
-  prefs->SetBoolean(prefs::kEditBookmarksEnabled, false);
+  prefs->SetBoolean(bookmarks::prefs::kEditBookmarksEnabled, false);
 
   ASSERT_TRUE(RunComponentExtensionTest("bookmark_manager/edit_disabled"))
       << message_;

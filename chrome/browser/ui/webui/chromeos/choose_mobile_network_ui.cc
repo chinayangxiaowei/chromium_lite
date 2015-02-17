@@ -16,6 +16,7 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/network/device_state.h"
 #include "chromeos/network/network_device_handler.h"
 #include "chromeos/network/network_event_log.h"
@@ -26,7 +27,6 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 using content::WebContents;
@@ -66,7 +66,6 @@ content::WebUIDataSource* CreateChooseMobileNetworkUIHTMLSource() {
   source->AddLocalizedString("connect", IDS_OPTIONS_SETTINGS_CONNECT);
   source->AddLocalizedString("cancel", IDS_CANCEL);
 
-  source->SetUseJsonJSFormatV2();
   source->SetJsonPath("strings.js");
   source->AddResourcePath("choose_mobile_network.js",
                           IDR_CHOOSE_MOBILE_NETWORK_JS);
@@ -97,10 +96,10 @@ class ChooseMobileNetworkHandler
   virtual ~ChooseMobileNetworkHandler();
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
   // NetworkStateHandlerObserver implementation.
-  virtual void DeviceListChanged() OVERRIDE;
+  virtual void DeviceListChanged() override;
 
  private:
   // Handlers for JS WebUI messages.

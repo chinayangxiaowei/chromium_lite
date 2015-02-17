@@ -5,7 +5,7 @@
 #include "remoting/protocol/authenticator.h"
 
 #include "remoting/base/constants.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 namespace remoting {
 namespace protocol {
@@ -22,8 +22,7 @@ bool Authenticator::IsAuthenticatorMessage(const buzz::XmlElement* message) {
 
 // static
 scoped_ptr<buzz::XmlElement> Authenticator::CreateEmptyAuthenticatorMessage() {
-  return scoped_ptr<buzz::XmlElement>(
-      new buzz::XmlElement(kAuthenticationQName));
+  return make_scoped_ptr(new buzz::XmlElement(kAuthenticationQName));
 }
 
 // static

@@ -12,8 +12,6 @@
 #include "chrome/browser/net/url_request_mock_util.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_modal_dialogs/app_modal_dialog.h"
-#include "chrome/browser/ui/app_modal_dialogs/native_app_modal_dialog.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -27,18 +25,20 @@
 #include "chrome/browser/ui/panels/test_panel_active_state_observer.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/app_modal_dialogs/app_modal_dialog.h"
+#include "components/app_modal_dialogs/native_app_modal_dialog.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/test/net/url_request_mock_http_job.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
 #include "net/base/net_util.h"
+#include "net/test/url_request/url_request_mock_http_job.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/hit_test.h"
 #include "ui/events/event_utils.h"
@@ -359,10 +359,10 @@ class WaitForStableInitialSize : public TestPanelNotificationObserver {
           chrome::NOTIFICATION_PANEL_COLLECTION_UPDATED,
           content::NotificationService::AllSources()),
         panel_(panel) {}
-  virtual ~WaitForStableInitialSize() {}
+  ~WaitForStableInitialSize() override {}
 
  protected:
-  virtual bool AtExpectedState() OVERRIDE {
+  bool AtExpectedState() override {
     return panel_->GetBounds().height() > panel_->TitleOnlyHeight();
   }
   Panel* panel_;
@@ -376,10 +376,10 @@ class WaitForAutoResizeWider : public TestPanelNotificationObserver {
           content::NotificationService::AllSources()),
         panel_(panel),
         initial_size_(panel->GetBounds().size()) {}
-  virtual ~WaitForAutoResizeWider() {}
+  ~WaitForAutoResizeWider() override {}
 
  protected:
-  virtual bool AtExpectedState() OVERRIDE {
+  bool AtExpectedState() override {
     return panel_->GetBounds().width() > initial_size_.width();
   }
   Panel* panel_;
@@ -394,10 +394,10 @@ class WaitForAutoResizeNarrower : public TestPanelNotificationObserver {
           content::NotificationService::AllSources()),
         panel_(panel),
         initial_size_(panel->GetBounds().size()) {}
-  virtual ~WaitForAutoResizeNarrower() {}
+  ~WaitForAutoResizeNarrower() override {}
 
  protected:
-  virtual bool AtExpectedState() OVERRIDE {
+  bool AtExpectedState() override {
     return panel_->GetBounds().width() < initial_size_.width();
   }
   Panel* panel_;
@@ -1418,12 +1418,11 @@ IN_PROC_BROWSER_TEST_F(PanelBrowserTest,
       content::Source<Panel>(panel1));
 
   // Send unload notification on the first extension.
-  extensions::UnloadedExtensionInfo details(
+  extensions::ExtensionRegistry* registry =
+      extensions::ExtensionRegistry::Get(browser()->profile());
+  registry->RemoveEnabled(extension->id());
+  registry->TriggerOnUnloaded(
       extension.get(), extensions::UnloadedExtensionInfo::REASON_UNINSTALL);
-  content::NotificationService::current()->Notify(
-      extensions::NOTIFICATION_EXTENSION_UNLOADED_DEPRECATED,
-      content::Source<Profile>(browser()->profile()),
-      content::Details<extensions::UnloadedExtensionInfo>(&details));
 
   // Wait for the panels opened by the first extension to close.
   signal.Wait();
@@ -1759,7 +1758,7 @@ IN_PROC_BROWSER_TEST_F(PanelBrowserTest,
 
 class PanelExtensionApiTest : public ExtensionApiTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kEnablePanels);
   }

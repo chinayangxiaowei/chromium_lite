@@ -12,7 +12,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/cryptohome_client.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/dbus/session_manager_client.h"
 #include "components/user_manager/user.h"
@@ -37,21 +37,18 @@ class CrashRestoreSimpleTest : public InProcessBrowserTest {
 
   virtual ~CrashRestoreSimpleTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kLoginUser, kUserId1);
     command_line->AppendSwitchASCII(
         switches::kLoginProfile,
         CryptohomeClient::GetStubSanitizedUsername(kUserId1));
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     // Redirect session_manager DBus calls to FakeSessionManagerClient.
-    FakeDBusThreadManager* dbus_thread_manager = new FakeDBusThreadManager;
-    dbus_thread_manager->SetFakeClients();
     session_manager_client_ = new FakeSessionManagerClient;
-    dbus_thread_manager->SetSessionManagerClient(
+    chromeos::DBusThreadManager::GetSetterForTesting()->SetSessionManagerClient(
         scoped_ptr<SessionManagerClient>(session_manager_client_));
-    DBusThreadManager::SetInstanceForTesting(dbus_thread_manager);
     session_manager_client_->StartSession(kUserId1);
   }
 
@@ -80,7 +77,7 @@ class UserSessionRestoreObserver : public UserSessionStateObserver {
   }
   virtual ~UserSessionRestoreObserver() {}
 
-  virtual void PendingUserSessionsRestoreFinished() OVERRIDE {
+  virtual void PendingUserSessionsRestoreFinished() override {
     user_sessions_restored_ = true;
     UserSessionManager::GetInstance()->RemoveSessionStateObserver(this);
     if (!running_loop_)
@@ -115,7 +112,7 @@ class CrashRestoreComplexTest : public CrashRestoreSimpleTest {
   CrashRestoreComplexTest() {}
   virtual ~CrashRestoreComplexTest() {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     CrashRestoreSimpleTest::SetUpInProcessBrowserTestFixture();
     session_manager_client_->StartSession(kUserId2);
     session_manager_client_->StartSession(kUserId3);

@@ -24,6 +24,7 @@
 #include "chromeos/system/statistics_provider.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
+#include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/system_policy_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
 
@@ -67,7 +68,18 @@ DeviceCloudPolicyInitializer::DeviceCloudPolicyInitializer(
       device_store_(device_store),
       manager_(manager),
       device_settings_service_(device_settings_service),
-      on_connected_callback_(on_connected_callback) {
+      on_connected_callback_(on_connected_callback),
+      is_initialized_(false) {
+}
+
+DeviceCloudPolicyInitializer::~DeviceCloudPolicyInitializer() {
+  DCHECK(!is_initialized_);
+}
+
+void DeviceCloudPolicyInitializer::Init() {
+  DCHECK(!is_initialized_);
+
+  is_initialized_ = true;
   device_store_->AddObserver(this);
   state_keys_update_subscription_ = state_keys_broker_->RegisterUpdateCallback(
       base::Bind(&DeviceCloudPolicyInitializer::TryToCreateClient,
@@ -82,14 +94,14 @@ DeviceCloudPolicyInitializer::DeviceCloudPolicyInitializer(
   TryToCreateClient();
 }
 
-DeviceCloudPolicyInitializer::~DeviceCloudPolicyInitializer() {
-}
-
 void DeviceCloudPolicyInitializer::Shutdown() {
+  DCHECK(is_initialized_);
+
   device_store_->RemoveObserver(this);
   device_status_provider_.reset();
   enrollment_handler_.reset();
   state_keys_update_subscription_.reset();
+  is_initialized_ = false;
 }
 
 void DeviceCloudPolicyInitializer::StartEnrollment(
@@ -99,7 +111,8 @@ void DeviceCloudPolicyInitializer::StartEnrollment(
     bool is_auto_enrollment,
     const AllowedDeviceModes& allowed_device_modes,
     const EnrollmentCallback& enrollment_callback) {
-  CHECK(!enrollment_handler_);
+  DCHECK(is_initialized_);
+  DCHECK(!enrollment_handler_);
 
   manager_->core()->Disconnect();
   enrollment_handler_.reset(new EnrollmentHandlerChromeOS(
@@ -122,9 +135,9 @@ void DeviceCloudPolicyInitializer::StartEnrollment(
 }
 
 bool DeviceCloudPolicyInitializer::ShouldAutoStartEnrollment() const {
-  std::string restore_mode = GetRestoreMode();
-  if (restore_mode == kDeviceStateRestoreModeReEnrollmentRequested ||
-      restore_mode == kDeviceStateRestoreModeReEnrollmentEnforced) {
+  const RestoreMode restore_mode = GetRestoreMode();
+  if (restore_mode == RESTORE_MODE_REENROLLMENT_REQUESTED ||
+      restore_mode == RESTORE_MODE_REENROLLMENT_ENFORCED) {
     return true;
   }
 
@@ -150,7 +163,7 @@ std::string DeviceCloudPolicyInitializer::GetEnrollmentRecoveryDomain() const {
 }
 
 bool DeviceCloudPolicyInitializer::CanExitEnrollment() const {
-  if (GetRestoreMode() == kDeviceStateRestoreModeReEnrollmentEnforced)
+  if (GetRestoreMode() == RESTORE_MODE_REENROLLMENT_ENFORCED)
     return false;
 
   if (local_state_->HasPrefPath(prefs::kDeviceEnrollmentCanExit))
@@ -218,14 +231,15 @@ void DeviceCloudPolicyInitializer::TryToCreateClient() {
       !device_store_->policy()->request_token().empty() &&
       !state_keys_broker_->pending() &&
       !enrollment_handler_) {
-    DeviceManagementService* service;
+    DeviceManagementService* service = NULL;
     if (device_store_->policy()->management_mode() ==
         em::PolicyData::CONSUMER_MANAGED) {
       service = consumer_service_;
     } else {
       service = enterprise_service_;
     }
-    StartConnection(CreateClient(service));
+    if (service)
+      StartConnection(CreateClient(service));
   }
 }
 
@@ -238,14 +252,6 @@ void DeviceCloudPolicyInitializer::StartConnection(
     on_connected_callback_.Run();
     on_connected_callback_.Reset();
   }
-}
-
-std::string DeviceCloudPolicyInitializer::GetRestoreMode() const {
-  const base::DictionaryValue* device_state_dict =
-      local_state_->GetDictionary(prefs::kServerBackedDeviceState);
-  std::string restore_mode;
-  device_state_dict->GetString(kDeviceStateRestoreMode, &restore_mode);
-  return restore_mode;
 }
 
 }  // namespace policy

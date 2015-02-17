@@ -5,7 +5,7 @@
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -126,30 +126,30 @@ class AppDataLoadWaiter : public KioskAppManagerObserver {
 
  private:
   // KioskAppManagerObserver overrides:
-  virtual void OnKioskAppDataChanged(const std::string& app_id) OVERRIDE {
+  virtual void OnKioskAppDataChanged(const std::string& app_id) override {
     ++data_change_count_;
     if (data_change_count_ < data_loaded_threshold_)
       return;
     loaded_ = true;
     quit_ = true;
-    if (runner_)
+    if (runner_.get())
       runner_->Quit();
   }
 
-  virtual void OnKioskAppDataLoadFailure(const std::string& app_id) OVERRIDE {
+  virtual void OnKioskAppDataLoadFailure(const std::string& app_id) override {
     loaded_ = false;
     quit_ = true;
-    if (runner_)
+    if (runner_.get())
       runner_->Quit();
   }
 
   virtual void OnKioskExtensionLoadedInCache(
-      const std::string& app_id) OVERRIDE {
+      const std::string& app_id) override {
     OnKioskAppDataChanged(app_id);
   }
 
   virtual void OnKioskExtensionDownloadFailed(
-      const std::string& app_id) OVERRIDE {
+      const std::string& app_id) override {
     OnKioskAppDataLoadFailure(app_id);
   }
 
@@ -171,7 +171,7 @@ class KioskAppManagerTest : public InProcessBrowserTest {
   virtual ~KioskAppManagerTest() {}
 
   // InProcessBrowserTest overrides:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     base::FilePath test_data_dir;
     PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
     embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
@@ -185,21 +185,21 @@ class KioskAppManagerTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUp();
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     InProcessBrowserTest::SetUpCommandLine(command_line);
 
     // Initialize fake_cws_ to setup web store gallery.
     fake_cws_->Init(embedded_test_server());
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
     // Restart the thread as the sandbox host process has already been spawned.
     embedded_test_server()->RestartThreadAndListen();
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
 
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -521,7 +521,7 @@ IN_PROC_BROWSER_TEST_F(KioskAppManagerTest, RemoveApp) {
 
   // Remove the app now.
   manager()->RemoveApp(kTestLocalFsKioskApp);
-  content::BrowserThread::GetBlockingPool()->FlushForTesting();
+  content::RunAllBlockingPoolTasksUntilIdle();
   manager()->GetApps(&apps);
   ASSERT_EQ(0u, apps.size());
   EXPECT_FALSE(base::PathExists(crx_path));
@@ -603,7 +603,7 @@ IN_PROC_BROWSER_TEST_F(KioskAppManagerTest, UpdateAndRemoveApp) {
 
   // Remove the app now.
   manager()->RemoveApp(kTestLocalFsKioskApp);
-  content::BrowserThread::GetBlockingPool()->FlushForTesting();
+  content::RunAllBlockingPoolTasksUntilIdle();
   manager()->GetApps(&apps);
   ASSERT_EQ(0u, apps.size());
   // Verify both v1 and v2 crx files are removed.

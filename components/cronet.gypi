@@ -11,6 +11,8 @@
           'target_name': 'cronet_jni_headers',
           'type': 'none',
           'sources': [
+            'cronet/android/java/src/org/chromium/net/CronetUrlRequest.java',
+            'cronet/android/java/src/org/chromium/net/CronetUrlRequestContext.java',
             'cronet/android/java/src/org/chromium/net/ChromiumUrlRequest.java',
             'cronet/android/java/src/org/chromium/net/ChromiumUrlRequestContext.java',
           ],
@@ -20,34 +22,26 @@
           'includes': [ '../build/jni_generator.gypi' ],
         },
         {
-          'target_name': 'cronet_url_request_error_list',
+          'target_name': 'cronet_url_request_java',
           'type': 'none',
-          'sources': [
-            'cronet/android/java/src/org/chromium/net/ChromiumUrlRequestError.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/cronet',
-            'template_deps': ['cronet/android/chromium_url_request_error_list.h'],
+            'source_file': 'cronet/android/chromium_url_request.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
-          'target_name': 'cronet_url_request_priority_list',
+          'target_name': 'net_request_priority_java',
           'type': 'none',
-          'sources': [
-            'cronet/android/java/src/org/chromium/net/ChromiumUrlRequestPriority.template',
-          ],
           'variables': {
-            'package_name': 'org/chromium/cronet',
-            'template_deps': ['cronet/android/chromium_url_request_priority_list.h'],
+            'source_file': '../net/base/request_priority.h',
           },
-          'includes': [ '../build/android/java_cpp_template.gypi' ],
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
         {
           'target_name': 'cronet_url_request_context_config_list',
           'type': 'none',
           'sources': [
-            'cronet/android/java/src/org/chromium/net/UrlRequestContextConfig.template',
+            'cronet/android/java/src/org/chromium/net/UrlRequestContextConfigList.template',
           ],
           'variables': {
             'package_name': 'org/chromium/cronet',
@@ -58,25 +52,36 @@
         {
           'target_name': 'cronet_version',
           'type': 'none',
-          # Because cronet_version generates a header, we must set the
-          # hard_dependency flag.
-          'hard_dependency': 1,
+          'variables': {
+            'lastchange_path': '<(DEPTH)/build/util/LASTCHANGE',
+            'version_py_path': '<(DEPTH)/build/util/version.py',
+            'version_path': '<(DEPTH)/chrome/VERSION',
+            'template_input_path': 'cronet/android/java/src/org/chromium/net/Version.template',
+            'output_path': '<(SHARED_INTERMEDIATE_DIR)/templates/<(_target_name)/org/chromium/cronet/Version.java',
+          },
+          'direct_dependent_settings': {
+            'variables': {
+              # Ensure that the output directory is used in the class path
+              # when building targets that depend on this one.
+              'generated_src_dirs': [
+                '<(SHARED_INTERMEDIATE_DIR)/templates/<(_target_name)',
+              ],
+              # Ensure dependents are rebuilt when the generated Java file changes.
+              'additional_input_paths': [
+                '<(output_path)',
+              ],
+            },
+          },
           'actions': [
             {
               'action_name': 'cronet_version',
-              'variables': {
-                'lastchange_path': '<(DEPTH)/build/util/LASTCHANGE',
-                'version_py_path': '<(DEPTH)/build/util/version.py',
-                'version_path': '<(DEPTH)/chrome/VERSION',
-                'template_input_path': 'cronet/android/java/src/org/chromium/net/Version.template',
-              },
               'inputs': [
                 '<(template_input_path)',
                 '<(version_path)',
                 '<(lastchange_path)',
               ],
               'outputs': [
-                '<(SHARED_INTERMEDIATE_DIR)/templates/org/chromium/cronet/Version.java',
+                '<(output_path)',
               ],
               'action': [
                 'python',
@@ -84,25 +89,23 @@
                 '-f', '<(version_path)',
                 '-f', '<(lastchange_path)',
                 '<(template_input_path)',
-                '<@(_outputs)',
+                '<(output_path)',
               ],
               'message': 'Generating version information',
             },
           ],
         },
         {
-          'target_name': 'libcronet',
-          'type': 'shared_library',
+          'target_name': 'cronet_static',
+          'type': 'static_library',
           'dependencies': [
             '../base/base.gyp:base',
             '../base/base.gyp:base_i18n',
             '../third_party/icu/icu.gyp:icui18n',
             '../third_party/icu/icu.gyp:icuuc',
-            '../url/url.gyp:url_lib',
             'cronet_jni_headers',
             'cronet_url_request_context_config_list',
-            'cronet_url_request_error_list',
-            'cronet_url_request_priority_list',
+            'cronet_url_request_java',
             'cronet_version',
             '../net/net.gyp:net',
           ],
@@ -116,7 +119,16 @@
             'cronet/android/chromium_url_request_priority_list.h',
             'cronet/android/chromium_url_request_context.cc',
             'cronet/android/chromium_url_request_context.h',
-            'cronet/android/cronet_jni.cc',
+            'cronet/android/cronet_loader.cc',
+            'cronet/android/cronet_loader.h',
+            'cronet/android/cronet_url_request.cc',
+            'cronet/android/cronet_url_request.h',
+            'cronet/android/cronet_url_request_adapter.cc',
+            'cronet/android/cronet_url_request_adapter.h',
+            'cronet/android/cronet_url_request_context.cc',
+            'cronet/android/cronet_url_request_context.h',
+            'cronet/android/cronet_url_request_context_adapter.cc',
+            'cronet/android/cronet_url_request_context_adapter.h',
             'cronet/android/url_request_adapter.cc',
             'cronet/android/url_request_adapter.h',
             'cronet/android/url_request_context_adapter.cc',
@@ -151,6 +163,19 @@
             ],
           ],
         },
+        {
+          'target_name': 'libcronet',
+          'type': 'shared_library',
+          'sources': [
+            'cronet/android/cronet_jni.cc',
+          ],
+          'dependencies': [
+            'cronet_static',
+            '../base/base.gyp:base',
+            '../net/net.gyp:net',
+            '../url/url.gyp:url_lib',
+          ],
+        },
         { # cronet_stub.jar defines HttpUrlRequest interface and provides its
           # its implementation using HttpUrlConnection (not the Chromium stack).
           'target_name': 'cronet_stub',
@@ -163,12 +188,18 @@
             'java_in_dir': 'cronet/android/java',
             'javac_includes': [
               '**/ChunkedWritableByteChannel.java',
+              '**/ExtendedResponseInfo.java',
               '**/HttpUrlConnection*.java',
               '**/HttpUrlRequest*.java',
+              '**/ResponseInfo.java',
               '**/ResponseTooLargeException.java',
-              '**/UserAgent.java',
-              # TODO(mef): Consider moving this into HttpUrlRequestConfig.
+              '**/UrlRequest.java',
+              '**/UrlRequestContext.java',
               '**/UrlRequestContextConfig.java',
+              '**/UrlRequestContextConfigList.java',
+              '**/UrlRequestException.java',
+              '**/UrlRequestListener.java',
+              '**/UserAgent.java',
               '**/Version.java',
             ],
           },
@@ -181,20 +212,24 @@
           'dependencies': [
             '../base/base.gyp:base',
             'cronet_stub',
-            'cronet_url_request_error_list',
-            'cronet_url_request_priority_list',
+            'cronet_url_request_java',
             'libcronet',
+            'net_request_priority_java',
           ],
           'variables': {
             'java_in_dir': 'cronet/android/java',
             'javac_includes': [
+              '**/ChromiumAsyncUrlRequest.java',
               '**/ChromiumUrlRequest.java',
               '**/ChromiumUrlRequestContext.java',
               '**/ChromiumUrlRequestError.java',
               '**/ChromiumUrlRequestFactory.java',
               '**/ChromiumUrlRequestPriority.java',
-              '**/LibraryLoader.java',
-              '**/UsedByReflection.java',
+              '**/CronetResponseInfo.java',
+              '**/CronetUrlRequest.java',
+              '**/CronetUrlRequestContext.java',
+              '**/CronetUrlRequestFactory.java',
+              '**/RequestPriority.java',
             ],
           },
           'includes': [ '../build/java.gypi' ],
@@ -331,12 +366,18 @@
           'type': 'none',
           'dependencies': [
             'cronet',
+            'cronet_stub',
           ],
           'variables': {
             'apk_name': 'CronetSample',
             'java_in_dir': 'cronet/android/sample',
             'resource_dir': 'cronet/android/sample/res',
             'native_lib_target': 'libcronet',
+            'proguard_enabled': 'true',
+            'proguard_flags_paths': [
+              'cronet/android/proguard.cfg',
+              'cronet/android/sample/javatests/proguard.cfg',
+            ],
           },
           'includes': [ '../build/java_apk.gypi' ],
         },
@@ -357,18 +398,101 @@
           'target_name': 'cronet_sample_test_apk',
           'type': 'none',
           'dependencies': [
+            'cronet',
             'cronet_sample_apk_java',
-            '../base/base.gyp:base_java',
-            '../base/base.gyp:base_javatests',
+            'cronet_stub',
             '../base/base.gyp:base_java_test_support',
-            # TODO(mef): Figure out why some tests are failing.
-            #'../net/net.gyp:net_javatests',
-            #'../net/net.gyp:net_java_test_support',
           ],
           'variables': {
             'apk_name': 'CronetSampleTest',
             'java_in_dir': 'cronet/android/sample/javatests',
             'resource_dir': 'cronet/android/sample/res',
+            'is_test_apk': 1,
+          },
+          'includes': [ '../build/java_apk.gypi' ],
+        },
+        {
+          'target_name': 'cronet_tests_jni_headers',
+          'type': 'none',
+          'sources': [
+            'cronet/android/test/src/org/chromium/cronet_test_apk/CronetTestUtil.java',
+            'cronet/android/test/src/org/chromium/cronet_test_apk/MockUrlRequestJobUtil.java',
+            'cronet/android/test/src/org/chromium/cronet_test_apk/UploadTestServer.java',
+            'cronet/android/test/src/org/chromium/cronet_test_apk/NetworkChangeNotifierUtil.java',
+          ],
+          'variables': {
+            'jni_gen_package': 'cronet_tests',
+          },
+          'includes': [ '../build/jni_generator.gypi' ],
+        },
+        {
+          'target_name': 'libcronet_tests',
+          'type': 'shared_library',
+          'sources': [
+            'cronet/android/test/cronet_test_jni.cc',
+            'cronet/android/test/mock_url_request_job_util.cc',
+            'cronet/android/test/mock_url_request_job_util.h',
+            'cronet/android/test/upload_test_server.cc',
+            'cronet/android/test/upload_test_server.h',
+            'cronet/android/test/network_change_notifier_util.cc',
+            'cronet/android/test/network_change_notifier_util.h',
+            '../net/base/directory_lister.cc',
+            '../net/base/directory_lister.h',
+            '../net/url_request/url_request_file_job.cc',
+            '../net/url_request/url_request_file_job.h',
+          ],
+          'dependencies': [
+            'cronet_static',
+            'cronet_tests_jni_headers',
+            '../base/base.gyp:base',
+            '../net/net.gyp:net',
+            '../net/net.gyp:net_test_support',
+            '../net/net.gyp:quic_tools',
+            '../url/url.gyp:url_lib',
+            '../base/base.gyp:base_i18n',
+            '../third_party/icu/icu.gyp:icui18n',
+            '../third_party/icu/icu.gyp:icuuc',
+          ],
+        },
+        {
+          'target_name': 'cronet_test_apk',
+          'type': 'none',
+          'dependencies': [
+            'cronet',
+          ],
+          'variables': {
+            'apk_name': 'CronetTest',
+            'java_in_dir': 'cronet/android/test',
+            'resource_dir': 'cronet/android/test/res',
+            'asset_location': 'cronet/android/test/assets',
+            'native_lib_target': 'libcronet_tests',
+          },
+          'includes': [ '../build/java_apk.gypi' ],
+        },
+        {
+          # cronet_test_apk creates a .jar as a side effect. Any java targets
+          # that need that .jar in their classpath should depend on this target,
+          # cronet_test_apk_java. Dependents of cronet_test_apk receive its
+          # jar path in the variable 'apk_output_jar_path'. This target should
+          # only be used by targets which instrument cronet_test_apk.
+          'target_name': 'cronet_test_apk_java',
+          'type': 'none',
+          'dependencies': [
+            'cronet_test_apk',
+          ],
+          'includes': [ '../build/apk_fake_jar.gypi' ],
+        },
+        {
+          'target_name': 'cronet_test_instrumentation_apk',
+          'type': 'none',
+          'dependencies': [
+            'cronet_test_apk_java',
+            '../base/base.gyp:base_java_test_support',
+          ],
+          'variables': {
+            'apk_name': 'CronetTestInstrumentation',
+            'java_in_dir': 'cronet/android/test/javatests',
+            'resource_dir': 'cronet/android/test/res',
             'is_test_apk': 1,
           },
           'includes': [ '../build/java_apk.gypi' ],

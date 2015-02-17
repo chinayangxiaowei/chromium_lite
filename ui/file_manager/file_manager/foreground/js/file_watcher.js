@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Watches for changes in the tracked directory, including local metadata
  * changes.
@@ -18,12 +16,12 @@ function FileWatcher(metadataCache) {
   this.watchedDirectoryEntry_ = null;
 
   this.onDirectoryChangedBound_ = this.onDirectoryChanged_.bind(this);
-  chrome.fileBrowserPrivate.onDirectoryChanged.addListener(
+  chrome.fileManagerPrivate.onDirectoryChanged.addListener(
       this.onDirectoryChangedBound_);
 
   this.filesystemMetadataObserverId_ = null;
   this.thumbnailMetadataObserverId_ = null;
-  this.driveMetadataObserverId_ = null;
+  this.externalMetadataObserverId_ = null;
 }
 
 /**
@@ -35,7 +33,7 @@ FileWatcher.prototype.__proto__ = cr.EventTarget.prototype;
  * Stops watching (must be called before page unload).
  */
 FileWatcher.prototype.dispose = function() {
-  chrome.fileBrowserPrivate.onDirectoryChanged.removeListener(
+  chrome.fileManagerPrivate.onDirectoryChanged.removeListener(
       this.onDirectoryChangedBound_);
   if (this.watchedDirectoryEntry_)
     this.resetWatchedEntry_(function() {}, function() {});
@@ -47,11 +45,30 @@ FileWatcher.prototype.dispose = function() {
  * @private
  */
 FileWatcher.prototype.onDirectoryChanged_ = function(event) {
-  if (this.watchedDirectoryEntry_ &&
-      event.entry.toURL() === this.watchedDirectoryEntry_.toURL()) {
+  var fireWatcherDirectoryChanged = function(changedFiles) {
     var e = new Event('watcher-directory-changed');
-    e.changedFiles = event.changedFiles;
+
+    if (changedFiles)
+      e.changedFiles = changedFiles;
+
     this.dispatchEvent(e);
+  }.bind(this);
+
+  if (this.watchedDirectoryEntry_) {
+    var eventURL = event.entry.toURL();
+    var watchedDirURL = this.watchedDirectoryEntry_.toURL();
+
+    if (eventURL === watchedDirURL) {
+      fireWatcherDirectoryChanged(event.changedFiles);
+    } else if (watchedDirURL.match(new RegExp('^' + eventURL))) {
+      // When watched directory is deleted by the change in parent directory,
+      // notify it as watcher directory changed.
+      this.watchedDirectoryEntry_.getDirectory(
+          this.watchedDirectoryEntry_.fullPath,
+          {create: false},
+          null,
+          function() { fireWatcherDirectoryChanged(null); });
+    }
   }
 };
 
@@ -82,16 +99,16 @@ FileWatcher.prototype.onThumbnailMetadataChanged_ = function(
 };
 
 /**
- * Called when drive metadata in the watched directory has been changed.
+ * Called when external metadata in the watched directory has been changed.
  *
  * @param {Array.<Entry>} entries Array of entries.
  * @param {Object.<string, Object>} properties Map from entry URLs to metadata
  *     properties.
  * @private
  */
-FileWatcher.prototype.onDriveMetadataChanged_ = function(
+FileWatcher.prototype.onExternalMetadataChanged_ = function(
     entries, properties) {
-  this.dispatchMetadataEvent_('drive', entries, properties);
+  this.dispatchMetadataEvent_('external', entries, properties);
 };
 
 /**
@@ -124,11 +141,11 @@ FileWatcher.prototype.dispatchMetadataEvent_ = function(
 FileWatcher.prototype.changeWatchedDirectory = function(entry, callback) {
   if (!util.isFakeEntry(entry)) {
     this.changeWatchedEntry_(
-        entry,
+        /** @type {!DirectoryEntry} */ (entry),
         callback,
         function() {
           console.error(
-             'Unable to change the watched directory to: ' + entry.toURL());
+              'Unable to change the watched directory to: ' + entry.toURL());
           callback();
         });
   } else {
@@ -153,7 +170,7 @@ FileWatcher.prototype.resetWatchedEntry_ = function(onSuccess, onError) {
   this.queue_.run(function(callback) {
     // Release the watched directory.
     if (this.watchedDirectoryEntry_) {
-      chrome.fileBrowserPrivate.removeFileWatch(
+      chrome.fileManagerPrivate.removeFileWatch(
           this.watchedDirectoryEntry_.toURL(),
           function(result) {
             this.watchedDirectoryEntry_ = null;
@@ -165,7 +182,7 @@ FileWatcher.prototype.resetWatchedEntry_ = function(onSuccess, onError) {
           }.bind(this));
       this.metadataCache_.removeObserver(this.filesystemMetadataObserverId_);
       this.metadataCache_.removeObserver(this.thumbnailMetadataObserverId_);
-      this.metadataCache_.removeObserver(this.driveMetadataObserverId_);
+      this.metadataCache_.removeObserver(this.externalMetadataObserverId_);
     } else {
       onSuccess();
       callback();
@@ -186,7 +203,7 @@ FileWatcher.prototype.changeWatchedEntry_ = function(
   var setEntryClosure = function() {
     // Run the tasks in the queue to avoid races.
     this.queue_.run(function(callback) {
-      chrome.fileBrowserPrivate.addFileWatch(
+      chrome.fileManagerPrivate.addFileWatch(
           entry.toURL(),
           function(result) {
             if (!result) {
@@ -199,20 +216,20 @@ FileWatcher.prototype.changeWatchedEntry_ = function(
             callback();
           }.bind(this));
       this.filesystemMetadataObserverId_ = this.metadataCache_.addObserver(
-        entry,
-        MetadataCache.CHILDREN,
-        'filesystem',
-        this.onFilesystemMetadataChanged_.bind(this));
+          entry,
+          MetadataCache.CHILDREN,
+          'filesystem',
+          this.onFilesystemMetadataChanged_.bind(this));
       this.thumbnailMetadataObserverId_ = this.metadataCache_.addObserver(
-        entry,
-        MetadataCache.CHILDREN,
-        'thumbnail',
-        this.onThumbnailMetadataChanged_.bind(this));
-      this.driveMetadataObserverId_ = this.metadataCache_.addObserver(
-        entry,
-        MetadataCache.CHILDREN,
-        'drive',
-        this.onDriveMetadataChanged_.bind(this));
+          entry,
+          MetadataCache.CHILDREN,
+          'thumbnail',
+          this.onThumbnailMetadataChanged_.bind(this));
+      this.externalMetadataObserverId_ = this.metadataCache_.addObserver(
+          entry,
+          MetadataCache.CHILDREN,
+          'external',
+          this.onExternalMetadataChanged_.bind(this));
     }.bind(this));
   }.bind(this);
 

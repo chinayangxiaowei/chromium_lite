@@ -5,7 +5,9 @@
 #ifndef ASH_WM_MAXIMIZE_MODE_WORKSPACE_BACKDROP_DELEGATE_H_
 #define ASH_WM_MAXIMIZE_MODE_WORKSPACE_BACKDROP_DELEGATE_H_
 
+#include "ash/ash_export.h"
 #include "ash/wm/workspace/workspace_layout_manager_delegate.h"
+#include "base/compiler_specific.h"
 #include "ui/aura/window_observer.h"
 
 namespace aura {
@@ -25,27 +27,27 @@ namespace ash {
 // A background which gets created for a container |window| and which gets
 // stacked behind the topmost window (within that container) covering the
 // entire container.
-class WorkspaceBackdropDelegate : public aura::WindowObserver,
-                                  public WorkspaceLayoutManagerDelegate {
+class ASH_EXPORT WorkspaceBackdropDelegate
+    : public aura::WindowObserver,
+      public NON_EXPORTED_BASE(WorkspaceLayoutManagerDelegate) {
  public:
   explicit WorkspaceBackdropDelegate(aura::Window* container);
-  virtual ~WorkspaceBackdropDelegate();
+  ~WorkspaceBackdropDelegate() override;
 
   // WindowObserver overrides:
-  virtual void OnWindowBoundsChanged(aura::Window* window,
-                                     const gfx::Rect& old_bounds,
-                                     const gfx::Rect& new_bounds) OVERRIDE;
+  void OnWindowBoundsChanged(aura::Window* window,
+                             const gfx::Rect& old_bounds,
+                             const gfx::Rect& new_bounds) override;
 
   // WorkspaceLayoutManagerDelegate overrides:
-  virtual void OnWindowAddedToLayout(aura::Window* child) OVERRIDE;
-  virtual void OnWindowRemovedFromLayout(aura::Window* child) OVERRIDE;
-  virtual void OnChildWindowVisibilityChanged(aura::Window* child,
-                                              bool visible) OVERRIDE;
-  virtual void OnWindowStackingChanged(aura::Window* window) OVERRIDE;
-  virtual void OnPostWindowStateTypeChange(
-      wm::WindowState* window_state,
-      wm::WindowStateType old_type) OVERRIDE;
-  virtual void OnDisplayWorkAreaInsetsChanged() OVERRIDE;
+  void OnWindowAddedToLayout(aura::Window* child) override;
+  void OnWindowRemovedFromLayout(aura::Window* child) override;
+  void OnChildWindowVisibilityChanged(aura::Window* child,
+                                      bool visible) override;
+  void OnWindowStackingChanged(aura::Window* window) override;
+  void OnPostWindowStateTypeChange(wm::WindowState* window_state,
+                                   wm::WindowStateType old_type) override;
+  void OnDisplayWorkAreaInsetsChanged() override;
 
  private:
   // Restack the backdrop relatively to the other windows in the container.

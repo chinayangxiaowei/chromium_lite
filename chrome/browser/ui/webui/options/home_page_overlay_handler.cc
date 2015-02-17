@@ -12,11 +12,11 @@
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/metrics/proto/omnibox_event.pb.h"
 #include "components/omnibox/autocomplete_input.h"
 #include "components/omnibox/autocomplete_result.h"
 #include "content/public/browser/web_ui.h"
-#include "grit/generated_resources.h"
 
 namespace options {
 
@@ -53,7 +53,7 @@ void HomePageOverlayHandler::RequestAutocompleteSuggestions(
   CHECK(args->GetString(0, &input));
 
   autocomplete_controller_->Start(AutocompleteInput(
-      input, base::string16::npos, base::string16(), GURL(),
+      input, base::string16::npos, std::string(), GURL(),
       metrics::OmniboxEventProto::INVALID_SPEC, true, false, false, true,
       ChromeAutocompleteSchemeClassifier(Profile::FromWebUI(web_ui()))));
 }

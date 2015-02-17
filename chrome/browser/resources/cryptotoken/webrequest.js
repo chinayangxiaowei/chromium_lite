@@ -26,25 +26,58 @@ function getOriginFromUrl(url) {
 }
 
 /**
- * Returns whether the array of SignChallenges appears to be valid.
- * @param {Array.<SignChallenge>} signChallenges The array of sign challenges.
- * @return {boolean} Whether the array appears valid.
+ * Returns whether the registered key appears to be valid.
+ * @param {Object} registeredKey The registered key object.
+ * @param {boolean} appIdRequired Whether the appId property is required on
+ *     each challenge.
+ * @return {boolean} Whether the object appears valid.
  */
-function isValidSignChallengeArray(signChallenges) {
-  for (var i = 0; i < signChallenges.length; i++) {
-    var incomingChallenge = signChallenges[i];
-    if (!incomingChallenge.hasOwnProperty('challenge'))
-      return false;
-    if (!incomingChallenge.hasOwnProperty('appId')) {
+function isValidRegisteredKey(registeredKey, appIdRequired) {
+  if (appIdRequired && !registeredKey.hasOwnProperty('appId')) {
+    return false;
+  }
+  if (!registeredKey.hasOwnProperty('keyHandle'))
+    return false;
+  if (registeredKey['version']) {
+    if (registeredKey['version'] != 'U2F_V1' &&
+        registeredKey['version'] != 'U2F_V2') {
       return false;
     }
-    if (!incomingChallenge.hasOwnProperty('keyHandle'))
+  }
+  return true;
+}
+
+/**
+ * Returns whether the array of registered keys appears to be valid.
+ * @param {Array.<Object>} registeredKeys The array of registered keys.
+ * @param {boolean} appIdRequired Whether the appId property is required on
+ *     each challenge.
+ * @return {boolean} Whether the array appears valid.
+ */
+function isValidRegisteredKeyArray(registeredKeys, appIdRequired) {
+  return registeredKeys.every(function(key) {
+    return isValidRegisteredKey(key, appIdRequired);
+  });
+}
+
+/**
+ * Returns whether the array of SignChallenges appears to be valid.
+ * @param {Array.<SignChallenge>} signChallenges The array of sign challenges.
+ * @param {boolean} challengeValueRequired Whether each challenge object
+ *     requires a challenge value.
+ * @param {boolean} appIdRequired Whether the appId property is required on
+ *     each challenge.
+ * @return {boolean} Whether the array appears valid.
+ */
+function isValidSignChallengeArray(signChallenges, challengeValueRequired,
+    appIdRequired) {
+  for (var i = 0; i < signChallenges.length; i++) {
+    var incomingChallenge = signChallenges[i];
+    if (challengeValueRequired &&
+        !incomingChallenge.hasOwnProperty('challenge'))
       return false;
-    if (incomingChallenge['version']) {
-      if (incomingChallenge['version'] != 'U2F_V1' &&
-          incomingChallenge['version'] != 'U2F_V2') {
-        return false;
-      }
+    if (!isValidRegisteredKey(incomingChallenge, appIdRequired)) {
+      return false;
     }
   }
   return true;
@@ -64,6 +97,66 @@ function logMessage(logMsg, opt_logMsgUrl) {
   // But video and audio is.
   var audio = new Audio();
   audio.src = opt_logMsgUrl + logMsg;
+}
+
+/**
+ * @param {Object} request Request object
+ * @param {MessageSender} sender Sender frame
+ * @param {Function} sendResponse Response callback
+ * @return {?Closeable} Optional handler object that should be closed when port
+ *     closes
+ */
+function handleWebPageRequest(request, sender, sendResponse) {
+  switch (request.type) {
+    case GnubbyMsgTypes.ENROLL_WEB_REQUEST:
+      return handleWebEnrollRequest(sender, request, sendResponse);
+
+    case GnubbyMsgTypes.SIGN_WEB_REQUEST:
+      return handleWebSignRequest(sender, request, sendResponse);
+
+    case MessageTypes.U2F_REGISTER_REQUEST:
+      return handleU2fEnrollRequest(sender, request, sendResponse);
+
+    case MessageTypes.U2F_SIGN_REQUEST:
+      return handleU2fSignRequest(sender, request, sendResponse);
+
+    default:
+      sendResponse(
+          makeU2fErrorResponse(request, ErrorCodes.BAD_REQUEST, undefined,
+              MessageTypes.U2F_REGISTER_RESPONSE));
+      return null;
+  }
+}
+
+/**
+ * Set-up listeners for webpage connect.
+ * @param {Object} port connection is on.
+ * @param {Object} request that got received on port.
+ */
+function handleWebPageConnect(port, request) {
+  var closeable;
+
+  var onMessage = function(request) {
+    console.log(UTIL_fmt('request'));
+    console.log(request);
+    closeable = handleWebPageRequest(request, port.sender,
+        function(response) {
+          response['requestId'] = request['requestId'];
+          port.postMessage(response);
+        });
+  };
+
+  var onDisconnect = function() {
+    port.onMessage.removeListener(onMessage);
+    port.onDisconnect.removeListener(onDisconnect);
+    if (closeable) closeable.close();
+  };
+
+  port.onMessage.addListener(onMessage);
+  port.onDisconnect.addListener(onDisconnect);
+
+  // Start work on initial message.
+  onMessage(request);
 }
 
 /**
@@ -165,29 +258,34 @@ function mapErrorCodeToGnubbyCodeType(errorCode, forSign) {
 
     case ErrorCodes.TIMEOUT:
       return GnubbyCodeTypes.WAIT_TOUCH;
+
   }
   return GnubbyCodeTypes.UNKNOWN_ERROR;
 }
 
 /**
- * Maps a helper's error code from the DeviceStatusCodes namespace to the
- * ErrorCodes namespace.
+ * Maps a helper's error code from the DeviceStatusCodes namespace to a
+ * U2fError.
  * @param {number} code Error code from DeviceStatusCodes namespace.
- * @return {ErrorCodes} A ErrorCodes error code.
+ * @return {U2fError} An error.
  */
-function mapDeviceStatusCodeToErrorCode(code) {
-  var reportedError = ErrorCodes.OTHER_ERROR;
+function mapDeviceStatusCodeToU2fError(code) {
   switch (code) {
     case DeviceStatusCodes.WRONG_DATA_STATUS:
-      reportedError = ErrorCodes.DEVICE_INELIGIBLE;
-      break;
+      return {errorCode: ErrorCodes.DEVICE_INELIGIBLE};
 
     case DeviceStatusCodes.TIMEOUT_STATUS:
     case DeviceStatusCodes.WAIT_TOUCH_STATUS:
-      reportedError = ErrorCodes.TIMEOUT;
-      break;
+      return {errorCode: ErrorCodes.TIMEOUT};
+
+
+    default:
+      var reportedError = {
+        errorCode: ErrorCodes.OTHER_ERROR,
+        errorMessage: 'device status code: ' + code.toString(16)
+      };
+      return reportedError;
   }
-  return reportedError;
 }
 
 /**
@@ -276,7 +374,9 @@ function makeBrowserData(type, serverChallenge, origin, opt_tlsChannelId) {
     'challenge' : serverChallenge,
     'origin' : origin
   };
-  browserData['cid_pubkey'] = tlsChannelIdValue(opt_tlsChannelId);
+  if (BROWSER_SUPPORTS_TLS_CHANNEL_ID) {
+    browserData['cid_pubkey'] = tlsChannelIdValue(opt_tlsChannelId);
+  }
   return JSON.stringify(browserData);
 }
 
@@ -310,13 +410,18 @@ function makeSignBrowserData(serverChallenge, origin, opt_tlsChannelId) {
 /**
  * Encodes the sign data as an array of sign helper challenges.
  * @param {Array.<SignChallenge>} signChallenges The sign challenges to encode.
+ * @param {string|undefined} opt_defaultChallenge A default sign challenge
+ *     value, if a request does not provide one.
+ * @param {string=} opt_defaultAppId The app id to use for each challenge, if
+ *     the challenge contains none.
  * @param {function(string, string): string=} opt_challengeHashFunction
  *     A function that produces, from a key handle and a raw challenge, a hash
  *     of the raw challenge. If none is provided, a default hash function is
  *     used.
  * @return {!Array.<SignHelperChallenge>} The sign challenges, encoded.
  */
-function encodeSignChallenges(signChallenges, opt_challengeHashFunction) {
+function encodeSignChallenges(signChallenges, opt_defaultChallenge,
+    opt_defaultAppId, opt_challengeHashFunction) {
   function encodedSha256(keyHandle, challenge) {
     return B64_encode(sha256HashOfString(challenge));
   }
@@ -325,12 +430,24 @@ function encodeSignChallenges(signChallenges, opt_challengeHashFunction) {
   if (signChallenges) {
     for (var i = 0; i < signChallenges.length; i++) {
       var challenge = signChallenges[i];
-      var challengeHash =
-          challengeHashFn(challenge['keyHandle'], challenge['challenge']);
+      var keyHandle = challenge['keyHandle'];
+      var challengeValue;
+      if (challenge.hasOwnProperty('challenge')) {
+        challengeValue = challenge['challenge'];
+      } else {
+        challengeValue = opt_defaultChallenge;
+      }
+      var challengeHash = challengeHashFn(keyHandle, challengeValue);
+      var appId;
+      if (challenge.hasOwnProperty('appId')) {
+        appId = challenge['appId'];
+      } else {
+        appId = opt_defaultAppId;
+      }
       var encodedChallenge = {
         'challengeHash': challengeHash,
-        'appIdHash': B64_encode(sha256HashOfString(challenge['appId'])),
-        'keyHandle': challenge['keyHandle'],
+        'appIdHash': B64_encode(sha256HashOfString(appId)),
+        'keyHandle': keyHandle,
         'version': (challenge['version'] || 'U2F_V1')
       };
       encodedSignChallenges.push(encodedChallenge);

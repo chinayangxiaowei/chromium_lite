@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
@@ -28,7 +28,7 @@ void TestCallback(bool* out_success, const base::Closure& quit, bool success) {
 
 class ZipFileCreatorTest : public InProcessBrowserTest {
  protected:
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     ASSERT_TRUE(dir_.CreateUniqueTempDir());
     ASSERT_TRUE(base::CreateDirectory(zip_base_dir()));
   }

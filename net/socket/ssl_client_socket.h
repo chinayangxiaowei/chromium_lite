@@ -79,19 +79,19 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
                                 // the first protocol in our list.
   };
 
-  // StreamSocket:
-  virtual bool WasNpnNegotiated() const OVERRIDE;
-  virtual NextProto GetNegotiatedProtocol() const OVERRIDE;
+  // TLS extension used to negotiate protocol.
+  enum SSLNegotiationExtension {
+    kExtensionUnknown,
+    kExtensionALPN,
+    kExtensionNPN,
+  };
 
-  // Formats a unique key for the SSL session cache. This method
-  // is necessary so that all classes create cache keys in a consistent
-  // manner.
-  // TODO(mshelley) This method will be deleted in an upcoming CL when
-  // it will no longer be necessary to generate a cache key outside of
-  // an SSLClientSocket.
-  static std::string CreateSessionCacheKey(
-      const HostPortPair& host_and_port,
-      const std::string& ssl_session_cache_shard);
+  // StreamSocket:
+  bool WasNpnNegotiated() const override;
+  NextProto GetNegotiatedProtocol() const override;
+
+  // Computes a unique key string for the SSL session cache.
+  virtual std::string GetSessionCacheKey() const = 0;
 
   // Returns true if there is a cache entry in the SSL session cache
   // for the cache key of the SSL socket.
@@ -157,6 +157,8 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
 
   virtual void set_protocol_negotiated(NextProto protocol_negotiated);
 
+  void set_negotiation_extension(SSLNegotiationExtension negotiation_extension);
+
   // Returns the ChannelIDService used by this socket, or NULL if
   // channel ids are not supported.
   virtual ChannelIDService* GetChannelIDService() const = 0;
@@ -168,6 +170,10 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
   //
   // Public for ssl_client_socket_openssl_unittest.cc.
   virtual bool WasChannelIDSent() const;
+
+  // Record which TLS extension was used to negotiate protocol and protocol
+  // chosen in a UMA histogram.
+  void RecordNegotiationExtension();
 
  protected:
   virtual void set_channel_id_sent(bool channel_id_sent);
@@ -185,6 +191,9 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
       bool negotiated_channel_id,
       bool channel_id_enabled,
       bool supports_ecc);
+
+  // Records ConnectionType histograms for a successful SSL connection.
+  static void RecordConnectionTypeMetrics(int ssl_version);
 
   // Returns whether TLS channel ID is enabled.
   static bool IsChannelIDEnabled(
@@ -226,6 +235,8 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
   bool signed_cert_timestamps_received_;
   // True if a stapled OCSP response was received.
   bool stapled_ocsp_response_received_;
+  // Protocol negotiation extension used.
+  SSLNegotiationExtension negotiation_extension_;
 };
 
 }  // namespace net

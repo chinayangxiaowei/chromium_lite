@@ -4,6 +4,7 @@ include_rules = [
   "+crypto",
   "+sandbox/linux/bpf_dsl",
   "+sandbox/linux/seccomp-bpf",
+  "+sandbox/linux/seccomp-bpf-helpers",
   "+sandbox/linux/services",
   "+sandbox/linux/suid",
   "+sandbox/win/src",
@@ -16,6 +17,7 @@ include_rules = [
   "+native_client/src/trusted/desc",
   "+native_client/src/trusted/service_runtime/include",
   "+native_client/src/trusted/service_runtime/nacl_error_code.h",
+  "+native_client/src/trusted/validator/rich_file_info.h",
   "+native_client/src/trusted/validator/validation_cache.h",
   "+native_client/src/untrusted/irt/irt.h",
 

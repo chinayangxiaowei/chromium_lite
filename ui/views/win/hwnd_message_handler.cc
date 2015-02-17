@@ -23,7 +23,6 @@
 #include "ui/base/win/touch_input.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
-#include "ui/events/gestures/gesture_sequence.h"
 #include "ui/events/keycodes/keyboard_code_conversion_win.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/canvas_skia_paint.h"
@@ -359,7 +358,8 @@ HWNDMessageHandler::HWNDMessageHandler(HWNDMessageHandlerDelegate* delegate)
       in_size_loop_(false),
       touch_down_contexts_(0),
       last_mouse_hwheel_time_(0),
-      msg_handled_(FALSE) {
+      msg_handled_(FALSE),
+      dwm_transition_desired_(false) {
 }
 
 HWNDMessageHandler::~HWNDMessageHandler() {
@@ -734,7 +734,7 @@ void HWNDMessageHandler::FlashFrame(bool flash) {
   fwi.cbSize = sizeof(fwi);
   fwi.hwnd = hwnd();
   if (flash) {
-    fwi.dwFlags = FLASHW_ALL;
+    fwi.dwFlags = custom_window_region_ ? FLASHW_TRAY : FLASHW_ALL;
     fwi.uCount = 4;
     fwi.dwTimeout = 0;
   } else {
@@ -794,33 +794,18 @@ void HWNDMessageHandler::SetCursor(HCURSOR cursor) {
 }
 
 void HWNDMessageHandler::FrameTypeChanged() {
-  // Called when the frame type could possibly be changing (theme change or
-  // DWM composition change).
-  UpdateDwmNcRenderingPolicy();
-
-  // Don't redraw the window here, because we need to hide and show the window
-  // which will also trigger a redraw.
-  ResetWindowRegion(true, false);
-
-  // The non-client view needs to update too.
-  delegate_->HandleFrameChanged();
-
-  if (IsVisible() && !delegate_->IsUsingCustomFrame()) {
-    // For some reason, we need to hide the window after we change from a custom
-    // frame to a native frame.  If we don't, the client area will be filled
-    // with black.  This seems to be related to an interaction between DWM and
-    // SetWindowRgn, but the details aren't clear. Additionally, we need to
-    // specify SWP_NOZORDER here, otherwise if you have multiple chrome windows
-    // open they will re-appear with a non-deterministic Z-order.
-    UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
-    SetWindowPos(hwnd(), NULL, 0, 0, 0, 0, flags | SWP_HIDEWINDOW);
-    SetWindowPos(hwnd(), NULL, 0, 0, 0, 0, flags | SWP_SHOWWINDOW);
+  if (base::win::GetVersion() < base::win::VERSION_VISTA) {
+    // Don't redraw the window here, because we invalidate the window later.
+    ResetWindowRegion(true, false);
+    // The non-client view needs to update too.
+    delegate_->HandleFrameChanged();
+    InvalidateRect(hwnd(), NULL, FALSE);
+  } else {
+    if (!custom_window_region_ && !delegate_->IsUsingCustomFrame())
+      dwm_transition_desired_ = true;
+    if (!dwm_transition_desired_ || !fullscreen_handler_->fullscreen())
+      PerformDwmTransition();
   }
-
-  // WM_DWMCOMPOSITIONCHANGED is only sent to top level windows, however we want
-  // to notify our children too, since we can have MDI child windows who need to
-  // update their appearance.
-  EnumChildWindows(hwnd(), &SendDwmCompositionChanged, NULL);
 }
 
 void HWNDMessageHandler::SchedulePaintInRect(const gfx::Rect& rect) {
@@ -873,6 +858,35 @@ void HWNDMessageHandler::SetWindowIcons(const gfx::ImageSkia& window_icon,
     if (old_icon)
       DestroyIcon(old_icon);
   }
+}
+
+void HWNDMessageHandler::SetFullscreen(bool fullscreen) {
+  fullscreen_handler()->SetFullscreen(fullscreen);
+  // If we are out of fullscreen and there was a pending DWM transition for the
+  // window, then go ahead and do it now.
+  if (!fullscreen && dwm_transition_desired_)
+    PerformDwmTransition();
+}
+
+void HWNDMessageHandler::SizeConstraintsChanged() {
+  LONG style = GetWindowLong(hwnd(), GWL_STYLE);
+  // Ignore if this is not a standard window.
+  if (!(style & WS_OVERLAPPED))
+    return;
+
+  if (delegate_->CanResize()) {
+    style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    if (!delegate_->CanMaximize())
+      style &= ~WS_MAXIMIZEBOX;
+  } else {
+    style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+  }
+  if (delegate_->CanMinimize()) {
+    style |= WS_MINIMIZEBOX;
+  } else {
+    style &= ~WS_MINIMIZEBOX;
+  }
+  SetWindowLong(hwnd(), GWL_STYLE, style);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1153,6 +1167,9 @@ void HWNDMessageHandler::UpdateDwmNcRenderingPolicy() {
   if (base::win::GetVersion() < base::win::VERSION_VISTA)
     return;
 
+  if (fullscreen_handler_->fullscreen())
+    return;
+
   DWMNCRENDERINGPOLICY policy =
       custom_window_region_ || delegate_->IsUsingCustomFrame() ?
           DWMNCRP_DISABLED : DWMNCRP_ENABLED;
@@ -1202,7 +1219,7 @@ void HWNDMessageHandler::RedrawLayeredWindowContents() {
 
   // We need to clip to the dirty rect ourselves.
   layered_window_contents_->sk_canvas()->save();
-  double scale = gfx::win::GetDeviceScaleFactor();
+  double scale = gfx::GetDPIScale();
   layered_window_contents_->sk_canvas()->scale(
       SkScalar(scale),SkScalar(scale));
   layered_window_contents_->ClipRect(invalid_rect_);
@@ -1401,6 +1418,9 @@ void HWNDMessageHandler::OnGetMinMaxInfo(MINMAXINFO* minmax_info) {
   gfx::Size min_window_size;
   gfx::Size max_window_size;
   delegate_->GetMinMaxSize(&min_window_size, &max_window_size);
+  min_window_size = gfx::win::DIPToScreenSize(min_window_size);
+  max_window_size = gfx::win::DIPToScreenSize(max_window_size);
+
 
   // Add the native frame border size to the minimum and maximum size if the
   // view reports its size as the client size.
@@ -1411,10 +1431,11 @@ void HWNDMessageHandler::OnGetMinMaxInfo(MINMAXINFO* minmax_info) {
     CR_DEFLATE_RECT(&window_rect, &client_rect);
     min_window_size.Enlarge(window_rect.right - window_rect.left,
                             window_rect.bottom - window_rect.top);
-    if (!max_window_size.IsEmpty()) {
-      max_window_size.Enlarge(window_rect.right - window_rect.left,
-                              window_rect.bottom - window_rect.top);
-    }
+    // Either axis may be zero, so enlarge them independently.
+    if (max_window_size.width())
+      max_window_size.Enlarge(window_rect.right - window_rect.left, 0);
+    if (max_window_size.height())
+      max_window_size.Enlarge(0, window_rect.bottom - window_rect.top);
   }
   minmax_info->ptMinTrackSize.x = min_window_size.width();
   minmax_info->ptMinTrackSize.y = min_window_size.height();
@@ -1456,8 +1477,11 @@ LRESULT HWNDMessageHandler::OnImeMessages(UINT message,
                                           WPARAM w_param,
                                           LPARAM l_param) {
   LRESULT result = 0;
-  SetMsgHandled(delegate_->HandleIMEMessage(
-      message, w_param, l_param, &result));
+  base::WeakPtr<HWNDMessageHandler> ref(weak_factory_.GetWeakPtr());
+  const bool msg_handled =
+      delegate_->HandleIMEMessage(message, w_param, l_param, &result);
+  if (ref.get())
+    SetMsgHandled(msg_handled);
   return result;
 }
 
@@ -1474,9 +1498,7 @@ void HWNDMessageHandler::OnInitMenu(HMENU menu) {
   EnableMenuItemByCommand(menu, SC_SIZE, delegate_->CanResize() && is_restored);
   EnableMenuItemByCommand(menu, SC_MAXIMIZE, delegate_->CanMaximize() &&
                           !is_fullscreen && !is_maximized);
-  // TODO: unfortunately, WidgetDelegate does not declare CanMinimize() and some
-  // code depends on this check, see http://crbug.com/341010.
-  EnableMenuItemByCommand(menu, SC_MINIMIZE, delegate_->CanMaximize() &&
+  EnableMenuItemByCommand(menu, SC_MINIMIZE, delegate_->CanMinimize() &&
                           !is_minimized);
 
   if (is_maximized && delegate_->CanResize())
@@ -1528,8 +1550,15 @@ LRESULT HWNDMessageHandler::OnMouseActivate(UINT message,
   POINT cursor_pos = {0};
   ::GetCursorPos(&cursor_pos);
   ::ScreenToClient(hwnd(), &cursor_pos);
+  // The code below exists for child windows like NPAPI plugins etc which need
+  // to be activated whenever we receive a WM_MOUSEACTIVATE message. Don't put
+  // transparent child windows in this bucket as they are not supposed to grab
+  // activation.
+  // TODO(ananta)
+  // Get rid of this code when we deprecate NPAPI plugins.
   HWND child = ::RealChildWindowFromPoint(hwnd(), cursor_pos);
-  if (::IsWindow(child) && child != hwnd() && ::IsWindowVisible(child))
+  if (::IsWindow(child) && child != hwnd() && ::IsWindowVisible(child) &&
+      !(::GetWindowLong(child, GWL_EXSTYLE) & WS_EX_TRANSPARENT))
     PostProcessActivateMessage(WA_INACTIVE, false);
 
   // TODO(beng): resolve this with the GetWindowLong() check on the subsequent
@@ -2441,6 +2470,33 @@ bool HWNDMessageHandler::IsSynthesizedMouseMessage(unsigned int message,
     return true;
   }
   return false;
+}
+
+void HWNDMessageHandler::PerformDwmTransition() {
+  dwm_transition_desired_ = false;
+
+  UpdateDwmNcRenderingPolicy();
+  // Don't redraw the window here, because we need to hide and show the window
+  // which will also trigger a redraw.
+  ResetWindowRegion(true, false);
+  // The non-client view needs to update too.
+  delegate_->HandleFrameChanged();
+
+  if (IsVisible() && !delegate_->IsUsingCustomFrame()) {
+    // For some reason, we need to hide the window after we change from a custom
+    // frame to a native frame.  If we don't, the client area will be filled
+    // with black.  This seems to be related to an interaction between DWM and
+    // SetWindowRgn, but the details aren't clear. Additionally, we need to
+    // specify SWP_NOZORDER here, otherwise if you have multiple chrome windows
+    // open they will re-appear with a non-deterministic Z-order.
+    UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
+    SetWindowPos(hwnd(), NULL, 0, 0, 0, 0, flags | SWP_HIDEWINDOW);
+    SetWindowPos(hwnd(), NULL, 0, 0, 0, 0, flags | SWP_SHOWWINDOW);
+  }
+  // WM_DWMCOMPOSITIONCHANGED is only sent to top level windows, however we want
+  // to notify our children too, since we can have MDI child windows who need to
+  // update their appearance.
+  EnumChildWindows(hwnd(), &SendDwmCompositionChanged, NULL);
 }
 
 }  // namespace views

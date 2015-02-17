@@ -18,9 +18,9 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_warning_dialog.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
-#include "grit/generated_resources.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/simple_menu_model.h"
@@ -36,18 +36,18 @@ class MultiUserContextMenuChromeos : public ui::SimpleMenuModel,
   virtual ~MultiUserContextMenuChromeos() {}
 
   // SimpleMenuModel::Delegate:
-  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE {
+  virtual bool IsCommandIdChecked(int command_id) const override {
     return false;
   }
-  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE {
+  virtual bool IsCommandIdEnabled(int command_id) const override {
     return true;
   }
   virtual bool GetAcceleratorForCommandId(
       int command_id,
-      ui::Accelerator* accelerator) OVERRIDE {
+      ui::Accelerator* accelerator) override {
     return false;
   }
-  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
+  virtual void ExecuteCommand(int command_id, int event_flags) override;
 
  private:
   // The window for which this menu is.

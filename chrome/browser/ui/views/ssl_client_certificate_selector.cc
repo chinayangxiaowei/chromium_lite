@@ -8,8 +8,8 @@
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/certificate_viewer.h"
-#include "chrome/browser/ui/views/constrained_window_views.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "net/cert/x509_certificate.h"
@@ -38,9 +38,9 @@ class CertificateSelectorTableModel : public ui::TableModel {
       net::SSLCertRequestInfo* cert_request_info);
 
   // ui::TableModel implementation:
-  virtual int RowCount() OVERRIDE;
-  virtual base::string16 GetText(int index, int column_id) OVERRIDE;
-  virtual void SetObserver(ui::TableModelObserver* observer) OVERRIDE;
+  int RowCount() override;
+  base::string16 GetText(int index, int column_id) override;
+  void SetObserver(ui::TableModelObserver* observer) override;
 
  private:
   std::vector<base::string16> items_;
@@ -83,10 +83,10 @@ void CertificateSelectorTableModel::SetObserver(
 SSLClientCertificateSelector::SSLClientCertificateSelector(
     content::WebContents* web_contents,
     const net::HttpNetworkSession* network_session,
-    net::SSLCertRequestInfo* cert_request_info,
+    const scoped_refptr<net::SSLCertRequestInfo>& cert_request_info,
     const chrome::SelectCertificateCallback& callback)
     : SSLClientAuthObserver(network_session, cert_request_info, callback),
-      model_(new CertificateSelectorTableModel(cert_request_info)),
+      model_(new CertificateSelectorTableModel(cert_request_info.get())),
       web_contents_(web_contents),
       table_(NULL),
       view_cert_button_(NULL) {
@@ -189,14 +189,14 @@ bool SSLClientCertificateSelector::Cancel() {
 bool SSLClientCertificateSelector::Accept() {
   DVLOG(1) << __FUNCTION__;
   scoped_refptr<net::X509Certificate> cert = GetSelectedCert();
-  if (cert) {
+  if (cert.get()) {
     // Remove the observer before we try unlocking, otherwise we might act on a
     // notification while waiting for the unlock dialog, causing us to delete
     // ourself before the Unlocked callback gets called.
     StopObserving();
 #if defined(USE_NSS)
     chrome::UnlockCertSlotIfNecessary(
-        cert,
+        cert.get(),
         chrome::kCryptoModulePasswordClientAuth,
         cert_request_info()->host_and_port,
         GetWidget()->GetNativeView(),
@@ -204,7 +204,7 @@ bool SSLClientCertificateSelector::Accept() {
                    base::Unretained(this),
                    cert));
 #else
-    Unlocked(cert);
+    Unlocked(cert.get());
 #endif
     return false;  // Unlocked() will close the dialog.
   }

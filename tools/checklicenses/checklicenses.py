@@ -186,6 +186,7 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'GPL',
         'GPL (v2)',
         'GPL (v2 or later)',
+        'GPL (v3 or later)',
         'UNKNOWN',  # http://crbug.com/98123
     ],
     'third_party/fontconfig': [
@@ -231,6 +232,16 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
     'third_party/libjpeg_turbo': [  # http://crbug.com/98314
         'UNKNOWN',
     ],
+
+    # Many liblouis files are mirrored but not used in the NaCl module.
+    # They are not excluded from the mirror because of lack of infrastructure
+    # support.  Getting license headers added to the files where missing is
+    # tracked in https://github.com/liblouis/liblouis/issues/22.
+    'third_party/liblouis/src': [
+        'GPL (v3 or later)',
+        'UNKNOWN',
+    ],
+
     'third_party/libpng': [  # http://crbug.com/98318
         'UNKNOWN',
     ],
@@ -277,9 +288,6 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
     'third_party/molokocacao': [  # http://crbug.com/98453
-        'UNKNOWN',
-    ],
-    'third_party/npapi/npspy': [
         'UNKNOWN',
     ],
     'third_party/ocmock/OCMock': [  # http://crbug.com/98454
@@ -388,6 +396,11 @@ PATH_SPECIFIC_WHITELISTED_LICENSES = {
         'UNKNOWN',
     ],
     'tools/symsrc/pefile.py': [
+        'UNKNOWN',
+    ],
+    # Not shipped, downloaded on trybots sometimes.
+    'tools/telemetry/third_party/gsutil': [
+        'BSD MIT/X11 (BSD like)',
         'UNKNOWN',
     ],
     'tools/telemetry/third_party/pyserial': [

@@ -40,11 +40,6 @@ base::ProcessId TestSink::GetSelfPID() const {
   return base::ProcessId();
 }
 
-ChannelHandle TestSink::TakePipeHandle() {
-  NOTIMPLEMENTED();
-  return ChannelHandle();
-}
-
 bool TestSink::OnMessageReceived(const Message& msg) {
   ObserverListBase<Listener>::Iterator it(filter_list_);
   Listener* observer;
@@ -105,9 +100,9 @@ int TestSink::GetClientFileDescriptor() const {
   return -1;
 }
 
-int TestSink::TakeClientFileDescriptor() {
+base::ScopedFD TestSink::TakeClientFileDescriptor() {
   NOTREACHED();
-  return -1;
+  return base::ScopedFD();
 }
 
 #endif  // defined(OS_POSIX) && !defined(OS_NACL)

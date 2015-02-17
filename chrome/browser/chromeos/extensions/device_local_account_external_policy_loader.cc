@@ -10,7 +10,6 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/policy_handlers.h"
-#include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_map.h"
 #include "extensions/browser/pref_names.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -94,6 +93,8 @@ DeviceLocalAccountExternalPolicyLoader::
 void DeviceLocalAccountExternalPolicyLoader::UpdateExtensionListFromStore() {
   scoped_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
   const policy::PolicyMap& policy_map = store_->policy_map();
+  // TODO(binjin): Use two policy handlers here after
+  // ExtensionManagementPolicyHandler is introduced.
   extensions::ExtensionInstallForcelistPolicyHandler policy_handler;
   if (policy_handler.CheckPolicySettings(policy_map, NULL)) {
     PrefValueMap pref_value_map;

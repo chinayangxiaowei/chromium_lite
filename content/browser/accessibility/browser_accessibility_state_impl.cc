@@ -6,17 +6,12 @@
 
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
-#include "base/timer/timer.h"
 #include "content/browser/accessibility/accessibility_mode_helper.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
 #include "ui/gfx/sys_color_change_listener.h"
-
-#if defined(OS_WIN)
-#include "base/win/windows_version.h"
-#endif
 
 namespace content {
 
@@ -79,16 +74,6 @@ void BrowserAccessibilityStateImpl::DisableAccessibility() {
 
 void BrowserAccessibilityStateImpl::ResetAccessibilityModeValue() {
   accessibility_mode_ = AccessibilityModeOff;
-#if defined(OS_WIN)
-  // On Windows 8, always enable accessibility for editable text controls
-  // so we can show the virtual keyboard when one is enabled.
-  if (base::win::GetVersion() >= base::win::VERSION_WIN8 &&
-      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableRendererAccessibility)) {
-    accessibility_mode_ = AccessibilityModeEditableTextOnly;
-  }
-#endif  // defined(OS_WIN)
-
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kForceRendererAccessibility)) {
     accessibility_mode_ = AccessibilityModeComplete;

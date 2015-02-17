@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/strings/string_piece.h"
@@ -102,8 +102,8 @@ TEST(DataPackTest, LoadFromFileRegion) {
   const char kPadding[5678] = {0};
   ASSERT_EQ(static_cast<int>(sizeof(kPadding)),
             base::WriteFile(data_path, kPadding, sizeof(kPadding)));
-  ASSERT_EQ(static_cast<int>(kSamplePakSize),
-            base::AppendToFile(data_path, kSamplePakContents, kSamplePakSize));
+  ASSERT_TRUE(base::AppendToFile(
+      data_path, kSamplePakContents, kSamplePakSize));
 
   base::File file(data_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
   ASSERT_TRUE(file.IsValid());

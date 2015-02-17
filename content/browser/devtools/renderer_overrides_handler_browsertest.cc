@@ -7,8 +7,6 @@
 #include "base/json/json_reader.h"
 #include "content/browser/devtools/devtools_protocol.h"
 #include "content/public/browser/devtools_agent_host.h"
-#include "content/public/browser/devtools_client_host.h"
-#include "content/public/browser/devtools_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -20,12 +18,12 @@
 namespace content {
 
 class RendererOverridesHandlerTest : public ContentBrowserTest,
-                                     public DevToolsClientHost {
+                                     public DevToolsAgentHostClient {
  protected:
   void SendCommand(const std::string& method,
                    base::DictionaryValue* params) {
-    EXPECT_TRUE(DevToolsManager::GetInstance()->DispatchOnInspectorBackend(this,
-        DevToolsProtocol::CreateCommand(1, method, params)->Serialize()));
+    agent_host_->DispatchProtocolMessage(
+        DevToolsProtocol::CreateCommand(1, method, params)->Serialize());
     base::MessageLoop::current()->Run();
   }
 
@@ -55,19 +53,21 @@ class RendererOverridesHandlerTest : public ContentBrowserTest,
   }
 
   scoped_ptr<base::DictionaryValue> result_;
+  scoped_refptr<DevToolsAgentHost> agent_host_;
 
  private:
-  virtual void SetUpOnMainThread() OVERRIDE {
-    DevToolsManager::GetInstance()->RegisterDevToolsClientHostFor(
-        DevToolsAgentHost::GetOrCreateFor(shell()->web_contents()).get(), this);
+  void SetUpOnMainThread() override {
+    agent_host_ = DevToolsAgentHost::GetOrCreateFor(shell()->web_contents());
+    agent_host_->AttachClient(this);
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
-    DevToolsManager::GetInstance()->ClientHostClosing(this);
+  void TearDownOnMainThread() override {
+    agent_host_->DetachClient();
+    agent_host_ = NULL;
   }
 
-  virtual void DispatchOnInspectorFrontend(
-      const std::string& message) OVERRIDE {
+  void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
+                               const std::string& message) override {
     scoped_ptr<base::DictionaryValue> root(
         static_cast<base::DictionaryValue*>(base::JSONReader::Read(message)));
     base::DictionaryValue* result;
@@ -76,11 +76,7 @@ class RendererOverridesHandlerTest : public ContentBrowserTest,
     base::MessageLoop::current()->QuitNow();
   }
 
-  virtual void InspectedContentsClosing() OVERRIDE {
-    EXPECT_TRUE(false);
-  }
-
-  virtual void ReplacedWithAnotherClient() OVERRIDE {
+  void AgentHostClosed(DevToolsAgentHost* agent_host, bool replaced) override {
     EXPECT_TRUE(false);
   }
 };
@@ -102,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(RendererOverridesHandlerTest, QueryUsageAndQuota) {
 class CaptureScreenshotTest : public RendererOverridesHandlerTest {
  private:
 #if !defined(OS_ANDROID)
-  virtual void SetUpCommandLine(base::CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kEnablePixelOutputInTests);
   }
 #endif
@@ -110,6 +106,11 @@ class CaptureScreenshotTest : public RendererOverridesHandlerTest {
 
 // Does not link on Android
 #if defined(OS_ANDROID)
+#define MAYBE_CaptureScreenshot DISABLED_CaptureScreenshot
+#elif defined(OS_MACOSX)  // Fails on 10.9. http://crbug.com/430620
+#define MAYBE_CaptureScreenshot DISABLED_CaptureScreenshot
+#elif defined(MEMORY_SANITIZER)
+// Also fails under MSAN. http://crbug.com/423583
 #define MAYBE_CaptureScreenshot DISABLED_CaptureScreenshot
 #else
 #define MAYBE_CaptureScreenshot CaptureScreenshot

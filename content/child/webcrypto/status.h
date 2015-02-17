@@ -111,6 +111,9 @@ class CONTENT_EXPORT Status {
   // violates the JWA requirement that such octet strings be minimal.
   static Status ErrorJwkBigIntegerHasLeadingZero(const std::string& property);
 
+  // The key_ops lists a usage more than once.
+  static Status ErrorJwkDuplicateKeyOps();
+
   // ------------------------------------
   // Other errors
   // ------------------------------------
@@ -143,6 +146,18 @@ class CONTENT_EXPORT Status {
   // When doing an AES-CBC encryption/decryption, the "iv" parameter was not 16
   // bytes.
   static Status ErrorIncorrectSizeAesCbcIv();
+
+  // When doing AES-CTR encryption/decryption, the "counter" parameter was not
+  // 16 bytes.
+  static Status ErrorIncorrectSizeAesCtrCounter();
+
+  // When doing AES-CTR encryption/decryption, the "length" parameter for the
+  // counter was out of range.
+  static Status ErrorInvalidAesCtrCounterLength();
+
+  // The input to encrypt/decrypt was too large. Based on the counter size, it
+  // would cause the counter to wraparound and repeat earlier values.
+  static Status ErrorAesCtrInputTooLongCounterRepeated();
 
   // The data provided to an encrypt/decrypt/sign/verify operation was too
   // large. This can either represent an internal limitation (for instance

@@ -15,15 +15,13 @@ class GestureProviderAuraTest : public testing::Test,
  public:
   GestureProviderAuraTest() {}
 
-  virtual ~GestureProviderAuraTest() {}
+  ~GestureProviderAuraTest() override {}
 
-  virtual void OnGestureEvent(GestureEvent* event) OVERRIDE {}
+  void OnGestureEvent(GestureEvent* event) override {}
 
-  virtual void SetUp() OVERRIDE {
-    provider_.reset(new GestureProviderAura(this));
-  }
+  void SetUp() override { provider_.reset(new GestureProviderAura(this)); }
 
-  virtual void TearDown() OVERRIDE { provider_.reset(); }
+  void TearDown() override { provider_.reset(); }
 
   GestureProviderAura* provider() { return provider_.get(); }
 
@@ -62,10 +60,10 @@ TEST_F(GestureProviderAuraTest, IgnoresExtraMoveOrReleaseEvents) {
 }
 
 TEST_F(GestureProviderAuraTest, IgnoresIdenticalMoveEvents) {
-  const float kRadiusX = 20;
-  const float kRadiusY = 30;
-  const float kAngle = 120;
-  const float kForce = 40;
+  const float kRadiusX = 20.f;
+  const float kRadiusY = 30.f;
+  const float kAngle = 0.321f;
+  const float kForce = 40.f;
   const int kTouchId0 = 5;
   const int kTouchId1 = 3;
 

@@ -9,8 +9,8 @@
 #include "cc/base/math_util.h"
 #include "cc/quads/texture_draw_quad.h"
 #include "cc/trees/layer_tree_impl.h"
-#include "cc/trees/occlusion_tracker.h"
-#include "ui/gfx/rect_f.h"
+#include "cc/trees/occlusion.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace cc {
 
@@ -22,7 +22,7 @@ NinePatchLayerImpl::~NinePatchLayerImpl() {}
 
 scoped_ptr<LayerImpl> NinePatchLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) {
-  return NinePatchLayerImpl::Create(tree_impl, id()).PassAs<LayerImpl>();
+  return NinePatchLayerImpl::Create(tree_impl, id());
 }
 
 void NinePatchLayerImpl::PushPropertiesTo(LayerImpl* layer) {
@@ -82,7 +82,7 @@ void NinePatchLayerImpl::CheckGeometryLimitations() {
 
 void NinePatchLayerImpl::AppendQuads(
     RenderPass* render_pass,
-    const OcclusionTracker<LayerImpl>& occlusion_tracker,
+    const Occlusion& occlusion_in_content_space,
     AppendQuadsData* append_quads_data) {
   CheckGeometryLimitations();
   SharedQuadState* shared_quad_state =
@@ -214,7 +214,7 @@ void NinePatchLayerImpl::AppendQuads(
   const float vertex_opacity[] = {1.0f, 1.0f, 1.0f, 1.0f};
 
   visible_rect =
-      occlusion_tracker.UnoccludedContentRect(layer_top_left, draw_transform());
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_top_left);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -231,8 +231,8 @@ void NinePatchLayerImpl::AppendQuads(
                  flipped);
   }
 
-  visible_rect = occlusion_tracker.UnoccludedContentRect(layer_top_right,
-                                                         draw_transform());
+  visible_rect =
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_top_right);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -249,8 +249,8 @@ void NinePatchLayerImpl::AppendQuads(
                  flipped);
   }
 
-  visible_rect = occlusion_tracker.UnoccludedContentRect(layer_bottom_left,
-                                                         draw_transform());
+  visible_rect =
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_bottom_left);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -267,8 +267,8 @@ void NinePatchLayerImpl::AppendQuads(
                  flipped);
   }
 
-  visible_rect = occlusion_tracker.UnoccludedContentRect(layer_bottom_right,
-                                                         draw_transform());
+  visible_rect =
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_bottom_right);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -285,8 +285,7 @@ void NinePatchLayerImpl::AppendQuads(
                  flipped);
   }
 
-  visible_rect =
-      occlusion_tracker.UnoccludedContentRect(layer_top, draw_transform());
+  visible_rect = occlusion_in_content_space.GetUnoccludedContentRect(layer_top);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -304,7 +303,7 @@ void NinePatchLayerImpl::AppendQuads(
   }
 
   visible_rect =
-      occlusion_tracker.UnoccludedContentRect(layer_left, draw_transform());
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_left);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -322,7 +321,7 @@ void NinePatchLayerImpl::AppendQuads(
   }
 
   visible_rect =
-      occlusion_tracker.UnoccludedContentRect(layer_right, draw_transform());
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_right);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -340,7 +339,7 @@ void NinePatchLayerImpl::AppendQuads(
   }
 
   visible_rect =
-      occlusion_tracker.UnoccludedContentRect(layer_bottom, draw_transform());
+      occlusion_in_content_space.GetUnoccludedContentRect(layer_bottom);
   if (!visible_rect.IsEmpty()) {
     TextureDrawQuad* quad =
         render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -359,7 +358,7 @@ void NinePatchLayerImpl::AppendQuads(
 
   if (fill_center_) {
     visible_rect =
-        occlusion_tracker.UnoccludedContentRect(layer_center, draw_transform());
+        occlusion_in_content_space.GetUnoccludedContentRect(layer_center);
     if (!visible_rect.IsEmpty()) {
       TextureDrawQuad* quad =
           render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();

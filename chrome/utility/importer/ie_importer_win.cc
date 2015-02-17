@@ -15,9 +15,9 @@
 #include <string>
 #include <vector>
 
-#include "base/file_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -72,7 +72,9 @@ base::Time GetFileCreationTime(const base::string16& file) {
                  NULL, OPEN_EXISTING,
                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, NULL));
   FILETIME creation_filetime;
-  if (GetFileTime(file_handle, &creation_filetime, NULL, NULL))
+  if (!file_handle.IsValid())
+    return creation_time;
+  if (GetFileTime(file_handle.Get(), &creation_filetime, NULL, NULL))
     creation_time = base::Time::FromFileTime(creation_filetime);
   return creation_time;
 }
@@ -195,7 +197,7 @@ bool ParseFavoritesOrderBlob(
     LPCITEMIDLIST idlist = BinaryReadItemIDList(
       base_offset + kItemIDListOffset, item_size - kItemIDListOffset, blob);
     TCHAR item_filename[MAX_PATH];
-    if (!idlist || FAILED(SHGetPathFromIDList(idlist, item_filename)))
+    if (!idlist || !SHGetPathFromIDList(idlist, item_filename))
       return false;
     base::FilePath item_relative_path =
       path.Append(base::FilePath(item_filename).BaseName());

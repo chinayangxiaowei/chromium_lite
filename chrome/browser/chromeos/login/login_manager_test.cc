@@ -30,6 +30,7 @@ LoginManagerTest::LoginManagerTest(bool should_launch_browser)
 }
 
 void LoginManagerTest::TearDownOnMainThread() {
+  MixinBasedBrowserTest::TearDownOnMainThread();
   if (LoginDisplayHostImpl::default_host())
     LoginDisplayHostImpl::default_host()->Finalize();
   base::MessageLoop::current()->RunUntilIdle();
@@ -38,9 +39,11 @@ void LoginManagerTest::TearDownOnMainThread() {
 void LoginManagerTest::SetUpCommandLine(CommandLine* command_line) {
   command_line->AppendSwitch(chromeos::switches::kLoginManager);
   command_line->AppendSwitch(chromeos::switches::kForceLoginManagerInTests);
+  MixinBasedBrowserTest::SetUpCommandLine(command_line);
 }
 
 void LoginManagerTest::SetUpInProcessBrowserTestFixture() {
+  MixinBasedBrowserTest::SetUpInProcessBrowserTestFixture();
   mock_login_utils_ = new testing::NiceMock<MockLoginUtils>();
   mock_login_utils_->DelegateToFake();
   mock_login_utils_->GetFakeLoginUtils()->set_should_launch_browser(
@@ -49,6 +52,7 @@ void LoginManagerTest::SetUpInProcessBrowserTestFixture() {
 }
 
 void LoginManagerTest::SetUpOnMainThread() {
+  MixinBasedBrowserTest::SetUpOnMainThread();
   content::WindowedNotificationObserver(
       chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
       content::NotificationService::AllSources()).Wait();
@@ -80,10 +84,11 @@ bool LoginManagerTest::AddUserToSession(const UserContext& user_context) {
     ADD_FAILURE();
     return false;
   }
-  controller->Login(user_context, SigninSpecifics());
-  content::WindowedNotificationObserver(
+  content::WindowedNotificationObserver observer(
       chrome::NOTIFICATION_SESSION_STARTED,
-      content::NotificationService::AllSources()).Wait();
+      content::NotificationService::AllSources());
+  controller->Login(user_context, SigninSpecifics());
+  observer.Wait();
   const user_manager::UserList& logged_users =
       user_manager::UserManager::Get()->GetLoggedInUsers();
   for (user_manager::UserList::const_iterator it = logged_users.begin();
@@ -114,14 +119,14 @@ void LoginManagerTest::JSExpect(const std::string& expression) {
 }
 
 void LoginManagerTest::InitializeWebContents() {
-    LoginDisplayHost* host = LoginDisplayHostImpl::default_host();
-    EXPECT_TRUE(host != NULL);
+  LoginDisplayHost* host = LoginDisplayHostImpl::default_host();
+  EXPECT_TRUE(host != NULL);
 
-    content::WebContents* web_contents =
-        host->GetWebUILoginView()->GetWebContents();
-    EXPECT_TRUE(web_contents != NULL);
-    set_web_contents(web_contents);
-    js_checker_.set_web_contents(web_contents);
-  }
+  content::WebContents* web_contents =
+      host->GetWebUILoginView()->GetWebContents();
+  EXPECT_TRUE(web_contents != NULL);
+  set_web_contents(web_contents);
+  js_checker_.set_web_contents(web_contents);
+}
 
 }  // namespace chromeos

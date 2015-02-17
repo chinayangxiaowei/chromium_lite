@@ -56,6 +56,9 @@
 #    code. This allows a test APK to inject a Linker.TestRunner instance at
 #    runtime. Should only be used by the chromium_linker_test_apk target!!
 #  never_lint - Set to 1 to not run lint on this target.
+#  java_in_dir_suffix - To override the /src suffix on java_in_dir.
+#  app_manifest_version_name - set the apps 'human readable' version number.
+#  app_manifest_version_code - set the apps version number.
 {
   'variables': {
     'tested_apk_obfuscated_jar_path%': '/',
@@ -99,6 +102,7 @@
     'lint_result': '<(intermediate_dir)/lint_result.xml',
     'lint_config': '<(intermediate_dir)/lint_config.xml',
     'never_lint%': 0,
+    'java_in_dir_suffix%': '/src',
     'instr_stamp': '<(intermediate_dir)/instr.stamp',
     'jar_stamp': '<(intermediate_dir)/jar.stamp',
     'obfuscate_stamp': '<(intermediate_dir)/obfuscate.stamp',
@@ -106,6 +110,7 @@
     'strip_stamp': '<(intermediate_dir)/strip.stamp',
     'stripped_libraries_dir': '<(intermediate_dir)/stripped_libraries',
     'strip_additional_stamp': '<(intermediate_dir)/strip_additional.stamp',
+    'version_stamp': '<(intermediate_dir)/version.stamp',
     'javac_includes': [],
     'jar_excluded_classes': [],
     'javac_jar_path': '<(intermediate_dir)/<(_target_name).javac.jar',
@@ -200,7 +205,7 @@
         # We generate R.java in package R_package (in addition to the package
         # listed in the AndroidManifest.xml, which is unavoidable).
         'additional_res_packages': ['<(R_package)'],
-        'additional_R_text_files': ['<(PRODUCT_DIR)/<(package_name)/R.txt'],
+        'additional_R_text_files': ['<(intermediate_dir)/R.txt'],
       },
     }],
     ['native_lib_target != "" and component == "shared_library"', {
@@ -215,9 +220,23 @@
     }],
     ['native_lib_target != ""', {
       'variables': {
+        'conditions': [
+          ['use_chromium_linker == 1', {
+            'variables': {
+              'chromium_linker_path': [
+                '<(SHARED_LIB_DIR)/<(libchromium_android_linker)',
+              ],
+            }
+          }, {
+            'variables': {
+              'chromium_linker_path': [],
+            },
+          }],
+        ],
         'generated_src_dirs': [ '<(native_libraries_java_dir)' ],
         'native_libs_paths': [
-          '<(SHARED_LIB_DIR)/<(native_lib_target).>(android_product_extension)'
+          '<(SHARED_LIB_DIR)/<(native_lib_target).>(android_product_extension)',
+          '<@(chromium_linker_path)'
         ],
         'package_input_paths': [
           '<(apk_package_native_libs_dir)/<(android_app_abi)/gdbserver',
@@ -237,46 +256,12 @@
       'actions': [
         {
           'variables': {
-            'conditions': [
-              ['use_chromium_linker == 1', {
-                'variables': {
-                  'linker_input_libraries': [
-                    '<(SHARED_LIB_DIR)/<(libchromium_android_linker)',
-                  ],
-                }
-              }, {
-                'variables': {
-                  'linker_input_libraries': [],
-                },
-              }],
-            ],
             'input_libraries': [
               '<@(native_libs_paths)',
               '<@(extra_native_libs)',
-              '<@(linker_input_libraries)',
             ],
           },
           'includes': ['../build/android/write_ordered_libraries.gypi'],
-        },
-        {
-          'action_name': 'native_libraries_template_data_<(_target_name)',
-          'message': 'Creating native_libraries_list.h for <(_target_name)',
-          'inputs': [
-            '<(DEPTH)/build/android/gyp/util/build_utils.py',
-            '<(DEPTH)/build/android/gyp/create_native_libraries_header.py',
-            '<(ordered_libraries_file)',
-          ],
-          'outputs': [
-            '<(native_libraries_template_data_file)',
-            '<(native_libraries_template_version_file)',
-          ],
-          'action': [
-            'python', '<(DEPTH)/build/android/gyp/create_native_libraries_header.py',
-            '--ordered-libraries=<(ordered_libraries_file)',
-            '--version-name=<(native_lib_version_name)',
-            '--native-library-list=<(native_libraries_template_data_file)',
-            '--version-output=<(native_libraries_template_version_file)',
-          ],
         },
         {
           'action_name': 'native_libraries_<(_target_name)',
@@ -326,8 +311,7 @@
           'inputs': [
             '<(DEPTH)/build/android/gyp/util/build_utils.py',
             '<(DEPTH)/build/android/gyp/gcc_preprocess.py',
-            '<(native_libraries_template_data_file)',
-            '<(native_libraries_template_version_file)',
+            '<(ordered_libraries_file)',
             '<(native_libraries_template)',
           ],
           'outputs': [
@@ -335,10 +319,12 @@
           ],
           'action': [
             'python', '<(DEPTH)/build/android/gyp/gcc_preprocess.py',
-            '--include-path=<(native_libraries_template_data_dir)',
+            '--include-path=',
             '--output=<(native_libraries_java_file)',
             '--template=<(native_libraries_template)',
             '--stamp=<(native_libraries_java_stamp)',
+            '--defines', 'NATIVE_LIBRARIES_LIST=@FileArg(<(ordered_libraries_file):java_libraries_list)',
+            '--defines', 'NATIVE_LIBRARIES_VERSION_NUMBER="<(native_lib_version_name)"',
             '<@(gcc_preprocess_defines)',
           ],
         },
@@ -356,10 +342,23 @@
           'includes': ['../build/android/strip_native_libraries.gypi'],
         },
         {
+          'action_name': 'insert_chromium_version',
+          'variables': {
+            'ordered_libraries_file%': '<(ordered_libraries_file)',
+            'stripped_libraries_dir%': '<(stripped_libraries_dir)',
+            'version_string': '<(native_lib_version_name)',
+            'input_paths': [
+              '<(strip_stamp)',
+            ],
+            'stamp': '<(version_stamp)'
+          },
+          'includes': ['../build/android/insert_chromium_version.gypi'],
+        },
+        {
           'action_name': 'pack_arm_relocations',
           'variables': {
             'conditions': [
-              ['use_chromium_linker == 1 and use_relocation_packer == 1', {
+              ['use_chromium_linker == 1 and use_relocation_packer == 1 and profiling != 1', {
                 'enable_packing': 1,
               }, {
                 'enable_packing': 0,
@@ -372,7 +371,7 @@
             'stripped_libraries_dir%': '<(stripped_libraries_dir)',
             'packed_libraries_dir': '<(libraries_source_dir)',
             'input_paths': [
-              '<(strip_stamp)',
+              '<(version_stamp)'
             ],
             'stamp': '<(pack_arm_relocations_stamp)',
           },
@@ -437,6 +436,7 @@
           },
           'dependencies': [
             '<(DEPTH)/build/android/setup.gyp:get_build_device_configurations',
+            '<(DEPTH)/build/android/pylib/device/commands/commands.gyp:chromium_commands',
           ],
           'actions': [
             {
@@ -458,7 +458,7 @@
               'action': [
                 'python', '<(DEPTH)/build/android/gyp/create_device_library_links.py',
                 '--build-device-configuration=<(build_device_config_path)',
-                '--libraries-json=<(ordered_libraries_file)',
+                '--libraries=@FileArg(<(ordered_libraries_file):libraries)',
                 '--script-host-path=<(symlink_script_host_path)',
                 '--script-device-path=<(symlink_script_device_path)',
                 '--target-dir=<(device_library_dir)',
@@ -476,8 +476,8 @@
                   'variables': {
                     'inputs': [
                       '<(ordered_libraries_file)',
-                      '<(pack_arm_relocations_stamp)',
                       '<(strip_additional_stamp)',
+                      '<(pack_arm_relocations_stamp)',
                     ],
                     'input_apk_path': '<(unsigned_apk_path)',
                     'output_apk_path': '<(unsigned_standalone_apk_path)',
@@ -493,8 +493,8 @@
           'variables': {
             'libraries_source_dir': '<(apk_package_native_libs_dir)/<(android_app_abi)',
             'package_input_paths': [
-              '<(pack_arm_relocations_stamp)',
               '<(strip_additional_stamp)',
+              '<(pack_arm_relocations_stamp)',
             ],
           },
         }],
@@ -512,7 +512,7 @@
         },
       ],
       'dependencies': [
-        '<(DEPTH)/build/android/rezip.gyp:rezip#host',
+        '<(DEPTH)/build/android/rezip.gyp:rezip_apk_jar',
       ],
     }],
     ['gyp_managed_install == 1', {
@@ -547,11 +547,12 @@
         },
       ],
       'dependencies': [
-        '<(DEPTH)/build/android/rezip.gyp:rezip#host',
+        '<(DEPTH)/build/android/rezip.gyp:rezip_apk_jar',
       ],
     }],
     ['is_test_apk == 1', {
       'dependencies': [
+        '<(DEPTH)/build/android/pylib/device/commands/commands.gyp:chromium_commands',
         '<(DEPTH)/tools/android/android_tools.gyp:android_tools',
       ]
     }],
@@ -633,7 +634,7 @@
         # Java files instead of using find. (As is, this will be broken if two
         # targets use the same java_in_dir and both use java_apk.gypi or
         # both use java.gypi.)
-        'java_sources': ['>!@(find >(java_in_dir)/src >(additional_src_dirs) -name "*.java"  # apk)'],
+        'java_sources': ['>!@(find >(java_in_dir)>(java_in_dir_suffix) >(additional_src_dirs) -name "*.java"  # apk)'],
 
       },
       'inputs': [
@@ -685,7 +686,7 @@
     {
       'variables': {
         'src_dirs': [
-          '<(java_in_dir)/src',
+          '<(java_in_dir)<(java_in_dir_suffix)',
           '>@(additional_src_dirs)',
         ],
         'lint_jar_path': '<(jar_path)',

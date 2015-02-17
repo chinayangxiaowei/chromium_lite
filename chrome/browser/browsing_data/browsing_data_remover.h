@@ -20,8 +20,8 @@
 #if defined(OS_CHROMEOS)
 #include "chromeos/dbus/dbus_method_call_status.h"
 #endif
+#include "storage/common/quota/quota_types.h"
 #include "url/gurl.h"
-#include "webkit/common/quota/quota_types.h"
 
 class ExtensionSpecialStoragePolicy;
 class IOThread;
@@ -44,7 +44,7 @@ namespace net {
 class URLRequestContextGetter;
 }
 
-namespace quota {
+namespace storage {
 class QuotaManager;
 }
 
@@ -250,7 +250,14 @@ class BrowsingDataRemover
   // to be deleted by other objects so make destructor private and DeleteHelper
   // a friend.
   friend class base::DeleteHelper<BrowsingDataRemover>;
-  virtual ~BrowsingDataRemover();
+
+  // When plugins aren't enabled, there is no base class, so adding an override
+  // specifier would result in a compile error.
+#if defined(ENABLE_PLUGINS)
+  ~BrowsingDataRemover() override;
+#else
+  ~BrowsingDataRemover();
+#endif
 
   // Callback for when TemplateURLService has finished loading. Clears the data,
   // clears the respective waiting flag, and invokes NotifyAndDeleteIfDone.
@@ -261,8 +268,8 @@ class BrowsingDataRemover
 
 #if defined(ENABLE_PLUGINS)
   // PepperFlashSettingsManager::Client implementation.
-  virtual void OnDeauthorizeContentLicensesCompleted(uint32 request_id,
-                                                     bool success) OVERRIDE;
+  void OnDeauthorizeContentLicensesCompleted(uint32 request_id,
+                                             bool success) override;
 #endif
 
 #if defined (OS_CHROMEOS)

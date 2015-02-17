@@ -35,6 +35,7 @@ class MaximizeModeWindowManager;
 class MaximizeModeWindowManagerTest;
 namespace test {
 class MultiUserWindowManagerChromeOSTest;
+class VirtualKeyboardControllerTest;
 }
 
 // MaximizeModeController listens to accelerometer events and automatically
@@ -60,10 +61,10 @@ class ASH_EXPORT MaximizeModeController
   };
 
   MaximizeModeController();
-  virtual ~MaximizeModeController();
+  ~MaximizeModeController() override;
 
-  bool in_set_screen_rotation() const {
-    return in_set_screen_rotation_;
+  bool ignore_display_configuration_updates() const {
+    return ignore_display_configuration_updates_;
   }
 
   // True if |rotation_lock_| has been set, and OnAccelerometerUpdated will not
@@ -109,29 +110,29 @@ class ASH_EXPORT MaximizeModeController
   void Shutdown();
 
   // AccelerometerObserver:
-  virtual void OnAccelerometerUpdated(const gfx::Vector3dF& base,
-                                      const gfx::Vector3dF& lid) OVERRIDE;
+  void OnAccelerometerUpdated(const ui::AccelerometerUpdate& update) override;
 
   // ShellObserver:
-  virtual void OnAppTerminating() OVERRIDE;
-  virtual void OnMaximizeModeStarted() OVERRIDE;
-  virtual void OnMaximizeModeEnded() OVERRIDE;
+  void OnAppTerminating() override;
+  void OnMaximizeModeStarted() override;
+  void OnMaximizeModeEnded() override;
 
   // DisplayController::Observer:
-  virtual void OnDisplayConfigurationChanged() OVERRIDE;
+  void OnDisplayConfigurationChanged() override;
 
 #if defined(OS_CHROMEOS)
   // PowerManagerClient::Observer:
   virtual void LidEventReceived(bool open,
-                                const base::TimeTicks& time) OVERRIDE;
-  virtual void SuspendImminent() OVERRIDE;
-  virtual void SuspendDone(const base::TimeDelta& sleep_duration) OVERRIDE;
+                                const base::TimeTicks& time) override;
+  virtual void SuspendImminent() override;
+  virtual void SuspendDone(const base::TimeDelta& sleep_duration) override;
 #endif  // OS_CHROMEOS
 
  private:
   friend class MaximizeModeControllerTest;
   friend class MaximizeModeWindowManagerTest;
   friend class test::MultiUserWindowManagerChromeOSTest;
+  friend class test::VirtualKeyboardControllerTest;
 
   // Set the TickClock. This is only to be used by tests that need to
   // artificially and deterministically control the current time.
@@ -164,6 +165,10 @@ class ASH_EXPORT MaximizeModeController
   // Record UMA stats tracking touchview usage.
   void RecordTouchViewStateTransition();
 
+  // Checks DisplayManager for registered rotation lock, and rotation,
+  // preferences. These are then applied.
+  void LoadDisplayRotationProperties();
+
   // The maximized window manager (if enabled).
   scoped_ptr<MaximizeModeWindowManager> maximize_mode_window_manager_;
 
@@ -171,17 +176,23 @@ class ASH_EXPORT MaximizeModeController
   // internal keyboard and touchpad.
   scoped_ptr<ScopedDisableInternalMouseAndKeyboard> event_blocker_;
 
-  // An event handler used to detect screenshot actions while in maximize mode.
-  scoped_ptr<ui::EventHandler> event_handler_;
-
   // When true calls to OnAccelerometerUpdated will not rotate the display.
   bool rotation_locked_;
 
   // Whether we have ever seen accelerometer data.
   bool have_seen_accelerometer_data_;
 
-  // True when the screen's orientation is being changed.
-  bool in_set_screen_rotation_;
+  // True when changes being applied cause OnDisplayConfigurationChanged() to be
+  // called, and for which these changes should be ignored.
+  bool ignore_display_configuration_updates_;
+
+  // True when the hinge angle has been detected past 180 degrees.
+  bool lid_open_past_180_;
+
+  // True when Shutdown has been called. When shutting down the non maximize
+  // mode state should be restored, however user preferences should not be
+  // altered.
+  bool shutting_down_;
 
   // The rotation of the display set by the user. This rotation will be
   // restored upon exiting maximize mode.

@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_CONTENT_SETTINGS_PERMISSION_INFOBAR_DELEGATE_H_
 #define CHROME_BROWSER_CONTENT_SETTINGS_PERMISSION_INFOBAR_DELEGATE_H_
 
-#include "chrome/browser/content_settings/permission_request_id.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/permission_request_id.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "content/public/browser/web_contents.h"
 
@@ -25,19 +25,19 @@ class PermissionInfobarDelegate : public ConfirmInfoBarDelegate {
                             const PermissionRequestID& id,
                             const GURL& requesting_origin,
                             ContentSettingsType type);
-  virtual ~PermissionInfobarDelegate();
+  ~PermissionInfobarDelegate() override;
 
   // ConfirmInfoBarDelegate:
   virtual base::string16 GetMessageText() const = 0;
 
-  virtual infobars::InfoBarDelegate::Type GetInfoBarType() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
+  infobars::InfoBarDelegate::Type GetInfoBarType() const override;
+  base::string16 GetButtonLabel(InfoBarButton button) const override;
 
   // Remember to call RegisterActionTaken for these methods if you are
   // overriding them.
-  virtual void InfoBarDismissed() OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
+  void InfoBarDismissed() override;
+  bool Accept() override;
+  bool Cancel() override;
 
  private:
   void SetPermission(bool update_content_setting, bool allowed);

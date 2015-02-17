@@ -17,6 +17,9 @@
 
 class ChromeExtensionsDispatcherDelegate;
 class ChromeRenderProcessObserver;
+#if defined(ENABLE_PRINT_PREVIEW)
+class ChromePDFPrintClient;
+#endif
 class PrescientNetworkingDispatcher;
 class RendererNetPredictor;
 class SearchBouncer;
@@ -28,6 +31,7 @@ class SpellCheckProvider;
 struct ChromeViewHostMsg_GetPluginInfo_Output;
 
 namespace content {
+class BrowserPluginDelegate;
 struct WebPluginInfo;
 }
 
@@ -50,8 +54,16 @@ namespace visitedlink {
 class VisitedLinkSlave;
 }
 
+namespace web_cache {
+class WebCacheRenderProcessObserver;
+}
+
 namespace blink {
 class WebSecurityOrigin;
+}
+
+namespace password_manager {
+class CredentialManagerClient;
 }
 
 #if defined(ENABLE_WEBRTC)
@@ -61,82 +73,85 @@ class WebRtcLoggingMessageFilter;
 class ChromeContentRendererClient : public content::ContentRendererClient {
  public:
   ChromeContentRendererClient();
-  virtual ~ChromeContentRendererClient();
+  ~ChromeContentRendererClient() override;
 
-  virtual void RenderThreadStarted() OVERRIDE;
-  virtual void RenderFrameCreated(content::RenderFrame* render_frame) OVERRIDE;
-  virtual void RenderViewCreated(content::RenderView* render_view) OVERRIDE;
-  virtual void SetNumberOfViews(int number_of_views) OVERRIDE;
-  virtual SkBitmap* GetSadPluginBitmap() OVERRIDE;
-  virtual SkBitmap* GetSadWebViewBitmap() OVERRIDE;
-  virtual std::string GetDefaultEncoding() OVERRIDE;
-  virtual bool OverrideCreatePlugin(
+  void RenderThreadStarted() override;
+  void RenderFrameCreated(content::RenderFrame* render_frame) override;
+  void RenderViewCreated(content::RenderView* render_view) override;
+  void SetNumberOfViews(int number_of_views) override;
+  SkBitmap* GetSadPluginBitmap() override;
+  SkBitmap* GetSadWebViewBitmap() override;
+  bool OverrideCreatePlugin(content::RenderFrame* render_frame,
+                            blink::WebLocalFrame* frame,
+                            const blink::WebPluginParams& params,
+                            blink::WebPlugin** plugin) override;
+  scoped_ptr<blink::WebPluginPlaceholder> CreatePluginPlaceholder(
       content::RenderFrame* render_frame,
       blink::WebLocalFrame* frame,
-      const blink::WebPluginParams& params,
-      blink::WebPlugin** plugin) OVERRIDE;
-  virtual blink::WebPlugin* CreatePluginReplacement(
+      const blink::WebPluginParams& params) override;
+  blink::WebPlugin* CreatePluginReplacement(
       content::RenderFrame* render_frame,
-      const base::FilePath& plugin_path) OVERRIDE;
-  virtual bool HasErrorPage(int http_status_code,
-                            std::string* error_domain) OVERRIDE;
-  virtual bool ShouldSuppressErrorPage(content::RenderFrame* render_frame,
-                                       const GURL& url) OVERRIDE;
-  virtual void GetNavigationErrorStrings(
-      content::RenderView* render_view,
-      blink::WebFrame* frame,
-      const blink::WebURLRequest& failed_request,
-      const blink::WebURLError& error,
-      std::string* error_html,
-      base::string16* error_description) OVERRIDE;
-  virtual void DeferMediaLoad(content::RenderFrame* render_frame,
-                              const base::Closure& closure) OVERRIDE;
-  virtual bool RunIdleHandlerWhenWidgetsHidden() OVERRIDE;
-  virtual bool AllowPopup() OVERRIDE;
-  virtual bool ShouldFork(blink::WebFrame* frame,
-                          const GURL& url,
-                          const std::string& http_method,
-                          bool is_initial_navigation,
-                          bool is_server_redirect,
-                          bool* send_referrer) OVERRIDE;
-  virtual bool WillSendRequest(blink::WebFrame* frame,
-                               content::PageTransition transition_type,
-                               const GURL& url,
-                               const GURL& first_party_for_cookies,
-                               GURL* new_url) OVERRIDE;
-  virtual void DidCreateScriptContext(blink::WebFrame* frame,
-                                      v8::Handle<v8::Context> context,
-                                      int extension_group,
-                                      int world_id) OVERRIDE;
-  virtual unsigned long long VisitedLinkHash(const char* canonical_url,
-                                             size_t length) OVERRIDE;
-  virtual bool IsLinkVisited(unsigned long long link_hash) OVERRIDE;
-  virtual blink::WebPrescientNetworking* GetPrescientNetworking() OVERRIDE;
-  virtual bool ShouldOverridePageVisibilityState(
+      const base::FilePath& plugin_path) override;
+  bool HasErrorPage(int http_status_code, std::string* error_domain) override;
+  bool ShouldSuppressErrorPage(content::RenderFrame* render_frame,
+                               const GURL& url) override;
+  void GetNavigationErrorStrings(content::RenderView* render_view,
+                                 blink::WebFrame* frame,
+                                 const blink::WebURLRequest& failed_request,
+                                 const blink::WebURLError& error,
+                                 std::string* error_html,
+                                 base::string16* error_description) override;
+  void DeferMediaLoad(content::RenderFrame* render_frame,
+                      const base::Closure& closure) override;
+  bool RunIdleHandlerWhenWidgetsHidden() override;
+  bool AllowPopup() override;
+  bool ShouldFork(blink::WebFrame* frame,
+                  const GURL& url,
+                  const std::string& http_method,
+                  bool is_initial_navigation,
+                  bool is_server_redirect,
+                  bool* send_referrer) override;
+  bool WillSendRequest(blink::WebFrame* frame,
+                       ui::PageTransition transition_type,
+                       const GURL& url,
+                       const GURL& first_party_for_cookies,
+                       GURL* new_url) override;
+  void DidCreateScriptContext(blink::WebFrame* frame,
+                              v8::Handle<v8::Context> context,
+                              int extension_group,
+                              int world_id) override;
+  unsigned long long VisitedLinkHash(const char* canonical_url,
+                                     size_t length) override;
+  bool IsLinkVisited(unsigned long long link_hash) override;
+  blink::WebPrescientNetworking* GetPrescientNetworking() override;
+  bool ShouldOverridePageVisibilityState(
       const content::RenderFrame* render_frame,
-      blink::WebPageVisibilityState* override_state) OVERRIDE;
-  virtual const void* CreatePPAPIInterface(
-      const std::string& interface_name) OVERRIDE;
-  virtual bool IsExternalPepperPlugin(const std::string& module_name) OVERRIDE;
-  virtual blink::WebSpeechSynthesizer* OverrideSpeechSynthesizer(
-      blink::WebSpeechSynthesizerClient* client) OVERRIDE;
-  virtual bool ShouldReportDetailedMessageForSource(
-      const base::string16& source) const OVERRIDE;
-  virtual bool ShouldEnableSiteIsolationPolicy() const OVERRIDE;
-  virtual blink::WebWorkerPermissionClientProxy*
-      CreateWorkerPermissionClientProxy(content::RenderFrame* render_frame,
-                                        blink::WebFrame* frame) OVERRIDE;
-  virtual bool AllowPepperMediaStreamAPI(const GURL& url) OVERRIDE;
-  virtual void AddKeySystems(
-      std::vector<content::KeySystemInfo>* key_systems) OVERRIDE;
-  virtual bool IsPluginAllowedToUseDevChannelAPIs() OVERRIDE;
-  virtual bool IsPluginAllowedToUseCompositorAPI(const GURL& url) OVERRIDE;
-  virtual bool IsPluginAllowedToUseVideoDecodeAPI(const GURL& url) OVERRIDE;
+      blink::WebPageVisibilityState* override_state) override;
+  const void* CreatePPAPIInterface(const std::string& interface_name) override;
+  bool IsExternalPepperPlugin(const std::string& module_name) override;
+  blink::WebSpeechSynthesizer* OverrideSpeechSynthesizer(
+      blink::WebSpeechSynthesizerClient* client) override;
+  bool ShouldReportDetailedMessageForSource(
+      const base::string16& source) const override;
+  bool ShouldEnableSiteIsolationPolicy() const override;
+  blink::WebWorkerPermissionClientProxy* CreateWorkerPermissionClientProxy(
+      content::RenderFrame* render_frame,
+      blink::WebFrame* frame) override;
+  bool AllowPepperMediaStreamAPI(const GURL& url) override;
+  void AddKeySystems(std::vector<media::KeySystemInfo>* key_systems) override;
+  bool IsPluginAllowedToUseDevChannelAPIs() override;
+  bool IsPluginAllowedToUseCompositorAPI(const GURL& url) override;
+  content::BrowserPluginDelegate* CreateBrowserPluginDelegate(
+      content::RenderFrame* render_frame,
+      const std::string& mime_type,
+      const GURL& original_url) override;
 
+#if defined(ENABLE_EXTENSIONS)
   // Takes ownership.
   void SetExtensionDispatcherForTest(
       extensions::Dispatcher* extension_dispatcher);
   extensions::Dispatcher* GetExtensionDispatcherForTest();
+#endif
 
 #if defined(ENABLE_SPELLCHECK)
   // Sets a new |spellcheck|. Used for testing only.
@@ -150,8 +165,10 @@ class ChromeContentRendererClient : public content::ContentRendererClient {
       const blink::WebPluginParams& params,
       const ChromeViewHostMsg_GetPluginInfo_Output& output);
 
+#if defined(ENABLE_PLUGINS) && defined(ENABLE_EXTENSIONS)
   static bool IsExtensionOrSharedModuleWhitelisted(
       const GURL& url, const std::set<std::string>& whitelist);
+#endif
 
   static bool WasWebRequestUsedBySomeExtensions();
 
@@ -160,6 +177,7 @@ class ChromeContentRendererClient : public content::ContentRendererClient {
   FRIEND_TEST_ALL_PREFIXES(ChromeContentRendererClientTest,
                            ShouldSuppressErrorPage);
 
+#if defined(ENABLE_EXTENSIONS)
   // Gets extension by the given origin, regardless of whether the extension
   // is active in the current process.
   const extensions::Extension* GetExtensionByOrigin(
@@ -172,10 +190,12 @@ class ChromeContentRendererClient : public content::ContentRendererClient {
                                const extensions::ExtensionSet& extensions,
                                bool is_extension_url,
                                bool is_initial_navigation);
+#endif
 
   static GURL GetNaClContentHandlerURL(const std::string& actual_mime_type,
                                        const content::WebPluginInfo& plugin);
 
+#if !defined(DISABLE_NACL)
   // Determines if a NaCl app is allowed, and modifies params to pass the app's
   // permissions to the trusted NaCl plugin.
   static bool IsNaClAllowed(const GURL& manifest_url,
@@ -183,14 +203,24 @@ class ChromeContentRendererClient : public content::ContentRendererClient {
                             bool is_nacl_unrestricted,
                             const extensions::Extension* extension,
                             blink::WebPluginParams* params);
+#endif
 
   scoped_ptr<ChromeRenderProcessObserver> chrome_observer_;
+  scoped_ptr<web_cache::WebCacheRenderProcessObserver> web_cache_observer_;
+
+// TODO(thestig): Extract into a separate file if possible. Cleanup
+// ENABLE_EXTENSIONS ifdefs in the .cc file as well.
+#if defined(ENABLE_EXTENSIONS)
   scoped_ptr<ChromeExtensionsDispatcherDelegate> extension_dispatcher_delegate_;
   scoped_ptr<extensions::Dispatcher> extension_dispatcher_;
   scoped_ptr<extensions::RendererPermissionsPolicyDelegate>
       permissions_policy_delegate_;
+#endif
+
   scoped_ptr<PrescientNetworkingDispatcher> prescient_networking_dispatcher_;
   scoped_ptr<RendererNetPredictor> net_predictor_;
+  scoped_ptr<password_manager::CredentialManagerClient>
+      credential_manager_client_;
 #if defined(ENABLE_SPELLCHECK)
   scoped_ptr<SpellCheck> spellcheck_;
 #endif
@@ -201,6 +231,9 @@ class ChromeContentRendererClient : public content::ContentRendererClient {
   scoped_refptr<WebRtcLoggingMessageFilter> webrtc_logging_message_filter_;
 #endif
   scoped_ptr<SearchBouncer> search_bouncer_;
+#if defined(ENABLE_PRINT_PREVIEW)
+  scoped_ptr<ChromePDFPrintClient> pdf_print_client_;
+#endif
 #if defined(ENABLE_PLUGINS)
   std::set<std::string> allowed_compositor_origins_;
   std::set<std::string> allowed_video_decode_origins_;

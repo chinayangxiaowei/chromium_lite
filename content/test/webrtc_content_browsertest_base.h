@@ -13,8 +13,9 @@ namespace content {
 // Contains stuff WebRTC browsertests have in common.
 class WebRtcContentBrowserTest: public ContentBrowserTest {
  public:
-  virtual void SetUpCommandLine(base::CommandLine* command_line) OVERRIDE;
-  virtual void SetUp() OVERRIDE;
+  void SetUpCommandLine(base::CommandLine* command_line) override;
+  void SetUp() override;
+  void TearDown() override;
 
  protected:
   // Executes |javascript|. The script is required to use
@@ -26,6 +27,8 @@ class WebRtcContentBrowserTest: public ContentBrowserTest {
   // If the javascript returns != OK or times out, we fail the test.
   void ExecuteJavascriptAndWaitForOk(const std::string& javascript);
 
+  void DisableOpusIfOnAndroid();
+
   // Generates javascript code for a getUserMedia call.
   std::string GenerateGetUserMediaCall(const char* function_name,
                                        int min_width,
@@ -34,6 +37,8 @@ class WebRtcContentBrowserTest: public ContentBrowserTest {
                                        int max_height,
                                        int min_frame_rate,
                                        int max_frame_rate) const;
+
+  bool OnWinXp() const;
 };
 
 }  // namespace content

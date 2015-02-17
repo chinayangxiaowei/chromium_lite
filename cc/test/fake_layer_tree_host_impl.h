@@ -18,7 +18,7 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
   FakeLayerTreeHostImpl(const LayerTreeSettings& settings,
                         Proxy* proxy,
                         SharedBitmapManager* manager);
-  virtual ~FakeLayerTreeHostImpl();
+  ~FakeLayerTreeHostImpl() override;
 
   void ForcePrepareToDraw() {
     LayerTreeHostImpl::FrameData frame_data;
@@ -26,10 +26,10 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
     DidDrawAllLayers(frame_data);
   }
 
-  virtual void CreatePendingTree() OVERRIDE;
+  void CreatePendingTree() override;
 
-  virtual base::TimeTicks CurrentFrameTimeTicks() OVERRIDE;
-  void SetCurrentFrameTimeTicks(base::TimeTicks current_frame_time_ticks);
+  BeginFrameArgs CurrentBeginFrameArgs() const override;
+  void SetCurrentBeginFrameArgs(const BeginFrameArgs& args);
   void UpdateNumChildrenAndDrawPropertiesForActiveTree();
   static void UpdateNumChildrenAndDrawProperties(LayerTreeImpl* layerTree);
   static int RecursiveUpdateNumChildren(LayerImpl* layer);
@@ -38,7 +38,7 @@ class FakeLayerTreeHostImpl : public LayerTreeHostImpl {
   using LayerTreeHostImpl::manage_tiles_needed;
 
  private:
-  base::TimeTicks current_frame_time_ticks_;
+  BeginFrameArgs current_begin_frame_args_;
   FakeLayerTreeHostImplClient client_;
   FakeRenderingStatsInstrumentation stats_instrumentation_;
 };

@@ -24,8 +24,8 @@ class MockDownloadItem : public DownloadItem {
   // Management of observer lists is common in tests. So Add/RemoveObserver
   // methods are not mocks. In addition, any registered observers will receive a
   // OnDownloadDestroyed() notification when the mock is destroyed.
-  virtual void AddObserver(Observer* observer) OVERRIDE;
-  virtual void RemoveObserver(Observer* observer) OVERRIDE;
+  virtual void AddObserver(Observer* observer) override;
+  virtual void RemoveObserver(Observer* observer) override;
 
   // Dispatches an OnDownloadOpened() notification to observers.
   void NotifyObserversDownloadOpened();
@@ -63,7 +63,7 @@ class MockDownloadItem : public DownloadItem {
   MOCK_CONST_METHOD0(GetReferrerCharset, std::string());
   MOCK_CONST_METHOD0(GetRemoteAddress, std::string());
   MOCK_CONST_METHOD0(HasUserGesture, bool());
-  MOCK_CONST_METHOD0(GetTransitionType, PageTransition());
+  MOCK_CONST_METHOD0(GetTransitionType, ui::PageTransition());
   MOCK_CONST_METHOD0(GetLastModifiedTime, const std::string&());
   MOCK_CONST_METHOD0(GetETag, const std::string&());
   MOCK_CONST_METHOD0(IsSavePackageDownload, bool());

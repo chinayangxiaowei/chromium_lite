@@ -243,7 +243,8 @@ static const MimeInfo secondary_mappings[] = {
   { "application/vnd.mozilla.xul+xml", "xul" },
   { "application/x-shockwave-flash", "swf,swl" },
   { "application/pkcs7-mime", "p7m,p7c,p7z" },
-  { "application/pkcs7-signature", "p7s" }
+  { "application/pkcs7-signature", "p7s" },
+  { "application/x-mpegurl", "m3u8" },
 };
 
 static const char* FindMimeType(const MimeInfo* mappings,
@@ -378,6 +379,11 @@ static const char* const proprietary_media_types[] = {
   "audio/mp3",
   "audio/x-mp3",
   "audio/mpeg",
+
+#if defined(ENABLE_MPEG2TS_STREAM_PARSER)
+  // MPEG-2 TS.
+  "video/mp2t",
+#endif
 };
 
 // Note:
@@ -522,16 +528,20 @@ struct MediaFormatStrict {
 //   mp4a.69     - MPEG-2 extension to MPEG-1
 //   mp4a.6B     - MPEG-1 audio
 //   mp4a.40.2   - MPEG-4 AAC LC
+//   mp4a.40.02  - MPEG-4 AAC LC (leading 0 in aud-oti for compatibility)
 //   mp4a.40.5   - MPEG-4 AAC SBRv1
+//   mp4a.40.05  - MPEG-4 AAC SBRv1 (leading 0 in aud-oti for compatibility)
 //
 //   avc1.42E0xx - H.264 Baseline
 //   avc1.4D40xx - H.264 Main
 //   avc1.6400xx - H.264 High
 static const char kMP4AudioCodecsExpression[] =
-    "mp4a.66,mp4a.67,mp4a.68,mp4a.69,mp4a.6B,mp4a.40.2,mp4a.40.5";
+    "mp4a.66,mp4a.67,mp4a.68,mp4a.69,mp4a.6B,mp4a.40.2,mp4a.40.02,mp4a.40.5,"
+    "mp4a.40.05";
 static const char kMP4VideoCodecsExpression[] =
-    "avc1.42E00A,avc1.4D400A,avc1.64000A," \
-    "mp4a.66,mp4a.67,mp4a.68,mp4a.69,mp4a.6B,mp4a.40.2,mp4a.40.5";
+    "avc1.42E00A,avc1.4D400A,avc1.64000A,"
+    "mp4a.66,mp4a.67,mp4a.68,mp4a.69,mp4a.6B,mp4a.40.2,mp4a.40.02,mp4a.40.5,"
+    "mp4a.40.05";
 
 static const MediaFormatStrict format_codec_mappings[] = {
   { "video/webm", "opus,vorbis,vp8,vp8.0,vp9,vp9.0" },
@@ -562,23 +572,24 @@ struct CodecIDMappings {
 //
 // The "mp4a" strings come from RFC 6381.
 static const CodecIDMappings kUnambiguousCodecIDs[] = {
-  { "1", MimeUtil::PCM }, // We only allow this for WAV so it isn't ambiguous.
-  { "mp3", MimeUtil::MP3 },
-  { "mp4a.66", MimeUtil::MPEG2_AAC_MAIN },
-  { "mp4a.67", MimeUtil::MPEG2_AAC_LC },
-  { "mp4a.68", MimeUtil::MPEG2_AAC_SSR },
-  { "mp4a.69", MimeUtil::MP3 },
-  { "mp4a.6B", MimeUtil::MP3 },
-  { "mp4a.40.2", MimeUtil::MPEG4_AAC_LC },
-  { "mp4a.40.5", MimeUtil::MPEG4_AAC_SBRv1 },
-  { "vorbis", MimeUtil::VORBIS },
-  { "opus", MimeUtil::OPUS },
-  { "vp8", MimeUtil::VP8 },
-  { "vp8.0", MimeUtil::VP8 },
-  { "vp9", MimeUtil::VP9 },
-  { "vp9.0", MimeUtil::VP9 },
-  { "theora", MimeUtil::THEORA }
-};
+    {"1", MimeUtil::PCM},  // We only allow this for WAV so it isn't ambiguous.
+    {"mp3", MimeUtil::MP3},
+    {"mp4a.66", MimeUtil::MPEG2_AAC_MAIN},
+    {"mp4a.67", MimeUtil::MPEG2_AAC_LC},
+    {"mp4a.68", MimeUtil::MPEG2_AAC_SSR},
+    {"mp4a.69", MimeUtil::MP3},
+    {"mp4a.6B", MimeUtil::MP3},
+    {"mp4a.40.2", MimeUtil::MPEG4_AAC_LC},
+    {"mp4a.40.02", MimeUtil::MPEG4_AAC_LC},
+    {"mp4a.40.5", MimeUtil::MPEG4_AAC_SBRv1},
+    {"mp4a.40.05", MimeUtil::MPEG4_AAC_SBRv1},
+    {"vorbis", MimeUtil::VORBIS},
+    {"opus", MimeUtil::OPUS},
+    {"vp8", MimeUtil::VP8},
+    {"vp8.0", MimeUtil::VP8},
+    {"vp9", MimeUtil::VP9},
+    {"vp9.0", MimeUtil::VP9},
+    {"theora", MimeUtil::THEORA}};
 
 // List of codec IDs that are ambiguous and don't provide
 // enough information to determine the codec and profile.
@@ -918,6 +929,39 @@ void MimeUtil::RemoveProprietaryMediaTypesAndCodecsForTests() {
   allow_proprietary_codecs_ = false;
 }
 
+// Returns true iff |profile_str| conforms to hex string "42y0", where y is one
+// of [8..F]. Requiring constraint_set0_flag be set and profile_idc be 0x42 is
+// taken from ISO-14496-10 7.3.2.1, 7.4.2.1, and Annex A.2.1.
+//
+// |profile_str| is the first four characters of the H.264 suffix string
+// (ignoring the last 2 characters of the full 6 character suffix that are
+// level_idc). From ISO-14496-10 7.3.2.1, it consists of:
+// 8 bits: profile_idc: required to be 0x42 here.
+// 1 bit: constraint_set0_flag : required to be true here.
+// 1 bit: constraint_set1_flag : ignored here.
+// 1 bit: constraint_set2_flag : ignored here.
+// 1 bit: constraint_set3_flag : ignored here.
+// 4 bits: reserved : required to be 0 here.
+//
+// The spec indicates other ways, not implemented here, that a |profile_str|
+// can indicate a baseline conforming decoder is sufficient for decode in Annex
+// A.2.1: "[profile_idc not necessarily 0x42] with constraint_set0_flag set and
+// in which level_idc and constraint_set3_flag represent a level less than or
+// equal to the specified level."
+static bool IsValidH264BaselineProfile(const std::string& profile_str) {
+  uint32 constraint_set_bits;
+  if (profile_str.size() != 4 ||
+      profile_str[0] != '4' ||
+      profile_str[1] != '2' ||
+      profile_str[3] != '0' ||
+      !base::HexStringToUInt(base::StringPiece(profile_str.c_str() + 2, 1),
+                             &constraint_set_bits)) {
+    return false;
+  }
+
+  return constraint_set_bits >= 8;
+}
+
 static bool IsValidH264Level(const std::string& level_str) {
   uint32 level;
   if (level_str.size() != 2 || !base::HexStringToUInt(level_str, &level))
@@ -932,13 +976,16 @@ static bool IsValidH264Level(const std::string& level_str) {
           (level >= 50 && level <= 51));
 }
 
-// Handle parsing H.264 codec IDs as outlined in RFC 6381
-//   avc1.42E0xx - H.264 Baseline
-//   avc1.4D40xx - H.264 Main
-//   avc1.6400xx - H.264 High
+// Handle parsing H.264 codec IDs as outlined in RFC 6381 and ISO-14496-10.
+//   avc1.42y0xx, y >= 8 - H.264 Baseline
+//   avc1.4D40xx         - H.264 Main
+//   avc1.6400xx         - H.264 High
 //
-//   avc1.xxxxxx & avc3.xxxxxx are considered ambiguous forms that
-//   are trying to signal H.264 Baseline.
+//   avc1.xxxxxx & avc3.xxxxxx are considered ambiguous forms that are trying to
+//   signal H.264 Baseline. For example, the idc_level, profile_idc and
+//   constraint_set3_flag pieces may explicitly require decoder to conform to
+//   baseline profile at the specified level (see Annex A and constraint_set0 in
+//   ISO-14496-10).
 static bool ParseH264CodecID(const std::string& codec_id,
                              MimeUtil::Codec* codec,
                              bool* is_ambiguous) {
@@ -950,7 +997,7 @@ static bool ParseH264CodecID(const std::string& codec_id,
   }
 
   std::string profile = StringToUpperASCII(codec_id.substr(5, 4));
-  if (profile == "42E0") {
+  if (IsValidH264BaselineProfile(profile)) {
     *codec = MimeUtil::H264_BASELINE;
   } else if (profile == "4D40") {
     *codec = MimeUtil::H264_MAIN;

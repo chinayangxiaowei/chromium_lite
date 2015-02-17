@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/values.h"
+#include "chrome/browser/accessibility/ax_tree_id_registry.h"
 #include "chrome/common/extensions/api/automation_internal.h"
 #include "extensions/browser/event_router.h"
 #include "ui/accessibility/ax_enums.h"
@@ -125,7 +126,8 @@ namespace automation_util {
 
 void DispatchAccessibilityEventsToAutomation(
     const std::vector<content::AXEventNotificationDetails>& details,
-    content::BrowserContext* browser_context) {
+    content::BrowserContext* browser_context,
+    const gfx::Vector2d& location_offset) {
   using api::automation_internal::AXEventParams;
   using api::automation_internal::AXTreeUpdate;
 
@@ -135,17 +137,20 @@ void DispatchAccessibilityEventsToAutomation(
     const content::AXEventNotificationDetails& event = *iter;
 
     AXEventParams ax_event_params;
-    ax_event_params.process_id = event.process_id;
-    ax_event_params.routing_id = event.routing_id;
+    ax_event_params.tree_id =
+        AXTreeIDRegistry::GetInstance()->GetOrCreateAXTreeID(event.process_id,
+                                                             event.routing_id);
     ax_event_params.event_type = ToString(iter->event_type);
     ax_event_params.target_id = event.id;
 
     AXTreeUpdate& ax_tree_update = ax_event_params.update;
     ax_tree_update.node_id_to_clear = event.node_id_to_clear;
     for (size_t i = 0; i < event.nodes.size(); ++i) {
+      ui::AXNodeData src = event.nodes[i];
+      src.location.Offset(location_offset);
       linked_ptr<api::automation_internal::AXNodeData> out_node(
           new api::automation_internal::AXNodeData());
-      PopulateNodeData(event.nodes[i], out_node);
+      PopulateNodeData(src, out_node);
       ax_tree_update.nodes.push_back(out_node);
     }
 
@@ -165,11 +170,13 @@ void DispatchTreeDestroyedEventToAutomation(
     int process_id,
     int routing_id,
     content::BrowserContext* browser_context) {
+  int tree_id = AXTreeIDRegistry::GetInstance()->GetOrCreateAXTreeID(
+      process_id, routing_id);
   DispatchEventInternal(
       browser_context,
       api::automation_internal::OnAccessibilityTreeDestroyed::kEventName,
-      api::automation_internal::OnAccessibilityTreeDestroyed::Create(
-          process_id, routing_id));
+      api::automation_internal::OnAccessibilityTreeDestroyed::Create(tree_id));
+  AXTreeIDRegistry::GetInstance()->RemoveAXTreeID(tree_id);
 }
 
 }  // namespace automation_util

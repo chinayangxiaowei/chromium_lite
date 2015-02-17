@@ -6,7 +6,7 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
@@ -29,14 +29,14 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "content/public/test/test_utils.h"
+#include "storage/browser/fileapi/file_system_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/leveldatabase/src/helpers/memenv/memenv.h"
 #include "third_party/leveldatabase/src/include/leveldb/env.h"
-#include "webkit/browser/fileapi/file_system_context.h"
 
 using content::BrowserThread;
-using fileapi::FileSystemURL;
+using storage::FileSystemURL;
 using ::testing::_;
 using ::testing::AtLeast;
 using ::testing::InvokeWithoutArgs;
@@ -109,7 +109,7 @@ class LocalFileSyncServiceTest
                        content::TestBrowserThreadBundle::REAL_IO_THREAD),
         num_changes_(0) {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
 
@@ -139,7 +139,7 @@ class LocalFileSyncServiceTest
         set_mock_notify_changes_duration_in_sec(0);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     local_service_->Shutdown();
     file_system_->TearDown();
     RevokeSyncableFileSystem();
@@ -148,7 +148,7 @@ class LocalFileSyncServiceTest
   }
 
   // LocalChangeObserver overrides.
-  virtual void OnLocalChangeAvailable(int64 num_changes) OVERRIDE {
+  void OnLocalChangeAvailable(int64 num_changes) override {
     num_changes_ = num_changes;
   }
 
@@ -543,7 +543,7 @@ TEST_F(LocalFileSyncServiceTest, RecordFakeChange) {
 
   EXPECT_EQ(0, GetNumChangesInTracker());
 
-  fileapi::FileSystemURLSet urlset;
+  storage::FileSystemURLSet urlset;
   file_system_->GetChangedURLsInTracker(&urlset);
   EXPECT_TRUE(urlset.empty());
 
@@ -591,7 +591,7 @@ TEST_F(LocalFileSyncServiceTest, RecordFakeChange) {
 class OriginChangeMapTest : public testing::Test {
  protected:
   OriginChangeMapTest() {}
-  virtual ~OriginChangeMapTest() {}
+  ~OriginChangeMapTest() override {}
 
   bool NextOriginToProcess(GURL* origin) {
     return map_.NextOriginToProcess(origin);
@@ -630,7 +630,7 @@ TEST_F(OriginChangeMapTest, Basic) {
 
   const GURL kOrigins[] = { kOrigin1, kOrigin2, kOrigin3 };
   std::set<GURL> all_origins;
-  all_origins.insert(kOrigins, kOrigins + ARRAYSIZE_UNSAFE(kOrigins));
+  all_origins.insert(kOrigins, kOrigins + arraysize(kOrigins));
 
   GURL origin;
   while (!all_origins.empty()) {
@@ -667,7 +667,7 @@ TEST_F(OriginChangeMapTest, Basic) {
   SetOriginChangeCount(kOrigin2, 8);
   ASSERT_EQ(1 + 4 + 8, GetTotalChangeCount());
 
-  all_origins.insert(kOrigins, kOrigins + ARRAYSIZE_UNSAFE(kOrigins));
+  all_origins.insert(kOrigins, kOrigins + arraysize(kOrigins));
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
     ASSERT_TRUE(ContainsKey(all_origins, origin));
@@ -690,7 +690,7 @@ TEST_F(OriginChangeMapTest, WithDisabled) {
   ASSERT_EQ(1 + 2 + 4, GetTotalChangeCount());
 
   std::set<GURL> all_origins;
-  all_origins.insert(kOrigins, kOrigins + ARRAYSIZE_UNSAFE(kOrigins));
+  all_origins.insert(kOrigins, kOrigins + arraysize(kOrigins));
 
   GURL origin;
   while (!all_origins.empty()) {

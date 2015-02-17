@@ -2,15 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/command_line.h"
-
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 
+#include "base/command_line.h"
+#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/profile_sync_service_mock.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/content/common/autofill_messages.h"
 #include "components/password_manager/content/browser/password_manager_internals_service_factory.h"
+#include "components/password_manager/content/common/credential_manager_messages.h"
+#include "components/password_manager/content/common/credential_manager_types.h"
 #include "components/password_manager/core/browser/log_receiver.h"
 #include "components/password_manager/core/browser/password_manager_internals_service.h"
 #include "components/password_manager/core/common/password_manager_switches.h"
@@ -22,6 +27,7 @@
 
 using content::BrowserContext;
 using content::WebContents;
+using testing::Return;
 
 namespace {
 
@@ -37,11 +43,10 @@ class TestChromePasswordManagerClient : public ChromePasswordManagerClient {
   explicit TestChromePasswordManagerClient(content::WebContents* web_contents)
       : ChromePasswordManagerClient(web_contents, NULL),
         is_sync_account_credential_(false) {}
-  virtual ~TestChromePasswordManagerClient() {}
+  ~TestChromePasswordManagerClient() override {}
 
-  virtual bool IsSyncAccountCredential(
-      const std::string& username,
-      const std::string& origin) const OVERRIDE {
+  bool IsSyncAccountCredential(const std::string& username,
+                               const std::string& origin) const override {
     return is_sync_account_credential_;
   }
 
@@ -61,7 +66,7 @@ class ChromePasswordManagerClientTest : public ChromeRenderViewHostTestHarness {
  public:
   ChromePasswordManagerClientTest();
 
-  virtual void SetUp() OVERRIDE;
+  virtual void SetUp() override;
 
  protected:
   ChromePasswordManagerClient* GetClient();
@@ -294,6 +299,12 @@ TEST_F(ChromePasswordManagerClientTest,
            "https://passwords.%67oogle.com/settings&rart=123"));
   EXPECT_FALSE(client->IsPasswordManagerEnabledForCurrentPage());
 
+  // Make sure testing sites are disabled as well.
+  NavigateAndCommit(
+      GURL("https://accounts.google.com/Login?continue="
+           "https://passwords-ac-testing.corp.google.com/settings&rart=456"));
+  EXPECT_FALSE(client->IsPasswordManagerEnabledForCurrentPage());
+
   // Fully qualified domain name is considered a different hostname by GURL.
   // Ideally this would not be the case, but this quirk can be avoided by
   // verification on the server. This test is simply documentation of this
@@ -320,4 +331,58 @@ TEST_F(ChromePasswordManagerClientTest,
       GURL("https://other.site.com/ServiceLogin?continue="
            "https://passwords.google.com&rart=234"));
   EXPECT_TRUE(client->IsPasswordManagerEnabledForCurrentPage());
+}
+
+TEST_F(ChromePasswordManagerClientTest, IsPasswordSyncEnabled) {
+  ChromePasswordManagerClient* client = GetClient();
+
+  ProfileSyncServiceMock* mock_sync_service =
+      static_cast<ProfileSyncServiceMock*>(
+          ProfileSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+              profile(), ProfileSyncServiceMock::BuildMockProfileSyncService));
+
+  syncer::ModelTypeSet active_types;
+  active_types.Put(syncer::PASSWORDS);
+  EXPECT_CALL(*mock_sync_service, HasSyncSetupCompleted())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_sync_service, SyncActive()).WillRepeatedly(Return(true));
+  EXPECT_CALL(*mock_sync_service, GetActiveDataTypes())
+      .WillRepeatedly(Return(active_types));
+  EXPECT_CALL(*mock_sync_service, IsUsingSecondaryPassphrase())
+      .WillRepeatedly(Return(false));
+
+  // Passwords are syncing and custom passphrase isn't used.
+  EXPECT_FALSE(
+      client->IsPasswordSyncEnabled(password_manager::ONLY_CUSTOM_PASSPHRASE));
+  EXPECT_TRUE(client->IsPasswordSyncEnabled(
+      password_manager::WITHOUT_CUSTOM_PASSPHRASE));
+
+  // Again, using a custom passphrase.
+  EXPECT_CALL(*mock_sync_service, IsUsingSecondaryPassphrase())
+      .WillRepeatedly(Return(true));
+
+  EXPECT_TRUE(
+      client->IsPasswordSyncEnabled(password_manager::ONLY_CUSTOM_PASSPHRASE));
+  EXPECT_FALSE(client->IsPasswordSyncEnabled(
+      password_manager::WITHOUT_CUSTOM_PASSPHRASE));
+
+  // Always return false if we aren't syncing passwords.
+  active_types.Remove(syncer::PASSWORDS);
+  active_types.Put(syncer::BOOKMARKS);
+  EXPECT_CALL(*mock_sync_service, GetActiveDataTypes())
+      .WillRepeatedly(Return(active_types));
+
+  EXPECT_FALSE(
+      client->IsPasswordSyncEnabled(password_manager::ONLY_CUSTOM_PASSPHRASE));
+  EXPECT_FALSE(client->IsPasswordSyncEnabled(
+      password_manager::WITHOUT_CUSTOM_PASSPHRASE));
+
+  // Again, without a custom passphrase.
+  EXPECT_CALL(*mock_sync_service, IsUsingSecondaryPassphrase())
+      .WillRepeatedly(Return(false));
+
+  EXPECT_FALSE(
+      client->IsPasswordSyncEnabled(password_manager::ONLY_CUSTOM_PASSPHRASE));
+  EXPECT_FALSE(client->IsPasswordSyncEnabled(
+      password_manager::WITHOUT_CUSTOM_PASSPHRASE));
 }

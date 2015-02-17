@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -31,7 +31,7 @@ class MediaStorageUtilTest : public testing::Test {
  public:
   MediaStorageUtilTest()
       : thread_bundle_(content::TestBrowserThreadBundle::REAL_FILE_THREAD) {}
-  virtual ~MediaStorageUtilTest() {}
+  ~MediaStorageUtilTest() override {}
 
   // Verify mounted device type.
   void CheckDCIMDeviceType(const base::FilePath& mount_point) {
@@ -60,12 +60,12 @@ class MediaStorageUtilTest : public testing::Test {
     return scoped_temp_dir_.path();
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     monitor_ = TestStorageMonitor::CreateAndInstall();
     ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     WaitForFileThread();
     TestStorageMonitor::Destroy();
   }

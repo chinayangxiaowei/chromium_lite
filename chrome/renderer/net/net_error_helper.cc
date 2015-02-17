@@ -14,10 +14,11 @@
 #include "base/values.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/localized_error.h"
-#include "chrome/common/net/net_error_info.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/grit/renderer_resources.h"
 #include "chrome/renderer/net/net_error_page_controller.h"
+#include "components/error_page/common/error_page_params.h"
+#include "components/error_page/common/net_error_info.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/content_renderer_client.h"
@@ -34,7 +35,7 @@
 #include "third_party/WebKit/public/platform/WebURLResponse.h"
 #include "third_party/WebKit/public/web/WebDataSource.h"
 #include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
+#include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebView.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/jstemplate_builder.h"
@@ -48,6 +49,8 @@ using content::RenderFrame;
 using content::RenderFrameObserver;
 using content::RenderThread;
 using content::kUnreachableWebDataURL;
+using error_page::ErrorPageParams;
+using error_page::NetErrorHelperCore;
 
 namespace {
 
@@ -165,7 +168,7 @@ void NetErrorHelper::TrackClick(int tracking_id) {
 void NetErrorHelper::GenerateLocalizedErrorPage(
     const blink::WebURLError& error,
     bool is_failed_post,
-    scoped_ptr<LocalizedError::ErrorPageParams> params,
+    scoped_ptr<ErrorPageParams> params,
     bool* reload_button_shown,
     bool* load_stale_button_shown,
     std::string* error_html) const {
@@ -227,7 +230,7 @@ void NetErrorHelper::UpdateErrorPage(const blink::WebURLError& error,
                              RenderThread::Get()->GetLocale(),
                              render_frame()->GetRenderView()->
                                  GetAcceptLanguages(),
-                             scoped_ptr<LocalizedError::ErrorPageParams>(),
+                             scoped_ptr<ErrorPageParams>(),
                              &error_strings);
 
   std::string json;
@@ -264,6 +267,7 @@ void NetErrorHelper::FetchNavigationCorrections(
       frame,
       blink::WebURLRequest::RequestContextInternal,
       blink::WebURLRequest::FrameTypeTopLevel,
+      content::ResourceFetcher::PLATFORM_LOADER,
       base::Bind(&NetErrorHelper::OnNavigationCorrectionsFetched,
                  base::Unretained(this)));
 
@@ -293,6 +297,7 @@ void NetErrorHelper::SendTrackingRequest(
       frame,
       blink::WebURLRequest::RequestContextInternal,
       blink::WebURLRequest::FrameTypeTopLevel,
+      content::ResourceFetcher::PLATFORM_LOADER,
       base::Bind(&NetErrorHelper::OnTrackingRequestComplete,
                  base::Unretained(this)));
 }

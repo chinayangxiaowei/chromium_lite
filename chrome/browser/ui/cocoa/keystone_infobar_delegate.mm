@@ -22,11 +22,11 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -44,20 +44,19 @@ class KeystonePromotionInfoBarDelegate : public ConfirmInfoBarDelegate {
 
  private:
   explicit KeystonePromotionInfoBarDelegate(PrefService* prefs);
-  virtual ~KeystonePromotionInfoBarDelegate();
+  ~KeystonePromotionInfoBarDelegate() override;
 
   // Sets this info bar to be able to expire.  Called a predetermined amount
   // of time after this object is created.
   void SetCanExpire() { can_expire_ = true; }
 
   // ConfirmInfoBarDelegate
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
-  virtual bool ShouldExpireInternal(
-      const NavigationDetails& details) const OVERRIDE;
+  int GetIconID() const override;
+  base::string16 GetMessageText() const override;
+  base::string16 GetButtonLabel(InfoBarButton button) const override;
+  bool Accept() override;
+  bool Cancel() override;
+  bool ShouldExpireInternal(const NavigationDetails& details) const override;
 
   // The prefs to use.
   PrefService* prefs_;  // weak

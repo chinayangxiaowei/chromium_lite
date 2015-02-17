@@ -7,9 +7,9 @@
 #include <algorithm>
 
 #include "base/command_line.h"
+#include "base/metrics/histogram.h"
 #include "base/strings/string_util.h"
 #include "base/win/windows_version.h"
-#include "grit/ui_resources.h"
 #include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/app_list_model.h"
 #include "ui/app_list/app_list_switches.h"
@@ -33,6 +33,7 @@
 #include "ui/gfx/insets.h"
 #include "ui/gfx/path.h"
 #include "ui/gfx/skia_util.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -86,10 +87,10 @@ class AppListOverlayBackground : public views::Background {
  public:
   AppListOverlayBackground(int corner_radius)
       : corner_radius_(corner_radius) {};
-  virtual ~AppListOverlayBackground() {};
+  ~AppListOverlayBackground() override{};
 
   // Overridden from views::Background:
-  virtual void Paint(gfx::Canvas* canvas, views::View* view) const OVERRIDE {
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
     SkPaint paint;
     paint.setStyle(SkPaint::kFill_Style);
     paint.setColor(SK_ColorWHITE);
@@ -112,7 +113,7 @@ class HideViewAnimationObserver : public ui::ImplicitAnimationObserver {
         target_(NULL) {
   }
 
-  virtual ~HideViewAnimationObserver() {
+  ~HideViewAnimationObserver() override {
     if (target_)
       StopObservingImplicitAnimations();
   }
@@ -127,7 +128,7 @@ class HideViewAnimationObserver : public ui::ImplicitAnimationObserver {
 
  private:
   // Overridden from ui::ImplicitAnimationObserver:
-  virtual void OnImplicitAnimationsCompleted() OVERRIDE {
+  void OnImplicitAnimationsCompleted() override {
     if (target_) {
       target_->SetVisible(false);
       target_ = NULL;
@@ -150,6 +151,7 @@ class HideViewAnimationObserver : public ui::ImplicitAnimationObserver {
 AppListView::AppListView(AppListViewDelegate* delegate)
     : delegate_(delegate),
       app_list_main_view_(NULL),
+      search_box_view_(NULL),
       speech_view_(NULL),
       experimental_banner_view_(NULL),
       overlay_view_(NULL),
@@ -281,6 +283,11 @@ void AppListView::OnProfilesChanged() {
   app_list_main_view_->search_box_view()->InvalidateMenu();
 }
 
+void AppListView::OnShutdown() {
+  // Nothing to do on views - the widget will soon be closed, which will tear
+  // everything down.
+}
+
 void AppListView::SetProfileByPath(const base::FilePath& profile_path) {
   delegate_->SetProfileByPath(profile_path);
   app_list_main_view_->ModelChanged();
@@ -319,16 +326,25 @@ void AppListView::InitAsBubbleInternal(gfx::NativeView parent,
                                        views::BubbleBorder::Arrow arrow,
                                        bool border_accepts_events,
                                        const gfx::Vector2d& anchor_offset) {
-  app_list_main_view_ =
-      new AppListMainView(delegate_.get(), initial_apps_page, parent);
+  base::Time start_time = base::Time::Now();
+
+  app_list_main_view_ = new AppListMainView(delegate_);
   AddChildView(app_list_main_view_);
   app_list_main_view_->SetPaintToLayer(true);
   app_list_main_view_->SetFillsBoundsOpaquely(false);
   app_list_main_view_->layer()->SetMasksToBounds(true);
 
+  search_box_view_ = new SearchBoxView(app_list_main_view_, delegate_);
+  search_box_view_->SetPaintToLayer(true);
+  search_box_view_->SetFillsBoundsOpaquely(false);
+  search_box_view_->layer()->SetMasksToBounds(true);
+  AddChildView(search_box_view_);
+
+  app_list_main_view_->Init(parent, initial_apps_page, search_box_view_);
+
   // Speech recognition is available only when the start page exists.
   if (delegate_ && delegate_->IsSpeechRecognitionEnabled()) {
-    speech_view_ = new SpeechView(delegate_.get());
+    speech_view_ = new SpeechView(delegate_);
     speech_view_->SetVisible(false);
     speech_view_->SetPaintToLayer(true);
     speech_view_->SetFillsBoundsOpaquely(false);
@@ -407,6 +423,9 @@ void AppListView::InitAsBubbleInternal(gfx::NativeView parent,
 
   if (delegate_)
     delegate_->ViewInitialized();
+
+  UMA_HISTOGRAM_TIMES("Apps.AppListCreationTime",
+                      base::Time::Now() - start_time);
 }
 
 void AppListView::OnBeforeBubbleWidgetInit(
@@ -482,6 +501,9 @@ bool AppListView::AcceleratorPressed(const ui::Accelerator& accelerator) {
 }
 
 void AppListView::Layout() {
+  search_box_view_->SetBoundsRect(
+      app_list_main_view_->contents_view()->GetDefaultSearchBoxBounds());
+
   const gfx::Rect contents_bounds = GetContentsBounds();
   app_list_main_view_->SetBoundsRect(contents_bounds);
 

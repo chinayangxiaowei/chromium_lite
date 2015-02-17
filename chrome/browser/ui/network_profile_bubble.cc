@@ -12,8 +12,8 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/prefs/pref_service.h"
@@ -44,9 +44,9 @@ class BrowserListObserver : public chrome::BrowserListObserver {
   virtual ~BrowserListObserver();
 
   // Overridden from chrome::BrowserListObserver:
-  virtual void OnBrowserAdded(Browser* browser) OVERRIDE;
-  virtual void OnBrowserRemoved(Browser* browser) OVERRIDE;
-  virtual void OnBrowserSetLastActive(Browser* browser) OVERRIDE;
+  virtual void OnBrowserAdded(Browser* browser) override;
+  virtual void OnBrowserRemoved(Browser* browser) override;
+  virtual void OnBrowserSetLastActive(Browser* browser) override;
 };
 
 BrowserListObserver::~BrowserListObserver() {

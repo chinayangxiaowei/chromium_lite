@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observer.h"
@@ -68,20 +68,18 @@ class ManagedValueStoreCache::ExtensionTracker
     : public ExtensionRegistryObserver {
  public:
   explicit ExtensionTracker(Profile* profile);
-  virtual ~ExtensionTracker() {}
+  ~ExtensionTracker() override {}
 
  private:
   // ExtensionRegistryObserver implementation.
-  virtual void OnExtensionWillBeInstalled(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      bool is_update,
-      bool from_ephemeral,
-      const std::string& old_name) OVERRIDE;
-  virtual void OnExtensionUninstalled(
-      content::BrowserContext* browser_context,
-      const Extension* extension,
-      extensions::UninstallReason reason) OVERRIDE;
+  void OnExtensionWillBeInstalled(content::BrowserContext* browser_context,
+                                  const Extension* extension,
+                                  bool is_update,
+                                  bool from_ephemeral,
+                                  const std::string& old_name) override;
+  void OnExtensionUninstalled(content::BrowserContext* browser_context,
+                              const Extension* extension,
+                              extensions::UninstallReason reason) override;
 
   // Handler for the signal from ExtensionSystem::ready().
   void OnExtensionsReady();
@@ -161,7 +159,7 @@ void ManagedValueStoreCache::ExtensionTracker::LoadSchemas(
   ExtensionSet::const_iterator it = added->begin();
   while (it != added->end()) {
     std::string to_remove;
-    if (!UsesManagedStorage(*it))
+    if (!UsesManagedStorage(it->get()))
       to_remove = (*it)->id();
     ++it;
     if (!to_remove.empty())

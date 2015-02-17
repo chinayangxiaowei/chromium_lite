@@ -32,7 +32,6 @@
 #include "base/auto_reset.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
-#include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "ui/accessibility/ax_view_state.h"
 #include "ui/aura/client/screen_position_client.h"
@@ -116,7 +115,7 @@ namespace {
 // A class to temporarily disable a given bounds animator.
 class BoundsAnimatorDisabler {
  public:
-  BoundsAnimatorDisabler(views::BoundsAnimator* bounds_animator)
+  explicit BoundsAnimatorDisabler(views::BoundsAnimator* bounds_animator)
       : old_duration_(bounds_animator->GetAnimationDuration()),
         bounds_animator_(bounds_animator) {
     bounds_animator_->SetAnimationDuration(1);
@@ -142,20 +141,20 @@ class ShelfMenuModelAdapter : public views::MenuModelAdapter {
   explicit ShelfMenuModelAdapter(ShelfMenuModel* menu_model);
 
   // views::MenuModelAdapter:
-  virtual const gfx::FontList* GetLabelFontList(int command_id) const OVERRIDE;
-  virtual bool IsCommandEnabled(int id) const OVERRIDE;
-  virtual void GetHorizontalIconMargins(int id,
-                                        int icon_size,
-                                        int* left_margin,
-                                        int* right_margin) const OVERRIDE;
-  virtual bool GetForegroundColor(int command_id,
-                                  bool is_hovered,
-                                  SkColor* override_color) const OVERRIDE;
-  virtual bool GetBackgroundColor(int command_id,
-                                  bool is_hovered,
-                                  SkColor* override_color) const OVERRIDE;
-  virtual int GetMaxWidthForMenu(views::MenuItemView* menu) OVERRIDE;
-  virtual bool ShouldReserveSpaceForSubmenuIndicator() const OVERRIDE;
+  const gfx::FontList* GetLabelFontList(int command_id) const override;
+  bool IsCommandEnabled(int id) const override;
+  void GetHorizontalIconMargins(int id,
+                                int icon_size,
+                                int* left_margin,
+                                int* right_margin) const override;
+  bool GetForegroundColor(int command_id,
+                          bool is_hovered,
+                          SkColor* override_color) const override;
+  bool GetBackgroundColor(int command_id,
+                          bool is_hovered,
+                          SkColor* override_color) const override;
+  int GetMaxWidthForMenu(views::MenuItemView* menu) override;
+  bool ShouldReserveSpaceForSubmenuIndicator() const override;
 
  private:
   ShelfMenuModel* menu_model_;
@@ -226,16 +225,15 @@ class ShelfFocusSearch : public views::FocusSearch {
   explicit ShelfFocusSearch(views::ViewModel* view_model)
       : FocusSearch(NULL, true, true),
         view_model_(view_model) {}
-  virtual ~ShelfFocusSearch() {}
+  ~ShelfFocusSearch() override {}
 
   // views::FocusSearch overrides:
-  virtual View* FindNextFocusableView(
-      View* starting_view,
-      bool reverse,
-      Direction direction,
-      bool check_starting_view,
-      views::FocusTraversable** focus_traversable,
-      View** focus_traversable_view) OVERRIDE {
+  View* FindNextFocusableView(View* starting_view,
+                              bool reverse,
+                              Direction direction,
+                              bool check_starting_view,
+                              views::FocusTraversable** focus_traversable,
+                              View** focus_traversable_view) override {
     int index = view_model_->GetIndexOfView(starting_view);
     if (index == -1)
       return view_model_->view_at(0);
@@ -263,18 +261,18 @@ class ShelfFocusSearch : public views::FocusSearch {
 class FadeInAnimationDelegate : public gfx::AnimationDelegate {
  public:
   explicit FadeInAnimationDelegate(views::View* view) : view_(view) {}
-  virtual ~FadeInAnimationDelegate() {}
+  ~FadeInAnimationDelegate() override {}
 
   // AnimationDelegate overrides:
-  virtual void AnimationProgressed(const Animation* animation) OVERRIDE {
+  void AnimationProgressed(const Animation* animation) override {
     view_->layer()->SetOpacity(animation->GetCurrentValue());
     view_->layer()->ScheduleDraw();
   }
-  virtual void AnimationEnded(const Animation* animation) OVERRIDE {
+  void AnimationEnded(const Animation* animation) override {
     view_->layer()->SetOpacity(1.0f);
     view_->layer()->ScheduleDraw();
   }
-  virtual void AnimationCanceled(const Animation* animation) OVERRIDE {
+  void AnimationCanceled(const Animation* animation) override {
     view_->layer()->SetOpacity(1.0f);
     view_->layer()->ScheduleDraw();
   }
@@ -319,18 +317,17 @@ class ShelfView::FadeOutAnimationDelegate : public gfx::AnimationDelegate {
   FadeOutAnimationDelegate(ShelfView* host, views::View* view)
       : shelf_view_(host),
         view_(view) {}
-  virtual ~FadeOutAnimationDelegate() {}
+  ~FadeOutAnimationDelegate() override {}
 
   // AnimationDelegate overrides:
-  virtual void AnimationProgressed(const Animation* animation) OVERRIDE {
+  void AnimationProgressed(const Animation* animation) override {
     view_->layer()->SetOpacity(1 - animation->GetCurrentValue());
     view_->layer()->ScheduleDraw();
   }
-  virtual void AnimationEnded(const Animation* animation) OVERRIDE {
+  void AnimationEnded(const Animation* animation) override {
     shelf_view_->OnFadeOutAnimationEnded();
   }
-  virtual void AnimationCanceled(const Animation* animation) OVERRIDE {
-  }
+  void AnimationCanceled(const Animation* animation) override {}
 
  private:
   ShelfView* shelf_view_;
@@ -348,13 +345,13 @@ class ShelfView::StartFadeAnimationDelegate : public gfx::AnimationDelegate {
                              views::View* view)
       : shelf_view_(host),
         view_(view) {}
-  virtual ~StartFadeAnimationDelegate() {}
+  ~StartFadeAnimationDelegate() override {}
 
   // AnimationDelegate overrides:
-  virtual void AnimationEnded(const Animation* animation) OVERRIDE {
+  void AnimationEnded(const Animation* animation) override {
     shelf_view_->FadeIn(view_);
   }
-  virtual void AnimationCanceled(const Animation* animation) OVERRIDE {
+  void AnimationCanceled(const Animation* animation) override {
     view_->layer()->SetOpacity(1.0f);
   }
 
@@ -431,7 +428,7 @@ void ShelfView::Init() {
 void ShelfView::OnShelfAlignmentChanged() {
   overflow_button_->OnShelfAlignmentChanged();
   LayoutToIdealBounds();
-  for (int i=0; i < view_model_->view_size(); ++i) {
+  for (int i = 0; i < view_model_->view_size(); ++i) {
     if (i >= first_visible_index_ && i <= last_visible_index_)
       view_model_->view_at(i)->Layout();
   }
@@ -463,7 +460,9 @@ gfx::Rect ShelfView::GetIdealBoundsOfItemIcon(ShelfID id) {
     index = last_visible_index_ + 1;
   const gfx::Rect& ideal_bounds(view_model_->ideal_bounds(index));
   DCHECK_NE(TYPE_APP_LIST, model_->items()[index].type);
-  ShelfButton* button = static_cast<ShelfButton*>(view_model_->view_at(index));
+  views::View* view = view_model_->view_at(index);
+  CHECK_EQ(ShelfButton::kViewClassName, view->GetClassName());
+  ShelfButton* button = static_cast<ShelfButton*>(view);
   gfx::Rect icon_bounds = button->GetIconBounds();
   return gfx::Rect(GetMirroredXWithWidthInView(
                        ideal_bounds.x() + icon_bounds.x(), icon_bounds.width()),
@@ -659,9 +658,9 @@ void ShelfView::EndDrag(bool cancel) {
       drag_and_drop_view, ShelfButtonHost::DRAG_AND_DROP, cancel);
 
   // Either destroy the temporarily created item - or - make the item visible.
-  if (drag_and_drop_item_pinned_ && cancel)
+  if (drag_and_drop_item_pinned_ && cancel) {
     delegate_->UnpinAppWithID(drag_and_drop_app_id_);
-  else if (drag_and_drop_view) {
+  } else if (drag_and_drop_view) {
     if (cancel) {
       // When a hosted drag gets canceled, the item can remain in the same slot
       // and it might have moved within the bounds. In that case the item need
@@ -1069,9 +1068,8 @@ bool ShelfView::HandleRipOffDrag(const ui::LocatedEvent& event) {
   int delta = CalculateShelfDistance(screen_location);
   if (delta > kRipOffDistance) {
     // Create a proxy view item which can be moved anywhere.
-    ShelfButton* button = static_cast<ShelfButton*>(drag_view_);
     CreateDragIconProxy(event.root_location(),
-                        button->GetImage(),
+                        drag_view_->GetImage(),
                         drag_view_,
                         gfx::Vector2d(0, 0),
                         kDragAndDropProxyScale);
@@ -1153,8 +1151,7 @@ void ShelfView::FinalizeRipOffDrag(bool cancel) {
       // animation end the flag gets cleared if |snap_back_from_rip_off_view_|
       // is set.
       snap_back_from_rip_off_view_ = drag_view_;
-      ShelfButton* button = static_cast<ShelfButton*>(drag_view_);
-      button->AddState(ShelfButton::STATE_HIDDEN);
+      drag_view_->AddState(ShelfButton::STATE_HIDDEN);
       // When a canceling drag model is happening, the view model is diverged
       // from the menu model and movements / animations should not be done.
       model_->Move(current_index, start_drag_index_);
@@ -1529,6 +1526,7 @@ void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
     case TYPE_PLATFORM_APP:
     case TYPE_DIALOG:
     case TYPE_APP_PANEL: {
+      CHECK_EQ(ShelfButton::kViewClassName, view->GetClassName());
       ShelfButton* button = static_cast<ShelfButton*>(view);
       ReflectItemStatus(item, button);
       // The browser shortcut is currently not a "real" item and as such the
@@ -1573,7 +1571,8 @@ void ShelfView::PointerPressedOnButton(views::View* view,
   if (view_model_->view_size() <= 1 || !item_delegate->IsDraggable())
     return;  // View is being deleted or not draggable, ignore request.
 
-  drag_view_ = view;
+  CHECK_EQ(ShelfButton::kViewClassName, view->GetClassName());
+  drag_view_ = static_cast<ShelfButton*>(view);
   drag_origin_ = gfx::Point(event.x(), event.y());
   UMA_HISTOGRAM_ENUMERATION("Ash.ShelfAlignmentUsage",
       layout_manager_->SelectValueForShelfAlignment(
@@ -1669,6 +1668,13 @@ void ShelfView::ButtonPressed(views::Button* sender, const ui::Event& event) {
   if (!IsUsableEvent(event))
     return;
 
+  // Don't activate the item twice on double-click. Otherwise the window starts
+  // animating open due to the first click, then immediately minimizes due to
+  // the second click. The user most likely intended to open or minimize the
+  // item once, not do both.
+  if (event.flags() & ui::EF_IS_DOUBLE_CLICK)
+    return;
+
   {
     ScopedTargetRootWindow scoped_target(
         sender->GetWidget()->GetNativeView()->GetRootWindow());
@@ -1715,14 +1721,15 @@ bool ShelfView::ShowListMenuForView(const ShelfItem& item,
                                     const ui::Event& event) {
   ShelfItemDelegate* item_delegate =
       item_manager_->GetShelfItemDelegate(item.id);
-  list_menu_model_.reset(item_delegate->CreateApplicationMenu(event.flags()));
+  scoped_ptr<ui::MenuModel> list_menu_model(
+      item_delegate->CreateApplicationMenu(event.flags()));
 
   // Make sure we have a menu and it has at least two items in addition to the
   // application title and the 3 spacing separators.
-  if (!list_menu_model_.get() || list_menu_model_->GetItemCount() <= 5)
+  if (!list_menu_model.get() || list_menu_model->GetItemCount() <= 5)
     return false;
 
-  ShowMenu(list_menu_model_.get(),
+  ShowMenu(list_menu_model.get(),
            source,
            gfx::Point(),
            false,
@@ -1859,6 +1866,7 @@ void ShelfView::OnBoundsAnimatorDone(views::BoundsAnimator* animator) {
       for (int index = 0; index < view_model_->view_size(); index++) {
         views::View* view = view_model_->view_at(index);
         if (view == snap_back_from_rip_off_view_) {
+          CHECK_EQ(ShelfButton::kViewClassName, view->GetClassName());
           ShelfButton* button = static_cast<ShelfButton*>(view);
           button->ClearState(ShelfButton::STATE_HIDDEN);
           break;

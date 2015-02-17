@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/strings/string_split.h"
@@ -33,11 +33,11 @@ static const char kMainWebrtcTestHtmlPage[] =
 // solution (which is only available on WebRTC internal bots).
 class WebRtcPerfBrowserTest : public WebRtcTestBase {
  public:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     DetectErrorsInJavaScript();  // Look for errors in our rather complex js.
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     // Ensure the infobar is enabled, since we expect that in this test.
     EXPECT_FALSE(command_line->HasSwitch(switches::kUseFakeUIForMediaStream));
 

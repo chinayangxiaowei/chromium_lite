@@ -7,11 +7,10 @@
 #include <list>
 #include <map>
 
+#include "base/command_line.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
-#include "grit/ui_resources.h"
-#include "grit/ui_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/animation/multi_animation.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -21,6 +20,7 @@
 #include "ui/gfx/size.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_style.h"
+#include "ui/message_center/message_center_switches.h"
 #include "ui/message_center/message_center_tray.h"
 #include "ui/message_center/message_center_types.h"
 #include "ui/message_center/views/message_center_button_bar.h"
@@ -28,6 +28,8 @@
 #include "ui/message_center/views/message_view_context_menu_controller.h"
 #include "ui/message_center/views/notification_view.h"
 #include "ui/message_center/views/notifier_settings_view.h"
+#include "ui/resources/grit/ui_resources.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/animation/bounds_animator_observer.h"
 #include "ui/views/background.h"
@@ -57,12 +59,12 @@ const int kDefaultFrameRateHz = 60;
 class NoNotificationMessageView : public views::View {
  public:
   NoNotificationMessageView();
-  virtual ~NoNotificationMessageView();
+  ~NoNotificationMessageView() override;
 
   // Overridden from views::View.
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual int GetHeightForWidth(int width) const OVERRIDE;
-  virtual void Layout() OVERRIDE;
+  gfx::Size GetPreferredSize() const override;
+  int GetHeightForWidth(int width) const override;
+  void Layout() override;
 
  private:
   views::Label* label_;
@@ -108,7 +110,7 @@ class MessageListView : public views::View,
  public:
   explicit MessageListView(MessageCenterView* message_center_view,
                            bool top_down);
-  virtual ~MessageListView();
+  ~MessageListView() override;
 
   void AddNotificationAt(MessageView* view, int i);
   void RemoveNotification(MessageView* view);
@@ -119,17 +121,16 @@ class MessageListView : public views::View,
 
  protected:
   // Overridden from views::View.
-  virtual void Layout() OVERRIDE;
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual int GetHeightForWidth(int width) const OVERRIDE;
-  virtual void PaintChildren(gfx::Canvas* canvas,
-                             const views::CullSet& cull_set) OVERRIDE;
-  virtual void ReorderChildLayers(ui::Layer* parent_layer) OVERRIDE;
+  void Layout() override;
+  gfx::Size GetPreferredSize() const override;
+  int GetHeightForWidth(int width) const override;
+  void PaintChildren(gfx::Canvas* canvas,
+                     const views::CullSet& cull_set) override;
+  void ReorderChildLayers(ui::Layer* parent_layer) override;
 
   // Overridden from views::BoundsAnimatorObserver.
-  virtual void OnBoundsAnimatorProgressed(
-      views::BoundsAnimator* animator) OVERRIDE;
-  virtual void OnBoundsAnimatorDone(views::BoundsAnimator* animator) OVERRIDE;
+  void OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) override;
+  void OnBoundsAnimatorDone(views::BoundsAnimator* animator) override;
 
  private:
   bool IsValidChild(const views::View* child) const;
@@ -418,7 +419,9 @@ void MessageListView::DoUpdateIfPossible() {
     return;
   }
 
-  if (top_down_)
+  if (top_down_ ||
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableMessageCenterAlwaysScrollUpUponNotificationRemoval))
     AnimateNotificationsBelowTarget();
   else
     AnimateNotificationsAboveTarget();

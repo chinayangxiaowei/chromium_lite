@@ -4,11 +4,14 @@ include_rules = [
   # Components within athena must state their dependencies explicitly
   # except for common.
   "-athena",
-  "+athena/common",
+  "+athena/util",
 ]
 
 specific_include_rules = {
   ".*unittest\.cc": [
+    "+athena/test",
+  ],
+  ".*browsertest\.cc": [
     "+athena/test",
   ],
 }

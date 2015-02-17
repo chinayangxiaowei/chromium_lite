@@ -18,17 +18,6 @@
 #include "cc/output/renderer.h"
 #include "cc/resources/ui_resource_client.h"
 
-#if defined(COMPILER_GCC)
-namespace BASE_HASH_NAMESPACE {
-template<>
-struct hash<cc::LayerImpl*> {
-  size_t operator()(cc::LayerImpl* ptr) const {
-    return hash<size_t>()(reinterpret_cast<size_t>(ptr));
-  }
-};
-}  // namespace BASE_HASH_NAMESPACE
-#endif  // COMPILER
-
 namespace base {
 namespace debug {
 class TracedValue;
@@ -48,6 +37,7 @@ class LayerTreeImpl;
 class LayerTreeSettings;
 class MemoryHistory;
 class OutputSurface;
+class PageScaleAnimation;
 class PaintTimeCounter;
 class PictureLayerImpl;
 class Proxy;
@@ -81,16 +71,14 @@ class CC_EXPORT LayerTreeImpl {
   FrameRateCounter* frame_rate_counter() const;
   PaintTimeCounter* paint_time_counter() const;
   MemoryHistory* memory_history() const;
-  bool resourceless_software_draw() const;
   gfx::Size device_viewport_size() const;
   bool IsActiveTree() const;
   bool IsPendingTree() const;
   bool IsRecycleTree() const;
   LayerImpl* FindActiveTreeLayerById(int id);
   LayerImpl* FindPendingTreeLayerById(int id);
-  LayerImpl* FindRecycleTreeLayerById(int id);
   bool PinchGestureActive() const;
-  base::TimeTicks CurrentFrameTimeTicks() const;
+  BeginFrameArgs CurrentBeginFrameArgs() const;
   base::TimeDelta begin_impl_frame_interval() const;
   void SetNeedsCommit();
   gfx::Rect DeviceViewport() const;
@@ -102,6 +90,9 @@ class CC_EXPORT LayerTreeImpl {
   void InputScrollAnimationFinished();
   bool use_gpu_rasterization() const;
   bool create_low_res_tiling() const;
+  BlockingTaskRunner* BlockingMainThreadTaskRunner() const;
+  bool RequiresHighResToDraw() const;
+  bool SmoothnessTakesPriority() const;
 
   // Tree specific methods exposed to layer-impl tree.
   // ---------------------------------------------------------------------------
@@ -136,15 +127,15 @@ class CC_EXPORT LayerTreeImpl {
   LayerImpl* InnerViewportScrollLayer() const;
   // This function may return NULL, it is the caller's responsibility to check.
   LayerImpl* OuterViewportScrollLayer() const;
-  gfx::Vector2dF TotalScrollOffset() const;
-  gfx::Vector2dF TotalMaxScrollOffset() const;
+  gfx::ScrollOffset TotalScrollOffset() const;
+  gfx::ScrollOffset TotalMaxScrollOffset() const;
   gfx::Vector2dF TotalScrollDelta() const;
 
   LayerImpl* InnerViewportContainerLayer() const;
+  LayerImpl* OuterViewportContainerLayer() const;
   LayerImpl* CurrentlyScrollingLayer() const;
   void SetCurrentlyScrollingLayer(LayerImpl* layer);
   void ClearCurrentlyScrollingLayer();
-  float VerticalAdjust(const int clip_layer_id) const;
 
   void SetViewportLayersFromIds(int page_scale_layer_id,
                                 int inner_viewport_scroll_layer_id,
@@ -232,10 +223,6 @@ class CC_EXPORT LayerTreeImpl {
   void SetContentsTexturesPurged();
   void ResetContentsTexturesPurged();
 
-  void SetRequiresHighResToDraw();
-  void ResetRequiresHighResToDraw();
-  bool RequiresHighResToDraw() const;
-
   // Set on the active tree when the viewport size recently changed
   // and the active tree's size is now out of date.
   bool ViewportSizeInvalid() const;
@@ -247,8 +234,9 @@ class CC_EXPORT LayerTreeImpl {
 
   void SetRootLayerScrollOffsetDelegate(
       LayerScrollOffsetDelegate* root_layer_scroll_offset_delegate);
+  void OnRootLayerDelegatedScrollOffsetChanged();
   void UpdateScrollOffsetDelegate();
-  gfx::Vector2dF GetDelegatedScrollOffset(LayerImpl* layer);
+  gfx::ScrollOffset GetDelegatedScrollOffset(LayerImpl* layer);
 
   // Call this function when you expect there to be a swap buffer.
   // See swap_promise.h for how to use SwapPromise.
@@ -293,6 +281,42 @@ class CC_EXPORT LayerTreeImpl {
   void RegisterPictureLayerImpl(PictureLayerImpl* layer);
   void UnregisterPictureLayerImpl(PictureLayerImpl* layer);
 
+  void set_top_controls_layout_height(float height) {
+    top_controls_layout_height_ = height;
+  }
+  void set_top_controls_content_offset(float offset) {
+    top_controls_content_offset_ = offset;
+  }
+  void set_top_controls_delta(float delta) {
+    top_controls_delta_ = delta;
+  }
+  void set_sent_top_controls_delta(float sent_delta) {
+    sent_top_controls_delta_ = sent_delta;
+  }
+
+  float top_controls_layout_height() const {
+    return top_controls_layout_height_;
+  }
+  float top_controls_content_offset() const {
+    return top_controls_content_offset_;
+  }
+  float top_controls_delta() const {
+    return top_controls_delta_;
+  }
+  float sent_top_controls_delta() const {
+    return sent_top_controls_delta_;
+  }
+  float total_top_controls_content_offset() const {
+    return top_controls_content_offset_ + top_controls_delta_;
+  }
+
+  void SetPageScaleAnimation(
+      const gfx::Vector2d& target_offset,
+      bool anchor_point,
+      float page_scale,
+      base::TimeDelta duration);
+  scoped_ptr<PageScaleAnimation> TakePageScaleAnimation();
+
  protected:
   explicit LayerTreeImpl(LayerTreeHostImpl* layer_tree_host_impl);
   void ReleaseResourcesRecursive(LayerImpl* current);
@@ -335,7 +359,6 @@ class CC_EXPORT LayerTreeImpl {
   LayerImplList render_surface_layer_list_;
 
   bool contents_textures_purged_;
-  bool requires_high_res_to_draw_;
   bool viewport_size_invalid_;
   bool needs_update_draw_properties_;
 
@@ -352,6 +375,19 @@ class CC_EXPORT LayerTreeImpl {
   UIResourceRequestQueue ui_resource_request_queue_;
 
   int render_surface_layer_list_id_;
+
+  // The top controls content offset at the time of the last layout (and thus,
+  // viewport resize) in Blink. i.e. How much the viewport was shrunk by the top
+  // controls.
+  float top_controls_layout_height_;
+
+  // The up-to-date content offset of the top controls, i.e. the amount that the
+  // web contents have been shifted down from the top of the device viewport.
+  float top_controls_content_offset_;
+  float top_controls_delta_;
+  float sent_top_controls_delta_;
+
+  scoped_ptr<PageScaleAnimation> page_scale_animation_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(LayerTreeImpl);

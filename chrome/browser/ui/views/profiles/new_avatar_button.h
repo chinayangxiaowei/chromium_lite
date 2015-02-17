@@ -7,12 +7,12 @@
 
 #include "chrome/browser/profiles/profile_info_cache_observer.h"
 #include "components/signin/core/browser/signin_error_controller.h"
-#include "ui/views/controls/button/menu_button.h"
+#include "ui/views/controls/button/label_button.h"
 
 class Browser;
 
 // Avatar button that displays the active profile's name in the caption area.
-class NewAvatarButton : public views::MenuButton,
+class NewAvatarButton : public views::LabelButton,
                         public ProfileInfoCacheObserver,
                         public SigninErrorController::Observer {
  public:
@@ -23,14 +23,13 @@ class NewAvatarButton : public views::MenuButton,
   };
 
   NewAvatarButton(views::ButtonListener* listener,
-                  const base::string16& profile_name,
                   AvatarButtonStyle button_style,
                   Browser* browser);
-  virtual ~NewAvatarButton();
+  ~NewAvatarButton() override;
 
-  // Views::MenuButton
-  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
+  // Views::LabelButton
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnMouseReleased(const ui::MouseEvent& event) override;
 
  private:
   friend class NewAvatarMenuButtonTest;
@@ -39,26 +38,31 @@ class NewAvatarButton : public views::MenuButton,
   FRIEND_TEST_ALL_PREFIXES(ProfileChooserViewBrowserTest, ViewProfileUMA);
 
   // ProfileInfoCacheObserver:
-  virtual void OnProfileAdded(const base::FilePath& profile_path) OVERRIDE;
-  virtual void OnProfileWasRemoved(
-      const base::FilePath& profile_path,
-      const base::string16& profile_name) OVERRIDE;
-  virtual void OnProfileNameChanged(
-      const base::FilePath& profile_path,
-      const base::string16& old_profile_name) OVERRIDE;
-  virtual void OnProfileAvatarChanged(
-      const base::FilePath& profile_path) OVERRIDE;
-  virtual void OnProfileSupervisedUserIdChanged(
-      const base::FilePath& profile_path) OVERRIDE;
+  void OnProfileAdded(const base::FilePath& profile_path) override;
+  void OnProfileWasRemoved(const base::FilePath& profile_path,
+                           const base::string16& profile_name) override;
+  void OnProfileNameChanged(const base::FilePath& profile_path,
+                            const base::string16& old_profile_name) override;
+  void OnProfileAvatarChanged(const base::FilePath& profile_path) override;
+  void OnProfileSupervisedUserIdChanged(
+      const base::FilePath& profile_path) override;
 
   // SigninErrorController::Observer:
-  virtual void OnErrorChanged() OVERRIDE;
+  void OnErrorChanged() override;
 
   // Called when the profile info cache has changed, which means we might
-  // have to re-display the profile name.
+  // have to update the icon/text of the button.
   void UpdateAvatarButtonAndRelayoutParent();
 
   Browser* browser_;
+
+  // Whether the signed in profile has an authentication error. Used to display
+  // an error icon next to the button text.
+  bool has_auth_error_;
+
+  // The icon displayed instead of the profile name in the local profile case.
+  // Different assets are used depending on the OS version.
+  gfx::ImageSkia generic_avatar_;
 
   // This is used to check if the bubble was showing during the mouse pressed
   // event. If this is true then the mouse released event is ignored to prevent

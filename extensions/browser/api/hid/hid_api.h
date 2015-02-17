@@ -15,10 +15,12 @@
 #include "extensions/browser/api/hid/hid_device_manager.h"
 #include "extensions/common/api/hid.h"
 
+namespace device {
+class HidService;
+}  // namespace device
+
 namespace net {
-
-class IOBufferWithSize;
-
+class IOBuffer;
 }  // namespace net
 
 namespace extensions {
@@ -27,11 +29,11 @@ class HidAsyncApiFunction : public AsyncApiFunction {
  public:
   HidAsyncApiFunction();
 
-  virtual bool PrePrepare() OVERRIDE;
-  virtual bool Respond() OVERRIDE;
+  bool PrePrepare() override;
+  bool Respond() override;
 
  protected:
-  virtual ~HidAsyncApiFunction();
+  ~HidAsyncApiFunction() override;
 
   HidConnectionResource* GetHidConnectionResource(int api_resource_id);
   void RemoveHidConnectionResource(int api_resource_id);
@@ -52,10 +54,10 @@ class HidGetDevicesFunction : public HidAsyncApiFunction {
   HidGetDevicesFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
-  virtual ~HidGetDevicesFunction();
+  ~HidGetDevicesFunction() override;
 
   scoped_ptr<core_api::hid::GetDevices::Params> parameters_;
 
@@ -70,11 +72,13 @@ class HidConnectFunction : public HidAsyncApiFunction {
   HidConnectFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidConnectFunction();
+  ~HidConnectFunction() override;
+
+  void OnConnectComplete(scoped_refptr<device::HidConnection> connection);
 
   scoped_ptr<core_api::hid::Connect::Params> parameters_;
 
@@ -88,11 +92,11 @@ class HidDisconnectFunction : public HidAsyncApiFunction {
   HidDisconnectFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidDisconnectFunction();
+  ~HidDisconnectFunction() override;
 
   scoped_ptr<core_api::hid::Disconnect::Params> parameters_;
 
@@ -106,16 +110,16 @@ class HidReceiveFunction : public HidAsyncApiFunction {
   HidReceiveFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidReceiveFunction();
+  ~HidReceiveFunction() override;
 
-  void OnFinished(bool success, size_t bytes);
+  void OnFinished(bool success,
+                  scoped_refptr<net::IOBuffer> buffer,
+                  size_t size);
 
-  bool has_report_id_;
-  scoped_refptr<net::IOBufferWithSize> buffer_;
   scoped_ptr<core_api::hid::Receive::Params> parameters_;
 
   DISALLOW_COPY_AND_ASSIGN(HidReceiveFunction);
@@ -128,13 +132,13 @@ class HidSendFunction : public HidAsyncApiFunction {
   HidSendFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidSendFunction();
+  ~HidSendFunction() override;
 
-  void OnFinished(bool success, size_t bytes);
+  void OnFinished(bool success);
 
   scoped_ptr<core_api::hid::Send::Params> parameters_;
 
@@ -149,15 +153,16 @@ class HidReceiveFeatureReportFunction : public HidAsyncApiFunction {
   HidReceiveFeatureReportFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidReceiveFeatureReportFunction();
+  ~HidReceiveFeatureReportFunction() override;
 
-  void OnFinished(bool success, size_t bytes);
+  void OnFinished(bool success,
+                  scoped_refptr<net::IOBuffer> buffer,
+                  size_t size);
 
-  scoped_refptr<net::IOBufferWithSize> buffer_;
   scoped_ptr<core_api::hid::ReceiveFeatureReport::Params> parameters_;
 
   DISALLOW_COPY_AND_ASSIGN(HidReceiveFeatureReportFunction);
@@ -170,13 +175,13 @@ class HidSendFeatureReportFunction : public HidAsyncApiFunction {
   HidSendFeatureReportFunction();
 
  protected:
-  virtual bool Prepare() OVERRIDE;
-  virtual void AsyncWorkStart() OVERRIDE;
+  bool Prepare() override;
+  void AsyncWorkStart() override;
 
  private:
-  virtual ~HidSendFeatureReportFunction();
+  ~HidSendFeatureReportFunction() override;
 
-  void OnFinished(bool success, size_t bytes);
+  void OnFinished(bool success);
 
   scoped_ptr<core_api::hid::SendFeatureReport::Params> parameters_;
 

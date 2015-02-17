@@ -6,31 +6,31 @@
 
 #include "base/command_line.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chromeos/chromeos_switches.h"
-#include "components/pairing/fake_host_pairing_controller.h"
+#include "components/pairing/host_pairing_controller.h"
 
 namespace chromeos {
 
 using namespace host_pairing;
 using namespace pairing_chromeos;
 
-HostPairingScreen::HostPairingScreen(ScreenObserver* observer,
-                                     HostPairingScreenActor* actor)
-    : WizardScreen(observer),
+HostPairingScreen::HostPairingScreen(
+    BaseScreenDelegate* base_screen_delegate,
+    Delegate* delegate,
+    HostPairingScreenActor* actor,
+    pairing_chromeos::HostPairingController* remora_controller)
+    : BaseScreen(base_screen_delegate),
+      delegate_(delegate),
       actor_(actor),
+      remora_controller_(remora_controller),
       current_stage_(HostPairingController::STAGE_NONE) {
   actor_->SetDelegate(this);
-  std::string controller_config =
-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kShowHostPairingDemo);
-  controller_.reset(new FakeHostPairingController(controller_config));
-  controller_->AddObserver(this);
+  remora_controller_->AddObserver(this);
 }
 
 HostPairingScreen::~HostPairingScreen() {
   if (actor_)
     actor_->SetDelegate(NULL);
-  controller_->RemoveObserver(this);
+  remora_controller_->RemoveObserver(this);
 }
 
 void HostPairingScreen::CommitContextChanges() {
@@ -48,7 +48,7 @@ void HostPairingScreen::PrepareToShow() {
 void HostPairingScreen::Show() {
   if (actor_)
     actor_->Show();
-  controller_->StartPairing();
+  PairingStageChanged(remora_controller_->GetCurrentStage());
 }
 
 void HostPairingScreen::Hide() {
@@ -61,8 +61,6 @@ std::string HostPairingScreen::GetName() const {
 }
 
 void HostPairingScreen::PairingStageChanged(Stage new_stage) {
-  DCHECK(new_stage != current_stage_);
-
   std::string desired_page;
   switch (new_stage) {
     case HostPairingController::STAGE_WAITING_FOR_CONTROLLER:
@@ -73,50 +71,38 @@ void HostPairingScreen::PairingStageChanged(Stage new_stage) {
     case HostPairingController::STAGE_WAITING_FOR_CODE_CONFIRMATION: {
       desired_page = kPageCodeConfirmation;
       context_.SetString(kContextKeyConfirmationCode,
-                         controller_->GetConfirmationCode());
+                         remora_controller_->GetConfirmationCode());
       break;
     }
-    case HostPairingController::STAGE_UPDATING: {
-      desired_page = kPageUpdate;
-      context_.SetDouble(kContextKeyUpdateProgress, 0.0);
+    default:
       break;
-    }
-    case HostPairingController::STAGE_WAITING_FOR_CREDENTIALS: {
-      desired_page = kPageEnrollmentIntroduction;
-      break;
-    }
-    case HostPairingController::STAGE_ENROLLING: {
-      desired_page = kPageEnrollment;
-      context_.SetString(kContextKeyEnrollmentDomain,
-                         controller_->GetEnrollmentDomain());
-      break;
-    }
-    case HostPairingController::STAGE_ENROLLMENT_ERROR: {
-      desired_page = kPageEnrollmentError;
-      break;
-    }
-    case HostPairingController::STAGE_PAIRING_DONE: {
-      desired_page = kPagePairingDone;
-      break;
-    }
-    case HostPairingController::STAGE_FINISHED: {
-      get_screen_observer()->OnExit(WizardController::HOST_PAIRING_FINISHED);
-      break;
-    }
-    default: {
-      NOTREACHED();
-      break;
-    }
   }
   current_stage_ = new_stage;
-  context_.SetString(kContextKeyDeviceName, controller_->GetDeviceName());
+  context_.SetString(kContextKeyDeviceName,
+                     remora_controller_->GetDeviceName());
   context_.SetString(kContextKeyPage, desired_page);
   CommitContextChanges();
 }
 
-void HostPairingScreen::UpdateAdvanced(const UpdateProgress& progress) {
-  context_.SetDouble(kContextKeyUpdateProgress, progress.progress);
-  CommitContextChanges();
+void HostPairingScreen::ConfigureHost(bool accepted_eula,
+                                      const std::string& lang,
+                                      const std::string& timezone,
+                                      bool send_reports,
+                                      const std::string& keyboard_layout) {
+  VLOG(1) << "ConfigureHostMessage language=" << lang
+          << ", timezone=" << timezone
+          << ", keyboard_layout=" << keyboard_layout;
+
+  remora_controller_->RemoveObserver(this);
+  if (delegate_) {
+    delegate_->ConfigureHost(
+        accepted_eula, lang, timezone, send_reports, keyboard_layout);
+  }
+  get_base_screen_delegate()->OnExit(WizardController::HOST_PAIRING_FINISHED);
+}
+
+void HostPairingScreen::EnrollHost(const std::string& auth_token) {
+  NOTREACHED();
 }
 
 void HostPairingScreen::OnActorDestroyed(HostPairingScreenActor* actor) {

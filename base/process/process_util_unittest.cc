@@ -107,12 +107,7 @@ base::TerminationStatus WaitForChildTermination(base::ProcessHandle handle,
     base::PlatformThread::Sleep(kInterval);
     waited += kInterval;
   } while (status == base::TERMINATION_STATUS_STILL_RUNNING &&
-// Waiting for more time for process termination on android devices.
-#if defined(OS_ANDROID)
-           waited < TestTimeouts::large_test_timeout());
-#else
            waited < TestTimeouts::action_max_timeout());
-#endif
 
   return status;
 }
@@ -314,45 +309,6 @@ TEST_F(ProcessUtilTest, GetTerminationStatusKill) {
 #endif
   base::CloseProcessHandle(handle);
   remove(signal_file.c_str());
-}
-
-// Ensure that the priority of a process is restored correctly after
-// backgrounding and restoring.
-// Note: a platform may not be willing or able to lower the priority of
-// a process. The calls to SetProcessBackground should be noops then.
-TEST_F(ProcessUtilTest, SetProcessBackgrounded) {
-  base::ProcessHandle handle = SpawnChild("SimpleChildProcess");
-  base::Process process(handle);
-  int old_priority = process.GetPriority();
-#if defined(OS_WIN)
-  EXPECT_TRUE(process.SetProcessBackgrounded(true));
-  EXPECT_TRUE(process.IsProcessBackgrounded());
-  EXPECT_TRUE(process.SetProcessBackgrounded(false));
-  EXPECT_FALSE(process.IsProcessBackgrounded());
-#else
-  process.SetProcessBackgrounded(true);
-  process.SetProcessBackgrounded(false);
-#endif
-  int new_priority = process.GetPriority();
-  EXPECT_EQ(old_priority, new_priority);
-}
-
-// Same as SetProcessBackgrounded but to this very process. It uses
-// a different code path at least for Windows.
-TEST_F(ProcessUtilTest, SetProcessBackgroundedSelf) {
-  base::Process process(base::Process::Current().handle());
-  int old_priority = process.GetPriority();
-#if defined(OS_WIN)
-  EXPECT_TRUE(process.SetProcessBackgrounded(true));
-  EXPECT_TRUE(process.IsProcessBackgrounded());
-  EXPECT_TRUE(process.SetProcessBackgrounded(false));
-  EXPECT_FALSE(process.IsProcessBackgrounded());
-#else
-  process.SetProcessBackgrounded(true);
-  process.SetProcessBackgrounded(false);
-#endif
-  int new_priority = process.GetPriority();
-  EXPECT_EQ(old_priority, new_priority);
 }
 
 #if defined(OS_WIN)

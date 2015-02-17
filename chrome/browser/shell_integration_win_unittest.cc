@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
@@ -32,7 +32,7 @@ struct ShortcutTestObject {
 
 class ShellIntegrationWinMigrateShortcutTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     // A path to a random target.

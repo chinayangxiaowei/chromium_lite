@@ -160,6 +160,9 @@
 // The sequence number is obsolete; it was used to allow two entries with the
 // same user (index) key in non-unique indexes prior to the inclusion of the
 // primary key in the data.
+//
+// Note: In order to be compatible with LevelDB's Bloom filter each bit of the
+// encoded key needs to used and "not ignored" by the comparator.
 
 using base::StringPiece;
 using blink::WebIDBKeyType;
@@ -377,10 +380,9 @@ void EncodeIDBKeyPath(const IndexedDBKeyPath& value, std::string* into) {
 }
 
 void EncodeBlobJournal(const BlobJournalType& journal, std::string* into) {
-  BlobJournalType::const_iterator iter;
-  for (iter = journal.begin(); iter != journal.end(); ++iter) {
-    EncodeVarInt(iter->first, into);
-    EncodeVarInt(iter->second, into);
+  for (const auto& iter : journal) {
+    EncodeVarInt(iter.first, into);
+    EncodeVarInt(iter.second, into);
   }
 }
 

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "chrome/common/chrome_paths.h"
@@ -24,12 +24,12 @@ class ArchivePatchHelperTest : public testing::Test {
     data_dir_.clear();
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Create a temp directory for testing.
     ASSERT_TRUE(test_dir_.CreateUniqueTempDir());
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     // Clean up test directory manually so we can fail if it leaks.
     ASSERT_TRUE(test_dir_.Delete());
   }

@@ -72,7 +72,7 @@ class ThumbnailStore : ThumbnailDelegate {
           post_decompress_callback);
 
   // ThumbnailDelegate implementation
-  virtual void InvalidateCachedThumbnail(Thumbnail* thumbnail) OVERRIDE;
+  virtual void InvalidateCachedThumbnail(Thumbnail* thumbnail) override;
 
  private:
   class ThumbnailMetaData {
@@ -114,6 +114,7 @@ class ThumbnailStore : ThumbnailDelegate {
   void PostWriteTask();
   static void CompressionTask(
       SkBitmap raw_data,
+      gfx::Size encoded_size,
       const base::Callback<void(skia::RefPtr<SkPixelRef>, const gfx::Size&)>&
           post_compression_task);
   void PostCompressionTask(TabId tab_id,

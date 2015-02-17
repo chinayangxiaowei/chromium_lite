@@ -10,6 +10,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/notifications/desktop_notification_service.h"
+#include "chrome/browser/notifications/desktop_notification_service_factory.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/common/chrome_version_info.h"
@@ -115,7 +117,8 @@ NotificationProviderNotifyOnClearedFunction::Run() {
 
   const Notification* notification =
       g_browser_process->notification_ui_manager()->FindById(
-          params->notification_id);
+          params->notification_id,
+          NotificationUIManager::GetProfileID(GetProfile()));
 
   bool found_notification = notification != NULL;
   if (found_notification)
@@ -142,7 +145,8 @@ NotificationProviderNotifyOnClickedFunction::Run() {
 
   const Notification* notification =
       g_browser_process->notification_ui_manager()->FindById(
-          params->notification_id);
+          params->notification_id,
+          NotificationUIManager::GetProfileID(GetProfile()));
 
   bool found_notification = notification != NULL;
   if (found_notification)
@@ -169,7 +173,8 @@ NotificationProviderNotifyOnButtonClickedFunction::Run() {
 
   const Notification* notification =
       g_browser_process->notification_ui_manager()->FindById(
-          params->notification_id);
+          params->notification_id,
+          NotificationUIManager::GetProfileID(GetProfile()));
 
   bool found_notification = notification != NULL;
   if (found_notification)
@@ -194,9 +199,31 @@ NotificationProviderNotifyOnPermissionLevelChangedFunction::Run() {
       params = api::notification_provider::NotifyOnPermissionLevelChanged::
           Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params.get());
+
+  // Third party apps/extensions with notification provider API will not be able
+  // to change permission levels of web notifiers, because the list of allowed
+  // websites should only be set in Chrome Settings manually by users. But they
+  // are able to change permission levels of application type notifiers.
+  bool is_application_type =
+      (params->notifier_type ==
+       api::notification_provider::NotifierType::NOTIFIER_TYPE_APPLICATION);
+  if (is_application_type) {
+    bool enabled =
+        (params->level == api::notification_provider::NotifierPermissionLevel::
+                              NOTIFIER_PERMISSION_LEVEL_GRANTED);
+
+    DesktopNotificationService* desktop_notification_service =
+        DesktopNotificationServiceFactory::GetForProfile(GetProfile());
+    message_center::NotifierId notifier_id(
+        message_center::NotifierId::NotifierType::APPLICATION,
+        params->notifier_id);
+
+    desktop_notification_service->SetNotifierEnabled(notifier_id, enabled);
+  }
+
   return RespondNow(
       ArgumentList(api::notification_provider::NotifyOnPermissionLevelChanged::
-                       Results::Create(true)));
+                       Results::Create(is_application_type)));
 }
 
 NotificationProviderNotifyOnShowSettingsFunction::

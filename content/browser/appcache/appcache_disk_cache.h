@@ -8,10 +8,15 @@
 #include <set>
 #include <vector>
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "content/browser/appcache/appcache_response.h"
 #include "content/common/content_export.h"
 #include "net/disk_cache/disk_cache.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}  // namespace base
 
 namespace content {
 
@@ -21,13 +26,15 @@ class CONTENT_EXPORT AppCacheDiskCache
     : public AppCacheDiskCacheInterface {
  public:
   AppCacheDiskCache();
-  virtual ~AppCacheDiskCache();
+  ~AppCacheDiskCache() override;
 
   // Initializes the object to use disk backed storage.
-  int InitWithDiskBackend(const base::FilePath& disk_cache_directory,
-                          int disk_cache_size, bool force,
-                          base::MessageLoopProxy* cache_thread,
-                          const net::CompletionCallback& callback);
+  int InitWithDiskBackend(
+      const base::FilePath& disk_cache_directory,
+      int disk_cache_size,
+      bool force,
+      const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread,
+      const net::CompletionCallback& callback);
 
   // Initializes the object to use memory only storage.
   // This is used for Chrome's incognito browsing.
@@ -37,12 +44,13 @@ class CONTENT_EXPORT AppCacheDiskCache
   void Disable();
   bool is_disabled() const { return is_disabled_; }
 
-  virtual int CreateEntry(int64 key, Entry** entry,
-                          const net::CompletionCallback& callback) OVERRIDE;
-  virtual int OpenEntry(int64 key, Entry** entry,
-                        const net::CompletionCallback& callback) OVERRIDE;
-  virtual int DoomEntry(int64 key,
-                        const net::CompletionCallback& callback) OVERRIDE;
+  int CreateEntry(int64 key,
+                  Entry** entry,
+                  const net::CompletionCallback& callback) override;
+  int OpenEntry(int64 key,
+                Entry** entry,
+                const net::CompletionCallback& callback) override;
+  int DoomEntry(int64 key, const net::CompletionCallback& callback) override;
 
  private:
   class CreateBackendCallbackShim;
@@ -81,8 +89,11 @@ class CONTENT_EXPORT AppCacheDiskCache
     return create_backend_callback_.get() != NULL;
   }
   disk_cache::Backend* disk_cache() { return disk_cache_.get(); }
-  int Init(net::CacheType cache_type, const base::FilePath& directory,
-           int cache_size, bool force, base::MessageLoopProxy* cache_thread,
+  int Init(net::CacheType cache_type,
+           const base::FilePath& directory,
+           int cache_size,
+           bool force,
+           const scoped_refptr<base::SingleThreadTaskRunner>& cache_thread,
            const net::CompletionCallback& callback);
   void OnCreateBackendComplete(int rv);
   void AddActiveCall(ActiveCall* call) { active_calls_.insert(call); }

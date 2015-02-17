@@ -5,6 +5,8 @@
 #ifndef UI_OZONE_PLATFORM_DRI_HARDWARE_CURSOR_DELEGATE_H_
 #define UI_OZONE_PLATFORM_DRI_HARDWARE_CURSOR_DELEGATE_H_
 
+#include <vector>
+
 #include "ui/gfx/native_widget_types.h"
 
 class SkBitmap;
@@ -20,8 +22,9 @@ class HardwareCursorDelegate {
   // Update the HW cursor bitmap & move to specified location. If
   // the bitmap is empty, the cursor is hidden.
   virtual void SetHardwareCursor(gfx::AcceleratedWidget widget,
-                                 const SkBitmap& bitmap,
-                                 const gfx::Point& location) = 0;
+                                 const std::vector<SkBitmap>& bitmaps,
+                                 const gfx::Point& location,
+                                 int frame_delay_ms) = 0;
 
   // Move the HW cursor to the specified location.
   virtual void MoveHardwareCursor(gfx::AcceleratedWidget widget,

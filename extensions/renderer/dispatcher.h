@@ -66,7 +66,7 @@ class Dispatcher : public content::RenderProcessObserver,
                    public UserScriptSetManager::Observer {
  public:
   explicit Dispatcher(DispatcherDelegate* delegate);
-  virtual ~Dispatcher();
+  ~Dispatcher() override;
 
   const std::set<std::string>& function_names() const {
     return function_names_;
@@ -90,11 +90,13 @@ class Dispatcher : public content::RenderProcessObserver,
 
   bool IsExtensionActive(const std::string& extension_id) const;
 
-  // Finds the extension ID for the JavaScript context associated with the
+  // Finds the extension for the JavaScript context associated with the
   // specified |frame| and isolated world. If |world_id| is zero, finds the
   // extension ID associated with the main world's JavaScript context. If the
   // JavaScript context isn't from an extension, returns empty string.
-  std::string GetExtensionID(const blink::WebFrame* frame, int world_id);
+  const Extension* GetExtensionFromFrameAndWorld(const blink::WebFrame* frame,
+                                                 int world_id,
+                                                 bool use_effective_url);
 
   void DidCreateScriptContext(blink::WebFrame* frame,
                               const v8::Handle<v8::Context>& context,
@@ -146,16 +148,18 @@ class Dispatcher : public content::RenderProcessObserver,
                                      RequestSender* request_sender,
                                      V8SchemaRegistry* v8_schema_registry);
 
+  bool WasWebRequestUsedBySomeExtensions() const { return webrequest_used_; }
+
  private:
   friend class ::ChromeRenderViewTest;
   FRIEND_TEST_ALL_PREFIXES(RendererPermissionsPolicyDelegateTest,
                            CannotScriptWebstore);
 
   // RenderProcessObserver implementation:
-  virtual bool OnControlMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void WebKitInitialized() OVERRIDE;
-  virtual void IdleNotification() OVERRIDE;
-  virtual void OnRenderProcessShutdown() OVERRIDE;
+  bool OnControlMessageReceived(const IPC::Message& message) override;
+  void WebKitInitialized() override;
+  void IdleNotification() override;
+  void OnRenderProcessShutdown() override;
 
   void OnActivateExtension(const std::string& extension_id);
   void OnCancelSuspend(const std::string& extension_id);
@@ -195,9 +199,8 @@ class Dispatcher : public content::RenderProcessObserver,
   void OnUsingWebRequestAPI(bool webrequest_used);
 
   // UserScriptSetManager::Observer implementation.
-  virtual void OnUserScriptsUpdated(
-      const std::set<std::string>& changed_extensions,
-      const std::vector<UserScript*>& scripts) OVERRIDE;
+  void OnUserScriptsUpdated(const std::set<std::string>& changed_extensions,
+                            const std::vector<UserScript*>& scripts) override;
 
   void UpdateActiveExtensions();
 
@@ -308,6 +311,9 @@ class Dispatcher : public content::RenderProcessObserver,
   // the observer is destroyed before the UserScriptSet.
   ScopedObserver<UserScriptSetManager, UserScriptSetManager::Observer>
       user_script_set_manager_observer_;
+
+  // Status of webrequest usage.
+  bool webrequest_used_;
 
   DISALLOW_COPY_AND_ASSIGN(Dispatcher);
 };

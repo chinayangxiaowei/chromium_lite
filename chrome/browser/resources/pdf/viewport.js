@@ -70,10 +70,19 @@ Viewport.SCROLL_INCREMENT = 40;
 
 /**
  * Predefined zoom factors to be used when zooming in/out. These are in
- * ascending order.
+ * ascending order. This should match the list in
+ * chrome/browser/chrome_page_zoom_constants.cc.
  */
 Viewport.ZOOM_FACTORS = [0.25, 0.333, 0.5, 0.666, 0.75, 0.9, 1,
                          1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+
+/**
+ * The minimum and maximum range to be used to clip zoom factor.
+ */
+Viewport.ZOOM_FACTOR_RANGE = {
+  min: Viewport.ZOOM_FACTORS[0],
+  max: Viewport.ZOOM_FACTORS[Viewport.ZOOM_FACTORS.length - 1]
+};
 
 /**
  * The width of the page shadow around pages in pixels.
@@ -211,18 +220,16 @@ Viewport.prototype = {
       throw 'Called Viewport.setZoomInternal_ without calling ' +
             'Viewport.mightZoom_.';
     }
-    var oldZoom = this.zoom_;
-    this.zoom_ = newZoom;
-    // Record the scroll position (relative to the middle of the window).
+    // Record the scroll position (relative to the top-left of the window).
     var currentScrollPos = [
-      (this.window_.pageXOffset + this.window_.innerWidth / 2) / oldZoom,
-      (this.window_.pageYOffset + this.window_.innerHeight / 2) / oldZoom
+      this.window_.pageXOffset / this.zoom_,
+      this.window_.pageYOffset / this.zoom_
     ];
+    this.zoom_ = newZoom;
     this.contentSizeChanged_();
     // Scroll to the scaled scroll position.
-    this.window_.scrollTo(
-        currentScrollPos[0] * newZoom - this.window_.innerWidth / 2,
-        currentScrollPos[1] * newZoom - this.window_.innerHeight / 2);
+    this.window_.scrollTo(currentScrollPos[0] * newZoom,
+                          currentScrollPos[1] * newZoom);
   },
 
   /**
@@ -230,6 +237,8 @@ Viewport.prototype = {
    * @param {number} newZoom the zoom level to zoom to.
    */
   setZoom: function(newZoom) {
+    newZoom = Math.max(Viewport.ZOOM_FACTOR_RANGE.min,
+                       Math.min(newZoom, Viewport.ZOOM_FACTOR_RANGE.max));
     this.mightZoom_(function() {
       this.setZoomInternal_(newZoom);
       this.updateViewport_();
@@ -402,15 +411,13 @@ Viewport.prototype = {
       if (!this.documentDimensions_)
         return;
       var page = this.getMostVisiblePage();
-      this.setZoomInternal_(this.computeFittingZoom_(
-          this.pageDimensions_[page], false));
-      // Center the document in the page by scrolling by the amount of empty
-      // space to the left of the document.
-      var xOffset =
-          (this.documentDimensions_.width - this.pageDimensions_[page].width) *
-          this.zoom_ / 2;
-      this.window_.scrollTo(xOffset,
-                            this.pageDimensions_[page].y * this.zoom_);
+      // Fit to the current page's height and the widest page's width.
+      var dimensions = {
+        width: this.documentDimensions_.width,
+        height: this.pageDimensions_[page].height,
+      };
+      this.setZoomInternal_(this.computeFittingZoom_(dimensions, false));
+      this.window_.scrollTo(0, this.pageDimensions_[page].y * this.zoom_);
       this.updateViewport_();
     }.bind(this));
   },
@@ -449,7 +456,7 @@ Viewport.prototype = {
 
   /**
    * Go to the given page index.
-   * @param {number} page the index of the page to go to.
+   * @param {number} page the index of the page to go to. zero-based.
    */
   goToPage: function(page) {
     this.mightZoom_(function() {

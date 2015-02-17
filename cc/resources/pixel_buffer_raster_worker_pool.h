@@ -29,7 +29,7 @@ class CC_EXPORT PixelBufferRasterWorkerPool : public RasterWorkerPool,
                                               public Rasterizer,
                                               public RasterizerTaskClient {
  public:
-  virtual ~PixelBufferRasterWorkerPool();
+  ~PixelBufferRasterWorkerPool() override;
 
   static scoped_ptr<RasterWorkerPool> Create(
       base::SequencedTaskRunner* task_runner,
@@ -39,17 +39,18 @@ class CC_EXPORT PixelBufferRasterWorkerPool : public RasterWorkerPool,
       size_t max_transfer_buffer_usage_bytes);
 
   // Overridden from RasterWorkerPool:
-  virtual Rasterizer* AsRasterizer() OVERRIDE;
+  Rasterizer* AsRasterizer() override;
 
   // Overridden from Rasterizer:
-  virtual void SetClient(RasterizerClient* client) OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
-  virtual void ScheduleTasks(RasterTaskQueue* queue) OVERRIDE;
-  virtual void CheckForCompletedTasks() OVERRIDE;
+  void SetClient(RasterizerClient* client) override;
+  void Shutdown() override;
+  void ScheduleTasks(RasterTaskQueue* queue) override;
+  void CheckForCompletedTasks() override;
 
   // Overridden from RasterizerTaskClient:
-  virtual SkCanvas* AcquireCanvasForRaster(RasterTask* task) OVERRIDE;
-  virtual void ReleaseCanvasForRaster(RasterTask* task) OVERRIDE;
+  scoped_ptr<RasterBuffer> AcquireBufferForRaster(
+      const Resource* resource) override;
+  void ReleaseBufferForRaster(scoped_ptr<RasterBuffer> buffer) override;
 
  private:
   struct RasterTaskState {
@@ -67,17 +68,14 @@ class CC_EXPORT PixelBufferRasterWorkerPool : public RasterWorkerPool,
 
     typedef std::vector<RasterTaskState> Vector;
 
-    RasterTaskState(RasterTask* task, bool required_for_activation)
-        : type(UNSCHEDULED),
-          task(task),
-          required_for_activation(required_for_activation) {}
+    RasterTaskState(RasterTask* task, const TaskSetCollection& task_sets);
 
     enum { UNSCHEDULED, SCHEDULED, UPLOADING, COMPLETED } type;
     RasterTask* task;
-    bool required_for_activation;
+    TaskSetCollection task_sets;
   };
 
-  typedef std::deque<scoped_refptr<RasterTask> > RasterTaskDeque;
+  typedef std::deque<scoped_refptr<RasterTask>> RasterTaskDeque;
 
   PixelBufferRasterWorkerPool(base::SequencedTaskRunner* task_runner,
                               TaskGraphRunner* task_graph_runner,
@@ -85,15 +83,13 @@ class CC_EXPORT PixelBufferRasterWorkerPool : public RasterWorkerPool,
                               ResourceProvider* resource_provider,
                               size_t max_transfer_buffer_usage_bytes);
 
-  void OnRasterFinished();
-  void OnRasterRequiredForActivationFinished();
+  void OnRasterFinished(TaskSet task_set);
   void FlushUploads();
   void CheckForCompletedUploads();
   void CheckForCompletedRasterTasks();
   void ScheduleMoreTasks();
   unsigned PendingRasterTaskCount() const;
-  bool HasPendingTasks() const;
-  bool HasPendingTasksRequiredForActivation() const;
+  TaskSetCollection PendingTasks() const;
   void CheckForCompletedRasterizerTasks();
 
   const char* StateName() const;
@@ -116,28 +112,25 @@ class CC_EXPORT PixelBufferRasterWorkerPool : public RasterWorkerPool,
   RasterizerTask::Vector completed_image_decode_tasks_;
 
   size_t scheduled_raster_task_count_;
-  size_t raster_tasks_required_for_activation_count_;
+  size_t task_counts_[kNumberOfTaskSets];
   size_t bytes_pending_upload_;
   size_t max_bytes_pending_upload_;
   bool has_performed_uploads_since_last_flush_;
 
-  bool should_notify_client_if_no_tasks_are_pending_;
-  bool should_notify_client_if_no_tasks_required_for_activation_are_pending_;
-  bool raster_finished_task_pending_;
-  bool raster_required_for_activation_finished_task_pending_;
+  TaskSetCollection should_notify_client_if_no_tasks_are_pending_;
+  TaskSetCollection raster_finished_tasks_pending_;
 
   DelayedUniqueNotifier check_for_completed_raster_task_notifier_;
 
-  base::WeakPtrFactory<PixelBufferRasterWorkerPool>
-      raster_finished_weak_ptr_factory_;
-
-  scoped_refptr<RasterizerTask> raster_finished_task_;
-  scoped_refptr<RasterizerTask> raster_required_for_activation_finished_task_;
+  scoped_refptr<RasterizerTask> raster_finished_tasks_[kNumberOfTaskSets];
 
   // Task graph used when scheduling tasks and vector used to gather
   // completed tasks.
   TaskGraph graph_;
   Task::Vector completed_tasks_;
+
+  base::WeakPtrFactory<PixelBufferRasterWorkerPool>
+      raster_finished_weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(PixelBufferRasterWorkerPool);
 };

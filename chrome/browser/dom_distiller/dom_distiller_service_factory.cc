@@ -5,6 +5,7 @@
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 
 #include "base/threading/sequenced_worker_pool.h"
+#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/dom_distiller/content/distiller_page_web_contents.h"
 #include "components/dom_distiller/core/article_entry.h"
@@ -62,8 +63,8 @@ KeyedService* DomDistillerServiceFactory::BuildServiceInstanceFor(
   base::FilePath database_dir(
       profile->GetPath().Append(FILE_PATH_LITERAL("Articles")));
 
-  scoped_ptr<DomDistillerStore> dom_distiller_store(new DomDistillerStore(
-      db.PassAs<leveldb_proto::ProtoDatabase<ArticleEntry> >(), database_dir));
+  scoped_ptr<DomDistillerStore> dom_distiller_store(
+      new DomDistillerStore(db.Pass(), database_dir));
 
   scoped_ptr<DistillerPageFactory> distiller_page_factory(
       new DistillerPageWebContentsFactory(profile));
@@ -81,20 +82,18 @@ KeyedService* DomDistillerServiceFactory::BuildServiceInstanceFor(
       new DistilledPagePrefs(Profile::FromBrowserContext(profile)->GetPrefs()));
 
   DomDistillerContextKeyedService* service =
-      new DomDistillerContextKeyedService(
-          dom_distiller_store.PassAs<DomDistillerStoreInterface>(),
-          distiller_factory.Pass(),
-          distiller_page_factory.Pass(),
-          distilled_page_prefs.Pass());
+      new DomDistillerContextKeyedService(dom_distiller_store.Pass(),
+                                          distiller_factory.Pass(),
+                                          distiller_page_factory.Pass(),
+                                          distilled_page_prefs.Pass());
 
   return service;
 }
 
 content::BrowserContext* DomDistillerServiceFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
-  // TODO(cjhopman): Do we want this to be
-  // GetBrowserContextRedirectedInIncognito?
-  return context;
+  // Makes normal profile and off-the-record profile use same service instance.
+  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 }  // namespace dom_distiller

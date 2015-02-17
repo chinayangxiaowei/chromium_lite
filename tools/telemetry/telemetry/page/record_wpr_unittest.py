@@ -6,6 +6,7 @@ import os
 import sys
 
 from telemetry import benchmark
+from telemetry import decorators
 from telemetry.core import util
 from telemetry.core import wpr_modes
 from telemetry.page import page as page_module
@@ -67,6 +68,11 @@ class MockPageTest(page_test.PageTest):
   def ValidatePage(self, page, tab, results):
     self.func_calls.append('ValidatePage')
 
+  def WillStartBrowser(self, platform):
+    self.func_calls.append('WillStartBrowser')
+
+  def DidStartBrowser(self, browser):
+    self.func_calls.append('DidStartBrowser')
 
 class MockBenchmark(benchmark.Benchmark):
   test = MockPageTest
@@ -137,8 +143,9 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
     self.assertEqual('DidRunActions', record_page_test.page_test.func_calls[1])
     self.assertEqual('ValidatePage', record_page_test.page_test.func_calls[2])
 
+  @decorators.Disabled('chromeos') # crbug.com/404868.
   def testWprRecorderWithPageSet(self):
-    flags = []
+    flags = ['--browser', self._browser.browser_type]
     mock_page_set = MockPageSet(url=self._url)
     wpr_recorder = record_wpr.WprRecorder(self._test_data_dir,
                                           mock_page_set, flags)
@@ -147,10 +154,25 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
     self.assertEqual(set(mock_page_set.pages), results.pages_that_succeeded)
 
   def testWprRecorderWithBenchmark(self):
-    flags = ['--mock-benchmark-url', self._url]
+    flags = ['--mock-benchmark-url', self._url,
+             '--browser', self._browser.browser_type]
     mock_benchmark = MockBenchmark()
     wpr_recorder = record_wpr.WprRecorder(self._test_data_dir, mock_benchmark,
                                           flags)
+    results = wpr_recorder.CreateResults()
+    wpr_recorder.Record(results)
+    self.assertEqual(set(mock_benchmark.mock_page_set.pages),
+                     results.pages_that_succeeded)
+
+  def testPageSetBaseDirFlag(self):
+    flags = [
+       '--page-set-base-dir', self._test_data_dir,
+       '--mock-benchmark-url', self._url,
+       '--browser', self._browser.browser_type,
+    ]
+    mock_benchmark = MockBenchmark()
+    wpr_recorder = record_wpr.WprRecorder(
+        'non-existent-dummy-dir', mock_benchmark, flags)
     results = wpr_recorder.CreateResults()
     wpr_recorder.Record(results)
     self.assertEqual(set(mock_benchmark.mock_page_set.pages),
@@ -188,3 +210,13 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
     self.assertTrue('RunFoo' in action_names_to_run)
     self.assertTrue('RunBar' in action_names_to_run)
     self.assertFalse('RunBaz' in action_names_to_run)
+
+  # When the RecorderPageTest WillStartBrowser/DidStartBrowser function is
+  # called, it forwards the call to the PageTest
+  def testRecorderPageTest_BrowserMethods(self):
+    record_page_test = record_wpr.RecorderPageTest([])
+    record_page_test.page_test = MockBenchmark().test()
+    record_page_test.WillStartBrowser(self._tab.browser.platform)
+    record_page_test.DidStartBrowser(self._tab.browser)
+    self.assertTrue('WillStartBrowser' in record_page_test.page_test.func_calls)
+    self.assertTrue('DidStartBrowser' in record_page_test.page_test.func_calls)

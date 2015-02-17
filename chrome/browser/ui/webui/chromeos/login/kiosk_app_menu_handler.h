@@ -32,7 +32,7 @@ class KioskAppMenuHandler
   void GetLocalizedStrings(base::DictionaryValue* localized_strings);
 
   // content::WebUIMessageHandler overrides:
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
   // Returns true if new kiosk UI is enabled.
   static bool EnableNewKioskUI();
@@ -47,18 +47,18 @@ class KioskAppMenuHandler
   void HandleCheckKioskAppLaunchError(const base::ListValue* args);
 
   // KioskAppManagerObserver overrides:
-  virtual void OnKioskAppsSettingsChanged() OVERRIDE;
-  virtual void OnKioskAppDataChanged(const std::string& app_id) OVERRIDE;
+  virtual void OnKioskAppsSettingsChanged() override;
+  virtual void OnKioskAppDataChanged(const std::string& app_id) override;
 
   // NetworkStateInformer::NetworkStateInformerObserver overrides:
-  virtual void UpdateState(ErrorScreenActor::ErrorReason reason) OVERRIDE;
-
-  base::WeakPtrFactory<KioskAppMenuHandler> weak_ptr_factory_;
+  virtual void UpdateState(ErrorScreenActor::ErrorReason reason) override;
 
   // True when WebUI is initialized. Otherwise don't allow calling JS functions.
   bool is_webui_initialized_;
 
   scoped_refptr<NetworkStateInformer> network_state_informer_;
+
+  base::WeakPtrFactory<KioskAppMenuHandler> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(KioskAppMenuHandler);
 };

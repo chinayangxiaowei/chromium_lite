@@ -11,6 +11,7 @@
 #include "net/quic/crypto/quic_random.h"
 
 using std::list;
+using std::make_pair;
 using std::max;
 using std::min;
 using std::vector;
@@ -112,7 +113,7 @@ void SendAlgorithmSimulator::TransferBytes(QuicByteCount max_bytes,
 
 SendAlgorithmSimulator::PacketEvent SendAlgorithmSimulator::NextSendEvent() {
   QuicTime::Delta next_send_time = QuicTime::Delta::Infinite();
-  Transfer* transfer = NULL;
+  Transfer* transfer = nullptr;
   for (vector<Transfer>::iterator it = pending_transfers_.begin();
        it != pending_transfers_.end(); ++it) {
     // If we've already sent enough bytes, wait for them to be acked.
@@ -142,12 +143,12 @@ SendAlgorithmSimulator::PacketEvent SendAlgorithmSimulator::NextSendEvent() {
 SendAlgorithmSimulator::PacketEvent SendAlgorithmSimulator::NextAckEvent() {
   if (sent_packets_.empty()) {
     DVLOG(1) << "No outstanding packets to ack for any transfer.";
-    return PacketEvent(QuicTime::Delta::Infinite(), NULL);
+    return PacketEvent(QuicTime::Delta::Infinite(), nullptr);
   }
 
   // For each connection, find the next acked packet.
   QuicTime::Delta ack_time = QuicTime::Delta::Infinite();
-  Transfer* transfer = NULL;
+  Transfer* transfer = nullptr;
   for (vector<Transfer>::iterator it = pending_transfers_.begin();
        it != pending_transfers_.end(); ++it) {
     QuicTime::Delta transfer_ack_time = FindNextAcked(&(*it));
@@ -244,8 +245,8 @@ bool SendAlgorithmSimulator::HasRecentLostPackets(
 void SendAlgorithmSimulator::HandlePendingAck(Transfer* transfer) {
   Sender* sender  = transfer->sender;
   DCHECK_LT(sender->last_acked, sender->next_acked);
-  SendAlgorithmInterface::CongestionMap acked_packets;
-  SendAlgorithmInterface::CongestionMap lost_packets;
+  SendAlgorithmInterface::CongestionVector acked_packets;
+  SendAlgorithmInterface::CongestionVector lost_packets;
   DVLOG(1) << "Acking packets from:" << sender->last_acked
              << " to " << sender->next_acked
              << " bytes_in_flight:" << transfer->bytes_in_flight
@@ -268,13 +269,13 @@ void SendAlgorithmSimulator::HandlePendingAck(Transfer* transfer) {
     if (it->sequence_number > sender->last_acked) {
       DVLOG(1) << "Lost packet:" << sender->last_acked
                << " dropped by buffer overflow.";
-      lost_packets[sender->last_acked] = info;
+      lost_packets.push_back(make_pair(sender->last_acked, info));
       continue;
     }
     if (it->lost) {
-      lost_packets[sender->last_acked] = info;
+      lost_packets.push_back(make_pair(sender->last_acked, info));
     } else {
-      acked_packets[sender->last_acked] = info;
+      acked_packets.push_back(make_pair(sender->last_acked, info));
     }
     // This packet has been acked or lost, remove it from sent_packets_.
     largest_observed = *it;

@@ -24,7 +24,7 @@ static const base::FilePath::CharType kVaLib[] =
 
 #define LOG_VA_ERROR_AND_REPORT(va_error, err_msg)         \
   do {                                                     \
-    DVLOG(1) << err_msg                                    \
+    LOG(ERROR) << err_msg                                  \
              << " VA error: " << vaErrorStr(va_error);     \
     report_error_to_uma_cb_.Run();                         \
   } while (0)
@@ -57,27 +57,47 @@ static const VAConfigAttrib kEncodeVAConfigAttribs[] = {
      VA_ENC_PACKED_HEADER_SEQUENCE | VA_ENC_PACKED_HEADER_PICTURE},
 };
 
+struct ProfileMap {
+  media::VideoCodecProfile profile;
+  VAProfile va_profile;
+};
+
+// A map between VideoCodecProfile and VAProfile.
+static const ProfileMap kProfileMap[] = {
+    {media::H264PROFILE_BASELINE, VAProfileH264Baseline},
+    {media::H264PROFILE_MAIN, VAProfileH264Main},
+    // TODO(posciak): See if we can/want support other variants of
+    // media::H264PROFILE_HIGH*.
+    {media::H264PROFILE_HIGH, VAProfileH264High},
+};
+
+static std::vector<VAConfigAttrib> GetRequiredAttribs(
+    VaapiWrapper::CodecMode mode) {
+  std::vector<VAConfigAttrib> required_attribs;
+  required_attribs.insert(
+      required_attribs.end(),
+      kCommonVAConfigAttribs,
+      kCommonVAConfigAttribs + arraysize(kCommonVAConfigAttribs));
+  if (mode == VaapiWrapper::kEncode) {
+    required_attribs.insert(
+        required_attribs.end(),
+        kEncodeVAConfigAttribs,
+        kEncodeVAConfigAttribs + arraysize(kEncodeVAConfigAttribs));
+  }
+  return required_attribs;
+}
+
 // Maps Profile enum values to VaProfile values.
 static VAProfile ProfileToVAProfile(
     media::VideoCodecProfile profile,
     const std::vector<VAProfile>& supported_profiles) {
 
   VAProfile va_profile = VAProfileNone;
-
-  switch (profile) {
-    case media::H264PROFILE_BASELINE:
-      va_profile = VAProfileH264Baseline;
+  for (size_t i = 0; i < arraysize(kProfileMap); i++) {
+    if (kProfileMap[i].profile == profile) {
+      va_profile = kProfileMap[i].va_profile;
       break;
-    case media::H264PROFILE_MAIN:
-      va_profile = VAProfileH264Main;
-      break;
-    // TODO(posciak): See if we can/want support other variants
-    // of media::H264PROFILE_HIGH*.
-    case media::H264PROFILE_HIGH:
-      va_profile = VAProfileH264High;
-      break;
-    default:
-      break;
+    }
   }
 
   bool supported = std::find(supported_profiles.begin(),
@@ -139,7 +159,36 @@ scoped_ptr<VaapiWrapper> VaapiWrapper::Create(
   return vaapi_wrapper.Pass();
 }
 
+std::vector<media::VideoCodecProfile> VaapiWrapper::GetSupportedEncodeProfiles(
+    Display* x_display,
+    const base::Closure& report_error_to_uma_cb) {
+  std::vector<media::VideoCodecProfile> supported_profiles;
+
+  scoped_ptr<VaapiWrapper> wrapper(new VaapiWrapper());
+  if (!wrapper->VaInitialize(x_display, report_error_to_uma_cb)) {
+    return supported_profiles;
+  }
+
+  std::vector<VAProfile> va_profiles;
+  if (!wrapper->GetSupportedVaProfiles(&va_profiles))
+    return supported_profiles;
+
+  std::vector<VAConfigAttrib> required_attribs = GetRequiredAttribs(kEncode);
+  for (size_t i = 0; i < arraysize(kProfileMap); i++) {
+    VAProfile va_profile =
+        ProfileToVAProfile(kProfileMap[i].profile, va_profiles);
+    if (va_profile != VAProfileNone &&
+        wrapper->IsEntrypointSupported(va_profile, VAEntrypointEncSlice) &&
+        wrapper->AreAttribsSupported(
+            va_profile, VAEntrypointEncSlice, required_attribs)) {
+      supported_profiles.push_back(kProfileMap[i].profile);
+    }
+  }
+  return supported_profiles;
+}
+
 void VaapiWrapper::TryToSetVADisplayAttributeToLocalGPU() {
+  base::AutoLock auto_lock(va_lock_);
   VADisplayAttribute item = {VADisplayAttribRenderMode,
                              1,  // At least support '_LOCAL_OVERLAY'.
                              -1,  // The maximum possible support 'ALL'.
@@ -151,13 +200,11 @@ void VaapiWrapper::TryToSetVADisplayAttributeToLocalGPU() {
     DVLOG(2) << "vaSetDisplayAttributes unsupported, ignoring by default.";
 }
 
-bool VaapiWrapper::Initialize(CodecMode mode,
-                              media::VideoCodecProfile profile,
-                              Display* x_display,
-                              const base::Closure& report_error_to_uma_cb) {
+bool VaapiWrapper::VaInitialize(Display* x_display,
+                                const base::Closure& report_error_to_uma_cb) {
   static bool vaapi_functions_initialized = PostSandboxInitialization();
   if (!vaapi_functions_initialized) {
-    DVLOG(1) << "Failed to initialize VAAPI libs";
+    LOG(ERROR) << "Failed to initialize VAAPI libs";
     return false;
   }
 
@@ -167,7 +214,7 @@ bool VaapiWrapper::Initialize(CodecMode mode,
 
   va_display_ = vaGetDisplay(x_display);
   if (!vaDisplayIsValid(va_display_)) {
-    DVLOG(1) << "Could not get a valid VA display";
+    LOG(ERROR) << "Could not get a valid VA display";
     return false;
   }
 
@@ -176,52 +223,53 @@ bool VaapiWrapper::Initialize(CodecMode mode,
   DVLOG(1) << "VAAPI version: " << major_version_ << "." << minor_version_;
 
   if (VAAPIVersionLessThan(0, 34)) {
-    DVLOG(1) << "VAAPI version < 0.34 is not supported.";
+    LOG(ERROR) << "VAAPI version < 0.34 is not supported.";
     return false;
   }
+  return true;
+}
 
+bool VaapiWrapper::GetSupportedVaProfiles(std::vector<VAProfile>* profiles) {
+  base::AutoLock auto_lock(va_lock_);
   // Query the driver for supported profiles.
   int max_profiles = vaMaxNumProfiles(va_display_);
   std::vector<VAProfile> supported_profiles(
       base::checked_cast<size_t>(max_profiles));
 
   int num_supported_profiles;
-  va_res = vaQueryConfigProfiles(
+  VAStatus va_res = vaQueryConfigProfiles(
       va_display_, &supported_profiles[0], &num_supported_profiles);
   VA_SUCCESS_OR_RETURN(va_res, "vaQueryConfigProfiles failed", false);
   if (num_supported_profiles < 0 || num_supported_profiles > max_profiles) {
-    DVLOG(1) << "vaQueryConfigProfiles returned: " << num_supported_profiles;
+    LOG(ERROR) << "vaQueryConfigProfiles returned: " << num_supported_profiles;
     return false;
   }
 
   supported_profiles.resize(base::checked_cast<size_t>(num_supported_profiles));
+  *profiles = supported_profiles;
+  return true;
+}
 
-  VAProfile va_profile = ProfileToVAProfile(profile, supported_profiles);
-  if (va_profile == VAProfileNone) {
-    DVLOG(1) << "Unsupported profile";
-    return false;
-  }
-
+bool VaapiWrapper::IsEntrypointSupported(VAProfile va_profile,
+                                         VAEntrypoint entrypoint) {
+  base::AutoLock auto_lock(va_lock_);
   // Query the driver for supported entrypoints.
   int max_entrypoints = vaMaxNumEntrypoints(va_display_);
   std::vector<VAEntrypoint> supported_entrypoints(
       base::checked_cast<size_t>(max_entrypoints));
 
   int num_supported_entrypoints;
-  va_res = vaQueryConfigEntrypoints(va_display_,
-                                    va_profile,
-                                    &supported_entrypoints[0],
-                                    &num_supported_entrypoints);
+  VAStatus va_res = vaQueryConfigEntrypoints(va_display_,
+                                             va_profile,
+                                             &supported_entrypoints[0],
+                                             &num_supported_entrypoints);
   VA_SUCCESS_OR_RETURN(va_res, "vaQueryConfigEntrypoints failed", false);
   if (num_supported_entrypoints < 0 ||
       num_supported_entrypoints > max_entrypoints) {
-    DVLOG(1) << "vaQueryConfigEntrypoints returned: "
-             << num_supported_entrypoints;
+    LOG(ERROR) << "vaQueryConfigEntrypoints returned: "
+               << num_supported_entrypoints;
     return false;
   }
-
-  VAEntrypoint entrypoint =
-      (mode == kEncode ? VAEntrypointEncSlice : VAEntrypointVLD);
 
   if (std::find(supported_entrypoints.begin(),
                 supported_entrypoints.end(),
@@ -229,25 +277,20 @@ bool VaapiWrapper::Initialize(CodecMode mode,
     DVLOG(1) << "Unsupported entrypoint";
     return false;
   }
+  return true;
+}
 
+bool VaapiWrapper::AreAttribsSupported(
+    VAProfile va_profile,
+    VAEntrypoint entrypoint,
+    const std::vector<VAConfigAttrib>& required_attribs) {
+  base::AutoLock auto_lock(va_lock_);
   // Query the driver for required attributes.
-  std::vector<VAConfigAttrib> required_attribs;
-  required_attribs.insert(
-      required_attribs.end(),
-      kCommonVAConfigAttribs,
-      kCommonVAConfigAttribs + arraysize(kCommonVAConfigAttribs));
-  if (mode == kEncode) {
-    required_attribs.insert(
-        required_attribs.end(),
-        kEncodeVAConfigAttribs,
-        kEncodeVAConfigAttribs + arraysize(kEncodeVAConfigAttribs));
-  }
-
   std::vector<VAConfigAttrib> attribs = required_attribs;
   for (size_t i = 0; i < required_attribs.size(); ++i)
     attribs[i].value = 0;
 
-  va_res = vaGetConfigAttributes(
+  VAStatus va_res = vaGetConfigAttributes(
       va_display_, va_profile, entrypoint, &attribs[0], attribs.size());
   VA_SUCCESS_OR_RETURN(va_res, "vaGetConfigAttributes failed", false);
 
@@ -260,15 +303,40 @@ bool VaapiWrapper::Initialize(CodecMode mode,
       return false;
     }
   }
+  return true;
+}
+
+bool VaapiWrapper::Initialize(CodecMode mode,
+                              media::VideoCodecProfile profile,
+                              Display* x_display,
+                              const base::Closure& report_error_to_uma_cb) {
+  if (!VaInitialize(x_display, report_error_to_uma_cb))
+    return false;
+  std::vector<VAProfile> supported_va_profiles;
+  if (!GetSupportedVaProfiles(&supported_va_profiles))
+    return false;
+  VAProfile va_profile = ProfileToVAProfile(profile, supported_va_profiles);
+  if (va_profile == VAProfileNone) {
+    DVLOG(1) << "Unsupported profile";
+    return false;
+  }
+  VAEntrypoint entrypoint =
+      (mode == kEncode ? VAEntrypointEncSlice : VAEntrypointVLD);
+  if (!IsEntrypointSupported(va_profile, entrypoint))
+    return false;
+  std::vector<VAConfigAttrib> required_attribs = GetRequiredAttribs(mode);
+  if (!AreAttribsSupported(va_profile, entrypoint, required_attribs))
+    return false;
 
   TryToSetVADisplayAttributeToLocalGPU();
 
-  va_res = vaCreateConfig(va_display_,
-                          va_profile,
-                          entrypoint,
-                          &required_attribs[0],
-                          required_attribs.size(),
-                          &va_config_id_);
+  base::AutoLock auto_lock(va_lock_);
+  VAStatus va_res = vaCreateConfig(va_display_,
+                                   va_profile,
+                                   entrypoint,
+                                   &required_attribs[0],
+                                   required_attribs.size(),
+                                   &va_config_id_);
   VA_SUCCESS_OR_RETURN(va_res, "vaCreateConfig failed", false);
 
   return true;
@@ -578,12 +646,12 @@ bool VaapiWrapper::UploadVideoFrameToSurface(
       base::Bind(&DestroyVAImage, va_display_, image));
 
   if (image.format.fourcc != VA_FOURCC_NV12) {
-    DVLOG(1) << "Unsupported image format: " << image.format.fourcc;
+    LOG(ERROR) << "Unsupported image format: " << image.format.fourcc;
     return false;
   }
 
   if (gfx::Rect(image.width, image.height) < gfx::Rect(frame->coded_size())) {
-    DVLOG(1) << "Buffer too small to fit the frame.";
+    LOG(ERROR) << "Buffer too small to fit the frame.";
     return false;
   }
 
@@ -639,7 +707,7 @@ bool VaapiWrapper::DownloadAndDestroyCodedBuffer(VABufferID buffer_id,
       DCHECK(buffer_segment->buf);
 
       if (buffer_segment->size > target_size) {
-        DVLOG(1) << "Insufficient output buffer size";
+        LOG(ERROR) << "Insufficient output buffer size";
         break;
       }
 

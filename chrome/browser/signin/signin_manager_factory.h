@@ -54,8 +54,8 @@ class SigninManagerFactory : public BrowserContextKeyedServiceFactory {
 
   // Implementation of BrowserContextKeyedServiceFactory (public so tests
   // can call it).
-  virtual void RegisterProfilePrefs(
-      user_prefs::PrefRegistrySyncable* registry) OVERRIDE;
+  void RegisterProfilePrefs(
+      user_prefs::PrefRegistrySyncable* registry) override;
 
   // Registers the browser-global prefs used by SigninManager.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -74,22 +74,15 @@ class SigninManagerFactory : public BrowserContextKeyedServiceFactory {
   friend struct DefaultSingletonTraits<SigninManagerFactory>;
 
   SigninManagerFactory();
-  virtual ~SigninManagerFactory();
+  ~SigninManagerFactory() override;
 
-#if defined(OS_MACOSX)
-  // List of observers. Does not check that list is empty on destruction, as
-  // there are some leaky singletons that observe the SigninManagerFactory.
-  mutable ObserverList<Observer> observer_list_;
-#else
   // List of observers. Checks that list is empty on destruction.
   mutable ObserverList<Observer, true> observer_list_;
-#endif
 
   // BrowserContextKeyedServiceFactory:
-  virtual KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* profile) const OVERRIDE;
-  virtual void BrowserContextShutdown(content::BrowserContext* context)
-      OVERRIDE;
+  KeyedService* BuildServiceInstanceFor(
+      content::BrowserContext* profile) const override;
+  void BrowserContextShutdown(content::BrowserContext* context) override;
 };
 
 #endif  // CHROME_BROWSER_SIGNIN_SIGNIN_MANAGER_FACTORY_H_

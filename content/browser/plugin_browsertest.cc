@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -17,8 +17,8 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_switches.h"
-#include "content/test/net/url_request_mock_http_job.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/url_request/url_request_mock_http_job.h"
 #include "net/url_request/url_request.h"
 #include "ui/gfx/rect.h"
 
@@ -39,7 +39,8 @@ namespace content {
 namespace {
 
 void SetUrlRequestMock(const base::FilePath& path) {
-  URLRequestMockHTTPJob::AddUrlHandler(path);
+  net::URLRequestMockHTTPJob::AddUrlHandler(
+      path, content::BrowserThread::GetBlockingPool());
 }
 
 }
@@ -48,7 +49,7 @@ class PluginTest : public ContentBrowserTest {
  protected:
   PluginTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     // Some NPAPI tests schedule garbage collection to force object tear-down.
     command_line->AppendSwitchASCII(switches::kJavaScriptFlags, "--expose_gc");
 
@@ -75,7 +76,7 @@ class PluginTest : public ContentBrowserTest {
 #endif
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     base::FilePath path = GetTestFilePath("", "");
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE, base::Bind(&SetUrlRequestMock, path));
@@ -186,9 +187,9 @@ IN_PROC_BROWSER_TEST_F(PluginTest,
 #endif
 
 IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE_GetURLRequest404Response) {
-  GURL url(URLRequestMockHTTPJob::GetMockUrl(
-      base::FilePath().AppendASCII("npapi").
-                       AppendASCII("plugin_url_request_404.html")));
+  GURL url(net::URLRequestMockHTTPJob::GetMockUrl(
+      base::FilePath().AppendASCII("npapi").AppendASCII(
+          "plugin_url_request_404.html")));
   LoadAndWait(url);
 }
 
@@ -296,7 +297,8 @@ IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(VerifyPluginWindowRect)) {
 
 // Tests that creating a new instance of a plugin while another one is handling
 // a paint message doesn't cause deadlock.
-IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(CreateInstanceInPaint)) {
+// http://crbug.com/406184
+IN_PROC_BROWSER_TEST_F(PluginTest, DISABLED_CreateInstanceInPaint) {
   LoadAndWait(GetURL("create_instance_in_paint.html"));
 }
 
@@ -308,7 +310,8 @@ IN_PROC_BROWSER_TEST_F(PluginTest, DISABLED_AlertInWindowMessage) {
   WaitForAppModalDialog(shell());
 }
 
-IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(VerifyNPObjectLifetimeTest)) {
+// http://crbug.com/406184
+IN_PROC_BROWSER_TEST_F(PluginTest, DISABLED_VerifyNPObjectLifetimeTest) {
   LoadAndWait(GetURL("npobject_lifetime_test.html"));
 }
 
@@ -375,9 +378,9 @@ IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(MultipleInstancesSyncCalls)) {
 }
 
 IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(GetURLRequestFailWrite)) {
-  GURL url(URLRequestMockHTTPJob::GetMockUrl(
-      base::FilePath().AppendASCII("npapi").
-                       AppendASCII("plugin_url_request_fail_write.html")));
+  GURL url(net::URLRequestMockHTTPJob::GetMockUrl(
+      base::FilePath().AppendASCII("npapi").AppendASCII(
+          "plugin_url_request_fail_write.html")));
   LoadAndWait(url);
 }
 #endif
@@ -400,9 +403,9 @@ IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(NoHangIfInitCrashes)) {
 
 // If this flakes on Mac, use http://crbug.com/111508
 IN_PROC_BROWSER_TEST_F(PluginTest, MAYBE(PluginReferrerTest)) {
-  GURL url(URLRequestMockHTTPJob::GetMockUrl(
-      base::FilePath().AppendASCII("npapi").
-                       AppendASCII("plugin_url_request_referrer_test.html")));
+  GURL url(net::URLRequestMockHTTPJob::GetMockUrl(
+      base::FilePath().AppendASCII("npapi").AppendASCII(
+          "plugin_url_request_referrer_test.html")));
   LoadAndWait(url);
 }
 
@@ -505,11 +508,10 @@ class TestResourceDispatcherHostDelegate
 
  private:
   // ResourceDispatcherHostDelegate implementation:
-  virtual void OnResponseStarted(
-      net::URLRequest* request,
-      ResourceContext* resource_context,
-      ResourceResponse* response,
-      IPC::Sender* sender) OVERRIDE {
+  void OnResponseStarted(net::URLRequest* request,
+                         ResourceContext* resource_context,
+                         ResourceResponse* response,
+                         IPC::Sender* sender) override {
     // The URL below comes from plugin_geturl_test.cc.
     if (!EndsWith(request->url().spec(),
                  "npapi/plugin_ref_target_page.html",
@@ -531,7 +533,7 @@ class TestResourceDispatcherHostDelegate
 
   void GotCookie(bool found_cookie) {
     found_cookie_ = found_cookie;
-    if (runner_)
+    if (runner_.get())
       runner_->QuitClosure().Run();
   }
 

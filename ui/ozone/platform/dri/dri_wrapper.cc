@@ -61,13 +61,19 @@ void DrmDestroyDumbBuffer(int fd, uint32_t handle) {
 
 }  // namespace
 
-DriWrapper::DriWrapper(const char* device_path) {
-  fd_ = open(device_path, O_RDWR | O_CLOEXEC);
+DriWrapper::DriWrapper(const char* device_path)
+    : fd_(-1), device_path_(device_path) {
 }
 
 DriWrapper::~DriWrapper() {
   if (fd_ >= 0)
     close(fd_);
+}
+
+void DriWrapper::Initialize() {
+  fd_ = open(device_path_, O_RDWR | O_CLOEXEC);
+  if (fd_ < 0)
+    PLOG(FATAL) << "open: " << device_path_;
 }
 
 ScopedDrmCrtcPtr DriWrapper::GetCrtc(uint32_t crtc_id) {
@@ -83,8 +89,8 @@ bool DriWrapper::SetCrtc(uint32_t crtc_id,
   DCHECK(!connectors.empty());
   DCHECK(mode);
 
-  TRACE_EVENT1("dri", "DriWrapper::SetCrtc",
-               "crtc", crtc_id);
+  TRACE_EVENT2("dri", "DriWrapper::SetCrtc", "crtc", crtc_id, "size",
+               gfx::Size(mode->hdisplay, mode->vdisplay).ToString());
   return !drmModeSetCrtc(fd_,
                          crtc_id,
                          framebuffer,
@@ -119,6 +125,12 @@ bool DriWrapper::DisableCrtc(uint32_t crtc_id) {
   TRACE_EVENT1("dri", "DriWrapper::DisableCrtc",
                "crtc", crtc_id);
   return !drmModeSetCrtc(fd_, crtc_id, 0, 0, 0, NULL, 0, NULL);
+}
+
+ScopedDrmConnectorPtr DriWrapper::GetConnector(uint32_t connector_id) {
+  DCHECK(fd_ >= 0);
+  TRACE_EVENT1("dri", "DriWrapper::GetConnector", "connector", connector_id);
+  return ScopedDrmConnectorPtr(drmModeGetConnector(fd_, connector_id));
 }
 
 bool DriWrapper::AddFramebuffer(uint32_t width,
@@ -217,6 +229,11 @@ bool DriWrapper::SetProperty(uint32_t connector_id,
   return !drmModeConnectorSetProperty(fd_, connector_id, property_id, value);
 }
 
+bool DriWrapper::GetCapability(uint64_t capability, uint64_t* value) {
+  DCHECK(fd_ >= 0);
+  return !drmGetCap(fd_, capability, value);
+}
+
 ScopedDrmPropertyBlobPtr DriWrapper::GetPropertyBlob(
     drmModeConnector* connector, const char* name) {
   DCHECK(fd_ >= 0);
@@ -284,5 +301,14 @@ void DriWrapper::DestroyDumbBuffer(const SkImageInfo& info,
   DrmDestroyDumbBuffer(fd_, handle);
 }
 
+bool DriWrapper::SetMaster() {
+  DCHECK(fd_ >= 0);
+  return (drmSetMaster(fd_) == 0);
+}
+
+bool DriWrapper::DropMaster() {
+  DCHECK(fd_ >= 0);
+  return (drmDropMaster(fd_) == 0);
+}
 
 }  // namespace ui

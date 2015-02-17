@@ -11,16 +11,16 @@
 #include "base/memory/scoped_vector.h"
 #include "chrome/browser/extensions/chrome_extension_function.h"
 
-namespace browser_sync {
+namespace sync_driver {
 class DeviceInfo;
-}  // namespace browser_sync
+class DeviceInfoTracker;
+}  // namespace sync_driver
 
 namespace extensions {
 class ExtensionPrefs;
 }  // namespace extensions
 
 class Profile;
-class ProfileSyncService;
 
 namespace extensions {
 
@@ -28,21 +28,21 @@ namespace extensions {
 // filled with the list of devices associated with the account signed into this
 // |profile|. This function needs the |extension_id| because the
 // public device ids are set per extension.
-ScopedVector<browser_sync::DeviceInfo> GetAllSignedInDevices(
+ScopedVector<sync_driver::DeviceInfo> GetAllSignedInDevices(
     const std::string& extension_id,
     Profile* profile);
 
-ScopedVector<browser_sync::DeviceInfo> GetAllSignedInDevices(
+ScopedVector<sync_driver::DeviceInfo> GetAllSignedInDevices(
     const std::string& extension_id,
-    ProfileSyncService* pss,
+    sync_driver::DeviceInfoTracker* device_tracker,
     ExtensionPrefs* extension_prefs);
 
 class SignedInDevicesGetFunction : public ChromeSyncExtensionFunction {
  protected:
-  virtual ~SignedInDevicesGetFunction() {}
+  ~SignedInDevicesGetFunction() override {}
 
   // ExtensionFunction:
-  virtual bool RunSync() OVERRIDE;
+  bool RunSync() override;
   DECLARE_EXTENSION_FUNCTION("signedInDevices.get", SIGNED_IN_DEVICES_GET)
 };
 

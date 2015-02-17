@@ -17,7 +17,8 @@ FakePictureLayerImpl::FakePictureLayerImpl(LayerTreeImpl* tree_impl,
       append_quads_count_(0),
       did_become_active_call_count_(0),
       has_valid_tile_priorities_(false),
-      use_set_valid_tile_priorities_flag_(false) {
+      use_set_valid_tile_priorities_flag_(false),
+      release_resources_count_(0) {
   pile_ = pile;
   SetBounds(pile_->tiling_size());
   SetContentBounds(pile_->tiling_size());
@@ -31,7 +32,8 @@ FakePictureLayerImpl::FakePictureLayerImpl(LayerTreeImpl* tree_impl,
       append_quads_count_(0),
       did_become_active_call_count_(0),
       has_valid_tile_priorities_(false),
-      use_set_valid_tile_priorities_flag_(false) {
+      use_set_valid_tile_priorities_flag_(false),
+      release_resources_count_(0) {
   pile_ = pile;
   SetBounds(layer_bounds);
   SetContentBounds(layer_bounds);
@@ -42,21 +44,21 @@ FakePictureLayerImpl::FakePictureLayerImpl(LayerTreeImpl* tree_impl, int id)
       append_quads_count_(0),
       did_become_active_call_count_(0),
       has_valid_tile_priorities_(false),
-      use_set_valid_tile_priorities_flag_(false) {
+      use_set_valid_tile_priorities_flag_(false),
+      release_resources_count_(0) {
 }
 
 scoped_ptr<LayerImpl> FakePictureLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) {
-  return make_scoped_ptr(
-      new FakePictureLayerImpl(tree_impl, id())).PassAs<LayerImpl>();
+  return make_scoped_ptr(new FakePictureLayerImpl(tree_impl, id()));
 }
 
 void FakePictureLayerImpl::AppendQuads(
     RenderPass* render_pass,
-    const OcclusionTracker<LayerImpl>& occlusion_tracker,
+    const Occlusion& occlusion_in_content_space,
     AppendQuadsData* append_quads_data) {
   PictureLayerImpl::AppendQuads(
-      render_pass, occlusion_tracker, append_quads_data);
+      render_pass, occlusion_in_content_space, append_quads_data);
   ++append_quads_count_;
 }
 
@@ -93,6 +95,16 @@ PictureLayerTiling* FakePictureLayerImpl::LowResTiling() const {
     }
   }
   return result;
+}
+
+void FakePictureLayerImpl::SetPile(scoped_refptr<PicturePileImpl> pile) {
+  pile_.swap(pile);
+  if (tilings()) {
+    for (size_t i = 0; i < num_tilings(); ++i) {
+      tilings()->tiling_at(i)->UpdateTilesToCurrentPile(Region(),
+                                                        pile_->tiling_size());
+    }
+  }
 }
 
 void FakePictureLayerImpl::SetAllTilesVisible() {
@@ -140,11 +152,14 @@ void FakePictureLayerImpl::SetAllTilesReadyInTiling(
   std::vector<Tile*> tiles = tiling->AllTilesForTesting();
   for (size_t tile_idx = 0; tile_idx < tiles.size(); ++tile_idx) {
     Tile* tile = tiles[tile_idx];
-    ManagedTileState& state = tile->managed_state();
-    for (size_t mode_idx = 0; mode_idx < NUM_RASTER_MODES; ++mode_idx)
-      state.tile_versions[mode_idx].SetSolidColorForTesting(true);
-    DCHECK(tile->IsReadyToDraw());
+    SetTileReady(tile);
   }
+}
+
+void FakePictureLayerImpl::SetTileReady(Tile* tile) {
+  ManagedTileState& state = tile->managed_state();
+  state.draw_info.SetSolidColorForTesting(true);
+  DCHECK(tile->IsReadyToDraw());
 }
 
 void FakePictureLayerImpl::CreateDefaultTilingsAndTiles() {
@@ -173,6 +188,11 @@ bool FakePictureLayerImpl::HasValidTilePriorities() const {
   return use_set_valid_tile_priorities_flag_
              ? has_valid_tile_priorities_
              : PictureLayerImpl::HasValidTilePriorities();
+}
+
+void FakePictureLayerImpl::ReleaseResources() {
+  PictureLayerImpl::ReleaseResources();
+  ++release_resources_count_;
 }
 
 }  // namespace cc

@@ -57,7 +57,7 @@ class SuggestionsService : public KeyedService, public net::URLFetcherDelegate {
       scoped_ptr<SuggestionsStore> suggestions_store,
       scoped_ptr<ImageManager> thumbnail_manager,
       scoped_ptr<BlacklistStore> blacklist_store);
-  virtual ~SuggestionsService();
+  ~SuggestionsService() override;
 
   // Whether this service is enabled.
   static bool IsEnabled();
@@ -124,10 +124,10 @@ class SuggestionsService : public KeyedService, public net::URLFetcherDelegate {
   // net::URLFetcherDelegate implementation.
   // Called when fetch request completes. Parses the received suggestions data,
   // and dispatches them to callbacks stored in queue.
-  virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE;
+  void OnURLFetchComplete(const net::URLFetcher* source) override;
 
   // KeyedService implementation.
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // Load the cached suggestions and service the requestors with them.
   void ServeFromCache();
@@ -188,12 +188,12 @@ class SuggestionsService : public KeyedService, public net::URLFetcherDelegate {
   // Delay used when scheduling a blacklisting task.
   int blacklist_delay_sec_;
 
-  // For callbacks may be run after destruction.
-  base::WeakPtrFactory<SuggestionsService> weak_ptr_factory_;
-
   // Timeout (in ms) before serving requestors after a fetch suggestions request
   // has been issued.
   int request_timeout_ms_;
+
+  // For callbacks may be run after destruction.
+  base::WeakPtrFactory<SuggestionsService> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(SuggestionsService);
 };

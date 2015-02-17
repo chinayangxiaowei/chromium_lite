@@ -6,8 +6,8 @@
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/values.h"
@@ -94,9 +94,7 @@ class ExtensionInstalledBubbleControllerTest : public CocoaProfileTest {
       action->SetString(keys::kPageActionId, "ExtensionActionId");
       action->SetString(keys::kPageActionDefaultTitle, "ExtensionActionTitle");
       action->SetString(keys::kPageActionDefaultIcon, "image1.png");
-      base::ListValue* action_list = new base::ListValue;
-      action_list->Append(action);
-      extension_input_value.Set(keys::kPageActions, action_list);
+      extension_input_value.Set(keys::kPageAction, action);
     } else if (type == extension_installed_bubble::kBrowserAction) {
       extension_input_value.SetString(keys::kName, "browser action extension");
       base::DictionaryValue* browser_action = new base::DictionaryValue;

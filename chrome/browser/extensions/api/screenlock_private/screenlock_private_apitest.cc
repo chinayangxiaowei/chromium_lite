@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/string16.h"
 #include "chrome/browser/extensions/api/screenlock_private/screenlock_private_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/signin/easy_unlock_service.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "components/signin/core/browser/signin_manager.h"
 #include "components/signin/core/common/profile_management_switches.h"
@@ -27,10 +29,10 @@ class ScreenlockPrivateApiTest : public ExtensionApiTest,
  public:
   ScreenlockPrivateApiTest() {}
 
-  virtual ~ScreenlockPrivateApiTest() {}
+  ~ScreenlockPrivateApiTest() override {}
 
   // ExtensionApiTest
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(
         extensions::switches::kWhitelistedExtensionID, kTestExtensionId);
@@ -41,7 +43,7 @@ class ScreenlockPrivateApiTest : public ExtensionApiTest,
 #endif
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     SigninManagerFactory::GetForProfile(profile())
         ->SetAuthenticatedUsername(kTestUser);
     ExtensionApiTest::SetUpOnMainThread();
@@ -49,7 +51,7 @@ class ScreenlockPrivateApiTest : public ExtensionApiTest,
 
  protected:
   // ExtensionApiTest override:
-  virtual void RunTestOnMainThreadLoop() OVERRIDE {
+  void RunTestOnMainThreadLoop() override {
     registrar_.Add(this,
                    extensions::NOTIFICATION_EXTENSION_TEST_MESSAGE,
                    content::NotificationService::AllSources());
@@ -58,16 +60,16 @@ class ScreenlockPrivateApiTest : public ExtensionApiTest,
   }
 
   // content::NotificationObserver override:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     const std::string& content = *content::Details<std::string>(details).ptr();
     if (content == kAttemptClickAuthMessage) {
-      extensions::ScreenlockPrivateEventRouter* router =
-          extensions::ScreenlockPrivateEventRouter::GetFactoryInstance()->Get(
-              profile());
-      router->OnAuthAttempted(
-          ScreenlockBridge::Get()->lock_handler()->GetAuthType(kTestUser), "");
+      ScreenlockBridge::Get()->lock_handler()->SetAuthType(
+          kTestUser,
+          ScreenlockBridge::LockHandler::USER_CLICK,
+          base::string16());
+      EasyUnlockService::Get(profile())->AttemptAuth(kTestUser);
     }
   }
 

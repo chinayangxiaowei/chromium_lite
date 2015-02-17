@@ -9,7 +9,7 @@
 #include "content/browser/fileapi/chrome_blob_storage_context.h"
 #include "content/browser/indexed_db/indexed_db_context_impl.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
-#include "content/browser/push_messaging_router.h"
+#include "content/browser/push_messaging/push_messaging_router.h"
 #include "content/browser/storage_partition_impl_map.h"
 #include "content/common/child_process_host_impl.h"
 #include "content/public/browser/blob_handle.h"
@@ -22,8 +22,8 @@
 #include "net/ssl/channel_id_store.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
-#include "webkit/browser/database/database_tracker.h"
-#include "webkit/browser/fileapi/external_mount_points.h"
+#include "storage/browser/database/database_tracker.h"
+#include "storage/browser/fileapi/external_mount_points.h"
 #endif // !OS_IOS
 
 using base::UserDataAdapter;
@@ -84,6 +84,13 @@ void SaveSessionStateOnIndexedDBThread(
   indexed_db_context->SetForceKeepSessionState();
 }
 
+void ShutdownServiceWorkerContext(StoragePartition* partition) {
+  ServiceWorkerContextWrapper* wrapper =
+      static_cast<ServiceWorkerContextWrapper*>(
+          partition->GetServiceWorkerContext());
+  wrapper->process_manager()->Shutdown();
+}
+
 }  // namespace
 
 // static
@@ -125,7 +132,7 @@ DownloadManager* BrowserContext::GetDownloadManager(
 }
 
 // static
-fileapi::ExternalMountPoints* BrowserContext::GetMountPoints(
+storage::ExternalMountPoints* BrowserContext::GetMountPoints(
     BrowserContext* context) {
   // Ensure that these methods are called on the UI thread, except for
   // unittests where a UI thread might not have been created.
@@ -134,15 +141,15 @@ fileapi::ExternalMountPoints* BrowserContext::GetMountPoints(
 
 #if defined(OS_CHROMEOS)
   if (!context->GetUserData(kMountPointsKey)) {
-    scoped_refptr<fileapi::ExternalMountPoints> mount_points =
-        fileapi::ExternalMountPoints::CreateRefCounted();
+    scoped_refptr<storage::ExternalMountPoints> mount_points =
+        storage::ExternalMountPoints::CreateRefCounted();
     context->SetUserData(
         kMountPointsKey,
-        new UserDataAdapter<fileapi::ExternalMountPoints>(mount_points.get()));
+        new UserDataAdapter<storage::ExternalMountPoints>(mount_points.get()));
   }
 
-  return UserDataAdapter<fileapi::ExternalMountPoints>::Get(
-      context, kMountPointsKey);
+  return UserDataAdapter<storage::ExternalMountPoints>::Get(context,
+                                                            kMountPointsKey);
 #else
   return NULL;
 #endif
@@ -219,10 +226,19 @@ void BrowserContext::DeliverPushMessage(
     const GURL& origin,
     int64 service_worker_registration_id,
     const std::string& data,
-    const base::Callback<void(PushMessagingStatus)>& callback) {
+    const base::Callback<void(PushDeliveryStatus)>& callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   PushMessagingRouter::DeliverMessage(
       browser_context, origin, service_worker_registration_id, data, callback);
+}
+
+// static
+void BrowserContext::NotifyWillBeDestroyed(BrowserContext* browser_context) {
+  // Service Workers must shutdown before the browser context is destroyed,
+  // since they keep render process hosts alive and the codebase assumes that
+  // render process hosts die before their profile (browser context) dies.
+  ForEachStoragePartition(browser_context,
+                          base::Bind(ShutdownServiceWorkerContext));
 }
 
 void BrowserContext::EnsureResourceContextInitialized(BrowserContext* context) {

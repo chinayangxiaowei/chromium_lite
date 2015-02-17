@@ -4,7 +4,7 @@
 
 #include "chrome/browser/prefs/leveldb_pref_store.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
@@ -32,7 +32,7 @@ class MockReadErrorDelegate : public PersistentPrefStore::ReadErrorDelegate {
 
 class LevelDBPrefStoreTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &data_dir_));
@@ -40,9 +40,7 @@ class LevelDBPrefStoreTest : public testing::Test {
     ASSERT_TRUE(PathExists(data_dir_));
   }
 
-  virtual void TearDown() OVERRIDE {
-    Close();
-  }
+  void TearDown() override { Close(); }
 
   void Open() {
     pref_store_ = new LevelDBPrefStore(

@@ -58,11 +58,25 @@
               '<(SHARED_INTERMEDIATE_DIR)/ui/strings/ui_strings_en-US.pak',
             ],
             'pak_output': '<(PRODUCT_DIR)/ui_test.pak',
+            'conditions': [
+              ['chromeos==1', {
+                'pak_inputs': [
+                  '<(SHARED_INTERMEDIATE_DIR)/ui/chromeos/resources/ui_chromeos_resources_100_percent.pak',
+                  '<(SHARED_INTERMEDIATE_DIR)/ui/chromeos/strings/ui_chromeos_strings_en-US.pak',
+                ],
+              }],
+            ],
           },
           'includes': [ '../../build/repack_action.gypi' ],
         },
       ],
       'conditions': [
+        ['chromeos==1', {
+          'dependencies': [
+            '../chromeos/ui_chromeos.gyp:ui_chromeos_strings',
+            '../chromeos/ui_chromeos.gyp:ui_chromeos_resources',
+          ],
+        }],
         ['OS != "mac"', {
           'copies': [
             {
@@ -74,24 +88,24 @@
             },
           ],
         }],
-        ['OS == "ios"', {
+        ['OS == "ios" or OS == "mac"', {
           'actions': [
             {
-              # GN version: //ui/resources:copy_ui_test_pak
-              'action_name': 'copy_ui_test_pak',
-              'message': 'Copying ui_test.pak into locale.pak',
-              'inputs': [
-                '<(PRODUCT_DIR)/ui_test.pak',
-              ],
-              'outputs': [
-                '<(PRODUCT_DIR)/ui/en.lproj/locale.pak',
-              ],
-              'action': [
-                'python',
-                '../../build/cp.py',
-                '<@(_inputs)',
-                '<@(_outputs)'
-              ],
+              # GN version: //ui/resources:repack_ui_test_mac_locale_pack
+              # Repack just the strings for the framework locales on Mac and
+              # iOS. This emulates repack_locales.py, but just for en-US. Note
+              # ui_test.pak is not simply copied, because it causes leaks from
+              # allocations within system libraries when trying to load non-
+              # string resources. http://crbug.com/413034.
+              'action_name': 'repack_ui_test_mac_locale_pack',
+              'variables': {
+                'pak_inputs': [
+                  '<(SHARED_INTERMEDIATE_DIR)/ui/strings/app_locale_settings_en-US.pak',
+                  '<(SHARED_INTERMEDIATE_DIR)/ui/strings/ui_strings_en-US.pak',
+                ],
+                'pak_output': '<(PRODUCT_DIR)/ui/en.lproj/locale.pak',
+              },
+              'includes': [ '../../build/repack_action.gypi' ],
             },
           ],
         }],

@@ -195,6 +195,9 @@ bool GLSurface::OnMakeCurrent(GLContext* context) {
   return true;
 }
 
+void GLSurface::NotifyWasBound() {
+}
+
 bool GLSurface::SetBackbufferAllocation(bool allocated) {
   return true;
 }
@@ -235,6 +238,10 @@ bool GLSurface::ScheduleOverlayPlane(int z_order,
   return false;
 }
 
+bool GLSurface::IsSurfaceless() const {
+  return false;
+}
+
 GLSurface* GLSurface::GetCurrent() {
   return current_surface_.Pointer()->Get();
 }
@@ -259,6 +266,9 @@ bool GLSurface::ExtensionsContain(const char* c_extensions, const char* name) {
   delimited_name += " ";
 
   return extensions.find(delimited_name) != std::string::npos;
+}
+
+void GLSurface::SetSwapInterval(int interval) {
 }
 
 GLSurfaceAdapter::GLSurfaceAdapter(GLSurface* surface) : surface_(surface) {}
@@ -350,6 +360,10 @@ bool GLSurfaceAdapter::ScheduleOverlayPlane(int z_order,
                                             const RectF& crop_rect) {
   return surface_->ScheduleOverlayPlane(
       z_order, transform, image, bounds_rect, crop_rect);
+}
+
+bool GLSurfaceAdapter::IsSurfaceless() const {
+  return surface_->IsSurfaceless();
 }
 
 GLSurfaceAdapter::~GLSurfaceAdapter() {}

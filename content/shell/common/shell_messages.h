@@ -76,12 +76,6 @@ IPC_MESSAGE_ROUTED0(ShellViewHostMsg_TestFinishedInSecondaryWindow)
 // WebTestDelegate related.
 IPC_MESSAGE_ROUTED1(ShellViewHostMsg_OverridePreferences,
                     content::WebPreferences /* preferences */)
-IPC_SYNC_MESSAGE_ROUTED1_1(ShellViewHostMsg_RegisterIsolatedFileSystem,
-                           std::vector<base::FilePath> /* absolute_filenames */,
-                           std::string /* filesystem_id */)
-IPC_SYNC_MESSAGE_ROUTED1_1(ShellViewHostMsg_ReadFileToString,
-                           base::FilePath /* local path */,
-                           std::string /* contents */)
 IPC_MESSAGE_ROUTED1(ShellViewHostMsg_PrintMessage,
                     std::string /* message */)
 IPC_MESSAGE_ROUTED0(ShellViewHostMsg_ClearDevToolsLocalStorage)
@@ -95,23 +89,18 @@ IPC_MESSAGE_ROUTED0(ShellViewHostMsg_Reload)
 IPC_MESSAGE_ROUTED2(ShellViewHostMsg_LoadURLForFrame,
                     GURL /* url */,
                     std::string /* frame_name */)
-IPC_MESSAGE_ROUTED0(ShellViewHostMsg_ClearAllDatabases)
-IPC_MESSAGE_ROUTED1(ShellViewHostMsg_SetDatabaseQuota,
-                    int /* quota */)
-IPC_SYNC_MESSAGE_ROUTED1_1(ShellViewHostMsg_CheckWebNotificationPermission,
-                           GURL /* origin */,
-                           int /* result */)
-IPC_MESSAGE_ROUTED2(ShellViewHostMsg_GrantWebNotificationPermission,
-                    GURL /* origin */,
-                    bool /* permission_granted */)
-IPC_MESSAGE_ROUTED0(ShellViewHostMsg_ClearWebNotificationPermissions)
-IPC_MESSAGE_ROUTED1(ShellViewHostMsg_AcceptAllCookies,
-                    bool /* accept */)
-IPC_MESSAGE_ROUTED0(ShellViewHostMsg_DeleteAllCookies)
 IPC_MESSAGE_ROUTED1(ShellViewHostMsg_SetDeviceScaleFactor,
                     float /* factor */)
 IPC_MESSAGE_ROUTED0(ShellViewHostMsg_CaptureSessionHistory)
 IPC_MESSAGE_ROUTED0(ShellViewHostMsg_CloseRemainingWindows)
+
+IPC_MESSAGE_CONTROL3(ShellViewHostMsg_EchoPing,
+                     int /* routing_id */,
+                     int /* id */,
+                     std::string /* body */)
+IPC_MESSAGE_ROUTED2(ShellViewMsg_EchoPong,
+                    int /* id */,
+                    std::string /* body */)
 
 IPC_STRUCT_TRAITS_BEGIN(content::LeakDetectionResult)
 IPC_STRUCT_TRAITS_MEMBER(leaked)

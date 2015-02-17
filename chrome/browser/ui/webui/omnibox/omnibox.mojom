@@ -10,7 +10,7 @@ struct AutocompleteAdditionalInfo {
 };
 
 struct AutocompleteMatchMojo {
-  string provider_name;
+  string? provider_name;
   // Only meaningful if |provider_name| is valid.
   bool provider_done;
   int32 relevance;
@@ -24,17 +24,17 @@ struct AutocompleteMatchMojo {
   bool is_history_what_you_typed_match;
   bool allowed_to_be_default_match;
   string type;
-  string associated_keyword;
+  string? associated_keyword;
   string keyword;
   bool starred;
   int32 duplicates;
   bool from_previous;
-  AutocompleteAdditionalInfo[] additional_info;
+  array<AutocompleteAdditionalInfo> additional_info;
 };
 
 struct AutocompleteResultsForProviderMojo {
   string provider_name;
-  AutocompleteMatchMojo[] results;
+  array<AutocompleteMatchMojo> results;
 };
 
 struct OmniboxResultMojo {
@@ -43,8 +43,8 @@ struct OmniboxResultMojo {
   int32 time_since_omnibox_started_ms;
   string host;
   bool is_typed_host;
-  AutocompleteMatchMojo[] combined_results;
-  AutocompleteResultsForProviderMojo[] results_by_provider;
+  array<AutocompleteMatchMojo> combined_results;
+  array<AutocompleteResultsForProviderMojo> results_by_provider;
 };
 
 [Client=OmniboxPage]

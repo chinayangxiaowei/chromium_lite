@@ -23,9 +23,10 @@
 #include "chrome/browser/chromeos/mobile/mobile_activator.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "chromeos/network/device_state.h"
 #include "chromeos/network/network_configuration_handler.h"
 #include "chromeos/network/network_event_log.h"
@@ -39,9 +40,6 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -145,16 +143,16 @@ class MobileSetupUIHTMLSource : public content::URLDataSource {
   MobileSetupUIHTMLSource();
 
   // content::URLDataSource implementation.
-  virtual std::string GetSource() const OVERRIDE;
+  virtual std::string GetSource() const override;
   virtual void StartDataRequest(
       const std::string& path,
       int render_process_id,
       int render_frame_id,
-      const content::URLDataSource::GotDataCallback& callback) OVERRIDE;
-  virtual std::string GetMimeType(const std::string&) const OVERRIDE {
+      const content::URLDataSource::GotDataCallback& callback) override;
+  virtual std::string GetMimeType(const std::string&) const override {
     return "text/html";
   }
-  virtual bool ShouldAddContentSecurityPolicy() const OVERRIDE {
+  virtual bool ShouldAddContentSecurityPolicy() const override {
     return false;
   }
 
@@ -187,7 +185,7 @@ class MobileSetupHandler
   virtual ~MobileSetupHandler();
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
  private:
   enum Type {
@@ -206,7 +204,7 @@ class MobileSetupHandler
   virtual void OnActivationStateChanged(
       const NetworkState* network,
       MobileActivator::PlanActivationState new_state,
-      const std::string& error_description) OVERRIDE;
+      const std::string& error_description) override;
 
   // Callbacks for NetworkConfigurationHandler::GetProperties.
   void GetPropertiesAndCallStatusChanged(
@@ -231,9 +229,9 @@ class MobileSetupHandler
 
   // NetworkStateHandlerObserver implementation.
   virtual void NetworkConnectionStateChanged(
-      const NetworkState* network) OVERRIDE;
+      const NetworkState* network) override;
   virtual void DefaultNetworkChanged(
-      const NetworkState* default_network) OVERRIDE;
+      const NetworkState* default_network) override;
 
   // Updates |lte_portal_reachable_| for lte network |network| and notifies
   // webui of the new state if the reachability changed or |force_notification|
@@ -638,7 +636,7 @@ MobileSetupUI::MobileSetupUI(content::WebUI* web_ui)
 void MobileSetupUI::DidCommitProvisionalLoadForFrame(
     content::RenderFrameHost* render_frame_host,
     const GURL& url,
-    content::PageTransition transition_type) {
+    ui::PageTransition transition_type) {
   if (render_frame_host->GetFrameName() != "paymentForm")
     return;
 

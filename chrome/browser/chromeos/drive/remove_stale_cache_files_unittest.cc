@@ -4,8 +4,8 @@
 
 #include <string>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/drive/drive.pb.h"
@@ -23,7 +23,7 @@ namespace internal {
 
 class RemoveStaleCacheFilesTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     fake_free_disk_space_getter_.reset(new FakeFreeDiskSpaceGetter);

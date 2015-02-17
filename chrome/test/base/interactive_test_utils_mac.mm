@@ -54,6 +54,13 @@ bool IsViewFocused(const Browser* browser, ViewID vid) {
   if (firstResponder == static_cast<NSResponder*>(view))
     return true;
 
+  // Handle special case for VIEW_ID_TAB_CONTAINER.  The tab container NSView
+  // always transfers first responder status to its subview, so test whether
+  // |firstResponder| is a descendant.
+  if (vid == VIEW_ID_TAB_CONTAINER &&
+      [firstResponder isKindOfClass:[NSView class]])
+    return [static_cast<NSView*>(firstResponder) isDescendantOf:view];
+
   // Handle the special case of focusing a TextField.
   if ([firstResponder isKindOfClass:[NSTextView class]]) {
     NSView* delegate = static_cast<NSView*>([(NSTextView*)firstResponder
@@ -77,6 +84,14 @@ void ClickOnView(const Browser* browser, ViewID vid) {
       base::MessageLoop::QuitClosure());
   content::RunMessageLoop();
 }
+
+void FocusView(const Browser* browser, ViewID vid) {
+   NSWindow* window = browser->window()->GetNativeWindow();
+   DCHECK(window);
+   NSView* view = view_id_util::GetView(window, vid);
+   DCHECK(view);
+   [window makeFirstResponder:view];
+ }
 
 void HideNativeWindow(gfx::NativeWindow window) {
   [window orderOut:nil];

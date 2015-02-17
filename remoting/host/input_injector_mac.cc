@@ -60,19 +60,18 @@ class InputInjectorMac : public InputInjector {
  public:
   explicit InputInjectorMac(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-  virtual ~InputInjectorMac();
+  ~InputInjectorMac() override;
 
   // ClipboardStub interface.
-  virtual void InjectClipboardEvent(const ClipboardEvent& event) OVERRIDE;
+  void InjectClipboardEvent(const ClipboardEvent& event) override;
 
   // InputStub interface.
-  virtual void InjectKeyEvent(const KeyEvent& event) OVERRIDE;
-  virtual void InjectTextEvent(const TextEvent& event) OVERRIDE;
-  virtual void InjectMouseEvent(const MouseEvent& event) OVERRIDE;
+  void InjectKeyEvent(const KeyEvent& event) override;
+  void InjectTextEvent(const TextEvent& event) override;
+  void InjectMouseEvent(const MouseEvent& event) override;
 
   // InputInjector interface.
-  virtual void Start(
-      scoped_ptr<protocol::ClipboardStub> client_clipboard) OVERRIDE;
+  void Start(scoped_ptr<protocol::ClipboardStub> client_clipboard) override;
 
  private:
   // The actual implementation resides in InputInjectorMac::Core class.
@@ -179,14 +178,14 @@ void InputInjectorMac::Core::InjectKeyEvent(const KeyEvent& event) {
   if (!event.has_pressed() || !event.has_usb_keycode())
     return;
 
-  ui::KeycodeConverter* key_converter = ui::KeycodeConverter::GetInstance();
-  int keycode = key_converter->UsbKeycodeToNativeKeycode(event.usb_keycode());
+  int keycode =
+      ui::KeycodeConverter::UsbKeycodeToNativeKeycode(event.usb_keycode());
 
   VLOG(3) << "Converting USB keycode: " << std::hex << event.usb_keycode()
           << " to keycode: " << keycode << std::dec;
 
   // If we couldn't determine the Mac virtual key code then ignore the event.
-  if (keycode == key_converter->InvalidNativeKeycode())
+  if (keycode == ui::KeycodeConverter::InvalidNativeKeycode())
     return;
 
   // If this is a modifier key, remember its new state so that it can be
@@ -338,7 +337,7 @@ InputInjectorMac::Core::~Core() {}
 scoped_ptr<InputInjector> InputInjector::Create(
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-  return scoped_ptr<InputInjector>(new InputInjectorMac(main_task_runner));
+  return make_scoped_ptr(new InputInjectorMac(main_task_runner));
 }
 
 }  // namespace remoting

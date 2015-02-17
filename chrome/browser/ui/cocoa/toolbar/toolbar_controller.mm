@@ -22,6 +22,7 @@
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/background_gradient_view.h"
 #include "chrome/browser/ui/cocoa/drag_util.h"
@@ -34,9 +35,9 @@
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
 #import "chrome/browser/ui/cocoa/menu_button.h"
 #import "chrome/browser/ui/cocoa/toolbar/back_forward_menu_controller.h"
-#import "chrome/browser/ui/cocoa/toolbar/reload_button.h"
-#import "chrome/browser/ui/cocoa/toolbar/toolbar_button.h"
-#import "chrome/browser/ui/cocoa/toolbar/toolbar_view.h"
+#import "chrome/browser/ui/cocoa/toolbar/reload_button_cocoa.h"
+#import "chrome/browser/ui/cocoa/toolbar/toolbar_button_cocoa.h"
+#import "chrome/browser/ui/cocoa/toolbar/toolbar_view_cocoa.h"
 #import "chrome/browser/ui/cocoa/toolbar/wrench_toolbar_button_cell.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #import "chrome/browser/ui/cocoa/wrench_menu/wrench_menu_controller.h"
@@ -45,13 +46,13 @@
 #include "chrome/browser/ui/toolbar/wrench_menu_badge_controller.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/metrics/proto/omnibox_event.pb.h"
 #include "components/omnibox/autocomplete_match.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/url_fixer/url_fixer.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -89,6 +90,7 @@ const CGFloat kWrenchMenuLeftPadding = 3.0;
 - (void)pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:(BOOL)animate;
 - (void)maintainMinimumLocationBarWidth;
 - (void)adjustBrowserActionsContainerForNewWindow:(NSNotification*)notification;
+- (void)browserActionsContainerWillDrag:(NSNotification*)notification;
 - (void)browserActionsContainerDragged:(NSNotification*)notification;
 - (void)browserActionsContainerDragFinished:(NSNotification*)notification;
 - (void)browserActionsVisibilityChanged:(NSNotification*)notification;
@@ -108,16 +110,15 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
       : controller_(controller),
         badge_controller_([controller browser]->profile(), this) {
   }
-  virtual ~NotificationBridge() {
-  }
+  ~NotificationBridge() override {}
 
   void UpdateBadgeSeverity() {
     badge_controller_.UpdateDelegate();
   }
 
-  virtual void UpdateBadgeSeverity(WrenchMenuBadgeController::BadgeType type,
-                                   WrenchIconPainter::Severity severity,
-                                   bool animate) OVERRIDE {
+  void UpdateBadgeSeverity(WrenchMenuBadgeController::BadgeType type,
+                           WrenchIconPainter::Severity severity,
+                           bool animate) override {
     [controller_ updateWrenchButtonSeverity:severity animate:animate];
   }
 
@@ -258,6 +259,7 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
   [homeButton_ setHandleMiddleClick:YES];
 
   [self initCommandStatus:commands_];
+  [reloadButton_ setCommandUpdater:commands_];
 
   locationBarView_.reset(new LocationBarViewMac(locationBar_, commands_,
                                                 profile_, browser_));
@@ -440,6 +442,9 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
   if (browserActionsController_.get()) {
     [browserActionsController_ update];
   }
+
+  BOOL needReloadMenu = chrome::IsDebuggerAttachedToCurrentTab(browser_);
+  [reloadButton_ setMenuEnabled:needReloadMenu];
 }
 
 - (void)setStarredState:(BOOL)isStarred {
@@ -587,6 +592,11 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
               containerView:browserActionsContainerView_]);
     [[NSNotificationCenter defaultCenter]
         addObserver:self
+           selector:@selector(browserActionsContainerWillDrag:)
+               name:kBrowserActionGrippyWillDragNotification
+             object:browserActionsController_];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
            selector:@selector(browserActionsContainerDragged:)
                name:kBrowserActionGrippyDraggingNotification
              object:browserActionsController_];
@@ -633,6 +643,18 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
 - (void)browserActionsContainerDragFinished:(NSNotification*)notification {
   [browserActionsController_ resizeContainerAndAnimate:YES];
   [self pinLocationBarToLeftOfBrowserActionsContainerAndAnimate:YES];
+}
+
+- (void)browserActionsContainerWillDrag:(NSNotification*)notification {
+  CGFloat deltaX = [[notification.userInfo objectForKey:kTranslationWithDelta]
+      floatValue];
+  CGFloat locationBarWidth = NSWidth([locationBar_ frame]);
+  BOOL locationBarWillBeAtMinSize =
+      (locationBarWidth + deltaX) <= kMinimumLocationBarWidth;
+
+  // Prevent the |browserActionsContainerView_| from dragging if the width of
+  // location bar will reach the minimum.
+  [browserActionsContainerView_ setCanDragLeft:!locationBarWillBeAtMinSize];
 }
 
 - (void)browserActionsVisibilityChanged:(NSNotification*)notification {
@@ -734,6 +756,10 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
   return [self.view convertPoint:point toView:nil];
 }
 
+- (NSPoint)managePasswordsBubblePoint {
+  return locationBarView_->GetManagePasswordsBubblePoint();
+}
+
 - (NSPoint)translateBubblePoint {
   return locationBarView_->GetTranslateBubblePoint();
 }
@@ -768,15 +794,6 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
   return wrenchButton_;
 }
 
-- (void)activatePageAction:(const std::string&)extension_id {
-  locationBarView_->ActivatePageAction(extension_id);
-}
-
-// Activates the browser action for the extension that has the given id.
-- (void)activateBrowserAction:(const std::string&)extension_id {
-  [browserActionsController_ activateBrowserAction:extension_id];
-}
-
 // (URLDropTargetController protocol)
 - (void)dropURLs:(NSArray*)urls inView:(NSView*)view at:(NSPoint)point {
   // TODO(viettrungluu): This code is more or less copied from the code in
@@ -800,7 +817,7 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
           OmniboxView::StripJavascriptSchemas(base::UTF8ToUTF16(url.spec())));
   }
   OpenURLParams params(
-      url, Referrer(), CURRENT_TAB, content::PAGE_TRANSITION_TYPED, false);
+      url, Referrer(), CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false);
   browser_->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
 }
 
@@ -818,7 +835,7 @@ class NotificationBridge : public WrenchMenuBadgeController::Delegate {
   GURL url(match.destination_url);
 
   OpenURLParams params(
-      url, Referrer(), CURRENT_TAB, content::PAGE_TRANSITION_TYPED, false);
+      url, Referrer(), CURRENT_TAB, ui::PAGE_TRANSITION_TYPED, false);
   browser_->tab_strip_model()->GetActiveWebContents()->OpenURL(params);
 }
 

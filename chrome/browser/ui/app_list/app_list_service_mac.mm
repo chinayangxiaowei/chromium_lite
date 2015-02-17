@@ -9,7 +9,7 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/singleton.h"
@@ -34,11 +34,11 @@
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/mac/app_mode_common.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/google_chrome_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/manifest_handlers/file_handler_info.h"
 #include "grit/chrome_unscaled_resources.h"
-#include "grit/google_chrome_strings.h"
 #include "net/base/url_util.h"
 #import "ui/app_list/cocoa/app_list_view_controller.h"
 #import "ui/app_list/cocoa/app_list_window_controller.h"
@@ -383,29 +383,7 @@ Profile* AppListServiceMac::GetCurrentAppListProfile() {
   return profile_;
 }
 
-void AppListServiceMac::CreateForProfile(Profile* requested_profile) {
-  if (profile_ == requested_profile)
-    return;
-
-  profile_ = requested_profile;
-
-  if (!window_controller_)
-    window_controller_.reset([[AppListWindowController alloc] init]);
-
-  scoped_ptr<app_list::AppListViewDelegate> delegate(
-      new AppListViewDelegate(profile_, GetControllerDelegate()));
-  [[window_controller_ appListViewController] setDelegate:delegate.Pass()];
-}
-
 void AppListServiceMac::ShowForProfile(Profile* requested_profile) {
-  InvalidatePendingProfileLoads();
-
-  if (requested_profile == profile_) {
-    ShowWindowNearDock();
-    return;
-  }
-
-  SetProfilePath(requested_profile->GetPath());
   CreateForProfile(requested_profile);
   ShowWindowNearDock();
 }
@@ -450,6 +428,33 @@ void AppListServiceMac::EnableAppList(Profile* initial_profile,
 void AppListServiceMac::CreateShortcut() {
   CreateAppListShim(GetProfilePath(
       g_browser_process->profile_manager()->user_data_dir()));
+}
+
+void AppListServiceMac::CreateForProfile(Profile* requested_profile) {
+  DCHECK(requested_profile);
+  InvalidatePendingProfileLoads();
+  if (profile_ && requested_profile->IsSameProfile(profile_))
+    return;
+
+  profile_ = requested_profile->GetOriginalProfile();
+  SetProfilePath(profile_->GetPath());
+
+  if (!window_controller_)
+    window_controller_.reset([[AppListWindowController alloc] init]);
+
+  [[window_controller_ appListViewController] setDelegate:nil];
+  [[window_controller_ appListViewController]
+      setDelegate:GetViewDelegate(profile_)];
+}
+
+void AppListServiceMac::DestroyAppList() {
+  // Due to reference counting, Mac can't guarantee that the widget is deleted,
+  // but mac supports a visible app list with a NULL profile, so there's also no
+  // need to tear it down completely.
+  DismissAppList();
+  [[window_controller_ appListViewController] setDelegate:NULL];
+
+  profile_ = NULL;
 }
 
 NSWindow* AppListServiceMac::GetAppListWindow() {
@@ -569,14 +574,12 @@ void AppListService::InitAll(Profile* initial_profile) {
     [animation_ setAnimationCurve:NSAnimationEaseOut];
     window_.reset();
   }
-  // Threaded animations are buggy on Snow Leopard. See http://crbug.com/335550.
-  // Note that in the non-threaded case, the animation won't start unless the
-  // UI runloop has spun up, so on <= Lion the animation will only animate if
-  // Chrome is already running.
-  if (base::mac::IsOSMountainLionOrLater())
-    [animation_ setAnimationBlockingMode:NSAnimationNonblockingThreaded];
-  else
-    [animation_ setAnimationBlockingMode:NSAnimationNonblocking];
+  // This once used a threaded animation, but AppKit would too often ignore
+  // -[NSView canDrawConcurrently:] and just redraw whole view hierarchies on
+  // the animation thread anyway, creating a minefield of race conditions.
+  // Non-threaded means the animation isn't as smooth and doesn't begin unless
+  // the UI runloop has spun up (after profile loading).
+  [animation_ setAnimationBlockingMode:NSAnimationNonblocking];
 
   [animation_ startAnimation];
 }

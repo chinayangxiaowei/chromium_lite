@@ -17,6 +17,7 @@
 #include "chrome/browser/sync_file_system/sync_file_system_test_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "net/url_request/url_request_context_getter.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sync_file_system {
@@ -28,9 +29,9 @@ class SyncEngineTest : public testing::Test,
   typedef RemoteFileSyncService::OriginStatusMap RemoteOriginStatusMap;
 
   SyncEngineTest() {}
-  virtual ~SyncEngineTest() {}
+  ~SyncEngineTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(profile_dir_.CreateUniqueTempDir());
 
     scoped_ptr<drive::DriveServiceInterface>
@@ -45,22 +46,22 @@ class SyncEngineTest : public testing::Test,
             base::SequencedWorkerPool::SKIP_ON_SHUTDOWN);
 
     sync_engine_.reset(new drive_backend::SyncEngine(
-        ui_task_runner,
-        worker_task_runner_,
-        NULL /* drive_task_runner */,
+        ui_task_runner.get(),
+        worker_task_runner_.get(),
+        nullptr /* drive_task_runner */,
         profile_dir_.path(),
-        NULL /* task_logger */,
-        NULL /* notification_manager */,
-        NULL /* extension_service */,
-        NULL /* signin_manager */,
-        NULL /* token_service */,
-        NULL /* request_context */,
-        scoped_ptr<SyncEngine::DriveServiceFactory>(),
-        NULL /* in_memory_env */));
+        nullptr /* task_logger */,
+        nullptr /* notification_manager */,
+        nullptr /* extension_service */,
+        nullptr /* signin_manager */,
+        nullptr /* token_service */,
+        nullptr /* request_context */,
+        nullptr /* drive_service_factory */,
+        nullptr /* in_memory_env */));
 
     sync_engine_->InitializeForTesting(
         fake_drive_service.Pass(),
-        scoped_ptr<drive::DriveUploaderInterface>(),
+        nullptr,  // drive_uploader
         scoped_ptr<SyncWorkerInterface>(new FakeSyncWorker));
     sync_engine_->SetSyncEnabled(true);
     sync_engine_->OnReadyToSendRequests();
@@ -68,10 +69,14 @@ class SyncEngineTest : public testing::Test,
     WaitForWorkerTaskRunner();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     sync_engine_.reset();
     WaitForWorkerTaskRunner();
     worker_pool_->Shutdown();
+
+    worker_task_runner_ = nullptr;
+    worker_pool_ = nullptr;
+
     base::RunLoop().RunUntilIdle();
   }
 
@@ -103,7 +108,7 @@ class SyncEngineTest : public testing::Test,
   }
 
   void WaitForWorkerTaskRunner() {
-    DCHECK(worker_task_runner_);
+    DCHECK(worker_task_runner_.get());
 
     base::RunLoop run_loop;
     worker_task_runner_->PostTask(
@@ -214,7 +219,7 @@ TEST_F(SyncEngineTest, UpdateServiceState) {
     {REMOTE_SERVICE_DISABLED, "DISABLED"},
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_data); ++i) {
+  for (size_t i = 0; i < arraysize(test_data); ++i) {
     PostUpdateServiceState(test_data[i].state, test_data[i].description);
     EXPECT_EQ(test_data[i].state, sync_engine()->GetCurrentState())
         << "Expected state: REMOTE_SERVICE_" << test_data[i].description;
@@ -223,7 +228,7 @@ TEST_F(SyncEngineTest, UpdateServiceState) {
 
 TEST_F(SyncEngineTest, ProcessRemoteChange) {
   SyncStatusCode sync_status;
-  fileapi::FileSystemURL url;
+  storage::FileSystemURL url;
   sync_engine()->ProcessRemoteChange(CreateResultReceiver(&sync_status, &url));
   WaitForWorkerTaskRunner();
   EXPECT_EQ(SYNC_STATUS_OK, sync_status);

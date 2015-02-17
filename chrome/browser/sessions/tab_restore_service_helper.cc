@@ -14,22 +14,20 @@
 #include "chrome/browser/sessions/session_types.h"
 #include "chrome/browser/sessions/tab_restore_service_delegate.h"
 #include "chrome/browser/sessions/tab_restore_service_observer.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/url_constants.h"
+#include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/session_storage_namespace.h"
 #include "content/public/browser/web_contents.h"
-#include "extensions/browser/extension_registry.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/extension_set.h"
-
-#if !defined(OS_ANDROID)
-#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
-#endif
 
 #if defined(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
+#include "chrome/common/extensions/extension_constants.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_set.h"
 #endif
 
 using content::NavigationController;
@@ -39,7 +37,7 @@ using content::WebContents;
 namespace {
 
 void RecordAppLaunch(Profile* profile, const TabRestoreService::Tab& tab) {
-#if !defined(OS_ANDROID)
+#if defined(ENABLE_EXTENSIONS)
   GURL url = tab.navigations.at(tab.current_navigation_index).virtual_url();
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)
@@ -50,7 +48,7 @@ void RecordAppLaunch(Profile* profile, const TabRestoreService::Tab& tab) {
   CoreAppLauncherHandler::RecordAppLaunchType(
       extension_misc::APP_LAUNCH_NTP_RECENTLY_CLOSED,
       extension->GetType());
-#endif  // !defined(OS_ANDROID)
+#endif  // defined(ENABLE_EXTENSIONS)
 }
 
 }  // namespace
@@ -416,7 +414,8 @@ void TabRestoreServiceHelper::PopulateTab(
     NavigationEntry* entry = (i == pending_index) ?
         controller->GetPendingEntry() : controller->GetEntryAtIndex(i);
     tab->navigations[i] =
-        sessions::SerializedNavigationEntry::FromNavigationEntry(i, *entry);
+        sessions::ContentSerializedNavigationBuilder::FromNavigationEntry(
+            i, *entry);
   }
   tab->timestamp = TimeNow();
   tab->current_navigation_index = controller->GetCurrentEntryIndex();

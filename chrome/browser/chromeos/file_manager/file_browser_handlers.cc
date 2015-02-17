@@ -4,8 +4,12 @@
 
 #include "chrome/browser/chromeos/file_manager/file_browser_handlers.h"
 
+#include <algorithm>
+#include <set>
+
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/command_line.h"
+#include "base/files/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/drive/file_system_util.h"
@@ -18,7 +22,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/common/extensions/api/file_browser_handlers/file_browser_handler.h"
-#include "chrome/common/extensions/api/file_browser_private.h"
+#include "chrome/common/extensions/api/file_manager_private.h"
+#include "chromeos/chromeos_switches.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/render_process_host.h"
@@ -31,18 +36,19 @@
 #include "extensions/browser/lazy_background_task_queue.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest_handlers/background_info.h"
+#include "extensions/common/url_pattern.h"
 #include "net/base/escape.h"
-#include "webkit/browser/fileapi/file_system_context.h"
-#include "webkit/browser/fileapi/file_system_url.h"
-#include "webkit/common/fileapi/file_system_info.h"
-#include "webkit/common/fileapi/file_system_util.h"
+#include "storage/browser/fileapi/file_system_context.h"
+#include "storage/browser/fileapi/file_system_url.h"
+#include "storage/common/fileapi/file_system_info.h"
+#include "storage/common/fileapi/file_system_util.h"
 
 using content::BrowserThread;
 using content::ChildProcessSecurityPolicy;
 using content::SiteInstance;
 using content::WebContents;
 using extensions::Extension;
-using fileapi::FileSystemURL;
+using storage::FileSystemURL;
 using file_manager::util::EntryDefinition;
 using file_manager::util::EntryDefinitionList;
 using file_manager::util::FileDefinition;
@@ -58,7 +64,7 @@ int ExtractProcessFromExtensionId(Profile* profile,
   GURL extension_url =
       Extension::GetBaseURLFromExtensionId(extension_id);
   extensions::ProcessManager* manager =
-    extensions::ExtensionSystem::Get(profile)->process_manager();
+      extensions::ProcessManager::Get(profile);
 
   SiteInstance* site_instance = manager->GetSiteInstanceForURL(extension_url);
   if (!site_instance || !site_instance->HasProcess())
@@ -129,8 +135,18 @@ FileBrowserHandlerList FindFileBrowserHandlersForURL(
       const FileBrowserHandler* handler = handler_iter->get();
       if (!handler->MatchesURL(lowercase_url))
         continue;
-
-      results.push_back(handler_iter->get());
+      // Filter out Files app from handling ZIP files via a handler, as it's
+      // now handled by new ZIP unpacker extension based on File System Provider
+      // API.
+      const URLPattern zip_pattern(URLPattern::SCHEME_EXTENSION,
+                                   "chrome-extension://*/*.zip");
+      if (handler->extension_id() == kFileManagerAppId &&
+          zip_pattern.MatchesURL(selected_file_url) &&
+          !CommandLine::ForCurrentProcess()->HasSwitch(
+              chromeos::switches::kDisableNewZIPUnpacker)) {
+        continue;
+      }
+      results.push_back(handler);
     }
   }
   return results;
@@ -165,7 +181,7 @@ class FileBrowserHandlerExecutor {
   // Checks legitimacy of file url and grants file RO access permissions from
   // handler (target) extension and its renderer process.
   static scoped_ptr<FileDefinitionList> SetupFileAccessPermissions(
-      scoped_refptr<fileapi::FileSystemContext> file_system_context_handler,
+      scoped_refptr<storage::FileSystemContext> file_system_context_handler,
       const scoped_refptr<const Extension>& handler_extension,
       const std::vector<FileSystemURL>& file_urls);
 
@@ -199,13 +215,13 @@ class FileBrowserHandlerExecutor {
 // static
 scoped_ptr<FileDefinitionList>
 FileBrowserHandlerExecutor::SetupFileAccessPermissions(
-    scoped_refptr<fileapi::FileSystemContext> file_system_context_handler,
+    scoped_refptr<storage::FileSystemContext> file_system_context_handler,
     const scoped_refptr<const Extension>& handler_extension,
     const std::vector<FileSystemURL>& file_urls) {
   DCHECK_CURRENTLY_ON(BrowserThread::FILE);
   DCHECK(handler_extension.get());
 
-  fileapi::ExternalFileSystemBackend* backend =
+  storage::ExternalFileSystemBackend* backend =
       file_system_context_handler->external_backend();
 
   scoped_ptr<FileDefinitionList> file_definition_list(new FileDefinitionList);
@@ -218,12 +234,12 @@ FileBrowserHandlerExecutor::SetupFileAccessPermissions(
     base::FilePath local_path = url.path();
     base::FilePath virtual_path = url.virtual_path();
 
-    const bool is_drive_file = url.type() == fileapi::kFileSystemTypeDrive;
+    const bool is_drive_file = url.type() == storage::kFileSystemTypeDrive;
     DCHECK(!is_drive_file || drive::util::IsUnderDriveMountPoint(local_path));
 
     const bool is_native_file =
-        url.type() == fileapi::kFileSystemTypeNativeLocal ||
-        url.type() == fileapi::kFileSystemTypeRestrictedNativeLocal;
+        url.type() == storage::kFileSystemTypeNativeLocal ||
+        url.type() == storage::kFileSystemTypeRestrictedNativeLocal;
 
     // If the file is from a physical volume, actual file must be found.
     if (is_native_file) {
@@ -270,9 +286,8 @@ void FileBrowserHandlerExecutor::Execute(
   // Get file system context for the extension to which onExecute event will be
   // sent. The file access permissions will be granted to the extension in the
   // file system context for the files in |file_urls|.
-  scoped_refptr<fileapi::FileSystemContext> file_system_context(
-      util::GetFileSystemContextForExtensionId(
-          profile_, extension_->id()));
+  scoped_refptr<storage::FileSystemContext> file_system_context(
+      util::GetFileSystemContextForExtensionId(profile_, extension_->id()));
 
   BrowserThread::PostTaskAndReplyWithResult(
       BrowserThread::FILE,
@@ -304,8 +319,8 @@ void FileBrowserHandlerExecutor::ExecuteDoneOnUIThread(bool success) {
   if (!done_.is_null())
     done_.Run(
         success
-            ? extensions::api::file_browser_private::TASK_RESULT_MESSAGE_SENT
-            : extensions::api::file_browser_private::TASK_RESULT_FAILED);
+            ? extensions::api::file_manager_private::TASK_RESULT_MESSAGE_SENT
+            : extensions::api::file_manager_private::TASK_RESULT_FAILED);
   delete this;
 }
 
@@ -408,8 +423,8 @@ void FileBrowserHandlerExecutor::SetupHandlerHostFileAccessPermissions(
     FileDefinitionList* file_definition_list,
     const Extension* extension,
     int handler_pid) {
-  const FileBrowserHandler* action = FindFileBrowserHandlerForActionId(
-      extension_, action_id_);
+  const FileBrowserHandler* action =
+      FindFileBrowserHandlerForActionId(extension_.get(), action_id_);
   for (FileDefinitionList::const_iterator iter = file_definition_list->begin();
        iter != file_definition_list->end();
        ++iter) {
@@ -431,7 +446,6 @@ void FileBrowserHandlerExecutor::SetupHandlerHostFileAccessPermissions(
 // is used to handle certain action IDs of the file manager.
 bool ShouldBeOpenedWithBrowser(const std::string& extension_id,
                                const std::string& action_id) {
-
   return (extension_id == kFileManagerAppId &&
           (action_id == "view-pdf" ||
            action_id == "view-swf" ||
@@ -450,8 +464,7 @@ bool OpenFilesWithBrowser(Profile* profile,
   for (size_t i = 0; i < file_urls.size(); ++i) {
     const FileSystemURL& file_url = file_urls[i];
     if (chromeos::FileSystemBackend::CanHandleURL(file_url)) {
-      const base::FilePath& file_path = file_url.path();
-      num_opened += util::OpenFileWithBrowser(profile, file_path);
+      num_opened += util::OpenFileWithBrowser(profile, file_url) ? 1 : 0;
     }
   }
   return num_opened > 0;
@@ -474,7 +487,7 @@ bool ExecuteFileBrowserHandler(
   if (ShouldBeOpenedWithBrowser(extension->id(), action_id)) {
     const bool result = OpenFilesWithBrowser(profile, file_urls);
     if (result && !done.is_null())
-      done.Run(extensions::api::file_browser_private::TASK_RESULT_OPENED);
+      done.Run(extensions::api::file_manager_private::TASK_RESULT_OPENED);
     return result;
   }
 

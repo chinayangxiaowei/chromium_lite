@@ -14,17 +14,15 @@
 #include "base/threading/thread_checker.h"
 #include "chrome/browser/memory_details.h"
 #include "chrome/browser/metrics/network_stats_uploader.h"
-#include "chrome/browser/metrics/tracking_synchronizer_observer.h"
 #include "components/metrics/metrics_service_client.h"
+#include "components/metrics/profiler/tracking_synchronizer_observer.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
 class ChromeOSMetricsProvider;
 class GoogleUpdateMetricsProviderWin;
-class MetricsService;
 class PluginMetricsProvider;
 class PrefRegistrySimple;
-class ProfilerMetricsProvider;
 
 #if !defined(OS_CHROMEOS) && !defined(OS_IOS)
 class SigninStatusMetricsProvider;
@@ -35,17 +33,19 @@ class FilePath;
 }
 
 namespace metrics {
+class MetricsService;
 class MetricsStateManager;
+class ProfilerMetricsProvider;
 }
 
 // ChromeMetricsServiceClient provides an implementation of MetricsServiceClient
 // that depends on chrome/.
 class ChromeMetricsServiceClient
     : public metrics::MetricsServiceClient,
-      public chrome_browser_metrics::TrackingSynchronizerObserver,
+      public metrics::TrackingSynchronizerObserver,
       public content::NotificationObserver {
  public:
-  virtual ~ChromeMetricsServiceClient();
+  ~ChromeMetricsServiceClient() override;
 
   // Factory function.
   static scoped_ptr<ChromeMetricsServiceClient> Create(
@@ -56,23 +56,23 @@ class ChromeMetricsServiceClient
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // metrics::MetricsServiceClient:
-  virtual void SetMetricsClientId(const std::string& client_id) OVERRIDE;
-  virtual bool IsOffTheRecordSessionActive() OVERRIDE;
-  virtual std::string GetApplicationLocale() OVERRIDE;
-  virtual bool GetBrand(std::string* brand_code) OVERRIDE;
-  virtual metrics::SystemProfileProto::Channel GetChannel() OVERRIDE;
-  virtual std::string GetVersionString() OVERRIDE;
-  virtual void OnLogUploadComplete() OVERRIDE;
-  virtual void StartGatheringMetrics(
-      const base::Closure& done_callback) OVERRIDE;
-  virtual void CollectFinalMetrics(const base::Closure& done_callback)
-      OVERRIDE;
-  virtual scoped_ptr<metrics::MetricsLogUploader> CreateUploader(
+  void SetMetricsClientId(const std::string& client_id) override;
+  bool IsOffTheRecordSessionActive() override;
+  int32 GetProduct() override;
+  std::string GetApplicationLocale() override;
+  bool GetBrand(std::string* brand_code) override;
+  metrics::SystemProfileProto::Channel GetChannel() override;
+  std::string GetVersionString() override;
+  void OnLogUploadComplete() override;
+  void StartGatheringMetrics(const base::Closure& done_callback) override;
+  void CollectFinalMetrics(const base::Closure& done_callback) override;
+  scoped_ptr<metrics::MetricsLogUploader> CreateUploader(
       const std::string& server_url,
       const std::string& mime_type,
-      const base::Callback<void(int)>& on_upload_complete) OVERRIDE;
+      const base::Callback<void(int)>& on_upload_complete) override;
+  base::string16 GetRegistryBackupKey() override;
 
-  MetricsService* metrics_service() { return metrics_service_.get(); }
+  metrics::MetricsService* metrics_service() { return metrics_service_.get(); }
 
   void LogPluginLoadingError(const base::FilePath& plugin_path);
 
@@ -95,10 +95,10 @@ class ChromeMetricsServiceClient
   void OnInitTaskGotGoogleUpdateData();
 
   // TrackingSynchronizerObserver:
-  virtual void ReceivedProfilerData(
+  void ReceivedProfilerData(
       const tracked_objects::ProcessDataSnapshot& process_data,
-      int process_type) OVERRIDE;
-  virtual void FinishedReceivingProfilerData() OVERRIDE;
+      int process_type) override;
+  void FinishedReceivingProfilerData() override;
 
   // Callbacks for various stages of final log info collection. Do not call
   // these directly.
@@ -115,9 +115,9 @@ class ChromeMetricsServiceClient
   void RegisterForNotifications();
 
   // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
 #if defined(OS_WIN)
   // Counts (and removes) the browser crash dump attempt signals left behind by
@@ -131,7 +131,7 @@ class ChromeMetricsServiceClient
   metrics::MetricsStateManager* metrics_state_manager_;
 
   // The MetricsService that |this| is a client of.
-  scoped_ptr<MetricsService> metrics_service_;
+  scoped_ptr<metrics::MetricsService> metrics_service_;
 
   content::NotificationRegistrar registrar_;
 
@@ -152,7 +152,7 @@ class ChromeMetricsServiceClient
 
   // The ProfilerMetricsProvider instance that was registered with
   // MetricsService. Has the same lifetime as |metrics_service_|.
-  ProfilerMetricsProvider* profiler_metrics_provider_;
+  metrics::ProfilerMetricsProvider* profiler_metrics_provider_;
 
 #if defined(ENABLE_PLUGINS)
   // The PluginMetricsProvider instance that was registered with
@@ -164,12 +164,6 @@ class ChromeMetricsServiceClient
   // The GoogleUpdateMetricsProviderWin instance that was registered with
   // MetricsService. Has the same lifetime as |metrics_service_|.
   GoogleUpdateMetricsProviderWin* google_update_metrics_provider_;
-#endif
-
-#if !defined(OS_CHROMEOS) && !defined(OS_IOS)
-  // The SigninStatusMetricsProvider instance that was registered with
-  // MetricsService. Has the same lifetime as |metrics_service_|.
-  SigninStatusMetricsProvider* signin_status_metrics_provider_;
 #endif
 
   // Callback that is called when initial metrics gathering is complete.

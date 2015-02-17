@@ -12,10 +12,18 @@
   'variables': {
     'conditions': [
       # Remoting host is supported only on Windows, OSX and Linux (with X11).
-      ['OS=="win" or OS=="mac" or (OS=="linux" and chromeos==0 and use_x11==1)', {
+      ['OS=="win" or OS=="mac" or (OS=="linux" and use_x11==1)', {
+        'enable_me2me_host': 1,
+        'enable_it2me_host': 1,
         'enable_remoting_host': 1,
       }, {
+        'enable_me2me_host': 0,
+        'enable_it2me_host': 0,
         'enable_remoting_host': 0,
+      }],
+      ['chromeos==1 and use_x11==1', {
+        'enable_me2me_host': 0,
+        'enable_it2me_host': 1,
       }],
     ],
   },
@@ -64,6 +72,10 @@
             'host/branding.h',
             'host/capture_scheduler.cc',
             'host/capture_scheduler.h',
+            'host/chromeos/aura_desktop_capturer.cc',
+            'host/chromeos/aura_desktop_capturer.h',
+            'host/chromeos/message_box.cc',
+            'host/chromeos/message_box.h',
             'host/chromium_port_allocator_factory.cc',
             'host/chromium_port_allocator_factory.h',
             'host/chromoting_host.cc',
@@ -78,6 +90,8 @@
             'host/client_session.h',
             'host/client_session_control.h',
             'host/clipboard.h',
+            'host/clipboard_aura.cc',
+            'host/clipboard_aura.h',
             'host/clipboard_mac.mm',
             'host/clipboard_win.cc',
             'host/clipboard_x11.cc',
@@ -88,6 +102,7 @@
             'host/constants_mac.h',
             'host/continue_window.cc',
             'host/continue_window.h',
+            'host/continue_window_chromeos.cc',
             'host/continue_window_linux.cc',
             'host/continue_window_mac.mm',
             'host/continue_window_win.cc',
@@ -114,6 +129,7 @@
             'host/desktop_shape_tracker_mac.cc',
             'host/desktop_shape_tracker_win.cc',
             'host/desktop_shape_tracker_x11.cc',
+            'host/disconnect_window_chromeos.cc',
             'host/disconnect_window_linux.cc',
             'host/disconnect_window_mac.h',
             'host/disconnect_window_mac.mm',
@@ -217,6 +233,7 @@
             'host/pin_hash.h',
             'host/policy_hack/policy_watcher.cc',
             'host/policy_hack/policy_watcher.h',
+            'host/policy_hack/policy_watcher_chromeos.cc',
             'host/policy_hack/policy_watcher_linux.cc',
             'host/policy_hack/policy_watcher_mac.mm',
             'host/policy_hack/policy_watcher_win.cc',
@@ -287,8 +304,6 @@
           'conditions': [
             ['OS=="linux"', {
               'dependencies': [
-                # Always use GTK on Linux, even for Aura builds.
-                '../build/linux/system.gyp:gtk',
                 '../build/linux/system.gyp:x11',
                 '../build/linux/system.gyp:xext',
                 '../build/linux/system.gyp:xfixes',
@@ -302,9 +317,66 @@
                 ],
               },
             }],
+            ['OS=="linux" and chromeos==0 and use_ozone==0', {
+              'dependencies' : [
+                # Always use GTK on Linux, even for Aura builds.
+                '../build/linux/system.gyp:gtk',
+              ],
+            }],
+            ['chromeos==1', {
+              'dependencies' : [
+                '../cc/cc.gyp:cc',
+                '../components/components.gyp:policy_component_common',
+                '../content/content.gyp:content',
+                '../ppapi/ppapi_internal.gyp:ppapi_host',
+                '../skia/skia.gyp:skia',
+                '../ui/aura/aura.gyp:aura',
+                '../ui/compositor/compositor.gyp:compositor',
+                '../ui/events/events.gyp:events',
+                '../ui/views/views.gyp:views',
+              ],
+              'include_dirs': [
+                '../third_party/skia/include/utils',
+              ],
+              'sources!' : [
+                'host/clipboard_x11.cc',
+                'host/continue_window_linux.cc',
+                'host/disconnect_window.cc',
+                'host/disconnect_window_linux.cc',
+                'host/policy_hack/policy_watcher_linux.cc',
+                'host/remoting_me2me_host.cc',
+              ]
+            }, {  # chromeos==0
+               'sources!' : [
+                 'host/chromeos/aura_desktop_capturer.cc',
+                 'host/chromeos/aura_desktop_capturer.h',
+                 'host/chromeos/message_box.cc',
+                 'host/chromeos/message_box.h',
+                 'host/clipboard_aura.cc',
+                 'host/clipboard_aura.h',
+                 'host/continue_window_chromeos.cc',
+                 'host/disconnect_window_chromeos.cc',
+                 'host/policy_hack/policy_watcher_chromeos.cc',
+               ],
+            }],
             ['OS=="mac"', {
               'dependencies': [
                 '../third_party/google_toolbox_for_mac/google_toolbox_for_mac.gyp:google_toolbox_for_mac',
+              ],
+              'variables': {
+                # Include internal_mac-inl.h only if it exists.
+                'use_remoting_macosx_internal%':
+                  '<!(python -c "import os; print 1 if os.path.exists(\'tools/internal/internal_mac-inl.h\') else 0")'
+              },
+              'conditions': [
+                ['use_remoting_macosx_internal==1', {
+                  'sources': [
+                    'internal/internal_mac-inl.h'
+                  ],
+                  'defines': [
+                    'USE_REMOTING_MACOSX_INTERNAL'
+                  ]
+                }]
               ],
               'link_settings': {
                 'libraries': [
@@ -363,14 +435,23 @@
                 'message': 'Running message compiler on <(RULE_INPUT_PATH)',
               }],
             }],
+            ['use_ash==1', {
+              'dependencies': [
+                 '../ash/ash.gyp:ash',
+              ],
+            }],
             ['enable_webrtc==1', {
               'dependencies': [
                 '../third_party/webrtc/modules/modules.gyp:desktop_capture',
                 '../third_party/libjingle/libjingle.gyp:libpeerconnection',
               ],
               'sources': [
+                'host/cast_extension.cc',
+                'host/cast_extension.h',
+                'host/cast_extension_session.cc',
+                'host/cast_extension_session.h',
                 'host/cast_video_capturer_adapter.cc',
-                'host/cast_video_capturer_adapter.h'
+                'host/cast_video_capturer_adapter.h',
               ],
             }],
           ],
@@ -384,48 +465,16 @@
             '../base/base.gyp:base',
           ],
           'sources': [
-            'host/native_messaging/native_messaging_channel.cc',
-            'host/native_messaging/native_messaging_channel.h',
+            'host/native_messaging/pipe_messaging_channel.cc',
+            'host/native_messaging/pipe_messaging_channel.h',
+            'host/native_messaging/native_messaging_pipe.cc',
+            'host/native_messaging/native_messaging_pipe.h',
             'host/native_messaging/native_messaging_reader.cc',
             'host/native_messaging/native_messaging_reader.h',
             'host/native_messaging/native_messaging_writer.cc',
             'host/native_messaging/native_messaging_writer.h',
           ],
         },  # end of target 'remoting_native_messaging_base'
-
-        {
-          'target_name': 'remoting_me2me_host_static',
-          'type': 'static_library',
-          'variables': { 'enable_wexit_time_destructors': 1, },
-          'dependencies': [
-            '../base/base.gyp:base',
-            '../base/base.gyp:base_i18n',
-            '../net/net.gyp:net',
-            '../third_party/webrtc/modules/modules.gyp:desktop_capture',
-            'remoting_base',
-            'remoting_breakpad',
-            'remoting_host',
-            'remoting_protocol',
-          ],
-          'defines': [
-            'VERSION=<(version_full)',
-          ],
-          'sources': [
-            'host/curtain_mode.h',
-            'host/curtain_mode_linux.cc',
-            'host/curtain_mode_mac.cc',
-            'host/curtain_mode_win.cc',
-            'host/posix/signal_handler.cc',
-            'host/posix/signal_handler.h',
-          ],
-          'conditions': [
-            ['os_posix != 1', {
-              'sources/': [
-                ['exclude', '^host/posix/'],
-              ],
-            }],
-          ],  # end of 'conditions'
-        },  # end of target 'remoting_me2me_host_static'
 
         {
           'target_name': 'remoting_host_setup_base',
@@ -476,30 +525,6 @@
             }],
           ],
         },  # end of target 'remoting_host_setup_base'
-
-        {
-          'target_name': 'remoting_it2me_host_static',
-          'type': 'static_library',
-          'variables': { 'enable_wexit_time_destructors': 1, },
-          'dependencies': [
-            '../base/base.gyp:base_i18n',
-            '../net/net.gyp:net',
-            'remoting_base',
-            'remoting_host',
-            'remoting_infoplist_strings',
-            'remoting_protocol',
-            'remoting_resources',
-          ],
-          'defines': [
-            'VERSION=<(version_full)',
-          ],
-          'sources': [
-            'host/it2me/it2me_host.cc',
-            'host/it2me/it2me_host.h',
-            'host/it2me/it2me_native_messaging_host.cc',
-            'host/it2me/it2me_native_messaging_host.h',
-          ],
-        },  # end of target 'remoting_it2me_host_static'
 
         # Generates native messaging manifest files.
         {
@@ -557,7 +582,25 @@
             ],
           }],
         },  # end of target 'remoting_native_messaging_manifests'
-
+        {
+          'target_name': 'remoting_start_host',
+          'type': 'executable',
+          'dependencies': [
+            'remoting_host_setup_base',
+          ],
+          'sources': [
+            'host/setup/host_starter.cc',
+            'host/setup/host_starter.h',
+            'host/setup/start_host.cc',
+          ],
+          'conditions': [
+            ['OS=="linux" and use_allocator!="none"', {
+              'dependencies': [
+                '../base/allocator/allocator.gyp:allocator',
+              ],
+            }],
+          ],
+        },  # end of target 'remoting_start_host'
         {
           'target_name': 'remoting_infoplist_strings',
           'type': 'none',
@@ -595,7 +638,73 @@
       ],  # end of 'targets'
     }],  # 'enable_remoting_host==1'
 
-    ['OS!="win" and enable_remoting_host==1', {
+    ['enable_me2me_host==1', {
+      'targets': [
+        {
+          'target_name': 'remoting_me2me_host_static',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'dependencies': [
+            '../base/base.gyp:base',
+            '../base/base.gyp:base_i18n',
+            '../net/net.gyp:net',
+            '../third_party/webrtc/modules/modules.gyp:desktop_capture',
+            'remoting_base',
+            'remoting_breakpad',
+            'remoting_host',
+            'remoting_protocol',
+          ],
+          'defines': [
+            'VERSION=<(version_full)',
+          ],
+          'sources': [
+            'host/curtain_mode.h',
+            'host/curtain_mode_linux.cc',
+            'host/curtain_mode_mac.cc',
+            'host/curtain_mode_win.cc',
+            'host/posix/signal_handler.cc',
+            'host/posix/signal_handler.h',
+          ],
+          'conditions': [
+            ['os_posix != 1', {
+              'sources/': [
+                ['exclude', '^host/posix/'],
+              ],
+            }],
+          ],  # end of 'conditions'
+        },  # end of target 'remoting_me2me_host_static'
+      ] # end of targets
+    }], # end of enable_me2me_host==1
+
+    ['enable_it2me_host==1', {
+      'targets': [
+        {
+          'target_name': 'remoting_it2me_host_static',
+          'type': 'static_library',
+          'variables': { 'enable_wexit_time_destructors': 1, },
+          'dependencies': [
+            '../base/base.gyp:base_i18n',
+            '../net/net.gyp:net',
+            'remoting_base',
+            'remoting_host',
+            'remoting_infoplist_strings',
+            'remoting_protocol',
+            'remoting_resources',
+          ],
+          'defines': [
+            'VERSION=<(version_full)',
+          ],
+          'sources': [
+            'host/it2me/it2me_host.cc',
+            'host/it2me/it2me_host.h',
+            'host/it2me/it2me_native_messaging_host.cc',
+            'host/it2me/it2me_native_messaging_host.h',
+          ],
+        },  # end of target 'remoting_it2me_host_static'
+      ] # end of targets
+    }], # end of 'enable_it2me_host==1'
+
+    ['OS!="win" and enable_me2me_host==1', {
       'targets': [
         {
           'target_name': 'remoting_me2me_host',
@@ -773,6 +882,11 @@
             }],  # OS=mac
           ],
         },  # end of target 'remoting_me2me_native_messaging_host'
+      ], # targets
+    }], # end of OS!="win" and enable_me2me_host==1
+
+    ['OS!="win" and enable_it2me_host==1 and chromeos==0', {
+      'targets': [
         {
           'target_name': 'remoting_it2me_native_messaging_host',
           'type': 'executable',
@@ -796,7 +910,7 @@
             'host/it2me/it2me_native_messaging_host_main.h',
           ],
           'conditions': [
-            ['OS=="linux"', {
+            ['OS=="linux" and chromeos==0 and use_ozone==0', {
               'dependencies': [
                 # Always use GTK on Linux, even for Aura builds.
                 '../build/linux/system.gyp:gtk',
@@ -868,7 +982,7 @@
           ],
         },  # end of target 'remoting_it2me_native_messaging_host'
       ],  # end of 'targets'
-    }],  # OS!="win"
+    }],  # # end of OS!="win" and enable_it2me_host==1
 
   ],  # end of 'conditions'
 }

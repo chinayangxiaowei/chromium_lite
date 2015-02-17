@@ -14,7 +14,6 @@ namespace chrome {
 
 #if defined(OS_CHROMEOS)
 const char kCrosScheme[] = "cros";
-const char kDriveScheme[] = "drive";
 #endif
 
 // Add Chrome UI URLs as necessary, in alphabetical order.
@@ -69,7 +68,6 @@ const char kChromeUINetInternalsURL[] = "chrome://net-internals/";
 const char kChromeUINewProfile[] = "chrome://newprofile/";
 const char kChromeUINewTabURL[] = "chrome://newtab/";
 const char kChromeUIOmniboxURL[] = "chrome://omnibox/";
-const char kChromeUIPerformanceMonitorURL[] = "chrome://performance/";
 const char kChromeUIPluginsURL[] = "chrome://plugins/";
 const char kChromeUIPolicyURL[] = "chrome://policy/";
 const char kChromeUIProfileSigninConfirmationURL[] =
@@ -97,10 +95,10 @@ const char kChromeUIVersionURL[] = "chrome://version/";
 const char kChromeUIVoiceSearchURL[] = "chrome://voicesearch/";
 
 #if defined(OS_ANDROID)
+const char kChromeUINativeScheme[] = "chrome-native";
 const char kChromeUINativeNewTabURL[] = "chrome-native://newtab/";
 const char kChromeUINativeBookmarksURL[] = "chrome-native://bookmarks/";
 const char kChromeUINativeRecentTabsURL[] = "chrome-native://recent-tabs/";
-const char kChromeUIWelcomeURL[] = "chrome://welcome/";
 #endif
 
 #if defined(OS_CHROMEOS)
@@ -213,7 +211,6 @@ const char kChromeUINewTabHost[] = "newtab";
 const char kChromeUIOmniboxHost[] = "omnibox";
 const char kChromeUIPasswordManagerInternalsHost[] =
     "password-manager-internals";
-const char kChromeUIPerformanceMonitorHost[] = "performance";
 const char kChromeUIPluginsHost[] = "plugins";
 const char kChromeUIComponentsHost[] = "components";
 const char kChromeUIPolicyHost[] = "policy";
@@ -221,7 +218,6 @@ const char kChromeUIProfileSigninConfirmationHost[] =
     "profile-signin-confirmation";
 const char kChromeUIUserManagerHost[] = "user-manager";
 const char kChromeUIPredictorsHost[] = "predictors";
-const char kChromeUIPrintHost[] = "print";
 const char kChromeUIProfilerHost[] = "profiler";
 const char kChromeUIQuotaInternalsHost[] = "quota-internals";
 const char kChromeUIQuitHost[] = "quit";
@@ -259,9 +255,9 @@ const char kChromeUIWorkersHost[] = "workers";
 const char kChromeUIScreenshotPath[] = "screenshots";
 const char kChromeUIThemePath[] = "theme";
 
-#if defined(OS_ANDROID)
-const char kChromeUIWelcomeHost[] = "welcome";
-#endif
+#if defined(ENABLE_PRINT_PREVIEW)
+const char kChromeUIPrintHost[] = "print";
+#endif  // ENABLE_PRINT_PREVIEW
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)
 const char kChromeUILinuxProxyConfigHost[] = "linux-proxy-config";
@@ -310,6 +306,12 @@ const char kEULAPathFormat[] = "/usr/share/chromeos-assets/eula/%s/eula.html";
 const char kOemEulaURLPath[] = "oem";
 const char kOnlineEulaURLPath[] =
     "https://www.google.com/intl/%s/chrome/eula_text.html";
+
+const char kChromeOSCreditsPath[] =
+    "/opt/google/chrome/resources/about_os_credits.html";
+
+const char kChromeOSAssetHost[] = "chromeos-asset";
+const char kChromeOSAssetPath[] = "/usr/share/chromeos-assets/";
 #endif
 
 #if (defined(OS_LINUX) && defined(TOOLKIT_VIEWS)) || defined(USE_AURA)
@@ -556,9 +558,6 @@ const char kRemoveNonCWSExtensionURL[] =
     "https://support.google.com/chrome/answer/2811969?"
     "p=ui_remove_non_cws_extensions&rd=1";
 
-const char kCorruptExtensionURL[] =
-    "https://support.google.com/chrome/?p=settings_corrupt_extension";
-
 const char kNotificationsHelpURL[] =
     "https://support.google.com/chrome/?p=ui_notifications";
 
@@ -606,9 +605,7 @@ const char* const kChromeHostURLs[] = {
   content::kChromeUIServiceWorkerInternalsHost,
   content::kChromeUITracingHost,
   content::kChromeUIWebRTCInternalsHost,
-#if defined(OS_ANDROID)
-  kChromeUIWelcomeHost,
-#else
+#if !defined(OS_ANDROID)
   kChromeUIAppLauncherPageHost,
   kChromeUIBookmarksHost,
   kChromeUIDownloadsHost,
@@ -659,7 +656,7 @@ const char* const kChromeHostURLs[] = {
 #if defined(ENABLE_EXTENSIONS)
   kChromeUIExtensionsHost,
 #endif
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_PRINT_PREVIEW)
   kChromeUIPrintHost,
 #endif
 #if defined(ENABLE_SERVICE_DISCOVERY)
@@ -723,6 +720,6 @@ const char kMac32BitDeprecationURL[] =
 #endif
 
 const char kEasyUnlockLearnMoreUrl[] =
-    "https://support.google.com/chromebook/answer/6070209";
+    "https://support.google.com/chromebook/?p=easy_unlock";
 
 }  // namespace chrome

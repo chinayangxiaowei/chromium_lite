@@ -7,7 +7,7 @@
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/appcache/appcache_entry.h"
@@ -153,8 +153,8 @@ const IndexInfo kIndexes[] = {
     true },
 };
 
-const int kTableCount = ARRAYSIZE_UNSAFE(kTables);
-const int kIndexCount = ARRAYSIZE_UNSAFE(kIndexes);
+const int kTableCount = arraysize(kTables);
+const int kIndexCount = arraysize(kIndexes);
 
 bool CreateTable(sql::Connection* db, const TableInfo& info) {
   std::string sql("CREATE TABLE ");

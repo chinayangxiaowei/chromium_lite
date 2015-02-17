@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "apps/pref_names.h"
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
@@ -16,11 +15,13 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/app_list/app_list_view_delegate.h"
 #include "chrome/browser/ui/app_list/profile_loader.h"
 #include "chrome/browser/ui/app_list/profile_store.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "ui/app_list/app_list_model.h"
 
 namespace {
 
@@ -86,13 +87,12 @@ class ProfileStoreImpl : public ProfileStore {
         weak_factory_(this) {
   }
 
-  virtual void AddProfileObserver(ProfileInfoCacheObserver* observer) OVERRIDE {
+  void AddProfileObserver(ProfileInfoCacheObserver* observer) override {
     profile_manager_->GetProfileInfoCache().AddObserver(observer);
   }
 
-  virtual void LoadProfileAsync(
-      const base::FilePath& path,
-      base::Callback<void(Profile*)> callback) OVERRIDE {
+  void LoadProfileAsync(const base::FilePath& path,
+                        base::Callback<void(Profile*)> callback) override {
     profile_manager_->CreateProfileAsync(
         path,
         base::Bind(&ProfileStoreImpl::OnProfileCreated,
@@ -122,16 +122,15 @@ class ProfileStoreImpl : public ProfileStore {
     }
   }
 
-  virtual Profile* GetProfileByPath(const base::FilePath& path) OVERRIDE {
+  Profile* GetProfileByPath(const base::FilePath& path) override {
     return profile_manager_->GetProfileByPath(path);
   }
 
-  virtual base::FilePath GetUserDataDir() OVERRIDE {
+  base::FilePath GetUserDataDir() override {
     return profile_manager_->user_data_dir();
   }
 
-  virtual bool IsProfileSupervised(
-      const base::FilePath& profile_path) OVERRIDE {
+  bool IsProfileSupervised(const base::FilePath& profile_path) override {
     ProfileInfoCache& profile_info =
         g_browser_process->profile_manager()->GetProfileInfoCache();
     size_t profile_index = profile_info.GetIndexOfProfileWithPath(profile_path);
@@ -230,10 +229,10 @@ void AppListServiceImpl::SendAppListStats() {
 AppListServiceImpl::AppListServiceImpl()
     : profile_store_(
           new ProfileStoreImpl(g_browser_process->profile_manager())),
-      weak_factory_(this),
       command_line_(*CommandLine::ForCurrentProcess()),
       local_state_(g_browser_process->local_state()),
-      profile_loader_(new ProfileLoader(profile_store_.get())) {
+      profile_loader_(new ProfileLoader(profile_store_.get())),
+      weak_factory_(this) {
   profile_store_->AddProfileObserver(this);
 }
 
@@ -241,14 +240,21 @@ AppListServiceImpl::AppListServiceImpl(const CommandLine& command_line,
                                        PrefService* local_state,
                                        scoped_ptr<ProfileStore> profile_store)
     : profile_store_(profile_store.Pass()),
-      weak_factory_(this),
       command_line_(command_line),
       local_state_(local_state),
-      profile_loader_(new ProfileLoader(profile_store_.get())) {
+      profile_loader_(new ProfileLoader(profile_store_.get())),
+      weak_factory_(this) {
   profile_store_->AddProfileObserver(this);
 }
 
 AppListServiceImpl::~AppListServiceImpl() {}
+
+AppListViewDelegate* AppListServiceImpl::GetViewDelegate(Profile* profile) {
+  if (!view_delegate_)
+    view_delegate_.reset(new AppListViewDelegate(GetControllerDelegate()));
+  view_delegate_->SetProfile(profile);
+  return view_delegate_.get();
+}
 
 void AppListServiceImpl::SetAppListNextPaintCallback(void (*callback)()) {}
 
@@ -284,17 +290,36 @@ void AppListServiceImpl::SetProfilePath(const base::FilePath& profile_path) {
 
 void AppListServiceImpl::CreateShortcut() {}
 
-// We need to watch for profile removal to keep kAppListProfile updated.
 void AppListServiceImpl::OnProfileWillBeRemoved(
     const base::FilePath& profile_path) {
-  // If the profile the app list uses just got deleted, reset it to the last
-  // used profile.
+  // We need to watch for profile removal to keep kAppListProfile updated, for
+  // the case that the deleted profile is being used by the app list.
   std::string app_list_last_profile = local_state_->GetString(
       prefs::kAppListProfile);
-  if (profile_path.BaseName().MaybeAsASCII() == app_list_last_profile) {
-    local_state_->SetString(prefs::kAppListProfile,
-        local_state_->GetString(prefs::kProfileLastUsed));
-  }
+  if (profile_path.BaseName().MaybeAsASCII() != app_list_last_profile)
+    return;
+
+  // Switch the app list over to a valid profile.
+  // Before ProfileInfoCache::DeleteProfileFromCache() calls this function,
+  // ProfileManager::ScheduleProfileForDeletion() will have checked to see if
+  // the deleted profile was also "last used", and updated that setting with
+  // something valid.
+  local_state_->SetString(prefs::kAppListProfile,
+                          local_state_->GetString(prefs::kProfileLastUsed));
+
+  // If the app list was never shown, there won't be a |view_delegate_| yet.
+  if (!view_delegate_)
+    return;
+
+  // The Chrome AppListViewDelegate now needs its profile cleared, because:
+  //  1. it has many references to the profile and can't be profile-keyed, and
+  //  2. the last used profile might not be loaded yet.
+  //    - this loading is sometimes done by the ProfileManager asynchronously,
+  //      so the app list can't just switch to that.
+  // Only Mac supports showing the app list with a NULL profile, so tear down
+  // the view.
+  DestroyAppList();
+  view_delegate_->SetProfile(NULL);
 }
 
 void AppListServiceImpl::Show() {
@@ -304,14 +329,36 @@ void AppListServiceImpl::Show() {
                  weak_factory_.GetWeakPtr()));
 }
 
-void AppListServiceImpl::AutoShowForProfile(Profile* requested_profile) {
-  if (local_state_->GetInt64(prefs::kAppListEnableTime) != 0) {
-    // User has not yet discovered the app launcher. Update the enable method to
-    // indicate this. It will then be recorded in UMA.
-    local_state_->SetInteger(prefs::kAppListEnableMethod,
-                             ENABLE_SHOWN_UNDISCOVERED);
+void AppListServiceImpl::ShowForVoiceSearch(Profile* profile) {
+  ShowForProfile(profile);
+  view_delegate_->ToggleSpeechRecognition();
+}
+
+void AppListServiceImpl::ShowForAppInstall(Profile* profile,
+                                           const std::string& extension_id,
+                                           bool start_discovery_tracking) {
+  if (start_discovery_tracking) {
+    CreateForProfile(profile);
+  } else {
+    // Check if the app launcher has not yet been shown ever. Since this will
+    // show it, if discoverability UMA hasn't yet been recorded, it needs to be
+    // counted as undiscovered.
+    if (local_state_->GetInt64(prefs::kAppListEnableTime) != 0) {
+      local_state_->SetInteger(prefs::kAppListEnableMethod,
+                               ENABLE_SHOWN_UNDISCOVERED);
+    }
+    ShowForProfile(profile);
   }
-  ShowForProfile(requested_profile);
+  if (extension_id.empty())
+    return;  // Nothing to highlight. Only used in tests.
+
+  // The only way an install can happen is with the profile already loaded. So,
+  // ShowForProfile() can never be asynchronous, and the model is guaranteed to
+  // exist after a show.
+  DCHECK(view_delegate_->GetModel());
+  view_delegate_->GetModel()
+      ->top_level_item_list()
+      ->HighlightItemInstalledFromUI(extension_id);
 }
 
 void AppListServiceImpl::EnableAppList(Profile* initial_profile,

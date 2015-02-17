@@ -4,9 +4,9 @@
 
 #include "content/shell/renderer/test_runner/mock_web_midi_accessor.h"
 
-#include "content/shell/renderer/test_runner/WebTestDelegate.h"
 #include "content/shell/renderer/test_runner/test_interfaces.h"
 #include "content/shell/renderer/test_runner/test_runner.h"
+#include "content/shell/renderer/test_runner/web_test_delegate.h"
 #include "content/shell/renderer/test_runner/web_test_runner.h"
 #include "third_party/WebKit/public/platform/WebMIDIAccessorClient.h"
 
@@ -23,7 +23,7 @@ class DidStartSessionTask : public WebMethodTask<MockWebMIDIAccessor> {
         client_(client),
         result_(result) {}
 
-  virtual void runIfValid() OVERRIDE {
+  void RunIfValid() override {
     client_->didStartSession(result_, "InvalidStateError", "");
   }
 
@@ -46,15 +46,18 @@ MockWebMIDIAccessor::~MockWebMIDIAccessor() {
 
 void MockWebMIDIAccessor::startSession() {
   // Add a mock input and output port.
+  const bool active = true;
   client_->didAddInputPort("MockInputID",
                            "MockInputManufacturer",
                            "MockInputName",
-                           "MockInputVersion");
+                           "MockInputVersion",
+                           active);
   client_->didAddOutputPort("MockOutputID",
                             "MockOutputManufacturer",
                             "MockOutputName",
-                            "MockOutputVersion");
-  interfaces_->GetDelegate()->postTask(new DidStartSessionTask(
+                            "MockOutputVersion",
+                            active);
+  interfaces_->GetDelegate()->PostTask(new DidStartSessionTask(
       this, client_, interfaces_->GetTestRunner()->midiAccessorResult()));
 }
 

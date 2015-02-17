@@ -4,7 +4,7 @@
 
 #include "ui/app_list/views/top_icon_animation_view.h"
 
-#include "base/message_loop/message_loop_proxy.h"
+#include "base/thread_task_runner_handle.h"
 #include "ui/app_list/app_list_constants.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -49,12 +49,13 @@ void TopIconAnimationView::TransformView() {
   set_owned_by_client();
 
   // Transform used for scaling down the icon and move it back inside to the
-  // original folder icon.
-  const float kIconTransformScale = 0.33333f;
+  // original folder icon. The transform's origin is this view's origin.
   gfx::Transform transform;
-  transform.Translate(scaled_rect_.x() - layer()->bounds().x(),
-                      scaled_rect_.y() - layer()->bounds().y());
-  transform.Scale(kIconTransformScale, kIconTransformScale);
+  transform.Translate(scaled_rect_.x() - bounds().x(),
+                      scaled_rect_.y() - bounds().y());
+  transform.Scale(
+      static_cast<double>(scaled_rect_.width()) / bounds().width(),
+      static_cast<double>(scaled_rect_.height()) / bounds().height());
 
   if (open_folder_) {
     // Transform to a scaled down icon inside the original folder icon.
@@ -84,7 +85,7 @@ void TopIconAnimationView::OnImplicitAnimationsCompleted() {
   FOR_EACH_OBSERVER(TopIconAnimationObserver,
                     observers_,
                     OnTopIconAnimationsComplete());
-  base::MessageLoopProxy::current()->DeleteSoon(FROM_HERE, this);
+  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
 }
 
 bool TopIconAnimationView::RequiresNotificationWhenAnimatorDestroyed() const {

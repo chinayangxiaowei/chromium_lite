@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
@@ -39,17 +39,15 @@ class MockURLRequestContextGetter : public net::URLRequestContextGetter {
       : context_(context), message_loop_proxy_(message_loop_proxy) {
   }
 
-  virtual net::URLRequestContext* GetURLRequestContext() OVERRIDE {
-    return context_;
-  }
+  net::URLRequestContext* GetURLRequestContext() override { return context_; }
 
-  virtual scoped_refptr<base::SingleThreadTaskRunner>
-      GetNetworkTaskRunner() const OVERRIDE {
+  scoped_refptr<base::SingleThreadTaskRunner> GetNetworkTaskRunner()
+      const override {
     return message_loop_proxy_;
   }
 
  protected:
-  virtual ~MockURLRequestContextGetter() {}
+  ~MockURLRequestContextGetter() override {}
 
  private:
   net::URLRequestContext* context_;

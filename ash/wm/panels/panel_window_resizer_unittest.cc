@@ -35,9 +35,9 @@ namespace ash {
 class PanelWindowResizerTest : public test::AshTestBase {
  public:
   PanelWindowResizerTest() {}
-  virtual ~PanelWindowResizerTest() {}
+  ~PanelWindowResizerTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     AshTestBase::SetUp();
     UpdateDisplay("600x400");
     test::ShellTestApi test_api(Shell::GetInstance());
@@ -45,9 +45,7 @@ class PanelWindowResizerTest : public test::AshTestBase {
     shelf_delegate_ = test::TestShelfDelegate::instance();
   }
 
-  virtual void TearDown() OVERRIDE {
-    AshTestBase::TearDown();
-  }
+  void TearDown() override { AshTestBase::TearDown(); }
 
  protected:
   gfx::Point CalculateDragPoint(const WindowResizer& resizer,
@@ -191,7 +189,7 @@ class PanelWindowResizerTextDirectionTest
   PanelWindowResizerTextDirectionTest() : is_rtl_(GetParam()) {}
   virtual ~PanelWindowResizerTextDirectionTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     original_locale = l10n_util::GetApplicationLocale(std::string());
     if (is_rtl_)
       base::i18n::SetICUDefaultLocale("he");
@@ -199,7 +197,7 @@ class PanelWindowResizerTextDirectionTest
     ASSERT_EQ(is_rtl_, base::i18n::IsRTL());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     if (is_rtl_)
       base::i18n::SetICUDefaultLocale(original_locale);
     PanelWindowResizerTest::TearDown();
@@ -271,6 +269,38 @@ TEST_F(PanelWindowResizerTest, PanelDetachReattachTop) {
   scoped_ptr<aura::Window> window(
       CreatePanelWindow(gfx::Point(0, 0)));
   DetachReattachTest(window.get(), 0, 1);
+}
+
+// Tests that a drag continues when the shelf is hidden. This occurs as part of
+// the animation when switching profiles. http://crbug.com/393047.
+TEST_F(PanelWindowResizerTest, DetachThenHideShelf) {
+  if (!SupportsHostWindowResize())
+    return;
+  scoped_ptr<aura::Window> window(
+      CreatePanelWindow(gfx::Point(0, 0)));
+  wm::WindowState* state = wm::GetWindowState(window.get());
+  gfx::Rect expected_bounds = window->GetBoundsInScreen();
+  expected_bounds.set_y(expected_bounds.y() - 100);
+  DragStart(window.get());
+  DragMove(0, -100);
+  EXPECT_FALSE(state->IsMinimized());
+
+  // Hide the shelf. This minimizes all attached windows but should ignore
+  // the dragged window.
+  ShelfLayoutManager* shelf = RootWindowController::ForWindow(window.get())->
+      shelf()->shelf_layout_manager();
+  shelf->SetAutoHideBehavior(SHELF_AUTO_HIDE_ALWAYS_HIDDEN);
+  shelf->UpdateVisibilityState();
+  RunAllPendingInMessageLoop();
+  EXPECT_FALSE(state->IsMinimized());
+  EXPECT_EQ(kShellWindowId_PanelContainer, window->parent()->id());
+  DragEnd();
+
+  // When the drag ends the window should be detached and placed where it was
+  // dragged to.
+  EXPECT_EQ(kShellWindowId_DefaultContainer, window->parent()->id());
+  EXPECT_FALSE(state->IsMinimized());
+  EXPECT_EQ(expected_bounds.ToString(), window->GetBoundsInScreen().ToString());
 }
 
 TEST_F(PanelWindowResizerTest, PanelDetachReattachMultipleDisplays) {

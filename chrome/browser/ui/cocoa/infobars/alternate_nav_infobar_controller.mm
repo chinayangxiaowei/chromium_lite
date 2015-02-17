@@ -6,10 +6,10 @@
 
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
-#import "chrome/browser/ui/cocoa/hyperlink_text_view.h"
 #include "chrome/browser/ui/cocoa/infobars/infobar_cocoa.h"
 #include "chrome/browser/ui/omnibox/alternate_nav_infobar_delegate.h"
 #import "ui/base/cocoa/cocoa_base_utils.h"
+#import "ui/base/cocoa/controls/hyperlink_text_view.h"
 #include "ui/base/window_open_disposition.h"
 
 @implementation AlternateNavInfoBarController
@@ -60,10 +60,9 @@
 // static
 scoped_ptr<infobars::InfoBar> AlternateNavInfoBarDelegate::CreateInfoBar(
     scoped_ptr<AlternateNavInfoBarDelegate> delegate) {
-  scoped_ptr<InfoBarCocoa> infobar(
-      new InfoBarCocoa(delegate.PassAs<infobars::InfoBarDelegate>()));
+  scoped_ptr<InfoBarCocoa> infobar(new InfoBarCocoa(delegate.Pass()));
   base::scoped_nsobject<AlternateNavInfoBarController> controller(
       [[AlternateNavInfoBarController alloc] initWithInfoBar:infobar.get()]);
   infobar->set_controller(controller);
-  return infobar.PassAs<infobars::InfoBar>();
+  return infobar.Pass();
 }

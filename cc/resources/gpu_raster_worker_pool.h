@@ -8,6 +8,7 @@
 #include "base/memory/weak_ptr.h"
 #include "cc/resources/raster_worker_pool.h"
 #include "cc/resources/rasterizer.h"
+#include "third_party/skia/include/core/SkMultiPictureDraw.h"
 
 namespace cc {
 class ContextProvider;
@@ -17,33 +18,35 @@ class CC_EXPORT GpuRasterWorkerPool : public RasterWorkerPool,
                                       public Rasterizer,
                                       public RasterizerTaskClient {
  public:
-  virtual ~GpuRasterWorkerPool();
+  ~GpuRasterWorkerPool() override;
 
   static scoped_ptr<RasterWorkerPool> Create(
       base::SequencedTaskRunner* task_runner,
       ContextProvider* context_provider,
-      ResourceProvider* resource_provider);
+      ResourceProvider* resource_provider,
+      bool use_distance_field_text);
 
   // Overridden from RasterWorkerPool:
-  virtual Rasterizer* AsRasterizer() OVERRIDE;
+  Rasterizer* AsRasterizer() override;
 
   // Overridden from Rasterizer:
-  virtual void SetClient(RasterizerClient* client) OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
-  virtual void ScheduleTasks(RasterTaskQueue* queue) OVERRIDE;
-  virtual void CheckForCompletedTasks() OVERRIDE;
+  void SetClient(RasterizerClient* client) override;
+  void Shutdown() override;
+  void ScheduleTasks(RasterTaskQueue* queue) override;
+  void CheckForCompletedTasks() override;
 
   // Overridden from RasterizerTaskClient:
-  virtual SkCanvas* AcquireCanvasForRaster(RasterTask* task) OVERRIDE;
-  virtual void ReleaseCanvasForRaster(RasterTask* task) OVERRIDE;
+  scoped_ptr<RasterBuffer> AcquireBufferForRaster(
+      const Resource* resource) override;
+  void ReleaseBufferForRaster(scoped_ptr<RasterBuffer> buffer) override;
 
  private:
   GpuRasterWorkerPool(base::SequencedTaskRunner* task_runner,
                       ContextProvider* context_provider,
-                      ResourceProvider* resource_provider);
+                      ResourceProvider* resource_provider,
+                      bool use_distance_field_text);
 
-  void OnRasterFinished();
-  void OnRasterRequiredForActivationFinished();
+  void OnRasterFinished(TaskSet task_set);
   void ScheduleRunTasksOnOriginThread();
   void RunTasksOnOriginThread();
   void RunTaskOnOriginThread(RasterizerTask* task);
@@ -54,21 +57,21 @@ class CC_EXPORT GpuRasterWorkerPool : public RasterWorkerPool,
   RasterizerClient* client_;
   ContextProvider* context_provider_;
   ResourceProvider* resource_provider_;
+  SkMultiPictureDraw multi_picture_draw_;
 
   bool run_tasks_on_origin_thread_pending_;
+  bool use_distance_field_text_;
 
-  bool raster_tasks_pending_;
-  bool raster_tasks_required_for_activation_pending_;
+  TaskSetCollection raster_pending_;
 
-  base::WeakPtrFactory<GpuRasterWorkerPool> raster_finished_weak_ptr_factory_;
-
-  scoped_refptr<RasterizerTask> raster_finished_task_;
-  scoped_refptr<RasterizerTask> raster_required_for_activation_finished_task_;
+  scoped_refptr<RasterizerTask> raster_finished_tasks_[kNumberOfTaskSets];
 
   // Task graph used when scheduling tasks and vector used to gather
   // completed tasks.
   TaskGraph graph_;
   Task::Vector completed_tasks_;
+
+  base::WeakPtrFactory<GpuRasterWorkerPool> raster_finished_weak_ptr_factory_;
 
   base::WeakPtrFactory<GpuRasterWorkerPool> weak_ptr_factory_;
 

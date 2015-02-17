@@ -8,8 +8,8 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.view.View;
 import android.widget.AdapterView;
+import android.widget.PopupWindow;
 
-import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.ui.DropdownAdapter;
 import org.chromium.ui.DropdownItem;
 import org.chromium.ui.DropdownPopupWindow;
@@ -23,19 +23,14 @@ import java.util.List;
 /**
  * The Autofill suggestion popup that lists relevant suggestions.
  */
-public class AutofillPopup extends DropdownPopupWindow implements AdapterView.OnItemClickListener {
+public class AutofillPopup extends DropdownPopupWindow implements AdapterView.OnItemClickListener,
+        PopupWindow.OnDismissListener {
 
     /**
-     * Constants defining types of Autofill suggestion entries.
+     * The constant used to specify a separator in a list of Autofill suggestions.
      * Has to be kept in sync with enum in WebAutofillClient.h
-     *
-     * Not supported: MenuItemIDWarningMessage, MenuItemIDClearForm, and
-     * MenuItemIDAutofillOptions.
      */
-    private static final int ITEM_ID_AUTOCOMPLETE_ENTRY = 0;
-    private static final int ITEM_ID_PASSWORD_ENTRY = -2;
     private static final int ITEM_ID_SEPARATOR_ENTRY = -3;
-    private static final int ITEM_ID_DATA_LIST_ENTRY = -6;
 
     private final Context mContext;
     private final AutofillPopupDelegate mAutofillCallback;
@@ -47,9 +42,9 @@ public class AutofillPopup extends DropdownPopupWindow implements AdapterView.On
      */
     public interface AutofillPopupDelegate {
         /**
-         * Requests the controller to hide AutofillPopup.
+         * Informs the controller the AutofillPopup was hidden.
          */
-        public void requestHide();
+        public void dismissed();
 
         /**
          * Handles the selection of an Autofill suggestion from an AutofillPopup.
@@ -71,6 +66,7 @@ public class AutofillPopup extends DropdownPopupWindow implements AdapterView.On
         mAutofillCallback = autofillCallback;
 
         setOnItemClickListener(this);
+        setOnDismissListener(this);
     }
 
     /**
@@ -84,33 +80,24 @@ public class AutofillPopup extends DropdownPopupWindow implements AdapterView.On
         ArrayList<DropdownItem> cleanedData = new ArrayList<DropdownItem>();
         HashSet<Integer> separators = new HashSet<Integer>();
         for (int i = 0; i < suggestions.length; i++) {
-            int itemId = suggestions[i].mUniqueId;
-            if (itemId > 0 || itemId == ITEM_ID_AUTOCOMPLETE_ENTRY ||
-                    itemId == ITEM_ID_PASSWORD_ENTRY || itemId == ITEM_ID_DATA_LIST_ENTRY) {
-                cleanedData.add(suggestions[i]);
-            } else if (itemId == ITEM_ID_SEPARATOR_ENTRY) {
+            int itemId = suggestions[i].getSuggestionId();
+            if (itemId == ITEM_ID_SEPARATOR_ENTRY) {
                 separators.add(cleanedData.size());
+            } else {
+                cleanedData.add(suggestions[i]);
             }
         }
-        setAdapter(new DropdownAdapter(mContext, cleanedData, separators));
-        show();
-        ApiCompatibilityUtils.setLayoutDirection(getListView(),
-                isRtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
-    }
 
-    /**
-     * Overrides the default dismiss behavior to request the controller to dismiss the view.
-     */
-    @Override
-    public void dismiss() {
-        mAutofillCallback.requestHide();
+        setAdapter(new DropdownAdapter(mContext, cleanedData, separators));
+        setRtl(isRtl);
+        show();
     }
 
     /**
      * Hides the popup.
      */
     public void hide() {
-        super.dismiss();
+        dismiss();
     }
 
     @Override
@@ -119,5 +106,10 @@ public class AutofillPopup extends DropdownPopupWindow implements AdapterView.On
         int listIndex = mSuggestions.indexOf(adapter.getItem(position));
         assert listIndex > -1;
         mAutofillCallback.suggestionSelected(listIndex);
+    }
+
+    @Override
+    public void onDismiss() {
+        mAutofillCallback.dismissed();
     }
 }

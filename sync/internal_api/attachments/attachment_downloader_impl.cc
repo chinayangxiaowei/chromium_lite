@@ -7,7 +7,9 @@
 #include "base/bind.h"
 #include "base/message_loop/message_loop.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "net/http/http_util.h"
 #include "net/url_request/url_fetcher.h"
 #include "sync/internal_api/public/attachments/attachment_uploader_impl.h"
 #include "sync/protocol/sync.pb.h"
@@ -51,8 +53,8 @@ AttachmentDownloaderImpl::AttachmentDownloaderImpl(
       token_service_provider_(token_service_provider) {
   DCHECK(!account_id.empty());
   DCHECK(!scopes.empty());
-  DCHECK(token_service_provider_);
-  DCHECK(url_request_context_getter_);
+  DCHECK(token_service_provider_.get());
+  DCHECK(url_request_context_getter_.get());
 }
 
 AttachmentDownloaderImpl::~AttachmentDownloaderImpl() {
@@ -115,7 +117,7 @@ void AttachmentDownloaderImpl::OnGetTokenFailure(
     DownloadState* download_state = *iter;
     scoped_refptr<base::RefCountedString> null_attachment_data;
     ReportResult(
-        *download_state, DOWNLOAD_UNSPECIFIED_ERROR, null_attachment_data);
+        *download_state, DOWNLOAD_TRANSIENT_ERROR, null_attachment_data);
     DCHECK(state_map_.find(download_state->attachment_url) != state_map_.end());
     state_map_.erase(download_state->attachment_url);
   }
@@ -133,22 +135,33 @@ void AttachmentDownloaderImpl::OnURLFetchComplete(
   const DownloadState& download_state = *iter->second;
   DCHECK(source == download_state.url_fetcher.get());
 
-  DownloadResult result = DOWNLOAD_UNSPECIFIED_ERROR;
+  DownloadResult result = DOWNLOAD_TRANSIENT_ERROR;
   scoped_refptr<base::RefCountedString> attachment_data;
 
-  if (source->GetResponseCode() == net::HTTP_OK) {
-    result = DOWNLOAD_SUCCESS;
+  const int response_code = source->GetResponseCode();
+  if (response_code == net::HTTP_OK) {
     std::string data_as_string;
     source->GetResponseAsString(&data_as_string);
-    attachment_data = base::RefCountedString::TakeString(&data_as_string);
-  } else if (source->GetResponseCode() == net::HTTP_UNAUTHORIZED) {
+    if (VerifyHashIfPresent(*source, data_as_string)) {
+      result = DOWNLOAD_SUCCESS;
+      attachment_data = base::RefCountedString::TakeString(&data_as_string);
+    } else {
+      // TODO(maniscalco): Test me!
+      result = DOWNLOAD_TRANSIENT_ERROR;
+    }
+  } else if (response_code == net::HTTP_UNAUTHORIZED) {
+    // Server tells us we've got a bad token so invalidate it.
     OAuth2TokenServiceRequest::InvalidateToken(token_service_provider_.get(),
                                                account_id_,
                                                oauth2_scopes_,
                                                download_state.access_token);
-    // TODO(pavely): crbug/380437. This is transient error. Request new access
-    // token for this DownloadState. The only trick is to do it with exponential
-    // backoff.
+    // Fail the request, but indicate that it may be successful if retried.
+    result = DOWNLOAD_TRANSIENT_ERROR;
+  } else if (response_code == net::HTTP_FORBIDDEN) {
+    // User is not allowed to use attachments.  Retrying won't help.
+    result = DOWNLOAD_UNSPECIFIED_ERROR;
+  } else if (response_code == net::URLFetcher::RESPONSE_CODE_INVALID) {
+    result = DOWNLOAD_TRANSIENT_ERROR;
   }
   ReportResult(download_state, result, attachment_data);
   state_map_.erase(iter);
@@ -159,6 +172,7 @@ scoped_ptr<net::URLFetcher> AttachmentDownloaderImpl::CreateFetcher(
     const std::string& access_token) {
   scoped_ptr<net::URLFetcher> url_fetcher(
       net::URLFetcher::Create(GURL(url), net::URLFetcher::GET, this));
+  url_fetcher->SetAutomaticallyRetryOn5xx(false);
   const std::string auth_header("Authorization: Bearer " + access_token);
   url_fetcher->AddExtraRequestHeader(auth_header);
   url_fetcher->SetRequestContext(url_request_context_getter_.get());
@@ -197,6 +211,53 @@ void AttachmentDownloaderImpl::ReportResult(
     base::MessageLoop::current()->PostTask(
         FROM_HERE, base::Bind(*iter, result, base::Passed(&attachment)));
   }
+}
+
+bool AttachmentDownloaderImpl::VerifyHashIfPresent(
+    const net::URLFetcher& fetcher,
+    const std::string& data) {
+  const net::HttpResponseHeaders* headers = fetcher.GetResponseHeaders();
+  if (!headers) {
+    // No headers?  It passes.
+    return true;
+  }
+
+  std::string value;
+  if (!ExtractCrc32c(*headers, &value)) {
+    // No crc32c?  It passes.
+    return true;
+  }
+
+  if (value ==
+      AttachmentUploaderImpl::ComputeCrc32cHash(data.data(), data.size())) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+bool AttachmentDownloaderImpl::ExtractCrc32c(
+    const net::HttpResponseHeaders& headers,
+    std::string* crc32c) {
+  DCHECK(crc32c);
+  std::string header_value;
+  void* iter = NULL;
+  // Iterate over all matching headers.
+  while (headers.EnumerateHeader(&iter, "x-goog-hash", &header_value)) {
+    // Because EnumerateHeader is smart about list values, header_value will
+    // either be empty or a single name=value pair.
+    net::HttpUtil::NameValuePairsIterator pair_iter(
+        header_value.begin(), header_value.end(), ',');
+    if (pair_iter.GetNext()) {
+      if (pair_iter.name() == "crc32c") {
+        *crc32c = pair_iter.value();
+        DCHECK(!pair_iter.GetNext());
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 }  // namespace syncer

@@ -19,7 +19,7 @@
 #include "components/autofill/core/browser/popup_item_ids.h"
 #include "components/autofill/core/browser/test_autofill_client.h"
 #include "components/autofill/core/browser/test_autofill_external_delegate.h"
-#include "grit/component_scaled_resources.h"
+#include "grit/components_scaled_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -41,13 +41,12 @@ class MockAutofillExternalDelegate : public AutofillExternalDelegate {
   MockAutofillExternalDelegate(AutofillManager* autofill_manager,
                                AutofillDriver* autofill_driver)
       : AutofillExternalDelegate(autofill_manager, autofill_driver) {}
-  virtual ~MockAutofillExternalDelegate() {}
+  ~MockAutofillExternalDelegate() override {}
 
-  virtual void DidSelectSuggestion(const base::string16& value,
-                                   int identifier) OVERRIDE {}
-  virtual void RemoveSuggestion(const base::string16& value,
-                                int identifier) OVERRIDE {}
-  virtual void ClearPreviewedForm() OVERRIDE {}
+  void DidSelectSuggestion(const base::string16& value,
+                           int identifier) override {}
+  void RemoveSuggestion(const base::string16& value, int identifier) override {}
+  void ClearPreviewedForm() override {}
   base::WeakPtr<AutofillExternalDelegate> GetWeakPtr() {
     return AutofillExternalDelegate::GetWeakPtr();
   }
@@ -56,9 +55,9 @@ class MockAutofillExternalDelegate : public AutofillExternalDelegate {
 class MockAutofillClient : public autofill::TestAutofillClient {
  public:
   MockAutofillClient() : prefs_(autofill::test::PrefServiceForTesting()) {}
-  virtual ~MockAutofillClient() {}
+  ~MockAutofillClient() override {}
 
-  virtual PrefService* GetPrefs() OVERRIDE { return prefs_.get(); }
+  PrefService* GetPrefs() override { return prefs_.get(); }
 
  private:
   scoped_ptr<PrefService> prefs_;
@@ -113,7 +112,7 @@ class TestAutofillPopupController : public AutofillPopupControllerImpl {
   }
 
  private:
-  virtual void ShowView() OVERRIDE {}
+  virtual void ShowView() override {}
 
   TestPopupControllerCommon* test_controller_common_;
 };
@@ -125,9 +124,9 @@ class AutofillPopupControllerUnitTest : public ChromeRenderViewHostTestHarness {
   AutofillPopupControllerUnitTest()
       : autofill_client_(new MockAutofillClient()),
         autofill_popup_controller_(NULL) {}
-  virtual ~AutofillPopupControllerUnitTest() {}
+  ~AutofillPopupControllerUnitTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 
     ContentAutofillDriver::CreateForWebContentsAndDelegate(
@@ -147,7 +146,7 @@ class AutofillPopupControllerUnitTest : public ChromeRenderViewHostTestHarness {
             external_delegate_->GetWeakPtr(),gfx::Rect());
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     // This will make sure the controller and the view (if any) are both
     // cleaned up.
     if (autofill_popup_controller_)

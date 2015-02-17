@@ -10,6 +10,7 @@
 #include "ui/aura/test/ui_controls_factory_aura.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/test/ui_controls_aura.h"
+#include "ui/events/test/events_test_utils.h"
 
 namespace aura {
 namespace test {
@@ -24,7 +25,7 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
                             bool control,
                             bool shift,
                             bool alt,
-                            bool command) OVERRIDE {
+                            bool command) override {
     return SendKeyPressNotifyWhenDone(
         window, key, control, shift, alt, command, base::Closure());
   }
@@ -35,9 +36,7 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
       bool shift,
       bool alt,
       bool command,
-      const base::Closure& closure) OVERRIDE {
-    DCHECK(!command);  // No command key on Aura
-
+      const base::Closure& closure) override {
     int flags = button_down_mask_;
 
     if (control) {
@@ -53,6 +52,11 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
     if (alt) {
       flags |= ui::EF_ALT_DOWN;
       PostKeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_MENU, flags);
+    }
+
+    if (command) {
+      flags |= ui::EF_COMMAND_DOWN;
+      PostKeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_LWIN, flags);
     }
 
     PostKeyEvent(ui::ET_KEY_PRESSED, key, flags);
@@ -73,17 +77,22 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
       PostKeyEvent(ui::ET_KEY_RELEASED, ui::VKEY_CONTROL, flags);
     }
 
+    if (command) {
+      flags &= ~ui::EF_COMMAND_DOWN;
+      PostKeyEvent(ui::ET_KEY_RELEASED, ui::VKEY_LWIN, flags);
+    }
+
     RunClosureAfterAllPendingUIEvents(closure);
     return true;
   }
 
-  virtual bool SendMouseMove(long screen_x, long screen_y) OVERRIDE {
+  virtual bool SendMouseMove(long screen_x, long screen_y) override {
     return SendMouseMoveNotifyWhenDone(screen_x, screen_y, base::Closure());
   }
   virtual bool SendMouseMoveNotifyWhenDone(
       long screen_x,
       long screen_y,
-      const base::Closure& closure) OVERRIDE {
+      const base::Closure& closure) override {
     gfx::Point root_location(screen_x, screen_y);
     aura::client::ScreenPositionClient* screen_position_client =
         aura::client::GetScreenPositionClient(host_->window());
@@ -104,13 +113,13 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
     return true;
   }
   virtual bool SendMouseEvents(ui_controls::MouseButton type,
-                               int state) OVERRIDE {
+                               int state) override {
     return SendMouseEventsNotifyWhenDone(type, state, base::Closure());
   }
   virtual bool SendMouseEventsNotifyWhenDone(
       ui_controls::MouseButton type,
       int state,
-      const base::Closure& closure) OVERRIDE {
+      const base::Closure& closure) override {
     gfx::Point loc = aura::Env::GetInstance()->last_mouse_location();
     aura::client::ScreenPositionClient* screen_position_client =
         aura::client::GetScreenPositionClient(host_->window());
@@ -147,16 +156,24 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
     RunClosureAfterAllPendingUIEvents(closure);
     return true;
   }
-  virtual bool SendMouseClick(ui_controls::MouseButton type) OVERRIDE {
+  virtual bool SendMouseClick(ui_controls::MouseButton type) override {
     return SendMouseEvents(type, ui_controls::UP | ui_controls::DOWN);
   }
   virtual void RunClosureAfterAllPendingUIEvents(
-      const base::Closure& closure) OVERRIDE {
+      const base::Closure& closure) override {
     if (!closure.is_null())
       base::MessageLoop::current()->PostTask(FROM_HERE, closure);
   }
 
  private:
+  void SendEventToProcessor(ui::Event* event) {
+    ui::EventSourceTestApi event_source_test(host_->GetEventSource());
+    ui::EventDispatchDetails details =
+        event_source_test.SendEventToProcessor(event);
+    if (details.dispatcher_destroyed)
+      return;
+  }
+
   void PostKeyEvent(ui::EventType type, ui::KeyboardCode key_code, int flags) {
     base::MessageLoop::current()->PostTask(
         FROM_HERE,
@@ -174,7 +191,7 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
     flags |= ui::EF_FINAL;
 
     ui::KeyEvent key_event(type, key_code, flags);
-    host_->PostNativeEvent(&key_event);
+    SendEventToProcessor(&key_event);
   }
 
   void PostMouseEvent(ui::EventType type,
@@ -201,7 +218,7 @@ class UIControlsOzone : public ui_controls::UIControlsAura {
     // This hack is necessary to set the repeat count for clicks.
     ui::MouseEvent mouse_event2(&mouse_event);
 
-    host_->PostNativeEvent(&mouse_event2);
+    SendEventToProcessor(&mouse_event2);
   }
 
   WindowTreeHost* host_;

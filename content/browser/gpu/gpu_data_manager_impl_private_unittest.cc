@@ -14,6 +14,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif
+
 #define LONG_STRING_CONST(...) #__VA_ARGS__
 
 namespace content {
@@ -25,19 +29,17 @@ class TestObserver : public GpuDataManagerObserver {
       : gpu_info_updated_(false),
         video_memory_usage_stats_updated_(false) {
   }
-  virtual ~TestObserver() { }
+  ~TestObserver() override {}
 
   bool gpu_info_updated() const { return gpu_info_updated_; }
   bool video_memory_usage_stats_updated() const {
     return video_memory_usage_stats_updated_;
   }
 
-  virtual void OnGpuInfoUpdate() OVERRIDE {
-    gpu_info_updated_ = true;
-  }
+  void OnGpuInfoUpdate() override { gpu_info_updated_ = true; }
 
-  virtual void OnVideoMemoryUsageStatsUpdate(
-      const GPUVideoMemoryUsageStats& stats) OVERRIDE {
+  void OnVideoMemoryUsageStatsUpdate(
+      const GPUVideoMemoryUsageStats& stats) override {
     video_memory_usage_stats_updated_ = true;
   }
 
@@ -69,7 +71,7 @@ class GpuDataManagerImplPrivateTest : public testing::Test {
  public:
   GpuDataManagerImplPrivateTest() { }
 
-  virtual ~GpuDataManagerImplPrivateTest() { }
+  ~GpuDataManagerImplPrivateTest() override {}
 
  protected:
   // scoped_ptr doesn't work with GpuDataManagerImpl because its
@@ -115,11 +117,9 @@ class GpuDataManagerImplPrivateTest : public testing::Test {
     DISALLOW_COPY_AND_ASSIGN(ScopedGpuDataManagerImplPrivate);
   };
 
-  virtual void SetUp() {
-  }
+  void SetUp() override {}
 
-  virtual void TearDown() {
-  }
+  void TearDown() override {}
 
   base::Time JustBeforeExpiration(const GpuDataManagerImplPrivate* manager);
   base::Time JustAfterExpiration(const GpuDataManagerImplPrivate* manager);
@@ -282,6 +282,22 @@ TEST_F(GpuDataManagerImplPrivateTest, SwiftShaderRendering2) {
   EXPECT_EQ(1u, manager->GetBlacklistedFeatureCount());
   EXPECT_TRUE(manager->IsFeatureBlacklisted(
       gpu::GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS));
+}
+
+TEST_F(GpuDataManagerImplPrivateTest, WarpEnabledOverridesSwiftShader) {
+  // If WARP fallback is enabled on Windows 8 it should not allow SwiftShader
+  // to be enabled.
+#if defined(OS_WIN)
+  if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+    ScopedGpuDataManagerImplPrivate manager;
+    manager->ForceWarpModeForTesting();
+    const base::FilePath test_path(FILE_PATH_LITERAL("AnyPath"));
+    manager->RegisterSwiftShaderPath(test_path);
+    manager->DisableHardwareAcceleration();
+    EXPECT_TRUE(manager->ShouldUseWarp());
+    EXPECT_FALSE(manager->ShouldUseSwiftShader());
+  }
+#endif
 }
 
 TEST_F(GpuDataManagerImplPrivateTest, GpuInfoUpdate) {

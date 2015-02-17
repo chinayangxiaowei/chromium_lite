@@ -13,8 +13,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/media/desktop_media_list_observer.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
-#include "grit/generated_resources.h"
 #include "media/base/video_util.h"
 #include "third_party/libyuv/include/libyuv/scale_argb.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -88,7 +88,7 @@ class NativeDesktopMediaList::Worker
   Worker(base::WeakPtr<NativeDesktopMediaList> media_list,
          scoped_ptr<webrtc::ScreenCapturer> screen_capturer,
          scoped_ptr<webrtc::WindowCapturer> window_capturer);
-  virtual ~Worker();
+  ~Worker() override;
 
   void Refresh(const gfx::Size& thumbnail_size,
                content::DesktopMediaID::Id view_dialog_id);
@@ -97,8 +97,8 @@ class NativeDesktopMediaList::Worker
   typedef std::map<DesktopMediaID, uint32> ImageHashesMap;
 
   // webrtc::DesktopCapturer::Callback interface.
-  virtual webrtc::SharedMemory* CreateSharedMemory(size_t size) OVERRIDE;
-  virtual void OnCaptureCompleted(webrtc::DesktopFrame* frame) OVERRIDE;
+  webrtc::SharedMemory* CreateSharedMemory(size_t size) override;
+  void OnCaptureCompleted(webrtc::DesktopFrame* frame) override;
 
   base::WeakPtr<NativeDesktopMediaList> media_list_;
 

@@ -14,6 +14,7 @@
 #include "chrome/browser/safe_browsing/database_manager.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "content/public/browser/resource_throttle.h"
+#include "content/public/common/resource_type.h"
 
 class ResourceDispatcherHost;
 
@@ -49,17 +50,18 @@ class SafeBrowsingResourceThrottle
       public base::SupportsWeakPtr<SafeBrowsingResourceThrottle> {
  public:
   SafeBrowsingResourceThrottle(const net::URLRequest* request,
-                               bool is_subresource,
+                               content::ResourceType resource_type,
                                SafeBrowsingService* safe_browsing);
 
   // content::ResourceThrottle implementation (called on IO thread):
-  virtual void WillStartRequest(bool* defer) OVERRIDE;
-  virtual void WillRedirectRequest(const GURL& new_url, bool* defer) OVERRIDE;
-  virtual const char* GetNameForLogging() const OVERRIDE;
+  void WillStartRequest(bool* defer) override;
+  void WillRedirectRequest(const GURL& new_url, bool* defer) override;
+  const char* GetNameForLogging() const override;
 
   // SafeBrowsingDabaseManager::Client implementation (called on IO thread):
-  virtual void OnCheckBrowseUrlResult(
-      const GURL& url, SBThreatType result) OVERRIDE;
+  void OnCheckBrowseUrlResult(const GURL& url,
+                              SBThreatType result,
+                              const std::string& metadata) override;
 
  private:
   // Describes what phase of the check a throttle is in.
@@ -76,7 +78,7 @@ class SafeBrowsingResourceThrottle
     DEFERRED_REDIRECT,
   };
 
-  virtual ~SafeBrowsingResourceThrottle();
+  ~SafeBrowsingResourceThrottle() override;
 
   // SafeBrowsingService::UrlCheckCallback implementation.
   void OnBlockingPageComplete(bool proceed);
@@ -126,7 +128,8 @@ class SafeBrowsingResourceThrottle
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
   scoped_refptr<SafeBrowsingUIManager> ui_manager_;
   const net::URLRequest* request_;
-  bool is_subresource_;
+  const bool is_subresource_;
+  const bool is_subframe_;
 
   DISALLOW_COPY_AND_ASSIGN(SafeBrowsingResourceThrottle);
 };

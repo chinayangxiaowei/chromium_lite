@@ -19,11 +19,11 @@
 #include "chrome/browser/download/download_target_info.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_pref_service_syncable.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/history/core/browser/history_types.h"
 #include "content/public/browser/download_interrupt_reasons.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -31,7 +31,6 @@
 #include "content/public/test/mock_download_item.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
-#include "extensions/common/extension.h"
 #include "net/base/mime_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,6 +39,10 @@
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/plugin_service_filter.h"
 #include "content/public/common/webplugininfo.h"
+#endif
+
+#if defined(ENABLE_EXTENSIONS)
+#include "extensions/common/extension.h"
 #endif
 
 using ::testing::AnyNumber;
@@ -59,7 +62,7 @@ namespace {
 class NullWebContentsDelegate : public content::WebContentsDelegate {
  public:
   NullWebContentsDelegate() {}
-  virtual ~NullWebContentsDelegate() {}
+  ~NullWebContentsDelegate() override {}
 };
 
 // Google Mock action that posts a task to the current message loop that invokes
@@ -191,8 +194,8 @@ class MockDownloadTargetDeterminerDelegate
 class DownloadTargetDeterminerTest : public ChromeRenderViewHostTestHarness {
  public:
   // ::testing::Test
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  virtual void SetUp() override;
+  virtual void TearDown() override;
 
   // Creates MockDownloadItem and sets up default expectations.
   content::MockDownloadItem* CreateActiveDownloadItem(
@@ -318,7 +321,7 @@ DownloadTargetDeterminerTest::CreateActiveDownloadItem(
   ON_CALL(*item, GetTargetFilePath())
       .WillByDefault(ReturnRefOfCopy(base::FilePath()));
   ON_CALL(*item, GetTransitionType())
-      .WillByDefault(Return(content::PAGE_TRANSITION_LINK));
+      .WillByDefault(Return(ui::PAGE_TRANSITION_LINK));
   ON_CALL(*item, GetURL())
       .WillByDefault(ReturnRefOfCopy(download_url));
   ON_CALL(*item, GetUrlChain())
@@ -1147,7 +1150,7 @@ TEST_F(DownloadTargetDeterminerTest, TargetDeterminer_PromptAlways) {
                              arraysize(kPromptingTestCases));
 }
 
-#if !defined(OS_ANDROID)
+#if defined(ENABLE_EXTENSIONS)
 // These test cases are run with "Prompt for download" user preference set to
 // true. Automatic extension downloads shouldn't cause prompting.
 // Android doesn't support extensions.
@@ -1204,7 +1207,7 @@ TEST_F(DownloadTargetDeterminerTest, TargetDeterminer_PromptAlways_Extension) {
   RunTestCasesWithActiveItem(kPromptingTestCases,
                              arraysize(kPromptingTestCases));
 }
-#endif
+#endif  // defined(ENABLE_EXTENSIONS)
 
 // If the download path is managed, then we don't show any prompts.
 // Note that if the download path is managed, then PromptForDownload() is false.
@@ -1786,7 +1789,7 @@ TEST_F(DownloadTargetDeterminerTest,
             download_util::GetFileDangerLevel(
                 base::FilePath(FILE_PATH_LITERAL("foo.crx"))));
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kIntermediateNameTestCases); ++i) {
+  for (size_t i = 0; i < arraysize(kIntermediateNameTestCases); ++i) {
     SCOPED_TRACE(testing::Message() << "Running test case " << i);
     const IntermediateNameTestCase& test_case = kIntermediateNameTestCases[i];
     scoped_ptr<content::MockDownloadItem> item(
@@ -1909,7 +1912,7 @@ TEST_F(DownloadTargetDeterminerTest,
       .WillByDefault(WithArg<1>(
           ScheduleCallback("image/png")));
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kMIMETypeTestCases); ++i) {
+  for (size_t i = 0; i < arraysize(kMIMETypeTestCases); ++i) {
     SCOPED_TRACE(testing::Message() << "Running test case " << i);
     const MIMETypeTestCase& test_case = kMIMETypeTestCases[i];
     scoped_ptr<content::MockDownloadItem> item(
@@ -1953,12 +1956,12 @@ class MockPluginServiceFilter : public content::PluginServiceFilter {
                                  const void* context,
                                  const GURL& url,
                                  const GURL& policy_url,
-                                 content::WebPluginInfo* plugin) OVERRIDE {
+                                 content::WebPluginInfo* plugin) override {
     return MockPluginAvailable(plugin->path);
   }
 
   virtual bool CanLoadPlugin(int render_process_id,
-                             const base::FilePath& path) OVERRIDE {
+                             const base::FilePath& path) override {
     return true;
   }
 };
@@ -2010,7 +2013,7 @@ class DownloadTargetDeterminerTestWithPlugin
   DownloadTargetDeterminerTestWithPlugin()
       : old_plugin_service_filter_(NULL) {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     content::PluginService* plugin_service =
         content::PluginService::GetInstance();
     plugin_service->Init();
@@ -2020,7 +2023,7 @@ class DownloadTargetDeterminerTestWithPlugin
     DownloadTargetDeterminerTest::SetUp();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     content::PluginService::GetInstance()->SetFilter(
         old_plugin_service_filter_);
     DownloadTargetDeterminerTest::TearDown();

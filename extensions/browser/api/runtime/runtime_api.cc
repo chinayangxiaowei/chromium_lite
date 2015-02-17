@@ -27,14 +27,14 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/lazy_background_task_queue.h"
 #include "extensions/browser/notification_types.h"
-#include "extensions/browser/process_manager.h"
+#include "extensions/browser/process_manager_factory.h"
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
+#include "storage/browser/fileapi/isolated_context.h"
 #include "url/gurl.h"
-#include "webkit/browser/fileapi/isolated_context.h"
 
 using content::BrowserContext;
 
@@ -136,14 +136,25 @@ BrowserContextKeyedAPIFactory<RuntimeAPI>* RuntimeAPI::GetFactoryInstance() {
   return g_factory.Pointer();
 }
 
+template <>
+void BrowserContextKeyedAPIFactory<RuntimeAPI>::DeclareFactoryDependencies() {
+  DependsOn(ProcessManagerFactory::GetInstance());
+}
+
 RuntimeAPI::RuntimeAPI(content::BrowserContext* context)
     : browser_context_(context),
       dispatch_chrome_updated_event_(false),
-      extension_registry_observer_(this) {
+      extension_registry_observer_(this),
+      process_manager_observer_(this) {
+  // RuntimeAPI is redirected in incognito, so |browser_context_| is never
+  // incognito.
+  DCHECK(!browser_context_->IsOffTheRecord());
+
   registrar_.Add(this,
                  extensions::NOTIFICATION_EXTENSIONS_READY_DEPRECATED,
                  content::Source<BrowserContext>(context));
   extension_registry_observer_.Add(ExtensionRegistry::Get(browser_context_));
+  process_manager_observer_.Add(ProcessManager::Get(browser_context_));
 
   delegate_ = ExtensionsBrowserClient::Get()->CreateRuntimeAPIDelegate(
       browser_context_);
@@ -155,7 +166,6 @@ RuntimeAPI::RuntimeAPI(content::BrowserContext* context)
 }
 
 RuntimeAPI::~RuntimeAPI() {
-  delegate_->RemoveUpdateObserver(this);
 }
 
 void RuntimeAPI::Observe(int type,
@@ -166,15 +176,6 @@ void RuntimeAPI::Observe(int type,
   dispatch_chrome_updated_event_ = false;
 
   delegate_->AddUpdateObserver(this);
-
-  // RuntimeAPI is redirected in incognito, so |browser_context_| is never
-  // incognito. We don't observe incognito ProcessManagers but that is OK
-  // because we don't send onStartup events to incognito browser contexts.
-  DCHECK(!browser_context_->IsOffTheRecord());
-  // Some tests use partially constructed Profiles without a process manager.
-  ExtensionSystem* extension_system = ExtensionSystem::Get(browser_context_);
-  if (extension_system->process_manager())
-    extension_system->process_manager()->AddObserver(this);
 }
 
 void RuntimeAPI::OnExtensionLoaded(content::BrowserContext* browser_context,
@@ -229,13 +230,7 @@ void RuntimeAPI::OnExtensionUninstalled(
 }
 
 void RuntimeAPI::Shutdown() {
-  // ExtensionSystem deletes its ProcessManager during the Shutdown() phase, so
-  // the observer must be removed here and not in the RuntimeAPI destructor.
-  ProcessManager* process_manager =
-      ExtensionSystem::Get(browser_context_)->process_manager();
-  // Some tests use partially constructed Profiles without a process manager.
-  if (process_manager)
-    process_manager->RemoveObserver(this);
+  delegate_->RemoveUpdateObserver(this);
 }
 
 void RuntimeAPI::OnAppUpdateAvailable(const Extension* extension) {
@@ -405,8 +400,8 @@ void RuntimeEventRouter::OnExtensionUninstalled(
 
 ExtensionFunction::ResponseAction RuntimeGetBackgroundPageFunction::Run() {
   ExtensionSystem* system = ExtensionSystem::Get(browser_context());
-  ExtensionHost* host =
-      system->process_manager()->GetBackgroundHostForExtension(extension_id());
+  ExtensionHost* host = ProcessManager::Get(browser_context())
+                            ->GetBackgroundHostForExtension(extension_id());
   if (system->lazy_background_task_queue()->ShouldEnqueueTask(browser_context(),
                                                               extension())) {
     system->lazy_background_task_queue()->AddPendingTask(
@@ -498,14 +493,14 @@ ExtensionFunction::ResponseAction RuntimeGetPlatformInfoFunction::Run() {
 
 ExtensionFunction::ResponseAction
 RuntimeGetPackageDirectoryEntryFunction::Run() {
-  fileapi::IsolatedContext* isolated_context =
-      fileapi::IsolatedContext::GetInstance();
+  storage::IsolatedContext* isolated_context =
+      storage::IsolatedContext::GetInstance();
   DCHECK(isolated_context);
 
   std::string relative_path = kPackageDirectoryPath;
   base::FilePath path = extension_->path();
   std::string filesystem_id = isolated_context->RegisterFileSystemForPath(
-      fileapi::kFileSystemTypeNativeLocal, std::string(), path, &relative_path);
+      storage::kFileSystemTypeNativeLocal, std::string(), path, &relative_path);
 
   int renderer_id = render_view_host_->GetProcess()->GetID();
   content::ChildProcessSecurityPolicy* policy =

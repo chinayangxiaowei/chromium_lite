@@ -4,8 +4,8 @@
 
 #include "chrome/browser/chromeos/drive/sync_client.h"
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/testing_pref_service.h"
@@ -54,7 +54,7 @@ class SyncClientTestDriveService : public ::drive::FakeDriveService {
       const std::string& resource_id,
       const google_apis::DownloadActionCallback& download_action_callback,
       const google_apis::GetContentCallback& get_content_callback,
-      const google_apis::ProgressCallback& progress_callback) OVERRIDE {
+      const google_apis::ProgressCallback& progress_callback) override {
     ++download_file_count_;
     if (resource_id == resource_id_to_be_cancelled_) {
       base::MessageLoopProxy::current()->PostTask(
@@ -100,7 +100,7 @@ class SyncClientTestDriveService : public ::drive::FakeDriveService {
 
 class SyncClientTest : public testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     pref_service_.reset(new TestingPrefServiceSimple);

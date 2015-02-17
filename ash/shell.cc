@@ -23,7 +23,6 @@
 #include "ash/display/event_transformation_handler.h"
 #include "ash/display/mouse_cursor_event_filter.h"
 #include "ash/display/screen_position_controller.h"
-#include "ash/display/virtual_keyboard_window_controller.h"
 #include "ash/drag_drop/drag_drop_controller.h"
 #include "ash/first_run/first_run_helper_impl.h"
 #include "ash/focus_cycler.h"
@@ -119,7 +118,6 @@
 #if defined(USE_X11)
 #include "ash/accelerators/magnifier_key_scroller.h"
 #include "ash/accelerators/spoken_feedback_toggler.h"
-#include "ash/touch/touch_transformer_controller.h"
 #include "ui/gfx/x/x11_types.h"
 #endif  // defined(USE_X11)
 #include "ash/ash_constants.h"
@@ -136,8 +134,11 @@
 #include "ash/system/chromeos/power/video_activity_notifier.h"
 #include "ash/system/chromeos/session/last_window_closed_logout_reminder.h"
 #include "ash/system/chromeos/session/logout_confirmation_controller.h"
+#include "ash/touch/touch_transformer_controller.h"
+#include "ash/virtual_keyboard_controller.h"
 #include "base/bind_helpers.h"
 #include "base/sys_info.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "ui/chromeos/user_activity_power_manager_notifier.h"
 #include "ui/display/chromeos/display_configurator.h"
 #endif  // defined(OS_CHROMEOS)
@@ -154,13 +155,12 @@ using views::Widget;
 class AshVisibilityController : public ::wm::VisibilityController {
  public:
   AshVisibilityController() {}
-  virtual ~AshVisibilityController() {}
+  ~AshVisibilityController() override {}
 
  private:
   // Overridden from ::wm::VisibilityController:
-  virtual bool CallAnimateOnChildWindowVisibilityChanged(
-      aura::Window* window,
-      bool visible) OVERRIDE {
+  bool CallAnimateOnChildWindowVisibilityChanged(aura::Window* window,
+                                                 bool visible) override {
     return AnimateOnChildWindowVisibilityChanged(window, visible);
   }
 
@@ -196,7 +196,7 @@ Shell* Shell::CreateInstance(const ShellInitParams& init_params) {
 
 // static
 Shell* Shell::GetInstance() {
-  DCHECK(instance_);
+  CHECK(instance_);
   return instance_;
 }
 
@@ -213,22 +213,26 @@ void Shell::DeleteInstance() {
 
 // static
 RootWindowController* Shell::GetPrimaryRootWindowController() {
+  CHECK(HasInstance());
   return GetRootWindowController(GetPrimaryRootWindow());
 }
 
 // static
 Shell::RootWindowControllerList Shell::GetAllRootWindowControllers() {
+  CHECK(HasInstance());
   return Shell::GetInstance()->display_controller()->
       GetAllRootWindowControllers();
 }
 
 // static
 aura::Window* Shell::GetPrimaryRootWindow() {
+  CHECK(HasInstance());
   return GetInstance()->display_controller()->GetPrimaryRootWindow();
 }
 
 // static
 aura::Window* Shell::GetTargetRootWindow() {
+  CHECK(HasInstance());
   Shell* shell = GetInstance();
   if (shell->scoped_target_root_window_)
     return shell->scoped_target_root_window_;
@@ -242,6 +246,7 @@ gfx::Screen* Shell::GetScreen() {
 
 // static
 aura::Window::Windows Shell::GetAllRootWindows() {
+  CHECK(HasInstance());
   return Shell::GetInstance()->display_controller()->
       GetAllRootWindows();
 }
@@ -298,13 +303,13 @@ void Shell::ShowAppList(aura::Window* window) {
     window = GetTargetRootWindow();
   if (!app_list_controller_)
     app_list_controller_.reset(new AppListController);
-  app_list_controller_->SetVisible(true, window);
+  app_list_controller_->Show(window);
 }
 
 void Shell::DismissAppList() {
   if (!app_list_controller_)
     return;
-  app_list_controller_->SetVisible(false, GetTargetRootWindow());
+  app_list_controller_->Dismiss();
 }
 
 void Shell::ToggleAppList(aura::Window* window) {
@@ -447,13 +452,8 @@ void Shell::CreateKeyboard() {
   // TODO(bshe): Primary root window controller may not be the controller to
   // attach virtual keyboard. See http://crbug.com/303429
   InitKeyboard();
-  if (keyboard::IsKeyboardUsabilityExperimentEnabled()) {
-    display_controller()->virtual_keyboard_window_controller()->
-        ActivateKeyboard(keyboard::KeyboardController::GetInstance());
-  } else {
-    GetPrimaryRootWindowController()->
-        ActivateKeyboard(keyboard::KeyboardController::GetInstance());
-  }
+  GetPrimaryRootWindowController()->
+      ActivateKeyboard(keyboard::KeyboardController::GetInstance());
 }
 
 void Shell::DeactivateKeyboard() {
@@ -485,7 +485,8 @@ void Shell::RemoveShellObserver(ShellObserver* observer) {
 #if defined(OS_CHROMEOS)
 bool Shell::ShouldSaveDisplaySettings() {
   return !((maximize_mode_controller_->IsMaximizeModeWindowManagerEnabled() &&
-            maximize_mode_controller_->in_set_screen_rotation()) ||
+            maximize_mode_controller_->
+                ignore_display_configuration_updates()) ||
            resolution_notification_controller_->DoesNotificationTimeout());
 }
 #endif
@@ -694,6 +695,12 @@ Shell::~Shell() {
   // TooltipController is deleted with the Shell so removing its references.
   RemovePreTargetHandler(tooltip_controller_.get());
 
+// Destroy the virtual keyboard controller before the maximize mode controller
+// since the latters destructor triggers events that the former is listening
+// to but no longer cares about.
+#if defined(OS_CHROMEOS)
+  virtual_keyboard_controller_.reset();
+#endif
   // Destroy maximize mode controller early on since it has some observers which
   // need to be removed.
   maximize_mode_controller_->Shutdown();
@@ -783,9 +790,9 @@ Shell::~Shell() {
   desktop_background_controller_.reset();
   mouse_cursor_filter_.reset();
 
-#if defined(OS_CHROMEOS) && defined(USE_X11)
+#if defined(OS_CHROMEOS)
   touch_transformer_controller_.reset();
-#endif  // defined(OS_CHROMEOS) && defined(USE_X11)
+#endif  // defined(OS_CHROMEOS)
 
   // This also deletes all RootWindows. Note that we invoke Shutdown() on
   // DisplayController before resetting |display_controller_|, since destruction
@@ -811,10 +818,11 @@ Shell::~Shell() {
   if (projecting_observer_)
     display_configurator_->RemoveObserver(projecting_observer_.get());
   display_change_observer_.reset();
-#endif  // defined(OS_CHROMEOS)
 
-#if defined(OS_CHROMEOS)
   PowerStatus::Shutdown();
+
+  // Ensure that DBusThreadManager outlives this Shell.
+  DCHECK(chromeos::DBusThreadManager::IsInitialized());
 #endif
 
   DCHECK(instance_ == this);
@@ -823,16 +831,17 @@ Shell::~Shell() {
 
 void Shell::Init(const ShellInitParams& init_params) {
   delegate_->PreInit();
-  if (keyboard::IsKeyboardUsabilityExperimentEnabled()) {
-    display_manager_->SetSecondDisplayMode(DisplayManager::VIRTUAL_KEYBOARD);
-  }
   bool display_initialized = display_manager_->InitFromCommandLine();
 #if defined(OS_CHROMEOS)
   display_configurator_->Init(!gpu_support_->IsPanelFittingDisabled());
   display_configurator_animation_.reset(new DisplayConfiguratorAnimation());
   display_configurator_->AddObserver(display_configurator_animation_.get());
 
-  projecting_observer_.reset(new ProjectingObserver());
+  // The DBusThreadManager must outlive this Shell. See the DCHECK in ~Shell.
+  chromeos::DBusThreadManager* dbus_thread_manager =
+      chromeos::DBusThreadManager::Get();
+  projecting_observer_.reset(
+      new ProjectingObserver(dbus_thread_manager->GetPowerManagerClient()));
   display_configurator_->AddObserver(projecting_observer_.get());
 
   if (!display_initialized && base::SysInfo::IsRunningOnChromeOS()) {
@@ -1015,16 +1024,20 @@ void Shell::Init(const ShellInitParams& init_params) {
   logout_confirmation_controller_.reset(new LogoutConfirmationController(
       base::Bind(&SystemTrayDelegate::SignOut,
                  base::Unretained(system_tray_delegate_.get()))));
-#endif
 
-#if defined(OS_CHROMEOS) && defined(USE_X11)
   // Create TouchTransformerController before DisplayController::InitDisplays()
   // since TouchTransformerController listens on
   // DisplayController::Observer::OnDisplaysInitialized().
   touch_transformer_controller_.reset(new TouchTransformerController());
-#endif  // defined(OS_CHROMEOS) && defined(USE_X11)
+#endif  // defined(OS_CHROMEOS)
 
   display_controller_->InitDisplays();
+
+#if defined(OS_CHROMEOS)
+  // Needs to be created after InitDisplays() since it may cause the virtual
+  // keyboard to be deployed.
+  virtual_keyboard_controller_.reset(new VirtualKeyboardController);
+#endif  // defined(OS_CHROMEOS)
 
   // It needs to be created after RootWindowController has been created
   // (which calls OnWindowResized has been called, otherwise the

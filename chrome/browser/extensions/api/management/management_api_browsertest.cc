@@ -6,22 +6,24 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/extensions/api/management/management_api.h"
-#include "chrome/browser/extensions/api/management/management_api_constants.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_function_test_utils.h"
+#include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/api/management/management_api.h"
+#include "extensions/browser/api/management/management_api_constants.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/notification_types.h"
+#include "extensions/common/test_util.h"
+#include "extensions/test/extension_test_message_listener.h"
 
 namespace keys = extension_management_api_constants;
 namespace util = extension_function_test_utils;
@@ -32,8 +34,8 @@ class ExtensionManagementApiBrowserTest : public ExtensionBrowserTest {
  protected:
   bool CrashEnabledExtension(const std::string& extension_id) {
     ExtensionHost* background_host =
-        ExtensionSystem::Get(browser()->profile())->
-            process_manager()->GetBackgroundHostForExtension(extension_id);
+        ProcessManager::Get(browser()->profile())
+            ->GetBackgroundHostForExtension(extension_id);
     if (!background_host)
       return false;
     content::CrashTab(background_host->host_contents());
@@ -99,6 +101,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
+                       GetSelfNoPermissions) {
+  ExtensionTestMessageListener listener1("success", false);
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("management/get_self")));
+  ASSERT_TRUE(listener1.WaitUntilSatisfied());
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
                        UninstallWithConfirmDialog) {
   ExtensionService* service = ExtensionSystem::Get(browser()->profile())->
       extension_service();
@@ -110,12 +120,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
 
   const std::string id = extension->id();
 
-  scoped_refptr<Extension> empty_extension(
-      extension_function_test_utils::CreateEmptyExtension());
+  scoped_refptr<Extension> empty_extension(test_util::CreateEmptyExtension());
   // Uninstall, then cancel via the confirm dialog.
   scoped_refptr<ManagementUninstallFunction> uninstall_function(
       new ManagementUninstallFunction());
-  uninstall_function->set_extension(empty_extension);
+  uninstall_function->set_extension(empty_extension.get());
   uninstall_function->set_user_gesture(true);
   ManagementUninstallFunction::SetAutoConfirmForTest(false);
 
@@ -132,7 +141,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionManagementApiBrowserTest,
 
   // Uninstall, then accept via the confirm dialog.
   uninstall_function = new ManagementUninstallFunction();
-  uninstall_function->set_extension(empty_extension);
+  uninstall_function->set_extension(empty_extension.get());
   ManagementUninstallFunction::SetAutoConfirmForTest(true);
   uninstall_function->set_user_gesture(true);
   util::RunFunctionAndReturnSingleResult(
@@ -207,7 +216,7 @@ class ExtensionManagementApiEscalationTest :
   // The id of the permissions escalation test extension we use.
   static const char kId[];
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     EXPECT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
     base::FilePath pem_path = test_data_dir_.
         AppendASCII("permissions_increase").AppendASCII("permissions.pem");
@@ -241,7 +250,7 @@ class ExtensionManagementApiEscalationTest :
                   const std::string& expected_error) {
     scoped_refptr<ManagementSetEnabledFunction> function(
         new ManagementSetEnabledFunction);
-    const char* enabled_string = enabled ? "true" : "false";
+    const char* const enabled_string = enabled ? "true" : "false";
     if (user_gesture)
       function->set_user_gesture(true);
     bool response = util::RunFunction(

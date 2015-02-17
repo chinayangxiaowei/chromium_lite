@@ -22,15 +22,17 @@ class ChromeLauncherAppMenuItemBrowser : public content::NotificationObserver,
                                    const gfx::Image* icon,
                                    Browser* browser,
                                    bool has_leading_separator);
-  virtual bool IsActive() const OVERRIDE;
-  virtual bool IsEnabled() const OVERRIDE;
-  virtual void Execute(int event_flags) OVERRIDE;
+  ~ChromeLauncherAppMenuItemBrowser() override;
+
+  bool IsActive() const override;
+  bool IsEnabled() const override;
+  void Execute(int event_flags) override;
 
  private:
   // content::NotificationObserver.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // The browser which is associated which this item.
   Browser* browser_;

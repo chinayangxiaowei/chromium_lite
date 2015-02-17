@@ -10,10 +10,12 @@
 #include "base/run_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace metrics {
+
 class MetricsReportingSchedulerTest : public testing::Test {
  public:
   MetricsReportingSchedulerTest() : callback_call_count_(0) {}
-  virtual ~MetricsReportingSchedulerTest() {}
+  ~MetricsReportingSchedulerTest() override {}
 
   base::Closure GetCallback() {
     return base::Bind(&MetricsReportingSchedulerTest::SchedulerCallback,
@@ -56,3 +58,5 @@ TEST_F(MetricsReportingSchedulerTest, InitTaskCompleteAfterTimer) {
   scheduler.InitTaskComplete();
   EXPECT_EQ(1, callback_call_count());
 }
+
+}  // namespace metrics

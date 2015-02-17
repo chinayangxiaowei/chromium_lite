@@ -11,10 +11,12 @@ namespace app_list {
 namespace switches {
 
 // Please keep these flags sorted.
+APP_LIST_EXPORT extern const char kCustomLauncherPage[];
 APP_LIST_EXPORT extern const char kDisableAppInfo[];
+APP_LIST_EXPORT extern const char kDisableAppListDismissOnBlur[];
+APP_LIST_EXPORT extern const char kDisableDriveAppsInAppList[];
 APP_LIST_EXPORT extern const char kDisableSyncAppList[];
 APP_LIST_EXPORT extern const char kEnableCenteredAppList[];
-APP_LIST_EXPORT extern const char kEnableDriveAppsInAppList[];
 APP_LIST_EXPORT extern const char kEnableExperimentalAppList[];
 APP_LIST_EXPORT extern const char kEnableHotwordAlwaysOn[];
 APP_LIST_EXPORT extern const char kEnableSyncAppList[];
@@ -34,6 +36,9 @@ bool APP_LIST_EXPORT IsExperimentalAppListEnabled();
 // instead use AppListViewDelegate::ShouldCenterWindow. It checks a superset of
 // the conditions that trigger the position.
 bool APP_LIST_EXPORT IsCenteredAppListEnabled();
+
+// Determines whether the app list should not be dismissed on focus loss.
+bool APP_LIST_EXPORT ShouldNotDismissOnBlur();
 
 bool APP_LIST_EXPORT IsDriveAppsInAppListEnabled();
 

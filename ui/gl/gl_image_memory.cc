@@ -17,60 +17,71 @@
 namespace gfx {
 namespace {
 
-bool ValidFormat(unsigned internalformat) {
+bool ValidInternalFormat(unsigned internalformat) {
   switch (internalformat) {
-    case GL_BGRA8_EXT:
-    case GL_RGBA8_OES:
+    case GL_RGBA:
       return true;
     default:
       return false;
   }
 }
 
-GLenum TextureFormat(unsigned internalformat) {
-  switch (internalformat) {
-    case GL_BGRA8_EXT:
-      return GL_BGRA_EXT;
-    case GL_RGBA8_OES:
+bool ValidFormat(gfx::GpuMemoryBuffer::Format format) {
+  switch (format) {
+    case gfx::GpuMemoryBuffer::RGBA_8888:
+    case gfx::GpuMemoryBuffer::BGRA_8888:
+      return true;
+    case gfx::GpuMemoryBuffer::RGBX_8888:
+      return false;
+  }
+
+  NOTREACHED();
+  return false;
+}
+
+GLenum TextureFormat(gfx::GpuMemoryBuffer::Format format) {
+  switch (format) {
+    case gfx::GpuMemoryBuffer::RGBA_8888:
       return GL_RGBA;
-    default:
+    case gfx::GpuMemoryBuffer::BGRA_8888:
+      return GL_BGRA_EXT;
+    case gfx::GpuMemoryBuffer::RGBX_8888:
       NOTREACHED();
       return 0;
   }
+
+  NOTREACHED();
+  return 0;
 }
 
-GLenum DataFormat(unsigned internalformat) {
-  return TextureFormat(internalformat);
+GLenum DataFormat(gfx::GpuMemoryBuffer::Format format) {
+  return TextureFormat(format);
 }
 
-GLenum DataType(unsigned internalformat) {
-  switch (internalformat) {
-    case GL_BGRA8_EXT:
-    case GL_RGBA8_OES:
+GLenum DataType(gfx::GpuMemoryBuffer::Format format) {
+  switch (format) {
+    case gfx::GpuMemoryBuffer::RGBA_8888:
+    case gfx::GpuMemoryBuffer::BGRA_8888:
       return GL_UNSIGNED_BYTE;
-    default:
+    case gfx::GpuMemoryBuffer::RGBX_8888:
       NOTREACHED();
       return 0;
   }
-}
 
-int BytesPerPixel(unsigned internalformat) {
-  switch (internalformat) {
-    case GL_BGRA8_EXT:
-    case GL_RGBA8_OES:
-      return 4;
-    default:
-      NOTREACHED();
-      return 0;
-  }
+  NOTREACHED();
+  return 0;
 }
 
 }  // namespace
 
 GLImageMemory::GLImageMemory(const gfx::Size& size, unsigned internalformat)
-    : memory_(NULL),
-      size_(size),
-      internalformat_(internalformat)
+    : size_(size),
+      internalformat_(internalformat),
+      memory_(NULL),
+      format_(gfx::GpuMemoryBuffer::RGBA_8888),
+      in_use_(false),
+      target_(0),
+      need_do_bind_tex_image_(false)
 #if defined(OS_WIN) || defined(USE_X11) || defined(OS_ANDROID) || \
     defined(USE_OZONE)
       ,
@@ -88,15 +99,37 @@ GLImageMemory::~GLImageMemory() {
 #endif
 }
 
-bool GLImageMemory::Initialize(const unsigned char* memory) {
-  if (!ValidFormat(internalformat_)) {
-    DVLOG(0) << "Invalid format: " << internalformat_;
+// static
+size_t GLImageMemory::BytesPerPixel(gfx::GpuMemoryBuffer::Format format) {
+  switch (format) {
+    case gfx::GpuMemoryBuffer::RGBA_8888:
+    case gfx::GpuMemoryBuffer::BGRA_8888:
+      return 4;
+    case gfx::GpuMemoryBuffer::RGBX_8888:
+      NOTREACHED();
+      return 0;
+  }
+
+  NOTREACHED();
+  return 0;
+}
+
+bool GLImageMemory::Initialize(const unsigned char* memory,
+                               gfx::GpuMemoryBuffer::Format format) {
+  if (!ValidInternalFormat(internalformat_)) {
+    LOG(ERROR) << "Invalid internalformat: " << internalformat_;
+    return false;
+  }
+
+  if (!ValidFormat(format)) {
+    LOG(ERROR) << "Invalid format: " << format;
     return false;
   }
 
   DCHECK(memory);
   DCHECK(!memory_);
   memory_ = memory;
+  format_ = format;
   return true;
 }
 
@@ -122,7 +155,72 @@ gfx::Size GLImageMemory::GetSize() {
 }
 
 bool GLImageMemory::BindTexImage(unsigned target) {
-  TRACE_EVENT0("gpu", "GLImageMemory::BindTexImage");
+  if (target_ && target_ != target) {
+    LOG(ERROR) << "GLImage can only be bound to one target";
+    return false;
+  }
+  target_ = target;
+
+  // Defer DoBindTexImage if not currently in use.
+  if (!in_use_) {
+    need_do_bind_tex_image_ = true;
+    return true;
+  }
+
+  DoBindTexImage(target);
+  return true;
+}
+
+bool GLImageMemory::CopyTexImage(unsigned target) {
+  TRACE_EVENT0("gpu", "GLImageMemory::CopyTexImage");
+
+  // GL_TEXTURE_EXTERNAL_OES is not a supported CopyTexImage target.
+  if (target == GL_TEXTURE_EXTERNAL_OES)
+    return false;
+
+  DCHECK(memory_);
+  glTexImage2D(target,
+               0,  // mip level
+               TextureFormat(format_),
+               size_.width(),
+               size_.height(),
+               0,  // border
+               DataFormat(format_),
+               DataType(format_),
+               memory_);
+
+  return true;
+}
+
+void GLImageMemory::WillUseTexImage() {
+  DCHECK(!in_use_);
+  in_use_ = true;
+
+  if (!need_do_bind_tex_image_)
+    return;
+
+  DCHECK(target_);
+  DoBindTexImage(target_);
+}
+
+void GLImageMemory::DidUseTexImage() {
+  DCHECK(in_use_);
+  in_use_ = false;
+}
+
+bool GLImageMemory::ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
+                                         int z_order,
+                                         OverlayTransform transform,
+                                         const Rect& bounds_rect,
+                                         const RectF& crop_rect) {
+  return false;
+}
+
+void GLImageMemory::DoBindTexImage(unsigned target) {
+  TRACE_EVENT0("gpu", "GLImageMemory::DoBindTexImage");
+
+  DCHECK(need_do_bind_tex_image_);
+  need_do_bind_tex_image_ = false;
 
   DCHECK(memory_);
 #if defined(OS_WIN) || defined(USE_X11) || defined(OS_ANDROID) || \
@@ -140,12 +238,12 @@ bool GLImageMemory::BindTexImage(unsigned target) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexImage2D(GL_TEXTURE_2D,
                      0,  // mip level
-                     TextureFormat(internalformat_),
+                     TextureFormat(format_),
                      size_.width(),
                      size_.height(),
                      0,  // border
-                     DataFormat(internalformat_),
-                     DataType(internalformat_),
+                     DataFormat(format_),
+                     DataType(format_),
                      memory_);
       }
 
@@ -169,46 +267,27 @@ bool GLImageMemory::BindTexImage(unsigned target) {
                       0,  // y-offset
                       size_.width(),
                       size_.height(),
-                      DataFormat(internalformat_),
-                      DataType(internalformat_),
+                      DataFormat(format_),
+                      DataType(format_),
                       memory_);
     }
 
     glEGLImageTargetTexture2DOES(target, egl_image_);
     DCHECK_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
-
-    return true;
+    return;
   }
 #endif
 
   DCHECK_NE(static_cast<GLenum>(GL_TEXTURE_EXTERNAL_OES), target);
   glTexImage2D(target,
                0,  // mip level
-               TextureFormat(internalformat_),
+               TextureFormat(format_),
                size_.width(),
                size_.height(),
                0,  // border
-               DataFormat(internalformat_),
-               DataType(internalformat_),
+               DataFormat(format_),
+               DataType(format_),
                memory_);
-
-  return true;
-}
-
-bool GLImageMemory::HasValidFormat() const {
-  return ValidFormat(internalformat_);
-}
-
-size_t GLImageMemory::Bytes() const {
-  return size_.GetArea() * BytesPerPixel(internalformat_);
-}
-
-bool GLImageMemory::ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
-                                         int z_order,
-                                         OverlayTransform transform,
-                                         const Rect& bounds_rect,
-                                         const RectF& crop_rect) {
-  return false;
 }
 
 }  // namespace gfx

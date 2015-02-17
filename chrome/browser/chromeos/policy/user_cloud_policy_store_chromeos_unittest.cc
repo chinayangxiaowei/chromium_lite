@@ -8,7 +8,7 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
@@ -54,7 +54,7 @@ class UserCloudPolicyStoreChromeOSTest : public testing::Test {
  protected:
   UserCloudPolicyStoreChromeOSTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     EXPECT_CALL(cryptohome_client_,
                 GetSanitizedUsername(PolicyBuilder::kFakeUsername, _))
         .Times(AnyNumber())
@@ -82,7 +82,7 @@ class UserCloudPolicyStoreChromeOSTest : public testing::Test {
     policy_.Build();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     store_->RemoveObserver(&observer_);
     store_.reset();
     RunUntilIdle();

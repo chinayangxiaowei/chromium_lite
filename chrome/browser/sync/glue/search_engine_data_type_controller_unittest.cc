@@ -33,7 +33,7 @@ class SyncSearchEngineDataTypeControllerTest : public testing::Test {
  public:
   SyncSearchEngineDataTypeControllerTest() : test_util_(&profile_) { }
 
-  virtual void SetUp() {
+  void SetUp() override {
     service_.reset(new ProfileSyncServiceMock(&profile_));
     profile_sync_factory_.reset(new ProfileSyncComponentsFactoryMock());
     // Feed the DTC the profile so it is reused later.
@@ -42,7 +42,7 @@ class SyncSearchEngineDataTypeControllerTest : public testing::Test {
         profile_sync_factory_.get(), &profile_);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     // Must be done before we pump the loop.
     syncable_service_.StopSyncing(syncer::SEARCH_ENGINES);
     search_engine_dtc_ = NULL;
@@ -60,7 +60,7 @@ class SyncSearchEngineDataTypeControllerTest : public testing::Test {
         make_scoped_ptr<sync_driver::GenericChangeProcessorFactory>(
             new sync_driver::FakeGenericChangeProcessorFactory(
                 make_scoped_ptr(new sync_driver::FakeGenericChangeProcessor(
-                    profile_sync_factory_.get())))));
+                    syncer::SEARCH_ENGINES, profile_sync_factory_.get())))));
     EXPECT_CALL(model_load_callback_, Run(_, _));
     EXPECT_CALL(*profile_sync_factory_,
                 GetSyncableServiceForType(syncer::SEARCH_ENGINES)).
@@ -163,7 +163,6 @@ TEST_F(SyncSearchEngineDataTypeControllerTest, Stop) {
 }
 
 TEST_F(SyncSearchEngineDataTypeControllerTest, StopBeforeLoaded) {
-  EXPECT_CALL(model_load_callback_, Run(_, _));
   EXPECT_FALSE(syncable_service_.syncing());
   search_engine_dtc_->LoadModels(
       base::Bind(&sync_driver::ModelLoadCallbackMock::Run,

@@ -22,9 +22,9 @@ class GeolocationHandlerTest : public testing::Test {
   virtual ~GeolocationHandlerTest() {
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Initialize DBusThreadManager with a stub implementation.
-    DBusThreadManager::InitializeWithStub();
+    DBusThreadManager::Initialize();
     // Get the test interface for manager / device.
     manager_test_ =
         DBusThreadManager::Get()->GetShillManagerClient()->GetTestInterface();
@@ -34,7 +34,7 @@ class GeolocationHandlerTest : public testing::Test {
     message_loop_.RunUntilIdle();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     geolocation_handler_.reset();
     DBusThreadManager::Shutdown();
   }

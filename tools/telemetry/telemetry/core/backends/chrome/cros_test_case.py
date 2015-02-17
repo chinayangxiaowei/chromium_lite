@@ -8,7 +8,7 @@ import unittest
 from telemetry.core import browser_finder
 from telemetry.core import extension_to_load
 from telemetry.core import util
-from telemetry.core.backends.chrome import cros_interface
+from telemetry.core.platform import cros_interface
 from telemetry.unittest import options_for_unittests
 
 
@@ -48,7 +48,7 @@ class CrOSTestCase(unittest.TestCase):
     if password is not None:
       browser_options.password = password
 
-    return browser_to_create.Create()
+    return browser_to_create.Create(options)
 
   def _GetAutotestExtension(self, browser):
     """Returns the autotest extension instance"""

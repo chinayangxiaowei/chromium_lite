@@ -28,8 +28,8 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -93,15 +93,18 @@ class BackendDelegate : public HistoryBackend::Delegate {
       : history_test_(history_test) {
   }
 
-  virtual void NotifyProfileError(sql::InitStatus init_status) OVERRIDE {}
-  virtual void SetInMemoryBackend(
-      scoped_ptr<InMemoryHistoryBackend> backend) OVERRIDE;
-  virtual void BroadcastNotifications(
-      int type,
-      scoped_ptr<HistoryDetails> details) OVERRIDE;
-  virtual void DBLoaded() OVERRIDE {}
-  virtual void NotifyVisitDBObserversOnAddVisit(
-      const BriefVisitInfo& info) OVERRIDE {}
+  void NotifyProfileError(sql::InitStatus init_status) override {}
+  void SetInMemoryBackend(scoped_ptr<InMemoryHistoryBackend> backend) override;
+  void NotifyAddVisit(const BriefVisitInfo& info) override {}
+  void NotifyFaviconChanged(const std::set<GURL>& url) override {}
+  void NotifyURLVisited(ui::PageTransition transition,
+                        const URLRow& row,
+                        const RedirectList& redirects,
+                        base::Time visit_time) override {}
+  void BroadcastNotifications(int type,
+                              scoped_ptr<HistoryDetails> details) override;
+  void DBLoaded() override {}
+
  private:
   HistoryBackendDBTest* history_test_;
 };
@@ -113,8 +116,7 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
   HistoryBackendDBTest() : db_(NULL) {
   }
 
-  virtual ~HistoryBackendDBTest() {
-  }
+  ~HistoryBackendDBTest() override {}
 
  protected:
   friend class BackendDelegate;
@@ -152,7 +154,7 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
   }
 
   // testing::Test
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     history_dir_ = temp_dir_.path().AppendASCII("HistoryBackendDBTest");
     ASSERT_TRUE(base::CreateDirectory(history_dir_));
@@ -165,7 +167,7 @@ class HistoryBackendDBTest : public HistoryUnitTestBase {
     }
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     DeleteBackend();
 
     // Make sure we don't have any event pending that could disrupt the next
@@ -982,8 +984,7 @@ class HistoryTest : public testing::Test {
         query_url_success_(false) {
   }
 
-  virtual ~HistoryTest() {
-  }
+  ~HistoryTest() override {}
 
   void OnMostVisitedURLsAvailable(const MostVisitedURLList* url_list) {
     most_visited_urls_ = *url_list;
@@ -994,7 +995,7 @@ class HistoryTest : public testing::Test {
   friend class BackendDelegate;
 
   // testing::Test
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     history_dir_ = temp_dir_.path().AppendASCII("HistoryTest");
     ASSERT_TRUE(base::CreateDirectory(history_dir_));
@@ -1005,7 +1006,7 @@ class HistoryTest : public testing::Test {
     }
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     if (history_service_)
       CleanupHistoryService();
 
@@ -1118,7 +1119,7 @@ TEST_F(HistoryTest, AddPage) {
   const GURL test_url("http://www.google.com/");
   history_service_->AddPage(test_url, base::Time::Now(), NULL, 0, GURL(),
                             history::RedirectList(),
-                            content::PAGE_TRANSITION_MANUAL_SUBFRAME,
+                            ui::PAGE_TRANSITION_MANUAL_SUBFRAME,
                             history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   EXPECT_EQ(1, query_url_row_.visit_count());
@@ -1127,7 +1128,7 @@ TEST_F(HistoryTest, AddPage) {
 
   // Add the page once from the main frame (should unhide it).
   history_service_->AddPage(test_url, base::Time::Now(), NULL, 0, GURL(),
-                   history::RedirectList(), content::PAGE_TRANSITION_LINK,
+                   history::RedirectList(), ui::PAGE_TRANSITION_LINK,
                    history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   EXPECT_EQ(2, query_url_row_.visit_count());  // Added twice.
@@ -1150,7 +1151,7 @@ TEST_F(HistoryTest, AddRedirect) {
   history_service_->AddPage(
       first_redirects.back(), base::Time::Now(),
       reinterpret_cast<ContextID>(1), 0, GURL(), first_redirects,
-      content::PAGE_TRANSITION_LINK, history::SOURCE_BROWSED, true);
+      ui::PAGE_TRANSITION_LINK, history::SOURCE_BROWSED, true);
 
   // The first page should be added once with a link visit type (because we set
   // LINK when we added the original URL, and a referrer of nowhere (0).
@@ -1158,8 +1159,8 @@ TEST_F(HistoryTest, AddRedirect) {
   EXPECT_EQ(1, query_url_row_.visit_count());
   ASSERT_EQ(1U, query_url_visits_.size());
   int64 first_visit = query_url_visits_[0].visit_id;
-  EXPECT_EQ(content::PAGE_TRANSITION_LINK |
-            content::PAGE_TRANSITION_CHAIN_START,
+  EXPECT_EQ(ui::PAGE_TRANSITION_LINK |
+            ui::PAGE_TRANSITION_CHAIN_START,
             query_url_visits_[0].transition);
   EXPECT_EQ(0, query_url_visits_[0].referring_visit);  // No referrer.
 
@@ -1169,8 +1170,8 @@ TEST_F(HistoryTest, AddRedirect) {
   EXPECT_EQ(1, query_url_row_.visit_count());
   ASSERT_EQ(1U, query_url_visits_.size());
   int64 second_visit = query_url_visits_[0].visit_id;
-  EXPECT_EQ(content::PAGE_TRANSITION_SERVER_REDIRECT |
-            content::PAGE_TRANSITION_CHAIN_END,
+  EXPECT_EQ(ui::PAGE_TRANSITION_SERVER_REDIRECT |
+            ui::PAGE_TRANSITION_CHAIN_END,
             query_url_visits_[0].transition);
   EXPECT_EQ(first_visit, query_url_visits_[0].referring_visit);
 
@@ -1189,9 +1190,9 @@ TEST_F(HistoryTest, AddRedirect) {
   history_service_->AddPage(second_redirects[1], base::Time::Now(),
                    reinterpret_cast<ContextID>(1), 1,
                    second_redirects[0], second_redirects,
-                   static_cast<content::PageTransition>(
-                       content::PAGE_TRANSITION_LINK |
-                       content::PAGE_TRANSITION_CLIENT_REDIRECT),
+                   ui::PageTransitionFromInt(
+                       ui::PAGE_TRANSITION_LINK |
+                       ui::PAGE_TRANSITION_CLIENT_REDIRECT),
                    history::SOURCE_BROWSED, true);
 
   // The last page (source of the client redirect) should NOT have an
@@ -1204,8 +1205,8 @@ TEST_F(HistoryTest, AddRedirect) {
   EXPECT_TRUE(QueryURL(history_service_.get(), second_redirects[1]));
   EXPECT_EQ(1, query_url_row_.visit_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_CLIENT_REDIRECT |
-            content::PAGE_TRANSITION_CHAIN_END,
+  EXPECT_EQ(ui::PAGE_TRANSITION_CLIENT_REDIRECT |
+            ui::PAGE_TRANSITION_CHAIN_END,
             query_url_visits_[0].transition);
   EXPECT_EQ(second_visit, query_url_visits_[0].referring_visit);
 }
@@ -1218,14 +1219,14 @@ TEST_F(HistoryTest, MakeIntranetURLsTyped) {
   const GURL test_url("http://intranet_host/path");
   history_service_->AddPage(
       test_url, base::Time::Now(), NULL, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   EXPECT_EQ(1, query_url_row_.visit_count());
   EXPECT_EQ(1, query_url_row_.typed_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_TYPED,
-      content::PageTransitionStripQualifier(query_url_visits_[0].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_TYPED,
+      ui::PageTransitionStripQualifier(query_url_visits_[0].transition));
 
   // Add more visits on the same host.  None of these should be promoted since
   // there is already a typed visit.
@@ -1234,66 +1235,66 @@ TEST_F(HistoryTest, MakeIntranetURLsTyped) {
   const GURL test_url2("http://intranet_host/different_path");
   history_service_->AddPage(
       test_url2, base::Time::Now(), NULL, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url2));
   EXPECT_EQ(1, query_url_row_.visit_count());
   EXPECT_EQ(0, query_url_row_.typed_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_LINK,
-      content::PageTransitionStripQualifier(query_url_visits_[0].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_LINK,
+      ui::PageTransitionStripQualifier(query_url_visits_[0].transition));
 
   // No path.
   const GURL test_url3("http://intranet_host/");
   history_service_->AddPage(
       test_url3, base::Time::Now(), NULL, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url3));
   EXPECT_EQ(1, query_url_row_.visit_count());
   EXPECT_EQ(0, query_url_row_.typed_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_LINK,
-      content::PageTransitionStripQualifier(query_url_visits_[0].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_LINK,
+      ui::PageTransitionStripQualifier(query_url_visits_[0].transition));
 
   // Different scheme.
   const GURL test_url4("https://intranet_host/");
   history_service_->AddPage(
       test_url4, base::Time::Now(), NULL, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url4));
   EXPECT_EQ(1, query_url_row_.visit_count());
   EXPECT_EQ(0, query_url_row_.typed_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_LINK,
-      content::PageTransitionStripQualifier(query_url_visits_[0].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_LINK,
+      ui::PageTransitionStripQualifier(query_url_visits_[0].transition));
 
   // Different transition.
   const GURL test_url5("http://intranet_host/another_path");
   history_service_->AddPage(
       test_url5, base::Time::Now(), NULL, 0, GURL(),
       history::RedirectList(),
-      content::PAGE_TRANSITION_AUTO_BOOKMARK,
+      ui::PAGE_TRANSITION_AUTO_BOOKMARK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url5));
   EXPECT_EQ(1, query_url_row_.visit_count());
   EXPECT_EQ(0, query_url_row_.typed_count());
   ASSERT_EQ(1U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_AUTO_BOOKMARK,
-      content::PageTransitionStripQualifier(query_url_visits_[0].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_AUTO_BOOKMARK,
+      ui::PageTransitionStripQualifier(query_url_visits_[0].transition));
 
   // Original URL.
   history_service_->AddPage(
       test_url, base::Time::Now(), NULL, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
   EXPECT_EQ(2, query_url_row_.visit_count());
   EXPECT_EQ(1, query_url_row_.typed_count());
   ASSERT_EQ(2U, query_url_visits_.size());
-  EXPECT_EQ(content::PAGE_TRANSITION_LINK,
-      content::PageTransitionStripQualifier(query_url_visits_[1].transition));
+  EXPECT_EQ(ui::PAGE_TRANSITION_LINK,
+      ui::PageTransitionStripQualifier(query_url_visits_[1].transition));
 }
 
 TEST_F(HistoryTest, Typed) {
@@ -1305,7 +1306,7 @@ TEST_F(HistoryTest, Typed) {
   const GURL test_url("http://www.google.com/");
   history_service_->AddPage(
       test_url, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
 
@@ -1316,7 +1317,7 @@ TEST_F(HistoryTest, Typed) {
   // Add the page again not typed.
   history_service_->AddPage(
       test_url, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_LINK,
+      history::RedirectList(), ui::PAGE_TRANSITION_LINK,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
 
@@ -1327,7 +1328,7 @@ TEST_F(HistoryTest, Typed) {
   // Add the page again as a generated URL.
   history_service_->AddPage(
       test_url, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_GENERATED,
+      history::RedirectList(), ui::PAGE_TRANSITION_GENERATED,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
 
@@ -1338,7 +1339,7 @@ TEST_F(HistoryTest, Typed) {
   // Add the page again as a reload.
   history_service_->AddPage(
       test_url, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_RELOAD,
+      history::RedirectList(), ui::PAGE_TRANSITION_RELOAD,
       history::SOURCE_BROWSED, false);
   EXPECT_TRUE(QueryURL(history_service_.get(), test_url));
 
@@ -1390,11 +1391,11 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   // Add two pages.
   history_service_->AddPage(
       url0, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->AddPage(
       url1, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->QueryMostVisitedURLs(
       20,
@@ -1411,7 +1412,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   // Add another page.
   history_service_->AddPage(
       url2, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->QueryMostVisitedURLs(
       20,
@@ -1429,7 +1430,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   // Revisit url2, making it the top URL.
   history_service_->AddPage(
       url2, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->QueryMostVisitedURLs(
       20,
@@ -1447,7 +1448,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   // Revisit url1, making it the top URL.
   history_service_->AddPage(
       url1, base::Time::Now(), context_id, 0, GURL(),
-      history::RedirectList(), content::PAGE_TRANSITION_TYPED,
+      history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->QueryMostVisitedURLs(
       20,
@@ -1470,7 +1471,7 @@ TEST_F(HistoryTest, MostVisitedURLs) {
   // Visit url4 using redirects.
   history_service_->AddPage(
       url4, base::Time::Now(), context_id, 0, GURL(),
-      redirects, content::PAGE_TRANSITION_TYPED,
+      redirects, ui::PAGE_TRANSITION_TYPED,
       history::SOURCE_BROWSED, false);
   history_service_->QueryMostVisitedURLs(
       20,
@@ -1502,12 +1503,11 @@ class HistoryDBTaskImpl : public HistoryDBTask {
   HistoryDBTaskImpl(int* invoke_count, bool* done_invoked)
       : invoke_count_(invoke_count), done_invoked_(done_invoked) {}
 
-  virtual bool RunOnDBThread(HistoryBackend* backend,
-                             HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(HistoryBackend* backend, HistoryDatabase* db) override {
     return (++*invoke_count_ == kWantInvokeCount);
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {
+  void DoneRunOnMainThread() override {
     *done_invoked_ = true;
     base::MessageLoop::current()->Quit();
   }
@@ -1516,7 +1516,7 @@ class HistoryDBTaskImpl : public HistoryDBTask {
   bool* done_invoked_;
 
  private:
-  virtual ~HistoryDBTaskImpl() {}
+  ~HistoryDBTaskImpl() override {}
 
   DISALLOW_COPY_AND_ASSIGN(HistoryDBTaskImpl);
 };
@@ -1575,7 +1575,7 @@ TEST_F(HistoryTest, ProcessLocalDeleteDirectiveSyncOnline) {
         base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(i);
     history_service_->AddPage(test_url, t, NULL, 0, GURL(),
                               history::RedirectList(),
-                              content::PAGE_TRANSITION_LINK,
+                              ui::PAGE_TRANSITION_LINK,
                               history::SOURCE_BROWSED, false);
   }
 
@@ -1640,7 +1640,7 @@ TEST_F(HistoryTest, ProcessGlobalIdDeleteDirective) {
         base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(i);
     history_service_->AddPage(test_url, t, NULL, 0, GURL(),
                               history::RedirectList(),
-                              content::PAGE_TRANSITION_LINK,
+                              ui::PAGE_TRANSITION_LINK,
                               history::SOURCE_BROWSED, false);
   }
 
@@ -1731,7 +1731,7 @@ TEST_F(HistoryTest, ProcessTimeRangeDeleteDirective) {
         base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(i);
     history_service_->AddPage(test_url, t, NULL, 0, GURL(),
                               history::RedirectList(),
-                              content::PAGE_TRANSITION_LINK,
+                              ui::PAGE_TRANSITION_LINK,
                               history::SOURCE_BROWSED, false);
   }
 

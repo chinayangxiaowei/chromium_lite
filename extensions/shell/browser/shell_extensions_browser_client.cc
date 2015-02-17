@@ -9,19 +9,23 @@
 #include "base/prefs/testing_pref_store.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/user_prefs/user_prefs.h"
+#include "content/public/browser/browser_thread.h"
+#include "extensions/browser/api/extensions_api_client.h"
+#include "extensions/browser/api/generated_api_registration.h"
 #include "extensions/browser/app_sorting.h"
+#include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_function_registry.h"
-#include "extensions/browser/extension_host_delegate.h"
 #include "extensions/browser/extension_prefs.h"
-#include "extensions/common/api/generated_api.h"
-#include "extensions/shell/browser/api/shell_extensions_api_client.h"
-#include "extensions/shell/browser/shell_app_sorting.h"
+#include "extensions/browser/null_app_sorting.h"
+#include "extensions/browser/updater/null_extension_cache.h"
+#include "extensions/browser/url_request_util.h"
+#include "extensions/shell/browser/api/generated_api_registration.h"
+#include "extensions/shell/browser/shell_extension_host_delegate.h"
 #include "extensions/shell/browser/shell_extension_system_factory.h"
-#include "extensions/shell/browser/shell_extension_web_contents_observer.h"
 #include "extensions/shell/browser/shell_runtime_api_delegate.h"
-#include "extensions/shell/common/api/generated_api.h"
 
 using content::BrowserContext;
+using content::BrowserThread;
 
 namespace extensions {
 namespace {
@@ -31,56 +35,13 @@ void RegisterPrefs(user_prefs::PrefRegistrySyncable* registry) {
   ExtensionPrefs::RegisterProfilePrefs(registry);
 }
 
-// A minimal ExtensionHostDelegate.
-class ShellExtensionHostDelegate : public ExtensionHostDelegate {
- public:
-  ShellExtensionHostDelegate() {}
-  virtual ~ShellExtensionHostDelegate() {}
-
-  // ExtensionHostDelegate implementation.
-  virtual void OnExtensionHostCreated(
-      content::WebContents* web_contents) OVERRIDE;
-
-  virtual void OnRenderViewCreatedForBackgroundPage(
-      ExtensionHost* host) OVERRIDE {}
-
-  virtual content::JavaScriptDialogManager* GetJavaScriptDialogManager()
-      OVERRIDE {
-    // TODO(jamescook): Create a JavaScriptDialogManager or reuse the one from
-    // content_shell.
-    NOTREACHED();
-    return NULL;
-  }
-
-  virtual void CreateTab(content::WebContents* web_contents,
-                         const std::string& extension_id,
-                         WindowOpenDisposition disposition,
-                         const gfx::Rect& initial_pos,
-                         bool user_gesture) OVERRIDE {
-    // TODO(jamescook): Should app_shell support opening popup windows?
-    NOTREACHED();
-  }
-
-  virtual void ProcessMediaAccessRequest(
-      content::WebContents* web_contents,
-      const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback,
-      const Extension* extension) OVERRIDE {
-    // app_shell does not support media capture.
-    NOTREACHED();
-  }
-};
-
-void ShellExtensionHostDelegate::OnExtensionHostCreated(
-    content::WebContents* web_contents) {
-  ShellExtensionWebContentsObserver::CreateForWebContents(web_contents);
-}
-
 }  // namespace
 
 ShellExtensionsBrowserClient::ShellExtensionsBrowserClient(
     BrowserContext* context)
-    : browser_context_(context), api_client_(new ShellExtensionsAPIClient) {
+    : browser_context_(context),
+      api_client_(new ExtensionsAPIClient),
+      extension_cache_(new NullExtensionCache()) {
   // Set up the preferences service.
   base::PrefServiceFactory factory;
   factory.set_user_prefs(new TestingPrefStore);
@@ -151,11 +112,6 @@ bool ShellExtensionsBrowserClient::CanExtensionCrossIncognito(
   return false;
 }
 
-bool ShellExtensionsBrowserClient::IsWebViewRequest(
-    net::URLRequest* request) const {
-  return false;
-}
-
 net::URLRequestJob*
 ShellExtensionsBrowserClient::MaybeCreateResourceBundleRequestJob(
     net::URLRequest* request,
@@ -171,7 +127,13 @@ bool ShellExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     bool is_incognito,
     const Extension* extension,
     InfoMap* extension_info_map) {
-  // Note: This may need to change if app_shell supports webview.
+  bool allowed = false;
+  if (url_request_util::AllowCrossRendererResourceLoad(
+          request, is_incognito, extension, extension_info_map, &allowed)) {
+    return allowed;
+  }
+
+  // Couldn't determine if resource is allowed. Block the load.
   return false;
 }
 
@@ -204,7 +166,7 @@ void ShellExtensionsBrowserClient::PermitExternalProtocolHandler() {
 }
 
 scoped_ptr<AppSorting> ShellExtensionsBrowserClient::CreateAppSorting() {
-  return scoped_ptr<AppSorting>(new ShellAppSorting);
+  return scoped_ptr<AppSorting>(new NullAppSorting);
 }
 
 bool ShellExtensionsBrowserClient::IsRunningInForcedAppMode() {
@@ -227,8 +189,8 @@ void ShellExtensionsBrowserClient::RegisterExtensionFunctions(
   // Register core extension-system APIs.
   core_api::GeneratedFunctionRegistry::RegisterAll(registry);
 
-  // Register chrome.shell APIs.
-  shell_api::GeneratedFunctionRegistry::RegisterAll(registry);
+  // app_shell-only APIs.
+  shell::api::GeneratedFunctionRegistry::RegisterAll(registry);
 }
 
 scoped_ptr<RuntimeAPIDelegate>
@@ -242,8 +204,39 @@ ShellExtensionsBrowserClient::GetComponentExtensionResourceManager() {
   return NULL;
 }
 
+void ShellExtensionsBrowserClient::BroadcastEventToRenderers(
+    const std::string& event_name,
+    scoped_ptr<base::ListValue> args) {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+    BrowserThread::PostTask(
+        BrowserThread::UI,
+        FROM_HERE,
+        base::Bind(&ShellExtensionsBrowserClient::BroadcastEventToRenderers,
+                   base::Unretained(this),
+                   event_name,
+                   base::Passed(&args)));
+    return;
+  }
+
+  scoped_ptr<Event> event(new Event(event_name, args.Pass()));
+  EventRouter::Get(browser_context_)->BroadcastEvent(event.Pass());
+}
+
 net::NetLog* ShellExtensionsBrowserClient::GetNetLog() {
   return NULL;
+}
+
+ExtensionCache* ShellExtensionsBrowserClient::GetExtensionCache() {
+  return extension_cache_.get();
+}
+
+bool ShellExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
+  return true;
+}
+
+bool ShellExtensionsBrowserClient::IsMinBrowserVersionSupported(
+    const std::string& min_version) {
+  return true;
 }
 
 }  // namespace extensions

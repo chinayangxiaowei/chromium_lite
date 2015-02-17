@@ -6,19 +6,20 @@
 
 #include "base/memory/singleton.h"
 #include "base/thread_task_runner_handle.h"
+#include "chrome/browser/apps/scoped_keep_alive.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/shell_integration_linux.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate_views.h"
 #include "chrome/browser/ui/app_list/app_list_shower_views.h"
 #include "chrome/browser/ui/app_list/app_list_view_delegate.h"
-#include "chrome/browser/ui/app_list/scoped_keep_alive.h"
 #include "chrome/browser/ui/ash/app_list/app_list_service_ash.h"
 #include "chrome/browser/ui/views/app_list/linux/app_list_linux.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/google_chrome_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/app_list/app_list_constants.h"
+#include "ui/app_list/app_list_switches.h"
 #include "ui/app_list/views/app_list_view.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -53,6 +54,9 @@ void AppListServiceLinux::CreateShortcut() {
 void AppListServiceLinux::OnActivationChanged(views::Widget* /*widget*/,
                                               bool active) {
   if (active)
+    return;
+
+  if (app_list::switches::ShouldNotDismissOnBlur())
     return;
 
   // Dismiss the app list asynchronously. This must be done asynchronously

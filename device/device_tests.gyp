@@ -12,12 +12,14 @@
       'type': '<(gtest_target_type)',
       'dependencies': [
         '../base/base.gyp:test_support_base',
-        '../components/components.gyp:usb_service',
+        '../mojo/edk/mojo_edk.gyp:mojo_system_impl',
         '../mojo/mojo_base.gyp:mojo_environment_chromium',
-        '../mojo/mojo_base.gyp:mojo_system_impl',
+        '../mojo/public/mojo_public.gyp:mojo_cpp_bindings',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
-        '../tools/usb_gadget.gyp:usb_gadget',
+        '../tools/usb_gadget/usb_gadget.gyp:usb_gadget',
+        'battery/battery.gyp:device_battery',
+        'battery/battery.gyp:device_battery_mojo_bindings',
         'bluetooth/bluetooth.gyp:device_bluetooth',
         'bluetooth/bluetooth.gyp:device_bluetooth_mocks',
         'nfc/nfc.gyp:device_nfc',
@@ -27,6 +29,9 @@
         'serial/serial.gyp:device_serial_test_util',
       ],
       'sources': [
+        'battery/battery_status_manager_linux_unittest.cc',
+        'battery/battery_status_manager_win_unittest.cc',
+        'battery/battery_status_service_unittest.cc',
         'bluetooth/bluetooth_adapter_mac_unittest.mm',
         'bluetooth/bluetooth_adapter_unittest.cc',
         'bluetooth/bluetooth_adapter_win_unittest.cc',
@@ -41,12 +46,17 @@
         'bluetooth/bluetooth_uuid_unittest.cc',
         'nfc/nfc_chromeos_unittest.cc',
         'nfc/nfc_ndef_record_unittest.cc',
+        'usb/usb_context_unittest.cc',
+        'usb/usb_device_filter_unittest.cc',
         'usb/usb_ids_unittest.cc',
+        'usb/usb_device_handle_unittest.cc',
         'usb/usb_service_unittest.cc',
         'hid/hid_connection_unittest.cc',
+        'hid/hid_device_filter_unittest.cc',
         'hid/hid_report_descriptor_unittest.cc',
         'hid/hid_service_unittest.cc',
         'hid/input_service_linux_unittest.cc',
+        'serial/data_sink_unittest.cc',
         'serial/data_source_unittest.cc',
         'serial/serial_connection_unittest.cc',
         'serial/serial_service_unittest.cc',
@@ -60,7 +70,10 @@
             '../chromeos/chromeos.gyp:chromeos_test_support',
             '../chromeos/chromeos.gyp:chromeos_test_support_without_gmock',
             '../dbus/dbus.gyp:dbus',
-          ]
+          ],
+          'sources!': [
+            'battery/battery_status_manager_linux_unittest.cc',
+          ],
         }],
         ['OS=="mac"', {
           'link_settings': {
@@ -83,9 +96,17 @@
           # Udev, disable these unittests.
           'dependencies!': [
             'hid/hid.gyp:device_hid',
+            'serial/serial.gyp:device_serial',
+            'serial/serial.gyp:device_serial_test_util',
           ],
           'sources/': [
+            ['exclude', '^serial/'],
             ['exclude', '^hid/'],
+          ],
+        }],
+        ['use_dbus==0', {
+          'sources!': [
+            'battery/battery_status_manager_linux_unittest.cc',
           ],
         }],
       ],

@@ -7,8 +7,9 @@
 #include "base/logging.h"
 #include "chrome/browser/extensions/app_sync_data.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
+#include "components/crx_file/id_util.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest_url_handlers.h"
 #include "sync/api/sync_data.h"
 #include "sync/protocol/extension_specifics.pb.h"
 #include "sync/protocol/sync.pb.h"
@@ -74,7 +75,7 @@ syncer::SyncChange ExtensionSyncData::GetSyncChange(
 
 void ExtensionSyncData::PopulateExtensionSpecifics(
     sync_pb::ExtensionSpecifics* specifics) const {
-  DCHECK(Extension::IdIsValid(id_));
+  DCHECK(crx_file::id_util::IdIsValid(id_));
   specifics->set_id(id_);
   specifics->set_update_url(update_url_.spec());
   specifics->set_version(version_.GetString());
@@ -87,7 +88,7 @@ void ExtensionSyncData::PopulateExtensionSpecifics(
 
 void ExtensionSyncData::PopulateFromExtensionSpecifics(
     const sync_pb::ExtensionSpecifics& specifics) {
-  if (!Extension::IdIsValid(specifics.id())) {
+  if (!crx_file::id_util::IdIsValid(specifics.id())) {
     LOG(FATAL) << "Attempt to sync bad ExtensionSpecifics.";
   }
 

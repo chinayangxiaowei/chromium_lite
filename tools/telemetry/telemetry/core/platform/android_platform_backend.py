@@ -3,24 +3,38 @@
 # found in the LICENSE file.
 
 import logging
+import os
+import re
+import shutil
+import subprocess
 import tempfile
+import time
 
 from telemetry import decorators
 from telemetry.core import exceptions
 from telemetry.core import platform
 from telemetry.core import util
 from telemetry.core import video
-from telemetry.core.platform import proc_supporting_platform_backend
+from telemetry.core.backends import adb_commands
+from telemetry.core.platform import android_device
+from telemetry.core.platform import linux_based_platform_backend
 from telemetry.core.platform.power_monitor import android_ds2784_power_monitor
 from telemetry.core.platform.power_monitor import android_dumpsys_power_monitor
 from telemetry.core.platform.power_monitor import android_temperature_monitor
 from telemetry.core.platform.power_monitor import monsoon_power_monitor
 from telemetry.core.platform.power_monitor import power_monitor_controller
 from telemetry.core.platform.profiler import android_prebuilt_profiler_helper
+from telemetry.util import exception_formatter
+
+util.AddDirToPythonPath(util.GetChromiumSrcDir(),
+                        'third_party', 'webpagereplay')
+import adb_install_cert  # pylint: disable=F0401
+import certutils  # pylint: disable=F0401
 
 # Get build/android scripts into our path.
 util.AddDirToPythonPath(util.GetChromiumSrcDir(), 'build', 'android')
 from pylib import screenshot  # pylint: disable=F0401
+from pylib.device import device_errors  # pylint: disable=F0401
 from pylib.perf import cache_control  # pylint: disable=F0401
 from pylib.perf import perf_control  # pylint: disable=F0401
 from pylib.perf import thermal_throttle  # pylint: disable=F0401
@@ -31,35 +45,52 @@ except Exception:
   surface_stats_collector = None
 
 
-_HOST_APPLICATIONS = [
-    'avconv',
-    'ipfw',
-    'perfhost',
-    ]
-
-
 class AndroidPlatformBackend(
-    proc_supporting_platform_backend.ProcSupportingPlatformBackend):
-  def __init__(self, device, no_performance_mode):
-    super(AndroidPlatformBackend, self).__init__()
-    self._device = device
+    linux_based_platform_backend.LinuxBasedPlatformBackend):
+  def __init__(self, device):
+    assert device, (
+        'AndroidPlatformBackend can only be initialized from remote device')
+    super(AndroidPlatformBackend, self).__init__(device)
+    self._adb = adb_commands.AdbCommands(device=device.device_id)
+    installed_prebuilt_tools = adb_commands.SetupPrebuiltTools(self._adb)
+    if not installed_prebuilt_tools:
+      logging.error(
+          '%s detected, however prebuilt android tools could not '
+          'be used. To run on Android you must build them first:\n'
+          '  $ ninja -C out/Release android_tools' % device.name)
+      raise exceptions.PlatformError()
+    # Trying to root the device, if possible.
+    if not self._adb.IsRootEnabled():
+      # Ignore result.
+      self._adb.EnableAdbRoot()
+    self._device = self._adb.device()
+    self._enable_performance_mode = device.enable_performance_mode
     self._surface_stats_collector = None
     self._perf_tests_setup = perf_control.PerfControl(self._device)
     self._thermal_throttle = thermal_throttle.ThermalThrottle(self._device)
-    self._no_performance_mode = no_performance_mode
     self._raw_display_frame_rate_measurements = []
     self._can_access_protected_file_contents = \
         self._device.old_interface.CanAccessProtectedFileContents()
     power_controller = power_monitor_controller.PowerMonitorController([
-        monsoon_power_monitor.MonsoonPowerMonitor(),
-        android_ds2784_power_monitor.DS2784PowerMonitor(device),
-        android_dumpsys_power_monitor.DumpsysPowerMonitor(device),
+        monsoon_power_monitor.MonsoonPowerMonitor(self._device, self),
+        android_ds2784_power_monitor.DS2784PowerMonitor(self._device, self),
+        android_dumpsys_power_monitor.DumpsysPowerMonitor(self._device, self),
     ])
     self._power_monitor = android_temperature_monitor.AndroidTemperatureMonitor(
-        power_controller, device)
+        power_controller, self._device)
     self._video_recorder = None
-    if self._no_performance_mode:
-      logging.warning('CPU governor will not be set!')
+    self._installed_applications = None
+
+    self._wpr_ca_cert_path = None
+    self._device_cert_util = None
+
+  @classmethod
+  def SupportsDevice(cls, device):
+    return isinstance(device, android_device.AndroidDevice)
+
+  @property
+  def adb(self):
+    return self._adb
 
   def IsRawDisplayFrameRateSupported(self):
     return True
@@ -90,7 +121,8 @@ class AndroidPlatformBackend(
     return ret
 
   def SetFullPerformanceModeEnabled(self, enabled):
-    if self._no_performance_mode:
+    if not self._enable_performance_mode:
+      logging.warning('CPU governor will not be set!')
       return
     if enabled:
       self._perf_tests_setup.SetHighPerfMode()
@@ -150,7 +182,7 @@ class AndroidPlatformBackend(
 
   def GetChildPids(self, pid):
     child_pids = []
-    ps = self._GetPsOutput(['pid', 'name'])
+    ps = self.GetPsOutput(['pid', 'name'])
     for curr_pid, curr_name in ps:
       if int(curr_pid) == pid:
         name = curr_name
@@ -162,7 +194,7 @@ class AndroidPlatformBackend(
 
   @decorators.Cache
   def GetCommandLine(self, pid):
-    ps = self._GetPsOutput(['pid', 'name'], pid)
+    ps = self.GetPsOutput(['pid', 'name'], pid)
     if not ps:
       raise exceptions.ProcessGoneException()
     return ps[0][1]
@@ -187,34 +219,59 @@ class AndroidPlatformBackend(
   def FlushDnsCache(self):
     self._device.RunShellCommand('ndc resolver flushdefaultif', as_root=True)
 
+  def StopApplication(self, application):
+    """Stop the given |application|.
+
+    Args:
+       application: The full package name string of the application to stop.
+    """
+    self._device.ForceStop(application)
+
+  def KillApplication(self, application):
+    """Kill the given application.
+
+    Args:
+      application: The full package name string of the application to kill.
+    """
+    # We use KillAll rather than ForceStop for efficiency reasons.
+    try:
+      self._adb.device().KillAll(application, retries=0)
+      time.sleep(3)
+    except device_errors.CommandFailedError:
+      pass
+
   def LaunchApplication(
       self, application, parameters=None, elevate_privilege=False):
-    if application in _HOST_APPLICATIONS:
-      platform.GetHostPlatform().LaunchApplication(
-          application, parameters, elevate_privilege=elevate_privilege)
-      return
+    """Launches the given |application| with a list of |parameters| on the OS.
+
+    Args:
+      application: The full package name string of the application to launch.
+      parameters: A list of parameters to be passed to the ActivityManager.
+      elevate_privilege: Currently unimplemented on Android.
+    """
     if elevate_privilege:
       raise NotImplementedError("elevate_privilege isn't supported on android.")
     if not parameters:
       parameters = ''
-    self._device.RunShellCommand('am start ' + parameters + ' ' + application)
+    result_lines = self._device.RunShellCommand('am start %s %s' %
+                                                (parameters, application))
+    for line in result_lines:
+      if line.startswith('Error: '):
+        raise ValueError('Failed to start "%s" with error\n  %s' %
+                         (application, line))
 
   def IsApplicationRunning(self, application):
-    if application in _HOST_APPLICATIONS:
-      return platform.GetHostPlatform().IsApplicationRunning(application)
     return len(self._device.GetPids(application)) > 0
 
   def CanLaunchApplication(self, application):
-    if application in _HOST_APPLICATIONS:
-      return platform.GetHostPlatform().CanLaunchApplication(application)
-    return True
+    if not self._installed_applications:
+      self._installed_applications = self._device.RunShellCommand(
+          'pm list packages')
+    return 'package:' + application in self._installed_applications
 
   def InstallApplication(self, application):
-    if application in _HOST_APPLICATIONS:
-      platform.GetHostPlatform().InstallApplication(application)
-      return
-    raise NotImplementedError(
-        'Please teach Telemetry how to install ' + application)
+    self._installed_applications = None
+    self._device.Install(application)
 
   @decorators.Cache
   def CanCaptureVideo(self):
@@ -255,13 +312,13 @@ class AndroidPlatformBackend(
   def StopMonitoringPower(self):
     return self._power_monitor.StopMonitoringPower()
 
-  def _GetFileContents(self, fname):
+  def GetFileContents(self, fname):
     if not self._can_access_protected_file_contents:
       logging.warning('%s cannot be retrieved on non-rooted device.' % fname)
       return ''
     return '\n'.join(self._device.ReadFile(fname, as_root=True))
 
-  def _GetPsOutput(self, columns, pid=None):
+  def GetPsOutput(self, columns, pid=None):
     assert columns == ['pid', 'name'] or columns == ['pid'], \
         'Only know how to return pid and name. Requested: ' + columns
     command = 'ps'
@@ -278,3 +335,256 @@ class AndroidPlatformBackend(
       else:
         output.append([curr_pid])
     return output
+
+  def RunCommand(self, command):
+    return '\n'.join(self._device.RunShellCommand(command))
+
+  @staticmethod
+  def ParseCStateSample(sample):
+    sample_stats = {}
+    for cpu in sample:
+      values = sample[cpu].splitlines()
+      # Each state has three values after excluding the time value.
+      num_states = (len(values) - 1) / 3
+      names = values[:num_states]
+      times = values[num_states:2 * num_states]
+      cstates = {'C0': int(values[-1]) * 10 ** 6}
+      for i, state in enumerate(names):
+        if state == 'C0':
+          # The Exynos cpuidle driver for the Nexus 10 uses the name 'C0' for
+          # its WFI state.
+          # TODO(tmandel): We should verify that no other Android device
+          # actually reports time in C0 causing this to report active time as
+          # idle time.
+          state = 'WFI'
+        cstates[state] = int(times[i])
+        cstates['C0'] -= int(times[i])
+      sample_stats[cpu] = cstates
+    return sample_stats
+
+  def SetRelaxSslCheck(self, value):
+    old_flag = self._device.GetProp('socket.relaxsslcheck')
+    self._device.SetProp('socket.relaxsslcheck', value)
+    return old_flag
+
+  def ForwardHostToDevice(self, host_port, device_port):
+    self._adb.Forward('tcp:%d' % host_port, device_port)
+
+  def DismissCrashDialogIfNeeded(self):
+    """Dismiss any error dialogs.
+
+    Limit the number in case we have an error loop or we are failing to dismiss.
+    """
+    for _ in xrange(10):
+      if not self._device.old_interface.DismissCrashDialogIfNeeded():
+        break
+
+  def IsAppRunning(self, process_name):
+    """Determine if the given process is running.
+
+    Args:
+      process_name: The full package name string of the process.
+    """
+    pids = self._adb.ExtractPid(process_name)
+    return len(pids) != 0
+
+  @property
+  def wpr_ca_cert_path(self):
+    """Path to root certificate installed on browser (or None).
+
+    If this is set, web page replay will use it to sign HTTPS responses.
+    """
+    if self._wpr_ca_cert_path:
+      assert os.path.isfile(self._wpr_ca_cert_path)
+    return self._wpr_ca_cert_path
+
+  def InstallTestCa(self):
+    """Install a randomly generated root CA on the android device.
+
+    This allows transparent HTTPS testing with WPR server without need
+    to tweak application network stack.
+
+    Returns:
+      True if the certificate installation succeeded.
+    """
+    if certutils.openssl_import_error:
+      logging.warn(
+          'The OpenSSL module is unavailable. '
+          'Will fallback to ignoring certificate errors.')
+      return False
+
+    try:
+      self._wpr_ca_cert_path = os.path.join(tempfile.mkdtemp(), 'testca.pem')
+      certutils.write_dummy_ca_cert(*certutils.generate_dummy_ca_cert(),
+                                    cert_path=self._wpr_ca_cert_path)
+      self._device_cert_util = adb_install_cert.AndroidCertInstaller(
+          self._adb.device_serial(), None, self._wpr_ca_cert_path)
+      logging.info('Installing test certificate authority on device: %s',
+                   self._adb.device_serial())
+      self._device_cert_util.install_cert(overwrite_cert=True)
+    except Exception:
+      # Fallback to ignoring certificate errors.
+      self.RemoveTestCa()
+      exception_formatter.PrintFormattedException(
+          msg=('Unable to install test certificate authority on device: %s. '
+               'Will fallback to ignoring certificate errors.'
+               % self._adb.device_serial()))
+      return False
+    return True
+
+  def RemoveTestCa(self):
+    """Remove root CA generated by previous call to InstallTestCa().
+
+    Removes the test root certificate from both the device and host machine.
+    """
+    if not self._wpr_ca_cert_path:
+      return
+
+    if self._device_cert_util:
+      self._device_cert_util.remove_cert()
+
+    shutil.rmtree(os.path.dirname(self._wpr_ca_cert_path), ignore_errors = True)
+    self._wpr_ca_cert_path = None
+    self._device_cert_util = None
+
+  def PushProfile(self, package, new_profile_dir):
+    """Replace application profile with files found on host machine.
+
+    Pushing the profile is slow, so we don't want to do it every time.
+    Avoid this by pushing to a safe location using PushChangedFiles, and
+    then copying into the correct location on each test run.
+
+    Args:
+      package: The full package name string of the application for which the
+        profile is to be updated.
+      new_profile_dir: Location where profile to be pushed is stored on the
+        host machine.
+    """
+    (profile_parent, profile_base) = os.path.split(new_profile_dir)
+    # If the path ends with a '/' python split will return an empty string for
+    # the base name; so we now need to get the base name from the directory.
+    if not profile_base:
+      profile_base = os.path.basename(profile_parent)
+
+    saved_profile_location = '/sdcard/profile/%s' % profile_base
+    self._device.PushChangedFiles([(new_profile_dir, saved_profile_location)])
+
+    profile_dir = self._GetProfileDir(package)
+    self._device.old_interface.EfficientDeviceDirectoryCopy(
+        saved_profile_location, profile_dir)
+    dumpsys = self._device.RunShellCommand('dumpsys package %s' % package)
+    id_line = next(line for line in dumpsys if 'userId=' in line)
+    uid = re.search(r'\d+', id_line).group()
+    files = self._device.RunShellCommand(
+        'ls "%s"' % profile_dir, as_root=True)
+    files.remove('lib')
+    paths = ['%s%s' % (profile_dir, f) for f in files]
+    for path in paths:
+      extended_path = '%s %s/* %s/*/* %s/*/*/*' % (path, path, path, path)
+      self._device.RunShellCommand(
+          'chown %s.%s %s' % (uid, uid, extended_path))
+
+  def RemoveProfile(self, package, ignore_list):
+    """Delete application profile on device.
+
+    Args:
+      package: The full package name string of the application for which the
+        profile is to be deleted.
+      ignore_list: List of files to keep.
+    """
+    profile_dir = self._GetProfileDir(package)
+    files = self._device.RunShellCommand(
+        'ls "%s"' % profile_dir, as_root=True)
+    paths = ['"%s%s"' % (profile_dir, f) for f in files
+             if f not in ignore_list]
+    self._device.RunShellCommand('rm -r %s' % ' '.join(paths), as_root=True)
+
+  def PullProfile(self, package, output_profile_path):
+    """Copy application profile from device to host machine.
+
+    Args:
+      package: The full package name string of the application for which the
+        profile is to be copied.
+      output_profile_dir: Location where profile to be stored on host machine.
+    """
+    profile_dir = self._GetProfileDir(package)
+    logging.info("Pulling profile directory from device: '%s'->'%s'.",
+                 profile_dir, output_profile_path)
+    # To minimize bandwidth it might be good to look at whether all the data
+    # pulled down is really needed e.g. .pak files.
+    if not os.path.exists(output_profile_path):
+      os.makedirs(output_profile_path)
+    files = self._device.RunShellCommand('ls "%s"' % profile_dir)
+    for f in files:
+      # Don't pull lib, since it is created by the installer.
+      if f != 'lib':
+        source = '%s%s' % (profile_dir, f)
+        dest = os.path.join(output_profile_path, f)
+        # self._adb.Pull(source, dest) doesn't work because its timeout
+        # is fixed in android's adb_interface at 60 seconds, which may
+        # be too short to pull the cache.
+        cmd = 'pull %s %s' % (source, dest)
+        self._device.old_interface.Adb().SendCommand(cmd, timeout_time=240)
+
+  def _GetProfileDir(self, package):
+    """Returns the on-device location where the application profile is stored
+    based on Android convention.
+
+    Args:
+      package: The full package name string of the application.
+    """
+    return '/data/data/%s/' % package
+
+  def SetDebugApp(self, package):
+    """Set application to debugging.
+
+    Args:
+      package: The full package name string of the application.
+    """
+    if self._adb.IsUserBuild():
+      logging.debug('User build device, setting debug app')
+      self._device.RunShellCommand('am set-debug-app --persistent %s' % package)
+
+  def GetStandardOutput(self, number_of_lines=500):
+    """Returns most recent lines of logcat dump.
+
+    Args:
+      number_of_lines: Number of lines of log to return.
+    """
+    return '\n'.join(self.adb.device().RunShellCommand(
+        'logcat -d -t %d' % number_of_lines))
+
+  def GetStackTrace(self, target_arch):
+    """Returns stack trace.
+
+    The stack trace consists of raw logcat dump, logcat dump with symbols,
+    and stack info from tomstone files.
+
+    Args:
+      target_arch: String specifying device architecture (eg. arm, arm64, mips,
+        x86, x86_64)
+    """
+    def Decorate(title, content):
+      return "%s\n%s\n%s\n" % (title, content, '*' * 80)
+    # Get the last lines of logcat (large enough to contain stacktrace)
+    logcat = self.GetStandardOutput()
+    ret = Decorate('Logcat', logcat)
+    stack = os.path.join(util.GetChromiumSrcDir(), 'third_party',
+                         'android_platform', 'development', 'scripts', 'stack')
+    # Try to symbolize logcat.
+    if os.path.exists(stack):
+      cmd = [stack]
+      if target_arch:
+        cmd.append('--arch=%s' % target_arch)
+      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+      ret += Decorate('Stack from Logcat', p.communicate(input=logcat)[0])
+
+    # Try to get tombstones.
+    tombstones = os.path.join(util.GetChromiumSrcDir(), 'build', 'android',
+                              'tombstones.py')
+    if os.path.exists(tombstones):
+      ret += Decorate('Tombstones',
+                      subprocess.Popen([tombstones, '-w', '--device',
+                                        self._adb.device_serial()],
+                                       stdout=subprocess.PIPE).communicate()[0])
+    return ret

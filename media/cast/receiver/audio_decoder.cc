@@ -116,9 +116,9 @@ class AudioDecoder::OpusImpl : public AudioDecoder::ImplBase {
   }
 
  private:
-  virtual ~OpusImpl() {}
+  ~OpusImpl() override {}
 
-  virtual void RecoverBecauseFramesWereDropped() OVERRIDE {
+  void RecoverBecauseFramesWereDropped() override {
     // Passing NULL for the input data notifies the decoder of frame loss.
     const opus_int32 result =
         opus_decode_float(
@@ -126,7 +126,7 @@ class AudioDecoder::OpusImpl : public AudioDecoder::ImplBase {
     DCHECK_GE(result, 0);
   }
 
-  virtual scoped_ptr<AudioBus> Decode(uint8* data, int len) OVERRIDE {
+  scoped_ptr<AudioBus> Decode(uint8* data, int len) override {
     scoped_ptr<AudioBus> audio_bus;
     const opus_int32 num_samples_decoded = opus_decode_float(
         opus_decoder_, data, len, buffer_.get(), max_samples_per_frame_, 0);
@@ -175,9 +175,9 @@ class AudioDecoder::Pcm16Impl : public AudioDecoder::ImplBase {
   }
 
  private:
-  virtual ~Pcm16Impl() {}
+  ~Pcm16Impl() override {}
 
-  virtual scoped_ptr<AudioBus> Decode(uint8* data, int len) OVERRIDE {
+  scoped_ptr<AudioBus> Decode(uint8* data, int len) override {
     scoped_ptr<AudioBus> audio_bus;
     const int num_samples = len / sizeof(int16) / num_channels_;
     if (num_samples <= 0)
@@ -220,7 +220,7 @@ AudioDecoder::AudioDecoder(
 AudioDecoder::~AudioDecoder() {}
 
 CastInitializationStatus AudioDecoder::InitializationResult() const {
-  if (impl_)
+  if (impl_.get())
     return impl_->InitializationResult();
   return STATUS_UNSUPPORTED_AUDIO_CODEC;
 }
@@ -230,7 +230,8 @@ void AudioDecoder::DecodeFrame(
     const DecodeFrameCallback& callback) {
   DCHECK(encoded_frame.get());
   DCHECK(!callback.is_null());
-  if (!impl_ || impl_->InitializationResult() != STATUS_AUDIO_INITIALIZED) {
+  if (!impl_.get() ||
+      impl_->InitializationResult() != STATUS_AUDIO_INITIALIZED) {
     callback.Run(make_scoped_ptr<AudioBus>(NULL), false);
     return;
   }

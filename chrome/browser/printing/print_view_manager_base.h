@@ -23,8 +23,7 @@ class RenderViewHost;
 namespace printing {
 
 class JobEventDetails;
-class Metafile;
-class PdfToEmfConverter;
+class MetafilePlayer;
 class PrintJob;
 class PrintJobWorkerOwner;
 class PrintQueriesQueue;
@@ -34,18 +33,20 @@ class PrintViewManagerBase : public content::NotificationObserver,
                              public PrintedPagesSource,
                              public content::WebContentsObserver {
  public:
-  virtual ~PrintViewManagerBase();
+  ~PrintViewManagerBase() override;
 
+#if defined(ENABLE_BASIC_PRINTING)
   // Prints the current document immediately. Since the rendering is
   // asynchronous, the actual printing will not be completed on the return of
   // this function. Returns false if printing is impossible at the moment.
   virtual bool PrintNow();
+#endif  // ENABLE_BASIC_PRINTING
 
   // Whether to block scripted printing for our tab or not.
   void UpdateScriptedPrintingBlocked();
 
   // PrintedPagesSource implementation.
-  virtual base::string16 RenderSourceName() OVERRIDE;
+  base::string16 RenderSourceName() override;
 
  protected:
   explicit PrintViewManagerBase(content::WebContents* web_contents);
@@ -54,26 +55,25 @@ class PrintViewManagerBase : public content::NotificationObserver,
   bool PrintNowInternal(IPC::Message* message);
 
   // Terminates or cancels the print job if one was pending.
-  virtual void RenderProcessGone(base::TerminationStatus status) OVERRIDE;
+  void RenderProcessGone(base::TerminationStatus status) override;
 
   // content::WebContentsObserver implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   // IPC Message handlers.
   virtual void OnPrintingFailed(int cookie);
 
  private:
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // content::WebContentsObserver implementation.
-  virtual void DidStartLoading(
-      content::RenderViewHost* render_view_host) OVERRIDE;
+  void DidStartLoading(content::RenderViewHost* render_view_host) override;
 
   // Cancels the print job.
-  virtual void NavigationStopped() OVERRIDE;
+  void NavigationStopped() override;
 
   // IPC Message handlers.
   void OnDidGetPrintedPagesCount(int cookie, int number_pages);
@@ -132,13 +132,6 @@ class PrintViewManagerBase : public content::NotificationObserver,
   // Release the PrinterQuery associated with our |cookie_|.
   void ReleasePrinterQuery();
 
-#if defined(WIN_PDF_METAFILE_FOR_PRINTING)
-  // Called on completion of converting the pdf to emf.
-  void OnPdfToEmfConverted(const PrintHostMsg_DidPrintPage_Params& params,
-                           double scale_factor,
-                           ScopedVector<Metafile>* emf_files);
-#endif
-
   content::NotificationRegistrar registrar_;
 
   // Manages the low-level talk to the printer.
@@ -155,15 +148,10 @@ class PrintViewManagerBase : public content::NotificationObserver,
   // print settings are being loaded.
   bool inside_inner_message_loop_;
 
-#if (defined(OS_POSIX) && !defined(OS_MACOSX)) || \
-    defined(WIN_PDF_METAFILE_FOR_PRINTING)
+#if !defined(OS_MACOSX)
   // Set to true when OnDidPrintPage() should be expecting the first page.
   bool expecting_first_page_;
-#endif
-
-#if defined(WIN_PDF_METAFILE_FOR_PRINTING)
-  scoped_ptr<PdfToEmfConverter> pdf_to_emf_converter_;
-#endif
+#endif  // OS_MACOSX
 
   // The document cookie of the current PrinterQuery.
   int cookie_;

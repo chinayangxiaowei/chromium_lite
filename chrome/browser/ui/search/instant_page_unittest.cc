@@ -40,7 +40,7 @@ class FakePageDelegate : public InstantPage::Delegate {
   MOCK_METHOD5(NavigateToURL,
                void(const content::WebContents* contents,
                     const GURL& url,
-                    content::PageTransition transition,
+                    ui::PageTransition transition,
                     WindowOpenDisposition disposition,
                     bool is_search_type));
 };
@@ -49,7 +49,7 @@ class FakePageDelegate : public InstantPage::Delegate {
 
 class InstantPageTest : public ChromeRenderViewHostTestHarness {
  public:
-  virtual void SetUp() OVERRIDE;
+  void SetUp() override;
 
   bool MessageWasSent(uint32 id) {
     return process()->sink().GetFirstMessageMatching(id) != NULL;

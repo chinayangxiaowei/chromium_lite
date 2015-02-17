@@ -11,15 +11,14 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/debug/alias.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "crypto/nss_util.h"
@@ -91,6 +90,7 @@
 
 #if defined(OS_LINUX)
 #include <gtk/gtk.h>
+#include <X11/Xlib.h>
 #include "remoting/host/audio_capturer_linux.h"
 #endif  // defined(OS_LINUX)
 
@@ -104,6 +104,10 @@
 
 using remoting::protocol::PairingRegistry;
 using remoting::protocol::NetworkSettings;
+
+#if defined(USE_REMOTING_MACOSX_INTERNAL)
+#include "remoting/tools/internal/internal_mac-inl.h"
+#endif
 
 namespace {
 
@@ -151,19 +155,19 @@ class HostProcess
               int* exit_code_out);
 
   // ConfigWatcher::Delegate interface.
-  virtual void OnConfigUpdated(const std::string& serialized_config) OVERRIDE;
-  virtual void OnConfigWatcherError() OVERRIDE;
+  void OnConfigUpdated(const std::string& serialized_config) override;
+  void OnConfigWatcherError() override;
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelError() override;
 
   // HeartbeatSender::Listener overrides.
-  virtual void OnHeartbeatSuccessful() OVERRIDE;
-  virtual void OnUnknownHostIdError() OVERRIDE;
+  void OnHeartbeatSuccessful() override;
+  void OnUnknownHostIdError() override;
 
   // HostChangeNotificationListener::Listener overrides.
-  virtual void OnHostDeleted() OVERRIDE;
+  void OnHostDeleted() override;
 
   // Initializes the pairing registry on Windows.
   void OnInitializePairingRegistry(
@@ -203,7 +207,7 @@ class HostProcess
   };
 
   friend class base::RefCountedThreadSafe<HostProcess>;
-  virtual ~HostProcess();
+  ~HostProcess() override;
 
   void StartOnNetworkThread();
 
@@ -259,6 +263,8 @@ class HostProcess
 
   void ShutdownOnNetworkThread();
 
+  void OnPolicyWatcherShutdown();
+
   // Crashes the process in response to a daemon's request. The daemon passes
   // the location of the code that detected the fatal error resulted in this
   // request.
@@ -294,6 +300,7 @@ class HostProcess
   std::string oauth_refresh_token_;
   std::string serialized_config_;
   std::string host_owner_;
+  std::string host_owner_email_;
   bool use_service_account_;
   bool enable_vp9_;
   int64_t frame_recorder_buffer_size_;
@@ -401,7 +408,7 @@ bool HostProcess::InitWithCommandLine(const base::CommandLine* cmd_line) {
 
 #if defined(OS_WIN)
   base::win::ScopedHandle pipe(reinterpret_cast<HANDLE>(pipe_handle));
-  IPC::ChannelHandle channel_handle(pipe);
+  IPC::ChannelHandle channel_handle(pipe.Get());
 #elif defined(OS_POSIX)
   base::FileDescriptor pipe(pipe_handle, true);
   IPC::ChannelHandle channel_handle(channel_name, pipe);
@@ -522,8 +529,8 @@ void HostProcess::OnConfigUpdated(
     // already loaded so PolicyWatcher has to be started here. Separate policy
     // loading from policy verifications and move |policy_watcher_|
     // initialization to StartOnNetworkThread().
-    policy_watcher_.reset(
-        policy_hack::PolicyWatcher::Create(context_->file_task_runner()));
+    policy_watcher_ = policy_hack::PolicyWatcher::Create(
+        nullptr, context_->network_task_runner());
     policy_watcher_->StartWatching(
         base::Bind(&HostProcess::OnPolicyUpdate, base::Unretained(this)));
   } else {
@@ -799,7 +806,7 @@ void HostProcess::OnInitializePairingRegistry(
   if (!result)
     return;
 
-  pairing_registry_delegate_ = delegate.PassAs<PairingRegistry::Delegate>();
+  pairing_registry_delegate_ = delegate.Pass();
 #else  // !defined(OS_WIN)
   NOTREACHED();
 #endif  // !defined(OS_WIN)
@@ -868,6 +875,13 @@ bool HostProcess::ApplyConfig(scoped_ptr<JsonHostConfig> config) {
     use_service_account_ = false;
   }
 
+  // For non-Gmail Google accounts, the owner base JID differs from the email.
+  // host_owner_ contains the base JID (used for authenticating clients), while
+  // host_owner_email contains the account's email (used for UI and logs).
+  if (!config->GetString(kHostOwnerEmailConfigPath, &host_owner_email_)) {
+    host_owner_email_ = host_owner_;
+  }
+
   // Allow offering of VP9 encoding to be overridden by the command-line.
   if (CommandLine::ForCurrentProcess()->HasSwitch(kEnableVp9SwitchName)) {
     enable_vp9_ = true;
@@ -925,10 +939,22 @@ void HostProcess::OnPolicyUpdate(scoped_ptr<base::DictionaryValue> policies) {
 
 void HostProcess::ApplyHostDomainPolicy() {
   HOST_LOG << "Policy sets host domain: " << host_domain_;
-  if (!host_domain_.empty() &&
-      !EndsWith(host_owner_, std::string("@") + host_domain_, false)) {
-    LOG(ERROR) << "The host domain does not match the policy.";
-    ShutdownHost(kInvalidHostDomainExitCode);
+
+  if (!host_domain_.empty()) {
+    // If the user does not have a Google email, their client JID will not be
+    // based on their email. In that case, the username/host domain policies
+    // would be meaningless, since there is no way to check that the JID
+    // trying to connect actually corresponds to the owner email in question.
+    if (host_owner_ != host_owner_email_) {
+      LOG(ERROR) << "The username and host domain policies cannot be enabled "
+                 << "for accounts with a non-Google email.";
+      ShutdownHost(kInvalidHostDomainExitCode);
+    }
+
+    if (!EndsWith(host_owner_, std::string("@") + host_domain_, false)) {
+      LOG(ERROR) << "The host domain does not match the policy.";
+      ShutdownHost(kInvalidHostDomainExitCode);
+    }
   }
 }
 
@@ -948,6 +974,14 @@ bool HostProcess::OnHostDomainPolicyUpdate(base::DictionaryValue* policies) {
 void HostProcess::ApplyUsernamePolicy() {
   if (host_username_match_required_) {
     HOST_LOG << "Policy requires host username match.";
+
+    // See comment in ApplyHostDomainPolicy.
+    if (host_owner_ != host_owner_email_) {
+      LOG(ERROR) << "The username and host domain policies cannot be enabled "
+                 << "for accounts with a non-Google email.";
+      ShutdownHost(kUsernameMismatchExitCode);
+    }
+
     std::string username = GetUsername();
     bool shutdown = username.empty() ||
         !StartsWithASCII(host_owner_, username + std::string("@"),
@@ -1277,7 +1311,7 @@ void HostProcess::StartHost() {
     scoped_ptr<VideoFrameRecorderHostExtension> frame_recorder_extension(
         new VideoFrameRecorderHostExtension());
     frame_recorder_extension->SetMaxContentBytes(frame_recorder_buffer_size_);
-    host_->AddExtension(frame_recorder_extension.PassAs<HostExtension>());
+    host_->AddExtension(frame_recorder_extension.Pass());
   }
 
   // TODO(simonmorris): Get the maximum session duration from a policy.
@@ -1309,7 +1343,7 @@ void HostProcess::StartHost() {
 #endif  // !defined(REMOTING_MULTI_PROCESS)
 
   host_->SetEnableCurtaining(curtain_required_);
-  host_->Start(host_owner_);
+  host_->Start(host_owner_email_);
 
   CreateAuthenticatorFactory();
 }
@@ -1384,22 +1418,23 @@ void HostProcess::ShutdownOnNetworkThread() {
     state_ = HOST_STOPPED;
 
     if (policy_watcher_.get()) {
-      base::WaitableEvent done_event(true, false);
-      policy_watcher_->StopWatching(&done_event);
-      done_event.Wait();
-      policy_watcher_.reset();
+      policy_watcher_->StopWatching(
+          base::Bind(&HostProcess::OnPolicyWatcherShutdown, this));
+    } else {
+      OnPolicyWatcherShutdown();
     }
-
-    config_watcher_.reset();
-
-    // Complete the rest of shutdown on the main thread.
-    context_->ui_task_runner()->PostTask(
-        FROM_HERE,
-        base::Bind(&HostProcess::ShutdownOnUiThread, this));
   } else {
     // This method is only called in STOPPING_TO_RESTART and STOPPING states.
     NOTREACHED();
   }
+}
+
+void HostProcess::OnPolicyWatcherShutdown() {
+  policy_watcher_.reset();
+
+  // Complete the rest of shutdown on the main thread.
+  context_->ui_task_runner()->PostTask(
+      FROM_HERE, base::Bind(&HostProcess::ShutdownOnUiThread, this));
 }
 
 void HostProcess::OnCrash(const std::string& function_name,
@@ -1417,6 +1452,9 @@ void HostProcess::OnCrash(const std::string& function_name,
 
 int HostProcessMain() {
 #if defined(OS_LINUX)
+  // Required in order for us to run multiple X11 threads.
+  XInitThreads();
+
   // Required for any calls into GTK functions, such as the Disconnect and
   // Continue windows, though these should not be used for the Me2Me case
   // (crbug.com/104377).

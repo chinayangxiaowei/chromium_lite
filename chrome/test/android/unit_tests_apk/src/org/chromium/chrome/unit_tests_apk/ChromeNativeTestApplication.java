@@ -22,6 +22,14 @@ public class ChromeNativeTestApplication extends ChromiumApplication {
     }
 
     @Override
+    protected void showAutofillSettings() {
+    }
+
+    @Override
+    protected void showPasswordSettings() {
+    }
+
+    @Override
     protected void showTermsOfServiceDialog() {
     }
 
@@ -37,5 +45,9 @@ public class ChromeNativeTestApplication extends ChromiumApplication {
     @Override
     protected PKCS11AuthenticationManager getPKCS11AuthenticationManager() {
         return null;
+    }
+
+    @Override
+    public void initCommandLine() {
     }
 }

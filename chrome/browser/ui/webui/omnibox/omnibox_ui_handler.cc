@@ -33,10 +33,9 @@
 namespace mojo {
 
 template <>
-class TypeConverter<mojo::Array<AutocompleteAdditionalInfoPtr>,
-                    AutocompleteMatch::AdditionalInfo> {
- public:
-  static mojo::Array<AutocompleteAdditionalInfoPtr> ConvertFrom(
+struct TypeConverter<mojo::Array<AutocompleteAdditionalInfoPtr>,
+                     AutocompleteMatch::AdditionalInfo> {
+  static mojo::Array<AutocompleteAdditionalInfoPtr> Convert(
       const AutocompleteMatch::AdditionalInfo& input) {
     mojo::Array<AutocompleteAdditionalInfoPtr> array(input.size());
     size_t index = 0;
@@ -52,9 +51,8 @@ class TypeConverter<mojo::Array<AutocompleteAdditionalInfoPtr>,
 };
 
 template <>
-class TypeConverter<AutocompleteMatchMojoPtr, AutocompleteMatch> {
- public:
-  static AutocompleteMatchMojoPtr ConvertFrom(const AutocompleteMatch& input) {
+struct TypeConverter<AutocompleteMatchMojoPtr, AutocompleteMatch> {
+  static AutocompleteMatchMojoPtr Convert(const AutocompleteMatch& input) {
     AutocompleteMatchMojoPtr result(AutocompleteMatchMojo::New());
     if (input.provider != NULL) {
       result->provider_name = input.provider->GetName();
@@ -94,10 +92,9 @@ class TypeConverter<AutocompleteMatchMojoPtr, AutocompleteMatch> {
 };
 
 template <>
-class TypeConverter<AutocompleteResultsForProviderMojoPtr,
-                    scoped_refptr<AutocompleteProvider> > {
- public:
-  static AutocompleteResultsForProviderMojoPtr ConvertFrom(
+struct TypeConverter<AutocompleteResultsForProviderMojoPtr,
+                     scoped_refptr<AutocompleteProvider> > {
+  static AutocompleteResultsForProviderMojoPtr Convert(
       const scoped_refptr<AutocompleteProvider>& input) {
     AutocompleteResultsForProviderMojoPtr result(
         AutocompleteResultsForProviderMojo::New());
@@ -190,8 +187,7 @@ void OmniboxUIHandler::StartOmniboxQuery(const mojo::String& input_string,
   ResetController();
   time_omnibox_started_ = base::Time::Now();
   input_ = AutocompleteInput(
-      input_string.To<base::string16>(), cursor_position, base::string16(),
-      GURL(),
+      input_string.To<base::string16>(), cursor_position, std::string(), GURL(),
       static_cast<metrics::OmniboxEventProto::PageClassification>(
           page_classification),
       prevent_inline_autocomplete, prefer_keyword, true, true,

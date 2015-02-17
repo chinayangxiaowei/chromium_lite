@@ -53,13 +53,13 @@ class ScreenshotTaker : public ash::ScreenshotDelegate {
  public:
   ScreenshotTaker();
 
-  virtual ~ScreenshotTaker();
+  ~ScreenshotTaker() override;
 
   // Overridden from ash::ScreenshotDelegate:
-  virtual void HandleTakeScreenshotForAllRootWindows() OVERRIDE;
-  virtual void HandleTakePartialScreenshot(aura::Window* window,
-                                           const gfx::Rect& rect) OVERRIDE;
-  virtual bool CanTakeScreenshot() OVERRIDE;
+  void HandleTakeScreenshotForAllRootWindows() override;
+  void HandleTakePartialScreenshot(aura::Window* window,
+                                   const gfx::Rect& rect) override;
+  bool CanTakeScreenshot() override;
 
   void ShowNotification(
       ScreenshotTakerObserver::Result screenshot_result,
@@ -98,8 +98,6 @@ class ScreenshotTaker : public ash::ScreenshotDelegate {
       const base::FilePath& screenshot_path);
 #endif
 
-  base::WeakPtrFactory<ScreenshotTaker> factory_;
-
   // The timestamp when the screenshot task was issued last time.
   base::Time last_screenshot_timestamp_;
 
@@ -108,6 +106,8 @@ class ScreenshotTaker : public ash::ScreenshotDelegate {
   base::FilePath screenshot_directory_for_test_;
   std::string screenshot_basename_for_test_;
   Profile* profile_for_test_;
+
+  base::WeakPtrFactory<ScreenshotTaker> factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ScreenshotTaker);
 };

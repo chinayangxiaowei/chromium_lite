@@ -30,7 +30,7 @@ class ManagePasswordsBubbleModel : public content::WebContentsObserver {
   // The bubble's state is updated from the ManagePasswordsUIController
   // associated with |web_contents| upon creation.
   explicit ManagePasswordsBubbleModel(content::WebContents* web_contents);
-  virtual ~ManagePasswordsBubbleModel();
+  ~ManagePasswordsBubbleModel() override;
 
   // Called by the view code when the bubble is shown.
   void OnBubbleShown(ManagePasswordsBubble::DisplayReason reason);
@@ -59,10 +59,6 @@ class ManagePasswordsBubbleModel : public content::WebContentsObserver {
 
   // Called by the view code when the manage link is clicked by the user.
   void OnManageLinkClicked();
-
-  // Called by the view code when the manage in Google link is clicked by the
-  // user.
-  void OnRemoteManageLinkClicked();
 
   // Called by the view code to delete or add a password form to the
   // PasswordStore.
@@ -101,6 +97,10 @@ class ManagePasswordsBubbleModel : public content::WebContentsObserver {
   // State setter.
   void set_state(password_manager::ui::State state) { state_ = state; }
 #endif
+
+// Upper limits on the size of the username and password fields.
+  static int UsernameFieldWidth();
+  static int PasswordFieldWidth();
 
  private:
   password_manager::ui::State state_;

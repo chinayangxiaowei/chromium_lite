@@ -12,34 +12,44 @@ namespace content {
 // Implementation of GPU memory buffer based on shared memory.
 class GpuMemoryBufferImplSharedMemory : public GpuMemoryBufferImpl {
  public:
-  GpuMemoryBufferImplSharedMemory(const gfx::Size& size,
-                                  unsigned internalformat);
-  virtual ~GpuMemoryBufferImplSharedMemory();
+  static void Create(gfx::GpuMemoryBufferId id,
+                     const gfx::Size& size,
+                     Format format,
+                     const CreationCallback& callback);
 
-  // Allocates a shared memory backed GPU memory buffer with |size| and
-  // |internalformat| for use by |child_process|.
-  static void AllocateSharedMemoryForChildProcess(
+  static void AllocateForChildProcess(gfx::GpuMemoryBufferId id,
+                                      const gfx::Size& size,
+                                      Format format,
+                                      base::ProcessHandle child_process,
+                                      const AllocationCallback& callback);
+
+  static scoped_ptr<GpuMemoryBufferImpl> CreateFromHandle(
+      const gfx::GpuMemoryBufferHandle& handle,
       const gfx::Size& size,
-      unsigned internalformat,
-      base::ProcessHandle child_process,
-      const AllocationCallback& callback);
+      Format format,
+      const DestructionCallback& callback);
 
-  static bool IsLayoutSupported(const gfx::Size& size, unsigned internalformat);
-  static bool IsUsageSupported(unsigned usage);
+  static bool IsFormatSupported(Format format);
+  static bool IsUsageSupported(Usage usage);
+  static bool IsLayoutSupported(const gfx::Size& size, Format format);
   static bool IsConfigurationSupported(const gfx::Size& size,
-                                       unsigned internalformat,
-                                       unsigned usage);
-
-  bool Initialize();
-  bool InitializeFromHandle(const gfx::GpuMemoryBufferHandle& handle);
+                                       Format format,
+                                       Usage usage);
 
   // Overridden from gfx::GpuMemoryBuffer:
-  virtual void* Map() OVERRIDE;
-  virtual void Unmap() OVERRIDE;
-  virtual uint32 GetStride() const OVERRIDE;
-  virtual gfx::GpuMemoryBufferHandle GetHandle() const OVERRIDE;
+  void* Map() override;
+  void Unmap() override;
+  uint32 GetStride() const override;
+  gfx::GpuMemoryBufferHandle GetHandle() const override;
 
  private:
+  GpuMemoryBufferImplSharedMemory(gfx::GpuMemoryBufferId id,
+                                  const gfx::Size& size,
+                                  Format format,
+                                  const DestructionCallback& callback,
+                                  scoped_ptr<base::SharedMemory> shared_memory);
+  ~GpuMemoryBufferImplSharedMemory() override;
+
   scoped_ptr<base::SharedMemory> shared_memory_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuMemoryBufferImplSharedMemory);

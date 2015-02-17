@@ -79,8 +79,13 @@ class WebContentsView {
   // Sets up the View that holds the rendered web page, receives messages for
   // it and contains page plugins. The host view should be sized to the current
   // size of the WebContents.
+  //
+  // |is_guest_view_hack| is temporary hack and will be removed once
+  // RenderWidgetHostViewGuest is not dependent on platform view.
+  // TODO(lazyboy): Remove |is_guest_view_hack| once http://crbug.com/330264 is
+  // fixed.
   virtual RenderWidgetHostViewBase* CreateViewForWidget(
-      RenderWidgetHost* render_widget_host) = 0;
+      RenderWidgetHost* render_widget_host, bool is_guest_view_hack) = 0;
 
   // Creates a new View that holds a popup and receives messages for it.
   virtual RenderWidgetHostViewBase* CreateViewForPopupWidget(
@@ -104,15 +109,6 @@ class WebContentsView {
   virtual void SetOverscrollControllerEnabled(bool enabled) = 0;
 
 #if defined(OS_MACOSX)
-  // The web contents view assumes that its view will never be overlapped by
-  // another view (either partially or fully). This allows it to perform
-  // optimizations. If the view is in a view hierarchy where it might be
-  // overlapped by another view, notify the view by calling this with |true|.
-  virtual void SetAllowOverlappingViews(bool overlapping) = 0;
-
-  // Returns true if overlapping views are allowed, false otherwise.
-  virtual bool GetAllowOverlappingViews() const = 0;
-
   // Allowing other views disables optimizations which assume that only a single
   // WebContents is present.
   virtual void SetAllowOtherViews(bool allow) = 0;

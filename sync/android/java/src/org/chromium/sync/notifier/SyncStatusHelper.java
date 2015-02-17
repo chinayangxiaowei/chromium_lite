@@ -10,9 +10,8 @@ import android.content.Context;
 import android.content.SyncStatusObserver;
 import android.os.StrictMode;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import org.chromium.base.ObserverList;
+import org.chromium.base.VisibleForTesting;
 import org.chromium.sync.signin.AccountManagerHelper;
 import org.chromium.sync.signin.ChromeSigninController;
 
@@ -280,8 +279,8 @@ public class SyncStatusHelper {
         if (account == null) return false;
         boolean returnValue;
         synchronized (mCachedSettings) {
-            returnValue = mCachedMasterSyncAutomatically &&
-                mCachedSettings.getSyncAutomatically(account);
+            returnValue = mCachedMasterSyncAutomatically
+                    && mCachedSettings.getSyncAutomatically(account);
         }
 
         notifyObserversIfAccountSettingsChanged();
@@ -375,11 +374,11 @@ public class SyncStatusHelper {
         // Disable the syncability of Chrome for all other accounts. Don't use
         // our cache as we're touching many accounts that aren't signed in, so this saves
         // extra calls to Android sync configuration.
-        Account[] googleAccounts = AccountManagerHelper.get(mApplicationContext).
-                getGoogleAccounts();
+        Account[] googleAccounts = AccountManagerHelper.get(mApplicationContext)
+                .getGoogleAccounts();
         for (Account accountToSetNotSyncable : googleAccounts) {
-            if (!accountToSetNotSyncable.equals(account) &&
-                    mSyncContentResolverDelegate.getIsSyncable(
+            if (!accountToSetNotSyncable.equals(account)
+                    && mSyncContentResolverDelegate.getIsSyncable(
                             accountToSetNotSyncable, mContractAuthority) > 0) {
                 mSyncContentResolverDelegate.setIsSyncable(accountToSetNotSyncable,
                         mContractAuthority, 0);

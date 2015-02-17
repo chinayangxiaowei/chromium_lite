@@ -19,7 +19,7 @@
 using base::android::ConvertUTF8ToJavaString;
 using base::android::ScopedJavaLocalRef;
 using content::BrowserThread;
-using content::PageTransition;
+using ui::PageTransition;
 using content::RenderViewHost;
 using content::WebContents;
 
@@ -56,7 +56,7 @@ void InterceptNavigationDelegate::Associate(
 // static
 InterceptNavigationDelegate* InterceptNavigationDelegate::Get(
     WebContents* web_contents) {
-  return reinterpret_cast<InterceptNavigationDelegate*>(
+  return static_cast<InterceptNavigationDelegate*>(
       web_contents->GetUserData(kInterceptNavigationDelegateUserDataKey));
 }
 

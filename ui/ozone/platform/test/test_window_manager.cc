@@ -5,7 +5,7 @@
 #include "ui/ozone/platform/test/test_window_manager.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/stl_util.h"
 #include "base/threading/worker_pool.h"
@@ -32,17 +32,17 @@ void WriteDataToFile(const base::FilePath& location, const SkBitmap& bitmap) {
 class FileSurface : public SurfaceOzoneCanvas {
  public:
   FileSurface(const base::FilePath& location) : location_(location) {}
-  virtual ~FileSurface() {}
+  ~FileSurface() override {}
 
   // SurfaceOzoneCanvas overrides:
-  virtual void ResizeCanvas(const gfx::Size& viewport_size) OVERRIDE {
+  void ResizeCanvas(const gfx::Size& viewport_size) override {
     surface_ = skia::AdoptRef(SkSurface::NewRaster(SkImageInfo::MakeN32Premul(
         viewport_size.width(), viewport_size.height())));
   }
-  virtual skia::RefPtr<SkCanvas> GetCanvas() OVERRIDE {
+  skia::RefPtr<SkCanvas> GetCanvas() override {
     return skia::SharePtr(surface_->getCanvas());
   }
-  virtual void PresentCanvas(const gfx::Rect& damage) OVERRIDE {
+  void PresentCanvas(const gfx::Rect& damage) override {
     if (location_.empty())
       return;
     SkBitmap bitmap;
@@ -55,7 +55,7 @@ class FileSurface : public SurfaceOzoneCanvas {
           FROM_HERE, base::Bind(&WriteDataToFile, location_, bitmap), true);
     }
   }
-  virtual scoped_ptr<gfx::VSyncProvider> CreateVSyncProvider() OVERRIDE {
+  scoped_ptr<gfx::VSyncProvider> CreateVSyncProvider() override {
     return scoped_ptr<gfx::VSyncProvider>();
   }
 

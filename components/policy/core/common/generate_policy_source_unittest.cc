@@ -20,6 +20,7 @@ namespace policy {
 
 namespace {
 
+#if defined(OS_CHROMEOS)
 // Checks if two schemas are the same or not. Note that this function doesn't
 // consider restrictions on integers and strings nor pattern properties.
 bool IsSameSchema(Schema a, Schema b) {
@@ -49,6 +50,7 @@ bool IsSameSchema(Schema a, Schema b) {
     return false;
   return IsSameSchema(a.GetAdditionalProperties(), b.GetAdditionalProperties());
 }
+#endif
 
 }  // namespace
 
@@ -80,6 +82,37 @@ TEST(GeneratePolicySource, ChromeSchemaData) {
   EXPECT_EQ(base::Value::TYPE_LIST, subschema.type());
   ASSERT_TRUE(subschema.GetItems().valid());
   EXPECT_EQ(base::Value::TYPE_STRING, subschema.GetItems().type());
+
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
+  subschema = schema.GetProperty(key::kExtensionSettings);
+  ASSERT_TRUE(subschema.valid());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, subschema.type());
+  EXPECT_FALSE(subschema.GetAdditionalProperties().valid());
+  EXPECT_FALSE(subschema.GetProperty("no such extension id exists").valid());
+  EXPECT_TRUE(subschema.GetPatternProperties("*").empty());
+  EXPECT_TRUE(subschema.GetPatternProperties("no such extension id").empty());
+  EXPECT_TRUE(subschema.GetPatternProperties("^[a-p]{32}$").empty());
+  EXPECT_TRUE(subschema.GetPatternProperties(
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").empty());
+  EXPECT_TRUE(subschema.GetPatternProperties(
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").empty());
+  SchemaList schema_list =
+      subschema.GetPatternProperties("abcdefghijklmnopabcdefghijklmnop");
+  ASSERT_EQ(1u, schema_list.size());
+  subschema = schema_list[0];
+  ASSERT_TRUE(subschema.valid());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, subschema.type());
+  subschema = subschema.GetProperty("installation_mode");
+  ASSERT_TRUE(subschema.valid());
+  ASSERT_EQ(base::Value::TYPE_STRING, subschema.type());
+
+  subschema = schema.GetProperty(key::kExtensionSettings).GetProperty("*");
+  ASSERT_TRUE(subschema.valid());
+  ASSERT_EQ(base::Value::TYPE_DICTIONARY, subschema.type());
+  subschema = subschema.GetProperty("installation_mode");
+  ASSERT_TRUE(subschema.valid());
+  ASSERT_EQ(base::Value::TYPE_STRING, subschema.type());
+#endif
 
   subschema = schema.GetProperty(key::kProxySettings);
   ASSERT_TRUE(subschema.valid());
@@ -170,5 +203,31 @@ TEST(GeneratePolicySource, PolicyDetails) {
   // TODO(bartfab): add a test that verifies a max_external_data_size larger
   // than 0, once a type 'external' policy is added.
 }
+
+#if defined(OS_CHROMEOS)
+TEST(GeneratePolicySource, SetEnterpriseDefaults) {
+  PolicyMap policy_map;
+
+  // If policy not configured yet, set the enterprise default.
+  SetEnterpriseUsersDefaults(&policy_map);
+
+  const base::Value* multiprof_behavior =
+      policy_map.GetValue(key::kChromeOsMultiProfileUserBehavior);
+  base::StringValue expected("primary-only");
+  EXPECT_TRUE(expected.Equals(multiprof_behavior));
+
+  // If policy already configured, it's not changed to enterprise defaults.
+  policy_map.Set(key::kChromeOsMultiProfileUserBehavior,
+                 POLICY_LEVEL_MANDATORY,
+                 POLICY_SCOPE_USER,
+                 new base::StringValue("test_value"),
+                 NULL);
+  SetEnterpriseUsersDefaults(&policy_map);
+  multiprof_behavior =
+      policy_map.GetValue(key::kChromeOsMultiProfileUserBehavior);
+  expected = base::StringValue("test_value");
+  EXPECT_TRUE(expected.Equals(multiprof_behavior));
+}
+#endif
 
 }  // namespace policy

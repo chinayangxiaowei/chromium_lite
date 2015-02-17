@@ -11,7 +11,7 @@
 #include "remoting/signaling/server_log_entry_unittest.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 using buzz::XmlElement;
 using buzz::QName;
@@ -65,7 +65,7 @@ MATCHER(IsStatisticsLog, "") {
 class ClientStatusLoggerTest : public testing::Test {
  public:
   ClientStatusLoggerTest() {}
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     EXPECT_CALL(signal_strategy_, AddListener(_));
     EXPECT_CALL(signal_strategy_, RemoveListener(_));
     message_loop_proxy_ = base::MessageLoopProxy::current();

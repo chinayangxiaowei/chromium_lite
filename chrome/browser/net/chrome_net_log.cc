@@ -16,23 +16,11 @@
 #include "chrome/common/chrome_switches.h"
 #include "content/public/common/content_switches.h"
 #include "net/base/net_log_logger.h"
+#include "net/base/trace_net_log_observer.h"
 
 ChromeNetLog::ChromeNetLog()
     : net_log_temp_file_(new NetLogTempFile(this)) {
   const CommandLine* command_line = CommandLine::ForCurrentProcess();
-  // Adjust base log level based on command line switch, if present.
-  // This is done before adding any observers so the call to UpdateLogLevel when
-  // an observers is added will set |effective_log_level_| correctly.
-  if (command_line->HasSwitch(switches::kNetLogLevel)) {
-    std::string log_level_string =
-        command_line->GetSwitchValueASCII(switches::kNetLogLevel);
-    int command_line_log_level;
-    if (base::StringToInt(log_level_string, &command_line_log_level) &&
-        command_line_log_level >= LOG_ALL &&
-        command_line_log_level <= LOG_NONE) {
-      SetBaseLogLevel(static_cast<LogLevel>(command_line_log_level));
-    }
-  }
 
   if (command_line->HasSwitch(switches::kLogNetLog)) {
     base::FilePath log_path =
@@ -56,9 +44,23 @@ ChromeNetLog::ChromeNetLog()
     } else {
       scoped_ptr<base::Value> constants(NetInternalsUI::GetConstants());
       net_log_logger_.reset(new net::NetLogLogger(file, *constants));
+      if (command_line->HasSwitch(switches::kNetLogLevel)) {
+        std::string log_level_string =
+            command_line->GetSwitchValueASCII(switches::kNetLogLevel);
+        int command_line_log_level;
+        if (base::StringToInt(log_level_string, &command_line_log_level) &&
+            command_line_log_level >= LOG_ALL &&
+            command_line_log_level <= LOG_NONE) {
+          net_log_logger_->set_log_level(
+              static_cast<LogLevel>(command_line_log_level));
+        }
+      }
       net_log_logger_->StartObserving(this);
     }
   }
+
+  trace_net_log_observer_.reset(new net::TraceNetLogObserver());
+  trace_net_log_observer_->WatchForTraceStart(this);
 }
 
 ChromeNetLog::~ChromeNetLog() {
@@ -66,5 +68,7 @@ ChromeNetLog::~ChromeNetLog() {
   // Remove the observers we own before we're destroyed.
   if (net_log_logger_)
     RemoveThreadSafeObserver(net_log_logger_.get());
+  if (trace_net_log_observer_)
+    trace_net_log_observer_->StopWatchForTraceStart();
 }
 

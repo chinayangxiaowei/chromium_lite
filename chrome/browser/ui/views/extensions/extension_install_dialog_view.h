@@ -15,6 +15,8 @@
 
 typedef std::vector<base::string16> PermissionDetails;
 class ExpandableContainerView;
+class ExtensionInstallPromptShowParams;
+class Profile;
 
 namespace content {
 class PageNavigator;
@@ -22,6 +24,10 @@ class PageNavigator;
 
 namespace extensions {
 class ExperienceSamplingEvent;
+}
+
+namespace ui {
+class ResourceBundle;
 }
 
 namespace views {
@@ -35,10 +41,10 @@ class Link;
 class CustomScrollableView : public views::View {
  public:
   CustomScrollableView();
-  virtual ~CustomScrollableView();
+  ~CustomScrollableView() override;
 
  private:
-  virtual void Layout() OVERRIDE;
+  void Layout() override;
 
   DISALLOW_COPY_AND_ASSIGN(CustomScrollableView);
 };
@@ -49,10 +55,11 @@ class ExtensionInstallDialogView : public views::DialogDelegateView,
                                    public views::ButtonListener {
  public:
   ExtensionInstallDialogView(
+      Profile* profile,
       content::PageNavigator* navigator,
       ExtensionInstallPrompt::Delegate* delegate,
       scoped_refptr<ExtensionInstallPrompt::Prompt> prompt);
-  virtual ~ExtensionInstallDialogView();
+  ~ExtensionInstallDialogView() override;
 
   // Returns the interior ScrollView of the dialog. This allows us to inspect
   // the contents of the DialogView.
@@ -63,28 +70,36 @@ class ExtensionInstallDialogView : public views::DialogDelegateView,
 
  private:
   // views::DialogDelegateView:
-  virtual int GetDialogButtons() const OVERRIDE;
-  virtual base::string16 GetDialogButtonLabel(
-      ui::DialogButton button) const OVERRIDE;
-  virtual int GetDefaultDialogButton() const OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual ui::ModalType GetModalType() const OVERRIDE;
-  virtual base::string16 GetWindowTitle() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void ViewHierarchyChanged(
-      const ViewHierarchyChangedDetails& details) OVERRIDE;
+  int GetDialogButtons() const override;
+  base::string16 GetDialogButtonLabel(ui::DialogButton button) const override;
+  int GetDefaultDialogButton() const override;
+  bool Cancel() override;
+  bool Accept() override;
+  ui::ModalType GetModalType() const override;
+  base::string16 GetWindowTitle() const override;
+  void Layout() override;
+  gfx::Size GetPreferredSize() const override;
+  void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) override;
 
   // views::LinkListener:
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void LinkClicked(views::Link* source, int event_flags) override;
 
   // views::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // Experimental: Toggles inline permission explanations with an animation.
   void ToggleInlineExplanations();
+
+  // Initializes the dialog view, adding in permissions if they exist.
+  void InitView();
+
+  // Adds permissions of |perm_type| to the dialog view if they exist.
+  bool AddPermissions(views::GridLayout* layout,
+                      ui::ResourceBundle& rb,
+                      int column_set_id,
+                      int left_column_width,
+                      ExtensionInstallPrompt::PermissionsType perm_type);
 
   // Creates a layout consisting of dialog header, extension name and icon.
   views::GridLayout* CreateLayout(
@@ -112,6 +127,7 @@ class ExtensionInstallDialogView : public views::DialogDelegateView,
   // "Show permissions" links were shown and/or clicked.
   void UpdateLinkActionHistogram(int action_type) const;
 
+  Profile* profile_;
   content::PageNavigator* navigator_;
   ExtensionInstallPrompt::Delegate* delegate_;
   scoped_refptr<ExtensionInstallPrompt::Prompt> prompt_;
@@ -188,21 +204,20 @@ class ExpandableContainerView : public views::View,
                           bool parent_bulleted,
                           bool show_expand_link,
                           bool lighter_color_details);
-  virtual ~ExpandableContainerView();
+  ~ExpandableContainerView() override;
 
   // views::View:
-  virtual void ChildPreferredSizeChanged(views::View* child) OVERRIDE;
+  void ChildPreferredSizeChanged(views::View* child) override;
 
   // views::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // views::LinkListener:
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE;
+  void LinkClicked(views::Link* source, int event_flags) override;
 
   // gfx::AnimationDelegate:
-  virtual void AnimationProgressed(const gfx::Animation* animation) OVERRIDE;
-  virtual void AnimationEnded(const gfx::Animation* animation) OVERRIDE;
+  void AnimationProgressed(const gfx::Animation* animation) override;
+  void AnimationEnded(const gfx::Animation* animation) override;
 
   // Expand/Collapse the detail section for this ExpandableContainerView.
   void ToggleDetailLevel();
@@ -217,10 +232,10 @@ class ExpandableContainerView : public views::View,
    public:
     explicit DetailsView(int horizontal_space, bool parent_bulleted,
                          bool lighter_color);
-    virtual ~DetailsView() {}
+    ~DetailsView() override {}
 
     // views::View:
-    virtual gfx::Size GetPreferredSize() const OVERRIDE;
+    gfx::Size GetPreferredSize() const override;
 
     void AddDetail(const base::string16& detail);
 
@@ -260,7 +275,7 @@ class ExpandableContainerView : public views::View,
 };
 
 void ShowExtensionInstallDialogImpl(
-    const ExtensionInstallPrompt::ShowParams& show_params,
+    ExtensionInstallPromptShowParams* show_params,
     ExtensionInstallPrompt::Delegate* delegate,
     scoped_refptr<ExtensionInstallPrompt::Prompt> prompt);
 

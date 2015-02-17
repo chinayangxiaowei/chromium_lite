@@ -10,9 +10,10 @@ mojom("native_viewport") {
     "native_viewport.mojom",
   ]
 
-  deps = [
-    "//mojo/services/gles2:bindings",
+  public_deps = [
     "//mojo/services/public/interfaces/geometry",
+    "//mojo/services/public/interfaces/gpu",
     "//mojo/services/public/interfaces/input_events",
+    "//mojo/services/public/interfaces/surfaces:surface_id",
   ]
 }

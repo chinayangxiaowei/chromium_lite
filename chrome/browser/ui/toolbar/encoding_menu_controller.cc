@@ -12,13 +12,12 @@
 #include "chrome/browser/character_encoding.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 const int EncodingMenuController::kValidEncodingIds[] = {
     IDC_ENCODING_UTF8,
     IDC_ENCODING_UTF16LE,
-    IDC_ENCODING_ISO88591,
     IDC_ENCODING_WINDOWS1252,
     IDC_ENCODING_GBK,
     IDC_ENCODING_GB18030,

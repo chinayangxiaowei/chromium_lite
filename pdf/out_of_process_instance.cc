@@ -19,7 +19,6 @@
 #include "base/values.h"
 #include "chrome/common/content_restriction.h"
 #include "net/base/escape.h"
-#include "pdf/draw_utils.h"
 #include "pdf/pdf.h"
 #include "ppapi/c/dev/ppb_cursor_control_dev.h"
 #include "ppapi/c/pp_errors.h"
@@ -47,13 +46,6 @@
 #endif
 
 namespace chrome_pdf {
-
-// URL reference parameters.
-// For more possible parameters, see RFC 3778 and the "PDF Open Parameters"
-// document from Adobe.
-const char kDelimiters[] = "#&";
-const char kNamedDest[] = "nameddest";
-const char kPage[] = "page";
 
 const char kChromePrint[] = "chrome://print/";
 const char kChromeExtension[] =
@@ -132,6 +124,11 @@ const char kJSEmailCc[] = "cc";
 const char kJSEmailBcc[] = "bcc";
 const char kJSEmailSubject[] = "subject";
 const char kJSEmailBody[] = "body";
+// Rotation (Page -> Plugin)
+const char kJSRotateClockwiseType[] = "rotateClockwise";
+const char kJSRotateCounterclockwiseType[] = "rotateCounterclockwise";
+// Select all text in the document (Page -> Plugin)
+const char kJSSelectAllType[] = "selectAll";
 
 const int kFindResultCooldownMs = 100;
 
@@ -355,14 +352,14 @@ void OutOfProcessInstance::HandleMessage(const pp::Var& message) {
   std::string type = dict.Get(kType).AsString();
 
   if (type == kJSViewportType &&
-      dict.Get(pp::Var(kJSXOffset)).is_int() &&
-      dict.Get(pp::Var(kJSYOffset)).is_int() &&
+      dict.Get(pp::Var(kJSXOffset)).is_number() &&
+      dict.Get(pp::Var(kJSYOffset)).is_number() &&
       dict.Get(pp::Var(kJSZoom)).is_number()) {
     received_viewport_message_ = true;
     stop_scrolling_ = false;
     double zoom = dict.Get(pp::Var(kJSZoom)).AsDouble();
-    pp::Point scroll_offset(dict.Get(pp::Var(kJSXOffset)).AsInt(),
-                            dict.Get(pp::Var(kJSYOffset)).AsInt());
+    pp::FloatPoint scroll_offset(dict.Get(pp::Var(kJSXOffset)).AsDouble(),
+                                 dict.Get(pp::Var(kJSYOffset)).AsDouble());
 
     // Bound the input parameters.
     zoom = std::max(kMinZoom, zoom);
@@ -382,6 +379,12 @@ void OutOfProcessInstance::HandleMessage(const pp::Var& message) {
     }
   } else if (type == kJSPrintType) {
     Print();
+  } else if (type == kJSRotateClockwiseType) {
+    RotateClockwise();
+  } else if (type == kJSRotateCounterclockwiseType) {
+    RotateCounterclockwise();
+  } else if (type == kJSSelectAllType) {
+    engine_->SelectAll();
   } else if (type == kJSResetPrintPreviewModeType &&
              dict.Get(pp::Var(kJSPrintPreviewUrl)).is_string() &&
              dict.Get(pp::Var(kJSPrintPreviewGrayscale)).is_bool() &&
@@ -489,16 +492,6 @@ bool OutOfProcessInstance::HandleInputEvent(
   // TODO(raymes): Implement this scroll behavior in JS:
   // When click+dragging, scroll the document correctly.
 
-  if (event.GetType() == PP_INPUTEVENT_TYPE_KEYDOWN &&
-      event.GetModifiers() & kDefaultKeyModifier) {
-    pp::KeyboardInputEvent keyboard_event(event);
-    switch (keyboard_event.GetKeyCode()) {
-      case 'A':
-        engine_->SelectAll();
-        return true;
-    }
-  }
-
   // Return true for unhandled clicks so the plugin takes focus.
   return (event.GetType() == PP_INPUTEVENT_TYPE_MOUSEDOWN);
 }
@@ -537,10 +530,12 @@ void OutOfProcessInstance::DidChangeView(const pp::View& view) {
   }
 
   if (!stop_scrolling_) {
-    pp::Point scroll_offset(
-        BoundScrollOffsetToDocument(view.GetScrollOffset()));
-    engine_->ScrolledToXPosition(scroll_offset.x() * device_scale_);
-    engine_->ScrolledToYPosition(scroll_offset.y() * device_scale_);
+    pp::Point scroll_offset(view.GetScrollOffset());
+    pp::FloatPoint scroll_offset_float(scroll_offset.x(),
+                                       scroll_offset.y());
+    scroll_offset_float = BoundScrollOffsetToDocument(scroll_offset_float);
+    engine_->ScrolledToXPosition(scroll_offset_float.x() * device_scale_);
+    engine_->ScrolledToYPosition(scroll_offset_float.y() * device_scale_);
   }
 }
 
@@ -911,6 +906,7 @@ void OutOfProcessInstance::NotifyNumberOfFindResultsChanged(int total,
 
 void OutOfProcessInstance::NotifySelectedFindResultChanged(
     int current_find_index) {
+  DCHECK_GE(current_find_index, 0);
   SelectedFindResultChanged(current_find_index);
 }
 
@@ -1073,11 +1069,7 @@ void OutOfProcessInstance::DocumentLoadComplete(int page_count) {
 
   // Note: If we are in print preview mode the scroll location is retained
   // across document loads so we don't want to scroll again and override it.
-  if (!IsPrintPreview()) {
-    int initial_page = GetInitialPage(url_);
-    if (initial_page >= 0)
-      ScrollToPage(initial_page);
-  } else {
+  if (IsPrintPreview()) {
     AppendBlankPrintPreviewPages();
     OnGeometryChanged(0, 0);
   }
@@ -1304,49 +1296,6 @@ pp::URLLoader OutOfProcessInstance::CreateURLLoaderInternal() {
   return loader;
 }
 
-int OutOfProcessInstance::GetInitialPage(const std::string& url) {
-  size_t found_idx = url.find('#');
-  if (found_idx == std::string::npos)
-    return -1;
-
-  const std::string& ref = url.substr(found_idx + 1);
-  std::vector<std::string> fragments;
-  Tokenize(ref, kDelimiters, &fragments);
-
-  // Page number to return, zero-based.
-  int page = -1;
-
-  // Handle the case of http://foo.com/bar#NAMEDDEST. This is not explicitly
-  // mentioned except by example in the Adobe "PDF Open Parameters" document.
-  if ((fragments.size() == 1) && (fragments[0].find('=') == std::string::npos))
-    return engine_->GetNamedDestinationPage(fragments[0]);
-
-  for (size_t i = 0; i < fragments.size(); ++i) {
-    std::vector<std::string> key_value;
-    base::SplitString(fragments[i], '=', &key_value);
-    if (key_value.size() != 2)
-      continue;
-    const std::string& key = key_value[0];
-    const std::string& value = key_value[1];
-
-    if (base::strcasecmp(kPage, key.c_str()) == 0) {
-      // |page_value| is 1-based.
-      int page_value = -1;
-      if (base::StringToInt(value, &page_value) && page_value > 0)
-        page = page_value - 1;
-      continue;
-    }
-    if (base::strcasecmp(kNamedDest, key.c_str()) == 0) {
-      // |page_value| is 0-based.
-      int page_value = engine_->GetNamedDestinationPage(value);
-      if (page_value >= 0)
-        page = page_value;
-      continue;
-    }
-  }
-  return page;
-}
-
 void OutOfProcessInstance::SetZoom(double scale) {
   double old_zoom = zoom_;
   zoom_ = scale;
@@ -1411,13 +1360,13 @@ void OutOfProcessInstance::UserMetricsRecordAction(
   pp::PDF::UserMetricsRecordAction(this, pp::Var(action));
 }
 
-pp::Point OutOfProcessInstance::BoundScrollOffsetToDocument(
-    const pp::Point& scroll_offset) {
-  int max_x = document_size_.width() * zoom_ - plugin_dip_size_.width();
-  int x = std::max(std::min(scroll_offset.x(), max_x), 0);
-  int max_y = document_size_.height() * zoom_ - plugin_dip_size_.height();
-  int y = std::max(std::min(scroll_offset.y(), max_y), 0);
-  return pp::Point(x, y);
+pp::FloatPoint OutOfProcessInstance::BoundScrollOffsetToDocument(
+    const pp::FloatPoint& scroll_offset) {
+  float max_x = document_size_.width() * zoom_ - plugin_dip_size_.width();
+  float x = std::max(std::min(scroll_offset.x(), max_x), 0.0f);
+  float max_y = document_size_.height() * zoom_ - plugin_dip_size_.height();
+  float y = std::max(std::min(scroll_offset.y(), max_y), 0.0f);
+  return pp::FloatPoint(x, y);
 }
 
 }  // namespace chrome_pdf

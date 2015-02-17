@@ -5,6 +5,7 @@
 #include "content/child/runtime_features.h"
 
 #include "base/command_line.h"
+#include "base/metrics/field_trial.h"
 #include "content/common/content_switches_internal.h"
 #include "content/public/common/content_switches.h"
 #include "third_party/WebKit/public/web/WebRuntimeFeatures.h"
@@ -41,9 +42,6 @@ static void SetRuntimeFeatureDefaultsForPlatform() {
        (cpu_family == ANDROID_CPU_FAMILY_X86) ||
        (cpu_family == ANDROID_CPU_FAMILY_MIPS)));
 
-  // Android supports gamepad API for JellyBean and beyond
-  WebRuntimeFeatures::enableGamepad(
-      base::android::BuildInfo::GetInstance()->sdk_int() >= 16);
   // Android does not have support for PagePopup
   WebRuntimeFeatures::enablePagePopup(false);
   // Android does not yet support the Web Notification API. crbug.com/115320
@@ -56,6 +54,7 @@ static void SetRuntimeFeatureDefaultsForPlatform() {
   WebRuntimeFeatures::enableOrientationEvent(true);
   WebRuntimeFeatures::enableFastMobileScrolling(true);
   WebRuntimeFeatures::enableMediaCapture(true);
+  WebRuntimeFeatures::enableCompositedSelectionUpdate(true);
   // If navigation transitions gets activated via field trial, enable it in
   // blink. We don't set this to false in case the user has manually enabled
   // the feature via experimental web platform features.
@@ -93,8 +92,8 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
   if (command_line.HasSwitch(switches::kDisableApplicationCache))
     WebRuntimeFeatures::enableApplicationCache(false);
 
-  if (command_line.HasSwitch(switches::kDisableDesktopNotifications))
-    WebRuntimeFeatures::enableNotifications(false);
+  if (command_line.HasSwitch(switches::kDisableBlinkScheduler))
+    WebRuntimeFeatures::enableBlinkScheduler(false);
 
   if (command_line.HasSwitch(switches::kDisableLocalStorage))
     WebRuntimeFeatures::enableLocalStorage(false);
@@ -109,13 +108,14 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
     WebRuntimeFeatures::enableSharedWorker(false);
 
 #if defined(OS_ANDROID)
-  if (command_line.HasSwitch(switches::kDisableWebRTC)) {
-    WebRuntimeFeatures::enableMediaStream(false);
+  if (command_line.HasSwitch(switches::kDisableWebRTC))
     WebRuntimeFeatures::enablePeerConnection(false);
-  }
 
   if (!command_line.HasSwitch(switches::kEnableSpeechRecognition))
     WebRuntimeFeatures::enableScriptedSpeech(false);
+
+  if (command_line.HasSwitch(switches::kEnableExperimentalWebPlatformFeatures))
+    WebRuntimeFeatures::enableNotifications(true);
 
   // WebAudio is enabled by default on ARM and X86, if the MediaCodec
   // API is available.
@@ -133,9 +133,6 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
   if (command_line.HasSwitch(switches::kDisablePrefixedEncryptedMedia))
     WebRuntimeFeatures::enablePrefixedEncryptedMedia(false);
 
-  if (command_line.HasSwitch(switches::kEnableWebAnimationsSVG))
-    WebRuntimeFeatures::enableWebAnimationsSVG(true);
-
   if (command_line.HasSwitch(switches::kEnableWebMIDI))
     WebRuntimeFeatures::enableWebMIDI(true);
 
@@ -145,8 +142,18 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
   if (command_line.HasSwitch(switches::kEnableExperimentalCanvasFeatures))
     WebRuntimeFeatures::enableExperimentalCanvasFeatures(true);
 
-  if (command_line.HasSwitch(switches::kEnableDisplayList2dCanvas))
+  if (command_line.HasSwitch(switches::kEnableAcceleratedJpegDecoding))
+    WebRuntimeFeatures::enableDecodeToYUV(true);
+
+  if (command_line.HasSwitch(switches::kDisableDisplayList2dCanvas)) {
+    WebRuntimeFeatures::enableDisplayList2dCanvas(false);
+  } else if (command_line.HasSwitch(switches::kEnableDisplayList2dCanvas)) {
     WebRuntimeFeatures::enableDisplayList2dCanvas(true);
+  } else {
+    WebRuntimeFeatures::enableDisplayList2dCanvas(
+        base::FieldTrialList::FindFullName("DisplayList2dCanvas") == "Enabled"
+    );
+  }
 
   if (command_line.HasSwitch(switches::kEnableWebGLDraftExtensions))
     WebRuntimeFeatures::enableWebGLDraftExtensions(true);
@@ -159,9 +166,6 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
 
   if (ui::IsOverlayScrollbarEnabled())
     WebRuntimeFeatures::enableOverlayScrollbars(true);
-
-  if (command_line.HasSwitch(switches::kEnableTargetedStyleRecalc))
-    WebRuntimeFeatures::enableTargetedStyleRecalc(true);
 
   if (command_line.HasSwitch(switches::kEnableBleedingEdgeRenderingFastPaths))
     WebRuntimeFeatures::enableBleedingEdgeFastPaths(true);
@@ -176,6 +180,16 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
       command_line.HasSwitch(
           switches::kEnableExperimentalWebPlatformFeatures)) {
     WebRuntimeFeatures::enableNetworkInformation(true);
+  }
+
+  if (command_line.HasSwitch(switches::kEnableCredentialManagerAPI))
+    WebRuntimeFeatures::enableCredentialManagerAPI(true);
+
+  if (command_line.HasSwitch(switches::kEnableViewport))
+    WebRuntimeFeatures::enableCSSViewport(true);
+
+  if (command_line.HasSwitch(switches::kDisableSVG1DOM)) {
+    WebRuntimeFeatures::enableSVG1DOM(false);
   }
 }
 

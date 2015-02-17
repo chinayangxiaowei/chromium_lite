@@ -16,6 +16,7 @@
 #include "content/child/request_extra_data.h"
 #include "content/child/request_info.h"
 #include "content/child/resource_dispatcher.h"
+#include "content/child/resource_loader_bridge.h"
 #include "content/child/web_url_loader_impl.h"
 #include "content/common/resource_request_body.h"
 #include "content/common/service_worker/service_worker_types.h"
@@ -26,7 +27,6 @@
 #include "net/url_request/redirect_info.h"
 #include "third_party/WebKit/public/platform/WebURLLoaderClient.h"
 #include "third_party/WebKit/public/platform/WebURLResponse.h"
-#include "webkit/child/resource_loader_bridge.h"
 
 namespace content {
 namespace {
@@ -46,7 +46,7 @@ class MultiPartResponseClient : public blink::WebURLLoaderClient {
   // blink::WebURLLoaderClient implementation:
   virtual void didReceiveResponse(
       blink::WebURLLoader* loader,
-      const blink::WebURLResponse& response) OVERRIDE {
+      const blink::WebURLResponse& response) override {
     int64 byte_range_upper_bound, instance_size;
     if (!MultipartResponseDelegate::ReadContentRanges(response,
                                                       &byte_range_lower_bound_,
@@ -58,7 +58,7 @@ class MultiPartResponseClient : public blink::WebURLLoaderClient {
   virtual void didReceiveData(blink::WebURLLoader* loader,
                               const char* data,
                               int data_length,
-                              int encoded_data_length) OVERRIDE {
+                              int encoded_data_length) override {
     // TODO(ananta)
     // We should defer further loads on multipart resources on the same lines
     // as regular resources requested by plugins to prevent reentrancy.
@@ -114,6 +114,8 @@ PluginURLFetcher::PluginURLFetcher(PluginStreamUrl* plugin_stream,
   request_info.requestor_pid = origin_pid;
   request_info.request_type = RESOURCE_TYPE_OBJECT;
   request_info.routing_id = render_view_id;
+  // ServiceWorker is disabled for NPAPI.
+  request_info.skip_service_worker = true;
 
   RequestExtraData extra_data;
   extra_data.set_render_frame_id(render_frame_id);
@@ -284,7 +286,7 @@ void PluginURLFetcher::OnReceivedResponse(const ResourceResponseInfo& info) {
   base::Time temp;
   uint32 last_modified = 0;
   std::string headers;
-  if (info.headers) {  // NULL for data: urls.
+  if (info.headers.get()) {  // NULL for data: urls.
     if (info.headers->GetLastModifiedValue(&temp))
       last_modified = static_cast<uint32>(temp.ToDoubleT());
 
@@ -307,7 +309,7 @@ void PluginURLFetcher::OnReceivedResponse(const ResourceResponseInfo& info) {
     // of the HTTP requests issued via NPN_GetURLNotify. Webkit and FF destroy
     // the stream and invoke the NPP_DestroyStream function on the plugin if the
     // HTTPrequest fails.
-    if ((url_.SchemeIs("http") || url_.SchemeIs("https")) &&
+    if ((url_.SchemeIs(url::kHttpScheme) || url_.SchemeIs(url::kHttpsScheme)) &&
         (response_code < 100 || response_code >= 400)) {
       pending_failure_notification_ = true;
     }

@@ -11,11 +11,11 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "chrome/browser/autocomplete/keyword_extensions_delegate.h"
-#include "chrome/browser/autocomplete/keyword_provider.h"
 #include "components/omnibox/autocomplete_input.h"
 #include "components/omnibox/autocomplete_match.h"
 #include "components/omnibox/autocomplete_provider_listener.h"
+#include "components/omnibox/keyword_extensions_delegate.h"
+#include "components/omnibox/keyword_provider.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -29,24 +29,23 @@ class KeywordExtensionsDelegateImpl : public KeywordExtensionsDelegate,
                                       public content::NotificationObserver {
  public:
   KeywordExtensionsDelegateImpl(Profile* profile, KeywordProvider* provider);
-  virtual ~KeywordExtensionsDelegateImpl();
+  ~KeywordExtensionsDelegateImpl() override;
 
  private:
   // KeywordExtensionsDelegate:
-  virtual void IncrementInputId() OVERRIDE;
-  virtual bool IsEnabledExtension(const std::string& extension_id) OVERRIDE;
-  virtual bool Start(const AutocompleteInput& input,
-                     bool minimal_changes,
-                     const TemplateURL* template_url,
-                     const base::string16& remaining_input) OVERRIDE;
-  virtual void EnterExtensionKeywordMode(
-      const std::string& extension_id) OVERRIDE;
-  virtual void MaybeEndExtensionKeywordMode() OVERRIDE;
+  void IncrementInputId() override;
+  bool IsEnabledExtension(const std::string& extension_id) override;
+  bool Start(const AutocompleteInput& input,
+             bool minimal_changes,
+             const TemplateURL* template_url,
+             const base::string16& remaining_input) override;
+  void EnterExtensionKeywordMode(const std::string& extension_id) override;
+  void MaybeEndExtensionKeywordMode() override;
 
   // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   ACMatches* matches() { return &provider_->matches_; }
   void set_done(bool done) {

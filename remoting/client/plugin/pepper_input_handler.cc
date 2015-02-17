@@ -39,8 +39,7 @@ uint32_t GetUsbKeyCode(pp::KeyboardInputEvent pp_key_event) {
   std::string codestr = pp_key_event.GetCode().AsString();
 
   // Convert the |code| string into a USB keycode.
-  ui::KeycodeConverter* key_converter = ui::KeycodeConverter::GetInstance();
-  return key_converter->CodeToUsbKeycode(codestr.c_str());
+  return ui::KeycodeConverter::CodeToUsbKeycode(codestr.c_str());
 }
 
 bool PepperInputHandler::HandleInputEvent(const pp::InputEvent& event) {
@@ -219,6 +218,11 @@ void PepperInputHandler::SetMouseCursor(scoped_ptr<pp::ImageData> image,
   }
 }
 
+void PepperInputHandler::HideMouseCursor() {
+  cursor_image_.reset();
+  pp::MouseCursor::SetCursor(instance_, PP_MOUSECURSOR_TYPE_NONE);
+}
+
 void PepperInputHandler::MouseLockLost() {
   DCHECK(mouse_lock_state_ == MouseLockOn ||
          mouse_lock_state_ == MouseLockCancelling);
@@ -281,10 +285,7 @@ void PepperInputHandler::UpdateMouseCursor() {
                                *cursor_image_,
                                cursor_hotspot_);
   } else {
-    // If there is no cursor shape stored, either because the host never
-    // supplied one, or we were previously in mouse-lock mode, then use
-    // a standard arrow pointer.
-    pp::MouseCursor::SetCursor(instance_, PP_MOUSECURSOR_TYPE_POINTER);
+    pp::MouseCursor::SetCursor(instance_, PP_MOUSECURSOR_TYPE_NONE);
   }
 }
 

@@ -4,12 +4,11 @@
 
 package org.chromium.content.browser;
 
-import android.test.suitebuilder.annotation.SmallTest;
-
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.test.util.CallbackHelper;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_shell_apk.ContentShellActivity;
 import org.chromium.content_shell_apk.ContentShellTestBase;
@@ -17,16 +16,16 @@ import org.chromium.content_shell_apk.ContentShellTestBase;
 import java.util.concurrent.Callable;
 
 /**
- * Tests for the WebContentsObserverAndroid APIs.
+ * Tests for the WebContentsObserver APIs.
  */
 public class WebContentsObserverAndroidTest extends ContentShellTestBase {
     private static final String URL = UrlUtils.encodeHtmlDataUri(
             "<html><head></head><body>didFirstVisuallyNonEmptyPaint test</body></html>");
 
-    private static class TestWebContentsObserverAndroid extends WebContentsObserverAndroid {
+    private static class TestWebContentsObserver extends WebContentsObserver {
         private CallbackHelper mDidFirstVisuallyNonEmptyPaintCallbackHelper = new CallbackHelper();
 
-        public TestWebContentsObserverAndroid(WebContents webContents) {
+        public TestWebContentsObserver(WebContents webContents) {
             super(webContents);
         }
 
@@ -48,15 +47,18 @@ public class WebContentsObserverAndroidTest extends ContentShellTestBase {
         waitForActiveShellToBeDoneLoading();
     }
 
+    /*
     @SmallTest
     @Feature({"Navigation"})
+    http://crbug.com/411931
+    */
+    @DisabledTest
     public void testDidFirstVisuallyNonEmptyPaint() throws Throwable {
-        TestWebContentsObserverAndroid observer = ThreadUtils.runOnUiThreadBlocking(
-                new Callable<TestWebContentsObserverAndroid>() {
+        TestWebContentsObserver observer = ThreadUtils.runOnUiThreadBlocking(
+                new Callable<TestWebContentsObserver>() {
                     @Override
-                    public TestWebContentsObserverAndroid call() throws Exception {
-                        return new TestWebContentsObserverAndroid(
-                                getContentViewCore().getWebContents());
+                    public TestWebContentsObserver call() throws Exception {
+                        return new TestWebContentsObserver(getContentViewCore().getWebContents());
                     }
                 });
 
@@ -64,7 +66,8 @@ public class WebContentsObserverAndroidTest extends ContentShellTestBase {
         getInstrumentation().runOnMainSync(new Runnable() {
             @Override
             public void run() {
-                getContentViewCore().loadUrl(new LoadUrlParams(URL));
+                getContentViewCore().getWebContents().getNavigationController()
+                        .loadUrl(new LoadUrlParams(URL));
             }
         });
         observer.getDidFirstVisuallyNonEmptyPaintCallbackHelper().waitForCallback(callCount);

@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/test/base/testing_profile.h"
@@ -38,11 +38,11 @@ void OnMimeTypesCollected(std::vector<std::string>* output,
 }
 
 // Creates a native local file system URL for a local path.
-fileapi::FileSystemURL CreateNativeLocalFileSystemURL(
-    fileapi::FileSystemContext* context,
+storage::FileSystemURL CreateNativeLocalFileSystemURL(
+    storage::FileSystemContext* context,
     const base::FilePath local_path) {
   return context->CreateCrackedFileSystemURL(
-      GURL(kOrigin), fileapi::kFileSystemTypeNativeLocal, local_path);
+      GURL(kOrigin), storage::kFileSystemTypeNativeLocal, local_path);
 }
 
 }  // namespace
@@ -50,9 +50,9 @@ fileapi::FileSystemURL CreateNativeLocalFileSystemURL(
 class FileHandlersMimeUtilTest : public testing::Test {
  protected:
   FileHandlersMimeUtilTest() {}
-  virtual ~FileHandlersMimeUtilTest() {}
+  ~FileHandlersMimeUtilTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
     file_system_context_ =
         content::CreateFileSystemContextForTesting(NULL, data_dir_.path());
@@ -65,7 +65,7 @@ class FileHandlersMimeUtilTest : public testing::Test {
 
   content::TestBrowserThreadBundle thread_bundle_;
   TestingProfile profile_;
-  scoped_refptr<fileapi::FileSystemContext> file_system_context_;
+  scoped_refptr<storage::FileSystemContext> file_system_context_;
   base::ScopedTempDir data_dir_;
   base::FilePath html_mime_file_path_;
 };
@@ -104,14 +104,14 @@ TEST_F(FileHandlersMimeUtilTest, GetMimeTypeForLocalPath) {
 TEST_F(FileHandlersMimeUtilTest, MimeTypeCollector_ForURLs) {
   MimeTypeCollector collector(&profile_);
 
-  std::vector<fileapi::FileSystemURL> urls;
+  std::vector<storage::FileSystemURL> urls;
   urls.push_back(CreateNativeLocalFileSystemURL(
-      file_system_context_,
+      file_system_context_.get(),
       base::FilePath::FromUTF8Unsafe(kJPEGExtensionFilePath)));
   urls.push_back(CreateNativeLocalFileSystemURL(
-      file_system_context_,
+      file_system_context_.get(),
       base::FilePath::FromUTF8Unsafe(kJPEGExtensionUpperCaseFilePath)));
-  urls.push_back(CreateNativeLocalFileSystemURL(file_system_context_,
+  urls.push_back(CreateNativeLocalFileSystemURL(file_system_context_.get(),
                                                 html_mime_file_path_));
 
   std::vector<std::string> result;

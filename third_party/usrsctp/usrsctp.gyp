@@ -53,9 +53,11 @@
   },
   'targets': [
     {
+      # GN version: //third_party/usrsctp
       'target_name': 'usrsctplib',
       'type': 'static_library',
       'sources': [
+        # Note: sources list duplicated in GN build.
         'usrsctplib/netinet/sctp.h',
         'usrsctplib/netinet/sctp_asconf.c',
         'usrsctplib/netinet/sctp_asconf.h',
@@ -113,7 +115,6 @@
         'usrsctplib/user_recv_thread.c',
         'usrsctplib/user_recv_thread.h',
         'usrsctplib/user_route.h',
-        'usrsctplib/user_sctp_timer_iterate.c',
         'usrsctplib/user_socket.c',
         'usrsctplib/user_socketvar.h',
         'usrsctplib/user_uma.h',

@@ -7,9 +7,9 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
-#include "chrome/browser/content_settings/content_settings_observable_provider.h"
-#include "chrome/browser/content_settings/content_settings_origin_identifier_value_map.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/browser/content_settings_observable_provider.h"
+#include "components/content_settings/core/browser/content_settings_origin_identifier_value_map.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -23,34 +23,32 @@ namespace content_settings {
 
 // A content settings provider which disables certain plugins for platform apps.
 class InternalExtensionProvider : public ObservableProvider,
-                            public content::NotificationObserver {
+                                  public content::NotificationObserver {
  public:
   explicit InternalExtensionProvider(ExtensionService* extension_service);
 
-  virtual ~InternalExtensionProvider();
+  ~InternalExtensionProvider() override;
 
   // ProviderInterface methods:
-  virtual RuleIterator* GetRuleIterator(
-      ContentSettingsType content_type,
-      const ResourceIdentifier& resource_identifier,
-      bool incognito) const OVERRIDE;
+  RuleIterator* GetRuleIterator(ContentSettingsType content_type,
+                                const ResourceIdentifier& resource_identifier,
+                                bool incognito) const override;
 
-  virtual bool SetWebsiteSetting(
-      const ContentSettingsPattern& primary_pattern,
-      const ContentSettingsPattern& secondary_pattern,
-      ContentSettingsType content_type,
-      const ResourceIdentifier& resource_identifier,
-      base::Value* value) OVERRIDE;
+  bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
+                         const ContentSettingsPattern& secondary_pattern,
+                         ContentSettingsType content_type,
+                         const ResourceIdentifier& resource_identifier,
+                         base::Value* value) override;
 
-  virtual void ClearAllContentSettingsRules(ContentSettingsType content_type)
-      OVERRIDE;
+  void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
 
-  virtual void ShutdownOnUIThread() OVERRIDE;
+  void ShutdownOnUIThread() override;
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
+
  private:
   void SetContentSettingForExtension(const extensions::Extension* extension,
                                      ContentSetting setting);

@@ -14,14 +14,13 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/environment.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
-#include "base/path_service.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -48,6 +47,7 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
@@ -80,14 +80,14 @@
 #endif
 
 #if defined(TOOLKIT_VIEWS) && defined(OS_LINUX)
-#include "ui/events/x/touch_factory_x11.h"
+#include "ui/events/devices/x11/touch_factory_x11.h"
 #endif
 
 #if defined(OS_MACOSX)
 #include "chrome/browser/web_applications/web_app_mac.h"
 #endif
 
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_PRINT_PREVIEW)
 #include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_proxy_service_factory.h"
 #include "chrome/browser/printing/print_dialog_cloud.h"
@@ -109,11 +109,11 @@ class ProfileLaunchObserver : public content::NotificationObserver {
     registrar_.Add(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
                    content::NotificationService::AllSources());
   }
-  virtual ~ProfileLaunchObserver() {}
+  ~ProfileLaunchObserver() override {}
 
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     switch (type) {
       case chrome::NOTIFICATION_PROFILE_DESTROYED: {
         Profile* profile = content::Source<Profile>(source).ptr();
@@ -361,8 +361,13 @@ SessionStartupPref StartupBrowserCreator::GetSessionStartupPref(
 #if defined(OS_CHROMEOS)
   const bool is_first_run =
       user_manager::UserManager::Get()->IsCurrentUserNew();
+  // On ChromeOS restarts force the user to login again. The expectation is that
+  // after a login the user gets clean state. For this reason we ignore
+  // StartupBrowserCreator::WasRestarted().
+  const bool did_restart = false;
 #else
   const bool is_first_run = first_run::IsChromeFirstRun();
+  const bool did_restart = StartupBrowserCreator::WasRestarted();
 #endif
 
   // The pref has an OS-dependent default value. For the first run only, this
@@ -378,11 +383,23 @@ SessionStartupPref StartupBrowserCreator::GetSessionStartupPref(
   // However, new profiles can be created from a browser process that has this
   // switch so do not set the session pref to SessionStartupPref::LAST for
   // those as there is nothing to restore.
-  if ((command_line.HasSwitch(switches::kRestoreLastSession) ||
-       StartupBrowserCreator::WasRestarted()) &&
+  if ((command_line.HasSwitch(switches::kRestoreLastSession) || did_restart) &&
       !profile->IsNewProfile()) {
     pref.type = SessionStartupPref::LAST;
   }
+
+  // A browser starting for a profile being unlocked should always restore.
+  if (!profile->IsGuestSession()) {
+    ProfileInfoCache& info_cache =
+        g_browser_process->profile_manager()->GetProfileInfoCache();
+    size_t index = info_cache.GetIndexOfProfileWithPath(profile->GetPath());
+
+    if (index != std::string::npos &&
+        info_cache.ProfileIsSigninRequiredAtIndex(index)) {
+      pref.type = SessionStartupPref::LAST;
+    }
+  }
+
   if (pref.type == SessionStartupPref::LAST &&
       IncognitoModePrefs::ShouldLaunchIncognito(command_line, prefs)) {
     // We don't store session information when incognito. If the user has
@@ -466,6 +483,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
     const Profiles& last_opened_profiles,
     int* return_code,
     StartupBrowserCreator* browser_creator) {
+  VLOG(2) << "ProcessCmdLineImpl : BEGIN";
   DCHECK(last_used_profile);
   if (process_startup) {
     if (command_line.HasSwitch(switches::kDisablePromptOnRepost))
@@ -474,7 +492,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
 
   bool silent_launch = false;
 
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_PRINT_PREVIEW)
   // If we are just displaying a print dialog we shouldn't open browser
   // windows.
   if (command_line.HasSwitch(switches::kCloudPrintFile) &&
@@ -492,22 +510,24 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
       // launching and quit.
       return false;
   }
-#endif  // defined(ENABLE_FULL_PRINTING)
+#endif  // defined(ENABLE_PRINT_PREVIEW)
 
+  VLOG(2) << "ProcessCmdLineImpl: PLACE 1";
   if (command_line.HasSwitch(switches::kExplicitlyAllowedPorts)) {
     std::string allowed_ports =
         command_line.GetSwitchValueASCII(switches::kExplicitlyAllowedPorts);
     net::SetExplicitlyAllowedPorts(allowed_ports);
   }
 
-  if (command_line.HasSwitch(switches::kInstallFromWebstore)) {
+  if (command_line.HasSwitch(switches::kInstallEphemeralAppFromWebstore)) {
     extensions::StartupHelper helper;
-    helper.InstallFromWebstore(command_line, last_used_profile);
+    helper.InstallEphemeralApp(command_line, last_used_profile);
     // Nothing more needs to be done, so return false to stop launching and
     // quit.
     return false;
   }
 
+  VLOG(2) << "ProcessCmdLineImpl: PLACE 2";
   if (command_line.HasSwitch(switches::kValidateCrx)) {
     if (!process_startup) {
       LOG(ERROR) << "chrome is already running; you must close all running "
@@ -526,13 +546,13 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
     return false;
   }
 
-  if (command_line.HasSwitch(switches::kLimitedInstallFromWebstore)) {
-    extensions::StartupHelper helper;
-    helper.LimitedInstallFromWebstore(command_line, last_used_profile,
-                                      base::Bind(&base::DoNothing));
-  }
-
 #if defined(OS_CHROMEOS)
+
+#if defined(USE_ATHENA)
+  // Athena will never launch browser.
+  silent_launch = true;
+#endif
+
   // The browser will be launched after the user logs in.
   if (command_line.HasSwitch(chromeos::switches::kLoginManager))
     silent_launch = true;
@@ -555,12 +575,13 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
     chrome::AttemptUserExit();
     return false;
   }
-#endif
+#endif  // OS_CHROMEOS
 
 #if defined(TOOLKIT_VIEWS) && defined(USE_X11)
   ui::TouchFactory::SetTouchDeviceListFromCommandLine();
 #endif
 
+  VLOG(2) << "ProcessCmdLineImpl: PLACE 3";
 #if defined(OS_MACOSX)
   if (web_app::MaybeRebuildShortcut(command_line))
     return true;
@@ -584,6 +605,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
   if (silent_launch)
     return true;
 
+  VLOG(2) << "ProcessCmdLineImpl: PLACE 4";
   // Check for --load-and-launch-app.
   if (command_line.HasSwitch(apps::kLoadAndLaunchApp) &&
       !IncognitoModePrefs::ShouldLaunchIncognito(
@@ -605,6 +627,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
       return true;
   }
 
+  VLOG(2) << "ProcessCmdLineImpl: PLACE 5";
   chrome::startup::IsProcessStartup is_process_startup = process_startup ?
       chrome::startup::IS_PROCESS_STARTUP :
       chrome::startup::IS_NOT_PROCESS_STARTUP;
@@ -619,6 +642,7 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
   // |last_used_profile| is the last used incognito profile. Restoring it will
   // create a browser window for the corresponding original profile.
   if (last_opened_profiles.empty()) {
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 6.A";
     // If the last used profile is locked or was a guest, show the user manager.
     if (switches::IsNewAvatarMenu()) {
       ProfileInfoCache& profile_info =
@@ -627,17 +651,45 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
           last_used_profile->GetPath());
       bool signin_required = profile_index != std::string::npos &&
           profile_info.ProfileIsSigninRequiredAtIndex(profile_index);
-      if (signin_required || last_used_profile->IsGuestSession()) {
-        chrome::ShowUserManager(base::FilePath());
+
+      // Guest or locked profiles cannot be re-opened on startup. The only
+      // exception is if there's already a Guest window open in a separate
+      // process (for example, launching a new browser after clicking on a
+      // downloaded file in Guest mode).
+      bool has_guest_browsers = last_used_profile->IsGuestSession() &&
+          chrome::GetTotalBrowserCountForProfile(
+              last_used_profile->GetOffTheRecordProfile()) > 0;
+      if (signin_required ||
+          (last_used_profile->IsGuestSession() && !has_guest_browsers)) {
+        UserManager::Show(base::FilePath(),
+                          profiles::USER_MANAGER_NO_TUTORIAL,
+                          profiles::USER_MANAGER_SELECT_PROFILE_NO_ACTION);
         return true;
       }
     }
-    if (!browser_creator->LaunchBrowser(command_line, last_used_profile,
+
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 7.A";
+    Profile* profile_to_open = last_used_profile->IsGuestSession() ?
+        last_used_profile->GetOffTheRecordProfile() : last_used_profile;
+
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 8.A";
+    if (!browser_creator->LaunchBrowser(command_line, profile_to_open,
                                         cur_dir, is_process_startup,
                                         is_first_run, return_code)) {
       return false;
     }
   } else {
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 6.B";
+    // Guest profiles should not be reopened on startup. This can happen if
+    // the last used profile was a Guest, but other profiles were also open
+    // when Chrome was closed. In this case, pick a different open profile
+    // to be the active one, since the Guest profile is never added to the list
+    // of open profiles.
+    if (switches::IsNewAvatarMenu() && last_used_profile->IsGuestSession()) {
+      DCHECK(!last_opened_profiles[0]->IsGuestSession());
+      last_used_profile = last_opened_profiles[0];
+    }
+
     // Launch the last used profile with the full command line, and the other
     // opened profiles without the URLs to launch.
     CommandLine command_line_without_urls(command_line.GetProgram());
@@ -647,9 +699,11 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
       command_line_without_urls.AppendSwitchNative(switch_it->first,
                                                    switch_it->second);
     }
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 7.B";
     // Launch the profiles in the order they became active.
     for (Profiles::const_iterator it = last_opened_profiles.begin();
          it != last_opened_profiles.end(); ++it) {
+      DCHECK(!(*it)->IsGuestSession());
       // Don't launch additional profiles which would only open a new tab
       // page. When restarting after an update, all profiles will reopen last
       // open pages.
@@ -660,11 +714,6 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
           !HasPendingUncleanExit(*it))
         continue;
 
-      // Don't re-open a browser window for the guest profile.
-      if (switches::IsNewAvatarMenu() &&
-          (*it)->IsGuestSession())
-        continue;
-
       if (!browser_creator->LaunchBrowser((*it == last_used_profile) ?
           command_line : command_line_without_urls, *it, cur_dir,
           is_process_startup, is_first_run, return_code))
@@ -672,15 +721,12 @@ bool StartupBrowserCreator::ProcessCmdLineImpl(
       // We've launched at least one browser.
       is_process_startup = chrome::startup::IS_NOT_PROCESS_STARTUP;
     }
+    VLOG(2) << "ProcessCmdLineImpl: PLACE 8.B";
     // This must be done after all profiles have been launched so the observer
     // knows about all profiles to wait for before activating this one.
-
-    // If the last used profile was the guest one, we didn't open it so
-    // we don't need to activate it either.
-    if (!switches::IsNewAvatarMenu() &&
-        !last_used_profile->IsGuestSession())
-      profile_launch_observer.Get().set_profile_to_activate(last_used_profile);
+    profile_launch_observer.Get().set_profile_to_activate(last_used_profile);
   }
+  VLOG(2) << "ProcessCmdLineImpl: END";
   return true;
 }
 
@@ -728,16 +774,16 @@ bool HasPendingUncleanExit(Profile* profile) {
 
 base::FilePath GetStartupProfilePath(const base::FilePath& user_data_dir,
                                      const CommandLine& command_line) {
+  if (command_line.HasSwitch(switches::kProfileDirectory)) {
+    return user_data_dir.Append(
+        command_line.GetSwitchValuePath(switches::kProfileDirectory));
+  }
+
   // If we are showing the app list then chrome isn't shown so load the app
   // list's profile rather than chrome's.
   if (command_line.HasSwitch(switches::kShowAppList)) {
     return AppListService::Get(chrome::HOST_DESKTOP_TYPE_NATIVE)->
         GetProfilePath(user_data_dir);
-  }
-
-  if (command_line.HasSwitch(switches::kProfileDirectory)) {
-    return user_data_dir.Append(
-        command_line.GetSwitchValuePath(switches::kProfileDirectory));
   }
 
   return g_browser_process->profile_manager()->GetLastUsedProfileDir(

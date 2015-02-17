@@ -2,6 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+cr.exportPath('print_preview');
+
+/**
+ * @typedef {{selectSaveAsPdfDestination: boolean,
+ *            layoutSettings.portrait: boolean,
+ *            pageRange: string,
+ *            headersAndFooters: boolean,
+ *            backgroundColorsAndImages: boolean,
+ *            margins: number}}
+ * @see chrome/browser/printing/print_preview_pdf_generated_browsertest.cc
+ */
+print_preview.PreviewSettings;
+
 cr.define('print_preview', function() {
   'use strict';
 
@@ -180,7 +193,7 @@ cr.define('print_preview', function() {
     getNativeColorModel_: function(destination, color) {
       // For non-local printers native color model is ignored anyway.
       var option = destination.isLocal ? color.getSelectedOption() : null;
-      var nativeColorModel = parseInt(option ? option.vendor_id : null);
+      var nativeColorModel = parseInt(option ? option.vendor_id : null, 10);
       if (isNaN(nativeColorModel)) {
         return color.getValue() ?
             NativeLayer.ColorMode_.COLOR : NativeLayer.ColorMode_.GRAY;
@@ -200,7 +213,7 @@ cr.define('print_preview', function() {
      * @param {!print_preview.PrintTicketStore} printTicketStore Used to get the
      *     state of the print ticket.
      * @param {!print_preview.DocumentInfo} documentInfo Document data model.
-     * @param {number} ID of the preview request.
+     * @param {number} requestId ID of the preview request.
      */
     startGetPreview: function(
         destination, printTicketStore, documentInfo, requestId) {
@@ -231,8 +244,8 @@ cr.define('print_preview', function() {
         // preview, they still need to be included.
         'duplex': printTicketStore.duplex.getValue() ?
             NativeLayer.DuplexMode.LONG_EDGE : NativeLayer.DuplexMode.SIMPLEX,
-        'copies': printTicketStore.copies.getValueAsNumber(),
-        'collate': printTicketStore.collate.getValue(),
+        'copies': 1,
+        'collate': true,
         'shouldPrintBackgrounds': printTicketStore.cssBackground.getValue(),
         'shouldPrintSelectionOnly': printTicketStore.selectionOnly.getValue()
       };
@@ -268,16 +281,22 @@ cr.define('print_preview', function() {
      * @param {!print_preview.Destination} destination Destination to print to.
      * @param {!print_preview.PrintTicketStore} printTicketStore Used to get the
      *     state of the print ticket.
-     * @param {print_preview.CloudPrintInterface} cloudPrintInterface Interface
+     * @param {cloudprint.CloudPrintInterface} cloudPrintInterface Interface
      *     to Google Cloud Print.
      * @param {!print_preview.DocumentInfo} documentInfo Document data model.
      * @param {boolean=} opt_isOpenPdfInPreview Whether to open the PDF in the
      *     system's preview application.
+     * @param {boolean=} opt_showSystemDialog Whether to open system dialog for
+     *     advanced settings.
      */
     startPrint: function(destination, printTicketStore, cloudPrintInterface,
-                         documentInfo, opt_isOpenPdfInPreview) {
+                         documentInfo, opt_isOpenPdfInPreview,
+                         opt_showSystemDialog) {
       assert(printTicketStore.isTicketValid(),
              'Trying to print when ticket is not valid');
+
+      assert(!opt_showSystemDialog || (cr.isWindows && destination.isLocal),
+             'Implemented for Windows only');
 
       var ticket = {
         'pageRange': printTicketStore.pageRange.getDocumentPageRanges(),
@@ -304,7 +323,8 @@ cr.define('print_preview', function() {
         'requestID': -1,
         'fitToPageEnabled': printTicketStore.fitToPage.getValue(),
         'pageWidth': documentInfo.pageSize.width,
-        'pageHeight': documentInfo.pageSize.height
+        'pageHeight': documentInfo.pageSize.height,
+        'showSystemDialog': opt_showSystemDialog
       };
 
       if (!destination.isLocal) {
@@ -347,14 +367,8 @@ cr.define('print_preview', function() {
 
     /** Shows the system's native printing dialog. */
     startShowSystemDialog: function() {
+      assert(!cr.isWindows);
       chrome.send('showSystemDialog');
-    },
-
-    /** Shows Google Cloud Print's web-based print dialog.
-     * @param {number} pageCount Number of pages to print.
-     */
-    startShowCloudPrintDialog: function(pageCount) {
-      chrome.send('printWithCloudPrintDialog', [pageCount]);
     },
 
     /** Closes the print preview dialog. */
@@ -427,7 +441,8 @@ cr.define('print_preview', function() {
 
     /**
      * Turn on the integration of Cloud Print.
-     * @param {string} cloudPrintURL The URL to use for cloud print servers.
+     * @param {{cloudPrintURL: string, appKioskMode: string}} settings
+     *     cloudPrintUrl: The URL to use for cloud print servers.
      * @private
      */
     onSetUseCloudPrint_: function(settings) {
@@ -466,7 +481,7 @@ cr.define('print_preview', function() {
     /**
      * Called when native layer gets settings information for a requested local
      * destination.
-     * @param {string} printerId printer affected by error.
+     * @param {string} destinationId Printer affected by error.
      * @private
      */
     onFailedToGetPrinterCapabilities_: function(destinationId) {
@@ -481,7 +496,7 @@ cr.define('print_preview', function() {
     /**
      * Called when native layer gets settings information for a requested privet
      * destination.
-     * @param {string} printerId printer affected by error.
+     * @param {string} destinationId Printer affected by error.
      * @private
      */
     onFailedToGetPrivetPrinterCapabilities_: function(destinationId) {
@@ -709,8 +724,8 @@ cr.define('print_preview', function() {
     /**
      * Dispatches an event to print_preview.js to change
      * a particular setting for print preview.
-     * @param {!Object} settings Object containing the value to be
-     *     changed and that value should be set to.
+     * @param {!print_preview.PreviewSettings} settings Object containing the
+     *     value to be changed and that value should be set to.
      * @private
      */
     onManipulateSettingsForTest_: function(settings) {
@@ -913,12 +928,12 @@ cr.define('print_preview', function() {
       return this.documentTitle_;
     },
 
-    /** @return {bool} Whether the document has selection. */
+    /** @return {boolean} Whether the document has selection. */
     get documentHasSelection() {
       return this.documentHasSelection_;
     },
 
-    /** @return {bool} Whether selection only should be printed. */
+    /** @return {boolean} Whether selection only should be printed. */
     get selectionOnly() {
       return this.selectionOnly_;
     },

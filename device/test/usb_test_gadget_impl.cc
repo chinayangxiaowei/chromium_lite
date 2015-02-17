@@ -16,16 +16,16 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/process/process.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
-#include "components/usb_service/usb_device.h"
-#include "components/usb_service/usb_device_handle.h"
-#include "components/usb_service/usb_service.h"
+#include "device/usb/usb_device.h"
+#include "device/usb/usb_device_handle.h"
+#include "device/usb/usb_service.h"
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_fetcher_delegate.h"
@@ -36,9 +36,6 @@
 
 using ::base::PlatformThread;
 using ::base::TimeDelta;
-using ::usb_service::UsbDevice;
-using ::usb_service::UsbDeviceHandle;
-using ::usb_service::UsbService;
 
 namespace device {
 
@@ -58,22 +55,23 @@ struct UsbTestGadgetConfiguration {
 };
 
 static const struct UsbTestGadgetConfiguration kConfigurations[] = {
-  { UsbTestGadget::DEFAULT, "/unconfigure", 0x58F0 },
-  { UsbTestGadget::KEYBOARD, "/keyboard/configure", 0x58F1 },
-  { UsbTestGadget::MOUSE, "/mouse/configure", 0x58F2 },
-  { UsbTestGadget::HID_ECHO, "/hid_echo/configure", 0x58F3 },
+    {UsbTestGadget::DEFAULT, "/unconfigure", 0x58F0},
+    {UsbTestGadget::KEYBOARD, "/keyboard/configure", 0x58F1},
+    {UsbTestGadget::MOUSE, "/mouse/configure", 0x58F2},
+    {UsbTestGadget::HID_ECHO, "/hid_echo/configure", 0x58F3},
+    {UsbTestGadget::ECHO, "/echo/configure", 0x58F4},
 };
 
 class UsbTestGadgetImpl : public UsbTestGadget {
  public:
-  virtual ~UsbTestGadgetImpl();
+  ~UsbTestGadgetImpl() override;
 
-  virtual bool Unclaim() OVERRIDE;
-  virtual bool Disconnect() OVERRIDE;
-  virtual bool Reconnect() OVERRIDE;
-  virtual bool SetType(Type type) OVERRIDE;
-  virtual UsbDevice* GetDevice() const OVERRIDE;
-  virtual std::string GetSerial() const OVERRIDE;
+  bool Unclaim() override;
+  bool Disconnect() override;
+  bool Reconnect() override;
+  bool SetType(Type type) override;
+  UsbDevice* GetDevice() const override;
+  std::string GetSerialNumber() const override;
 
  protected:
   UsbTestGadgetImpl();
@@ -95,13 +93,13 @@ class UsbTestGadgetImpl : public UsbTestGadget {
   class Delegate : public net::URLFetcherDelegate {
    public:
     Delegate() {}
-    virtual ~Delegate() {}
+    ~Delegate() override {}
 
     void WaitForCompletion() {
       run_loop_.Run();
     }
 
-    virtual void OnURLFetchComplete(const net::URLFetcher* source) OVERRIDE {
+    void OnURLFetchComplete(const net::URLFetcher* source) override {
       run_loop_.Quit();
     }
 
@@ -143,7 +141,7 @@ scoped_ptr<UsbTestGadget> UsbTestGadget::Claim() {
   VLOG(1) << "It took " << (kClaimRetries - retries)
           << " retries to find an unclaimed device.";
 
-  return gadget.PassAs<UsbTestGadget>();
+  return gadget.Pass();
 }
 
 UsbTestGadgetImpl::UsbTestGadgetImpl() {
@@ -151,11 +149,11 @@ UsbTestGadgetImpl::UsbTestGadgetImpl() {
   context_builder.set_proxy_service(net::ProxyService::CreateDirect());
   request_context_.reset(context_builder.Build());
 
-  base::ProcessId process_id = base::Process::Current().pid();
+  base::ProcessId process_id = base::GetCurrentProcId();
   session_id_ = base::StringPrintf(
       "%s:%p", base::HexEncode(&process_id, sizeof(process_id)).c_str(), this);
 
-  usb_service_ = UsbService::GetInstance();
+  usb_service_ = UsbService::GetInstance(NULL);
 }
 
 UsbTestGadgetImpl::~UsbTestGadgetImpl() {
@@ -168,7 +166,7 @@ UsbDevice* UsbTestGadgetImpl::GetDevice() const {
   return device_.get();
 }
 
-std::string UsbTestGadgetImpl::GetSerial() const {
+std::string UsbTestGadgetImpl::GetSerialNumber() const {
   return device_address_;
 }
 
@@ -183,7 +181,7 @@ scoped_ptr<net::URLFetcher> UsbTestGadgetImpl::CreateURLFetcher(
           request_context_.get(),
           base::MessageLoop::current()->message_loop_proxy()));
 
-  return url_fetcher.PassAs<net::URLFetcher>();
+  return url_fetcher;
 }
 
 int UsbTestGadgetImpl::SimplePOSTRequest(const GURL& url,
@@ -207,13 +205,8 @@ bool UsbTestGadgetImpl::FindUnclaimed() {
          devices.begin(); iter != devices.end(); ++iter) {
     const scoped_refptr<UsbDevice> &device = *iter;
     if (device->vendor_id() == 0x18D1 && device->product_id() == 0x58F0) {
-      scoped_refptr<UsbDeviceHandle> handle = device->Open();
-      if (handle.get() == NULL) {
-        continue;
-      }
-
       base::string16 serial_utf16;
-      if (!handle->GetSerial(&serial_utf16)) {
+      if (!device->GetSerialNumber(&serial_utf16)) {
         continue;
       }
 
@@ -342,7 +335,7 @@ bool UsbTestGadgetImpl::Update() {
 bool UsbTestGadgetImpl::FindClaimed() {
   CHECK(!device_.get());
 
-  std::string expected_serial = GetSerial();
+  std::string expected_serial = GetSerialNumber();
 
   std::vector<scoped_refptr<UsbDevice> > devices;
   usb_service_->GetDevices(&devices);
@@ -364,13 +357,8 @@ bool UsbTestGadgetImpl::FindClaimed() {
         continue;
       }
 
-      scoped_refptr<UsbDeviceHandle> handle(device->Open());
-      if (handle.get() == NULL) {
-        continue;
-      }
-
       base::string16 serial_utf16;
-      if (!handle->GetSerial(&serial_utf16)) {
+      if (!device->GetSerialNumber(&serial_utf16)) {
         continue;
       }
 

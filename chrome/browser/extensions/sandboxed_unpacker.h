@@ -78,12 +78,13 @@ class SandboxedUnpacker : public content::UtilityProcessHostClient {
   // Unpacks the extension in |crx_path| into a temporary directory and calls
   // |client| with the result. If |run_out_of_process| is provided, unpacking
   // is done in a sandboxed subprocess. Otherwise, it is done in-process.
-  SandboxedUnpacker(const base::FilePath& crx_path,
-                    Manifest::Location location,
-                    int creation_flags,
-                    const base::FilePath& extensions_dir,
-                    base::SequencedTaskRunner* unpacker_io_task_runner,
-                    SandboxedUnpackerClient* client);
+  SandboxedUnpacker(
+      const base::FilePath& crx_path,
+      Manifest::Location location,
+      int creation_flags,
+      const base::FilePath& extensions_dir,
+      const scoped_refptr<base::SequencedTaskRunner>& unpacker_io_task_runner,
+      SandboxedUnpackerClient* client);
 
   // Start unpacking the extension. The client is called with the results.
   void Start();
@@ -153,7 +154,7 @@ class SandboxedUnpacker : public content::UtilityProcessHostClient {
   friend class ProcessHostClient;
   friend class SandboxedUnpackerTest;
 
-  virtual ~SandboxedUnpacker();
+  ~SandboxedUnpacker() override;
 
   // Set |temp_dir_| as a temporary directory to unpack the extension in.
   // Return true on success.
@@ -174,8 +175,8 @@ class SandboxedUnpacker : public content::UtilityProcessHostClient {
   void StartProcessOnIOThread(const base::FilePath& temp_crx_path);
 
   // UtilityProcessHostClient
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnProcessCrashed(int exit_code) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnProcessCrashed(int exit_code) override;
 
   // IPC message handlers.
   void OnUnpackExtensionSucceeded(const base::DictionaryValue& manifest);

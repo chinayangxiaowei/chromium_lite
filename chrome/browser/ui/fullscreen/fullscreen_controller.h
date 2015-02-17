@@ -10,7 +10,7 @@
 #include "base/basictypes.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/fullscreen/fullscreen_exit_bubble_type.h"
-#include "chrome/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -54,7 +54,7 @@ class WebContents;
 class FullscreenController : public content::NotificationObserver {
  public:
   explicit FullscreenController(Browser* browser);
-  virtual ~FullscreenController();
+  ~FullscreenController() override;
 
   // Browser/User Fullscreen ///////////////////////////////////////////////////
 
@@ -143,9 +143,9 @@ class FullscreenController : public content::NotificationObserver {
   void LostMouseLock();
 
   // content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Bubble Content ////////////////////////////////////////////////////////////
 

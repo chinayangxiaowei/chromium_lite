@@ -14,7 +14,7 @@
 #include "base/mac/scoped_nsobject.h"
 #include "base/threading/thread_checker.h"
 #include "content/public/browser/browser_thread.h"
-#import "media/video/capture/mac/avfoundation_glue.h"
+#import "media/base/mac/avfoundation_glue.h"
 
 using content::BrowserThread;
 
@@ -136,9 +136,10 @@ void DeviceMonitorMacImpl::ConsolidateDevicesListAndNotify(
 class QTKitMonitorImpl : public DeviceMonitorMacImpl {
  public:
   explicit QTKitMonitorImpl(content::DeviceMonitorMac* monitor);
-  virtual ~QTKitMonitorImpl();
+  ~QTKitMonitorImpl() override;
 
-  virtual void OnDeviceChanged() OVERRIDE;
+  void OnDeviceChanged() override;
+
  private:
   void CountDevices();
   void OnAttributeChanged(NSNotification* notification);
@@ -297,7 +298,9 @@ void SuspendObserverDelegate::StartObserver(
   // Enumerate the devices in Device thread and post the observers start to be
   // done on UI thread. The devices array is retained in |device_thread| and
   // released in DoStartObserver().
-  base::PostTaskAndReplyWithResult(device_thread, FROM_HERE,
+  base::PostTaskAndReplyWithResult(
+      device_thread.get(),
+      FROM_HERE,
       base::BindBlock(^{ return [[AVCaptureDeviceGlue devices] retain]; }),
       base::Bind(&SuspendObserverDelegate::DoStartObserver, this));
 }
@@ -308,7 +311,9 @@ void SuspendObserverDelegate::OnDeviceChanged(
   // Enumerate the devices in Device thread and post the consolidation of the
   // new devices and the old ones to be done on UI thread. The devices array
   // is retained in |device_thread| and released in DoOnDeviceChanged().
-  PostTaskAndReplyWithResult(device_thread, FROM_HERE,
+  PostTaskAndReplyWithResult(
+      device_thread.get(),
+      FROM_HERE,
       base::BindBlock(^{ return [[AVCaptureDeviceGlue devices] retain]; }),
       base::Bind(&SuspendObserverDelegate::DoOnDeviceChanged, this));
 }
@@ -373,9 +378,9 @@ class AVFoundationMonitorImpl : public DeviceMonitorMacImpl {
   AVFoundationMonitorImpl(
       content::DeviceMonitorMac* monitor,
       const scoped_refptr<base::SingleThreadTaskRunner>& device_task_runner);
-  virtual ~AVFoundationMonitorImpl();
+  ~AVFoundationMonitorImpl() override;
 
-  virtual void OnDeviceChanged() OVERRIDE;
+  void OnDeviceChanged() override;
 
  private:
   // {Video,AudioInput}DeviceManager's "Device" thread task runner used for

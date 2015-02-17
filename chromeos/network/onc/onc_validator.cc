@@ -103,34 +103,37 @@ scoped_ptr<base::DictionaryValue> Validator::MapObject(
 
   bool valid = ValidateObjectDefault(signature, onc_object, repaired.get());
   if (valid) {
-    if (&signature == &kToplevelConfigurationSignature)
+    if (&signature == &kToplevelConfigurationSignature) {
       valid = ValidateToplevelConfiguration(repaired.get());
-    else if (&signature == &kNetworkConfigurationSignature)
+    } else if (&signature == &kNetworkConfigurationSignature) {
       valid = ValidateNetworkConfiguration(repaired.get());
-    else if (&signature == &kEthernetSignature)
+    } else if (&signature == &kEthernetSignature) {
       valid = ValidateEthernet(repaired.get());
-    else if (&signature == &kIPConfigSignature)
+    } else if (&signature == &kIPConfigSignature ||
+               &signature == &kSavedIPConfigSignature ||
+               &signature == &kStaticIPConfigSignature) {
       valid = ValidateIPConfig(repaired.get());
-    else if (&signature == &kWiFiSignature)
+    } else if (&signature == &kWiFiSignature) {
       valid = ValidateWiFi(repaired.get());
-    else if (&signature == &kVPNSignature)
+    } else if (&signature == &kVPNSignature) {
       valid = ValidateVPN(repaired.get());
-    else if (&signature == &kIPsecSignature)
+    } else if (&signature == &kIPsecSignature) {
       valid = ValidateIPsec(repaired.get());
-    else if (&signature == &kOpenVPNSignature)
+    } else if (&signature == &kOpenVPNSignature) {
       valid = ValidateOpenVPN(repaired.get());
-    else if (&signature == &kVerifyX509Signature)
+    } else if (&signature == &kVerifyX509Signature) {
       valid = ValidateVerifyX509(repaired.get());
-    else if (&signature == &kCertificatePatternSignature)
+    } else if (&signature == &kCertificatePatternSignature) {
       valid = ValidateCertificatePattern(repaired.get());
-    else if (&signature == &kProxySettingsSignature)
+    } else if (&signature == &kProxySettingsSignature) {
       valid = ValidateProxySettings(repaired.get());
-    else if (&signature == &kProxyLocationSignature)
+    } else if (&signature == &kProxyLocationSignature) {
       valid = ValidateProxyLocation(repaired.get());
-    else if (&signature == &kEAPSignature)
+    } else if (&signature == &kEAPSignature) {
       valid = ValidateEAP(repaired.get());
-    else if (&signature == &kCertificateSignature)
+    } else if (&signature == &kCertificateSignature) {
       valid = ValidateCertificate(repaired.get());
+    }
   }
 
   if (valid) {
@@ -674,11 +677,20 @@ bool Validator::ValidateOpenVPN(base::DictionaryValue* result) {
                                              ::onc::openvpn::kServer};
   const std::vector<const char*> valid_cert_tls_values(
       toVector(kValidCertTlsValues));
+  const char* const kValidUserAuthTypes[] = {
+      ::onc::openvpn_user_auth_type::kNone,
+      ::onc::openvpn_user_auth_type::kOTP,
+      ::onc::openvpn_user_auth_type::kPassword,
+      ::onc::openvpn_user_auth_type::kPasswordAndOTP};
+  const std::vector<const char*> valid_user_auth_types(
+      toVector(kValidUserAuthTypes));
 
   if (FieldExistsAndHasNoValidValue(
           *result, kAuthRetry, valid_auth_retry_values) ||
       FieldExistsAndHasNoValidValue(
           *result, kRemoteCertTLS, valid_cert_tls_values) ||
+      FieldExistsAndHasNoValidValue(
+          *result, kUserAuthenticationType, valid_user_auth_types) ||
       FieldExistsAndIsEmpty(*result, kServerCARefs)) {
     return false;
   }

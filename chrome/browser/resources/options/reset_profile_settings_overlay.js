@@ -6,6 +6,7 @@ cr.define('options', function() {
   var Page = cr.ui.pageManager.Page;
 
   var AutomaticSettingsResetBanner = options.AutomaticSettingsResetBanner;
+  var ResetProfileSettingsBanner = options.ResetProfileSettingsBanner;
 
   /**
    * ResetProfileSettingsOverlay class
@@ -28,22 +29,29 @@ cr.define('options', function() {
     initializePage: function() {
       Page.prototype.initializePage.call(this);
 
-      $('reset-profile-settings-dismiss').onclick = function(event) {
+      $('reset-profile-settings-dismiss').onclick = function(e) {
         ResetProfileSettingsOverlay.dismiss();
       };
-      $('reset-profile-settings-commit').onclick = function(event) {
+      $('reset-profile-settings-commit').onclick = function(e) {
         ResetProfileSettingsOverlay.setResettingState(true);
         chrome.send('performResetProfileSettings',
                     [$('send-settings').checked]);
       };
-      $('expand-feedback').onclick = function(event) {
+      $('expand-feedback').onclick = function(e) {
         var feedbackTemplate = $('feedback-template');
         feedbackTemplate.hidden = !feedbackTemplate.hidden;
+        e.preventDefault();
       };
     },
 
-    /** @override */
+    /**
+     * @override
+     * @suppress {checkTypes}
+     * TODO(vitalyp): remove the suppression. See the explanation in
+     * chrome/browser/resources/options/automatic_settings_reset_banner.js.
+     */
     didShowPage: function() {
+      ResetProfileSettingsBanner.dismiss();
       chrome.send('onShowResetProfileDialog');
     },
 
@@ -67,6 +75,9 @@ cr.define('options', function() {
   /**
    * Chrome callback to notify ResetProfileSettingsOverlay that the reset
    * operation has terminated.
+   * @suppress {checkTypes}
+   * TODO(vitalyp): remove the suppression. See the explanation in
+   * chrome/browser/resources/options/automatic_settings_reset_banner.js.
    */
   ResetProfileSettingsOverlay.doneResetting = function() {
     AutomaticSettingsResetBanner.dismiss();

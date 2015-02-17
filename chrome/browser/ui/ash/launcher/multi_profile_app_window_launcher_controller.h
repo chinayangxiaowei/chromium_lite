@@ -14,25 +14,26 @@ class MultiProfileAppWindowLauncherController
  public:
   explicit MultiProfileAppWindowLauncherController(
       ChromeLauncherController* owner);
-  virtual ~MultiProfileAppWindowLauncherController();
+  ~MultiProfileAppWindowLauncherController() override;
 
   // Overridden from AppWindowLauncherController:
-  virtual void ActiveUserChanged(const std::string& user_email) OVERRIDE;
-  virtual void AdditionalUserAddedToSession(Profile* profile) OVERRIDE;
+  void ActiveUserChanged(const std::string& user_email) override;
+  void AdditionalUserAddedToSession(Profile* profile) override;
 
   // Overridden from AppWindowRegistry::Observer:
-  virtual void OnAppWindowAdded(apps::AppWindow* app_window) OVERRIDE;
-  virtual void OnAppWindowRemoved(apps::AppWindow* app_window) OVERRIDE;
-  virtual void OnAppWindowShown(apps::AppWindow* app_window) OVERRIDE;
-  virtual void OnAppWindowHidden(apps::AppWindow* app_window) OVERRIDE;
+  void OnAppWindowAdded(extensions::AppWindow* app_window) override;
+  void OnAppWindowRemoved(extensions::AppWindow* app_window) override;
+  void OnAppWindowShown(extensions::AppWindow* app_window,
+                        bool was_hidden) override;
+  void OnAppWindowHidden(extensions::AppWindow* app_window) override;
 
  private:
-  typedef std::vector<apps::AppWindow*> AppWindowList;
-  typedef std::vector<apps::AppWindowRegistry*> AppWindowRegistryList;
+  typedef std::vector<extensions::AppWindow*> AppWindowList;
+  typedef std::vector<extensions::AppWindowRegistry*> AppWindowRegistryList;
 
   // Returns true if the owner of the given |app_window| has a window teleported
   // of the |app_window|'s application type to the current desktop.
-  bool UserHasAppOnActiveDesktop(apps::AppWindow* app_window);
+  bool UserHasAppOnActiveDesktop(extensions::AppWindow* app_window);
 
   // A list of all app windows for all users.
   AppWindowList app_window_list_;

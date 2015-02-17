@@ -191,7 +191,8 @@ ChromotingJniRuntime::ChromotingJniRuntime() {
   display_task_runner_ = AutoThread::Create("native_disp",
                                             ui_task_runner_);
 
-  url_requester_ = new URLRequestContextGetter(network_task_runner_);
+  url_requester_ =
+      new URLRequestContextGetter(network_task_runner_, network_task_runner_);
 
   // Allows later decoding of video frames.
   media::InitializeCPUSpecificYUVConversions();
@@ -228,7 +229,7 @@ void ChromotingJniRuntime::ConnectToHost(const char* username,
                                   const char* pairing_secret,
                                   const char* capabilities) {
   DCHECK(ui_task_runner_->BelongsToCurrentThread());
-  DCHECK(!session_);
+  DCHECK(!session_.get());
   session_ = new ChromotingJniInstance(this,
                                        username,
                                        auth_token,
@@ -242,7 +243,7 @@ void ChromotingJniRuntime::ConnectToHost(const char* username,
 
 void ChromotingJniRuntime::DisconnectFromHost() {
   DCHECK(ui_task_runner_->BelongsToCurrentThread());
-  if (session_) {
+  if (session_.get()) {
     session_->Disconnect();
     session_ = NULL;
   }

@@ -13,12 +13,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 #include "ui/base/webui/jstemplate_builder.h"
 #include "ui/base/webui/web_ui_util.h"
 
@@ -42,7 +42,6 @@ content::WebUIDataSource* CreateSlowUIHTMLSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUISlowHost);
 
-  source->SetUseJsonJSFormatV2();
   source->AddLocalizedString("slowDisable", IDS_SLOW_DISABLE);
   source->AddLocalizedString("slowEnable", IDS_SLOW_ENABLE);
   source->AddLocalizedString("slowDescription", IDS_SLOW_DESCRIPTION);
@@ -61,7 +60,7 @@ class SlowHandler : public WebUIMessageHandler {
   virtual ~SlowHandler();
 
   // WebUIMessageHandler implementation.
-  virtual void RegisterMessages() OVERRIDE;
+  virtual void RegisterMessages() override;
 
  private:
   void UpdatePage();

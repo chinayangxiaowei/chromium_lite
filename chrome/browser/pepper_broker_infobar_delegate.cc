@@ -5,13 +5,14 @@
 #include "chrome/browser/pepper_broker_infobar_delegate.h"
 
 #include "base/prefs/pref_service.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/plugins/plugin_finder.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/infobars/core/infobar.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/plugin_service.h"
@@ -19,7 +20,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/webplugininfo.h"
-#include "grit/generated_resources.h"
+#include "grit/components_strings.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -136,7 +137,7 @@ bool PepperBrokerInfoBarDelegate::LinkClicked(
       content::OpenURLParams(
           learn_more_url, content::Referrer(),
           (disposition == CURRENT_TAB) ? NEW_FOREGROUND_TAB : disposition,
-          content::PAGE_TRANSITION_LINK, false));
+          ui::PAGE_TRANSITION_LINK, false));
   return false;
 }
 

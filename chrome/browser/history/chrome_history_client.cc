@@ -5,15 +5,38 @@
 #include "chrome/browser/history/chrome_history_client.h"
 
 #include "base/logging.h"
+#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/history/history_notifications.h"
+#include "chrome/browser/history/history_service.h"
+#include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/ui/profile_error_dialog.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
+#include "content/public/browser/notification_service.h"
 
-ChromeHistoryClient::ChromeHistoryClient(BookmarkModel* bookmark_model)
-    : bookmark_model_(bookmark_model) {
+ChromeHistoryClient::ChromeHistoryClient(BookmarkModel* bookmark_model,
+                                         Profile* profile,
+                                         history::TopSites* top_sites)
+    : bookmark_model_(bookmark_model),
+      profile_(profile),
+      history_service_(nullptr),
+      top_sites_(top_sites) {
   DCHECK(bookmark_model_);
+  if (top_sites_)
+    top_sites_->AddObserver(this);
+}
+
+ChromeHistoryClient::~ChromeHistoryClient() {
+  if (top_sites_)
+    top_sites_->RemoveObserver(this);
+}
+
+void ChromeHistoryClient::SetHistoryService(HistoryService* history_service) {
+  DCHECK(history_service);
+  history_service_ = history_service;
+  history_service_->AddObserver(this);
 }
 
 void ChromeHistoryClient::BlockUntilBookmarksLoaded() {
@@ -64,4 +87,22 @@ void ChromeHistoryClient::Shutdown() {
   // shutdown (HistoryService::Cleanup to complete). In such a scenario history
   // sees an incorrect view of bookmarks, but it's better than a deadlock.
   bookmark_model_->Shutdown();
+  if (history_service_) {
+    history_service_->RemoveObserver(this);
+    history_service_ = nullptr;
+  }
+}
+
+void ChromeHistoryClient::TopSitesLoaded(history::TopSites* top_sites) {
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_TOP_SITES_LOADED,
+      content::Source<Profile>(profile_),
+      content::Details<history::TopSites>(top_sites));
+}
+
+void ChromeHistoryClient::TopSitesChanged(history::TopSites* top_sites) {
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_TOP_SITES_CHANGED,
+      content::Source<history::TopSites>(top_sites),
+      content::NotificationService::NoDetails());
 }

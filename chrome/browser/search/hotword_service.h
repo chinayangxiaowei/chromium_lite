@@ -16,6 +16,7 @@
 #include "extensions/browser/extension_registry_observer.h"
 
 class ExtensionService;
+class HotwordAudioHistoryHandler;
 class HotwordClient;
 class Profile;
 
@@ -28,34 +29,31 @@ namespace hotword_internal {
 // Constants for the hotword field trial.
 extern const char kHotwordFieldTrialName[];
 extern const char kHotwordFieldTrialDisabledGroupName[];
+// String passed to indicate the training state has changed.
+extern const char kHotwordTrainingEnabled[];
 }  // namespace hotword_internal
 
 // Provides an interface for the Hotword component that does voice triggered
 // search.
-class HotwordService : public content::NotificationObserver,
-                       public extensions::ExtensionRegistryObserver,
+class HotwordService : public extensions::ExtensionRegistryObserver,
                        public KeyedService {
  public:
   // Returns true if the hotword supports the current system language.
   static bool DoesHotwordSupportLanguage(Profile* profile);
 
-  explicit HotwordService(Profile* profile);
-  virtual ~HotwordService();
+  // Returns true if the "enable-experimental-hotwording" flag is set.
+  static bool IsExperimentalHotwordingEnabled();
 
-  // Overridden from content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  explicit HotwordService(Profile* profile);
+  ~HotwordService() override;
 
   // Overridden from ExtensionRegisterObserver:
-  virtual void OnExtensionInstalled(
-      content::BrowserContext* browser_context,
-      const extensions::Extension* extension,
-      bool is_update) OVERRIDE;
-  virtual void OnExtensionUninstalled(
-      content::BrowserContext* browser_context,
-      const extensions::Extension* extension,
-      extensions::UninstallReason reason) OVERRIDE;
+  void OnExtensionInstalled(content::BrowserContext* browser_context,
+                            const extensions::Extension* extension,
+                            bool is_update) override;
+  void OnExtensionUninstalled(content::BrowserContext* browser_context,
+                              const extensions::Extension* extension,
+                              extensions::UninstallReason reason) override;
 
   // Checks for whether all the necessary files have downloaded to allow for
   // using the extension.
@@ -68,6 +66,9 @@ class HotwordService : public content::NotificationObserver,
   // Checks if the user has opted into audio logging. Returns true if the user
   // is opted in, false otherwise..
   bool IsOptedIntoAudioLogging();
+
+  // Returns whether always-on hotwording is enabled.
+  bool IsAlwaysOnEnabled();
 
   // Control the state of the hotword extension.
   void EnableHotwordExtension(ExtensionService* extension_service);
@@ -103,7 +104,36 @@ class HotwordService : public content::NotificationObserver,
   // no error.
   int error_message() { return error_message_; }
 
+  // These methods are for launching, and getting and setting the launch mode of
+  // the Hotword Audio Verification App.
+  //
+  // TODO(kcarattini): Remove this when
+  // https://code.google.com/p/chromium/issues/detail?id=165573 is fixed,
+  // at which time we can simply launch the app in the given mode instead of
+  // having to check for it here.
+  enum LaunchMode {
+    HOTWORD_ONLY,
+    HOTWORD_AND_AUDIO_HISTORY,
+    RETRAIN
+  };
+  void LaunchHotwordAudioVerificationApp(const LaunchMode& launch_mode);
+  virtual LaunchMode GetHotwordAudioVerificationLaunchMode();
+
+  // These methods control the speaker training communication between
+  // the Hotword Audio Verification App and the Hotword Extension that
+  // contains the NaCl module.
+  void StartTraining();
+  void FinalizeSpeakerModel();
+  void StopTraining();
+  void NotifyHotwordTriggered();
+
+  // Returns true if speaker training is currently in progress.
+  bool IsTraining();
+
  private:
+  // Returns the ID of the extension that may need to be reinstalled.
+  std::string ReinstalledExtensionId();
+
   Profile* profile_;
 
   PrefChangeRegistrar pref_registrar_;
@@ -117,11 +147,18 @@ class HotwordService : public content::NotificationObserver,
 
   scoped_refptr<extensions::WebstoreStandaloneInstaller> installer_;
 
+  scoped_ptr<HotwordAudioHistoryHandler> audio_history_handler_;
+
   HotwordClient* client_;
   int error_message_;
   bool reinstall_pending_;
+  // Whether we are currently in the process of training the speaker model.
+  bool training_;
 
   base::WeakPtrFactory<HotwordService> weak_factory_;
+
+  // Stores the launch mode for the Hotword Audio Verification App.
+  LaunchMode hotword_audio_verification_launch_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(HotwordService);
 };

@@ -64,7 +64,7 @@ class SigninManager : public SigninManagerBase {
   static const char kChromeSigninEffectiveSite[];
 
   SigninManager(SigninClient* client, ProfileOAuth2TokenService* token_service);
-  virtual ~SigninManager();
+  ~SigninManager() override;
 
   // Returns true if the username is allowed based on the policy string.
   static bool IsUsernameAllowedByPolicy(const std::string& username,
@@ -93,8 +93,8 @@ class SigninManager : public SigninManagerBase {
   // On platforms where SigninManager is responsible for dealing with
   // invalid username policy updates, we need to check this during
   // initialization and sign the user out.
-  virtual void Initialize(PrefService* local_state) OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
+  void Initialize(PrefService* local_state) override;
+  void Shutdown() override;
 
   // Invoked from an OAuthTokenFetchedCallback to complete user signin.
   virtual void CompletePendingSignin();
@@ -104,9 +104,9 @@ class SigninManager : public SigninManagerBase {
   void OnExternalSigninCompleted(const std::string& username);
 
   // Returns true if there's a signin in progress.
-  virtual bool AuthInProgress() const OVERRIDE;
+  bool AuthInProgress() const override;
 
-  virtual bool IsSigninAllowed() const OVERRIDE;
+  bool IsSigninAllowed() const override;
 
   // Returns true if the passed username is allowed by policy. Virtual for
   // mocking in tests.
@@ -130,10 +130,8 @@ class SigninManager : public SigninManagerBase {
   bool IsSignoutProhibited() const;
 
   // Add or remove observers for the merge session notification.
-  virtual void AddMergeSessionObserver(
-      MergeSessionHelper::Observer* observer);
-  virtual void RemoveMergeSessionObserver(
-      MergeSessionHelper::Observer* observer);
+  void AddMergeSessionObserver(MergeSessionHelper::Observer* observer);
+  void RemoveMergeSessionObserver(MergeSessionHelper::Observer* observer);
 
  protected:
   // Flag saying whether signing out is allowed.
@@ -193,8 +191,6 @@ class SigninManager : public SigninManagerBase {
   // token service so that it does not need to mint new ones.
   std::string temp_refresh_token_;
 
-  base::WeakPtrFactory<SigninManager> weak_pointer_factory_;
-
   // The SigninClient object associated with this object. Must outlive this
   // object.
   SigninClient* client_;
@@ -212,6 +208,8 @@ class SigninManager : public SigninManagerBase {
 
   // Helper to merge signed in account into the content area.
   scoped_ptr<MergeSessionHelper> merge_session_helper_;
+
+  base::WeakPtrFactory<SigninManager> weak_pointer_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(SigninManager);
 };

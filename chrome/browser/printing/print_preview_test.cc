@@ -4,11 +4,9 @@
 
 #include "chrome/browser/printing/print_preview_test.h"
 
-#include "base/prefs/pref_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/plugin_service.h"
@@ -28,7 +26,7 @@ class PrintPreviewTestBrowserWindow
   PrintPreviewTestBrowserWindow() {}
 
   // BrowserWindow overrides
-  virtual WebContentsModalDialogHost* GetWebContentsModalDialogHost() OVERRIDE {
+  WebContentsModalDialogHost* GetWebContentsModalDialogHost() override {
     return this;
   }
 
@@ -36,23 +34,19 @@ class PrintPreviewTestBrowserWindow
 
   // The web contents modal dialog must be parented to *something*; use the
   // WebContents window since there is no true browser window for unit tests.
-  virtual gfx::NativeView GetHostView() const OVERRIDE {
+  gfx::NativeView GetHostView() const override {
     return FindBrowser()->tab_strip_model()->GetActiveWebContents()->
         GetNativeView();
   }
 
-  virtual gfx::Point GetDialogPosition(const gfx::Size& size) OVERRIDE {
+  gfx::Point GetDialogPosition(const gfx::Size& size) override {
     return gfx::Point();
   }
 
-  virtual gfx::Size GetMaximumDialogSize() OVERRIDE {
-    return gfx::Size();
-  }
+  gfx::Size GetMaximumDialogSize() override { return gfx::Size(); }
 
-  virtual void AddObserver(
-      ModalDialogHostObserver* observer) OVERRIDE {}
-  virtual void RemoveObserver(
-      ModalDialogHostObserver* observer) OVERRIDE {}
+  void AddObserver(ModalDialogHostObserver* observer) override {}
+  void RemoveObserver(ModalDialogHostObserver* observer) override {}
 
  private:
   Browser* FindBrowser() const {
@@ -79,8 +73,6 @@ void PrintPreviewTest::SetUp() {
   // ShadowingAtExitManager in our base class).
   content::PluginService::GetInstance()->Init();
   content::PluginService::GetInstance()->DisablePluginsDiscoveryForTesting();
-
-  profile()->GetPrefs()->SetBoolean(prefs::kPrintPreviewDisabled, false);
 }
 
 BrowserWindow* PrintPreviewTest::CreateBrowserWindow() {

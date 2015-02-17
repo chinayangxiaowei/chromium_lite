@@ -25,7 +25,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "components/storage_monitor/media_storage_util.h"
 #include "components/storage_monitor/storage_monitor.h"
 #include "content/public/browser/browser_thread.h"
@@ -38,15 +37,15 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
-#include "webkit/browser/fileapi/external_mount_points.h"
-#include "webkit/common/fileapi/file_system_mount_option.h"
-#include "webkit/common/fileapi/file_system_types.h"
+#include "storage/browser/fileapi/external_mount_points.h"
+#include "storage/common/fileapi/file_system_mount_option.h"
+#include "storage/common/fileapi/file_system_types.h"
 
 using content::BrowserThread;
 using content::NavigationController;
 using content::RenderProcessHost;
 using content::WebContents;
-using fileapi::ExternalMountPoints;
+using storage::ExternalMountPoints;
 using storage_monitor::MediaStorageUtil;
 using storage_monitor::StorageInfo;
 using storage_monitor::StorageMonitor;
@@ -86,9 +85,9 @@ class RPHReferenceManager {
 
    private:
     // content::WebContentsObserver
-    virtual void WebContentsDestroyed() OVERRIDE;
-    virtual void NavigationEntryCommitted(
-        const content::LoadCommittedDetails& load_details) OVERRIDE;
+    void WebContentsDestroyed() override;
+    void NavigationEntryCommitted(
+        const content::LoadCommittedDetails& load_details) override;
 
     RPHReferenceManager* manager_;
   };
@@ -96,7 +95,7 @@ class RPHReferenceManager {
   class RPHObserver : public content::RenderProcessHostObserver {
    public:
     RPHObserver(RPHReferenceManager* manager, RenderProcessHost* host);
-    virtual ~RPHObserver();
+    ~RPHObserver() override;
 
     void AddWebContentsObserver(WebContents* web_contents);
     void RemoveWebContentsObserver(WebContents* web_contents);
@@ -105,7 +104,7 @@ class RPHReferenceManager {
     }
 
    private:
-    virtual void RenderProcessHostDestroyed(RenderProcessHost* host) OVERRIDE;
+    void RenderProcessHostDestroyed(RenderProcessHost* host) override;
 
     RPHReferenceManager* manager_;
     RenderProcessHost* host_;
@@ -635,11 +634,11 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
     : public MediaFileSystemContext {
  public:
   MediaFileSystemContextImpl() {}
-  virtual ~MediaFileSystemContextImpl() {}
+  ~MediaFileSystemContextImpl() override {}
 
-  virtual bool RegisterFileSystem(const std::string& device_id,
-                                  const std::string& fs_name,
-                                  const base::FilePath& path) OVERRIDE {
+  bool RegisterFileSystem(const std::string& device_id,
+                          const std::string& fs_name,
+                          const base::FilePath& path) override {
     if (StorageInfo::IsMassStorageDevice(device_id)) {
       return RegisterFileSystemForMassStorage(device_id, fs_name, path);
     } else {
@@ -647,7 +646,7 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
     }
   }
 
-  virtual void RevokeFileSystem(const std::string& fs_name) OVERRIDE {
+  void RevokeFileSystem(const std::string& fs_name) override {
     ImportedMediaGalleryRegistry* imported_registry =
         ImportedMediaGalleryRegistry::GetInstance();
     if (imported_registry->RevokeImportedFilesystemOnUIThread(fs_name))
@@ -661,8 +660,7 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
         fs_name));
   }
 
-  virtual base::FilePath GetRegisteredPath(
-      const std::string& fs_name) const OVERRIDE {
+  base::FilePath GetRegisteredPath(const std::string& fs_name) const override {
     base::FilePath result;
     if (!ExternalMountPoints::GetSystemInstance()->GetRegisteredPath(fs_name,
                                                                      &result)) {
@@ -703,8 +701,10 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
       result = registry->RegisterIPhotoFilesystemOnUIThread(fs_name, path);
     } else {
       result = ExternalMountPoints::GetSystemInstance()->RegisterFileSystem(
-          fs_name, fileapi::kFileSystemTypeNativeMedia,
-          fileapi::FileSystemMountOption(), path);
+          fs_name,
+          storage::kFileSystemTypeNativeMedia,
+          storage::FileSystemMountOption(),
+          path);
     }
     return result;
   }
@@ -718,8 +718,10 @@ class MediaFileSystemRegistry::MediaFileSystemContextImpl
     // Sanity checks for |path|.
     CHECK(MediaStorageUtil::CanCreateFileSystem(device_id, path));
     bool result = ExternalMountPoints::GetSystemInstance()->RegisterFileSystem(
-        fs_name, fileapi::kFileSystemTypeDeviceMedia,
-        fileapi::FileSystemMountOption(), path);
+        fs_name,
+        storage::kFileSystemTypeDeviceMedia,
+        storage::FileSystemMountOption(),
+        path);
     CHECK(result);
     BrowserThread::PostTask(BrowserThread::IO, FROM_HERE, base::Bind(
         &MTPDeviceMapService::RegisterMTPFileSystem,

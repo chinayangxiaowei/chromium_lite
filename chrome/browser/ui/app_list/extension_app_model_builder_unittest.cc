@@ -15,8 +15,8 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/install_tracker.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
-#include "chrome/browser/ui/app_list/app_list_controller_delegate_impl.h"
 #include "chrome/browser/ui/app_list/app_list_test_util.h"
+#include "chrome/browser/ui/app_list/test/test_app_list_controller_delegate.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
@@ -24,6 +24,7 @@
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/uninstall_reason.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -63,40 +64,6 @@ scoped_refptr<extensions::Extension> MakeApp(const std::string& name,
   return app;
 }
 
-class TestAppListControllerDelegate : public AppListControllerDelegate {
- public:
-  virtual ~TestAppListControllerDelegate() {}
-  virtual void DismissView() OVERRIDE {}
-  virtual gfx::NativeWindow GetAppListWindow() OVERRIDE { return NULL; }
-  virtual gfx::ImageSkia GetWindowIcon() OVERRIDE { return gfx::ImageSkia(); }
-  virtual bool IsAppPinned(const std::string& extension_id) OVERRIDE {
-    return false;
-  }
-  virtual void PinApp(const std::string& extension_id) OVERRIDE {}
-  virtual void UnpinApp(const std::string& extension_id) OVERRIDE {}
-  virtual Pinnable GetPinnable() OVERRIDE { return NO_PIN; }
-  virtual bool CanDoCreateShortcutsFlow() OVERRIDE { return false; }
-  virtual void DoCreateShortcutsFlow(Profile* profile,
-                                     const std::string& extension_id) OVERRIDE {
-  }
-  virtual bool CanDoShowAppInfoFlow() OVERRIDE { return false; }
-  virtual void DoShowAppInfoFlow(Profile* profile,
-                                 const std::string& extension_id) OVERRIDE {
-  };
-  virtual void CreateNewWindow(Profile* profile, bool incognito) OVERRIDE {}
-  virtual void ActivateApp(Profile* profile,
-                           const extensions::Extension* extension,
-                           AppListSource source,
-                           int event_flags) OVERRIDE {}
-  virtual void LaunchApp(Profile* profile,
-                         const extensions::Extension* extension,
-                         AppListSource source,
-                         int event_flags) OVERRIDE {}
-  virtual void ShowForProfileByPath(
-      const base::FilePath& profile_path) OVERRIDE {}
-  virtual bool ShouldShowUserIcon() OVERRIDE { return false; }
-};
-
 const char kDefaultApps[] = "Packaged App 1,Packaged App 2,Hosted App";
 const size_t kDefaultAppCount = 3u;
 
@@ -105,17 +72,15 @@ const size_t kDefaultAppCount = 3u;
 class ExtensionAppModelBuilderTest : public AppListTestBase {
  public:
   ExtensionAppModelBuilderTest() {}
-  virtual ~ExtensionAppModelBuilderTest() {}
+  ~ExtensionAppModelBuilderTest() override {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     AppListTestBase::SetUp();
 
     CreateBuilder();
   }
 
-  virtual void TearDown() OVERRIDE {
-    ResetBuilder();
-  }
+  void TearDown() override { ResetBuilder(); }
 
  protected:
   // Creates a new builder, destroying any existing one.
@@ -123,7 +88,7 @@ class ExtensionAppModelBuilderTest : public AppListTestBase {
     ResetBuilder();  // Destroy any existing builder in the correct order.
 
     model_.reset(new app_list::AppListModel);
-    controller_.reset(new TestAppListControllerDelegate);
+    controller_.reset(new test::TestAppListControllerDelegate);
     builder_.reset(new ExtensionAppModelBuilder(controller_.get()));
     builder_->InitializeWithProfile(profile_.get(), model_.get());
   }
@@ -135,7 +100,7 @@ class ExtensionAppModelBuilderTest : public AppListTestBase {
   }
 
   scoped_ptr<app_list::AppListModel> model_;
-  scoped_ptr<TestAppListControllerDelegate> controller_;
+  scoped_ptr<test::TestAppListControllerDelegate> controller_;
   scoped_ptr<ExtensionAppModelBuilder> builder_;
 
   base::ScopedTempDir second_profile_temp_dir_;
@@ -156,7 +121,7 @@ TEST_F(ExtensionAppModelBuilderTest, HideWebStore) {
       MakeApp("webstore",
               "0.0",
               "http://google.com",
-              std::string(extension_misc::kWebStoreAppId));
+              std::string(extensions::kWebStoreAppId));
   service_->AddExtension(store.get());
 
   // Install an "enterprise web store" app.

@@ -5,15 +5,19 @@
 #include "components/password_manager/core/browser/login_database.h"
 
 #include "base/basictypes.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_vector.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/autofill/core/common/password_form.h"
 #include "components/password_manager/core/browser/psl_matching_helper.h"
+#include "sql/connection.h"
+#include "sql/statement.h"
+#include "sql/test/test_helpers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -42,7 +46,7 @@ std::vector<base::string16> DeserializeVector(const Pickle& pickle);
 
 class LoginDatabaseTest : public testing::Test {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     file_ = temp_dir_.path().AppendASCII("TestMetadataStoreMacDatabase");
 
@@ -98,10 +102,36 @@ class LoginDatabaseTest : public testing::Test {
     EXPECT_TRUE(db_.GetLogins(second_non_html_auth, &result.get()));
     EXPECT_EQ(0U, result.size());
 
-    // non-html auth still matches again itself.
+    // non-html auth still matches against itself.
     EXPECT_TRUE(db_.GetLogins(non_html_auth, &result.get()));
     ASSERT_EQ(1U, result.size());
     EXPECT_EQ(result[0]->signon_realm, "http://example.com/Realm");
+
+    // Clear state.
+    db_.RemoveLoginsCreatedBetween(now, base::Time());
+  }
+
+  // Checks that a form of a given |scheme|, once stored, can be successfully
+  // retrieved from the database.
+  void TestRetrievingIPAddress(const PasswordForm::Scheme& scheme) {
+    SCOPED_TRACE(testing::Message() << "scheme = " << scheme);
+    ScopedVector<PasswordForm> result;
+
+    base::Time now = base::Time::Now();
+    std::string origin("http://56.7.8.90");
+
+    PasswordForm ip_form;
+    ip_form.origin = GURL(origin);
+    ip_form.username_value = ASCIIToUTF16("test@gmail.com");
+    ip_form.password_value = ASCIIToUTF16("test");
+    ip_form.signon_realm = origin;
+    ip_form.scheme = scheme;
+    ip_form.date_created = now;
+
+    EXPECT_EQ(AddChangeForForm(ip_form), db_.AddLogin(ip_form));
+    EXPECT_TRUE(db_.GetLogins(ip_form, &result.get()));
+    ASSERT_EQ(1U, result.size());
+    EXPECT_EQ(result[0]->signon_realm, origin);
 
     // Clear state.
     db_.RemoveLoginsCreatedBetween(now, base::Time());
@@ -135,6 +165,10 @@ TEST_F(LoginDatabaseTest, Logins) {
   form.times_used = 1;
   form.form_data.name = ASCIIToUTF16("form_name");
   form.date_synced = base::Time::Now();
+  form.display_name = ASCIIToUTF16("Mr. Smith");
+  form.avatar_url = GURL("https://accounts.google.com/Avatar");
+  form.federation_url = GURL("https://accounts.google.com/federation");
+  form.is_zero_click = true;
 
   // Add it and make sure it is there and that all the fields were retrieved
   // correctly.
@@ -253,7 +287,6 @@ TEST_F(LoginDatabaseTest, Logins) {
 }
 
 TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatching) {
-  PSLMatchingHelper::EnablePublicSuffixDomainMatchingForTesting();
   std::vector<PasswordForm*> result;
 
   // Verify the database is empty.
@@ -303,15 +336,28 @@ TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatching) {
 }
 
 TEST_F(LoginDatabaseTest, TestPublicSuffixDisabledForNonHTMLForms) {
-  PSLMatchingHelper::EnablePublicSuffixDomainMatchingForTesting();
-
   TestNonHTMLFormPSLMatching(PasswordForm::SCHEME_BASIC);
   TestNonHTMLFormPSLMatching(PasswordForm::SCHEME_DIGEST);
   TestNonHTMLFormPSLMatching(PasswordForm::SCHEME_OTHER);
 }
 
+TEST_F(LoginDatabaseTest, TestIPAddressMatches_HTML) {
+  TestRetrievingIPAddress(PasswordForm::SCHEME_HTML);
+}
+
+TEST_F(LoginDatabaseTest, TestIPAddressMatches_basic) {
+  TestRetrievingIPAddress(PasswordForm::SCHEME_BASIC);
+}
+
+TEST_F(LoginDatabaseTest, TestIPAddressMatches_digest) {
+  TestRetrievingIPAddress(PasswordForm::SCHEME_DIGEST);
+}
+
+TEST_F(LoginDatabaseTest, TestIPAddressMatches_other) {
+  TestRetrievingIPAddress(PasswordForm::SCHEME_OTHER);
+}
+
 TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatchingShouldMatchingApply) {
-  PSLMatchingHelper::EnablePublicSuffixDomainMatchingForTesting();
   std::vector<PasswordForm*> result;
 
   // Verify the database is empty.
@@ -361,7 +407,6 @@ TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatchingShouldMatchingApply) {
 // instead of GetUniqueStatement, since REGEXP is in use. See
 // http://crbug.com/248608.
 TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatchingDifferentSites) {
-  PSLMatchingHelper::EnablePublicSuffixDomainMatchingForTesting();
   std::vector<PasswordForm*> result;
 
   // Verify the database is empty.
@@ -455,7 +500,6 @@ PasswordForm GetFormWithNewSignonRealm(PasswordForm form,
 }
 
 TEST_F(LoginDatabaseTest, TestPublicSuffixDomainMatchingRegexp) {
-  PSLMatchingHelper::EnablePublicSuffixDomainMatchingForTesting();
   std::vector<PasswordForm*> result;
 
   // Verify the database is empty.
@@ -589,6 +633,11 @@ static bool AddTimestampedLogin(LoginDatabase* db,
   form.password_element = ASCIIToUTF16(unique_string);
   form.submit_element = ASCIIToUTF16("signIn");
   form.signon_realm = url;
+  form.display_name = ASCIIToUTF16(unique_string);
+  form.avatar_url = GURL("https://accounts.google.com/Avatar");
+  form.federation_url = GURL("https://accounts.google.com/federation");
+  form.is_zero_click = true;
+
   if (date_is_creation)
     form.date_created = time;
   else
@@ -709,6 +758,10 @@ TEST_F(LoginDatabaseTest, BlacklistedLogins) {
   form.blacklisted_by_user = true;
   form.scheme = PasswordForm::SCHEME_HTML;
   form.date_synced = base::Time::Now();
+  form.display_name = ASCIIToUTF16("Mr. Smith");
+  form.avatar_url = GURL("https://accounts.google.com/Avatar");
+  form.federation_url = GURL("https://accounts.google.com/federation");
+  form.is_zero_click = true;
   EXPECT_EQ(AddChangeForForm(form), db_.AddLogin(form));
 
   // Get all non-blacklisted logins (should be none).
@@ -921,11 +974,13 @@ TEST_F(LoginDatabaseTest, UpdateLogin) {
   form.submit_element = ASCIIToUTF16("submit_element");
   form.date_synced = base::Time::Now();
   form.date_created = base::Time::Now() - base::TimeDelta::FromDays(1);
-  // Remove this line after crbug/374132 is fixed.
-  form.date_created = base::Time::FromTimeT(form.date_created.ToTimeT());
   form.blacklisted_by_user = true;
   form.scheme = PasswordForm::SCHEME_BASIC;
   form.type = PasswordForm::TYPE_GENERATED;
+  form.display_name = ASCIIToUTF16("Mr. Smith");
+  form.avatar_url = GURL("https://accounts.google.com/Avatar");
+  form.federation_url = GURL("https://accounts.google.com/federation");
+  form.is_zero_click = true;
   EXPECT_EQ(UpdateChangeForForm(form), db_.UpdateLogin(form));
 
   ScopedVector<autofill::PasswordForm> result;
@@ -937,6 +992,79 @@ TEST_F(LoginDatabaseTest, UpdateLogin) {
   form.password_value.clear();
 #endif  // OS_MACOSX && !OS_IOS
   EXPECT_EQ(form, *result[0]);
+}
+
+TEST_F(LoginDatabaseTest, ReportMetricsTest) {
+  PasswordForm password_form;
+  password_form.origin = GURL("http://example.com");
+  password_form.username_value = ASCIIToUTF16("test1@gmail.com");
+  password_form.password_value = ASCIIToUTF16("test");
+  password_form.signon_realm = "http://example.com/";
+  password_form.times_used = 0;
+  EXPECT_EQ(AddChangeForForm(password_form), db_.AddLogin(password_form));
+
+  password_form.username_value = ASCIIToUTF16("test2@gmail.com");
+  password_form.times_used = 1;
+  EXPECT_EQ(AddChangeForForm(password_form), db_.AddLogin(password_form));
+
+  password_form.origin = GURL("http://second.example.com");
+  password_form.signon_realm = "http://second.example.com";
+  password_form.times_used = 3;
+  EXPECT_EQ(AddChangeForForm(password_form), db_.AddLogin(password_form));
+
+  password_form.username_value = ASCIIToUTF16("test3@gmail.com");
+  password_form.type = PasswordForm::TYPE_GENERATED;
+  password_form.times_used = 2;
+  EXPECT_EQ(AddChangeForForm(password_form), db_.AddLogin(password_form));
+
+  password_form.origin = GURL("http://third.example.com/");
+  password_form.signon_realm = "http://third.example.com/";
+  password_form.times_used = 4;
+  EXPECT_EQ(AddChangeForForm(password_form), db_.AddLogin(password_form));
+
+  base::HistogramTester histogram_tester;
+  db_.ReportMetrics("", false);
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.TotalAccounts.UserCreated.WithoutCustomPassphrase",
+      3,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.AccountsPerSite.UserCreated.WithoutCustomPassphrase",
+      1,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.AccountsPerSite.UserCreated.WithoutCustomPassphrase",
+      2,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.TimesPasswordUsed.UserCreated.WithoutCustomPassphrase",
+      0,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.TimesPasswordUsed.UserCreated.WithoutCustomPassphrase",
+      1,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.TimesPasswordUsed.UserCreated.WithoutCustomPassphrase",
+      3,
+      1);
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.TotalAccounts.AutoGenerated.WithoutCustomPassphrase",
+      2,
+      1);
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.AccountsPerSite.AutoGenerated.WithoutCustomPassphrase",
+      1,
+      2);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.TimesPasswordUsed.AutoGenerated.WithoutCustomPassphrase",
+      2,
+      1);
+  histogram_tester.ExpectBucketCount(
+      "PasswordManager.TimesPasswordUsed.AutoGenerated.WithoutCustomPassphrase",
+      4,
+      1);
 }
 
 #if defined(OS_POSIX)
@@ -951,5 +1079,83 @@ TEST_F(LoginDatabaseTest, FilePermissions) {
   EXPECT_EQ((mode & base::FILE_PERMISSION_USER_MASK), mode);
 }
 #endif  // defined(OS_POSIX)
+
+class LoginDatabaseMigrationTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    PathService::Get(base::DIR_SOURCE_ROOT, &database_dump_);
+    database_dump_ = database_dump_.AppendASCII("components")
+                         .AppendASCII("test")
+                         .AppendASCII("data")
+                         .AppendASCII("password_manager")
+                         .AppendASCII("login_db_v8.sql");
+
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    database_path_ = temp_dir_.path().AppendASCII("test.db");
+    ASSERT_TRUE(
+        sql::test::CreateDatabaseFromSQL(database_path_, database_dump_));
+  }
+
+  void TearDown() override {
+    if (!database_path_.empty())
+      base::DeleteFile(database_path_, false);
+  }
+
+  // Returns an empty vector on failure. Otherwise returns the values of the
+  // date_created field from the logins table. The order of the returned rows
+  // is well-defined.
+  std::vector<int64_t> GetDateCreated(const base::FilePath& db_path) {
+    sql::Connection db;
+    std::vector<int64_t> results;
+    if (!db.Open(db_path))
+      return results;
+
+    sql::Statement s(db.GetCachedStatement(
+        SQL_FROM_HERE,
+        "SELECT date_created from logins order by username_value"));
+    if (!s.is_valid()) {
+      db.Close();
+      return results;
+    }
+
+    while (s.Step())
+      results.push_back(s.ColumnInt64(0));
+
+    s.Clear();
+    db.Close();
+    return results;
+  }
+
+  base::FilePath database_path_;
+
+ private:
+  base::FilePath database_dump_;
+  base::ScopedTempDir temp_dir_;
+};
+
+// Tests the migration of the login database from version 8 to version 9.
+TEST_F(LoginDatabaseMigrationTest, MigrationV8ToV9) {
+  // Original date, in seconds since UTC epoch.
+  std::vector<int64_t> date_created(GetDateCreated(database_path_));
+  ASSERT_EQ(1402955745, date_created[0]);
+  ASSERT_EQ(1402950000, date_created[1]);
+
+  // Assert that the database was successfully opened and migrated.
+  {
+    LoginDatabase db;
+    ASSERT_TRUE(db.Init(database_path_));
+  }
+
+  // New date, in microseconds since platform independent epoch.
+  std::vector<int64_t> new_date_created(GetDateCreated(database_path_));
+  ASSERT_EQ(13047429345000000, new_date_created[0]);
+  ASSERT_EQ(13047423600000000, new_date_created[1]);
+
+  // Check that the two dates match up.
+  for (size_t i = 0; i < date_created.size(); ++i) {
+    EXPECT_EQ(base::Time::FromInternalValue(new_date_created[i]),
+              base::Time::FromTimeT(date_created[i]));
+  }
+}
 
 }  // namespace password_manager

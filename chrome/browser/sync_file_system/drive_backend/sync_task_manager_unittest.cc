@@ -15,11 +15,11 @@
 #include "chrome/browser/sync_file_system/drive_backend/sync_task_manager.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_task_token.h"
 #include "chrome/browser/sync_file_system/sync_file_system_test_util.h"
+#include "storage/common/fileapi/file_system_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/common/fileapi/file_system_util.h"
 
 #define MAKE_PATH(path)                                       \
-  base::FilePath(fileapi::VirtualPath::GetNormalizedFilePath( \
+  base::FilePath(storage::VirtualPath::GetNormalizedFilePath( \
       base::FilePath(FILE_PATH_LITERAL(path))))
 
 namespace sync_file_system {
@@ -67,19 +67,16 @@ class TaskManagerClient
     base::MessageLoop::current()->RunUntilIdle();
     maybe_schedule_next_task_count_ = 0;
   }
-  virtual ~TaskManagerClient() {}
+  ~TaskManagerClient() override {}
 
   // DriveFileSyncManager::Client overrides.
-  virtual void MaybeScheduleNextTask() OVERRIDE {
-    ++maybe_schedule_next_task_count_;
-  }
-  virtual void NotifyLastOperationStatus(
-      SyncStatusCode last_operation_status,
-      bool last_operation_used_network) OVERRIDE {
+  void MaybeScheduleNextTask() override { ++maybe_schedule_next_task_count_; }
+  void NotifyLastOperationStatus(SyncStatusCode last_operation_status,
+                                 bool last_operation_used_network) override {
     last_operation_status_ = last_operation_status;
   }
 
-  virtual void RecordTaskLog(scoped_ptr<TaskLogger::TaskLog>) OVERRIDE {}
+  void RecordTaskLog(scoped_ptr<TaskLogger::TaskLog>) override {}
 
   void ScheduleTask(SyncStatusCode status_to_return,
                     const SyncStatusCallback& callback) {
@@ -141,9 +138,9 @@ class MultihopSyncTask : public ExclusiveTask {
     DCHECK(task_completed_);
   }
 
-  virtual ~MultihopSyncTask() {}
+  ~MultihopSyncTask() override {}
 
-  virtual void RunExclusive(const SyncStatusCallback& callback) OVERRIDE {
+  void RunExclusive(const SyncStatusCallback& callback) override {
     DCHECK(!*task_started_);
     *task_started_ = true;
     base::MessageLoop::current()->PostTask(
@@ -188,16 +185,15 @@ class BackgroundTask : public SyncTask {
         weak_ptr_factory_(this) {
   }
 
-  virtual ~BackgroundTask() {
-  }
+  ~BackgroundTask() override {}
 
-  virtual void RunPreflight(scoped_ptr<SyncTaskToken> token) OVERRIDE {
-    scoped_ptr<BlockingFactor> blocking_factor(new BlockingFactor);
-    blocking_factor->app_id = app_id_;
-    blocking_factor->paths.push_back(path_);
+  void RunPreflight(scoped_ptr<SyncTaskToken> token) override {
+    scoped_ptr<TaskBlocker> task_blocker(new TaskBlocker);
+    task_blocker->app_id = app_id_;
+    task_blocker->paths.push_back(path_);
 
-    SyncTaskManager::UpdateBlockingFactor(
-        token.Pass(), blocking_factor.Pass(),
+    SyncTaskManager::UpdateTaskBlocker(
+        token.Pass(), task_blocker.Pass(),
         base::Bind(&BackgroundTask::RunAsBackgroundTask,
                    weak_ptr_factory_.GetWeakPtr()));
   }
@@ -245,10 +241,9 @@ class BlockerUpdateTestHelper : public SyncTask {
         weak_ptr_factory_(this) {
   }
 
-  virtual ~BlockerUpdateTestHelper() {
-  }
+  ~BlockerUpdateTestHelper() override {}
 
-  virtual void RunPreflight(scoped_ptr<SyncTaskToken> token) OVERRIDE {
+  void RunPreflight(scoped_ptr<SyncTaskToken> token) override {
     UpdateBlocker(token.Pass());
   }
 
@@ -265,14 +260,14 @@ class BlockerUpdateTestHelper : public SyncTask {
 
     log_->push_back(name_ + ": updating to " + updating_to);
 
-    scoped_ptr<BlockingFactor> blocking_factor(new BlockingFactor);
-    blocking_factor->app_id = app_id_;
-    blocking_factor->paths.push_back(
-        base::FilePath(fileapi::VirtualPath::GetNormalizedFilePath(
+    scoped_ptr<TaskBlocker> task_blocker(new TaskBlocker);
+    task_blocker->app_id = app_id_;
+    task_blocker->paths.push_back(
+        base::FilePath(storage::VirtualPath::GetNormalizedFilePath(
             base::FilePath::FromUTF8Unsafe(updating_to))));
 
-    SyncTaskManager::UpdateBlockingFactor(
-        token.Pass(), blocking_factor.Pass(),
+    SyncTaskManager::UpdateTaskBlocker(
+        token.Pass(), task_blocker.Pass(),
         base::Bind(&BlockerUpdateTestHelper::UpdateBlockerSoon,
                    weak_ptr_factory_.GetWeakPtr(),
                    updating_to));
@@ -599,7 +594,7 @@ TEST(SyncTaskManagerTest, BackgroundTask_Throttled) {
   EXPECT_EQ(2, stats.max_parallel_task);
 }
 
-TEST(SyncTaskManagerTest, UpdateBlockingFactor) {
+TEST(SyncTaskManagerTest, UpdateTaskBlocker) {
   base::MessageLoop message_loop;
   SyncTaskManager task_manager(base::WeakPtr<SyncTaskManager::Client>(),
                                10 /* maximum_background_task */,

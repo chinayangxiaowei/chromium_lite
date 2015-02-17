@@ -30,38 +30,36 @@ class CONTENT_EXPORT MediaStreamDispatcherHost : public BrowserMessageFilter,
   MediaStreamDispatcherHost(
       int render_process_id,
       const ResourceContext::SaltCallback& salt_callback,
-      MediaStreamManager* media_stream_manager,
-      ResourceContext* resource_context);
+      MediaStreamManager* media_stream_manager);
 
   // MediaStreamRequester implementation.
-  virtual void StreamGenerated(
+  void StreamGenerated(int render_frame_id,
+                       int page_request_id,
+                       const std::string& label,
+                       const StreamDeviceInfoArray& audio_devices,
+                       const StreamDeviceInfoArray& video_devices) override;
+  void StreamGenerationFailed(
       int render_frame_id,
       int page_request_id,
-      const std::string& label,
-      const StreamDeviceInfoArray& audio_devices,
-      const StreamDeviceInfoArray& video_devices) OVERRIDE;
-  virtual void StreamGenerationFailed(
-      int render_frame_id,
-      int page_request_id,
-      content::MediaStreamRequestResult result) OVERRIDE;
-  virtual void DeviceStopped(int render_frame_id,
-                             const std::string& label,
-                             const StreamDeviceInfo& device) OVERRIDE;
-  virtual void DevicesEnumerated(int render_frame_id,
-                                 int page_request_id,
-                                 const std::string& label,
-                                 const StreamDeviceInfoArray& devices) OVERRIDE;
-  virtual void DeviceOpened(int render_frame_id,
-                            int page_request_id,
-                            const std::string& label,
-                            const StreamDeviceInfo& video_device) OVERRIDE;
+      content::MediaStreamRequestResult result) override;
+  void DeviceStopped(int render_frame_id,
+                     const std::string& label,
+                     const StreamDeviceInfo& device) override;
+  void DevicesEnumerated(int render_frame_id,
+                         int page_request_id,
+                         const std::string& label,
+                         const StreamDeviceInfoArray& devices) override;
+  void DeviceOpened(int render_frame_id,
+                    int page_request_id,
+                    const std::string& label,
+                    const StreamDeviceInfo& video_device) override;
 
   // BrowserMessageFilter implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelClosing() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelClosing() override;
 
  protected:
-  virtual ~MediaStreamDispatcherHost();
+  ~MediaStreamDispatcherHost() override;
 
  private:
   friend class MockMediaStreamDispatcherHost;
@@ -102,9 +100,6 @@ class CONTENT_EXPORT MediaStreamDispatcherHost : public BrowserMessageFilter,
   int render_process_id_;
   ResourceContext::SaltCallback salt_callback_;
   MediaStreamManager* media_stream_manager_;
-
-  // Owned by ProfileIOData which is guaranteed to outlive MSDH.
-  ResourceContext* const resource_context_;
 
   DISALLOW_COPY_AND_ASSIGN(MediaStreamDispatcherHost);
 };

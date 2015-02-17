@@ -8,7 +8,9 @@
 #include "base/strings/string_split.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/pnacl/pnacl_component_installer.h"
+#if defined(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/extension_service.h"
+#endif
 #include "chrome/browser/nacl_host/nacl_infobar_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -19,15 +21,16 @@
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/pepper_permission_util.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/site_instance.h"
+#if defined(ENABLE_EXTENSIONS)
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/info_map.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/url_pattern.h"
+#endif
 #include "ppapi/c/private/ppb_nacl_private.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -63,36 +66,12 @@ void OnKeepaliveOnUIThread(
   if (instance_data.size() < 1)
     return;
 
-  content::RenderFrameHost* render_frame_host =
-      content::RenderFrameHost::FromID(
-          instance_data[0].render_process_id, instance_data[0].render_frame_id);
-  if (!render_frame_host)
-    return;
-
-  content::SiteInstance* site_instance = render_frame_host->GetSiteInstance();
-  if (!site_instance)
-    return;
-
-  extensions::ExtensionSystem* extension_system =
-      extensions::ExtensionSystem::Get(site_instance->GetBrowserContext());
-  if (!extension_system)
-    return;
-
-  const ExtensionService* extension_service =
-      extension_system->extension_service();
-  if (!extension_service)
-    return;
-
-  const extensions::Extension* extension = extension_service->GetExtensionById(
-      instance_data[0].document_url.host(), false);
-  if (!extension)
-    return;
-
-  extensions::ProcessManager* pm = extension_system->process_manager();
-  if (!pm)
-    return;
-
-  pm->KeepaliveImpulse(extension);
+#if defined(ENABLE_EXTENSIONS)
+  extensions::ProcessManager::OnKeepaliveFromPlugin(
+      instance_data[0].render_process_id,
+      instance_data[0].render_frame_id,
+      instance_data[0].document_url.host());
+#endif
 }
 
 // Calls OnKeepaliveOnUIThread on UI thread.
@@ -217,10 +196,14 @@ bool NaClBrowserDelegateImpl::MapUrlToLocalFilePath(
     bool use_blocking_api,
     const base::FilePath& profile_directory,
     base::FilePath* file_path) {
+#if defined(ENABLE_EXTENSIONS)
   scoped_refptr<extensions::InfoMap> extension_info_map =
       GetExtensionInfoMap(profile_directory);
   return extension_info_map->MapUrlToLocalFilePath(
       file_url, use_blocking_api, file_path);
+#else
+  return false;
+#endif
 }
 
 content::BrowserPpapiHost::OnKeepaliveCallback
@@ -231,12 +214,17 @@ NaClBrowserDelegateImpl::GetOnKeepaliveCallback() {
 bool NaClBrowserDelegateImpl::IsNonSfiModeAllowed(
     const base::FilePath& profile_directory,
     const GURL& manifest_url) {
+#if defined(ENABLE_EXTENSIONS)
   const extensions::ExtensionSet* extension_set =
       &GetExtensionInfoMap(profile_directory)->extensions();
   return chrome::IsExtensionOrSharedModuleWhitelisted(
       manifest_url, extension_set, allowed_nonsfi_origins_);
+#else
+  return false;
+#endif
 }
 
+#if defined(ENABLE_EXTENSIONS)
 scoped_refptr<extensions::InfoMap> NaClBrowserDelegateImpl::GetExtensionInfoMap(
     const base::FilePath& profile_directory) {
   // Get the profile associated with the renderer.
@@ -244,6 +232,7 @@ scoped_refptr<extensions::InfoMap> NaClBrowserDelegateImpl::GetExtensionInfoMap(
   DCHECK(profile);
   scoped_refptr<extensions::InfoMap> extension_info_map =
       extensions::ExtensionSystem::Get(profile)->info_map();
-  DCHECK(extension_info_map);
+  DCHECK(extension_info_map.get());
   return extension_info_map;
 }
+#endif

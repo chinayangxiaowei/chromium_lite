@@ -8,9 +8,6 @@
 #include <map>
 #include <string>
 
-#include "apps/app_window.h"
-#include "apps/app_window_registry.h"
-#include "apps/ui/native_app_window.h"
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
@@ -25,6 +22,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "chrome/browser/apps/app_window_registry_util.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/autofill/validation_rules_storage_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -44,6 +42,8 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/autofill/content/browser/risk/fingerprint.h"
 #include "components/autofill/content/browser/risk/proto/fingerprint.pb.h"
 #include "components/autofill/content/browser/wallet/form_field_error.h"
@@ -76,10 +76,10 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
-#include "grit/chromium_strings.h"
-#include "grit/component_scaled_resources.h"
+#include "extensions/browser/app_window/app_window.h"
+#include "extensions/browser/app_window/native_app_window.h"
+#include "grit/components_scaled_resources.h"
 #include "grit/components_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/platform_locale_settings.h"
 #include "grit/theme_resources.h"
 #include "net/cert/cert_status_flags.h"
@@ -257,8 +257,8 @@ ui::BaseWindow* GetBaseWindowForWebContents(
     return browser->window();
 
   gfx::NativeWindow native_window = web_contents->GetTopLevelNativeWindow();
-  apps::AppWindow* app_window =
-      apps::AppWindowRegistry::GetAppWindowForNativeWindowAnyProfile(
+  extensions::AppWindow* app_window =
+      AppWindowRegistryUtil::GetAppWindowForNativeWindowAnyProfile(
           native_window);
   return app_window->GetBaseWindow();
 }
@@ -969,10 +969,6 @@ bool AutofillDialogControllerImpl::ShouldShowSignInWebView() const {
   return !signin_registrar_.IsEmpty();
 }
 
-GURL AutofillDialogControllerImpl::SignInUrl() const {
-  return wallet::GetSignInUrl();
-}
-
 bool AutofillDialogControllerImpl::ShouldOfferToSaveInChrome() const {
   return IsAutofillEnabled() &&
       !IsPayingWithWallet() &&
@@ -1173,7 +1169,7 @@ void AutofillDialogControllerImpl::SignedInStateUpdated() {
 
     case REQUIRES_SIGN_IN:
       if (handling_use_wallet_link_click_)
-        SignInLinkClicked();
+        ShowSignIn(wallet::GetSignInUrl(GetWalletClient()->user_index()));
       // Fall through.
     case SIGN_IN_DISABLED:
       // Switch to the local account and refresh the dialog.
@@ -2269,6 +2265,10 @@ void AutofillDialogControllerImpl::LinkClicked(const GURL& url) {
 }
 
 void AutofillDialogControllerImpl::SignInLinkClicked() {
+  AddAccount();
+}
+
+void AutofillDialogControllerImpl::ShowSignIn(const GURL& url) {
   ScopedViewUpdates updates(view_.get());
 
   if (SignedInState() == NOT_CHECKED) {
@@ -2278,7 +2278,8 @@ void AutofillDialogControllerImpl::SignInLinkClicked() {
   } else if (signin_registrar_.IsEmpty()) {
     // Start sign in.
     waiting_for_explicit_sign_in_response_ = true;
-    content::Source<content::NavigationController> source(view_->ShowSignIn());
+    content::Source<content::NavigationController> source(
+        view_->ShowSignIn(url));
     signin_registrar_.Add(
         this, content::NOTIFICATION_NAV_ENTRY_COMMITTED, source);
 
@@ -2625,13 +2626,10 @@ void AutofillDialogControllerImpl::OnPassiveSigninFailure(
   signin_helper_.reset();
   passive_failed_ = true;
 
-  if (handling_use_wallet_link_click_ ||
-      GetWalletClient()->user_index() != 0) {
-    // TODO(estade): When a secondary account is selected and fails passive
-    // auth, we show a sign in page. Currently we show the generic add account
-    // page, but we should instead show sign in for the selected account.
-    // http://crbug.com/323327
-    SignInLinkClicked();
+  // When the user clicks on "use wallet" or a second account and passive auth
+  // fails, try explicit sign in.
+  if (handling_use_wallet_link_click_ || GetWalletClient()->user_index() != 0) {
+    ShowSignIn(wallet::GetSignInUrl(GetWalletClient()->user_index()));
     handling_use_wallet_link_click_ = false;
   }
 
@@ -2747,7 +2745,7 @@ void AutofillDialogControllerImpl::AccountChoiceChanged() {
 }
 
 void AutofillDialogControllerImpl::AddAccount() {
-  SignInLinkClicked();
+  ShowSignIn(wallet::GetAddAccountUrl());
 }
 
 void AutofillDialogControllerImpl::UpdateAccountChooserView() {
@@ -2913,7 +2911,7 @@ void AutofillDialogControllerImpl::OpenTabWithUrl(const GURL& url) {
   chrome::NavigateParams params(
       chrome::FindBrowserWithWebContents(web_contents()),
       url,
-      content::PAGE_TRANSITION_LINK);
+      ui::PAGE_TRANSITION_LINK);
   params.disposition = NEW_FOREGROUND_TAB;
   chrome::Navigate(&params);
 }

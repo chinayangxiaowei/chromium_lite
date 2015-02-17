@@ -5,12 +5,17 @@
 #include "extensions/browser/api/extensions_api_client.h"
 
 #include "base/logging.h"
+#include "extensions/browser/api/device_permissions_prompt.h"
+#include "extensions/browser/api/virtual_keyboard_private/virtual_keyboard_delegate.h"
+#include "extensions/browser/api/web_request/web_request_event_router_delegate.h"
+#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest_delegate.h"
+#include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 
 namespace extensions {
+class AppViewGuestDelegate;
+
 namespace {
-
 ExtensionsAPIClient* g_instance = NULL;
-
 }  // namespace
 
 ExtensionsAPIClient::ExtensionsAPIClient() { g_instance = this; }
@@ -26,25 +31,59 @@ void ExtensionsAPIClient::AddAdditionalValueStoreCaches(
     const scoped_refptr<ObserverListThreadSafe<SettingsObserver> >& observers,
     std::map<settings_namespace::Namespace, ValueStoreCache*>* caches) {}
 
-bool ExtensionsAPIClient::AppViewInternalAttachFrame(
-    content::BrowserContext* browser_context,
-    const GURL& url,
-    int guest_instance_id,
-    const std::string& guest_extension_id) {
-  return false;
-}
-
-bool ExtensionsAPIClient::AppViewInternalDenyRequest(
-    content::BrowserContext* browser_context,
-    int guest_instance_id,
-    const std::string& guest_extension_id) {
-  return false;
-}
-
-device::HidService* ExtensionsAPIClient::GetHidService() {
-  // This should never be called by clients which don't support the HID API.
-  NOTIMPLEMENTED();
+AppViewGuestDelegate* ExtensionsAPIClient::CreateAppViewGuestDelegate() const {
   return NULL;
+}
+
+ExtensionOptionsGuestDelegate*
+ExtensionsAPIClient::CreateExtensionOptionsGuestDelegate(
+    ExtensionOptionsGuest* guest) const {
+  return NULL;
+}
+
+scoped_ptr<MimeHandlerViewGuestDelegate>
+ExtensionsAPIClient::CreateMimeHandlerViewGuestDelegate(
+    MimeHandlerViewGuest* guest) const {
+  return scoped_ptr<MimeHandlerViewGuestDelegate>();
+}
+
+WebViewGuestDelegate* ExtensionsAPIClient::CreateWebViewGuestDelegate(
+    WebViewGuest* web_view_guest) const {
+  return NULL;
+}
+
+WebViewPermissionHelperDelegate* ExtensionsAPIClient::
+    CreateWebViewPermissionHelperDelegate(
+        WebViewPermissionHelper* web_view_permission_helper) const {
+  return new WebViewPermissionHelperDelegate(web_view_permission_helper);
+}
+
+WebRequestEventRouterDelegate*
+ExtensionsAPIClient::CreateWebRequestEventRouterDelegate() const {
+  return new WebRequestEventRouterDelegate();
+}
+
+scoped_refptr<ContentRulesRegistry>
+ExtensionsAPIClient::CreateContentRulesRegistry(
+    content::BrowserContext* browser_context,
+    RulesCacheDelegate* cache_delegate) const {
+  return scoped_refptr<ContentRulesRegistry>();
+}
+
+scoped_ptr<DevicePermissionsPrompt>
+ExtensionsAPIClient::CreateDevicePermissionsPrompt(
+    content::WebContents* web_contents) const {
+  return nullptr;
+}
+
+scoped_ptr<VirtualKeyboardDelegate>
+ExtensionsAPIClient::CreateVirtualKeyboardDelegate() const {
+  return nullptr;
+}
+
+ManagementAPIDelegate* ExtensionsAPIClient::CreateManagementAPIDelegate()
+    const {
+  return nullptr;
 }
 
 }  // namespace extensions

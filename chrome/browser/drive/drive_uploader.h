@@ -114,31 +114,31 @@ class DriveUploaderInterface {
 class DriveUploader : public DriveUploaderInterface {
  public:
   DriveUploader(DriveServiceInterface* drive_service,
-                base::TaskRunner* blocking_task_runner);
-  virtual ~DriveUploader();
+                const scoped_refptr<base::TaskRunner>& blocking_task_runner);
+  ~DriveUploader() override;
 
   // DriveUploaderInterface overrides.
-  virtual google_apis::CancelCallback UploadNewFile(
+  google_apis::CancelCallback UploadNewFile(
       const std::string& parent_resource_id,
       const base::FilePath& local_file_path,
       const std::string& title,
       const std::string& content_type,
       const UploadNewFileOptions& options,
       const UploadCompletionCallback& callback,
-      const google_apis::ProgressCallback& progress_callback) OVERRIDE;
-  virtual google_apis::CancelCallback UploadExistingFile(
+      const google_apis::ProgressCallback& progress_callback) override;
+  google_apis::CancelCallback UploadExistingFile(
       const std::string& resource_id,
       const base::FilePath& local_file_path,
       const std::string& content_type,
       const UploadExistingFileOptions& options,
       const UploadCompletionCallback& callback,
-      const google_apis::ProgressCallback& progress_callback) OVERRIDE;
-  virtual google_apis::CancelCallback ResumeUploadFile(
+      const google_apis::ProgressCallback& progress_callback) override;
+  google_apis::CancelCallback ResumeUploadFile(
       const GURL& upload_location,
       const base::FilePath& local_file_path,
       const std::string& content_type,
       const UploadCompletionCallback& callback,
-      const google_apis::ProgressCallback& progress_callback) OVERRIDE;
+      const google_apis::ProgressCallback& progress_callback) override;
 
  private:
   struct UploadFileInfo;

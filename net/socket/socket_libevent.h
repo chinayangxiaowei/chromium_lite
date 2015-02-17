@@ -23,10 +23,11 @@ class IPEndPoint;
 
 // Socket class to provide asynchronous read/write operations on top of the
 // posix socket api. It supports AF_INET, AF_INET6, and AF_UNIX addresses.
-class SocketLibevent : public base::MessageLoopForIO::Watcher {
+class NET_EXPORT_PRIVATE SocketLibevent
+    : public base::MessageLoopForIO::Watcher {
  public:
   SocketLibevent();
-  virtual ~SocketLibevent();
+  ~SocketLibevent() override;
 
   // Opens a socket and returns net::OK if |address_family| is AF_INET, AF_INET6
   // or AF_UNIX. Otherwise, it does DCHECK() and returns a net error.
@@ -34,6 +35,8 @@ class SocketLibevent : public base::MessageLoopForIO::Watcher {
   // Takes ownership of |socket|.
   int AdoptConnectedSocket(SocketDescriptor socket,
                            const SockaddrStorage& peer_address);
+  // Releases ownership of |socket_fd_| to caller.
+  SocketDescriptor ReleaseConnectedSocket();
 
   int Bind(const SockaddrStorage& address);
 
@@ -78,8 +81,8 @@ class SocketLibevent : public base::MessageLoopForIO::Watcher {
 
  private:
   // base::MessageLoopForIO::Watcher methods.
-  virtual void OnFileCanReadWithoutBlocking(int fd) OVERRIDE;
-  virtual void OnFileCanWriteWithoutBlocking(int fd) OVERRIDE;
+  void OnFileCanReadWithoutBlocking(int fd) override;
+  void OnFileCanWriteWithoutBlocking(int fd) override;
 
   int DoAccept(scoped_ptr<SocketLibevent>* socket);
   void AcceptCompleted();
@@ -92,6 +95,8 @@ class SocketLibevent : public base::MessageLoopForIO::Watcher {
 
   int DoWrite(IOBuffer* buf, int buf_len);
   void WriteCompleted();
+
+  void StopWatchingAndCleanUp();
 
   SocketDescriptor socket_fd_;
 

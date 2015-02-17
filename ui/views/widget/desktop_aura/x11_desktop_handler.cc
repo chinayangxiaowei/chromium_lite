@@ -58,10 +58,14 @@ X11DesktopHandler::X11DesktopHandler()
                attr.your_event_mask | PropertyChangeMask |
                StructureNotifyMask | SubstructureNotifyMask);
 
-  ::Window active_window;
-  wm_supports_active_window_ =
-    ui::GetXIDProperty(x_root_window_, "_NET_ACTIVE_WINDOW", &active_window) &&
-    active_window;
+  if (ui::GuessWindowManager() == ui::WM_WMII) {
+    // wmii says that it supports _NET_ACTIVE_WINDOW but does not.
+    // https://code.google.com/p/wmii/issues/detail?id=266
+    wm_supports_active_window_ = false;
+  } else {
+    wm_supports_active_window_ =
+        ui::WmSupportsHint(atom_cache_.GetAtom("_NET_ACTIVE_WINDOW"));
+  }
 }
 
 X11DesktopHandler::~X11DesktopHandler() {

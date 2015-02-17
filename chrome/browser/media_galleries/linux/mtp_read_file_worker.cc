@@ -5,8 +5,8 @@
 #include "chrome/browser/media_galleries/linux/mtp_read_file_worker.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "chrome/browser/media_galleries/linux/snapshot_file_details.h"
 #include "components/storage_monitor/storage_monitor.h"
@@ -27,11 +27,9 @@ uint32 WriteDataChunkIntoSnapshotFileOnFileThread(
     const base::FilePath& snapshot_file_path,
     const std::string& data) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::FILE);
-  int bytes_written =
-      base::AppendToFile(snapshot_file_path, data.data(),
-                         base::checked_cast<int>(data.size()));
-  return (static_cast<int>(data.size()) == bytes_written) ?
-      base::checked_cast<uint32>(bytes_written) : 0;
+  return base::AppendToFile(snapshot_file_path, data.c_str(), data.size())
+             ? base::checked_cast<uint32>(data.size())
+             : 0;
 }
 
 }  // namespace

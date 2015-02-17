@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
@@ -143,9 +143,9 @@ class SignInObserver : public content::WebContentsObserver {
 
  private:
   // Overridden from content::WebContentsObserver:
-  virtual void DidNavigateMainFrame(
+  void DidNavigateMainFrame(
       const content::LoadCommittedDetails& details,
-      const content::FrameNavigateParams& params) OVERRIDE {
+      const content::FrameNavigateParams& params) override {
     if (IsSimilarUrl(params.url, cloud_print_url_)) {
       base::MessageLoop::current()->PostTask(
           FROM_HERE,
@@ -154,9 +154,7 @@ class SignInObserver : public content::WebContentsObserver {
     }
   }
 
-  virtual void WebContentsDestroyed() OVERRIDE {
-    delete this;
-  }
+  void WebContentsDestroyed() override { delete this; }
 
   void OnSignIn() {
     callback_.Run();
@@ -731,7 +729,7 @@ void CreateCloudPrintSigninTab(Browser* browser,
                 url, g_browser_process->GetApplicationLocale()),
             content::Referrer(),
             NEW_FOREGROUND_TAB,
-            content::PAGE_TRANSITION_AUTO_BOOKMARK,
+            ui::PAGE_TRANSITION_AUTO_BOOKMARK,
             false));
     new SignInObserver(web_contents, cloud_devices::GetCloudPrintURL(),
                         callback);

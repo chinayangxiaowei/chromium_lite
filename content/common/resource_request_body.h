@@ -11,8 +11,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
+#include "storage/common/data_element.h"
 #include "url/gurl.h"
-#include "webkit/common/data_element.h"
 
 namespace base {
 class FilePath;
@@ -26,7 +26,7 @@ class CONTENT_EXPORT ResourceRequestBody
     : public base::RefCountedThreadSafe<ResourceRequestBody>,
       public base::SupportsUserData {
  public:
-  typedef webkit_common::DataElement Element;
+  typedef storage::DataElement Element;
 
   ResourceRequestBody();
 
@@ -52,7 +52,7 @@ class CONTENT_EXPORT ResourceRequestBody
 
  private:
   friend class base::RefCountedThreadSafe<ResourceRequestBody>;
-  virtual ~ResourceRequestBody();
+  ~ResourceRequestBody() override;
 
   std::vector<Element> elements_;
   int64 identifier_;

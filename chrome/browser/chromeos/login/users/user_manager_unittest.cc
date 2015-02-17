@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "base/command_line.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_service.h"
@@ -23,7 +24,6 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "chromeos/settings/cros_settings_names.h"
 #include "chromeos/settings/cros_settings_provider.h"
 #include "components/user_manager/user.h"
@@ -41,7 +41,7 @@ class UnittestProfileManager : public ::ProfileManagerWithoutInit {
 
  protected:
   virtual Profile* CreateProfileHelper(
-      const base::FilePath& file_path) OVERRIDE {
+      const base::FilePath& file_path) override {
     if (!base::PathExists(file_path)) {
       if (!base::CreateDirectory(file_path))
         return NULL;
@@ -53,7 +53,7 @@ class UnittestProfileManager : public ::ProfileManagerWithoutInit {
 
 class UserManagerTest : public testing::Test {
  protected:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     CommandLine& command_line = *CommandLine::ForCurrentProcess();
     command_line.AppendSwitch(::switches::kTestType);
     command_line.AppendSwitch(
@@ -80,14 +80,12 @@ class UserManagerTest : public testing::Test {
     TestingBrowserProcess::GetGlobal()->SetProfileManager(
         new UnittestProfileManager(temp_dir_.path()));
 
-    chromeos::FakeDBusThreadManager* dbus_manager =
-        new chromeos::FakeDBusThreadManager();
-    chromeos::DBusThreadManager::InitializeForTesting(dbus_manager);
+    chromeos::DBusThreadManager::Initialize();
 
     ResetUserManager();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     // Unregister the in-memory local settings instance.
     local_state_.reset();
 

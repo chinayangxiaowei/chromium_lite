@@ -60,16 +60,16 @@ class InputInjectorWin : public InputInjector {
   virtual ~InputInjectorWin();
 
   // ClipboardStub interface.
-  virtual void InjectClipboardEvent(const ClipboardEvent& event) OVERRIDE;
+  virtual void InjectClipboardEvent(const ClipboardEvent& event) override;
 
   // InputStub interface.
-  virtual void InjectKeyEvent(const KeyEvent& event) OVERRIDE;
-  virtual void InjectTextEvent(const TextEvent& event) OVERRIDE;
-  virtual void InjectMouseEvent(const MouseEvent& event) OVERRIDE;
+  virtual void InjectKeyEvent(const KeyEvent& event) override;
+  virtual void InjectTextEvent(const TextEvent& event) override;
+  virtual void InjectMouseEvent(const MouseEvent& event) override;
 
   // InputInjector interface.
   virtual void Start(
-      scoped_ptr<protocol::ClipboardStub> client_clipboard) OVERRIDE;
+      scoped_ptr<protocol::ClipboardStub> client_clipboard) override;
 
  private:
   // The actual implementation resides in InputInjectorWin::Core class.
@@ -221,13 +221,13 @@ void InputInjectorWin::Core::HandleKey(const KeyEvent& event) {
   // Reset the system idle suspend timeout.
   SetThreadExecutionState(ES_SYSTEM_REQUIRED);
 
-  ui::KeycodeConverter* key_converter = ui::KeycodeConverter::GetInstance();
-  int scancode = key_converter->UsbKeycodeToNativeKeycode(event.usb_keycode());
+  int scancode =
+      ui::KeycodeConverter::UsbKeycodeToNativeKeycode(event.usb_keycode());
   VLOG(3) << "Converting USB keycode: " << std::hex << event.usb_keycode()
           << " to scancode: " << scancode << std::dec;
 
   // Ignore events which can't be mapped.
-  if (scancode == key_converter->InvalidNativeKeycode())
+  if (scancode == ui::KeycodeConverter::InvalidNativeKeycode())
     return;
 
   uint32_t flags = KEYEVENTF_SCANCODE | (event.pressed() ? 0 : KEYEVENTF_KEYUP);
@@ -325,7 +325,7 @@ void InputInjectorWin::Core::HandleMouse(const MouseEvent& event) {
 scoped_ptr<InputInjector> InputInjector::Create(
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-  return scoped_ptr<InputInjector>(
+  return make_scoped_ptr(
       new InputInjectorWin(main_task_runner, ui_task_runner));
 }
 

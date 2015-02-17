@@ -48,13 +48,19 @@ class DomainReliabilityMonitorTest : public testing::Test {
   typedef DomainReliabilityMonitor::RequestInfo RequestInfo;
 
   DomainReliabilityMonitorTest()
-      : network_task_runner_(new base::TestSimpleTaskRunner()),
+      : pref_task_runner_(new base::TestSimpleTaskRunner()),
+        network_task_runner_(new base::TestSimpleTaskRunner()),
         url_request_context_getter_(
             new net::TestURLRequestContextGetter(network_task_runner_)),
         time_(new MockTime()),
-        monitor_("test-reporter", scoped_ptr<MockableTime>(time_)),
+        monitor_("test-reporter",
+                 pref_task_runner_,
+                 network_task_runner_,
+                 scoped_ptr<MockableTime>(time_)),
         context_(NULL) {
-    monitor_.Init(url_request_context_getter_);
+    monitor_.MoveToNetworkThread();
+    monitor_.InitURLRequestContext(url_request_context_getter_);
+    monitor_.SetDiscardUploads(false);
     context_ = monitor_.AddContextForTesting(MakeTestConfig());
   }
 
@@ -108,6 +114,7 @@ class DomainReliabilityMonitorTest : public testing::Test {
     return monitor_.AddContextForTesting(MakeTestConfigWithDomain(domain));
   }
 
+  scoped_refptr<base::TestSimpleTaskRunner> pref_task_runner_;
   scoped_refptr<base::TestSimpleTaskRunner> network_task_runner_;
   scoped_refptr<net::URLRequestContextGetter> url_request_context_getter_;
   MockTime* time_;
@@ -246,6 +253,10 @@ TEST_F(DomainReliabilityMonitorTest, WasFetchedViaProxy) {
   EXPECT_TRUE(beacons[0].server_ip.empty());
 
   EXPECT_TRUE(CheckRequestCounts(kAlwaysReportIndex, 1u, 0u));
+}
+
+TEST_F(DomainReliabilityMonitorTest, AtLeastOneBakedInConfig) {
+  DCHECK(kBakedInJsonConfigs[0] != NULL);
 }
 
 // Will fail when baked-in configs expire, as a reminder to update them.

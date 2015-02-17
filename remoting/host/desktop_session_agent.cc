@@ -4,7 +4,7 @@
 
 #include "remoting/host/desktop_session_agent.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/shared_memory.h"
 #include "ipc/ipc_channel_proxy.h"
@@ -25,8 +25,8 @@
 #include "remoting/proto/event.pb.h"
 #include "remoting/protocol/clipboard_stub.h"
 #include "remoting/protocol/input_event_tracker.h"
-#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 #include "third_party/webrtc/modules/desktop_capture/mouse_cursor.h"
 #include "third_party/webrtc/modules/desktop_capture/shared_memory.h"
 
@@ -39,11 +39,10 @@ class DesktopSesssionClipboardStub : public protocol::ClipboardStub {
  public:
   explicit DesktopSesssionClipboardStub(
       scoped_refptr<DesktopSessionAgent> desktop_session_agent);
-  virtual ~DesktopSesssionClipboardStub();
+  ~DesktopSesssionClipboardStub() override;
 
   // protocol::ClipboardStub implementation.
-  virtual void InjectClipboardEvent(
-      const protocol::ClipboardEvent& event) OVERRIDE;
+  void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
 
  private:
   scoped_refptr<DesktopSessionAgent> desktop_session_agent_;
@@ -75,14 +74,11 @@ class DesktopSessionAgent::SharedBuffer : public webrtc::SharedMemory {
                                          int id) {
     scoped_ptr<base::SharedMemory> memory(new base::SharedMemory());
     if (!memory->CreateAndMapAnonymous(size))
-      return scoped_ptr<SharedBuffer>();
-    return scoped_ptr<SharedBuffer>(
-        new SharedBuffer(agent, memory.Pass(), size, id));
+      return nullptr;
+    return make_scoped_ptr(new SharedBuffer(agent, memory.Pass(), size, id));
   }
 
-  virtual ~SharedBuffer() {
-    agent_->OnSharedBufferDeleted(id());
-  }
+  ~SharedBuffer() override { agent_->OnSharedBufferDeleted(id()); }
 
  private:
   SharedBuffer(DesktopSessionAgent* agent,
@@ -120,10 +116,10 @@ DesktopSessionAgent::DesktopSessionAgent(
       input_task_runner_(input_task_runner),
       io_task_runner_(io_task_runner),
       video_capture_task_runner_(video_capture_task_runner),
-      control_factory_(this),
       next_shared_buffer_id_(1),
       shared_buffers_(0),
-      started_(false) {
+      started_(false),
+      weak_factory_(this) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 }
 
@@ -268,7 +264,7 @@ void DesktopSessionAgent::OnStartSessionAgent(
 
   // Create a desktop environment for the new session.
   desktop_environment_ = delegate_->desktop_environment_factory().Create(
-      control_factory_.GetWeakPtr());
+      weak_factory_.GetWeakPtr());
 
   // Create the session controller and set the initial screen resolution.
   screen_controls_ = desktop_environment_->CreateScreenControls();
@@ -407,7 +403,7 @@ void DesktopSessionAgent::Stop() {
     started_ = false;
 
     // Ignore any further callbacks.
-    control_factory_.InvalidateWeakPtrs();
+    weak_factory_.InvalidateWeakPtrs();
     client_jid_.clear();
 
     remote_input_filter_.reset();

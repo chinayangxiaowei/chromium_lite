@@ -28,6 +28,7 @@
 #include "chrome/browser/safe_browsing/database_manager.h"
 #include "chrome/browser/safe_browsing/download_protection_service.h"
 #include "chrome/browser/safe_browsing/incident_reporting/binary_integrity_analyzer.h"
+#include "chrome/browser/safe_browsing/incident_reporting/blacklist_load_analyzer.h"
 #include "chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.h"
 #include "chrome/browser/safe_browsing/malware_details.h"
 #include "chrome/browser/safe_browsing/ping_manager.h"
@@ -107,12 +108,12 @@ class SafeBrowsingURLRequestContextGetter
       SafeBrowsingService* sb_service_);
 
   // Implementation for net::UrlRequestContextGetter.
-  virtual net::URLRequestContext* GetURLRequestContext() OVERRIDE;
-  virtual scoped_refptr<base::SingleThreadTaskRunner>
-      GetNetworkTaskRunner() const OVERRIDE;
+  net::URLRequestContext* GetURLRequestContext() override;
+  scoped_refptr<base::SingleThreadTaskRunner> GetNetworkTaskRunner()
+      const override;
 
  protected:
-  virtual ~SafeBrowsingURLRequestContextGetter();
+  ~SafeBrowsingURLRequestContextGetter() override;
 
  private:
   SafeBrowsingService* const sb_service_;  // Owned by BrowserProcess.
@@ -150,7 +151,7 @@ SafeBrowsingServiceFactory* SafeBrowsingService::factory_ = NULL;
 // don't leak it.
 class SafeBrowsingServiceFactoryImpl : public SafeBrowsingServiceFactory {
  public:
-  virtual SafeBrowsingService* CreateSafeBrowsingService() OVERRIDE {
+  SafeBrowsingService* CreateSafeBrowsingService() override {
     return new SafeBrowsingService();
   }
 
@@ -279,8 +280,8 @@ void SafeBrowsingService::ShutDown() {
   // dtor executes now since it may call the dtor of URLFetcher which relies
   // on it.
   csd_service_.reset();
-  download_service_.reset();
   incident_service_.reset();
+  download_service_.reset();
 
   url_request_context_getter_ = NULL;
   BrowserThread::PostNonNestableTask(
@@ -346,6 +347,14 @@ void SafeBrowsingService::RegisterDelayedAnalysisCallback(
 #endif
 }
 
+void SafeBrowsingService::AddDownloadManager(
+    content::DownloadManager* download_manager) {
+#if defined(FULL_SAFE_BROWSING)
+  if (incident_service_)
+    incident_service_->AddDownloadManager(download_manager);
+#endif
+}
+
 SafeBrowsingUIManager* SafeBrowsingService::CreateUIManager() {
   return new SafeBrowsingUIManager(this);
 }
@@ -359,7 +368,12 @@ SafeBrowsingDatabaseManager* SafeBrowsingService::CreateDatabaseManager() {
 }
 
 void SafeBrowsingService::RegisterAllDelayedAnalysis() {
+#if defined(FULL_SAFE_BROWSING)
   safe_browsing::RegisterBinaryIntegrityAnalysis();
+  safe_browsing::RegisterBlacklistLoadAnalysis();
+#else
+  NOTREACHED();
+#endif
 }
 
 void SafeBrowsingService::InitURLRequestContextOnIOThread(

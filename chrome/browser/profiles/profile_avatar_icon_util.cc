@@ -4,14 +4,13 @@
 
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/common/chrome_paths.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkPaint.h"
@@ -58,10 +57,10 @@ class AvatarImageSource : public gfx::CanvasImageSource {
                     int width,
                     AvatarPosition position,
                     AvatarBorder border);
-  virtual ~AvatarImageSource();
+  ~AvatarImageSource() override;
 
   // CanvasImageSource override:
-  virtual void Draw(gfx::Canvas* canvas) OVERRIDE;
+  void Draw(gfx::Canvas* canvas) override;
 
  private:
   gfx::ImageSkia avatar_;
@@ -191,6 +190,9 @@ const SkColor kAvatarTutorialBackgroundColor = SkColorSetRGB(0x42, 0x85, 0xf4);
 const SkColor kAvatarTutorialContentTextColor = SkColorSetRGB(0xc6, 0xda, 0xfc);
 const SkColor kAvatarBubbleAccountsBackgroundColor =
     SkColorSetRGB(0xf3, 0xf3, 0xf3);
+const SkColor kAvatarBubbleGaiaBackgroundColor =
+    SkColorSetRGB(0xf5, 0xf5, 0xf5);
+const SkColor kUserManagerBackgroundColor = SkColorSetRGB(0xee, 0xee, 0xee);
 
 const char kDefaultUrlPrefix[] = "chrome://theme/IDR_PROFILE_AVATAR_";
 const char kGAIAPictureFileName[] = "Google Profile Picture.png";

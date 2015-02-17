@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -56,6 +56,7 @@
 #include "chrome/browser/chromeos/login/users/scoped_test_user_manager.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #endif
 
 namespace extensions {
@@ -139,29 +140,24 @@ class FakeExtensionGCMAppHandler : public ExtensionGCMAppHandler {
         app_handler_count_drop_to_zero_(false) {
   }
 
-  virtual ~FakeExtensionGCMAppHandler() {
-  }
+  ~FakeExtensionGCMAppHandler() override {}
 
-  virtual void OnMessage(
+  void OnMessage(const std::string& app_id,
+                 const gcm::GCMClient::IncomingMessage& message) override {}
+
+  void OnMessagesDeleted(const std::string& app_id) override {}
+
+  void OnSendError(
       const std::string& app_id,
-      const gcm::GCMClient::IncomingMessage& message) OVERRIDE {
-  }
+      const gcm::GCMClient::SendErrorDetails& send_error_details) override {}
 
-  virtual void OnMessagesDeleted(const std::string& app_id) OVERRIDE {
-  }
-
-  virtual void OnSendError(
-      const std::string& app_id,
-      const gcm::GCMClient::SendErrorDetails& send_error_details) OVERRIDE {
-  }
-
-  virtual void OnUnregisterCompleted(const std::string& app_id,
-                                     gcm::GCMClient::Result result) OVERRIDE {
+  void OnUnregisterCompleted(const std::string& app_id,
+                             gcm::GCMClient::Result result) override {
     unregistration_result_ = result;
     waiter_->SignalCompleted();
   }
 
-  virtual void RemoveAppHandler(const std::string& app_id) OVERRIDE{
+  void RemoveAppHandler(const std::string& app_id) override {
     ExtensionGCMAppHandler::RemoveAppHandler(app_id);
     if (!GetGCMDriver()->app_handlers().size())
       app_handler_count_drop_to_zero_ = true;
@@ -202,11 +198,10 @@ class ExtensionGCMAppHandlerTest : public testing::Test {
         unregistration_result_(gcm::GCMClient::UNKNOWN_ERROR) {
   }
 
-  virtual ~ExtensionGCMAppHandlerTest() {
-  }
+  ~ExtensionGCMAppHandlerTest() override {}
 
   // Overridden from test::Test:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     // Make BrowserThread work in unittest.
@@ -220,6 +215,10 @@ class ExtensionGCMAppHandlerTest : public testing::Test {
     // This is needed to create extension service under CrOS.
 #if defined(OS_CHROMEOS)
     test_user_manager_.reset(new chromeos::ScopedTestUserManager());
+    // Creating a DBus thread manager setter has the side effect of
+    // creating a DBusThreadManager, which is needed for testing.
+    // We don't actually need the setter so we ignore the return value.
+    chromeos::DBusThreadManager::GetSetterForTesting();
 #endif
 
     // Create a new profile.
@@ -253,7 +252,7 @@ class ExtensionGCMAppHandlerTest : public testing::Test {
     gcm_app_handler_.reset(new FakeExtensionGCMAppHandler(profile(), &waiter_));
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
 #if defined(OS_CHROMEOS)
     test_user_manager_.reset();
 #endif
@@ -411,29 +410,29 @@ TEST_F(ExtensionGCMAppHandlerTest, AddAndRemoveAppHandler) {
   scoped_refptr<Extension> extension(CreateExtension());
 
   // App handler is added when extension is loaded.
-  LoadExtension(extension);
+  LoadExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_TRUE(HasAppHandlers(extension->id()));
 
   // App handler is removed when extension is unloaded.
-  DisableExtension(extension);
+  DisableExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_FALSE(HasAppHandlers(extension->id()));
 
   // App handler is added when extension is reloaded.
-  EnableExtension(extension);
+  EnableExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_TRUE(HasAppHandlers(extension->id()));
 
   // App handler is removed when extension is uninstalled.
-  UninstallExtension(extension);
+  UninstallExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_FALSE(HasAppHandlers(extension->id()));
 }
 
 TEST_F(ExtensionGCMAppHandlerTest, UnregisterOnExtensionUninstall) {
   scoped_refptr<Extension> extension(CreateExtension());
-  LoadExtension(extension);
+  LoadExtension(extension.get());
 
   // Sign-in is needed for registration.
   SignIn(kTestingUsername);
@@ -451,7 +450,7 @@ TEST_F(ExtensionGCMAppHandlerTest, UnregisterOnExtensionUninstall) {
   GetGCMDriver()->AddAppHandler("Foo", gcm_app_handler());
 
   // Unregistration should be triggered when the extension is uninstalled.
-  UninstallExtension(extension);
+  UninstallExtension(extension.get());
   waiter()->WaitUntilCompleted();
   EXPECT_EQ(gcm::GCMClient::SUCCESS,
             gcm_app_handler()->unregistration_result());
@@ -464,12 +463,12 @@ TEST_F(ExtensionGCMAppHandlerTest, UpdateExtensionWithGcmPermissionKept) {
   scoped_refptr<Extension> extension(CreateExtension());
 
   // App handler is added when the extension is loaded.
-  LoadExtension(extension);
+  LoadExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_TRUE(HasAppHandlers(extension->id()));
 
   // App handler count should not drop to zero when the extension is updated.
-  UpdateExtension(extension, "gcm2.crx");
+  UpdateExtension(extension.get(), "gcm2.crx");
   waiter()->PumpUILoop();
   EXPECT_FALSE(gcm_app_handler()->app_handler_count_drop_to_zero());
   EXPECT_TRUE(HasAppHandlers(extension->id()));
@@ -479,13 +478,13 @@ TEST_F(ExtensionGCMAppHandlerTest, UpdateExtensionWithGcmPermissionRemoved) {
   scoped_refptr<Extension> extension(CreateExtension());
 
   // App handler is added when the extension is loaded.
-  LoadExtension(extension);
+  LoadExtension(extension.get());
   waiter()->PumpUILoop();
   EXPECT_TRUE(HasAppHandlers(extension->id()));
 
   // App handler is removed when the extension is updated to the version that
   // has GCM permission removed.
-  UpdateExtension(extension, "good2.crx");
+  UpdateExtension(extension.get(), "good2.crx");
   waiter()->PumpUILoop();
   EXPECT_TRUE(gcm_app_handler()->app_handler_count_drop_to_zero());
   EXPECT_FALSE(HasAppHandlers(extension->id()));

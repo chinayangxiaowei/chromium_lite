@@ -32,6 +32,7 @@
     '<(strip_stamp)',
     '<(strip_additional_stamp)',
     '<(build_device_config_path)',
+    '<(pack_arm_relocations_stamp)',
   ],
   'outputs': [
     '<(push_stamp)',
@@ -41,7 +42,7 @@
     '--build-device-configuration=<(build_device_config_path)',
     '--libraries-dir=<(libraries_source_dir)',
     '--device-dir=<(device_library_dir)',
-    '--libraries-json=<(ordered_libraries_file)',
+    '--libraries=@FileArg(<(ordered_libraries_file):libraries)',
     '--stamp=<(push_stamp)',
     '--configuration-name=<(configuration_name)',
   ],

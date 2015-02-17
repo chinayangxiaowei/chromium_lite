@@ -13,7 +13,6 @@
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_manager.h"
-#include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/browser.h"
@@ -24,20 +23,21 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/page_action_with_badge_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/browser/ui/views/toolbar/browser_action_view.h"
 #include "chrome/browser/ui/views/toolbar/browser_actions_container.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_action_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/extensions/api/omnibox/omnibox_handler.h"
 #include "chrome/common/extensions/sync_helper.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "extensions/common/extension.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/ui_resources.h"
+#include "extensions/common/feature_switch.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/text_elider.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -233,14 +233,13 @@ class InstalledBubbleContent : public views::View,
     AddChildView(close_button_);
   }
 
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE {
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override {
     DCHECK_EQ(sender, close_button_);
     GetWidget()->Close();
   }
 
   // Implements the views::LinkListener interface.
-  virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE {
+  void LinkClicked(views::Link* source, int event_flags) override {
     GetWidget()->Close();
     std::string configure_url;
     if (source == manage_shortcut_) {
@@ -260,13 +259,13 @@ class InstalledBubbleContent : public views::View,
   }
 
  private:
-   enum Flavors {
-     NONE            = 0,
-     HOW_TO_USE      = 1 << 0,
-     HOW_TO_MANAGE   = 1 << 1,
-     SHOW_KEYBINDING = 1 << 2,
-     SIGN_IN_PROMO   = 1 << 3,
-   };
+  enum Flavors {
+    NONE            = 0,
+    HOW_TO_USE      = 1 << 0,
+    HOW_TO_MANAGE   = 1 << 1,
+    SHOW_KEYBINDING = 1 << 2,
+    SIGN_IN_PROMO   = 1 << 3,
+  };
 
   bool GetKeybinding(extensions::Command* command) {
     extensions::CommandService* command_service =
@@ -373,7 +372,7 @@ class InstalledBubbleContent : public views::View,
     return height;
   }
 
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
+  gfx::Size GetPreferredSize() const override {
     int width = kHorizOuterMargin;
     width += kIconSize;
     width += views::kPanelHorizMargin;
@@ -408,7 +407,7 @@ class InstalledBubbleContent : public views::View,
     return gfx::Size(width, std::max(height, kIconSize + 2 * kVertOuterMargin));
   }
 
-  virtual void Layout() OVERRIDE {
+  void Layout() override {
     int x = kHorizOuterMargin;
     int y = kVertOuterMargin;
 
@@ -465,7 +464,7 @@ class InstalledBubbleContent : public views::View,
     close_button_->SetBounds(x - 1, y - 1, sz.width(), sz.height());
   }
 
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE {
+  void OnPaint(gfx::Canvas* canvas) override {
     for (ScopedVector<gfx::RenderText>::const_iterator it =
              sign_in_promo_lines_.begin();
          it != sign_in_promo_lines_.end(); ++it)
@@ -512,8 +511,8 @@ class InstalledBubbleContent : public views::View,
 };
 
 void ExtensionInstalledBubbleView::Show(const Extension* extension,
-                                    Browser *browser,
-                                    const SkBitmap& icon) {
+                                        Browser* browser,
+                                        const SkBitmap& icon) {
   new ExtensionInstalledBubbleView(extension, browser, icon);
 }
 
@@ -527,18 +526,16 @@ ExtensionInstalledBubbleView::~ExtensionInstalledBubbleView() {}
 bool ExtensionInstalledBubbleView::MaybeShowNow() {
   BrowserView* browser_view =
       BrowserView::GetBrowserViewForBrowser(bubble_.browser());
-  extensions::ExtensionActionManager* extension_action_manager =
-      extensions::ExtensionActionManager::Get(bubble_.browser()->profile());
 
   views::View* reference_view = NULL;
-  if (bubble_.type() == bubble_.BROWSER_ACTION) {
+  if (bubble_.type() == bubble_.BROWSER_ACTION ||
+      extensions::FeatureSwitch::extension_action_redesign()->IsEnabled()) {
     BrowserActionsContainer* container =
         browser_view->GetToolbarView()->browser_actions();
     if (container->animating())
       return false;
 
-    reference_view = container->GetBrowserActionView(
-        extension_action_manager->GetBrowserAction(*bubble_.extension()));
+    reference_view = container->GetViewForExtension(bubble_.extension());
     // If the view is not visible then it is in the chevron, so point the
     // install bubble to the chevron instead. If this is an incognito window,
     // both could be invisible.
@@ -550,7 +547,8 @@ bool ExtensionInstalledBubbleView::MaybeShowNow() {
   } else if (bubble_.type() == bubble_.PAGE_ACTION) {
     LocationBarView* location_bar_view = browser_view->GetLocationBarView();
     ExtensionAction* page_action =
-        extension_action_manager->GetPageAction(*bubble_.extension());
+        extensions::ExtensionActionManager::Get(bubble_.browser()->profile())->
+            GetPageAction(*bubble_.extension());
     location_bar_view->SetPreviewEnabledPageAction(page_action,
                                                    true);  // preview_enabled
     reference_view = location_bar_view->GetPageActionView(page_action);
@@ -597,7 +595,8 @@ gfx::Rect ExtensionInstalledBubbleView::GetAnchorRect() const {
 }
 
 void ExtensionInstalledBubbleView::WindowClosing() {
-  if (bubble_.extension() && bubble_.type() == bubble_.PAGE_ACTION) {
+  if (bubble_.extension() && bubble_.type() == bubble_.PAGE_ACTION &&
+      !extensions::FeatureSwitch::extension_action_redesign()->IsEnabled()) {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(bubble_.browser());
     browser_view->GetLocationBarView()->SetPreviewEnabledPageAction(

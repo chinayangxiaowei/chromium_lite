@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #include <sys/types.h>  // Include something that will define __GLIBC__.
+#include "nacl_io/kernel_wrap.h" // IRT_EXT is turned on in this header.
 
 // The entire file is wrapped in this #if. We do this so this .cc file can be
 // compiled, even on a non-newlib build.
-#if defined(__native_client__) && !defined(__GLIBC__) && !defined(__BIONIC__)
-
-#include "nacl_io/kernel_wrap.h"
+#if !defined(NACL_IO_IRT_EXT) && defined(__native_client__) && \
+    !defined(__GLIBC__) && !defined(__BIONIC__)
 
 #include <dirent.h>
 #include <errno.h>
@@ -185,8 +185,8 @@ int WRAP(munmap)(void* addr, size_t length) {
   return REAL(munmap)(addr, length);
 }
 
-int WRAP(open)(const char* pathname, int oflag, mode_t cmode, int* newfd) {
-  *newfd = ki_open(pathname, oflag);
+int WRAP(open)(const char* pathname, int oflag, mode_t mode, int* newfd) {
+  *newfd = ki_open(pathname, oflag, mode);
   ERRNO_RTN(*newfd);
 }
 
@@ -269,8 +269,11 @@ static void assign_real_pointers() {
 }
 
 #define CHECK_REAL(func)    \
-  if (!REAL(func))          \
-    assign_real_pointers();
+  if (!REAL(func)) {        \
+    assign_real_pointers(); \
+    if (!REAL(func))        \
+      return ENOSYS;        \
+  }
 
 // "real" functions, i.e. the unwrapped original functions.
 
@@ -280,7 +283,8 @@ int _real_close(int fd) {
 }
 
 void _real_exit(int status) {
-  CHECK_REAL(exit);
+  if (!REAL(exit))
+    assign_real_pointers();
   REAL(exit)(status);
 }
 
@@ -330,9 +334,9 @@ int _real_munmap(void* addr, size_t length) {
   return REAL(munmap)(addr, length);
 }
 
-int _real_open(const char* pathname, int oflag, mode_t cmode, int* newfd) {
+int _real_open(const char* pathname, int oflag, mode_t mode, int* newfd) {
   CHECK_REAL(open);
-  return REAL(open)(pathname, oflag, cmode, newfd);
+  return REAL(open)(pathname, oflag, mode, newfd);
 }
 
 int _real_open_resource(const char* file, int* fd) {
@@ -352,6 +356,11 @@ int _real_rmdir(const char* pathname) {
 int _real_write(int fd, const void* buf, size_t count, size_t* nwrote) {
   CHECK_REAL(write);
   return REAL(write)(fd, buf, count, nwrote);
+}
+
+int _real_getcwd(char* pathname, size_t len) {
+  CHECK_REAL(getcwd);
+  return REAL(getcwd)(pathname, len);
 }
 
 static bool s_wrapped = false;

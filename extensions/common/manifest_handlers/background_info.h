@@ -18,17 +18,15 @@ namespace extensions {
 class BackgroundInfo : public Extension::ManifestData {
  public:
   BackgroundInfo();
-  virtual ~BackgroundInfo();
+  ~BackgroundInfo() override;
 
   static GURL GetBackgroundURL(const Extension* extension);
   static const std::vector<std::string>& GetBackgroundScripts(
       const Extension* extension);
-  static const std::string& GetServiceWorkerScript(const Extension* extension);
   static bool HasBackgroundPage(const Extension* extension);
   static bool HasPersistentBackgroundPage(const Extension* extension);
   static bool HasLazyBackgroundPage(const Extension* extension);
   static bool HasGeneratedBackgroundPage(const Extension* extension);
-  static bool HasServiceWorker(const Extension* extension);
   static bool AllowJSAccess(const Extension* extension);
 
   bool has_background_page() const {
@@ -43,14 +41,9 @@ class BackgroundInfo : public Extension::ManifestData {
     return has_background_page() && !is_persistent_;
   }
 
-  bool has_service_worker() const { return !service_worker_script_.empty(); }
-
   bool Parse(const Extension* extension, base::string16* error);
 
  private:
-  bool LoadServiceWorkerScript(const Extension* extension,
-                               const std::string& key,
-                               base::string16* error);
   bool LoadBackgroundScripts(const Extension* extension,
                              const std::string& key,
                              base::string16* error);
@@ -74,10 +67,6 @@ class BackgroundInfo : public Extension::ManifestData {
   // load on-demand (when it needs to handle an event). Defaults to true.
   bool is_persistent_;
 
-  // Optional script to register as a service worker. This is mutually exclusive
-  // to the use of background_url_ or background_scripts_.
-  std::string service_worker_script_;
-
   // True if the background page can be scripted by pages of the app or
   // extension, in which case all such pages must run in the same process.
   // False if such pages are not permitted to script the background page,
@@ -92,16 +81,16 @@ class BackgroundInfo : public Extension::ManifestData {
 class BackgroundManifestHandler : public ManifestHandler {
  public:
   BackgroundManifestHandler();
-  virtual ~BackgroundManifestHandler();
+  ~BackgroundManifestHandler() override;
 
-  virtual bool Parse(Extension* extension, base::string16* error) OVERRIDE;
-  virtual bool Validate(const Extension* extension,
-                        std::string* error,
-                        std::vector<InstallWarning>* warnings) const OVERRIDE;
-  virtual bool AlwaysParseForType(Manifest::Type type) const OVERRIDE;
+  bool Parse(Extension* extension, base::string16* error) override;
+  bool Validate(const Extension* extension,
+                std::string* error,
+                std::vector<InstallWarning>* warnings) const override;
+  bool AlwaysParseForType(Manifest::Type type) const override;
 
  private:
-  virtual const std::vector<std::string> Keys() const OVERRIDE;
+  const std::vector<std::string> Keys() const override;
 
   DISALLOW_COPY_AND_ASSIGN(BackgroundManifestHandler);
 };

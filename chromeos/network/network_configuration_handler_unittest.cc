@@ -8,7 +8,6 @@
 #include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "chromeos/dbus/mock_shill_manager_client.h"
 #include "chromeos/dbus/mock_shill_profile_client.h"
 #include "chromeos/dbus/mock_shill_service_client.h"
@@ -98,16 +97,17 @@ class NetworkConfigurationHandlerTest : public testing::Test {
         dictionary_value_result_(NULL) {}
   virtual ~NetworkConfigurationHandlerTest() {}
 
-  virtual void SetUp() OVERRIDE {
-    FakeDBusThreadManager* dbus_thread_manager = new FakeDBusThreadManager;
+  virtual void SetUp() override {
+    scoped_ptr<DBusThreadManagerSetter> dbus_setter =
+        DBusThreadManager::GetSetterForTesting();
     mock_manager_client_ = new MockShillManagerClient();
     mock_profile_client_ = new MockShillProfileClient();
     mock_service_client_ = new MockShillServiceClient();
-    dbus_thread_manager->SetShillManagerClient(
+    dbus_setter->SetShillManagerClient(
         scoped_ptr<ShillManagerClient>(mock_manager_client_).Pass());
-    dbus_thread_manager->SetShillProfileClient(
+    dbus_setter->SetShillProfileClient(
         scoped_ptr<ShillProfileClient>(mock_profile_client_).Pass());
-    dbus_thread_manager->SetShillServiceClient(
+    dbus_setter->SetShillServiceClient(
         scoped_ptr<ShillServiceClient>(mock_service_client_).Pass());
 
     EXPECT_CALL(*mock_service_client_, GetProperties(_, _))
@@ -119,15 +119,13 @@ class NetworkConfigurationHandlerTest : public testing::Test {
     EXPECT_CALL(*mock_manager_client_, RemovePropertyChangedObserver(_))
         .Times(AnyNumber());
 
-    DBusThreadManager::InitializeForTesting(dbus_thread_manager);
-
     network_state_handler_.reset(NetworkStateHandler::InitializeForTest());
     network_configuration_handler_.reset(new NetworkConfigurationHandler());
     network_configuration_handler_->Init(network_state_handler_.get());
     message_loop_.RunUntilIdle();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     network_configuration_handler_.reset();
     network_state_handler_.reset();
     DBusThreadManager::Shutdown();
@@ -400,11 +398,11 @@ class TestObserver : public chromeos::NetworkStateHandlerObserver {
   TestObserver() : network_list_changed_count_(0) {}
   virtual ~TestObserver() {}
 
-  virtual void NetworkListChanged() OVERRIDE {
+  virtual void NetworkListChanged() override {
     ++network_list_changed_count_;
   }
 
-  virtual void NetworkPropertiesUpdated(const NetworkState* network) OVERRIDE {
+  virtual void NetworkPropertiesUpdated(const NetworkState* network) override {
     property_updates_[network->path()]++;
   }
 
@@ -435,8 +433,8 @@ class NetworkConfigurationHandlerStubTest : public testing::Test {
   virtual ~NetworkConfigurationHandlerStubTest() {
   }
 
-  virtual void SetUp() OVERRIDE {
-    DBusThreadManager::InitializeWithStub();
+  virtual void SetUp() override {
+    DBusThreadManager::Initialize();
 
     network_state_handler_.reset(NetworkStateHandler::InitializeForTest());
     test_observer_.reset(new TestObserver());
@@ -449,7 +447,7 @@ class NetworkConfigurationHandlerStubTest : public testing::Test {
     test_observer_->ClearPropertyUpdates();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     network_configuration_handler_.reset();
     network_state_handler_->RemoveObserver(test_observer_.get(), FROM_HERE);
     network_state_handler_.reset();

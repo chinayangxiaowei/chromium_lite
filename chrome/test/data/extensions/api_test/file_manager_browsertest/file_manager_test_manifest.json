@@ -10,6 +10,7 @@
       // List test_util.js and background.js first because the testcase
       // namespace is defined here.
       "test_util.js",
+      "remote_call.js",
       "file_manager/background.js",
       "file_manager/copy_between_windows.js",
       "file_manager/create_new_folder.js",
@@ -19,7 +20,6 @@
       "file_manager/folder_shortcuts.js",
       "file_manager/grid_view.js",
       "file_manager/keyboard_operations.js",
-      "file_manager/multi_profile.js",
       "file_manager/open_audio_files.js",
       "file_manager/open_video_files.js",
       "file_manager/open_zip_files.js",

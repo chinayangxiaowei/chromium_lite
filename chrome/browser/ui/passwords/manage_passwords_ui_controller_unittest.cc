@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/metrics/histogram_samples.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/statistics_delta_reader.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/passwords/manage_passwords_bubble.h"
 #include "chrome/browser/ui/passwords/manage_passwords_bubble_model.h"
@@ -32,7 +30,7 @@ const int64 kQuickNavigationDelayInMS = 500;
 class MockElapsedTimer : public base::ElapsedTimer {
  public:
   MockElapsedTimer() {}
-  virtual base::TimeDelta Elapsed() const OVERRIDE { return delta_; }
+  base::TimeDelta Elapsed() const override { return delta_; }
 
   void Advance(int64 ms) { delta_ = base::TimeDelta::FromMilliseconds(ms); }
 
@@ -48,7 +46,7 @@ class ManagePasswordsUIControllerTest : public ChromeRenderViewHostTestHarness {
  public:
   ManagePasswordsUIControllerTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 
     // Create the test UIController here so that it's bound to

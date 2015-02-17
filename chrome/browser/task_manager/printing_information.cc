@@ -15,11 +15,11 @@
 #include "chrome/browser/task_manager/renderer_resource.h"
 #include "chrome/browser/task_manager/task_manager.h"
 #include "chrome/browser/task_manager/task_manager_util.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -30,13 +30,13 @@ namespace task_manager {
 class PrintingResource : public RendererResource {
  public:
   explicit PrintingResource(content::WebContents* web_contents);
-  virtual ~PrintingResource();
+  ~PrintingResource() override;
 
   // Resource methods:
-  virtual Type GetType() const OVERRIDE;
-  virtual base::string16 GetTitle() const OVERRIDE;
-  virtual gfx::ImageSkia GetIcon() const OVERRIDE;
-  virtual content::WebContents* GetWebContents() const OVERRIDE;
+  Type GetType() const override;
+  base::string16 GetTitle() const override;
+  gfx::ImageSkia GetIcon() const override;
+  content::WebContents* GetWebContents() const override;
 
  private:
   content::WebContents* web_contents_;

@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ui/website_settings/website_settings_ui.h"
 
-#include "grit/generated_resources.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/ui_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -119,6 +119,7 @@ base::string16 WebsiteSettingsUI::PermissionTypeToUIString(
     case CONTENT_SETTINGS_TYPE_GEOLOCATION:
       return l10n_util::GetStringUTF16(IDS_WEBSITE_SETTINGS_TYPE_LOCATION);
     case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
+    case CONTENT_SETTINGS_TYPE_PUSH_MESSAGING:
       return l10n_util::GetStringUTF16(
           IDS_WEBSITE_SETTINGS_TYPE_NOTIFICATIONS);
     case CONTENT_SETTINGS_TYPE_FULLSCREEN:
@@ -257,6 +258,7 @@ int WebsiteSettingsUI::GetIdentityIconID(
   int resource_id = IDR_PAGEINFO_INFO;
   switch (status) {
     case WebsiteSettings::SITE_IDENTITY_STATUS_UNKNOWN:
+    case WebsiteSettings::SITE_IDENTITY_STATUS_INTERNAL_PAGE:
       break;
     case WebsiteSettings::SITE_IDENTITY_STATUS_CERT:
     case WebsiteSettings::SITE_IDENTITY_STATUS_EV_CERT:
@@ -273,6 +275,9 @@ int WebsiteSettingsUI::GetIdentityIconID(
       break;
     case WebsiteSettings::SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT:
       resource_id = IDR_PAGEINFO_ENTERPRISE_MANAGED;
+      break;
+    case WebsiteSettings::SITE_IDENTITY_STATUS_DEPRECATED_SIGNATURE_ALGORITHM:
+      resource_id = IDR_PAGEINFO_WARNING_MINOR;
       break;
     default:
       NOTREACHED();
@@ -294,6 +299,7 @@ int WebsiteSettingsUI::GetConnectionIconID(
   int resource_id = IDR_PAGEINFO_INFO;
   switch (status) {
     case WebsiteSettings::SITE_CONNECTION_STATUS_UNKNOWN:
+    case WebsiteSettings::SITE_CONNECTION_STATUS_INTERNAL_PAGE:
       break;
     case WebsiteSettings::SITE_CONNECTION_STATUS_ENCRYPTED:
       resource_id = IDR_PAGEINFO_GOOD;

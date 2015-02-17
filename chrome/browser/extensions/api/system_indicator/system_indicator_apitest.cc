@@ -9,21 +9,18 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/lazy_background_page_test_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "extensions/browser/extension_system.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/switches.h"
+#include "extensions/test/result_catcher.h"
 
 class SystemIndicatorApiTest : public ExtensionApiTest {
  public:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
-    ExtensionApiTest::SetUpCommandLine(command_line);
+  void SetUpOnMainThread() override {
+    ExtensionApiTest::SetUpOnMainThread();
     // Set shorter delays to prevent test timeouts in tests that need to wait
     // for the event page to unload.
-    command_line->AppendSwitchASCII(
-        extensions::switches::kEventPageIdleTime, "1000");
-    command_line->AppendSwitchASCII(
-        extensions::switches::kEventPageSuspendingTime, "1000");
+    extensions::ProcessManager::SetEventPageIdleTimeForTesting(1);
+    extensions::ProcessManager::SetEventPageSuspendingTimeForTesting(1);
   }
 
   const extensions::Extension* LoadExtensionAndWait(
@@ -53,15 +50,14 @@ IN_PROC_BROWSER_TEST_F(SystemIndicatorApiTest, SystemIndicator) {
   extensions::SystemIndicatorManager* manager =
       extensions::SystemIndicatorManagerFactory::GetForProfile(profile());
   if (manager) {
-    ResultCatcher catcher;
+    extensions::ResultCatcher catcher;
 
     const extensions::Extension* extension =
         LoadExtensionAndWait("system_indicator/unloaded");
     ASSERT_TRUE(extension) << message_;
 
     // Lazy Background Page has been shut down.
-    extensions::ProcessManager* pm =
-        extensions::ExtensionSystem::Get(profile())->process_manager();
+    extensions::ProcessManager* pm = extensions::ProcessManager::Get(profile());
     EXPECT_FALSE(pm->GetBackgroundHostForExtension(last_loaded_extension_id()));
 
     EXPECT_TRUE(manager->SendClickEventToExtensionForTest(extension->id()));

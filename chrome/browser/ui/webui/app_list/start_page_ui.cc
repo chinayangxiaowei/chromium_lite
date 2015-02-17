@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/webui/app_list/start_page_ui.h"
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/sys_info.h"
@@ -77,7 +77,6 @@ void StartPageUI::InitDataSource() {
   scoped_ptr<content::WebUIDataSource> source(
       content::WebUIDataSource::Create(chrome::kChromeUIAppListStartPageHost));
 
-  source->SetUseJsonJSFormatV2();
   source->SetJsonPath("strings.js");
 
   source->AddResourcePath("start_page.css", IDR_APP_LIST_START_PAGE_CSS);

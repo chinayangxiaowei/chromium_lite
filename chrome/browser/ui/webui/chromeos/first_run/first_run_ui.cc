@@ -9,12 +9,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chromeos/first_run/first_run_handler.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chromeos/chromeos_switches.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 
@@ -81,7 +81,6 @@ void SetLocalizedStrings(base::DictionaryValue* localized_strings) {
 content::WebUIDataSource* CreateDataSource() {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIFirstRunHost);
-  source->SetUseJsonJSFormatV2();
   source->SetJsonPath("strings.js");
   source->SetDefaultResource(IDR_FIRST_RUN_HTML);
   source->AddResourcePath(kFirstRunJSPath, IDR_FIRST_RUN_JS);

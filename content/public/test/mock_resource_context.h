@@ -23,29 +23,14 @@ class MockResourceContext : public ResourceContext {
   // Does not take ownership of |test_request_context|.
   explicit MockResourceContext(net::URLRequestContext* test_request_context);
 
-  virtual ~MockResourceContext();
+  ~MockResourceContext() override;
 
   // ResourceContext implementation:
-  virtual net::HostResolver* GetHostResolver() OVERRIDE;
-  virtual net::URLRequestContext* GetRequestContext() OVERRIDE;
-  virtual bool AllowMicAccess(const GURL& origin) OVERRIDE;
-  virtual bool AllowCameraAccess(const GURL& origin) OVERRIDE;
-
-  //////////////////////////////////////////////////////////////////////////
-  // The following functions are used by tests.
-  void set_mic_access(bool mic_allowed) {
-    mic_allowed_ = mic_allowed;
-  }
-
-  void set_camera_access(bool camera_allowed) {
-    camera_allowed_ = camera_allowed;
-  }
+  net::HostResolver* GetHostResolver() override;
+  net::URLRequestContext* GetRequestContext() override;
 
  private:
   net::URLRequestContext* test_request_context_;
-
-  bool mic_allowed_;
-  bool camera_allowed_;
 
   DISALLOW_COPY_AND_ASSIGN(MockResourceContext);
 };

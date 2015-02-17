@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/select_file_dialog_extension.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -16,7 +16,6 @@
 #include "chrome/browser/chromeos/file_manager/volume_manager.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -28,6 +27,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
@@ -50,7 +50,7 @@ class MockSelectFileDialogListener : public ui::SelectFileDialog::Listener {
   // ui::SelectFileDialog::Listener implementation.
   virtual void FileSelected(const base::FilePath& path,
                             int index,
-                            void* params) OVERRIDE {
+                            void* params) override {
     file_selected_ = true;
     path_ = path;
     params_ = params;
@@ -58,12 +58,12 @@ class MockSelectFileDialogListener : public ui::SelectFileDialog::Listener {
   virtual void FileSelectedWithExtraInfo(
       const ui::SelectedFileInfo& selected_file_info,
       int index,
-      void* params) OVERRIDE {
+      void* params) override {
     FileSelected(selected_file_info.local_path, index, params);
   }
   virtual void MultiFilesSelected(
-      const std::vector<base::FilePath>& files, void* params) OVERRIDE {}
-  virtual void FileSelectionCanceled(void* params) OVERRIDE {
+      const std::vector<base::FilePath>& files, void* params) override {}
+  virtual void FileSelectionCanceled(void* params) override {
     canceled_ = true;
     params_ = params;
   }
@@ -84,7 +84,7 @@ class SelectFileDialogExtensionBrowserTest : public ExtensionBrowserTest {
     DIALOG_BTN_CANCEL
   };
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
 
     // Create the dialog wrapper object, but don't show it yet.
@@ -103,7 +103,7 @@ class SelectFileDialogExtensionBrowserTest : public ExtensionBrowserTest {
     ExtensionBrowserTest::SetUp();
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     ExtensionBrowserTest::TearDown();
 
     // Delete the dialog first, as it holds a pointer to the listener.
@@ -138,8 +138,7 @@ class SelectFileDialogExtensionBrowserTest : public ExtensionBrowserTest {
                   const std::string& additional_message) {
     // Spawn a dialog to open a file.  The dialog will signal that it is ready
     // via chrome.test.sendMessage() in the extension JavaScript.
-    ExtensionTestMessageListener init_listener("worker-initialized",
-                                               false /* will_reply */);
+    ExtensionTestMessageListener init_listener("ready", false /* will_reply */);
 
     scoped_ptr<ExtensionTestMessageListener> additional_listener;
     if (!additional_message.empty()) {
@@ -278,8 +277,6 @@ IN_PROC_BROWSER_TEST_F(SelectFileDialogExtensionBrowserTest,
   // Spawn a dialog to open a file.  Provide the path to the file so the dialog
   // will automatically select it.  Ensure that the OK button is enabled by
   // waiting for chrome.test.sendMessage('selection-change-complete').
-  // The extension starts a Web Worker to read file metadata, so it may send
-  // 'selection-change-complete' before 'worker-initialized'.  This is OK.
   ASSERT_NO_FATAL_FAILURE(OpenDialog(ui::SelectFileDialog::SELECT_OPEN_FILE,
                                      test_file, owning_window,
                                      "selection-change-complete"));
@@ -306,8 +303,6 @@ IN_PROC_BROWSER_TEST_F(SelectFileDialogExtensionBrowserTest,
   // Spawn a dialog to save a file, providing a suggested path.
   // Ensure "Save" button is enabled by waiting for notification from
   // chrome.test.sendMessage().
-  // The extension starts a Web Worker to read file metadata, so it may send
-  // 'directory-change-complete' before 'worker-initialized'.  This is OK.
   ASSERT_NO_FATAL_FAILURE(OpenDialog(ui::SelectFileDialog::SELECT_SAVEAS_FILE,
                                      test_file, owning_window,
                                      "directory-change-complete"));
@@ -333,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(SelectFileDialogExtensionBrowserTest,
 
   // Open a singleton tab in background.
   chrome::NavigateParams p(browser(), GURL("http://www.google.com"),
-                           content::PAGE_TRANSITION_LINK);
+                           ui::PAGE_TRANSITION_LINK);
   p.window_action = chrome::NavigateParams::SHOW_WINDOW;
   p.disposition = SINGLETON_TAB;
   chrome::Navigate(&p);

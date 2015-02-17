@@ -10,20 +10,21 @@
 #include "chrome/browser/extensions/api/storage/settings_sync_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
-#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
 #include "extensions/browser/api/storage/storage_frontend.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/value_builder.h"
+#include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/result_catcher.h"
 #include "sync/api/fake_sync_change_processor.h"
 #include "sync/api/sync_change.h"
 #include "sync/api/sync_change_processor.h"
 #include "sync/api/sync_change_processor_wrapper_for_test.h"
 #include "sync/api/sync_error_factory.h"
 #include "sync/api/sync_error_factory_mock.h"
+#include "sync/api/syncable_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
@@ -73,7 +74,7 @@ class MockSchemaRegistryObserver : public policy::SchemaRegistry::Observer {
 
 class ExtensionSettingsApiTest : public ExtensionApiTest {
  protected:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
@@ -224,8 +225,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest, SplitModeIncognito) {
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToProfile(browser()->profile());
-  catcher_incognito.RestrictToProfile(
+  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher_incognito.RestrictToBrowserContext(
       browser()->profile()->GetOffTheRecordProfile());
 
   LoadAndReplyWhenSatisfied(SYNC,
@@ -248,8 +249,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToProfile(browser()->profile());
-  catcher_incognito.RestrictToProfile(
+  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher_incognito.RestrictToBrowserContext(
       browser()->profile()->GetOffTheRecordProfile());
 
   LoadAndReplyWhenSatisfied(SYNC,
@@ -271,8 +272,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToProfile(browser()->profile());
-  catcher_incognito.RestrictToProfile(
+  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher_incognito.RestrictToBrowserContext(
       browser()->profile()->GetOffTheRecordProfile());
 
   LoadAndReplyWhenSatisfied(SYNC,
@@ -322,8 +323,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToProfile(browser()->profile());
-  catcher_incognito.RestrictToProfile(
+  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher_incognito.RestrictToBrowserContext(
       browser()->profile()->GetOffTheRecordProfile());
 
   const Extension* extension =
@@ -367,8 +368,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionSettingsApiTest,
   // We need 2 ResultCatchers because we'll be running the same test in both
   // regular and incognito mode.
   ResultCatcher catcher, catcher_incognito;
-  catcher.RestrictToProfile(browser()->profile());
-  catcher_incognito.RestrictToProfile(
+  catcher.RestrictToBrowserContext(browser()->profile());
+  catcher_incognito.RestrictToBrowserContext(
       browser()->profile()->GetOffTheRecordProfile());
 
   const Extension* extension =

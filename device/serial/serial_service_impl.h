@@ -7,6 +7,7 @@
 
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop_proxy.h"
+#include "device/serial/data_stream.mojom.h"
 #include "device/serial/serial.mojom.h"
 #include "device/serial/serial_connection_factory.h"
 #include "device/serial/serial_device_enumerator.h"
@@ -20,29 +21,30 @@ class SerialServiceImpl : public mojo::InterfaceImpl<serial::SerialService> {
       scoped_refptr<SerialConnectionFactory> connection_factory);
   SerialServiceImpl(scoped_refptr<SerialConnectionFactory> connection_factory,
                     scoped_ptr<SerialDeviceEnumerator> device_enumerator);
-  virtual ~SerialServiceImpl();
+  ~SerialServiceImpl() override;
 
   static void Create(scoped_refptr<base::MessageLoopProxy> io_message_loop,
+                     scoped_refptr<base::MessageLoopProxy> ui_message_loop,
                      mojo::InterfaceRequest<serial::SerialService> request);
   static void CreateOnMessageLoop(
       scoped_refptr<base::MessageLoopProxy> message_loop,
       scoped_refptr<base::MessageLoopProxy> io_message_loop,
+      scoped_refptr<base::MessageLoopProxy> ui_message_loop,
       mojo::InterfaceRequest<serial::SerialService> request);
 
   // mojo::InterfaceImpl<SerialService> overrides.
-  virtual void GetDevices(const mojo::Callback<
-      void(mojo::Array<serial::DeviceInfoPtr>)>& callback) OVERRIDE;
-  virtual void Connect(
-      const mojo::String& path,
-      serial::ConnectionOptionsPtr options,
-      mojo::InterfaceRequest<serial::Connection> connection_request) OVERRIDE;
+  void GetDevices(
+      const mojo::Callback<void(mojo::Array<serial::DeviceInfoPtr>)>& callback)
+      override;
+  void Connect(const mojo::String& path,
+               serial::ConnectionOptionsPtr options,
+               mojo::InterfaceRequest<serial::Connection> connection_request,
+               mojo::InterfaceRequest<serial::DataSink> sink,
+               mojo::InterfaceRequest<serial::DataSource> source) override;
 
  private:
   SerialDeviceEnumerator* GetDeviceEnumerator();
   bool IsValidPath(const mojo::String& path);
-  void OnConnected(
-      const mojo::Callback<void(serial::ConnectionInfoPtr)>& callback,
-      serial::ConnectionInfoPtr result);
 
   scoped_ptr<SerialDeviceEnumerator> device_enumerator_;
   scoped_refptr<SerialConnectionFactory> connection_factory_;

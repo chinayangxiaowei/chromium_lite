@@ -29,6 +29,11 @@ namespace content {
 
 namespace {
 
+// We add a UMA histogram measuring the execution time of the Render() method
+// every |kNumCallbacksBetweenRenderTimeHistograms| callback. Assuming 10ms
+// between each callback leads to one UMA update each 100ms.
+const int kNumCallbacksBetweenRenderTimeHistograms = 10;
+
 // This is a simple wrapper class that's handed out to users of a shared
 // WebRtcAudioRenderer instance.  This class maintains the per-user 'playing'
 // and 'started' states to avoid problems related to incorrect usage which
@@ -53,13 +58,13 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
   }
 
  protected:
-  virtual ~SharedAudioRenderer() {
+  ~SharedAudioRenderer() override {
     DCHECK(thread_checker_.CalledOnValidThread());
     DVLOG(1) << __FUNCTION__;
     Stop();
   }
 
-  virtual void Start() OVERRIDE {
+  void Start() override {
     DCHECK(thread_checker_.CalledOnValidThread());
     if (started_)
       return;
@@ -67,7 +72,7 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
     delegate_->Start();
   }
 
-  virtual void Play() OVERRIDE {
+  void Play() override {
     DCHECK(thread_checker_.CalledOnValidThread());
     DCHECK(started_);
     if (playing_state_.playing())
@@ -76,7 +81,7 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
     on_play_state_changed_.Run(media_stream_, &playing_state_);
   }
 
-  virtual void Pause() OVERRIDE {
+  void Pause() override {
     DCHECK(thread_checker_.CalledOnValidThread());
     DCHECK(started_);
     if (!playing_state_.playing())
@@ -85,7 +90,7 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
     on_play_state_changed_.Run(media_stream_, &playing_state_);
   }
 
-  virtual void Stop() OVERRIDE {
+  void Stop() override {
     DCHECK(thread_checker_.CalledOnValidThread());
     if (!started_)
       return;
@@ -94,19 +99,19 @@ class SharedAudioRenderer : public MediaStreamAudioRenderer {
     delegate_->Stop();
   }
 
-  virtual void SetVolume(float volume) OVERRIDE {
+  void SetVolume(float volume) override {
     DCHECK(thread_checker_.CalledOnValidThread());
     DCHECK(volume >= 0.0f && volume <= 1.0f);
     playing_state_.set_volume(volume);
     on_play_state_changed_.Run(media_stream_, &playing_state_);
   }
 
-  virtual base::TimeDelta GetCurrentRenderTime() const OVERRIDE {
+  base::TimeDelta GetCurrentRenderTime() const override {
     DCHECK(thread_checker_.CalledOnValidThread());
     return delegate_->GetCurrentRenderTime();
   }
 
-  virtual bool IsLocalRenderer() const OVERRIDE {
+  bool IsLocalRenderer() const override {
     DCHECK(thread_checker_.CalledOnValidThread());
     return delegate_->IsLocalRenderer();
   }
@@ -135,8 +140,10 @@ int GetCurrentDuckingFlag(int render_frame_id) {
   return media::AudioParameters::NO_EFFECTS;
 }
 
-// Helper method to get platform specific optimal buffer size.
-int GetOptimalBufferSize(int sample_rate, int hardware_buffer_size) {
+}  // namespace
+
+int WebRtcAudioRenderer::GetOptimalBufferSize(int sample_rate,
+                                              int hardware_buffer_size) {
   // Use native hardware buffer size as default. On Windows, we strive to open
   // up using this native hardware buffer size to achieve best
   // possible performance and to ensure that no FIFO is needed on the browser
@@ -168,9 +175,8 @@ int GetOptimalBufferSize(int sample_rate, int hardware_buffer_size) {
   return frames_per_buffer;
 }
 
-}  // namespace
-
 WebRtcAudioRenderer::WebRtcAudioRenderer(
+    const scoped_refptr<base::SingleThreadTaskRunner>& signaling_thread,
     const scoped_refptr<webrtc::MediaStreamInterface>& media_stream,
     int source_render_view_id,
     int source_render_frame_id,
@@ -181,6 +187,7 @@ WebRtcAudioRenderer::WebRtcAudioRenderer(
       source_render_view_id_(source_render_view_id),
       source_render_frame_id_(source_render_frame_id),
       session_id_(session_id),
+      signaling_thread_(signaling_thread),
       media_stream_(media_stream),
       source_(NULL),
       play_ref_count_(0),
@@ -188,9 +195,10 @@ WebRtcAudioRenderer::WebRtcAudioRenderer(
       audio_delay_milliseconds_(0),
       fifo_delay_milliseconds_(0),
       sink_params_(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                   media::CHANNEL_LAYOUT_STEREO, 0, sample_rate, 16,
+                   media::CHANNEL_LAYOUT_STEREO, sample_rate, 16,
                    frames_per_buffer,
-                   GetCurrentDuckingFlag(source_render_frame_id)) {
+                   GetCurrentDuckingFlag(source_render_frame_id)),
+      render_callback_count_(0) {
   WebRtcLogMessage(base::StringPrintf(
       "WAR::WAR. source_render_view_id=%d"
       ", session_id=%d, sample_rate=%d, frames_per_buffer=%d, effects=%i",
@@ -245,14 +253,14 @@ bool WebRtcAudioRenderer::Initialize(WebRtcAudioRendererSource* source) {
   DVLOG(1) << "Using WebRTC output buffer size: " << frames_per_10ms;
 
   source_params.Reset(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      sink_params_.channel_layout(), sink_params_.channels(), 0,
+                      sink_params_.channel_layout(), sink_params_.channels(),
                       sample_rate, 16, frames_per_10ms);
 
   const int frames_per_buffer =
       GetOptimalBufferSize(sample_rate, sink_params_.frames_per_buffer());
 
   sink_params_.Reset(sink_params_.format(), sink_params_.channel_layout(),
-                     sink_params_.channels(), 0, sample_rate, 16,
+                     sink_params_.channels(), sample_rate, 16,
                      frames_per_buffer);
 
   // Create a FIFO if re-buffering is required to match the source input with
@@ -321,6 +329,7 @@ void WebRtcAudioRenderer::Play() {
     return;
 
   playing_state_.set_playing(true);
+  render_callback_count_ = 0;
 
   OnPlayStateChanged(media_stream_, &playing_state_);
 }
@@ -440,6 +449,7 @@ void WebRtcAudioRenderer::OnRenderError() {
 // Called by AudioPullFifo when more data is necessary.
 void WebRtcAudioRenderer::SourceCallback(
     int fifo_frame_delay, media::AudioBus* audio_bus) {
+  base::TimeTicks start_time = base::TimeTicks::Now() ;
   DVLOG(2) << "WebRtcAudioRenderer::SourceCallback("
            << fifo_frame_delay << ", "
            << audio_bus->frames() << ")";
@@ -458,6 +468,12 @@ void WebRtcAudioRenderer::SourceCallback(
   // return here and ensure that the returned value in Render() is 0.
   if (state_ != PLAYING)
     audio_bus->Zero();
+
+  if (++render_callback_count_ == kNumCallbacksBetweenRenderTimeHistograms) {
+    base::TimeDelta elapsed = base::TimeTicks::Now() - start_time;
+    render_callback_count_ = 0;
+    UMA_HISTOGRAM_TIMES("WebRTC.AudioRenderTimes", elapsed);
+  }
 }
 
 void WebRtcAudioRenderer::UpdateSourceVolume(
@@ -485,7 +501,15 @@ void WebRtcAudioRenderer::UpdateSourceVolume(
     volume = 10.0f;
 
   DVLOG(1) << "Setting remote source volume: " << volume;
-  source->SetVolume(volume);
+  if (!signaling_thread_->BelongsToCurrentThread()) {
+    // Libjingle hands out proxy objects in most cases, but the audio source
+    // object is an exception (bug?).  So, to work around that, we need to make
+    // sure we call SetVolume on the signaling thread.
+    signaling_thread_->PostTask(FROM_HERE,
+        base::Bind(&webrtc::AudioSourceInterface::SetVolume, source, volume));
+  } else {
+    source->SetVolume(volume);
+  }
 }
 
 bool WebRtcAudioRenderer::AddPlayingState(

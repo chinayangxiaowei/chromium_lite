@@ -8,16 +8,16 @@
 #include "base/mac/sdk_forward_declarations.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
+#include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/themes/theme_service.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/browser_window_utils.h"
 #import "chrome/browser/ui/cocoa/custom_frame_view.h"
-#import "chrome/browser/ui/cocoa/nsview_additions.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
-#include "chrome/browser/themes/theme_properties.h"
-#include "chrome/browser/themes/theme_service.h"
 #include "grit/theme_resources.h"
 #include "ui/base/cocoa/nsgraphics_context_additions.h"
+#import "ui/base/cocoa/nsview_additions.h"
 
 // Implementer's note: Moving the window controls is tricky. When altering the
 // code, ensure that:
@@ -27,8 +27,6 @@
 // - rollover effects work correctly
 
 namespace {
-
-const CGFloat kBrowserFrameViewPaintHeight = 60.0;
 
 // Size of the gradient. Empirically determined so that the gradient looks
 // like what the heuristic does when there are just a few tabs.
@@ -71,7 +69,8 @@ const CGFloat kWindowGradientHeight = 24.0;
   if ((self = [super initWithContentRect:contentRect
                                styleMask:styleMask
                                  backing:NSBackingStoreBuffered
-                                   defer:YES])) {
+                                   defer:YES
+                  wantsViewsOverTitlebar:hasTabStrip])) {
     // The 10.6 fullscreen code copies the title to a different window, which
     // will assert if it's nil.
     [self setTitle:@""];
@@ -312,68 +311,6 @@ const CGFloat kWindowGradientHeight = 24.0;
   }
 
   return origin;
-}
-
-- (void)drawCustomFrameRect:(NSRect)rect forView:(NSView*)view {
-  // WARNING: There is an obvious optimization opportunity here that you DO NOT
-  // want to take. To save painting cycles, you might think it would be a good
-  // idea to call out to the default implementation only if no theme were
-  // drawn. In reality, however, if you fail to call the default
-  // implementation, or if you call it after a clipping path is set, the
-  // rounded corners at the top of the window will not draw properly. Do not
-  // try to be smart here.
-
-  // Only paint the top of the window.
-  NSRect windowRect = [view convertRect:[self frame] fromView:nil];
-  windowRect.origin = NSZeroPoint;
-
-  NSRect paintRect = windowRect;
-  paintRect.origin.y = NSMaxY(paintRect) - kBrowserFrameViewPaintHeight;
-  paintRect.size.height = kBrowserFrameViewPaintHeight;
-  rect = NSIntersectionRect(paintRect, rect);
-  [super drawCustomFrameRect:rect forView:view];
-
-  // Set up our clip.
-  float cornerRadius = 4.0;
-  if ([view respondsToSelector:@selector(roundedCornerRadius)])
-    cornerRadius = [view roundedCornerRadius];
-  [[NSBezierPath bezierPathWithRoundedRect:windowRect
-                                   xRadius:cornerRadius
-                                   yRadius:cornerRadius] addClip];
-  [[NSBezierPath bezierPathWithRect:rect] addClip];
-
-  // Do the theming.
-  BOOL themed = [FramedBrowserWindow
-      drawWindowThemeInDirtyRect:rect
-                         forView:view
-                          bounds:windowRect
-            forceBlackBackground:NO];
-
-  // If the window needs a title and we painted over the title as drawn by the
-  // default window paint, paint it ourselves.
-  if (themed && [view respondsToSelector:@selector(_titlebarTitleRect)] &&
-      [view respondsToSelector:@selector(_drawTitleStringIn:withColor:)] &&
-      ![self _isTitleHidden]) {
-    [view _drawTitleStringIn:[view _titlebarTitleRect]
-                   withColor:[self titleColor]];
-  }
-
-  // Pinstripe the top.
-  if (themed) {
-    CGFloat lineWidth = [view cr_lineWidth];
-
-    windowRect = [view convertRect:[self frame] fromView:nil];
-    windowRect.origin = NSZeroPoint;
-    windowRect.origin.y -= 0.5 * lineWidth;
-    windowRect.origin.x -= 0.5 * lineWidth;
-    windowRect.size.width += lineWidth;
-    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.5] set];
-    NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:windowRect
-                                                         xRadius:cornerRadius
-                                                         yRadius:cornerRadius];
-    [path setLineWidth:lineWidth];
-    [path stroke];
-  }
 }
 
 + (BOOL)drawWindowThemeInDirtyRect:(NSRect)dirtyRect

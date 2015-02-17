@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/extensions/extension_creator_filter.h"
@@ -13,7 +13,7 @@ namespace {
 
 class ExtensionCreatorFilterTest : public PlatformTest {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     PlatformTest::SetUp();
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());

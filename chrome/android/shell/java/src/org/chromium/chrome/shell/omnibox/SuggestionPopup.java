@@ -5,6 +5,7 @@
 package org.chromium.chrome.shell.omnibox;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.text.Editable;
 import android.text.TextUtils;
@@ -13,13 +14,15 @@ import android.view.View;
 import android.view.View.OnLayoutChangeListener;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
+import android.widget.EditText;
 import android.widget.ListPopupWindow;
 import android.widget.PopupWindow.OnDismissListener;
-import android.widget.TextView;
+
 
 import org.chromium.chrome.browser.omnibox.AutocompleteController;
 import org.chromium.chrome.browser.omnibox.AutocompleteController.OnSuggestionsReceivedListener;
 import org.chromium.chrome.browser.omnibox.OmniboxSuggestion;
+import org.chromium.chrome.shell.ChromeShellActivity;
 import org.chromium.chrome.shell.ChromeShellToolbar;
 import org.chromium.chrome.shell.R;
 
@@ -32,7 +35,7 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
     private static final long SUGGESTION_START_DELAY_MS = 30;
 
     private final Context mContext;
-    private final TextView mUrlField;
+    private final EditText mUrlField;
     private final ChromeShellToolbar mToolbar;
     private final AutocompleteController mAutocomplete;
 
@@ -40,13 +43,13 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
     private Runnable mRequestSuggestions;
     private ListPopupWindow mSuggestionsPopup;
     private SuggestionArrayAdapter mSuggestionArrayAdapter;
+    private int mSuggestionsPopupItemsCount;
 
     /**
      * Initializes a suggestion popup that will track urlField value and display suggestions based
      * on that value.
      */
-    public SuggestionPopup(Context context, TextView urlField,
-            ChromeShellToolbar toolbar) {
+    public SuggestionPopup(Context context, EditText urlField, ChromeShellToolbar toolbar) {
         mContext = context;
         mUrlField = urlField;
         mToolbar = toolbar;
@@ -56,7 +59,8 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
             public void onLayoutChange(View v, int left, int top, int right, int bottom,
                     int oldLeft, int oldTop, int oldRight, int oldBottom) {
                 if (mSuggestionsPopup == null || !mSuggestionsPopup.isShowing()) return;
-                mSuggestionsPopup.setWidth(mUrlField.getWidth());
+                mSuggestionsPopup.setWidth(mToolbar.getWidth());
+                mSuggestionsPopup.setHeight(getSuggestionPopupHeight());
                 mSuggestionsPopup.show();
             }
         };
@@ -98,13 +102,29 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
         if (mRequestSuggestions != null) mRequestSuggestions = null;
     }
 
-    // OnSuggestionsReceivedListener implementation
+    private int getSuggestionPopupHeight() {
+        Rect appRect = new Rect();
+        ((ChromeShellActivity) mContext).getWindow().getDecorView()
+                .getWindowVisibleDisplayFrame(appRect);
+        int dropDownItemHeight = mContext.getResources()
+                .getDimensionPixelSize(R.dimen.dropdown_item_height);
+        // Applying margin height equal to |dropDownItemHeight| if constrained by app rect.
+        int popupHeight = appRect.height() - dropDownItemHeight;
+        if (mSuggestionsPopup != null) {
+            int height = mSuggestionsPopupItemsCount * dropDownItemHeight;
+            if (height < popupHeight)
+                popupHeight = height;
+        }
+        return popupHeight;
+    }
 
+    // OnSuggestionsReceivedListener implementation
     @Override
     public void onSuggestionsReceived(List<OmniboxSuggestion> suggestions,
             String inlineAutocompleteText) {
         if (!mUrlField.isFocused() || suggestions.isEmpty())
             return;
+        mSuggestionsPopupItemsCount = suggestions.size();
         if (mSuggestionsPopup == null) {
             mSuggestionsPopup = new ListPopupWindow(
                     mContext, null, android.R.attr.autoCompleteTextViewStyle);
@@ -116,11 +136,14 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
                 }
             });
         }
-        mSuggestionsPopup.setWidth(mUrlField.getWidth());
+        mSuggestionsPopup.setInputMethodMode(ListPopupWindow.INPUT_METHOD_NEEDED);
+        mSuggestionsPopup.setWidth(mToolbar.getWidth());
         mSuggestionArrayAdapter =
-                new SuggestionArrayAdapter(mContext, R.layout.dropdown_item, suggestions);
+                new SuggestionArrayAdapter(mContext, R.layout.dropdown_item, suggestions,
+                        mUrlField);
+        mSuggestionsPopup.setHeight(getSuggestionPopupHeight());
         mSuggestionsPopup.setAdapter(mSuggestionArrayAdapter);
-        mSuggestionsPopup.setAnchorView(mUrlField);
+        mSuggestionsPopup.setAnchorView(mToolbar);
         mSuggestionsPopup.setOnItemClickListener(new OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
@@ -148,6 +171,8 @@ public class SuggestionPopup implements OnSuggestionsReceivedListener, TextWatch
             mRequestSuggestions = new Runnable() {
                 @Override
                 public void run() {
+                    // TODO(aurimas): Create new tab if none exists.
+                    if (mToolbar.getCurrentTab() == null) return;
                     mRequestSuggestions = null;
                     mAutocomplete.start(
                             mToolbar.getCurrentTab().getProfile(),

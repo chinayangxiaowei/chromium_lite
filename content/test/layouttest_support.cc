@@ -6,16 +6,19 @@
 
 #include "base/callback.h"
 #include "base/lazy_instance.h"
+#include "cc/blink/web_layer_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/child/bluetooth/web_bluetooth_impl.h"
 #include "content/common/gpu/image_transport_surface.h"
 #include "content/public/common/page_state.h"
-#include "content/renderer/compositor_bindings/web_layer_impl.h"
+#include "content/public/renderer/renderer_gamepad_provider.h"
+#include "content/renderer/fetchers/manifest_fetcher.h"
 #include "content/renderer/history_entry.h"
 #include "content/renderer/history_serialization.h"
 #include "content/renderer/render_frame_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
-#include "content/renderer/renderer_webkitplatformsupport_impl.h"
+#include "content/renderer/renderer_blink_platform_impl.h"
 #include "content/shell/renderer/test_runner/test_common.h"
 #include "content/shell/renderer/test_runner/web_frame_test_proxy.h"
 #include "content/shell/renderer/test_runner/web_test_proxy.h"
@@ -24,9 +27,10 @@
 #include "third_party/WebKit/public/platform/WebDeviceOrientationData.h"
 #include "third_party/WebKit/public/platform/WebGamepads.h"
 #include "third_party/WebKit/public/web/WebHistoryItem.h"
+#include "third_party/WebKit/public/web/WebView.h"
 
 #if defined(OS_MACOSX)
-#include "content/browser/renderer_host/popup_menu_helper_mac.h"
+#include "content/browser/frame_host/popup_menu_helper_mac.h"
 #endif
 
 using blink::WebBatteryStatus;
@@ -81,26 +85,54 @@ void EnableWebTestProxyCreation(
   RenderFrameImpl::InstallCreateHook(CreateWebFrameTestProxy);
 }
 
-void SetMockGamepadProvider(RendererGamepadProvider* provider) {
-  RenderThreadImpl::current()->webkit_platform_support()->
-      set_gamepad_provider(provider);
+void FetchManifestDoneCallback(
+    scoped_ptr<ManifestFetcher> fetcher,
+    const FetchManifestCallback& callback,
+    const blink::WebURLResponse& response,
+    const std::string& data) {
+  // |fetcher| will be autodeleted here as it is going out of scope.
+  callback.Run(response, data);
+}
+
+void FetchManifest(blink::WebView* view, const GURL& url,
+                   const FetchManifestCallback& callback) {
+  ManifestFetcher* fetcher = new ManifestFetcher(url);
+  scoped_ptr<ManifestFetcher> autodeleter(fetcher);
+
+  // Start is called on fetcher which is also bound to the callback.
+  // A raw pointer is used instead of a scoped_ptr as base::Passes passes
+  // ownership and thus nulls the scoped_ptr. On MSVS this happens before
+  // the call to Start, resulting in a crash.
+  fetcher->Start(view->mainFrame(),
+    base::Bind(&FetchManifestDoneCallback,
+               base::Passed(&autodeleter),
+               callback));
+}
+
+void SetMockGamepadProvider(scoped_ptr<RendererGamepadProvider> provider) {
+  RenderThreadImpl::current()
+      ->blink_platform_impl()
+      ->SetPlatformEventObserverForTesting(
+          blink::WebPlatformEventGamepad,
+          provider.Pass());
 }
 
 void SetMockDeviceLightData(const double data) {
-  RendererWebKitPlatformSupportImpl::SetMockDeviceLightDataForTesting(data);
+  RendererBlinkPlatformImpl::SetMockDeviceLightDataForTesting(data);
 }
 
 void SetMockDeviceMotionData(const WebDeviceMotionData& data) {
-  RendererWebKitPlatformSupportImpl::SetMockDeviceMotionDataForTesting(data);
+  RendererBlinkPlatformImpl::SetMockDeviceMotionDataForTesting(data);
 }
 
 void SetMockDeviceOrientationData(const WebDeviceOrientationData& data) {
-  RendererWebKitPlatformSupportImpl::
-      SetMockDeviceOrientationDataForTesting(data);
+  RendererBlinkPlatformImpl::SetMockDeviceOrientationDataForTesting(data);
 }
 
 void MockBatteryStatusChanged(const WebBatteryStatus& status) {
-  RendererWebKitPlatformSupportImpl::MockBatteryStatusChangedForTesting(status);
+  RenderThreadImpl::current()
+      ->blink_platform_impl()
+      ->MockBatteryStatusChangedForTesting(status);
 }
 
 void EnableRendererLayoutTestMode() {
@@ -141,6 +173,12 @@ void SetDeviceScaleFactor(RenderView* render_view, float factor) {
 }
 
 void SetDeviceColorProfile(RenderView* render_view, const std::string& name) {
+  if (name == "reset") {
+    static_cast<RenderViewImpl*>(render_view)->
+        ResetDeviceColorProfileForTesting();
+    return;
+  }
+
   std::vector<char> color_profile;
 
   struct TestColorProfile {
@@ -273,6 +311,13 @@ void SetDeviceColorProfile(RenderView* render_view, const std::string& name) {
       SetDeviceColorProfileForTesting(color_profile);
 }
 
+void SetBluetoothMockDataSetForTesting(const std::string& name) {
+  RenderThreadImpl::current()
+      ->blink_platform_impl()
+      ->BluetoothImplForTesting()
+      ->SetBluetoothMockDataSetForTesting(name);
+}
+
 void UseSynchronousResizeMode(RenderView* render_view, bool enable) {
   static_cast<RenderViewImpl*>(render_view)->
       UseSynchronousResizeModeForTesting(enable);
@@ -353,7 +398,7 @@ std::string DumpBackForwardList(std::vector<PageState>& page_state,
 }
 
 blink::WebLayer* InstantiateWebLayer(scoped_refptr<cc::TextureLayer> layer) {
-  return new WebLayerImpl(layer);
+  return new cc_blink::WebLayerImpl(layer);
 }
 
 }  // namespace content

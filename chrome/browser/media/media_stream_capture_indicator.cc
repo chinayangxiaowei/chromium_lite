@@ -17,14 +17,13 @@
 #include "chrome/browser/status_icons/status_tray.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -157,7 +156,7 @@ class MediaStreamCaptureIndicator::WebContentsDeviceUsage
 
  private:
   // content::WebContentsObserver overrides.
-  virtual void WebContentsDestroyed() OVERRIDE {
+  void WebContentsDestroyed() override {
     indicator_->UnregisterWebContents(web_contents());
     delete this;
   }
@@ -188,15 +187,14 @@ class MediaStreamCaptureIndicator::UIDelegate
     DCHECK(!devices_.empty());
   }
 
-  virtual ~UIDelegate() {
+  ~UIDelegate() override {
     if (started_ && device_usage_.get())
       device_usage_->RemoveDevices(devices_);
   }
 
  private:
   // content::MediaStreamUI interface.
-  virtual gfx::NativeViewId OnStarted(const base::Closure& close_callback)
-      OVERRIDE {
+  gfx::NativeViewId OnStarted(const base::Closure& close_callback) override {
     DCHECK(!started_);
     started_ = true;
     if (device_usage_.get())

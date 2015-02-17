@@ -23,13 +23,13 @@ class AutofillScanner;
 // - number
 class PhoneField : public FormField {
  public:
-  virtual ~PhoneField();
+  ~PhoneField() override;
 
   static FormField* Parse(AutofillScanner* scanner);
 
  protected:
   // FormField:
-  virtual bool ClassifyField(ServerFieldTypeMap* map) const OVERRIDE;
+  bool ClassifyField(ServerFieldTypeMap* map) const override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(PhoneFieldTest, ParseOneLinePhone);
@@ -83,7 +83,7 @@ class PhoneField : public FormField {
 
   // FIELD_PHONE is always present; holds suffix if prefix is present.
   // The rest could be NULL.
-  const AutofillField* parsed_phone_fields_[FIELD_MAX];
+  AutofillField* parsed_phone_fields_[FIELD_MAX];
 
   DISALLOW_COPY_AND_ASSIGN(PhoneField);
 };

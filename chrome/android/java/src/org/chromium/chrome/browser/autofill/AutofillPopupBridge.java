@@ -9,6 +9,8 @@ import android.os.Handler;
 
 import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
+import org.chromium.chrome.browser.ResourceId;
+import org.chromium.ui.DropdownItem;
 import org.chromium.ui.autofill.AutofillPopup;
 import org.chromium.ui.autofill.AutofillPopup.AutofillPopupDelegate;
 import org.chromium.ui.autofill.AutofillSuggestion;
@@ -35,7 +37,7 @@ public class AutofillPopupBridge implements AutofillPopupDelegate{
             new Handler().post(new Runnable() {
                 @Override
                 public void run() {
-                    requestHide();
+                    dismissed();
                 }
             });
         } else {
@@ -51,8 +53,8 @@ public class AutofillPopupBridge implements AutofillPopupDelegate{
     }
 
     @Override
-    public void requestHide() {
-        nativeRequestHide(mNativeAutofillPopup);
+    public void dismissed() {
+        nativePopupDismissed(mNativeAutofillPopup);
     }
 
     @Override
@@ -101,15 +103,17 @@ public class AutofillPopupBridge implements AutofillPopupDelegate{
      * @param index Index in the array where to place a new suggestion.
      * @param label First line of the suggestion.
      * @param sublabel Second line of the suggestion.
-     * @param uniqueId Unique suggestion id.
+     * @param iconId The resource ID for the icon associated with the suggestion, or 0 for no icon.
+     * @param suggestionId Identifier for the suggestion type.
      */
     @CalledByNative
     private static void addToAutofillSuggestionArray(AutofillSuggestion[] array, int index,
-            String label, String sublabel, int uniqueId) {
-        array[index] = new AutofillSuggestion(label, sublabel, uniqueId);
+            String label, String sublabel, int iconId, int suggestionId) {
+        int drawableId = iconId == 0 ? DropdownItem.NO_ICON : ResourceId.mapToDrawableId(iconId);
+        array[index] = new AutofillSuggestion(label, sublabel, drawableId, suggestionId);
     }
 
-    private native void nativeRequestHide(long nativeAutofillPopupViewAndroid);
+    private native void nativePopupDismissed(long nativeAutofillPopupViewAndroid);
     private native void nativeSuggestionSelected(long nativeAutofillPopupViewAndroid,
             int listIndex);
 }

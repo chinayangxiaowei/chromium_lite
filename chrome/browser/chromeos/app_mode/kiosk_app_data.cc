@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/prefs/pref_service.h"
@@ -23,11 +23,11 @@
 #include "chrome/browser/extensions/webstore_install_helper.h"
 #include "chrome/browser/image_decoder.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
@@ -163,13 +163,13 @@ class KioskAppData::IconLoader : public ImageDecoder::Delegate {
 
   // ImageDecoder::Delegate overrides:
   virtual void OnImageDecoded(const ImageDecoder* decoder,
-                              const SkBitmap& decoded_image) OVERRIDE {
+                              const SkBitmap& decoded_image) override {
     icon_ = gfx::ImageSkia::CreateFrom1xBitmap(decoded_image);
     icon_.MakeThreadSafe();
     ReportResultOnBlockingPool(SUCCESS);
   }
 
-  virtual void OnDecodeImageFailed(const ImageDecoder* decoder) OVERRIDE {
+  virtual void OnDecodeImageFailed(const ImageDecoder* decoder) override {
     ReportResultOnBlockingPool(FAILED_TO_DECODE);
   }
 
@@ -225,7 +225,7 @@ class KioskAppData::WebstoreDataParser
   virtual void OnWebstoreParseSuccess(
       const std::string& id,
       const SkBitmap& icon,
-      base::DictionaryValue* parsed_manifest) OVERRIDE {
+      base::DictionaryValue* parsed_manifest) override {
     // Takes ownership of |parsed_manifest|.
     extensions::Manifest manifest(
         extensions::Manifest::INVALID_LOCATION,
@@ -243,7 +243,7 @@ class KioskAppData::WebstoreDataParser
   virtual void OnWebstoreParseFailure(
       const std::string& id,
       InstallHelperResultCode result_code,
-      const std::string& error_message) OVERRIDE {
+      const std::string& error_message) override {
     ReportFailure();
   }
 
@@ -257,11 +257,13 @@ class KioskAppData::WebstoreDataParser
 
 KioskAppData::KioskAppData(KioskAppDataDelegate* delegate,
                            const std::string& app_id,
-                           const std::string& user_id)
+                           const std::string& user_id,
+                           const GURL& update_url)
     : delegate_(delegate),
       status_(STATUS_INIT),
       app_id_(app_id),
-      user_id_(user_id) {
+      user_id_(user_id),
+      update_url_(update_url) {
 }
 
 KioskAppData::~KioskAppData() {}

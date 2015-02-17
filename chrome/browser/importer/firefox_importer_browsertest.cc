@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -20,6 +20,7 @@
 #include "chrome/common/importer/imported_favicon_usage.h"
 #include "chrome/common/importer/importer_data_types.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/autofill/core/browser/webdata/autofill_entry.h"
 #include "components/autofill/core/common/password_form.h"
 #include "components/search_engines/template_url.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -46,8 +47,14 @@ struct PasswordInfo {
 };
 
 struct KeywordInfo {
-  const wchar_t* keyword;
+  const wchar_t* keyword_in_sqlite;
+  const wchar_t* keyword_in_json;
   const char* url;
+};
+
+struct AutofillFormDataInfo {
+  const char* name;
+  const char* value;
 };
 
 const BookmarkInfo kFirefoxBookmarks[] = {
@@ -60,55 +67,78 @@ const BookmarkInfo kFirefoxBookmarks[] = {
 };
 
 const PasswordInfo kFirefoxPasswords[] = {
+  {"http://blacklist.com/", "", "http://blacklist.com/",
+      "", "", "", "", true},
   {"http://localhost:8080/", "http://localhost:8080/", "http://localhost:8080/",
     "loginuser", "abc", "loginpass", "123", false},
   {"http://localhost:8080/", "", "http://localhost:8080/localhost",
-    "", "http", "", "Http1+1abcdefg", false},
+      "", "http", "", "Http1+1abcdefg", false},
+  {"http://server.com:1234/", "", "http://server.com:1234/http_realm",
+      "loginuser", "user", "loginpass", "password", false},
+  {"http://server.com:4321/", "", "http://server.com:4321/http_realm",
+      "loginuser", "user", "loginpass", "", false},
+  {"http://server.com:4321/", "", "http://server.com:4321/http_realm",
+      "loginuser", "", "loginpass", "password", false},
 };
 
 const KeywordInfo kFirefoxKeywords[] = {
-  { L"amazon.com",
-    "http://www.amazon.com/exec/obidos/external-search/?field-keywords="
-    "{searchTerms}&mode=blended" },
-  { L"answers.com",
-    "http://www.answers.com/main/ntquery?s={searchTerms}&gwp=13" },
-  { L"search.creativecommons.org",
-    "http://search.creativecommons.org/?q={searchTerms}" },
-  { L"search.ebay.com",
-    "http://search.ebay.com/search/search.dll?query={searchTerms}&"
-    "MfcISAPICommand=GetResult&ht=1&ebaytag1=ebayreg&srchdesc=n&"
-    "maxRecordsReturned=300&maxRecordsPerPage=50&SortProperty=MetaEndSort" },
-  { L"google.com",
-    "http://www.google.com/search?q={searchTerms}&ie=utf-8&oe=utf-8&aq=t" },
-  { L"en.wikipedia.org",
-    "http://en.wikipedia.org/wiki/Special:Search?search={searchTerms}" },
-  { L"search.yahoo.com",
-    "http://search.yahoo.com/search?p={searchTerms}&ei=UTF-8" },
-  { L"flickr.com",
-    "http://www.flickr.com/photos/tags/?q={searchTerms}" },
-  { L"imdb.com",
-    "http://www.imdb.com/find?q={searchTerms}" },
-  { L"webster.com",
-    "http://www.webster.com/cgi-bin/dictionary?va={searchTerms}" },
-  // Search keywords.
-  { L"\x4E2D\x6587", "http://www.google.com/" },
+    {L"amazon.com", L"amazon.com",
+     "http://www.amazon.com/exec/obidos/external-search/?field-keywords="
+     "{searchTerms}&mode=blended"},
+    {L"answers.com", L"answers.com",
+     "http://www.answers.com/main/ntquery?s={searchTerms}&gwp=13"},
+    {L"search.creativecommons.org", L"search.creativecommons.org",
+     "http://search.creativecommons.org/?q={searchTerms}"},
+    {L"search.ebay.com", L"search.ebay.com",
+     "http://search.ebay.com/search/search.dll?query={searchTerms}&"
+     "MfcISAPICommand=GetResult&ht=1&ebaytag1=ebayreg&srchdesc=n&"
+     "maxRecordsReturned=300&maxRecordsPerPage=50&SortProperty=MetaEndSort"},
+    {L"google.com", L"google.com",
+     "http://www.google.com/search?q={searchTerms}&ie=utf-8&oe=utf-8&aq=t"},
+    {L"en.wikipedia.org", L"wiki",
+     "http://en.wikipedia.org/wiki/Special:Search?search={searchTerms}"},
+    {L"search.yahoo.com", L"search.yahoo.com",
+     "http://search.yahoo.com/search?p={searchTerms}&ei=UTF-8"},
+    {L"flickr.com", L"flickr.com",
+     "http://www.flickr.com/photos/tags/?q={searchTerms}"},
+    {L"imdb.com", L"imdb.com", "http://www.imdb.com/find?q={searchTerms}"},
+    {L"webster.com", L"webster.com",
+     "http://www.webster.com/cgi-bin/dictionary?va={searchTerms}"},
+    // Search keywords.
+    {L"\x4E2D\x6587", L"\x4E2D\x6587", "http://www.google.com/"},
+};
+
+const AutofillFormDataInfo kFirefoxAutofillEntries[] = {
+    {"name", "John"},
+    {"address", "#123 Cherry Ave"},
+    {"city", "Mountain View"},
+    {"zip", "94043"},
+    {"n300", "+1 (408) 871-4567"},
+    {"name", "john"},
+    {"name", "aguantó"},
+    {"address", "télévision@example.com"},
+    {"city", "&$%$$$ TESTO *&*&^&^& MOKO"},
+    {"zip", "WOHOOOO$$$$$$$$****"},
+    {"n300", "\xe0\xa4\x9f\xe2\x97\x8c\xe0\xa4\xbe\xe0\xa4\xaf\xe0\xa4\xb0"},
+    {"n300", "\xe4\xbb\xa5\xe7\x8e\xa9\xe4\xb8\xba\xe4\xb8\xbb"}
 };
 
 class FirefoxObserver : public ProfileWriter,
                         public importer::ImporterProgressObserver {
  public:
-  FirefoxObserver()
+  explicit FirefoxObserver(bool use_keyword_in_json)
       : ProfileWriter(NULL),
         bookmark_count_(0),
         history_count_(0),
         password_count_(0),
-        keyword_count_(0) {}
+        keyword_count_(0),
+        use_keyword_in_json_(use_keyword_in_json) {}
 
   // importer::ImporterProgressObserver:
-  virtual void ImportStarted() OVERRIDE {}
-  virtual void ImportItemStarted(importer::ImportItem item) OVERRIDE {}
-  virtual void ImportItemEnded(importer::ImportItem item) OVERRIDE {}
-  virtual void ImportEnded() OVERRIDE {
+  void ImportStarted() override {}
+  void ImportItemStarted(importer::ImportItem item) override {}
+  void ImportItemEnded(importer::ImportItem item) override {}
+  void ImportEnded() override {
     base::MessageLoop::current()->Quit();
     EXPECT_EQ(arraysize(kFirefoxBookmarks), bookmark_count_);
     EXPECT_EQ(1U, history_count_);
@@ -116,16 +146,14 @@ class FirefoxObserver : public ProfileWriter,
     EXPECT_EQ(arraysize(kFirefoxKeywords), keyword_count_);
   }
 
-  virtual bool BookmarkModelIsLoaded() const OVERRIDE {
+  bool BookmarkModelIsLoaded() const override {
     // Profile is ready for writing.
     return true;
   }
 
-  virtual bool TemplateURLServiceIsLoaded() const OVERRIDE {
-    return true;
-  }
+  bool TemplateURLServiceIsLoaded() const override { return true; }
 
-  virtual void AddPasswordForm(const autofill::PasswordForm& form) OVERRIDE {
+  void AddPasswordForm(const autofill::PasswordForm& form) override {
     PasswordInfo p = kFirefoxPasswords[password_count_];
     EXPECT_EQ(p.origin, form.origin.spec());
     EXPECT_EQ(p.realm, form.signon_realm);
@@ -138,8 +166,8 @@ class FirefoxObserver : public ProfileWriter,
     ++password_count_;
   }
 
-  virtual void AddHistoryPage(const history::URLRows& page,
-                              history::VisitSource visit_source) OVERRIDE {
+  void AddHistoryPage(const history::URLRows& page,
+                      history::VisitSource visit_source) override {
     ASSERT_EQ(3U, page.size());
     EXPECT_EQ("http://www.google.com/", page[0].url().spec());
     EXPECT_EQ(base::ASCIIToUTF16("Google"), page[0].title());
@@ -152,9 +180,8 @@ class FirefoxObserver : public ProfileWriter,
     ++history_count_;
   }
 
-  virtual void AddBookmarks(
-      const std::vector<ImportedBookmarkEntry>& bookmarks,
-      const base::string16& top_level_folder_name) OVERRIDE {
+  void AddBookmarks(const std::vector<ImportedBookmarkEntry>& bookmarks,
+                    const base::string16& top_level_folder_name) override {
     ASSERT_LE(bookmark_count_ + bookmarks.size(), arraysize(kFirefoxBookmarks));
     // Importer should import the FF favorites the same as the list, in the same
     // order.
@@ -166,15 +193,30 @@ class FirefoxObserver : public ProfileWriter,
     }
   }
 
-  virtual void AddKeywords(ScopedVector<TemplateURL> template_urls,
-                           bool unique_on_host_and_path) OVERRIDE {
+  void AddAutofillFormDataEntries(
+      const std::vector<autofill::AutofillEntry>& autofill_entries) override {
+    EXPECT_EQ(arraysize(kFirefoxAutofillEntries), autofill_entries.size());
+    for (size_t i = 0; i < arraysize(kFirefoxAutofillEntries); ++i) {
+      EXPECT_EQ(kFirefoxAutofillEntries[i].name,
+                base::UTF16ToUTF8(autofill_entries[i].key().name()));
+      EXPECT_EQ(kFirefoxAutofillEntries[i].value,
+                base::UTF16ToUTF8(autofill_entries[i].key().value()));
+    }
+  }
+
+  void AddKeywords(ScopedVector<TemplateURL> template_urls,
+                   bool unique_on_host_and_path) override {
     for (size_t i = 0; i < template_urls.size(); ++i) {
       // The order might not be deterministic, look in the expected list for
       // that template URL.
       bool found = false;
-      const base::string16& keyword = template_urls[i]->keyword();
+      const base::string16& imported_keyword = template_urls[i]->keyword();
       for (size_t j = 0; j < arraysize(kFirefoxKeywords); ++j) {
-        if (keyword == base::WideToUTF16(kFirefoxKeywords[j].keyword)) {
+        const base::string16 expected_keyword = base::WideToUTF16(
+            use_keyword_in_json_ ?
+            kFirefoxKeywords[j].keyword_in_json :
+            kFirefoxKeywords[j].keyword_in_sqlite);
+        if (imported_keyword == expected_keyword) {
           EXPECT_EQ(kFirefoxKeywords[j].url, template_urls[i]->url());
           found = true;
           break;
@@ -185,17 +227,22 @@ class FirefoxObserver : public ProfileWriter,
     }
   }
 
-  virtual void AddFavicons(
-      const std::vector<ImportedFaviconUsage>& favicons) OVERRIDE {
+  void AddFavicons(const std::vector<ImportedFaviconUsage>& favicons) override {
   }
 
  private:
-  virtual ~FirefoxObserver() {}
+  ~FirefoxObserver() override {}
 
   size_t bookmark_count_;
   size_t history_count_;
   size_t password_count_;
   size_t keyword_count_;
+
+  // Newer versions of Firefox can store custom keyword names in json, which
+  // override the sqlite values. To be able to test both older and newer
+  // versions, tests set this variable to indicate whether to expect the
+  // |keyword_in_sqlite| or |keyword_in_json| values from the reference data.
+  bool use_keyword_in_json_;
 };
 
 }  // namespace
@@ -205,7 +252,7 @@ class FirefoxObserver : public ProfileWriter,
 // supported platforms.
 class FirefoxProfileImporterBrowserTest : public InProcessBrowserTest {
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     // Creates a new profile in a new subdirectory in the temp directory.
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     base::FilePath test_path = temp_dir_.path().AppendASCII("ImporterTest");
@@ -260,7 +307,7 @@ class FirefoxProfileImporterBrowserTest : public InProcessBrowserTest {
     source_profile.locale = "en-US";
 
     int items = importer::HISTORY | importer::PASSWORDS | importer::FAVORITES |
-                importer::SEARCH_ENGINES;
+                importer::SEARCH_ENGINES | importer::AUTOFILL_FORM_DATA;
 
     // Deletes itself.
     ExternalProcessImporterHost* host = new ExternalProcessImporterHost;
@@ -277,20 +324,20 @@ class FirefoxProfileImporterBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(FirefoxProfileImporterBrowserTest,
                        MAYBE_IMPORTER(Firefox30Importer)) {
-  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver());
+  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver(false));
   FirefoxImporterBrowserTest(
       "firefox3_profile", observer.get(), observer.get());
 }
 
 IN_PROC_BROWSER_TEST_F(FirefoxProfileImporterBrowserTest,
                        MAYBE_IMPORTER(Firefox35Importer)) {
-  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver());
+  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver(false));
   FirefoxImporterBrowserTest(
       "firefox35_profile", observer.get(), observer.get());
 }
 
 IN_PROC_BROWSER_TEST_F(FirefoxProfileImporterBrowserTest,
                        MAYBE_IMPORTER(FirefoxImporter)) {
-  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver());
+  scoped_refptr<FirefoxObserver> observer(new FirefoxObserver(true));
   FirefoxImporterBrowserTest("firefox_profile", observer.get(), observer.get());
 }

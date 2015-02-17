@@ -76,6 +76,7 @@ const char kJSGetHeight[] = "getHeight";
 const char kJSGetHorizontalScrollbarThickness[] =
     "getHorizontalScrollbarThickness";
 const char kJSGetPageLocationNormalized[] = "getPageLocationNormalized";
+const char kJSGetSelectedText[] = "getSelectedText";
 const char kJSGetVerticalScrollbarThickness[] = "getVerticalScrollbarThickness";
 const char kJSGetWidth[] = "getWidth";
 const char kJSGetZoomLevel[] = "getZoomLevel";
@@ -295,7 +296,7 @@ Instance::Instance(PP_Instance instance)
   loader_factory_.Initialize(this);
   timer_factory_.Initialize(this);
   form_factory_.Initialize(this);
-  print_callback_factory_.Initialize(this);
+  callback_factory_.Initialize(this);
   engine_.reset(PDFEngine::Create(this));
   pp::Module::Get()->AddPluginInterface(kPPPPdfInterface, &ppp_private);
   AddPerInstanceObject(kPPPPdfInterface, this);
@@ -587,13 +588,27 @@ bool Instance::HandleInputEvent(const pp::InputEvent& event) {
     }
   }
 
-  if (event.GetType() == PP_INPUTEVENT_TYPE_KEYDOWN &&
-      event.GetModifiers() & kDefaultKeyModifier) {
+  if (event.GetType() == PP_INPUTEVENT_TYPE_KEYDOWN) {
     pp::KeyboardInputEvent keyboard_event(event);
-    switch (keyboard_event.GetKeyCode()) {
-      case 'A':
-        engine_->SelectAll();
-        return true;
+    const uint32 modifier = event.GetModifiers();
+    if (modifier & kDefaultKeyModifier) {
+      switch (keyboard_event.GetKeyCode()) {
+        case 'A':
+          engine_->SelectAll();
+          return true;
+      }
+    }
+    if (modifier & PP_INPUTEVENT_MODIFIER_CONTROLKEY) {
+      switch (keyboard_event.GetKeyCode()) {
+        case ui::VKEY_OEM_4:
+          // Left bracket.
+          engine_->RotateCounterclockwise();
+          return true;
+        case ui::VKEY_OEM_6:
+          // Right bracket.
+          engine_->RotateClockwise();
+          return true;
+      }
     }
   }
 
@@ -765,6 +780,14 @@ void Instance::StopFind() {
 
 void Instance::Zoom(double scale, bool text_only) {
   UserMetricsRecordAction("PDF.ZoomFromBrowser");
+
+  // If the zoom level doesn't change it means that this zoom change might have
+  // been initiated by the plugin. In that case, we don't want to change the
+  // zoom mode to ZOOM_SCALE as it may have been intentionally set to
+  // ZOOM_FIT_TO_PAGE or some other value when the zoom was last changed.
+  if (scale == zoom_)
+    return;
+
   SetZoom(ZOOM_SCALE, scale);
 }
 
@@ -1136,8 +1159,12 @@ void Instance::Scroll(const pp::Point& point) {
   if (page_indicator_.visible())
     paint_manager_.InvalidateRect(page_indicator_.rect());
 
-  if (on_scroll_callback_.is_string())
-    ExecuteScript(on_scroll_callback_);
+  // Run the scroll callback asynchronously. This function can be invoked by a
+  // layout change which should not re-enter into JS synchronously.
+  pp::CompletionCallback callback =
+      callback_factory_.NewCallback(&Instance::RunCallback,
+                                    on_scroll_callback_);
+  pp::Module::Get()->core()->CallOnMainThread(0, callback);
 }
 
 void Instance::ScrollToX(int position) {
@@ -1259,6 +1286,7 @@ void Instance::NotifyNumberOfFindResultsChanged(int total, bool final_result) {
 }
 
 void Instance::NotifySelectedFindResultChanged(int current_find_index) {
+  DCHECK_GE(current_find_index, 0);
   SelectedFindResultChanged(current_find_index);
 }
 
@@ -1378,7 +1406,7 @@ void Instance::Print() {
   }
 
   pp::CompletionCallback callback =
-      print_callback_factory_.NewCallback(&Instance::OnPrint);
+      callback_factory_.NewCallback(&Instance::OnPrint);
   pp::Module::Get()->core()->CallOnMainThread(0, callback);
 }
 
@@ -1666,6 +1694,7 @@ bool Instance::HasScriptableMethod(const pp::Var& method, pp::Var* exception) {
           method_str == kJSGetHeight ||
           method_str == kJSGetHorizontalScrollbarThickness ||
           method_str == kJSGetPageLocationNormalized ||
+          method_str == kJSGetSelectedText ||
           method_str == kJSGetVerticalScrollbarThickness ||
           method_str == kJSGetWidth ||
           method_str == kJSGetZoomLevel ||
@@ -1768,7 +1797,7 @@ pp::Var Instance::CallScriptableMethod(const pp::Var& method,
     return pp::Var();
   }
   if (method_str == kJSSetZoomLevel) {
-    if (args.size() == 1 && args[0].is_double())
+    if (args.size() == 1 && args[0].is_number())
       SetZoom(ZOOM_SCALE, args[0].AsDouble());
     return pp::Var();
   }
@@ -1788,6 +1817,9 @@ pp::Var Instance::CallScriptableMethod(const pp::Var& method,
   if (method_str == kJSGetVerticalScrollbarThickness) {
     return pp::Var(
           v_scrollbar_.get() ? GetScrollbarReservedThickness() : 0);
+  }
+  if (method_str == kJSGetSelectedText) {
+    return GetSelectedText(false);
   }
   if (method_str == kJSDocumentLoadComplete) {
     return pp::Var((document_load_state_ != LOAD_STATE_LOADING));
@@ -2121,8 +2153,17 @@ void Instance::OnGeometryChanged(double old_zoom, float old_device_scale) {
     return;
   paint_manager_.InvalidateRect(pp::Rect(pp::Point(), plugin_size_));
 
-  if (on_plugin_size_changed_callback_.is_string())
-    ExecuteScript(on_plugin_size_changed_callback_);
+  // Run the plugin size change callback asynchronously. This function can be
+  // invoked by a layout change which should not re-enter into JS synchronously.
+  pp::CompletionCallback callback =
+      callback_factory_.NewCallback(&Instance::RunCallback,
+                                    on_plugin_size_changed_callback_);
+  pp::Module::Get()->core()->CallOnMainThread(0, callback);
+}
+
+void Instance::RunCallback(int32_t, pp::Var callback) {
+  if (callback.is_string())
+    ExecuteScript(callback);
 }
 
 void Instance::CreateHorizontalScrollbar() {
@@ -2508,10 +2549,14 @@ double Instance::CalculateZoom(uint32 control_id) const {
 }
 
 pp::ImageData Instance::CreateResourceImage(PP_ResourceImage image_id) {
-  if (hidpi_enabled_)
-    return pp::PDF::GetResourceImageForScale(this, image_id, device_scale_);
+  pp::ImageData resource_data;
+  if (hidpi_enabled_) {
+    resource_data =
+        pp::PDF::GetResourceImageForScale(this, image_id, device_scale_);
+  }
 
-  return pp::PDF::GetResourceImage(this, image_id);
+  return resource_data.data() ? resource_data
+                              : pp::PDF::GetResourceImage(this, image_id);
 }
 
 std::string Instance::GetLocalizedString(PP_ResourceString id) {

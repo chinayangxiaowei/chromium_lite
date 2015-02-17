@@ -133,7 +133,7 @@ class NotificationBridge;
 // Called to update the loading state. Handles updating the go/stop
 // button state.  |force| is set if the update is due to changing
 // tabs, as opposed to the page-load finishing.  See comment in
-// reload_button.h.
+// reload_button_cocoa.h.
 - (void)setIsLoading:(BOOL)isLoading force:(BOOL)force;
 
 // Allow turning off the toolbar (but we may keep the location bar without a
@@ -163,12 +163,6 @@ class NotificationBridge;
 
 // Returns the wrench button.
 - (NSView*)wrenchButton;
-
-// Activates the page action for the extension that has the given id.
-- (void)activatePageAction:(const std::string&)extension_id;
-
-// Activates the browser action for the extension that has the given id.
-- (void)activateBrowserAction:(const std::string&)extension_id;
 
 @end
 

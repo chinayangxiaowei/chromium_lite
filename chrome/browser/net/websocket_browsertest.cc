@@ -9,6 +9,7 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/login/login_prompt.h"
+#include "chrome/browser/ui/login/login_prompt_test_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -54,14 +55,14 @@ class WebSocketBrowserTest : public InProcessBrowserTest {
   }
 
   // Prepare the title watcher.
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     watcher_.reset(new content::TitleWatcher(
         browser()->tab_strip_model()->GetActiveWebContents(),
         base::ASCIIToUTF16("PASS")));
     watcher_->AlsoWaitForTitle(base::ASCIIToUTF16("FAIL"));
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE { watcher_.reset(); }
+  void TearDownOnMainThread() override { watcher_.reset(); }
 
   std::string WaitAndGetTitle() {
     return base::UTF16ToUTF8(watcher_->WaitAndGetTitle());
@@ -89,7 +90,7 @@ class WebSocketBrowserConnectToTest : public WebSocketBrowserTest {
   // The title watcher and HTTP server are set up automatically by the test
   // framework. Each test case still needs to configure and start the
   // WebSocket server(s) it needs.
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     WebSocketBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(http_server_.StartInBackground());
   }
@@ -126,9 +127,9 @@ class AutoLogin : public content::NotificationObserver {
   }
 
   // NotificationObserver implementation
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE {
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override {
     DCHECK_EQ(chrome::NOTIFICATION_AUTH_NEEDED, type);
     scoped_refptr<LoginHandler> login_handler =
         content::Details<LoginNotificationDetails>(details)->handler();
@@ -235,7 +236,8 @@ IN_PROC_BROWSER_TEST_F(WebSocketBrowserTest, WebSocketBasicAuthInHTTPSURL) {
 // This test verifies that login details entered by the user into the login
 // prompt to authenticate the main page are re-used for WebSockets from the same
 // origin.
-IN_PROC_BROWSER_TEST_F(WebSocketBrowserTest, WebSocketBasicAuthPrompt) {
+IN_PROC_BROWSER_TEST_F(WebSocketBrowserTest,
+                       ReuseMainPageBasicAuthCredentialsForWebSocket) {
   // Launch a basic-auth-protected WebSocket server.
   ws_server_.set_websocket_basic_auth(true);
   ASSERT_TRUE(ws_server_.Start());
@@ -244,7 +246,9 @@ IN_PROC_BROWSER_TEST_F(WebSocketBrowserTest, WebSocketBasicAuthPrompt) {
       &browser()->tab_strip_model()->GetActiveWebContents()->GetController();
   AutoLogin auto_login("test", "test", navigation_controller);
 
+  WindowedAuthNeededObserver auth_needed_waiter(navigation_controller);
   NavigateToHTTP("connect_check.html");
+  auth_needed_waiter.Wait();
 
   EXPECT_TRUE(auto_login.logged_in());
   EXPECT_EQ("PASS", WaitAndGetTitle());

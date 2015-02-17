@@ -14,6 +14,8 @@
 #include "chromeos/chromeos_export.h"
 #include "chromeos/ime/input_method_descriptor.h"
 
+class Profile;
+
 namespace chromeos {
 
 // Represents an engine in component extension IME.
@@ -22,6 +24,7 @@ struct CHROMEOS_EXPORT ComponentExtensionEngine {
   ~ComponentExtensionEngine();
   std::string engine_id;  // The engine id.
   std::string display_name;  // The display name.
+  std::string indicator;  // The indicator text.
   std::vector<std::string> language_codes;  // The engine's language(ex. "en").
   std::string description;  // The engine description.
   std::vector<std::string> layouts;  // The list of keyboard layout of engine.
@@ -52,12 +55,14 @@ class CHROMEOS_EXPORT ComponentExtensionIMEManagerDelegate {
 
   // Loads component extension IME associated with |extension_id|.
   // Returns false if it fails, otherwise returns true.
-  virtual bool Load(const std::string& extension_id,
+  virtual void Load(Profile* profile,
+                    const std::string& extension_id,
                     const std::string& manifest,
                     const base::FilePath& path) = 0;
 
   // Unloads component extension IME associated with |extension_id|.
-  virtual void Unload(const std::string& extension_id,
+  virtual void Unload(Profile* profile,
+                      const std::string& extension_id,
                       const base::FilePath& path) = 0;
 };
 
@@ -75,12 +80,14 @@ class CHROMEOS_EXPORT ComponentExtensionIMEManager {
   // Loads |input_method_id| component extension IME. This function returns true
   // on success. This function is safe to call multiple times. Returns false if
   // already corresponding component extension is loaded.
-  bool LoadComponentExtensionIME(const std::string& input_method_id);
+  bool LoadComponentExtensionIME(Profile* profile,
+                                 const std::string& input_method_id);
 
   // Unloads |input_method_id| component extension IME. This function returns
   // true on success. This function is safe to call multiple times. Returns
   // false if already corresponding component extension is unloaded.
-  bool UnloadComponentExtensionIME(const std::string& input_method_id);
+  bool UnloadComponentExtensionIME(Profile* profile,
+                                   const std::string& input_method_id);
 
   // Returns true if |input_method_id| is whitelisted component extension input
   // method.

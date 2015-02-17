@@ -9,7 +9,6 @@
 #define CONTENT_PUBLIC_COMMON_COMMON_PARAM_TRAITS_MACROS_H_
 
 #include "content/public/common/console_message_level.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/security_style.h"
 #include "content/public/common/ssl_status.h"
@@ -23,12 +22,13 @@
 #include "third_party/WebKit/public/platform/WebReferrerPolicy.h"
 #include "third_party/WebKit/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/public/web/WebWindowFeatures.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 
 #undef IPC_MESSAGE_EXPORT
 #define IPC_MESSAGE_EXPORT CONTENT_EXPORT
 
-IPC_ENUM_TRAITS(content::PageTransition)  // Bitmask.
+IPC_ENUM_TRAITS(ui::PageTransition)  // Bitmask.
 IPC_ENUM_TRAITS_MAX_VALUE(net::NetworkChangeNotifier::ConnectionType,
                           net::NetworkChangeNotifier::CONNECTION_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(content::ConsoleMessageLevel,
@@ -44,6 +44,8 @@ IPC_ENUM_TRAITS_MAX_VALUE(WindowOpenDisposition,
 IPC_ENUM_TRAITS_MAX_VALUE(net::RequestPriority, net::MAXIMUM_PRIORITY)
 IPC_ENUM_TRAITS_MAX_VALUE(content::V8CacheOptions,
                           content::V8_CACHE_OPTIONS_LAST)
+IPC_ENUM_TRAITS_MAX_VALUE(content::V8ScriptStreamingMode,
+                          content::V8_SCRIPT_STREAMING_MODE_LAST)
 
 IPC_STRUCT_TRAITS_BEGIN(blink::WebPoint)
   IPC_STRUCT_TRAITS_MEMBER(x)
@@ -108,7 +110,6 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(images_enabled)
   IPC_STRUCT_TRAITS_MEMBER(plugins_enabled)
   IPC_STRUCT_TRAITS_MEMBER(dom_paste_enabled)
-  IPC_STRUCT_TRAITS_MEMBER(inspector_settings)
   IPC_STRUCT_TRAITS_MEMBER(shrinks_standalone_images_to_fit)
   IPC_STRUCT_TRAITS_MEMBER(uses_universal_detector)
   IPC_STRUCT_TRAITS_MEMBER(text_areas_are_resizable)
@@ -147,10 +148,12 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(accelerated_2d_canvas_enabled)
   IPC_STRUCT_TRAITS_MEMBER(minimum_accelerated_2d_canvas_size)
   IPC_STRUCT_TRAITS_MEMBER(antialiased_2d_canvas_disabled)
+  IPC_STRUCT_TRAITS_MEMBER(antialiased_clips_2d_canvas_enabled)
   IPC_STRUCT_TRAITS_MEMBER(accelerated_2d_canvas_msaa_sample_count)
   IPC_STRUCT_TRAITS_MEMBER(accelerated_filters_enabled)
   IPC_STRUCT_TRAITS_MEMBER(deferred_filters_enabled)
   IPC_STRUCT_TRAITS_MEMBER(container_culling_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(text_blobs_enabled)
   IPC_STRUCT_TRAITS_MEMBER(allow_displaying_insecure_content)
   IPC_STRUCT_TRAITS_MEMBER(allow_running_insecure_content)
   IPC_STRUCT_TRAITS_MEMBER(enable_scroll_animator)
@@ -164,13 +167,13 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(pointer_events_max_touch_points)
   IPC_STRUCT_TRAITS_MEMBER(sync_xhr_in_documents_enabled)
   IPC_STRUCT_TRAITS_MEMBER(deferred_image_decoding_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(image_color_profiles_enabled)
   IPC_STRUCT_TRAITS_MEMBER(should_respect_image_orientation)
   IPC_STRUCT_TRAITS_MEMBER(number_of_cpu_cores)
   IPC_STRUCT_TRAITS_MEMBER(editing_behavior)
   IPC_STRUCT_TRAITS_MEMBER(supports_multiple_windows)
   IPC_STRUCT_TRAITS_MEMBER(viewport_enabled)
   IPC_STRUCT_TRAITS_MEMBER(viewport_meta_enabled)
-  IPC_STRUCT_TRAITS_MEMBER(use_expanded_heuristics_for_gpu_rasterization)
   IPC_STRUCT_TRAITS_MEMBER(main_frame_resizes_are_orientation_changes)
   IPC_STRUCT_TRAITS_MEMBER(initialize_at_minimum_page_scale)
   IPC_STRUCT_TRAITS_MEMBER(smart_insert_delete_enabled)
@@ -178,6 +181,9 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(navigate_on_drag_drop)
   IPC_STRUCT_TRAITS_MEMBER(spatial_navigation_enabled)
   IPC_STRUCT_TRAITS_MEMBER(v8_cache_options)
+  IPC_STRUCT_TRAITS_MEMBER(v8_script_streaming_enabled)
+  IPC_STRUCT_TRAITS_MEMBER(v8_script_streaming_mode)
+  IPC_STRUCT_TRAITS_MEMBER(slimming_paint_enabled)
   IPC_STRUCT_TRAITS_MEMBER(pepper_accelerated_video_decode_enabled)
 #if defined(OS_ANDROID)
   IPC_STRUCT_TRAITS_MEMBER(text_autosizing_enabled)
@@ -185,7 +191,6 @@ IPC_STRUCT_TRAITS_BEGIN(content::WebPreferences)
   IPC_STRUCT_TRAITS_MEMBER(device_scale_adjustment)
   IPC_STRUCT_TRAITS_MEMBER(force_enable_zoom)
   IPC_STRUCT_TRAITS_MEMBER(fullscreen_supported)
-  IPC_STRUCT_TRAITS_MEMBER(disallow_fullscreen_for_non_media_elements)
   IPC_STRUCT_TRAITS_MEMBER(double_tap_to_zoom_enabled)
   IPC_STRUCT_TRAITS_MEMBER(user_gesture_required_for_media_playback)
   IPC_STRUCT_TRAITS_MEMBER(default_video_poster_url)

@@ -33,6 +33,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if defined(OS_CHROMEOS)
+#include "chromeos/audio/cras_audio_handler.h"
+#endif
+
 using ::testing::_;
 using ::testing::DeleteArg;
 using ::testing::DoAll;
@@ -52,10 +56,8 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
   MockMediaStreamDispatcherHost(
       const ResourceContext::SaltCallback salt_callback,
       const scoped_refptr<base::MessageLoopProxy>& message_loop,
-      MediaStreamManager* manager,
-      ResourceContext* resource_context)
-      : MediaStreamDispatcherHost(kProcessId, salt_callback, manager,
-                                  resource_context),
+      MediaStreamManager* manager)
+      : MediaStreamDispatcherHost(kProcessId, salt_callback, manager),
         message_loop_(message_loop),
         current_ipc_(NULL) {}
 
@@ -118,7 +120,7 @@ class MockMediaStreamDispatcherHost : public MediaStreamDispatcherHost,
   // This method is used to dispatch IPC messages to the renderer. We intercept
   // these messages here and dispatch to our mock methods to verify the
   // conversation between this object and the renderer.
-  virtual bool Send(IPC::Message* message) OVERRIDE {
+  virtual bool Send(IPC::Message* message) override {
     CHECK(message);
     current_ipc_ = message;
 
@@ -232,29 +234,38 @@ class MediaStreamDispatcherHostTest : public testing::Test {
             media_stream_manager_->video_capture_manager()
             ->video_capture_device_factory());
     DCHECK(video_capture_device_factory_);
+#if defined(OS_WIN)
+    // Override the Video Capture Thread that MediaStreamManager constructs.
+    media_stream_manager_->video_capture_manager()->set_device_task_runner(
+        base::MessageLoopProxy::current());
+#endif
 
     MockResourceContext* mock_resource_context =
         static_cast<MockResourceContext*>(
             browser_context_.GetResourceContext());
-    mock_resource_context->set_mic_access(true);
-    mock_resource_context->set_camera_access(true);
 
     host_ = new MockMediaStreamDispatcherHost(
         mock_resource_context->GetMediaDeviceIDSalt(),
         base::MessageLoopProxy::current(),
-        media_stream_manager_.get(),
-        mock_resource_context);
+        media_stream_manager_.get());
 
     // Use the fake content client and browser.
     content_client_.reset(new TestContentClient());
     SetContentClient(content_client_.get());
     old_browser_client_ = SetBrowserClientForTesting(host_.get());
+
+#if defined(OS_CHROMEOS)
+    chromeos::CrasAudioHandler::InitializeForTesting();
+#endif
   }
 
-  virtual ~MediaStreamDispatcherHostTest() {
+  ~MediaStreamDispatcherHostTest() override {
+#if defined(OS_CHROMEOS)
+    chromeos::CrasAudioHandler::Shutdown();
+#endif
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     video_capture_device_factory_->GetDeviceNames(&physical_video_devices_);
     ASSERT_GT(physical_video_devices_.size(), 0u);
 
@@ -263,18 +274,16 @@ class MediaStreamDispatcherHostTest : public testing::Test {
     ASSERT_GT(physical_audio_devices_.size(), 0u);
   }
 
-  virtual void TearDown() OVERRIDE {
-    host_->OnChannelClosing();
-  }
+  void TearDown() override { host_->OnChannelClosing(); }
 
  protected:
   virtual void SetupFakeUI(bool expect_started) {
-    scoped_ptr<MockMediaStreamUIProxy> stream_ui(new MockMediaStreamUIProxy());
+    stream_ui_ = new MockMediaStreamUIProxy();
     if (expect_started) {
-      EXPECT_CALL(*stream_ui, OnStarted(_, _));
+      EXPECT_CALL(*stream_ui_, OnStarted(_, _));
     }
     media_stream_manager_->UseFakeUI(
-        stream_ui.PassAs<FakeMediaStreamUIProxy>());
+      scoped_ptr<FakeMediaStreamUIProxy>(stream_ui_));
   }
 
   void GenerateStreamAndWaitForResult(int render_frame_id,
@@ -418,6 +427,7 @@ class MediaStreamDispatcherHostTest : public testing::Test {
   scoped_refptr<MockMediaStreamDispatcherHost> host_;
   scoped_ptr<media::AudioManager> audio_manager_;
   scoped_ptr<MediaStreamManager> media_stream_manager_;
+  MockMediaStreamUIProxy* stream_ui_;
   ContentBrowserClient* old_browser_client_;
   scoped_ptr<ContentClient> content_client_;
   content::TestBrowserThreadBundle thread_bundle_;
@@ -448,6 +458,9 @@ TEST_F(MediaStreamDispatcherHostTest, GenerateStreamWithAudioOnly) {
   EXPECT_EQ(host_->video_devices_.size(), 0u);
 }
 
+// This test simulates a shutdown scenario: we don't setup a fake UI proxy for
+// MediaStreamManager, so it will create an ordinary one which will not find
+// a RenderFrameHostDelegate. This normally should only be the case at shutdown.
 TEST_F(MediaStreamDispatcherHostTest, GenerateStreamWithNothing) {
   StreamOptions options(false, false);
 
@@ -455,7 +468,7 @@ TEST_F(MediaStreamDispatcherHostTest, GenerateStreamWithNothing) {
       kRenderId,
       kPageRequestId,
       options,
-      MEDIA_DEVICE_INVALID_STATE);
+      MEDIA_DEVICE_FAILED_DUE_TO_SHUTDOWN);
 }
 
 TEST_F(MediaStreamDispatcherHostTest, GenerateStreamWithAudioAndVideo) {
@@ -848,7 +861,7 @@ TEST_F(MediaStreamDispatcherHostTest, CloseFromUI) {
   scoped_ptr<MockMediaStreamUIProxy> stream_ui(new MockMediaStreamUIProxy());
   EXPECT_CALL(*stream_ui, OnStarted(_, _))
       .WillOnce(SaveArg<0>(&close_callback));
-  media_stream_manager_->UseFakeUI(stream_ui.PassAs<FakeMediaStreamUIProxy>());
+  media_stream_manager_->UseFakeUI(stream_ui.Pass());
 
   GenerateStreamAndWaitForResult(kRenderId, kPageRequestId, options);
 
@@ -882,30 +895,30 @@ TEST_F(MediaStreamDispatcherHostTest, VideoDeviceUnplugged) {
 }
 
 TEST_F(MediaStreamDispatcherHostTest, EnumerateAudioDevices) {
+  SetupFakeUI(false);
   EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
                                    MEDIA_DEVICE_AUDIO_CAPTURE);
   EXPECT_TRUE(DoesContainLabels(host_->enumerated_devices_));
 }
 
 TEST_F(MediaStreamDispatcherHostTest, EnumerateVideoDevices) {
+  SetupFakeUI(false);
   EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
                                    MEDIA_DEVICE_VIDEO_CAPTURE);
   EXPECT_TRUE(DoesContainLabels(host_->enumerated_devices_));
 }
 
 TEST_F(MediaStreamDispatcherHostTest, EnumerateAudioDevicesNoAccess) {
-  MockResourceContext* mock_resource_context =
-      static_cast<MockResourceContext*>(browser_context_.GetResourceContext());
-  mock_resource_context->set_mic_access(false);
+  SetupFakeUI(false);
+  stream_ui_->SetMicAccess(false);
   EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
                                    MEDIA_DEVICE_AUDIO_CAPTURE);
   EXPECT_TRUE(DoesNotContainLabels(host_->enumerated_devices_));
 }
 
 TEST_F(MediaStreamDispatcherHostTest, EnumerateVideoDevicesNoAccess) {
-  MockResourceContext* mock_resource_context =
-      static_cast<MockResourceContext*>(browser_context_.GetResourceContext());
-  mock_resource_context->set_camera_access(false);
+  SetupFakeUI(false);
+  stream_ui_->SetCameraAccess(false);
   EnumerateDevicesAndWaitForResult(kRenderId, kPageRequestId,
                                    MEDIA_DEVICE_VIDEO_CAPTURE);
   EXPECT_TRUE(DoesNotContainLabels(host_->enumerated_devices_));

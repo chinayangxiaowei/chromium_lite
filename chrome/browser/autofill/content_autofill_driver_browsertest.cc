@@ -65,7 +65,7 @@ class TestContentAutofillDriver : public ContentAutofillDriver {
             client,
             g_browser_process->GetApplicationLocale(),
             AutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER) {}
-  virtual ~TestContentAutofillDriver() {}
+  ~TestContentAutofillDriver() override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestContentAutofillDriver);
@@ -79,7 +79,7 @@ class ContentAutofillDriverBrowserTest : public InProcessBrowserTest,
   ContentAutofillDriverBrowserTest() {}
   virtual ~ContentAutofillDriverBrowserTest() {}
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     ASSERT_TRUE(web_contents != NULL);
@@ -92,17 +92,17 @@ class ContentAutofillDriverBrowserTest : public InProcessBrowserTest,
 
   // Normally the WebContents will automatically delete the driver, but here
   // the driver is owned by this test, so we have to manually destroy.
-  virtual void WebContentsDestroyed() OVERRIDE {
+  virtual void WebContentsDestroyed() override {
     autofill_driver_.reset();
   }
 
-  virtual void WasHidden() OVERRIDE {
+  virtual void WasHidden() override {
     if (!web_contents_hidden_callback_.is_null())
       web_contents_hidden_callback_.Run();
   }
 
   virtual void NavigationEntryCommitted(
-      const content::LoadCommittedDetails& load_details) OVERRIDE {
+      const content::LoadCommittedDetails& load_details) override {
     if (!nav_entry_committed_callback_.is_null())
       nav_entry_committed_callback_.Run();
   }
@@ -128,7 +128,7 @@ IN_PROC_BROWSER_TEST_F(ContentAutofillDriverBrowserTest,
   web_contents_hidden_callback_ = runner->QuitClosure();
   chrome::AddSelectedTabWithURL(browser(),
                                 GURL(url::kAboutBlankURL),
-                                content::PAGE_TRANSITION_AUTO_TOPLEVEL);
+                                ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
   runner->Run();
   web_contents_hidden_callback_.Reset();
 }
@@ -145,12 +145,12 @@ IN_PROC_BROWSER_TEST_F(ContentAutofillDriverBrowserTest,
   browser()->OpenURL(content::OpenURLParams(GURL(chrome::kChromeUIBookmarksURL),
                                             content::Referrer(),
                                             CURRENT_TAB,
-                                            content::PAGE_TRANSITION_TYPED,
+                                            ui::PAGE_TRANSITION_TYPED,
                                             false));
   browser()->OpenURL(content::OpenURLParams(GURL(chrome::kChromeUIAboutURL),
                                             content::Referrer(),
                                             CURRENT_TAB,
-                                            content::PAGE_TRANSITION_TYPED,
+                                            ui::PAGE_TRANSITION_TYPED,
                                             false));
   runner->Run();
   nav_entry_committed_callback_.Reset();

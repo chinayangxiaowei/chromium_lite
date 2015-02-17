@@ -7,7 +7,7 @@
 #include "base/logging.h"
 #include "base/sys_info.h"
 #include "remoting/base/constants.h"
-#include "third_party/libjingle/source/talk/xmllite/xmlelement.h"
+#include "third_party/webrtc/libjingle/xmllite/xmlelement.h"
 
 using base::SysInfo;
 using buzz::QName;
@@ -71,7 +71,7 @@ void ServerLogEntry::AddEventNameField(const char* name) {
 
 // static
 scoped_ptr<XmlElement> ServerLogEntry::MakeStanza() {
-  return scoped_ptr<XmlElement>(
+  return make_scoped_ptr(
       new XmlElement(QName(kChromotingXmlNamespace, kLogCommand)));
 }
 

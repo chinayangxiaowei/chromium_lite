@@ -10,6 +10,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -147,6 +148,8 @@ const char GaiaAuthFetcher::kAccountTypeGoogle[] =
 
 // static
 const char GaiaAuthFetcher::kSecondFactor[] = "Info=InvalidSecondFactor";
+// static
+const char GaiaAuthFetcher::kWebLoginRequired[] = "Info=WebLoginRequired";
 
 // static
 const char GaiaAuthFetcher::kAuthHeaderFormat[] =
@@ -185,9 +188,10 @@ GaiaAuthFetcher::GaiaAuthFetcher(GaiaAuthConsumer* consumer,
       uberauth_token_gurl_(GaiaUrls::GetInstance()->oauth1_login_url().Resolve(
           base::StringPrintf(kUberAuthTokenURLFormat, source.c_str()))),
       oauth_login_gurl_(GaiaUrls::GetInstance()->oauth1_login_url()),
-      list_accounts_gurl_(GaiaUrls::GetInstance()->list_accounts_url()),
+      list_accounts_gurl_(
+          GaiaUrls::GetInstance()->ListAccountsURLWithSource(source)),
       get_check_connection_info_url_(
-          GaiaUrls::GetInstance()->get_check_connection_info_url()),
+          GaiaUrls::GetInstance()->GetCheckConnectionInfoURLWithSource(source)),
       client_login_to_oauth2_gurl_(
           GaiaUrls::GetInstance()->client_login_to_oauth2_url()),
       fetch_pending_(false) {}
@@ -736,6 +740,9 @@ GoogleServiceAuthError GaiaAuthFetcher::GenerateAuthError(
   if (IsSecondFactorSuccess(data))
     return GoogleServiceAuthError(GoogleServiceAuthError::TWO_FACTOR);
 
+  if (IsWebLoginRequiredSuccess(data))
+    return GoogleServiceAuthError(GoogleServiceAuthError::WEB_LOGIN_REQUIRED);
+
   std::string error;
   std::string url;
   std::string captcha_url;
@@ -867,10 +874,10 @@ void GaiaAuthFetcher::OnGetUserInfoFetched(
     const net::URLRequestStatus& status,
     int response_code) {
   if (status.is_success() && response_code == net::HTTP_OK) {
-    std::vector<std::pair<std::string, std::string> > tokens;
+    base::StringPairs tokens;
     UserInfoMap matches;
     base::SplitStringIntoKeyValuePairs(data, '=', '\n', &tokens);
-    std::vector<std::pair<std::string, std::string> >::iterator i;
+    base::StringPairs::iterator i;
     for (i = tokens.begin(); i != tokens.end(); ++i) {
       matches[i->first] = i->second;
     }
@@ -979,5 +986,12 @@ void GaiaAuthFetcher::OnURLFetchComplete(const net::URLFetcher* source) {
 bool GaiaAuthFetcher::IsSecondFactorSuccess(
     const std::string& alleged_error) {
   return alleged_error.find(kSecondFactor) !=
+      std::string::npos;
+}
+
+// static
+bool GaiaAuthFetcher::IsWebLoginRequiredSuccess(
+    const std::string& alleged_error) {
+  return alleged_error.find(kWebLoginRequired) !=
       std::string::npos;
 }

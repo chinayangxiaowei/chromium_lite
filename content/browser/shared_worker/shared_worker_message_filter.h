@@ -26,8 +26,8 @@ class CONTENT_EXPORT SharedWorkerMessageFilter : public BrowserMessageFilter {
                             MessagePortMessageFilter* message_port_filter);
 
   // BrowserMessageFilter implementation.
-  virtual void OnChannelClosing() OVERRIDE;
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  void OnChannelClosing() override;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   int GetNextRoutingID();
   int render_process_id() const { return render_process_id_; }
@@ -38,7 +38,7 @@ class CONTENT_EXPORT SharedWorkerMessageFilter : public BrowserMessageFilter {
 
  protected:
   // This is protected, so we can define sub classes for testing.
-  virtual ~SharedWorkerMessageFilter();
+  ~SharedWorkerMessageFilter() override;
 
  private:
   // Message handlers.
@@ -48,6 +48,8 @@ class CONTENT_EXPORT SharedWorkerMessageFilter : public BrowserMessageFilter {
   void OnDocumentDetached(unsigned long long document_id);
   void OnWorkerContextClosed(int worker_route_id);
   void OnWorkerContextDestroyed(int worker_route_id);
+
+  void OnWorkerReadyForInspection(int worker_route_id);
   void OnWorkerScriptLoaded(int worker_route_id);
   void OnWorkerScriptLoadFailed(int worker_route_id);
   void OnWorkerConnected(int message_port_id, int worker_route_id);

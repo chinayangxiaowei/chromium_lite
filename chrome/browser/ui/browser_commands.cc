@@ -17,8 +17,6 @@
 #include "chrome/browser/chrome_page_zoom.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/dom_distiller/tab_utils.h"
-#include "chrome/browser/extensions/api/commands/command_service.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/platform_util.h"
@@ -52,20 +50,17 @@
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "chrome/browser/upgrade_detector.h"
-#include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/content_restriction.h"
-#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/google/core/browser/google_util.h"
 #include "components/translate/core/browser/language_state.h"
-#include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "components/web_modal/popup_manager.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -75,14 +70,11 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/page_state.h"
 #include "content/public/common/renderer_preferences.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
 #include "content/public/common/user_agent.h"
-#include "extensions/browser/extension_registry.h"
-#include "extensions/browser/extension_system.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/extension_set.h"
 #include "net/base/escape.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
@@ -90,13 +82,26 @@
 #include "chrome/browser/ui/metro_pin_tab_helper_win.h"
 #endif
 
+#if defined(ENABLE_EXTENSIONS)
+#include "chrome/browser/extensions/api/commands/command_service.h"
+#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
+#include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_system.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_set.h"
+#endif
+
 #if defined(ENABLE_PRINTING)
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_PRINT_PREVIEW)
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/printing/print_view_manager.h"
 #else
 #include "chrome/browser/printing/print_view_manager_basic.h"
-#endif  // defined(ENABLE_FULL_PRINTING)
+#endif  // defined(ENABLE_PRINT_PREVIEW)
 #endif  // defined(ENABLE_PRINTING)
 
 namespace {
@@ -110,7 +115,6 @@ using content::OpenURLParams;
 using content::Referrer;
 using content::SSLStatus;
 using content::WebContents;
-using web_modal::WebContentsModalDialogManager;
 
 namespace chrome {
 namespace {
@@ -121,12 +125,13 @@ bool CanBookmarkCurrentPageInternal(const Browser* browser,
       BookmarkModelFactory::GetForProfile(browser->profile());
   return browser_defaults::bookmarks_enabled &&
       browser->profile()->GetPrefs()->GetBoolean(
-          prefs::kEditBookmarksEnabled) &&
+          bookmarks::prefs::kEditBookmarksEnabled) &&
       model && model->loaded() && browser->is_type_tabbed() &&
       (!check_remove_bookmark_ui ||
            !chrome::ShouldRemoveBookmarkThisPageUI(browser->profile()));
 }
 
+#if defined(ENABLE_EXTENSIONS)
 bool GetBookmarkOverrideCommand(
     Profile* profile,
     const extensions::Extension** extension,
@@ -160,9 +165,9 @@ bool GetBookmarkOverrideCommand(
       return true;
     }
   }
-
   return false;
 }
+#endif
 
 void BookmarkCurrentPageInternal(Browser* browser) {
   content::RecordAction(UserMetricsAction("Star"));
@@ -208,7 +213,7 @@ WebContents* GetTabAndRevertIfNecessary(Browser* browser,
     case NEW_BACKGROUND_TAB: {
       WebContents* new_tab = current_tab->Clone();
       browser->tab_strip_model()->AddWebContents(
-          new_tab, -1, content::PAGE_TRANSITION_LINK,
+          new_tab, -1, ui::PAGE_TRANSITION_LINK,
           (disposition == NEW_FOREGROUND_TAB) ?
               TabStripModel::ADD_ACTIVE : TabStripModel::ADD_NONE);
       return new_tab;
@@ -218,7 +223,7 @@ WebContents* GetTabAndRevertIfNecessary(Browser* browser,
       Browser* new_browser = new Browser(Browser::CreateParams(
           browser->profile(), browser->host_desktop_type()));
       new_browser->tab_strip_model()->AddWebContents(
-          new_tab, -1, content::PAGE_TRANSITION_LINK,
+          new_tab, -1, ui::PAGE_TRANSITION_LINK,
           TabStripModel::ADD_ACTIVE);
       new_browser->window()->Show();
       return new_tab;
@@ -246,19 +251,26 @@ void ReloadInternal(Browser* browser,
     new_tab->GetController().Reload(true);
 }
 
-bool IsShowingWebContentsModalDialog(const Browser* browser) {
+bool IsShowingWebContentsModalDialog(Browser* browser) {
   WebContents* web_contents =
       browser->tab_strip_model()->GetActiveWebContents();
   if (!web_contents)
     return false;
 
-  WebContentsModalDialogManager* web_contents_modal_dialog_manager =
-      WebContentsModalDialogManager::FromWebContents(web_contents);
-  return web_contents_modal_dialog_manager->IsDialogActive();
+  // In test code we may not have a popup manager.
+  if (!browser->popup_manager())
+    return false;
+
+  // TODO(gbillock): This is currently called in production by the CanPrint
+  // method, and may be too restrictive if we allow print preview to overlap.
+  // Re-assess how to queue print preview after we know more about popup
+  // management policy.
+  return browser->popup_manager()->IsWebModalDialogActive(web_contents);
 }
 
+#if defined(ENABLE_BASIC_PRINTING)
 bool PrintPreviewShowing(const Browser* browser) {
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_PRINT_PREVIEW)
   WebContents* contents = browser->tab_strip_model()->GetActiveWebContents();
   printing::PrintPreviewDialogController* controller =
       printing::PrintPreviewDialogController::GetInstance();
@@ -268,6 +280,7 @@ bool PrintPreviewShowing(const Browser* browser) {
   return false;
 #endif
 }
+#endif  // ENABLE_BASIC_PRINTING
 
 }  // namespace
 
@@ -382,7 +395,7 @@ void OpenURLOffTheRecord(Profile* profile,
   ScopedTabbedBrowserDisplayer displayer(profile->GetOffTheRecordProfile(),
                                          desktop_type);
   AddSelectedTabWithURL(displayer.browser(), url,
-      content::PAGE_TRANSITION_LINK);
+      ui::PAGE_TRANSITION_LINK);
 }
 
 bool CanGoBack(const Browser* browser) {
@@ -460,6 +473,7 @@ void Home(Browser* browser, WindowOpenDisposition disposition) {
 
   GURL url = browser->profile()->GetHomePage();
 
+#if defined(ENABLE_EXTENSIONS)
   // Streamlined hosted apps should return to their launch page when the home
   // button is pressed.
   if (browser->is_app()) {
@@ -473,12 +487,13 @@ void Home(Browser* browser, WindowOpenDisposition disposition) {
 
     url = extensions::AppLaunchInfo::GetLaunchWebURL(extension);
   }
+#endif
 
   OpenURLParams params(
       url, Referrer(), disposition,
-      content::PageTransitionFromInt(
-          content::PAGE_TRANSITION_AUTO_BOOKMARK |
-          content::PAGE_TRANSITION_HOME_PAGE),
+      ui::PageTransitionFromInt(
+          ui::PAGE_TRANSITION_AUTO_BOOKMARK |
+          ui::PAGE_TRANSITION_HOME_PAGE),
       false);
   params.extra_headers = extra_headers;
   browser->OpenURL(params);
@@ -492,9 +507,9 @@ void OpenCurrentURL(Browser* browser) {
 
   GURL url(location_bar->GetDestinationURL());
 
-  content::PageTransition page_transition = location_bar->GetPageTransition();
-  content::PageTransition page_transition_without_qualifier(
-      PageTransitionStripQualifier(page_transition));
+  ui::PageTransition page_transition = location_bar->GetPageTransition();
+  ui::PageTransition page_transition_without_qualifier(
+      ui::PageTransitionStripQualifier(page_transition));
   WindowOpenDisposition open_disposition =
       location_bar->GetWindowOpenDisposition();
   // A PAGE_TRANSITION_TYPED means the user has typed a URL. We do not want to
@@ -504,8 +519,8 @@ void OpenCurrentURL(Browser* browser) {
   // Instant should also not handle PAGE_TRANSITION_RELOAD because its knowledge
   // of the omnibox text may be stale if the user focuses in the omnibox and
   // presses enter without typing anything.
-  if (page_transition_without_qualifier != content::PAGE_TRANSITION_TYPED &&
-      page_transition_without_qualifier != content::PAGE_TRANSITION_RELOAD &&
+  if (page_transition_without_qualifier != ui::PAGE_TRANSITION_TYPED &&
+      page_transition_without_qualifier != ui::PAGE_TRANSITION_RELOAD &&
       browser->instant_controller() &&
       browser->instant_controller()->OpenInstant(open_disposition, url))
     return;
@@ -520,6 +535,7 @@ void OpenCurrentURL(Browser* browser) {
       TabStripModel::ADD_FORCE_INDEX | TabStripModel::ADD_INHERIT_OPENER;
   Navigate(&params);
 
+#if defined(ENABLE_EXTENSIONS)
   DCHECK(extensions::ExtensionSystem::Get(
       browser->profile())->extension_service());
   const extensions::Extension* extension =
@@ -530,6 +546,7 @@ void OpenCurrentURL(Browser* browser) {
         extension_misc::APP_LAUNCH_OMNIBOX_LOCATION,
         extension->GetType());
   }
+#endif
 }
 
 void Stop(Browser* browser) {
@@ -694,7 +711,7 @@ WebContents* DuplicateTabAt(Browser* browser, int index) {
     // The page transition below is only for the purpose of inserting the tab.
     new_browser->tab_strip_model()->AddWebContents(
         contents_dupe, -1,
-        content::PAGE_TRANSITION_LINK,
+        ui::PAGE_TRANSITION_LINK,
         TabStripModel::ADD_ACTIVE);
   }
 
@@ -730,6 +747,7 @@ void Exit() {
 void BookmarkCurrentPage(Browser* browser) {
   DCHECK(!chrome::ShouldRemoveBookmarkThisPageUI(browser->profile()));
 
+#if defined(ENABLE_EXTENSIONS)
   const extensions::Extension* extension = NULL;
   extensions::Command command;
   extensions::CommandService::ExtensionCommandType command_type;
@@ -740,19 +758,18 @@ void BookmarkCurrentPage(Browser* browser) {
     switch (command_type) {
       case extensions::CommandService::NAMED:
         browser->window()->ExecuteExtensionCommand(extension, command);
-        return;
-
+        break;
       case extensions::CommandService::BROWSER_ACTION:
-        // BookmarkCurrentPage is called through a user gesture, so it is safe
-        // to call ShowBrowserActionPopup.
-        browser->window()->ShowBrowserActionPopup(extension);
-        return;
-
       case extensions::CommandService::PAGE_ACTION:
-        browser->window()->ShowPageActionPopup(extension);
-        return;
+        // BookmarkCurrentPage is called through a user gesture, so it is safe
+        // to grant the active tab permission.
+        extensions::ExtensionActionAPI::Get(browser->profile())->
+            ShowExtensionActionPopup(extension, browser, true);
+        break;
     }
+    return;
   }
+#endif
 
   BookmarkCurrentPageInternal(browser);
 }
@@ -792,24 +809,21 @@ void Translate(Browser* browser) {
 }
 
 void ManagePasswordsForPage(Browser* browser) {
-// TODO(mkwst): Implement this feature on Mac: http://crbug.com/261628
-#if !defined(OS_MACOSX)
   if (!browser->window()->IsActive())
     return;
 
   WebContents* web_contents =
       browser->tab_strip_model()->GetActiveWebContents();
   chrome::ShowManagePasswordsBubble(web_contents);
-#endif
 }
 
-void TogglePagePinnedToStartScreen(Browser* browser) {
 #if defined(OS_WIN)
+void TogglePagePinnedToStartScreen(Browser* browser) {
   MetroPinTabHelper::FromWebContents(
       browser->tab_strip_model()->GetActiveWebContents())->
           TogglePinnedToStartScreen();
-#endif
 }
+#endif
 
 void SavePage(Browser* browser) {
   content::RecordAction(UserMetricsAction("SavePage"));
@@ -843,48 +857,57 @@ void ShowWebsiteSettings(Browser* browser,
       web_contents, url, ssl);
 }
 
-
 void Print(Browser* browser) {
 #if defined(ENABLE_PRINTING)
   WebContents* contents = browser->tab_strip_model()->GetActiveWebContents();
-#if defined(ENABLE_FULL_PRINTING)
+
+#if defined(ENABLE_PRINT_PREVIEW)
   printing::PrintViewManager* print_view_manager =
       printing::PrintViewManager::FromWebContents(contents);
-  if (browser->profile()->GetPrefs()->GetBoolean(prefs::kPrintPreviewDisabled))
-    print_view_manager->PrintNow();
-  else
+  if (!browser->profile()->GetPrefs()->GetBoolean(
+          prefs::kPrintPreviewDisabled)) {
     print_view_manager->PrintPreviewNow(false);
-#else
+    return;
+  }
+#else   // ENABLE_PRINT_PREVIEW
   printing::PrintViewManagerBasic* print_view_manager =
       printing::PrintViewManagerBasic::FromWebContents(contents);
+#endif  // ENABLE_PRINT_PREVIEW
+
+#if defined(ENABLE_BASIC_PRINTING)
   print_view_manager->PrintNow();
-#endif  // defined(ENABLE_FULL_PRINTING)
+#endif  // ENABLE_BASIC_PRINTING
+
 #endif  // defined(ENABLE_PRINTING)
 }
 
-bool CanPrint(const Browser* browser) {
+bool CanPrint(Browser* browser) {
   // Do not print when printing is disabled via pref or policy.
   // Do not print when a constrained window is showing. It's confusing.
+  // TODO(gbillock): Need to re-assess the call to
+  // IsShowingWebContentsModalDialog after a popup management policy is
+  // refined -- we will probably want to just queue the print request, not
+  // block it.
   return browser->profile()->GetPrefs()->GetBoolean(prefs::kPrintingEnabled) &&
       !(IsShowingWebContentsModalDialog(browser) ||
       GetContentRestrictions(browser) & CONTENT_RESTRICTION_PRINT);
 }
 
-void AdvancedPrint(Browser* browser) {
-#if defined(ENABLE_FULL_PRINTING)
+#if defined(ENABLE_BASIC_PRINTING)
+void BasicPrint(Browser* browser) {
+#if defined(ENABLE_PRINT_PREVIEW)
   printing::PrintViewManager* print_view_manager =
       printing::PrintViewManager::FromWebContents(
           browser->tab_strip_model()->GetActiveWebContents());
-  print_view_manager->AdvancedPrintNow();
+  print_view_manager->BasicPrint();
 #endif
 }
 
-bool CanAdvancedPrint(const Browser* browser) {
+bool CanBasicPrint(Browser* browser) {
   // If printing is not disabled via pref or policy, it is always possible to
   // advanced print when the print preview is visible.  The exception to this
   // is under Win8 ash, since showing the advanced print dialog will open it
-  // modally on the Desktop and hang the browser.  We can remove this check
-  // once we integrate with the system print charm.
+  // modally on the Desktop and hang the browser.
 #if defined(OS_WIN)
   if (chrome::GetActiveDesktop() == chrome::HOST_DESKTOP_TYPE_ASH)
     return false;
@@ -893,15 +916,7 @@ bool CanAdvancedPrint(const Browser* browser) {
   return browser->profile()->GetPrefs()->GetBoolean(prefs::kPrintingEnabled) &&
       (PrintPreviewShowing(browser) || CanPrint(browser));
 }
-
-void PrintToDestination(Browser* browser) {
-#if defined(ENABLE_FULL_PRINTING)
-  printing::PrintViewManager* print_view_manager =
-      printing::PrintViewManager::FromWebContents(
-          browser->tab_strip_model()->GetActiveWebContents());
-  print_view_manager->PrintToDestination();
-#endif
-}
+#endif  // ENABLE_BASIC_PRINTING
 
 void EmailPageLocation(Browser* browser) {
   content::RecordAction(UserMetricsAction("EmailPageLocation"));
@@ -1120,9 +1135,7 @@ void ToggleRequestTabletSite(Browser* browser) {
   } else {
     entry->SetIsOverridingUserAgent(true);
     chrome::VersionInfo version_info;
-    std::string product;
-    if (version_info.is_valid())
-      product = version_info.ProductNameAndVersionForUserAgent();
+    std::string product = version_info.ProductNameAndVersionForUserAgent();
     current_tab->SetUserAgentOverride(content::BuildUserAgentFromOSAndProduct(
         kOsOverrideForTabletSite, product));
   }
@@ -1213,7 +1226,7 @@ void ViewSource(Browser* browser,
 
     // The page transition below is only for the purpose of inserting the tab.
     b->tab_strip_model()->AddWebContents(view_source_contents, -1,
-                                         content::PAGE_TRANSITION_LINK,
+                                         ui::PAGE_TRANSITION_LINK,
                                          TabStripModel::ADD_ACTIVE);
   }
 
@@ -1233,6 +1246,7 @@ bool CanViewSource(const Browser* browser) {
           CanViewSource();
 }
 
+#if defined(ENABLE_EXTENSIONS)
 void CreateApplicationShortcuts(Browser* browser) {
   content::RecordAction(UserMetricsAction("CreateShortcut"));
   extensions::TabHelper::FromWebContents(
@@ -1280,5 +1294,6 @@ void ConvertTabToAppWindow(Browser* browser,
   contents->GetRenderViewHost()->SyncRendererPrefs();
   app_browser->window()->Show();
 }
+#endif  // defined(ENABLE_EXTENSIONS)
 
 }  // namespace chrome

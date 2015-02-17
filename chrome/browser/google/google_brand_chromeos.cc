@@ -4,8 +4,8 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/string_util.h"
@@ -59,7 +59,9 @@ std::string GetBrand() {
          content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (g_brand_empty)
     return std::string();
-  DCHECK(g_browser_process->local_state());
+  // Unit tests do not have prefs.
+  if (!g_browser_process->local_state())
+    return std::string();
   return g_browser_process->local_state()->GetString(prefs::kRLZBrand);
 }
 

@@ -7,7 +7,6 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -32,10 +31,10 @@ class DropdownBackground : public views::Background {
   explicit DropdownBackground(BrowserView* browser,
                               const gfx::ImageSkia* left_alpha_mask,
                               const gfx::ImageSkia* right_alpha_mask);
-  virtual ~DropdownBackground() {}
+  ~DropdownBackground() override {}
 
   // Overridden from views::Background.
-  virtual void Paint(gfx::Canvas* canvas, views::View* view) const OVERRIDE;
+  void Paint(gfx::Canvas* canvas, views::View* view) const override;
 
  private:
   BrowserView* browser_view_;

@@ -6,9 +6,9 @@
 #define CHROME_BROWSER_CONTENT_SETTINGS_PERMISSION_BUBBLE_REQUEST_IMPL_H_
 
 #include "base/callback.h"
-#include "chrome/browser/content_settings/permission_request_id.h"
 #include "chrome/browser/ui/website_settings/permission_bubble_request.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/permission_request_id.h"
 
 class GURL;
 
@@ -31,23 +31,23 @@ class PermissionBubbleRequestImpl : public PermissionBubbleRequest {
       const PermissionDecidedCallback permission_decided_callback,
       const base::Closure delete_callback);
 
-  virtual ~PermissionBubbleRequestImpl();
+  ~PermissionBubbleRequestImpl() override;
 
   // PermissionBubbleRequest:
-  virtual int GetIconID() const OVERRIDE;
-  virtual base::string16 GetMessageText() const OVERRIDE;
-  virtual base::string16 GetMessageTextFragment() const OVERRIDE;
-  virtual bool HasUserGesture() const OVERRIDE;
+  int GetIconID() const override;
+  base::string16 GetMessageText() const override;
+  base::string16 GetMessageTextFragment() const override;
+  bool HasUserGesture() const override;
 
   // TODO(miguelg) Change this method to GetOrigin()
-  virtual GURL GetRequestingHostname() const OVERRIDE;
+  GURL GetRequestingHostname() const override;
 
   // Remember to call RegisterActionTaken for these methods if you are
   // overriding them.
-  virtual void PermissionGranted() OVERRIDE;
-  virtual void PermissionDenied() OVERRIDE;
-  virtual void Cancelled() OVERRIDE;
-  virtual void RequestFinished() OVERRIDE;
+  void PermissionGranted() override;
+  void PermissionDenied() override;
+  void Cancelled() override;
+  void RequestFinished() override;
 
  protected:
   void RegisterActionTaken() { action_taken_ = true; }

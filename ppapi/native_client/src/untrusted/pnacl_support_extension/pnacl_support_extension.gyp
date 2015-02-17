@@ -8,28 +8,56 @@
   'includes': [
     '../../../../../build/common_untrusted.gypi',
   ],
+  'variables': {
+    'pnacl_translator_dir%': "",
+    'pnacl_translator_stamp%': "pnacl_translator.json",
+  },
   'targets': [
   {
     'target_name': 'untar_pnacl_translator',
     'type': 'none',
-    'actions': [{
-      'action_name': 'Untar pnacl_translator',
-      'description': 'Untar pnacl_translator',
-      'inputs': [
-        '<(DEPTH)/native_client/build/package_version/package_version.py',
-        '<(DEPTH)/native_client/toolchain/.tars/<(TOOLCHAIN_OS)_x86/pnacl_translator.json',
-      ],
-      'outputs': ['<(SHARED_INTERMEDIATE_DIR)/<(TOOLCHAIN_OS)_x86/pnacl_translator/pnacl_translator.json'],
-      'action': [
-        'python',
-        '<(DEPTH)/native_client/build/package_version/package_version.py',
-        '--quiet',
-        '--packages', 'pnacl_translator',
-        '--tar-dir', '<(DEPTH)/native_client/toolchain/.tars',
-        '--dest-dir', '<(SHARED_INTERMEDIATE_DIR)',
-        'extract',
-      ],
-    }],
+    'conditions': [
+      ['pnacl_translator_dir==""', {
+        'actions': [{
+          'action_name': 'Untar pnacl_translator',
+          'description': 'Untar pnacl_translator',
+          'inputs': [
+              '<(DEPTH)/native_client/build/package_version/package_version.py',
+              '<(DEPTH)/native_client/toolchain/.tars/<(TOOLCHAIN_OS)_x86/pnacl_translator.json',
+          ],
+          'outputs': ['<(SHARED_INTERMEDIATE_DIR)/sdk/<(TOOLCHAIN_OS)_x86/pnacl_translator/<(pnacl_translator_stamp)'],
+          'action': [
+            'python',
+            '<(DEPTH)/native_client/build/package_version/package_version.py',
+            '--quiet',
+            '--packages', 'pnacl_translator',
+            '--tar-dir', '<(DEPTH)/native_client/toolchain/.tars',
+            '--dest-dir', '<(SHARED_INTERMEDIATE_DIR)/sdk',
+            'extract',
+          ],
+        }],
+      }, {
+        'actions': [{
+          'action_name': 'Copy pnacl_translator',
+          'description': 'Copy pnacl_translator',
+          'inputs': [
+            '<(DEPTH)/native_client/build/copy_directory.py',
+            '<(pnacl_translator_dir)/<(pnacl_translator_stamp)',
+          ],
+          'outputs': [
+            '<(SHARED_INTERMEDIATE_DIR)/sdk/<(TOOLCHAIN_OS)_x86/pnacl_translator/<(pnacl_translator_stamp)'],
+          'action': [
+            'python',
+            '<(DEPTH)/native_client/build/copy_directory.py',
+            '--quiet',
+            '--stamp-arg', 'pnacl_translator_stamp',
+            '--stamp-file', '<(pnacl_translator_stamp)',
+            '<(pnacl_translator_dir)',
+            '<(SHARED_INTERMEDIATE_DIR)/sdk/<(TOOLCHAIN_OS)_x86/pnacl_translator',
+          ],
+        }],
+      }],
+    ],
   },
   {
     'target_name': 'pnacl_support_extension',
@@ -52,7 +80,7 @@
             'inputs': [
               'pnacl_component_crx_gen.py',
               # A stamp file representing the contents of pnacl_translator.
-              '<(SHARED_INTERMEDIATE_DIR)/<(TOOLCHAIN_OS)_x86/pnacl_translator/pnacl_translator.json',
+              '<(SHARED_INTERMEDIATE_DIR)/sdk/<(TOOLCHAIN_OS)_x86/pnacl_translator/<(pnacl_translator_stamp)',
               '<(DEPTH)/native_client/pnacl/driver/pnacl_info_template.json',
               '<(DEPTH)/native_client/toolchain_revisions/pnacl_newlib.json',
             ],
@@ -184,7 +212,7 @@
               '<@(lib_overrides)',
               '--target_arch=<(target_arch)',
               '--info_template_path=<(DEPTH)/native_client/pnacl/driver/pnacl_info_template.json',
-              '--pnacl_translator_path=<(SHARED_INTERMEDIATE_DIR)/<(TOOLCHAIN_OS)_x86/pnacl_translator',
+              '--pnacl_translator_path=<(SHARED_INTERMEDIATE_DIR)/sdk/<(TOOLCHAIN_OS)_x86/pnacl_translator',
               '--package_version_path=<(DEPTH)/native_client/build/package_version/package_version.py',
               '--pnacl_package_name=pnacl_newlib',
               # ABI Version Number.

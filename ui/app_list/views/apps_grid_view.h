@@ -50,7 +50,8 @@ class AppListItemView;
 class AppsGridViewDelegate;
 class AppsGridViewFolderDelegate;
 class PageSwitcher;
-class PaginationModel;
+class PaginationController;
+class PulsingBlockView;
 
 // AppsGridView displays a grid for AppListItemList sub model.
 class APP_LIST_EXPORT AppsGridView : public views::View,
@@ -69,7 +70,7 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   // Constructs the app icon grid view. |delegate| is the delegate of this
   // view, which usually is the hosting AppListView.
   explicit AppsGridView(AppsGridViewDelegate* delegate);
-  virtual ~AppsGridView();
+  ~AppsGridView() override;
 
   // Sets fixed layout parameters. After setting this, CalculateLayout below
   // is no longer called to dynamically choosing those layout params.
@@ -88,14 +89,10 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   // |item_list|.
   void SetItemList(AppListItemList* item_list);
 
-  void SetSelectedView(views::View* view);
-  void ClearSelectedView(views::View* view);
+  void SetSelectedView(AppListItemView* view);
+  void ClearSelectedView(AppListItemView* view);
   void ClearAnySelectedView();
-  bool IsSelectedView(const views::View* view) const;
-
-  // Ensures the view is visible. Note that if there is a running page
-  // transition, this does nothing.
-  void EnsureViewVisible(const views::View* view);
+  bool IsSelectedView(const AppListItemView* view) const;
 
   void InitiateDrag(AppListItemView* view,
                     Pointer pointer,
@@ -109,7 +106,7 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   // coordinates.
   void UpdateDrag(Pointer pointer, const gfx::Point& point);
   void EndDrag(bool cancel);
-  bool IsDraggedView(const views::View* view) const;
+  bool IsDraggedView(const AppListItemView* view) const;
   void ClearDragState();
   void SetDragViewVisible(bool visible);
 
@@ -117,11 +114,11 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   void SetDragAndDropHostOfCurrentAppList(
       ApplicationDragAndDropHost* drag_and_drop_host);
 
-  // Prerenders the icons on and around |page_index|.
-  void Prerender(int page_index);
+  // Prerenders the icons on and around the currently selected page.
+  void Prerender();
 
   // Return true if the |bounds_animator_| is animating |view|.
-  bool IsAnimatingView(views::View* view);
+  bool IsAnimatingView(AppListItemView* view);
 
   bool has_dragged_view() const { return drag_view_ != NULL; }
   bool dragging() const { return drag_pointer_ != NONE; }
@@ -130,17 +127,22 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   PaginationModel* pagination_model() { return &pagination_model_; }
 
   // Overridden from views::View:
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
-  virtual bool OnKeyPressed(const ui::KeyEvent& event) OVERRIDE;
-  virtual bool OnKeyReleased(const ui::KeyEvent& event) OVERRIDE;
-  virtual void ViewHierarchyChanged(
-      const ViewHierarchyChangedDetails& details) OVERRIDE;
-  virtual bool GetDropFormats(
+  gfx::Size GetPreferredSize() const override;
+  void Layout() override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
+  bool OnKeyReleased(const ui::KeyEvent& event) override;
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
+  void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) override;
+  bool GetDropFormats(
       int* formats,
-      std::set<OSExchangeData::CustomFormat>* custom_formats) OVERRIDE;
-  virtual bool CanDrop(const OSExchangeData& data) OVERRIDE;
-  virtual int OnDragUpdated(const ui::DropTargetEvent& event) OVERRIDE;
+      std::set<OSExchangeData::CustomFormat>* custom_formats) override;
+  bool CanDrop(const OSExchangeData& data) override;
+  int OnDragUpdated(const ui::DropTargetEvent& event) override;
+
+  // Overridden from ui::EventHandler:
+  void OnGestureEvent(ui::GestureEvent* event) override;
+  void OnScrollEvent(ui::ScrollEvent* event) override;
 
   // Stops the timer that triggers a page flip during a drag.
   void StopPageFlipTimer();
@@ -161,7 +163,8 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   void InitiateDragFromReparentItemInRootLevelGridView(
       AppListItemView* original_drag_view,
       const gfx::Rect& drag_view_rect,
-      const gfx::Point& drag_point);
+      const gfx::Point& drag_point,
+      bool has_native_drag);
 
   // Updates drag in the root level grid view when receiving the drag event
   // dispatched from the hidden grid view for reparenting a folder item.
@@ -190,7 +193,9 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   void OnFolderItemRemoved();
 
   // Return the view model for test purposes.
-  const views::ViewModel* view_model_for_test() const { return &view_model_; }
+  const views::ViewModelT<AppListItemView>* view_model_for_test() const {
+    return &view_model_;
+  }
 
   // For test: Return if the drag and drop handler was set.
   bool has_drag_and_drop_host_for_test() { return NULL != drag_and_drop_host_; }
@@ -230,6 +235,12 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
     bool operator!=(const Index& other) const {
       return page != other.page || slot != other.slot;
     }
+    bool operator<(const Index& other) const {
+      if (page != other.page)
+        return page < other.page;
+
+      return slot < other.slot;
+    }
 
     int page;  // Which page an item view is on.
     int slot;  // Which slot in the page an item view is in.
@@ -247,7 +258,7 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   // number of apps.
   void UpdatePulsingBlockViews();
 
-  views::View* CreateViewForItemAtIndex(size_t index);
+  AppListItemView* CreateViewForItemAtIndex(size_t index);
 
   // Convert between the model index and the visual index. The model index
   // is the index of the item in AppListModel. The visual index is the Index
@@ -255,11 +266,18 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   Index GetIndexFromModelIndex(int model_index) const;
   int GetModelIndexFromIndex(const Index& index) const;
 
+  // Ensures the view is visible. Note that if there is a running page
+  // transition, this does nothing.
+  void EnsureViewVisible(const Index& index);
+
   void SetSelectedItemByIndex(const Index& index);
   bool IsValidIndex(const Index& index) const;
 
-  Index GetIndexOfView(const views::View* view) const;
-  views::View* GetViewAtIndex(const Index& index) const;
+  Index GetIndexOfView(const AppListItemView* view) const;
+  AppListItemView* GetViewAtIndex(const Index& index) const;
+
+  // Gets the index of the AppListItemView at the end of the view model.
+  Index GetLastViewIndex() const;
 
   void MoveSelected(int page_delta, int slot_x_delta, int slot_y_delta);
 
@@ -273,7 +291,7 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   // to succeeding slot of |current|. |animate_current| controls whether to run
   // fading out animation from |current|. |animate_target| controls whether to
   // run fading in animation to |target|.
-  void AnimationBetweenRows(views::View* view,
+  void AnimationBetweenRows(AppListItemView* view,
                             bool animate_current,
                             const gfx::Rect& current,
                             bool animate_target,
@@ -283,19 +301,19 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   void ExtractDragLocation(const ui::LocatedEvent& event,
                            gfx::Point* drag_point);
 
-  // Calculates |drop_target_| based on |drag_point|. |drag_point| is in the
-  // grid view's coordinates. When |use_page_button_hovering| is true and
-  // |drag_point| is hovering on a page button, use the last slot on that page
-  // as drop target.
-  void CalculateDropTarget(const gfx::Point& drag_point,
-                           bool use_page_button_hovering);
+  // Updates |reorder_drop_target_|, |folder_drop_target_| and |drop_attempt_|
+  // based on |drag_view_|'s position.
+  void CalculateDropTarget();
 
-  // Same as CalculateDropTarget, but with folder UI enabled. The |drop_target_|
-  // can be either a target for re-ordering, or a target folder to move the
-  // dragged item into if |drag_view_| enters its re-ordering or folder
-  // dropping circle.
-  void CalculateDropTargetWithFolderEnabled(const gfx::Point& drag_point,
-                                            bool use_page_button_hovering);
+  // If |point| is a valid folder drop target, returns true and sets
+  // |drop_target| to the index of the view to do a folder drop for.
+  bool CalculateFolderDropTarget(const gfx::Point& point,
+                                 Index* drop_target) const;
+
+  // Calculates the reorder target |point| and sets |drop_target| to the index
+  // of the view to reorder.
+  void CalculateReorderDropTarget(const gfx::Point& point,
+                                  Index* drop_target) const;
 
   // Prepares |drag_and_drop_host_| for dragging. |grid_location| contains
   // the drag point in this grid view's coordinates.
@@ -313,20 +331,21 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   void OnPageFlipTimer();
 
   // Updates |model_| to move item represented by |item_view| to |target| slot.
-  void MoveItemInModel(views::View* item_view, const Index& target);
+  void MoveItemInModel(AppListItemView* item_view, const Index& target);
 
   // Updates |model_| to move item represented by |item_view| into a folder
   // containing item located at |target| slot, also update |view_model_| for
   // the related view changes.
-  void MoveItemToFolder(views::View* item_view, const Index& target);
+  void MoveItemToFolder(AppListItemView* item_view, const Index& target);
 
   // Updates both data model and view_model_ for re-parenting a folder item to a
   // new position in top level item list.
-  void ReparentItemForReorder(views::View* item_view, const Index& target);
+  void ReparentItemForReorder(AppListItemView* item_view, const Index& target);
 
   // Updates both data model and view_model_ for re-parenting a folder item
   // to anther folder target.
-  void ReparentItemToAnotherFolder(views::View* item_view, const Index& target);
+  void ReparentItemToAnotherFolder(AppListItemView* item_view,
+                                   const Index& target);
 
   // If there is only 1 item left in the source folder after reparenting an item
   // from it, updates both data model and view_model_ for removing last item
@@ -350,66 +369,55 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   bool IsPointWithinDragBuffer(const gfx::Point& point) const;
 
   // Overridden from views::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender,
-                             const ui::Event& event) OVERRIDE;
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // Overridden from AppListItemListObserver:
-  virtual void OnListItemAdded(size_t index, AppListItem* item) OVERRIDE;
-  virtual void OnListItemRemoved(size_t index, AppListItem* item) OVERRIDE;
-  virtual void OnListItemMoved(size_t from_index,
-                               size_t to_index,
-                               AppListItem* item) OVERRIDE;
+  void OnListItemAdded(size_t index, AppListItem* item) override;
+  void OnListItemRemoved(size_t index, AppListItem* item) override;
+  void OnListItemMoved(size_t from_index,
+                       size_t to_index,
+                       AppListItem* item) override;
+  void OnAppListItemHighlight(size_t index, bool highlight) override;
 
   // Overridden from PaginationModelObserver:
-  virtual void TotalPagesChanged() OVERRIDE;
-  virtual void SelectedPageChanged(int old_selected, int new_selected) OVERRIDE;
-  virtual void TransitionStarted() OVERRIDE;
-  virtual void TransitionChanged() OVERRIDE;
+  void TotalPagesChanged() override;
+  void SelectedPageChanged(int old_selected, int new_selected) override;
+  void TransitionStarted() override;
+  void TransitionChanged() override;
 
   // Overridden from AppListModelObserver:
-  virtual void OnAppListModelStatusChanged() OVERRIDE;
+  void OnAppListModelStatusChanged() override;
 
   // ui::ImplicitAnimationObserver overrides:
-  virtual void OnImplicitAnimationsCompleted() OVERRIDE;
+  void OnImplicitAnimationsCompleted() override;
 
   // Hide a given view temporarily without losing (mouse) events and / or
   // changing the size of it. If |immediate| is set the change will be
   // immediately applied - otherwise it will change gradually.
   // If |hide| is set the view will get hidden, otherwise it gets shown.
-  void SetViewHidden(views::View* view, bool hide, bool immediate);
+  void SetViewHidden(AppListItemView* view, bool hide, bool immediate);
 
   // Whether the folder drag-and-drop UI should be enabled.
   bool EnableFolderDragDropUI();
 
-  // Whether target specified by |drap_target| can accept more items to be
-  // dropped into it.
-  bool CanDropIntoTarget(const Index& drop_target);
+  // Returns the size of the entire tile grid.
+  gfx::Size GetTileGridSize() const;
 
-  // Returns the visual index of the nearest tile in which |drag_view_| enters
-  // either its re-ordering or folder dropping circle.
-  Index GetNearestTileForDragView();
+  // Returns the slot number which the given |point| falls into or the closest
+  // slot if |point| is outside the page's bounds.
+  Index GetNearestTileIndexForPoint(const gfx::Point& point) const;
 
-  // Calculates |nearest_tile| in which |vertex| of the |drag_view| is
-  // enclosed.
-  // *|nearest_tile| and *|d_min| will be updated based on the calculation.
-  // *|d_min| is the distance between |nearest_tile| and |drag_view_|.
-  void CalculateNearestTileForVertex(
-      const gfx::Point& vertex, Index* nearest_tile, int* d_min);
+  // Gets the bounds of the tile located at |slot| on the current page.
+  gfx::Rect GetExpectedTileBounds(int slot) const;
 
-  // Returns the bounds of the tile in which |point| is enclosed if there
-  // is a valid item sits on the tile.
-  gfx::Rect GetTileBoundsForPoint(const gfx::Point& point, Index* tile_index);
+  // Gets the bounds of the tile located at |row| and |col| on the current page.
+  gfx::Rect GetExpectedTileBounds(int row, int col) const;
 
-  // Gets the bounds of the tile located at |row| and |col| on current page.
-  gfx::Rect GetTileBounds(int row, int col) const;
-
-  // Returns true if the slot of |index| is the last possible slot to drop
-  // an item, i.e. first empty slot next to the last item on the last page.
-  bool IsLastPossibleDropTarget(const Index& index) const;
-
-  // Gets the item view located at |slot| on the current page. If there is
-  // no item located at |slot|, returns NULL.
-  views::View* GetViewAtSlotOnCurrentPage(int slot);
+  // Gets the item view currently displayed at |slot| on the current page. If
+  // there is no item displayed at |slot|, returns NULL. Note that this finds an
+  // item *displayed* at a slot, which may differ from the item's location in
+  // the model (as it may have been temporarily moved during a drag operation).
+  AppListItemView* GetViewDisplayedAtSlotOnCurrentPage(int slot) const;
 
   // Sets state of the view with |target_index| to |is_target_folder| for
   // dropping |drag_view_|.
@@ -462,18 +470,20 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
   AppsGridViewFolderDelegate* folder_delegate_;
 
   PaginationModel pagination_model_;
+  // Must appear after |pagination_model_|.
+  scoped_ptr<PaginationController> pagination_controller_;
   PageSwitcher* page_switcher_view_;  // Owned by views hierarchy.
 
   int cols_;
   int rows_per_page_;
 
-  // Tracks app item views. There is a view per item in |model_|.
-  views::ViewModel view_model_;
+  // List of app item views. There is a view per item in |model_|.
+  views::ViewModelT<AppListItemView> view_model_;
 
-  // Tracks pulsing block views.
-  views::ViewModel pulsing_blocks_model_;
+  // List of pulsing block views.
+  views::ViewModelT<PulsingBlockView> pulsing_blocks_model_;
 
-  views::View* selected_view_;
+  AppListItemView* selected_view_;
 
   AppListItemView* drag_view_;
 
@@ -502,7 +512,18 @@ class APP_LIST_EXPORT AppsGridView : public views::View,
 #endif
 
   Pointer drag_pointer_;
-  Index drop_target_;
+
+  // The most recent reorder drop target.
+  Index reorder_drop_target_;
+
+  // The most recent folder drop target.
+  Index folder_drop_target_;
+
+  // The index where an empty slot has been left as a placeholder for the
+  // reorder drop target. This updates when the reorder animation triggers.
+  Index reorder_placeholder_;
+
+  // The current action that ending a drag will perform.
   DropAttempt drop_attempt_;
 
   // Timer for re-ordering the |drop_target_| and |drag_view_|.

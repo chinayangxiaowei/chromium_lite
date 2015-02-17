@@ -31,15 +31,15 @@ class RTCVideoDecoderTest : public ::testing::Test,
     memset(&codec_, 0, sizeof(codec_));
   }
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(vda_thread_.Start());
     vda_task_runner_ = vda_thread_.message_loop_proxy();
     mock_vda_ = new media::MockVideoDecodeAccelerator;
-    EXPECT_CALL(*mock_gpu_factories_, GetTaskRunner())
+    EXPECT_CALL(*mock_gpu_factories_.get(), GetTaskRunner())
         .WillRepeatedly(Return(vda_task_runner_));
-    EXPECT_CALL(*mock_gpu_factories_, DoCreateVideoDecodeAccelerator())
+    EXPECT_CALL(*mock_gpu_factories_.get(), DoCreateVideoDecodeAccelerator())
         .WillRepeatedly(Return(mock_vda_));
-    EXPECT_CALL(*mock_gpu_factories_, CreateSharedMemory(_))
+    EXPECT_CALL(*mock_gpu_factories_.get(), CreateSharedMemory(_))
         .WillRepeatedly(Return(static_cast<base::SharedMemory*>(NULL)));
     EXPECT_CALL(*mock_vda_, Initialize(_, _))
         .Times(1)
@@ -47,7 +47,7 @@ class RTCVideoDecoderTest : public ::testing::Test,
     EXPECT_CALL(*mock_vda_, Destroy()).Times(1);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     VLOG(2) << "TearDown";
     EXPECT_TRUE(vda_thread_.IsRunning());
     RunUntilIdle();  // Wait until all callbascks complete.
@@ -57,7 +57,7 @@ class RTCVideoDecoderTest : public ::testing::Test,
     vda_thread_.Stop();
   }
 
-  virtual int32_t Decoded(webrtc::I420VideoFrame& decoded_image) OVERRIDE {
+  int32_t Decoded(webrtc::I420VideoFrame& decoded_image) override {
     VLOG(2) << "Decoded";
     EXPECT_EQ(vda_task_runner_, base::MessageLoopProxy::current());
     return WEBRTC_VIDEO_CODEC_OK;

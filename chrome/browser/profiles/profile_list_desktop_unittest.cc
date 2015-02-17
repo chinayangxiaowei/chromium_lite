@@ -15,11 +15,11 @@
 #include "chrome/browser/profiles/avatar_menu_observer.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/signin/core/common/profile_management_switches.h"
 #include "content/public/test/test_browser_thread_bundle.h"
-#include "grit/generated_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -30,12 +30,9 @@ namespace {
 class MockObserver : public AvatarMenuObserver {
  public:
   MockObserver() : count_(0) {}
-  virtual ~MockObserver() {}
+  ~MockObserver() override {}
 
-  virtual void OnAvatarMenuChanged(
-      AvatarMenu* avatar_menu) OVERRIDE {
-    ++count_;
-  }
+  void OnAvatarMenuChanged(AvatarMenu* avatar_menu) override { ++count_; }
 
   int change_count() const { return count_; }
 
@@ -51,7 +48,7 @@ class ProfileListDesktopTest : public testing::Test {
       : manager_(TestingBrowserProcess::GetGlobal()) {
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(manager_.SetUp());
 #if defined(OS_CHROMEOS)
     // AvatarMenu and multiple profiles works after user logged in.

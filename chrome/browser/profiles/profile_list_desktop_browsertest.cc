@@ -3,15 +3,14 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/path_service.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/avatar_menu.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/user_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_switches.h"
@@ -34,13 +33,8 @@ class ProfileListDesktopBrowserTest : public InProcessBrowserTest {
  public:
   ProfileListDesktopBrowserTest() {}
 
-  AvatarMenu* GetAvatarMenu(ProfileInfoCache* cache) {
-    // Reset the menu.
-    avatar_menu_.reset(new AvatarMenu(
-        cache,
-        NULL,
-        browser()));
-    return avatar_menu_.get();
+  scoped_ptr<AvatarMenu> CreateAvatarMenu(ProfileInfoCache* cache) {
+    return scoped_ptr<AvatarMenu>(new AvatarMenu(cache, NULL, browser()));
   }
 
  private:
@@ -68,7 +62,7 @@ IN_PROC_BROWSER_TEST_F(ProfileListDesktopBrowserTest, MAYBE_SignOut) {
   ProfileInfoCache& cache = profile_manager->GetProfileInfoCache();
   size_t index = cache.GetIndexOfProfileWithPath(current_profile->GetPath());
 
-  AvatarMenu* menu = GetAvatarMenu(&cache);
+  scoped_ptr<AvatarMenu> menu = CreateAvatarMenu(&cache);
   menu->RebuildMenu();
 
   BrowserList* browser_list =
@@ -86,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(ProfileListDesktopBrowserTest, MAYBE_SignOut) {
   EXPECT_EQ(0U, browser_list->size());
 
   // Signing out brings up the User Manager which we should close before exit.
-  chrome::HideUserManager();
+  UserManager::Hide();
 }
 
 #if defined(OS_CHROMEOS)
@@ -125,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(ProfileListDesktopBrowserTest, MAYBE_SwitchToProfile) {
   content::RunMessageLoop();
   ASSERT_EQ(cache.GetNumberOfProfiles(), 2U);
 
-  AvatarMenu* menu = GetAvatarMenu(&cache);
+  scoped_ptr<AvatarMenu> menu = CreateAvatarMenu(&cache);
   menu->RebuildMenu();
   BrowserList* browser_list =
       BrowserList::GetInstance(chrome::GetActiveDesktop());

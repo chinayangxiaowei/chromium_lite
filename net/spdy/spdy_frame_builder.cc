@@ -63,8 +63,8 @@ bool SpdyFrameBuilder::WriteControlFrameHeader(const SpdyFramer& framer,
                                                SpdyFrameType type,
                                                uint8 flags) {
   DCHECK_GE(SPDY3, version_);
-  DCHECK_NE(-1,
-            SpdyConstants::SerializeFrameType(version_, type));
+  DCHECK(SpdyConstants::IsValidFrameType(
+      version_, SpdyConstants::SerializeFrameType(version_, type)));
   bool success = true;
   FlagsAndLength flags_length = CreateFlagsAndLength(
       flags, capacity_ - framer.GetControlFrameHeaderSize());
@@ -101,10 +101,10 @@ bool SpdyFrameBuilder::BeginNewFrame(const SpdyFramer& framer,
                                      SpdyFrameType type,
                                      uint8 flags,
                                      SpdyStreamId stream_id) {
-  DCHECK(SpdyConstants::IsValidFrameType(version_,
-      SpdyConstants::SerializeFrameType(version_, type)));
+  DCHECK(SpdyConstants::IsValidFrameType(
+      version_, SpdyConstants::SerializeFrameType(version_, type)));
   DCHECK_EQ(0u, stream_id & ~kStreamIdMask);
-  DCHECK_LT(SPDY3, framer.protocol_version());
+  DCHECK_GT(framer.protocol_version(), SPDY3);
   bool success = true;
   if (length_ > 0) {
     // Update length field for previous frame.
@@ -121,7 +121,7 @@ bool SpdyFrameBuilder::BeginNewFrame(const SpdyFramer& framer,
   // the length will get overwritten when we begin the next frame.
   // Don't check for length limits here because this may be larger than the
   // actual frame length.
-  success &= WriteUInt16(capacity_ - offset_ - framer.GetPrefixLength(type));
+  success &= WriteUInt24(capacity_ - offset_ - framer.GetPrefixLength(type));
   success &= WriteUInt8(
       SpdyConstants::SerializeFrameType(version_, type));
   success &= WriteUInt8(flags);
@@ -136,7 +136,7 @@ bool SpdyFrameBuilder::WriteString(const std::string& value) {
     return false;
   }
 
-  if (!WriteUInt16(static_cast<int>(value.size())))
+  if (!WriteUInt16(static_cast<uint16>(value.size())))
     return false;
 
   return WriteBytes(value.data(), static_cast<uint16>(value.size()));
@@ -168,17 +168,17 @@ bool SpdyFrameBuilder::RewriteLength(const SpdyFramer& framer) {
 
 bool SpdyFrameBuilder::OverwriteLength(const SpdyFramer& framer,
                                        size_t length) {
-  if (version_ <= SPDY3) {
-    DCHECK_GE(SpdyConstants::GetFrameMaximumSize(version_) -
-              framer.GetFrameMinimumSize(),
-              length);
+  if (version_ < SPDY4) {
+    DCHECK_LE(length,
+              SpdyConstants::GetFrameMaximumSize(version_) -
+                  framer.GetFrameMinimumSize());
   } else {
-    DCHECK_GE(SpdyConstants::GetFrameMaximumSize(version_), length);
+    DCHECK_LE(length, SpdyConstants::GetFrameMaximumSize(version_));
   }
   bool success = false;
   const size_t old_length = length_;
 
-  if (version_ <= SPDY3) {
+  if (version_ < SPDY4) {
     FlagsAndLength flags_length = CreateFlagsAndLength(
         0,  // We're not writing over the flags value anyway.
         length);
@@ -189,7 +189,7 @@ bool SpdyFrameBuilder::OverwriteLength(const SpdyFramer& framer,
                          sizeof(flags_length) - 1);
   } else {
     length_ = 0;
-    success = WriteUInt16(length);
+    success = WriteUInt24(length);
   }
 
   length_ = old_length;
@@ -198,11 +198,11 @@ bool SpdyFrameBuilder::OverwriteLength(const SpdyFramer& framer,
 
 bool SpdyFrameBuilder::OverwriteFlags(const SpdyFramer& framer,
                                       uint8 flags) {
-  DCHECK_LT(SPDY3, framer.protocol_version());
+  DCHECK_GT(framer.protocol_version(), SPDY3);
   bool success = false;
   const size_t old_length = length_;
-  // Flags are the fourth octet in the frame prefix.
-  length_ = 3;
+  // Flags are the fifth octet in the frame prefix.
+  length_ = 4;
   success = WriteUInt8(flags);
   length_ = old_length;
   return success;

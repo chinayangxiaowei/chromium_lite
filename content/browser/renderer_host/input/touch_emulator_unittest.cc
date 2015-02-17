@@ -12,7 +12,6 @@
 #include "content/browser/renderer_host/input/touch_emulator_client.h"
 #include "content/common/input/web_input_event_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/events/gesture_detection/gesture_config_helper.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/env.h"
@@ -35,6 +34,7 @@ class TouchEmulatorTest : public testing::Test,
   TouchEmulatorTest()
       : shift_pressed_(false),
         mouse_pressed_(false),
+        ack_touches_synchronously_(true),
         last_mouse_x_(-1),
         last_mouse_y_(-1) {
     last_event_time_seconds_ =
@@ -42,10 +42,10 @@ class TouchEmulatorTest : public testing::Test,
     event_time_delta_seconds_ = 0.1;
   }
 
-  virtual ~TouchEmulatorTest() {}
+  ~TouchEmulatorTest() override {}
 
   // testing::Test
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
 #if defined(USE_AURA)
     aura::Env::CreateInstance(true);
     screen_.reset(aura::TestScreen::Create(gfx::Size()));
@@ -53,10 +53,10 @@ class TouchEmulatorTest : public testing::Test,
 #endif
 
     emulator_.reset(new TouchEmulator(this));
-    emulator_->Enable(true /* allow_pinch */);
+    emulator_->Enable();
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     emulator_->Disable();
     EXPECT_EQ("", ExpectedEvents());
 
@@ -66,26 +66,26 @@ class TouchEmulatorTest : public testing::Test,
 #endif
   }
 
-  virtual void ForwardGestureEvent(
-      const blink::WebGestureEvent& event) OVERRIDE {
+  void ForwardGestureEvent(const blink::WebGestureEvent& event) override {
     forwarded_events_.push_back(event.type);
   }
 
-  virtual void ForwardEmulatedTouchEvent(
-      const blink::WebTouchEvent& event) OVERRIDE {
+  void ForwardEmulatedTouchEvent(const blink::WebTouchEvent& event) override {
     forwarded_events_.push_back(event.type);
     EXPECT_EQ(1U, event.touchesLength);
     EXPECT_EQ(last_mouse_x_, event.touches[0].position.x);
     EXPECT_EQ(last_mouse_y_, event.touches[0].position.y);
     int expectedCancelable = event.type != WebInputEvent::TouchCancel;
     EXPECT_EQ(expectedCancelable, event.cancelable);
-    emulator()->HandleTouchEventAck(
-        event, INPUT_EVENT_ACK_STATE_NO_CONSUMER_EXISTS);
+    if (ack_touches_synchronously_) {
+      emulator()->HandleTouchEventAck(
+          event, INPUT_EVENT_ACK_STATE_NO_CONSUMER_EXISTS);
+    }
   }
 
-  virtual void SetCursor(const WebCursor& cursor) OVERRIDE {}
+  void SetCursor(const WebCursor& cursor) override {}
 
-  virtual void ShowContextMenuAtPoint(const gfx::Point& point) OVERRIDE {}
+  void ShowContextMenuAtPoint(const gfx::Point& point) override {}
 
  protected:
   TouchEmulator* emulator() const {
@@ -244,6 +244,8 @@ class TouchEmulatorTest : public testing::Test,
                  event, INPUT_EVENT_ACK_STATE_NO_CONSUMER_EXISTS));
   }
 
+  void DisableSynchronousTouchAck() { ack_touches_synchronously_ = false; }
+
  private:
   scoped_ptr<TouchEmulator> emulator_;
   std::vector<WebInputEvent::Type> forwarded_events_;
@@ -254,6 +256,7 @@ class TouchEmulatorTest : public testing::Test,
   double event_time_delta_seconds_;
   bool shift_pressed_;
   bool mouse_pressed_;
+  bool ack_touches_synchronously_;
   int last_mouse_x_;
   int last_mouse_y_;
   std::vector<WebTouchEvent> touch_events_to_ack_;
@@ -327,6 +330,30 @@ TEST_F(TouchEmulatorTest, Pinch) {
   EXPECT_EQ("TouchEnd GestureScrollEnd", ExpectedEvents());
 }
 
+TEST_F(TouchEmulatorTest, CancelWithDelayedAck) {
+  DisableSynchronousTouchAck();
+
+  // Simulate a sequence that is interrupted by |CancelTouch()|.
+  MouseDown(100, 200);
+  EXPECT_EQ("TouchStart", ExpectedEvents());
+  MouseDrag(200, 200);
+  EXPECT_EQ("TouchMove", ExpectedEvents());
+  emulator()->CancelTouch();
+  EXPECT_EQ("TouchCancel", ExpectedEvents());
+  // The mouse up should have no effect as the sequence was already cancelled.
+  MouseUp(400, 200);
+  EXPECT_EQ("", ExpectedEvents());
+
+  // Simulate a sequence that fully completes before |CancelTouch()|.
+  MouseDown(100, 200);
+  EXPECT_EQ("TouchStart", ExpectedEvents());
+  MouseUp(100, 200);
+  EXPECT_EQ("TouchEnd", ExpectedEvents());
+  // |CancelTouch| should have no effect as the sequence was already terminated.
+  emulator()->CancelTouch();
+  EXPECT_EQ("", ExpectedEvents());
+}
+
 TEST_F(TouchEmulatorTest, DisableAndReenable) {
   MouseDown(100, 200);
   EXPECT_EQ("TouchStart GestureTapDown", ExpectedEvents());
@@ -346,7 +373,7 @@ TEST_F(TouchEmulatorTest, DisableAndReenable) {
   MouseMove(300, 300);
   EXPECT_EQ("", ExpectedEvents());
 
-  emulator()->Enable(true /* allow_pinch */);
+  emulator()->Enable();
   MouseDown(300, 300);
   EXPECT_EQ("TouchStart GestureTapDown", ExpectedEvents());
   MouseDrag(300, 400);
@@ -406,7 +433,7 @@ TEST_F(TouchEmulatorTest, MouseWheel) {
   emulator()->Disable();
   EXPECT_EQ("TouchCancel GestureTapCancel", ExpectedEvents());
   EXPECT_TRUE(SendMouseWheelEvent());
-  emulator()->Enable(true /* allow_pinch */);
+  emulator()->Enable();
   EXPECT_TRUE(SendMouseWheelEvent());
 }
 
@@ -432,7 +459,7 @@ TEST_F(TouchEmulatorTest, MultipleTouchStreams) {
   EXPECT_EQ("", ExpectedEvents());
   // Re-enabling in the middle of a touch sequence should not affect this.
   emulator()->Disable();
-  emulator()->Enable(true);
+  emulator()->Enable();
   MouseDrag(300, 300);
   EXPECT_EQ("", ExpectedEvents());
   MouseUp(300, 300);
@@ -447,7 +474,7 @@ TEST_F(TouchEmulatorTest, MultipleTouchStreams) {
   EXPECT_TRUE(TouchEnd(20, 20, false));
   EXPECT_TRUE(TouchStart(30, 30, false));
   AckOldestTouchEvent(); // TouchStart.
-  emulator()->Enable(true);
+  emulator()->Enable();
   AckOldestTouchEvent(); // TouchMove.
   AckOldestTouchEvent(); // TouchEnd.
   MouseDown(300, 200);

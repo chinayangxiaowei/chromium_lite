@@ -11,10 +11,14 @@
 
 void CalculateIdleTime(IdleTimeCallback notify) {
   base::TimeDelta idle_time = base::TimeTicks::Now() -
-      ash::Shell::GetInstance()->user_activity_detector()->last_activity_time();
+      wm::UserActivityDetector::Get()->last_activity_time();
   notify.Run(static_cast<int>(idle_time.InSeconds()));
 }
 
 bool CheckIdleStateIsLocked() {
+#if defined(USE_ATHENA)
+  return false;
+#else
   return ash::Shell::GetInstance()->session_state_delegate()->IsScreenLocked();
+#endif
 }

@@ -6,7 +6,7 @@
   'variables': {
     'pak_inputs': [
       '<(SHARED_INTERMEDIATE_DIR)/chrome/chrome_unscaled_resources.pak',
-      '<(SHARED_INTERMEDIATE_DIR)/components/component_resources.pak',
+      '<(SHARED_INTERMEDIATE_DIR)/components/components_resources.pak',
       '<(SHARED_INTERMEDIATE_DIR)/net/net_resources.pak',
       '<(SHARED_INTERMEDIATE_DIR)/ui/resources/webui_resources.pak',
       '<(grit_out_dir)/browser_resources.pak',
@@ -31,8 +31,6 @@
           '<(SHARED_INTERMEDIATE_DIR)/blink/public/resources/blink_resources.pak',
           '<(SHARED_INTERMEDIATE_DIR)/content/browser/tracing/tracing_resources.pak',
           '<(SHARED_INTERMEDIATE_DIR)/content/content_resources.pak',
-          '<(SHARED_INTERMEDIATE_DIR)/extensions/extensions_renderer_resources.pak', 
-          '<(SHARED_INTERMEDIATE_DIR)/extensions/extensions_resources.pak',
         ],
       }],
       ['OS != "ios" and OS != "android"', {
@@ -47,6 +45,8 @@
       }],
       ['enable_extensions==1', {
         'pak_inputs': [
+          '<(SHARED_INTERMEDIATE_DIR)/extensions/extensions_renderer_resources.pak',
+          '<(SHARED_INTERMEDIATE_DIR)/extensions/extensions_resources.pak',
           '<(grit_out_dir)/extensions_api_resources.pak',
         ],
       }],

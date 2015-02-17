@@ -79,6 +79,28 @@ Utils.createJWKData = function(keyId, key) {
   return Utils.convertToUint8Array(createJWKSet(createJWK(keyId, key)));
 };
 
+Utils.extractFirstLicenseKey = function(message) {
+  // Decodes data (Uint8Array) from base64 string.
+  // TODO(jrummell): Update once the EME spec is updated to say base64url
+  // encoding.
+  function base64Decode(data) {
+    return atob(data);
+  }
+
+  function convertToString(data) {
+    return String.fromCharCode.apply(null, Utils.convertToUint8Array(data));
+  }
+
+  try {
+    var json = JSON.parse(convertToString(message));
+    // Decode the first element of 'kids', return it as an Uint8Array.
+    return Utils.convertToUint8Array(base64Decode(json.kids[0]));
+  } catch (error) {
+    // Not valid JSON, so return message untouched as Uint8Array.
+    return Utils.convertToUint8Array(message);
+  }
+}
+
 Utils.documentLog = function(log, success, time) {
   if (!docLogs)
     return;
@@ -154,13 +176,17 @@ Utils.getHexString = function(uintArray) {
   return hex_str;
 };
 
-Utils.getInitDataFromMessage = function(message, mediaType) {
-  var initData = Utils.convertToUint8Array(message.message);
+Utils.getInitDataFromMessage = function(message, mediaType, decodeJSONMessage) {
+  var initData;
   if (mediaType.indexOf('mp4') != -1) {
     // Temporary hack for Clear Key in v0.1.
     // If content uses mp4, then message.message is PSSH data. Instead of
     // parsing that data we hard code the initData.
     initData = Utils.convertToUint8Array(KEY_ID);
+  } else if (decodeJSONMessage) {
+    initData = Utils.extractFirstLicenseKey(message.message);
+  } else {
+    initData = Utils.convertToUint8Array(message.message);
   }
   return initData;
 };
@@ -188,19 +214,22 @@ Utils.resetTitleChange = function() {
 Utils.sendRequest = function(requestType, responseType, message, serverURL,
                              onSuccessCallbackFn, forceInvalidResponse) {
   var requestAttemptCount = 0;
-  var MAXIMUM_REQUEST_ATTEMPTS = 3;
   var REQUEST_RETRY_DELAY_MS = 3000;
+  var REQUEST_TIMEOUT_MS = 1000;
 
   function sendRequestAttempt() {
+    // No limit on the number of retries. This will retry on failures
+    // until the test framework stops the test.
     requestAttemptCount++;
-    if (requestAttemptCount == MAXIMUM_REQUEST_ATTEMPTS) {
-      Utils.failTest('FAILED: Exceeded maximum license request attempts.');
-      return;
-    }
     var xmlhttp = new XMLHttpRequest();
     xmlhttp.responseType = responseType;
     xmlhttp.open(requestType, serverURL, true);
-
+    xmlhttp.onerror = function(e) {
+      Utils.timeLog('Request status: ' + this.statusText);
+      Utils.timeLog('FAILED: License request XHR failed with network error.');
+      Utils.timeLog('Retrying request in ' + REQUEST_RETRY_DELAY_MS + 'ms');
+      setTimeout(sendRequestAttempt, REQUEST_RETRY_DELAY_MS);
+    };
     xmlhttp.onload = function(e) {
       if (this.status == 200) {
         if (onSuccessCallbackFn)
@@ -208,11 +237,16 @@ Utils.sendRequest = function(requestType, responseType, message, serverURL,
       } else {
         Utils.timeLog('Bad response status: ' + this.status);
         Utils.timeLog('Bad response: ' + this.response);
-        Utils.timeLog('Retrying request if possible in ' +
-                      REQUEST_RETRY_DELAY_MS + 'ms');
+        Utils.timeLog('Retrying request in ' + REQUEST_RETRY_DELAY_MS + 'ms');
         setTimeout(sendRequestAttempt, REQUEST_RETRY_DELAY_MS);
       }
     };
+    xmlhttp.timeout = REQUEST_TIMEOUT_MS;
+    xmlhttp.ontimeout = function(e) {
+      Utils.timeLog('Request timeout');
+      Utils.timeLog('Retrying request in ' + REQUEST_RETRY_DELAY_MS + 'ms');
+      setTimeout(sendRequestAttempt, REQUEST_RETRY_DELAY_MS);
+    }
     Utils.timeLog('Attempt (' + requestAttemptCount +
                   '): sending request to server: ' + serverURL);
     xmlhttp.send(message);

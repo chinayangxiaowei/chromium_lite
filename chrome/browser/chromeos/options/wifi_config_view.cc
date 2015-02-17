@@ -4,7 +4,6 @@
 
 #include "chrome/browser/chromeos/options/wifi_config_view.h"
 
-#include "ash/system/chromeos/network/network_connect.h"
 #include "base/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -13,9 +12,7 @@
 #include "chrome/browser/chromeos/net/onc_utils.h"
 #include "chrome/browser/chromeos/options/passphrase_textfield.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/locale_settings.h"
 #include "chrome/grit/theme_resources.h"
 #include "chromeos/login/login_state.h"
 #include "chromeos/network/client_cert_util.h"
@@ -30,6 +27,7 @@
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/network/network_connect.h"
 #include "ui/events/event.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
@@ -54,7 +52,7 @@ class ComboboxWithWidth : public views::Combobox {
         width_(width) {
   }
   virtual ~ComboboxWithWidth() {}
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
+  virtual gfx::Size GetPreferredSize() const override {
     gfx::Size size = Combobox::GetPreferredSize();
     size.set_width(width_);
     return size;
@@ -107,8 +105,8 @@ class SecurityComboboxModel : public ui::ComboboxModel {
   virtual ~SecurityComboboxModel();
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  virtual int GetItemCount() const override;
+  virtual base::string16 GetItemAt(int index) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SecurityComboboxModel);
@@ -120,8 +118,8 @@ class EAPMethodComboboxModel : public ui::ComboboxModel {
   virtual ~EAPMethodComboboxModel();
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  virtual int GetItemCount() const override;
+  virtual base::string16 GetItemAt(int index) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(EAPMethodComboboxModel);
@@ -133,8 +131,8 @@ class Phase2AuthComboboxModel : public ui::ComboboxModel {
   virtual ~Phase2AuthComboboxModel();
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  virtual int GetItemCount() const override;
+  virtual base::string16 GetItemAt(int index) override;
 
  private:
   views::Combobox* eap_method_combobox_;
@@ -148,8 +146,8 @@ class ServerCACertComboboxModel : public ui::ComboboxModel {
   virtual ~ServerCACertComboboxModel();
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  virtual int GetItemCount() const override;
+  virtual base::string16 GetItemAt(int index) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ServerCACertComboboxModel);
@@ -161,8 +159,8 @@ class UserCertComboboxModel : public ui::ComboboxModel {
   virtual ~UserCertComboboxModel();
 
   // Overridden from ui::ComboboxModel:
-  virtual int GetItemCount() const OVERRIDE;
-  virtual base::string16 GetItemAt(int index) OVERRIDE;
+  virtual int GetItemCount() const override;
+  virtual base::string16 GetItemAt(int index) override;
 
  private:
   WifiConfigView* owner_;
@@ -443,10 +441,10 @@ bool WifiConfigView::IsUserCertValid() const {
   if (index < 0)
     return false;
   // Currently only hardware-backed user certificates are valid.
-  if (CertLibrary::Get()->IsHardwareBacked() &&
-      !CertLibrary::Get()->IsCertHardwareBackedAt(
-          CertLibrary::CERT_TYPE_USER, index))
+  if (!CertLibrary::Get()->IsCertHardwareBackedAt(CertLibrary::CERT_TYPE_USER,
+                                                  index)) {
     return false;
+  }
   return true;
 }
 
@@ -590,7 +588,7 @@ void WifiConfigView::UpdateErrorLabel() {
   if (error_msg.empty() && !service_path_.empty()) {
     const NetworkState* network = GetNetworkState();
     if (network && network->connection_state() == shill::kStateFailure) {
-      error_msg = ash::network_connect::ErrorString(
+      error_msg = ui::NetworkConnect::Get()->GetErrorString(
           network->last_error(), network->path());
     }
   }
@@ -701,14 +699,14 @@ bool WifiConfigView::Login() {
       }
     } else {
       security = shill::kSecurity8021x;
-      SetEapProperties(&properties);
+      SetEapProperties(&properties, false /* not configured */);
     }
     properties.SetStringWithoutPathExpansion(
         shill::kSecurityProperty, security);
 
     // Configure and connect to network.
-    ash::network_connect::CreateConfigurationAndConnect(&properties,
-                                                        share_network);
+    ui::NetworkConnect::Get()->CreateConfigurationAndConnect(&properties,
+                                                             share_network);
   } else {
     if (!network) {
       // Shill no longer knows about this network (edge case).
@@ -717,7 +715,7 @@ bool WifiConfigView::Login() {
       return true;  // Close dialog
     }
     if (eap_method_combobox_) {
-      SetEapProperties(&properties);
+      SetEapProperties(&properties, true /* configured */);
       properties.SetBooleanWithoutPathExpansion(
           shill::kSaveCredentialsProperty, GetSaveCredentials());
     } else {
@@ -734,9 +732,10 @@ bool WifiConfigView::Login() {
       properties.SetStringWithoutPathExpansion(shill::kTypeProperty,
                                                shill::kTypeEthernetEap);
       share_network = false;
-      ash::network_connect::CreateConfiguration(&properties, share_network);
+      ui::NetworkConnect::Get()->CreateConfiguration(&properties,
+                                                     share_network);
     } else {
-      ash::network_connect::ConfigureNetworkAndConnect(
+      ui::NetworkConnect::Get()->ConfigureNetworkAndConnect(
           service_path_, properties, share_network);
     }
   }
@@ -864,7 +863,8 @@ std::string WifiConfigView::GetEapAnonymousIdentity() const {
   return base::UTF16ToUTF8(identity_anonymous_textfield_->text());
 }
 
-void WifiConfigView::SetEapProperties(base::DictionaryValue* properties) {
+void WifiConfigView::SetEapProperties(base::DictionaryValue* properties,
+                                      bool configured) {
   properties->SetStringWithoutPathExpansion(
       shill::kEapIdentityProperty, GetEapIdentity());
   properties->SetStringWithoutPathExpansion(
@@ -880,11 +880,14 @@ void WifiConfigView::SetEapProperties(base::DictionaryValue* properties) {
 
   properties->SetBooleanWithoutPathExpansion(
       shill::kEapUseSystemCasProperty, GetEapUseSystemCas());
-  properties->SetStringWithoutPathExpansion(
-      shill::kEapPasswordProperty, GetPassphrase());
-
+  if (!configured || passphrase_textfield_->changed()) {
+    properties->SetStringWithoutPathExpansion(
+        shill::kEapPasswordProperty, GetPassphrase());
+  }
   base::ListValue* pem_list = new base::ListValue;
-  pem_list->AppendString(GetEapServerCaCertPEM());
+  std::string ca_cert_pem = GetEapServerCaCertPEM();
+  if (!ca_cert_pem.empty())
+    pem_list->AppendString(ca_cert_pem);
   properties->SetWithoutPathExpansion(
       shill::kEapCaCertPemProperty, pem_list);
 }

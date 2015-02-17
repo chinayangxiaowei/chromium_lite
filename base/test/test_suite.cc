@@ -32,8 +32,6 @@
 #include "base/mac/scoped_nsautorelease_pool.h"
 #if defined(OS_IOS)
 #include "base/test/test_listener_ios.h"
-#else
-#include "base/test/mock_chrome_application_mac.h"
 #endif  // OS_IOS
 #endif  // OS_MACOSX
 
@@ -49,7 +47,7 @@ namespace {
 
 class MaybeTestDisabler : public testing::EmptyTestEventListener {
  public:
-  virtual void OnTestStart(const testing::TestInfo& test_info) OVERRIDE {
+  virtual void OnTestStart(const testing::TestInfo& test_info) override {
     ASSERT_FALSE(TestSuite::IsMarkedMaybe(test_info))
         << "Probably the OS #ifdefs don't include all of the necessary "
            "platforms.\nPlease ensure that no tests have the MAYBE_ prefix "
@@ -63,11 +61,11 @@ class TestClientInitializer : public testing::EmptyTestEventListener {
       : old_command_line_(CommandLine::NO_PROGRAM) {
   }
 
-  virtual void OnTestStart(const testing::TestInfo& test_info) OVERRIDE {
+  virtual void OnTestStart(const testing::TestInfo& test_info) override {
     old_command_line_ = *CommandLine::ForCurrentProcess();
   }
 
-  virtual void OnTestEnd(const testing::TestInfo& test_info) OVERRIDE {
+  virtual void OnTestEnd(const testing::TestInfo& test_info) override {
     *CommandLine::ForCurrentProcess() = old_command_line_;
   }
 
@@ -135,7 +133,6 @@ void TestSuite::InitializeFromCommandLine(int argc, wchar_t** argv) {
 void TestSuite::PreInitialize(bool create_at_exit_manager) {
 #if defined(OS_WIN)
   testing::GTEST_FLAG(catch_exceptions) = false;
-  base::TimeTicks::SetNowIsHighResNowIfSupported();
 #endif
   base::EnableTerminationOnHeapCorruption();
 #if defined(OS_LINUX) && defined(USE_AURA)
@@ -281,9 +278,11 @@ void TestSuite::SuppressErrorDialogs() {
 }
 
 void TestSuite::Initialize() {
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  // Some of the app unit tests spin runloops.
-  mock_cr_app::RegisterMockCrApp();
+#if !defined(OS_IOS)
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWaitForDebugger)) {
+    base::debug::WaitForDebugger(60, true);
+  }
 #endif
 
 #if defined(OS_IOS)
@@ -331,6 +330,8 @@ void TestSuite::Initialize() {
 #endif  // !defined(OS_IOS)
 
   TestTimeouts::Initialize();
+
+  trace_to_file_.BeginTracingFromCommandLineOptions();
 }
 
 void TestSuite::Shutdown() {

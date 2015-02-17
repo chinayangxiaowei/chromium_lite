@@ -16,7 +16,7 @@ namespace wallpaper_api_util {
 namespace {
 
 // Keeps in sync (same order) with WallpaperLayout enum in header file.
-const char* kWallpaperLayoutArrays[] = {
+const char* const kWallpaperLayoutArrays[] = {
   "CENTER",
   "CENTER_CROPPED",
   "STRETCH",
@@ -25,7 +25,7 @@ const char* kWallpaperLayoutArrays[] = {
 
 const int kWallpaperLayoutCount = arraysize(kWallpaperLayoutArrays);
 
-} // namespace
+}  // namespace
 
 const char kCancelWallpaperMessage[] = "Set wallpaper was canceled.";
 
@@ -56,6 +56,8 @@ class WallpaperFunctionBase::UnsafeWallpaperDecoder
     CHECK(chromeos::LoginState::Get()->IsUserLoggedIn());
     unsafe_image_decoder_ = new ImageDecoder(this, image_data,
                                              ImageDecoder::DEFAULT_CODEC);
+    unsafe_image_decoder_->set_shrink_to_fit(true);
+
     scoped_refptr<base::MessageLoopProxy> task_runner =
         BrowserThread::GetMessageLoopProxyForThread(BrowserThread::UI);
     unsafe_image_decoder_->Start(task_runner);
@@ -66,7 +68,7 @@ class WallpaperFunctionBase::UnsafeWallpaperDecoder
   }
 
   virtual void OnImageDecoded(const ImageDecoder* decoder,
-                              const SkBitmap& decoded_image) OVERRIDE {
+                              const SkBitmap& decoded_image) override {
     // Make the SkBitmap immutable as we won't modify it. This is important
     // because otherwise it gets duplicated during painting, wasting memory.
     SkBitmap immutable(decoded_image);
@@ -82,7 +84,7 @@ class WallpaperFunctionBase::UnsafeWallpaperDecoder
     delete this;
   }
 
-  virtual void OnDecodeImageFailed(const ImageDecoder* decoder) OVERRIDE {
+  virtual void OnDecodeImageFailed(const ImageDecoder* decoder) override {
     function_->OnFailure(
         l10n_util::GetStringUTF8(IDS_WALLPAPER_MANAGER_INVALID_WALLPAPER));
     delete this;

@@ -12,15 +12,16 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ui/app_list/search/common/url_icon_source.h"
 #include "chrome/browser/ui/app_list/search/people/person.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/app_list/search/search_util.h"
 #include "chrome/common/extensions/api/hangouts_private.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/user_metrics.h"
 #include "extensions/browser/event_router.h"
-#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -60,8 +61,13 @@ GURL GetImageUrl(const GURL& url) {
 
 namespace app_list {
 
-PeopleResult::PeopleResult(Profile* profile, scoped_ptr<Person> person)
-    : profile_(profile), person_(person.Pass()), weak_factory_(this) {
+PeopleResult::PeopleResult(Profile* profile,
+                           AppListControllerDelegate* controller,
+                           scoped_ptr<Person> person)
+    : profile_(profile),
+      controller_(controller),
+      person_(person.Pass()),
+      weak_factory_(this) {
   set_id(person_->id);
   set_title(base::UTF8ToUTF16(person_->display_name));
   set_relevance(person_->interaction_rank);
@@ -86,6 +92,8 @@ PeopleResult::~PeopleResult() {
 }
 
 void PeopleResult::Open(int event_flags) {
+  RecordHistogram(SEARCH_PEOPLE_SEARCH_RESULT);
+
   // Action 0 will always be our default action.
   InvokeAction(0, event_flags);
 }
@@ -109,9 +117,9 @@ void PeopleResult::InvokeAction(int action_index, int event_flags) {
   }
 }
 
-scoped_ptr<ChromeSearchResult> PeopleResult::Duplicate() {
-  return scoped_ptr<ChromeSearchResult>(
-      new PeopleResult(profile_, person_->Duplicate().Pass())).Pass();
+scoped_ptr<SearchResult> PeopleResult::Duplicate() {
+  return scoped_ptr<SearchResult>(
+      new PeopleResult(profile_, controller_, person_->Duplicate().Pass()));
 }
 
 void PeopleResult::OnIconLoaded() {
@@ -152,7 +160,7 @@ void PeopleResult::OpenChat() {
   SigninManagerBase* signin_manager =
       SigninManagerFactory::GetInstance()->GetForProfile(profile_);
   DCHECK(signin_manager);
-  request.from = signin_manager->GetAuthenticatedAccountId();
+  request.from = signin_manager->GetAuthenticatedUsername();
 
   // to: list of users with whom to start this hangout is with.
   linked_ptr<User> target(new User());
@@ -172,12 +180,10 @@ void PeopleResult::OpenChat() {
 }
 
 void PeopleResult::SendEmail() {
-  chrome::NavigateParams params(profile_,
-                                GURL(kEmailUrlPrefix + person_->email),
-                                content::PAGE_TRANSITION_LINK);
-  // If no window exists, this will open a new window this one tab.
-  params.disposition = NEW_FOREGROUND_TAB;
-  chrome::Navigate(&params);
+  controller_->OpenURL(profile_,
+                       GURL(kEmailUrlPrefix + person_->email),
+                       ui::PAGE_TRANSITION_LINK,
+                       NEW_FOREGROUND_TAB);
   content::RecordAction(base::UserMetricsAction("PeopleSearch_SendEmail"));
 }
 
@@ -192,10 +198,6 @@ void PeopleResult::RefreshHangoutsExtensionId() {
     }
   }
   hangouts_extension_id_.clear();
-}
-
-ChromeSearchResultType PeopleResult::GetType() {
-  return SEARCH_PEOPLE_SEARCH_RESULT;
 }
 
 }  // namespace app_list

@@ -10,7 +10,6 @@
 #include "build/build_config.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
-#include "ui/gfx/gfx_paths.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/jni_android.h"
@@ -20,6 +19,7 @@
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
 #include "base/mac/bundle_locations.h"
+#include "base/test/mock_chrome_application_mac.h"
 #endif
 
 #if defined(OS_WIN)
@@ -34,8 +34,8 @@ class UIBaseTestSuite : public base::TestSuite {
 
  protected:
   // base::TestSuite:
-  virtual void Initialize() OVERRIDE;
-  virtual void Shutdown() OVERRIDE;
+  void Initialize() override;
+  void Shutdown() override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(UIBaseTestSuite);
@@ -48,7 +48,7 @@ void UIBaseTestSuite::Initialize() {
   base::TestSuite::Initialize();
 
 #if defined(OS_WIN)
-  gfx::ForceHighDPISupportForTesting(1.0);
+  gfx::InitDeviceScaleFactor(1.0);
 #endif
 
 #if defined(OS_ANDROID)
@@ -58,12 +58,13 @@ void UIBaseTestSuite::Initialize() {
 #endif
 
   ui::RegisterPathProvider();
-  gfx::RegisterPathProvider();
 
   base::FilePath exe_path;
   PathService::Get(base::DIR_EXE, &exe_path);
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
+  mock_cr_app::RegisterMockCrApp();
+
   // On Mac, a test Framework bundle is created that links locale.pak and
   // chrome_100_percent.pak at the appropriate places to ui_test.pak.
   base::mac::SetOverrideFrameworkBundlePath(

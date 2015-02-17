@@ -22,7 +22,6 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/pending_extension_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/omaha_query_params/omaha_query_params.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
@@ -228,7 +227,6 @@ ExtensionUpdater::ExtensionUpdater(
     ExtensionCache* cache,
     const ExtensionDownloader::Factory& downloader_factory)
     : alive_(false),
-      weak_ptr_factory_(this),
       service_(service),
       downloader_factory_(downloader_factory),
       frequency_seconds_(frequency_seconds),
@@ -239,7 +237,8 @@ ExtensionUpdater::ExtensionUpdater(
       next_request_id_(0),
       extension_registry_observer_(this),
       crx_install_is_running_(false),
-      extension_cache_(cache) {
+      extension_cache_(cache),
+      weak_ptr_factory_(this) {
   DCHECK_GE(frequency_seconds_, 5);
   DCHECK_LE(frequency_seconds_, kMaxUpdateFrequencySeconds);
 #if defined(NDEBUG)
@@ -393,6 +392,11 @@ void ExtensionUpdater::CheckSoon() {
 
 bool ExtensionUpdater::WillCheckSoon() const {
   return will_check_soon_;
+}
+
+void ExtensionUpdater::SetExtensionCacheForTesting(
+    ExtensionCache* extension_cache) {
+  extension_cache_ = extension_cache;
 }
 
 void ExtensionUpdater::DoCheckSoon() {
@@ -609,6 +613,8 @@ bool ExtensionUpdater::GetPingDataForExtension(
   ping_data->rollcall_days = CalculatePingDays(
       extension_prefs_->LastPingDay(id));
   ping_data->is_enabled = service_->IsExtensionEnabled(id);
+  if (!ping_data->is_enabled)
+    ping_data->disable_reasons = extension_prefs_->GetDisableReasons(id);
   ping_data->active_days =
       CalculateActivePingDays(extension_prefs_->LastActivePingDay(id),
                               extension_prefs_->GetActiveBit(id));

@@ -8,31 +8,35 @@
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/timer/mock_timer.h"
 #include "sync/internal_api/public/attachments/fake_attachment_downloader.h"
 #include "sync/internal_api/public/attachments/fake_attachment_uploader.h"
+#include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
+
+namespace {
 
 class MockAttachmentStore : public AttachmentStore,
                             public base::SupportsWeakPtr<MockAttachmentStore> {
  public:
   MockAttachmentStore() {}
 
-  virtual void Read(const AttachmentIdList& ids,
-                    const ReadCallback& callback) OVERRIDE {
+  void Read(const AttachmentIdList& ids,
+            const ReadCallback& callback) override {
     read_ids.push_back(ids);
     read_callbacks.push_back(callback);
   }
 
-  virtual void Write(const AttachmentList& attachments,
-                     const WriteCallback& callback) OVERRIDE {
+  void Write(const AttachmentList& attachments,
+             const WriteCallback& callback) override {
     write_attachments.push_back(attachments);
     write_callbacks.push_back(callback);
   }
 
-  virtual void Drop(const AttachmentIdList& ids,
-                    const DropCallback& callback) OVERRIDE {
+  void Drop(const AttachmentIdList& ids,
+            const DropCallback& callback) override {
     NOTREACHED();
   }
 
@@ -83,6 +87,9 @@ class MockAttachmentStore : public AttachmentStore,
   std::vector<AttachmentList> write_attachments;
   std::vector<WriteCallback> write_callbacks;
 
+ private:
+  ~MockAttachmentStore() override {}
+
   DISALLOW_COPY_AND_ASSIGN(MockAttachmentStore);
 };
 
@@ -92,8 +99,8 @@ class MockAttachmentDownloader
  public:
   MockAttachmentDownloader() {}
 
-  virtual void DownloadAttachment(const AttachmentId& id,
-                                  const DownloadCallback& callback) OVERRIDE {
+  void DownloadAttachment(const AttachmentId& id,
+                          const DownloadCallback& callback) override {
     ASSERT_TRUE(download_requests.find(id) == download_requests.end());
     download_requests.insert(std::make_pair(id, callback));
   }
@@ -126,8 +133,8 @@ class MockAttachmentUploader
   MockAttachmentUploader() {}
 
   // AttachmentUploader implementation.
-  virtual void UploadAttachment(const Attachment& attachment,
-                                const UploadCallback& callback) OVERRIDE {
+  void UploadAttachment(const Attachment& attachment,
+                        const UploadCallback& callback) override {
     const AttachmentId id = attachment.GetId();
     ASSERT_TRUE(upload_requests.find(id) == upload_requests.end());
     upload_requests.insert(std::make_pair(id, callback));
@@ -145,18 +152,21 @@ class MockAttachmentUploader
   DISALLOW_COPY_AND_ASSIGN(MockAttachmentUploader);
 };
 
+}  // namespace
+
 class AttachmentServiceImplTest : public testing::Test,
                                   public AttachmentService::Delegate {
  protected:
   AttachmentServiceImplTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
+    network_change_notifier_.reset(net::NetworkChangeNotifier::CreateMock());
     InitializeAttachmentService(make_scoped_ptr(new MockAttachmentUploader()),
                                 make_scoped_ptr(new MockAttachmentDownloader()),
                                 this);
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     attachment_service_.reset();
     ASSERT_FALSE(attachment_store_);
     ASSERT_FALSE(attachment_uploader_);
@@ -164,8 +174,7 @@ class AttachmentServiceImplTest : public testing::Test,
   }
 
   // AttachmentService::Delegate implementation.
-  virtual void OnAttachmentUploaded(
-      const AttachmentId& attachment_id) OVERRIDE {
+  void OnAttachmentUploaded(const AttachmentId& attachment_id) override {
     on_attachment_uploaded_list_.push_back(attachment_id);
   }
 
@@ -173,7 +182,8 @@ class AttachmentServiceImplTest : public testing::Test,
       scoped_ptr<MockAttachmentUploader> uploader,
       scoped_ptr<MockAttachmentDownloader> downloader,
       AttachmentService::Delegate* delegate) {
-    scoped_ptr<MockAttachmentStore> attachment_store(new MockAttachmentStore());
+    scoped_refptr<MockAttachmentStore> attachment_store(
+        new MockAttachmentStore());
     attachment_store_ = attachment_store->AsWeakPtr();
 
     if (uploader.get()) {
@@ -183,21 +193,25 @@ class AttachmentServiceImplTest : public testing::Test,
       attachment_downloader_ = downloader->AsWeakPtr();
     }
     attachment_service_.reset(
-        new AttachmentServiceImpl(attachment_store.PassAs<AttachmentStore>(),
-                                  uploader.PassAs<AttachmentUploader>(),
-                                  downloader.PassAs<AttachmentDownloader>(),
-                                  delegate));
+        new AttachmentServiceImpl(attachment_store,
+                                  uploader.Pass(),
+                                  downloader.Pass(),
+                                  delegate,
+                                  base::TimeDelta::FromMinutes(1),
+                                  base::TimeDelta::FromMinutes(8)));
+
+    scoped_ptr<base::MockTimer> timer_to_pass(
+        new base::MockTimer(false, false));
+    mock_timer_ = timer_to_pass.get();
+    attachment_service_->SetTimerForTest(timer_to_pass.Pass());
   }
 
   AttachmentService* attachment_service() { return attachment_service_.get(); }
 
+  base::MockTimer* mock_timer() { return mock_timer_; }
+
   AttachmentService::GetOrDownloadCallback download_callback() {
     return base::Bind(&AttachmentServiceImplTest::DownloadDone,
-                      base::Unretained(this));
-  }
-
-  AttachmentService::StoreCallback store_callback() {
-    return base::Bind(&AttachmentServiceImplTest::StoreDone,
                       base::Unretained(this));
   }
 
@@ -207,13 +221,17 @@ class AttachmentServiceImplTest : public testing::Test,
     last_download_attachments_ = attachments.Pass();
   }
 
-  void StoreDone(const AttachmentService::StoreResult& result) {
-    store_results_.push_back(result);
-  }
-
   void RunLoop() {
     base::RunLoop run_loop;
     run_loop.RunUntilIdle();
+  }
+
+  void RunLoopAndFireTimer() {
+    RunLoop();
+    if (mock_timer()->IsRunning()) {
+      mock_timer()->Fire();
+    }
+    RunLoop();
   }
 
   const std::vector<AttachmentService::GetOrDownloadResult>&
@@ -225,8 +243,8 @@ class AttachmentServiceImplTest : public testing::Test,
     return *last_download_attachments_.get();
   }
 
-  const std::vector<AttachmentService::StoreResult>& store_results() const {
-    return store_results_;
+  net::NetworkChangeNotifier* network_change_notifier() {
+    return network_change_notifier_.get();
   }
 
   MockAttachmentStore* store() { return attachment_store_.get(); }
@@ -245,17 +263,21 @@ class AttachmentServiceImplTest : public testing::Test,
 
  private:
   base::MessageLoop message_loop_;
+  scoped_ptr<net::NetworkChangeNotifier> network_change_notifier_;
   base::WeakPtr<MockAttachmentStore> attachment_store_;
   base::WeakPtr<MockAttachmentDownloader> attachment_downloader_;
   base::WeakPtr<MockAttachmentUploader> attachment_uploader_;
-  scoped_ptr<AttachmentService> attachment_service_;
+  scoped_ptr<AttachmentServiceImpl> attachment_service_;
+  base::MockTimer* mock_timer_;  // not owned
 
   std::vector<AttachmentService::GetOrDownloadResult> download_results_;
   scoped_ptr<AttachmentMap> last_download_attachments_;
   std::vector<AttachmentId> on_attachment_uploaded_list_;
-
-  std::vector<AttachmentService::StoreResult> store_results_;
 };
+
+TEST_F(AttachmentServiceImplTest, GetStore) {
+  EXPECT_EQ(store(), attachment_service()->GetStore());
+}
 
 TEST_F(AttachmentServiceImplTest, GetOrDownload_EmptyAttachmentList) {
   AttachmentIdList attachment_ids;
@@ -348,105 +370,188 @@ TEST_F(AttachmentServiceImplTest, GetOrDownload_NoDownloader) {
   EXPECT_TRUE(last_download_attachments().empty());
 }
 
-TEST_F(AttachmentServiceImplTest, StoreAttachments_Success) {
-  scoped_refptr<base::RefCountedString> data = new base::RefCountedString();
-  Attachment attachment(Attachment::Create(data));
-  AttachmentList attachments;
-  attachments.push_back(attachment);
-  attachment_service()->StoreAttachments(attachments, store_callback());
-  EXPECT_EQ(1U, store()->write_attachments.size());
-  EXPECT_EQ(1U, uploader()->upload_requests.size());
+TEST_F(AttachmentServiceImplTest, UploadAttachments_Success) {
+  AttachmentIdSet attachment_ids;
+  const unsigned num_attachments = 3;
+  for (unsigned i = 0; i < num_attachments; ++i) {
+    attachment_ids.insert(AttachmentId::Create());
+  }
+  attachment_service()->UploadAttachments(attachment_ids);
 
-  store()->RespondToWrite(AttachmentStore::SUCCESS);
-  uploader()->RespondToUpload(attachment.GetId(),
-                              AttachmentUploader::UPLOAD_SUCCESS);
+  for (unsigned i = 0; i < num_attachments; ++i) {
+    RunLoopAndFireTimer();
+    // See that the service has issued a read for at least one of the
+    // attachments.
+    ASSERT_GE(store()->read_ids.size(), 1U);
+    store()->RespondToRead(attachment_ids);
+    RunLoop();
+    ASSERT_GE(uploader()->upload_requests.size(), 1U);
+    uploader()->RespondToUpload(uploader()->upload_requests.begin()->first,
+                                AttachmentUploader::UPLOAD_SUCCESS);
+  }
   RunLoop();
-  ASSERT_EQ(1U, store_results().size());
-  EXPECT_EQ(AttachmentService::STORE_SUCCESS, store_results()[0]);
-  ASSERT_EQ(1U, on_attachment_uploaded_list().size());
-  EXPECT_EQ(attachment.GetId(), on_attachment_uploaded_list()[0]);
+  ASSERT_EQ(0U, store()->read_ids.size());
+  ASSERT_EQ(0U, uploader()->upload_requests.size());
+
+  // See that all the attachments were uploaded.
+  ASSERT_EQ(attachment_ids.size(), on_attachment_uploaded_list().size());
+  AttachmentIdSet::const_iterator iter = attachment_ids.begin();
+  const AttachmentIdSet::const_iterator end = attachment_ids.end();
+  for (iter = attachment_ids.begin(); iter != end; ++iter) {
+    EXPECT_THAT(on_attachment_uploaded_list(), testing::Contains(*iter));
+  }
 }
 
-TEST_F(AttachmentServiceImplTest,
-       StoreAttachments_StoreFailsWithUnspecifiedError) {
-  scoped_refptr<base::RefCountedString> data = new base::RefCountedString();
-  Attachment attachment(Attachment::Create(data));
-  AttachmentList attachments;
-  attachments.push_back(attachment);
-  attachment_service()->StoreAttachments(attachments, store_callback());
-  EXPECT_EQ(1U, store()->write_attachments.size());
-  EXPECT_EQ(1U, uploader()->upload_requests.size());
-
-  store()->RespondToWrite(AttachmentStore::UNSPECIFIED_ERROR);
-  uploader()->RespondToUpload(attachment.GetId(),
-                              AttachmentUploader::UPLOAD_SUCCESS);
-  RunLoop();
-  ASSERT_EQ(1U, store_results().size());
-  EXPECT_EQ(AttachmentService::STORE_UNSPECIFIED_ERROR, store_results()[0]);
-  ASSERT_EQ(1U, on_attachment_uploaded_list().size());
-  EXPECT_EQ(attachment.GetId(), on_attachment_uploaded_list()[0]);
-}
-
-TEST_F(AttachmentServiceImplTest,
-       StoreAttachments_UploadFailsWithUnspecifiedError) {
-  scoped_refptr<base::RefCountedString> data = new base::RefCountedString();
-  Attachment attachment(Attachment::Create(data));
-  AttachmentList attachments;
-  attachments.push_back(attachment);
-  attachment_service()->StoreAttachments(attachments, store_callback());
-  EXPECT_EQ(1U, store()->write_attachments.size());
-  EXPECT_EQ(1U, uploader()->upload_requests.size());
-
-  store()->RespondToWrite(AttachmentStore::SUCCESS);
-  uploader()->RespondToUpload(attachment.GetId(),
-                              AttachmentUploader::UPLOAD_UNSPECIFIED_ERROR);
-  RunLoop();
-  ASSERT_EQ(1U, store_results().size());
-  // Even though the upload failed, the Store operation is successful.
-  EXPECT_EQ(AttachmentService::STORE_SUCCESS, store_results()[0]);
-  EXPECT_TRUE(on_attachment_uploaded_list().empty());
-}
-
-TEST_F(AttachmentServiceImplTest, StoreAttachments_NoDelegate) {
+TEST_F(AttachmentServiceImplTest, UploadAttachments_Success_NoDelegate) {
   InitializeAttachmentService(make_scoped_ptr(new MockAttachmentUploader()),
                               make_scoped_ptr(new MockAttachmentDownloader()),
                               NULL);  // No delegate.
 
-  scoped_refptr<base::RefCountedString> data = new base::RefCountedString();
-  Attachment attachment(Attachment::Create(data));
-  AttachmentList attachments;
-  attachments.push_back(attachment);
-  attachment_service()->StoreAttachments(attachments, store_callback());
-  EXPECT_EQ(1U, store()->write_attachments.size());
-  EXPECT_EQ(1U, uploader()->upload_requests.size());
-
-  store()->RespondToWrite(AttachmentStore::SUCCESS);
-  uploader()->RespondToUpload(attachment.GetId(),
+  AttachmentIdSet attachment_ids;
+  attachment_ids.insert(AttachmentId::Create());
+  attachment_service()->UploadAttachments(attachment_ids);
+  RunLoopAndFireTimer();
+  ASSERT_EQ(1U, store()->read_ids.size());
+  ASSERT_EQ(0U, uploader()->upload_requests.size());
+  store()->RespondToRead(attachment_ids);
+  RunLoop();
+  ASSERT_EQ(0U, store()->read_ids.size());
+  ASSERT_EQ(1U, uploader()->upload_requests.size());
+  uploader()->RespondToUpload(*attachment_ids.begin(),
                               AttachmentUploader::UPLOAD_SUCCESS);
   RunLoop();
-  ASSERT_EQ(1U, store_results().size());
-  EXPECT_EQ(AttachmentService::STORE_SUCCESS, store_results()[0]);
-  EXPECT_TRUE(on_attachment_uploaded_list().empty());
+  ASSERT_TRUE(on_attachment_uploaded_list().empty());
 }
 
-TEST_F(AttachmentServiceImplTest, StoreAttachments_NoUploader) {
-  // No uploader.
+TEST_F(AttachmentServiceImplTest, UploadAttachments_SomeMissingFromStore) {
+  AttachmentIdSet attachment_ids;
+  attachment_ids.insert(AttachmentId::Create());
+  attachment_ids.insert(AttachmentId::Create());
+  attachment_service()->UploadAttachments(attachment_ids);
+  RunLoopAndFireTimer();
+  ASSERT_GE(store()->read_ids.size(), 1U);
+
+  ASSERT_EQ(0U, uploader()->upload_requests.size());
+  store()->RespondToRead(attachment_ids);
+  RunLoop();
+  ASSERT_EQ(1U, uploader()->upload_requests.size());
+
+  uploader()->RespondToUpload(uploader()->upload_requests.begin()->first,
+                              AttachmentUploader::UPLOAD_SUCCESS);
+  RunLoopAndFireTimer();
+  ASSERT_EQ(1U, on_attachment_uploaded_list().size());
+  ASSERT_GE(store()->read_ids.size(), 1U);
+  // Not found!
+  store()->RespondToRead(AttachmentIdSet());
+  RunLoop();
+  // No upload requests since the read failed.
+  ASSERT_EQ(0U, uploader()->upload_requests.size());
+}
+
+TEST_F(AttachmentServiceImplTest, UploadAttachments_AllMissingFromStore) {
+  AttachmentIdSet attachment_ids;
+  const unsigned num_attachments = 2;
+  for (unsigned i = 0; i < num_attachments; ++i) {
+    attachment_ids.insert(AttachmentId::Create());
+  }
+  attachment_service()->UploadAttachments(attachment_ids);
+
+  for (unsigned i = 0; i < num_attachments; ++i) {
+    RunLoopAndFireTimer();
+    ASSERT_GE(store()->read_ids.size(), 1U);
+    // None found!
+    store()->RespondToRead(AttachmentIdSet());
+  }
+  RunLoop();
+
+  // Nothing uploaded.
+  EXPECT_EQ(0U, uploader()->upload_requests.size());
+  // See that the delegate was never called.
+  ASSERT_EQ(0U, on_attachment_uploaded_list().size());
+}
+
+TEST_F(AttachmentServiceImplTest, UploadAttachments_NoUploader) {
   InitializeAttachmentService(make_scoped_ptr<MockAttachmentUploader>(NULL),
                               make_scoped_ptr(new MockAttachmentDownloader()),
                               this);
 
-  scoped_refptr<base::RefCountedString> data = new base::RefCountedString();
-  Attachment attachment(Attachment::Create(data));
-  AttachmentList attachments;
-  attachments.push_back(attachment);
-  attachment_service()->StoreAttachments(attachments, store_callback());
-  EXPECT_EQ(1U, store()->write_attachments.size());
-
-  store()->RespondToWrite(AttachmentStore::SUCCESS);
+  AttachmentIdSet attachment_ids;
+  attachment_ids.insert(AttachmentId::Create());
+  attachment_service()->UploadAttachments(attachment_ids);
   RunLoop();
-  ASSERT_EQ(1U, store_results().size());
-  EXPECT_EQ(AttachmentService::STORE_SUCCESS, store_results()[0]);
-  EXPECT_TRUE(on_attachment_uploaded_list().empty());
+  EXPECT_EQ(0U, store()->read_ids.size());
+  ASSERT_EQ(0U, on_attachment_uploaded_list().size());
+}
+
+// Upload three attachments.  For one of them, server responds with error.
+TEST_F(AttachmentServiceImplTest, UploadAttachments_OneUploadFails) {
+  AttachmentIdSet attachment_ids;
+  const unsigned num_attachments = 3;
+  for (unsigned i = 0; i < num_attachments; ++i) {
+    attachment_ids.insert(AttachmentId::Create());
+  }
+  attachment_service()->UploadAttachments(attachment_ids);
+
+  for (unsigned i = 0; i < 3; ++i) {
+    RunLoopAndFireTimer();
+    ASSERT_GE(store()->read_ids.size(), 1U);
+    store()->RespondToRead(attachment_ids);
+    RunLoop();
+    ASSERT_EQ(1U, uploader()->upload_requests.size());
+    AttachmentUploader::UploadResult result =
+        AttachmentUploader::UPLOAD_SUCCESS;
+    // Fail the 2nd one.
+    if (i == 2U) {
+      result = AttachmentUploader::UPLOAD_UNSPECIFIED_ERROR;
+    } else {
+      result = AttachmentUploader::UPLOAD_SUCCESS;
+    }
+    uploader()->RespondToUpload(uploader()->upload_requests.begin()->first,
+                                result);
+    RunLoop();
+  }
+  ASSERT_EQ(2U, on_attachment_uploaded_list().size());
+}
+
+// Attempt an upload, respond with transient error to trigger backoff, issue
+// network disconnect/connect events and see that backoff is cleared.
+TEST_F(AttachmentServiceImplTest,
+       UploadAttachments_ResetBackoffAfterNetworkChange) {
+  AttachmentIdSet attachment_ids;
+  attachment_ids.insert(AttachmentId::Create());
+  attachment_service()->UploadAttachments(attachment_ids);
+
+  RunLoopAndFireTimer();
+  ASSERT_EQ(1U, store()->read_ids.size());
+  store()->RespondToRead(attachment_ids);
+  RunLoop();
+  ASSERT_EQ(1U, uploader()->upload_requests.size());
+
+  uploader()->RespondToUpload(uploader()->upload_requests.begin()->first,
+                              AttachmentUploader::UPLOAD_TRANSIENT_ERROR);
+  RunLoop();
+
+  // See that we are in backoff.
+  ASSERT_TRUE(mock_timer()->IsRunning());
+  ASSERT_GT(mock_timer()->GetCurrentDelay(), base::TimeDelta());
+
+  // Issue a network disconnect event.
+  network_change_notifier()->NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::CONNECTION_NONE);
+  RunLoop();
+
+  // Still in backoff.
+  ASSERT_TRUE(mock_timer()->IsRunning());
+  ASSERT_GT(mock_timer()->GetCurrentDelay(), base::TimeDelta());
+
+  // Issue a network connect event.
+  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::CONNECTION_WIFI);
+  RunLoop();
+
+  // No longer in backoff.
+  ASSERT_TRUE(mock_timer()->IsRunning());
+  ASSERT_EQ(base::TimeDelta(), mock_timer()->GetCurrentDelay());
 }
 
 }  // namespace syncer

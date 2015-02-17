@@ -11,10 +11,10 @@
 #include "base/stl_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/net/cert_logger.pb.h"
+#include "net/base/elements_upload_data_stream.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
 #include "net/base/upload_bytes_element_reader.h"
-#include "net/base/upload_data_stream.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_info.h"
 #include "net/url_request/url_request_context.h"
@@ -70,12 +70,10 @@ ChromeFraudulentCertificateReporter::CreateURLRequest(
 
 void ChromeFraudulentCertificateReporter::SendReport(
     const std::string& hostname,
-    const net::SSLInfo& ssl_info,
-    bool sni_available) {
+    const net::SSLInfo& ssl_info) {
   // We do silent/automatic reporting ONLY for Google properties. For other
   // domains (when we start supporting that), we will ask for user permission.
-  if (!net::TransportSecurityState::IsGooglePinnedProperty(hostname,
-                                                           sni_available)) {
+  if (!net::TransportSecurityState::IsGooglePinnedProperty(hostname)) {
     return;
   }
 
@@ -86,8 +84,8 @@ void ChromeFraudulentCertificateReporter::SendReport(
 
   scoped_ptr<net::UploadElementReader> reader(
       net::UploadOwnedBytesElementReader::CreateWithString(report));
-  url_request->set_upload(make_scoped_ptr(
-      net::UploadDataStream::CreateWithReader(reader.Pass(), 0)));
+  url_request->set_upload(
+      net::ElementsUploadDataStream::CreateWithReader(reader.Pass(), 0));
 
   net::HttpRequestHeaders headers;
   headers.SetHeader(net::HttpRequestHeaders::kContentType,

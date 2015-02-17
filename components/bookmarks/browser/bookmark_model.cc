@@ -96,7 +96,7 @@ class SortComparator : public std::binary_function<const BookmarkNode*,
 
 // BookmarkModel --------------------------------------------------------------
 
-BookmarkModel::BookmarkModel(BookmarkClient* client, bool index_urls)
+BookmarkModel::BookmarkModel(BookmarkClient* client)
     : client_(client),
       loaded_(false),
       root_(GURL()),
@@ -105,7 +105,6 @@ BookmarkModel::BookmarkModel(BookmarkClient* client, bool index_urls)
       mobile_node_(NULL),
       next_node_id_(1),
       observers_(ObserverList<BookmarkModelObserver>::NOTIFY_EXISTING_ONLY),
-      index_urls_(index_urls),
       loaded_signal_(true, false),
       extensive_changes_(0) {
   DCHECK(client_);
@@ -372,9 +371,9 @@ void BookmarkModel::SetURL(const BookmarkNode* node, const GURL& url) {
 
   {
     base::AutoLock url_lock(url_lock_);
-    RemoveNodeFromURLSet(mutable_node);
+    RemoveNodeFromInternalMaps(mutable_node);
     mutable_node->set_url(url);
-    nodes_ordered_by_url_set_.insert(mutable_node);
+    AddNodeToInternalMaps(mutable_node);
   }
 
   if (store_.get())
@@ -618,12 +617,6 @@ const BookmarkNode* BookmarkModel::AddURLWithCreationTimeAndMetaInfo(
   if (meta_info)
     new_node->SetMetaInfoMap(*meta_info);
 
-  {
-    // Only hold the lock for the duration of the insert.
-    base::AutoLock url_lock(url_lock_);
-    nodes_ordered_by_url_set_.insert(new_node);
-  }
-
   return AddNode(AsMutable(parent), index, new_node);
 }
 
@@ -690,14 +683,22 @@ void BookmarkModel::ResetDateFolderModified(const BookmarkNode* node) {
   SetDateFolderModified(node, Time());
 }
 
+void BookmarkModel::GetBookmarksMatching(const base::string16& text,
+                                         size_t max_count,
+                                         std::vector<BookmarkMatch>* matches) {
+  GetBookmarksMatching(text, max_count,
+                       query_parser::MatchingAlgorithm::DEFAULT, matches);
+}
+
 void BookmarkModel::GetBookmarksMatching(
     const base::string16& text,
     size_t max_count,
+    query_parser::MatchingAlgorithm matching_algorithm,
     std::vector<BookmarkMatch>* matches) {
   if (!loaded_)
     return;
 
-  index_->GetBookmarksMatching(text, max_count, matches);
+  index_->GetBookmarksMatching(text, max_count, matching_algorithm, matches);
 }
 
 void BookmarkModel::ClearStore() {
@@ -741,9 +742,8 @@ void BookmarkModel::RemoveNode(BookmarkNode* node,
 
   url_lock_.AssertAcquired();
   if (node->is_url()) {
-    RemoveNodeFromURLSet(node);
+    RemoveNodeFromInternalMaps(node);
     removed_urls->insert(node->url());
-    index_->Remove(node);
   }
 
   CancelPendingFaviconLoadRequests(node);
@@ -838,9 +838,11 @@ void BookmarkModel::RemoveAndDeleteNode(BookmarkNode* delete_me) {
       BookmarkNodeRemoved(this, parent, index, node.get(), removed_urls));
 }
 
-void BookmarkModel::RemoveNodeFromURLSet(BookmarkNode* node) {
+void BookmarkModel::RemoveNodeFromInternalMaps(BookmarkNode* node) {
+  index_->Remove(node);
   // NOTE: this is called in such a way that url_lock_ is already held. As
   // such, this doesn't explicitly grab the lock.
+  url_lock_.AssertAcquired();
   NodesOrderedByURLSet::iterator i = nodes_ordered_by_url_set_.find(node);
   DCHECK(i != nodes_ordered_by_url_set_.end());
   // i points to the first node with the URL, advance until we find the
@@ -879,20 +881,28 @@ void BookmarkModel::RemoveNodeAndGetRemovedUrls(BookmarkNode* node,
 BookmarkNode* BookmarkModel::AddNode(BookmarkNode* parent,
                                      int index,
                                      BookmarkNode* node) {
-  FOR_EACH_OBSERVER(BookmarkModelObserver, observers_,
-                    OnWillAddBookmarkNode(this, node));
-
   parent->Add(node, index);
 
   if (store_.get())
     store_->ScheduleSave();
 
+  if (node->type() == BookmarkNode::URL) {
+    base::AutoLock url_lock(url_lock_);
+    AddNodeToInternalMaps(node);
+  } else {
+    index_->Add(node);
+  }
+
   FOR_EACH_OBSERVER(BookmarkModelObserver, observers_,
                     BookmarkNodeAdded(this, parent, index));
 
-  index_->Add(node);
-
   return node;
+}
+
+void BookmarkModel::AddNodeToInternalMaps(BookmarkNode* node) {
+  index_->Add(node);
+  url_lock_.AssertAcquired();
+  nodes_ordered_by_url_set_.insert(node);
 }
 
 bool BookmarkModel::IsValidIndex(const BookmarkNode* parent,
@@ -1012,6 +1022,6 @@ scoped_ptr<BookmarkLoadDetails> BookmarkModel::CreateLoadDetails(
       other_node,
       mobile_node,
       client_->GetLoadExtraNodesCallback(),
-      new BookmarkIndex(client_, index_urls_, accept_languages),
+      new BookmarkIndex(client_, accept_languages),
       next_node_id_));
 }

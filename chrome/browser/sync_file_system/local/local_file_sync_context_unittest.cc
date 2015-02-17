@@ -8,8 +8,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "chrome/browser/sync_file_system/local/canned_syncable_file_system.h"
@@ -21,20 +21,20 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/mock_blob_url_request_context.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "storage/browser/fileapi/file_system_context.h"
+#include "storage/browser/fileapi/file_system_operation_runner.h"
+#include "storage/browser/fileapi/isolated_context.h"
+#include "storage/common/blob/scoped_file.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/leveldatabase/src/helpers/memenv/memenv.h"
 #include "third_party/leveldatabase/src/include/leveldb/env.h"
-#include "webkit/browser/fileapi/file_system_context.h"
-#include "webkit/browser/fileapi/file_system_operation_runner.h"
-#include "webkit/browser/fileapi/isolated_context.h"
-#include "webkit/common/blob/scoped_file.h"
 
 #define FPL FILE_PATH_LITERAL
 
 using content::BrowserThread;
-using fileapi::FileSystemContext;
-using fileapi::FileSystemURL;
-using fileapi::FileSystemURLSet;
+using storage::FileSystemContext;
+using storage::FileSystemURL;
+using storage::FileSystemURLSet;
 
 // This tests LocalFileSyncContext behavior in multi-thread /
 // multi-file-system-context environment.
@@ -60,7 +60,7 @@ class LocalFileSyncContextTest : public testing::Test {
         async_modify_finished_(false),
         has_inflight_prepare_for_sync_(false) {}
 
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     RegisterSyncableFileSystem();
     ASSERT_TRUE(dir_.CreateUniqueTempDir());
     in_memory_env_.reset(leveldb::NewMemEnv(leveldb::Env::Default()));
@@ -72,17 +72,15 @@ class LocalFileSyncContextTest : public testing::Test {
         BrowserThread::IO);
   }
 
-  virtual void TearDown() OVERRIDE {
-    RevokeSyncableFileSystem();
-  }
+  void TearDown() override { RevokeSyncableFileSystem(); }
 
   void StartPrepareForSync(FileSystemContext* file_system_context,
                            const FileSystemURL& url,
                            LocalFileSyncContext::SyncMode sync_mode,
                            SyncFileMetadata* metadata,
                            FileChangeList* changes,
-                           webkit_blob::ScopedFile* snapshot) {
-    ASSERT_TRUE(changes != NULL);
+                           storage::ScopedFile* snapshot) {
+    ASSERT_TRUE(changes != nullptr);
     ASSERT_FALSE(has_inflight_prepare_for_sync_);
     status_ = SYNC_STATUS_UNKNOWN;
     has_inflight_prepare_for_sync_ = true;
@@ -99,7 +97,7 @@ class LocalFileSyncContextTest : public testing::Test {
                                 LocalFileSyncContext::SyncMode sync_mode,
                                 SyncFileMetadata* metadata,
                                 FileChangeList* changes,
-                                webkit_blob::ScopedFile* snapshot) {
+                                storage::ScopedFile* snapshot) {
     StartPrepareForSync(file_system_context, url, sync_mode,
                         metadata, changes, snapshot);
     base::MessageLoop::current()->Run();
@@ -112,7 +110,7 @@ class LocalFileSyncContextTest : public testing::Test {
       LocalFileSyncContext::SyncMode sync_mode,
       SyncFileMetadata* metadata,
       FileChangeList* changes,
-      webkit_blob::ScopedFile* snapshot) {
+      storage::ScopedFile* snapshot) {
     return base::Bind(&LocalFileSyncContextTest::StartPrepareForSync,
                       base::Unretained(this),
                       base::Unretained(file_system_context),
@@ -121,10 +119,10 @@ class LocalFileSyncContextTest : public testing::Test {
 
   void DidPrepareForSync(SyncFileMetadata* metadata_out,
                          FileChangeList* changes_out,
-                         webkit_blob::ScopedFile* snapshot_out,
+                         storage::ScopedFile* snapshot_out,
                          SyncStatusCode status,
                          const LocalFileSyncInfo& sync_file_info,
-                         webkit_blob::ScopedFile snapshot) {
+                         storage::ScopedFile snapshot) {
     ASSERT_TRUE(ui_task_runner_->RunsTasksOnCurrentThread());
     has_inflight_prepare_for_sync_ = false;
     status_ = status;
@@ -149,7 +147,7 @@ class LocalFileSyncContextTest : public testing::Test {
     EXPECT_EQ(SYNC_STATUS_OK,
               PrepareForSync(file_system_context, url,
                              LocalFileSyncContext::SYNC_EXCLUSIVE,
-                             &metadata, &changes, NULL));
+                             &metadata, &changes, nullptr));
     EXPECT_EQ(expected_file_type, metadata.file_type);
 
     status_ = SYNC_STATUS_UNKNOWN;
@@ -174,7 +172,7 @@ class LocalFileSyncContextTest : public testing::Test {
 
   void StartModifyFileOnIOThread(CannedSyncableFileSystem* file_system,
                                  const FileSystemURL& url) {
-    ASSERT_TRUE(file_system != NULL);
+    ASSERT_TRUE(file_system != nullptr);
     if (!io_task_runner_->RunsTasksOnCurrentThread()) {
       async_modify_finished_ = false;
       ASSERT_TRUE(ui_task_runner_->RunsTasksOnCurrentThread());
@@ -249,7 +247,7 @@ class LocalFileSyncContextTest : public testing::Test {
     FileChangeList changes;
     EXPECT_EQ(SYNC_STATUS_OK,
               PrepareForSync(file_system.file_system_context(), kFile,
-                             sync_mode, &metadata, &changes, NULL));
+                             sync_mode, &metadata, &changes, nullptr));
     EXPECT_EQ(1U, changes.size());
     EXPECT_TRUE(changes.list().back().IsFile());
     EXPECT_TRUE(changes.list().back().IsAddOrUpdate());
@@ -274,7 +272,7 @@ class LocalFileSyncContextTest : public testing::Test {
     }
 
     sync_context_->ShutdownOnUIThread();
-    sync_context_ = NULL;
+    sync_context_ = nullptr;
 
     file_system.TearDown();
   }
@@ -299,7 +297,7 @@ class LocalFileSyncContextTest : public testing::Test {
 
     SyncFileMetadata metadata;
     FileChangeList changes;
-    webkit_blob::ScopedFile snapshot;
+    storage::ScopedFile snapshot;
     EXPECT_EQ(SYNC_STATUS_OK,
               PrepareForSync(file_system.file_system_context(), kFile,
                              sync_mode, &metadata, &changes, &snapshot));
@@ -339,7 +337,7 @@ class LocalFileSyncContextTest : public testing::Test {
     EXPECT_TRUE(changes.list().back().IsAddOrUpdate());
 
     sync_context_->ShutdownOnUIThread();
-    sync_context_ = NULL;
+    sync_context_ = nullptr;
 
     file_system.TearDown();
   }
@@ -387,8 +385,8 @@ TEST_F(LocalFileSyncContextTest, InitializeFileSystemContext) {
 
   // Make sure everything's set up for file_system to be able to handle
   // syncable file system operations.
-  EXPECT_TRUE(file_system.backend()->sync_context() != NULL);
-  EXPECT_TRUE(file_system.backend()->change_tracker() != NULL);
+  EXPECT_TRUE(file_system.backend()->sync_context() != nullptr);
+  EXPECT_TRUE(file_system.backend()->change_tracker() != nullptr);
   EXPECT_EQ(sync_context_.get(), file_system.backend()->sync_context());
 
   // Calling MaybeInitialize for the same context multiple times must be ok.
@@ -475,7 +473,7 @@ TEST_F(LocalFileSyncContextTest, MultipleFileSystemContexts) {
   EXPECT_EQ(SYNC_STATUS_OK,
             PrepareForSync(file_system1.file_system_context(), kURL1,
                            LocalFileSyncContext::SYNC_EXCLUSIVE,
-                           &metadata, &changes, NULL));
+                           &metadata, &changes, nullptr));
   EXPECT_EQ(1U, changes.size());
   EXPECT_TRUE(changes.list().back().IsFile());
   EXPECT_TRUE(changes.list().back().IsAddOrUpdate());
@@ -486,7 +484,7 @@ TEST_F(LocalFileSyncContextTest, MultipleFileSystemContexts) {
   EXPECT_EQ(SYNC_STATUS_OK,
             PrepareForSync(file_system2.file_system_context(), kURL2,
                            LocalFileSyncContext::SYNC_EXCLUSIVE,
-                           &metadata, &changes, NULL));
+                           &metadata, &changes, nullptr));
   EXPECT_EQ(1U, changes.size());
   EXPECT_FALSE(changes.list().back().IsFile());
   EXPECT_TRUE(changes.list().back().IsAddOrUpdate());
@@ -494,7 +492,7 @@ TEST_F(LocalFileSyncContextTest, MultipleFileSystemContexts) {
   EXPECT_EQ(0, metadata.size);
 
   sync_context_->ShutdownOnUIThread();
-  sync_context_ = NULL;
+  sync_context_ = nullptr;
 
   file_system1.TearDown();
   file_system2.TearDown();
@@ -561,7 +559,7 @@ TEST_F(LocalFileSyncContextTest, DISABLED_PrepareSyncWhileWriting) {
   EXPECT_EQ(SYNC_STATUS_FILE_BUSY,
             PrepareForSync(file_system.file_system_context(), kURL1,
                            LocalFileSyncContext::SYNC_EXCLUSIVE,
-                           &metadata, &changes, NULL));
+                           &metadata, &changes, nullptr));
   EXPECT_EQ(SYNC_FILE_TYPE_FILE, metadata.file_type);
 
   // Register PrepareForSync method to be invoked when kURL1 becomes
@@ -572,7 +570,7 @@ TEST_F(LocalFileSyncContextTest, DISABLED_PrepareSyncWhileWriting) {
   sync_context_->RegisterURLForWaitingSync(
       kURL1, GetPrepareForSyncClosure(file_system.file_system_context(), kURL1,
                                       LocalFileSyncContext::SYNC_EXCLUSIVE,
-                                      &metadata, &changes, NULL));
+                                      &metadata, &changes, nullptr));
 
   // Wait for the completion.
   EXPECT_EQ(base::File::FILE_OK, WaitUntilModifyFileIsDone());
@@ -591,7 +589,7 @@ TEST_F(LocalFileSyncContextTest, DISABLED_PrepareSyncWhileWriting) {
   EXPECT_EQ(1, metadata.size);
 
   sync_context_->ShutdownOnUIThread();
-  sync_context_ = NULL;
+  sync_context_ = nullptr;
   file_system.TearDown();
 }
 
@@ -612,7 +610,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion) {
   // Record the initial usage (likely 0).
   int64 initial_usage = -1;
   int64 quota = -1;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&initial_usage, &quota));
 
   // Create a file and directory in the file_system.
@@ -638,7 +636,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion) {
 
   // At this point the usage must be greater than the initial usage.
   int64 new_usage = -1;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_GT(new_usage, initial_usage);
 
@@ -674,12 +672,12 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion) {
   EXPECT_TRUE(urls.empty());
 
   // The quota usage data must have reflected the deletion.
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_EQ(new_usage, initial_usage);
 
   sync_context_->ShutdownOnUIThread();
-  sync_context_ = NULL;
+  sync_context_ = nullptr;
   file_system.TearDown();
 }
 
@@ -700,7 +698,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion_ForRoot) {
   // Record the initial usage (likely 0).
   int64 initial_usage = -1;
   int64 quota = -1;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&initial_usage, &quota));
 
   // Create a file and directory in the file_system.
@@ -714,7 +712,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion_ForRoot) {
 
   // At this point the usage must be greater than the initial usage.
   int64 new_usage = -1;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_GT(new_usage, initial_usage);
 
@@ -741,12 +739,12 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForDeletion_ForRoot) {
   EXPECT_TRUE(urls.empty());
 
   // The quota usage data must have reflected the deletion.
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_EQ(new_usage, initial_usage);
 
   sync_context_->ShutdownOnUIThread();
-  sync_context_ = NULL;
+  sync_context_ = nullptr;
   file_system.TearDown();
 }
 
@@ -807,7 +805,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForAddOrUpdate) {
   // Record the usage.
   int64 usage = -1, new_usage = -1;
   int64 quota = -1;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&usage, &quota));
 
   // Here in the local filesystem we have:
@@ -834,7 +832,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForAddOrUpdate) {
   // Check if the usage has been increased by (kTestFileData1 - kTestFileData0).
   const int updated_size =
       arraysize(kTestFileData1) - arraysize(kTestFileData0);
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_EQ(updated_size, new_usage - usage);
 
@@ -881,7 +879,7 @@ TEST_F(LocalFileSyncContextTest, ApplyRemoteChangeForAddOrUpdate) {
   // Creating a file/directory must have increased the usage more than
   // the size of kTestFileData2.
   new_usage = usage;
-  EXPECT_EQ(quota::kQuotaStatusOk,
+  EXPECT_EQ(storage::kQuotaStatusOk,
             file_system.GetUsageAndQuota(&new_usage, &quota));
   EXPECT_GT(new_usage,
             static_cast<int64>(usage + arraysize(kTestFileData2) - 1));

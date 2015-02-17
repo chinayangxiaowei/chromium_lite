@@ -59,6 +59,7 @@
 #include "ash/system/chromeos/tray_caps_lock.h"
 #include "ash/system/chromeos/tray_display.h"
 #include "ash/system/chromeos/tray_tracing.h"
+#include "ash/system/chromeos/virtual_keyboard/tray_keyboard_lock.h"
 #include "ash/system/tray/media_security/multi_profile_media_tray_item.h"
 #include "ui/message_center/message_center.h"
 #elif defined(OS_WIN)
@@ -182,8 +183,11 @@ void SystemTray::CreateItems(SystemTrayDelegate* delegate) {
   AddTrayItem(new TraySms(this));
   AddTrayItem(new TrayBluetooth(this));
   AddTrayItem(new TrayDisplay(this));
-  AddTrayItem(new ScreenCaptureTrayItem(this));
-  AddTrayItem(new ScreenShareTrayItem(this));
+  screen_capture_tray_item_ = new ScreenCaptureTrayItem(this);
+  AddTrayItem(screen_capture_tray_item_);
+  screen_share_tray_item_ = new ScreenShareTrayItem(this);
+  AddTrayItem(screen_share_tray_item_);
+  AddTrayItem(new TrayKeyboardLock(this));
   AddTrayItem(new MultiProfileMediaTrayItem(this));
   AddTrayItem(new TrayAudioChromeOs(this));
   AddTrayItem(new TrayBrightness(this));

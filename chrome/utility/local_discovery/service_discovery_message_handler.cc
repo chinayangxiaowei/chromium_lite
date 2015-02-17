@@ -28,14 +28,15 @@ class ScopedSocketFactory : public net::PlatformSocketFactory {
     net::PlatformSocketFactory::SetInstance(this);
   }
 
-  virtual ~ScopedSocketFactory() {
+  ~ScopedSocketFactory() override {
     net::PlatformSocketFactory::SetInstance(NULL);
     ClosePlatformSocket(socket_);
     socket_ = net::kInvalidSocket;
   }
 
-  virtual net::SocketDescriptor CreateSocket(int family, int type,
-                                             int protocol) OVERRIDE {
+  net::SocketDescriptor CreateSocket(int family,
+                                     int type,
+                                     int protocol) override {
     DCHECK_EQ(type, SOCK_DGRAM);
     DCHECK(family == AF_INET || family == AF_INET6);
     net::SocketDescriptor result = net::kInvalidSocket;
@@ -65,15 +66,15 @@ struct SocketInfo {
 class PreCreatedMDnsSocketFactory : public net::MDnsSocketFactory {
  public:
   PreCreatedMDnsSocketFactory() {}
-  virtual ~PreCreatedMDnsSocketFactory() {
+  ~PreCreatedMDnsSocketFactory() override {
     // Not empty if process exits too fast, before starting mDns code. If
     // happened, destructors may crash accessing destroyed global objects.
     sockets_.weak_clear();
   }
 
   // net::MDnsSocketFactory implementation:
-  virtual void CreateSockets(
-      ScopedVector<net::DatagramServerSocket>* sockets) OVERRIDE {
+  void CreateSockets(
+      ScopedVector<net::DatagramServerSocket>* sockets) override {
     sockets->swap(sockets_);
     Reset();
   }
@@ -197,7 +198,7 @@ void ServiceDiscoveryMessageHandler::InitializeMdns() {
 }
 
 bool ServiceDiscoveryMessageHandler::InitializeThread() {
-  if (discovery_task_runner_)
+  if (discovery_task_runner_.get())
     return true;
   if (discovery_thread_)
     return false;
@@ -210,7 +211,7 @@ bool ServiceDiscoveryMessageHandler::InitializeThread() {
         base::Bind(&ServiceDiscoveryMessageHandler::InitializeMdns,
                     base::Unretained(this)));
   }
-  return discovery_task_runner_ != NULL;
+  return discovery_task_runner_.get() != NULL;
 }
 
 bool ServiceDiscoveryMessageHandler::OnMessageReceived(
@@ -405,7 +406,7 @@ void ServiceDiscoveryMessageHandler::DestroyLocalDomainResolver(uint64 id) {
 }
 
 void ServiceDiscoveryMessageHandler::ShutdownLocalDiscovery() {
-  if (!discovery_task_runner_)
+  if (!discovery_task_runner_.get())
     return;
 
   discovery_task_runner_->PostTask(

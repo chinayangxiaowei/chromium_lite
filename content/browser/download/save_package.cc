@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/logging.h"
 #include "base/message_loop/message_loop.h"
@@ -113,16 +113,14 @@ class SavePackageRequestHandle : public DownloadRequestHandleInterface {
       : save_package_(save_package) {}
 
   // DownloadRequestHandleInterface
-  virtual WebContents* GetWebContents() const OVERRIDE {
+  WebContents* GetWebContents() const override {
     return save_package_.get() ? save_package_->web_contents() : NULL;
   }
-  virtual DownloadManager* GetDownloadManager() const OVERRIDE {
-    return NULL;
-  }
-  virtual void PauseRequest() const OVERRIDE {}
-  virtual void ResumeRequest() const OVERRIDE {}
-  virtual void CancelRequest() const OVERRIDE {}
-  virtual std::string DebugString() const OVERRIDE {
+  DownloadManager* GetDownloadManager() const override { return NULL; }
+  void PauseRequest() const override {}
+  void ResumeRequest() const override {}
+  void CancelRequest() const override {}
+  std::string DebugString() const override {
     return "SavePackage DownloadRequestHandle";
   }
 
@@ -1297,15 +1295,11 @@ const base::FilePath::CharType* SavePackage::ExtensionForMimeType(
 #elif defined(OS_WIN)
   base::FilePath::StringType mime_type(base::UTF8ToWide(contents_mime_type));
 #endif  // OS_WIN
-  for (uint32 i = 0; i < ARRAYSIZE_UNSAFE(extensions); ++i) {
+  for (uint32 i = 0; i < arraysize(extensions); ++i) {
     if (mime_type == extensions[i].mime_type)
       return extensions[i].suggested_extension;
   }
   return FILE_PATH_LITERAL("");
-}
-
-WebContents* SavePackage::web_contents() const {
-  return WebContentsObserver::web_contents();
 }
 
 void SavePackage::GetSaveInfo() {

@@ -7,17 +7,20 @@ component("wm") {
     "core/accelerator_delegate.h",
     "core/accelerator_filter.cc",
     "core/accelerator_filter.h",
-    "core/base_focus_rules.h",
     "core/base_focus_rules.cc",
     "core/base_focus_rules.h",
     "core/capture_controller.cc",
     "core/capture_controller.h",
     "core/compound_event_filter.cc",
     "core/compound_event_filter.h",
+    "core/coordinate_conversion.cc",
+    "core/coordinate_conversion.h",
     "core/cursor_manager.cc",
     "core/cursor_manager.h",
     "core/default_activation_client.cc",
     "core/default_activation_client.h",
+    "core/default_screen_position_client.cc",
+    "core/default_screen_position_client.h",
     "core/easy_resize_window_targeter.cc",
     "core/easy_resize_window_targeter.h",
     "core/focus_controller.cc",
@@ -66,7 +69,6 @@ component("wm") {
     "core/wm_core_switches.h",
     "core/wm_state.cc",
     "core/wm_state.h",
-    "public/window_types.h",
     "wm_export.h",
   ]
 
@@ -79,6 +81,7 @@ component("wm") {
     "//ui/base",
     "//ui/compositor",
     "//ui/events",
+    "//ui/events/devices",
     "//ui/events/platform",
     "//ui/events:events_base",
     "//ui/events/platform",
@@ -89,23 +92,22 @@ component("wm") {
 }
 
 static_library("test_support") {
+  testonly = true
   sources = [
     "test/wm_test_helper.cc",
     "test/wm_test_helper.h",
   ]
 
   deps = [
+    ":wm",
     "//skia",
     "//ui/aura",
+    "//ui/aura:test_support",
     "//ui/base",
     "//ui/events",
     "//ui/events:events_base",
   ]
 }
-
-# TODO(GYP) enable the wm_unittests target when all dependencies have been
-# resolved. Some transitive deps aren't converted yet.
-if (false) {
 
 test("wm_unittests") {
   sources = [
@@ -131,16 +133,13 @@ test("wm_unittests") {
     "//base/test:test_support",
     "//skia",
     "//testing/gtest",
-    "//ui/aura",
     "//ui/aura:test_support",
-    "//ui/base",
-    "//ui/compositor",
-    "//ui/events",
-    "//ui/events:events_base",
+    "//ui/base:test_support",
+    "//ui/compositor:test_support",
+    "//ui/events:test_support",
     "//ui/events/platform",
     "//ui/gfx",
     "//ui/gfx/geometry",
+    "//ui/gl",
   ]
-}
-
 }

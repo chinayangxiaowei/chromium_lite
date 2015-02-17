@@ -8,82 +8,38 @@
 #include <vector>
 
 #include "athena/home/public/app_model_builder.h"
+#include "athena/home/public/search_controller_factory.h"
+#include "athena/strings/grit/athena_strings.h"
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/strings/utf_string_conversions.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/app_list/app_list_model.h"
 #include "ui/app_list/search_box_model.h"
+#include "ui/app_list/search_controller.h"
 #include "ui/app_list/search_provider.h"
 #include "ui/app_list/search_result.h"
 #include "ui/app_list/speech_ui_model.h"
-#include "ui/gfx/image/image_skia.h"
-#include "ui/views/background.h"
-#include "ui/views/view.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace athena {
 
-namespace {
-
-// A view to draw the logo area of app-list centered view.
-// TODO(mukai): replace this by the actual start page webview.
-class DummyLogoView : public views::View {
- public:
-  explicit DummyLogoView(const gfx::Size& size)
-      : size_(size) {
-    set_background(views::Background::CreateSolidBackground(
-        SK_ColorLTGRAY));
-  }
-
- private:
-  virtual gfx::Size GetPreferredSize() const OVERRIDE {
-    return size_;
-  }
-
-  const gfx::Size size_;
-
-  DISALLOW_COPY_AND_ASSIGN(DummyLogoView);
-};
-
-}
-
-AppListViewDelegate::AppListViewDelegate(AppModelBuilder* model_builder)
+AppListViewDelegate::AppListViewDelegate(
+    AppModelBuilder* model_builder,
+    SearchControllerFactory* search_factory)
     : model_(new app_list::AppListModel),
-      speech_ui_(new app_list::SpeechUIModel(
-          app_list::SPEECH_RECOGNITION_OFF)) {
-  model_builder->PopulateApps(model_.get());
-  // TODO(mukai): get the text from the resources.
-  model_->search_box()->SetHintText(base::ASCIIToUTF16("Search"));
+      speech_ui_(new app_list::SpeechUIModel) {
+  model_builder->RegisterAppListModel(model_.get());
+  model_->search_box()->SetHintText(
+      l10n_util::GetStringUTF16(IDS_ATHENA_SEARCH_BOX_HINT));
+  if (search_factory) {
+    search_controller_ =
+        search_factory->Create(model_->search_box(), model_->results());
+  }
 }
 
 AppListViewDelegate::~AppListViewDelegate() {
-  for (size_t i = 0; i < search_providers_.size(); ++i)
-    search_providers_[i]->set_result_changed_callback(base::Closure());
-}
-
-void AppListViewDelegate::RegisterSearchProvider(
-    app_list::SearchProvider* search_provider) {
-  // Right now we allow only one provider.
-  // TODO(mukai): port app-list's mixer and remove this restriction.
-  DCHECK(search_providers_.empty());
-  search_provider->set_result_changed_callback(base::Bind(
-      &AppListViewDelegate::SearchResultChanged, base::Unretained(this)));
-  search_providers_.push_back(search_provider);
-}
-
-void AppListViewDelegate::SearchResultChanged() {
-  // TODO(mukai): port app-list's Mixer to reorder the results properly.
-  app_list::SearchProvider* search_provider = search_providers_[0];
-  std::vector<app_list::SearchResult*> results;
-  search_provider->ReleaseResult(&results);
-  if (results.empty()) {
-    model_->results()->DeleteAll();
-  } else {
-    for (size_t i = 0; i < results.size(); ++i)
-      model_->results()->Add(results[i]);
-  }
 }
 
 bool AppListViewDelegate::ForceNativeDesktop() const {
@@ -109,26 +65,28 @@ void AppListViewDelegate::GetShortcutPathForApp(
 }
 
 void AppListViewDelegate::StartSearch() {
-  for (size_t i = 0; i < search_providers_.size(); ++i)
-    search_providers_[i]->Start(model_->search_box()->text());
+  if (search_controller_)
+    search_controller_->Start();
 }
 
 void AppListViewDelegate::StopSearch() {
-  for (size_t i = 0; i < search_providers_.size(); ++i)
-    search_providers_[i]->Stop();
+  if (search_controller_)
+    search_controller_->Stop();
 }
 
 void AppListViewDelegate::OpenSearchResult(app_list::SearchResult* result,
                                            bool auto_launch,
                                            int event_flags) {
-  result->Open(event_flags);
+  if (search_controller_)
+    search_controller_->OpenResult(result, event_flags);
 }
 
 void AppListViewDelegate::InvokeSearchResultAction(
     app_list::SearchResult* result,
     int action_index,
     int event_flags) {
-  // TODO(mukai): implement this.
+  if (search_controller_)
+    search_controller_->InvokeResultAction(result, action_index, event_flags);
 }
 
 base::TimeDelta AppListViewDelegate::GetAutoLaunchTimeout() {
@@ -182,7 +140,7 @@ void AppListViewDelegate::ShowForProfileByPath(
 
 views::View* AppListViewDelegate::CreateStartPageWebView(
     const gfx::Size& size) {
-  return new DummyLogoView(size);
+  return nullptr;
 }
 
 std::vector<views::View*> AppListViewDelegate::CreateCustomPageWebViews(

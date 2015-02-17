@@ -8,10 +8,10 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/top_sites_database.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/tools/profiles/thumbnail-inl.h"
+#include "components/history/core/browser/history_types.h"
 #include "sql/connection.h"
 #include "sql/recovery.h"
 #include "sql/test/scoped_error_ignorer.h"
@@ -75,7 +75,7 @@ namespace history {
 
 class TopSitesDatabaseTest : public testing::Test {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     // Get a temporary directory for the test DB files.
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     file_name_ = temp_dir_.path().AppendASCII("TestTopSites.db");

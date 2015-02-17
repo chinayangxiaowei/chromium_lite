@@ -53,8 +53,8 @@ class TrayRotationLockTest : public test::AshTestBase {
   void TearDownViews();
 
   // test::AshTestBase:
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  virtual void SetUp() override;
+  virtual void TearDown() override;
 
  private:
   scoped_ptr<TrayRotationLock> tray_;
@@ -83,7 +83,7 @@ void TrayRotationLockTest::SetUp() {
   // The Display used for testing is not an internal display. This flag
   // allows for DisplayManager to treat it as one. TrayRotationLock is only
   // visible on internal primary displays.
-  CommandLine::ForCurrentProcess()->AppendSwitch(
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kAshUseFirstDisplayAsInternal);
   test::AshTestBase::SetUp();
   SetUpForStatusAreaWidget(StatusAreaWidgetTestHelper::GetStatusAreaWidget());
@@ -209,8 +209,8 @@ TEST_F(TrayRotationLockTest, PerformActionOnDefaultView) {
       EnableMaximizeModeWindowManager(true);
   ASSERT_FALSE(tray_view()->visible());
 
-  ui::GestureEvent tap(0, 0, 0, base::TimeDelta(),
-      ui::GestureEventDetails(ui::ET_GESTURE_TAP, 0.0f, 0.0f));
+  ui::GestureEvent tap(
+      0, 0, 0, base::TimeDelta(), ui::GestureEventDetails(ui::ET_GESTURE_TAP));
   default_view()->OnGestureEvent(&tap);
   EXPECT_TRUE(maximize_mode_controller->rotation_locked());
   EXPECT_TRUE(tray_view()->visible());

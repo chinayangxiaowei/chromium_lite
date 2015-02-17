@@ -93,21 +93,22 @@ class CONTENT_EXPORT RenderViewObserver : public IPC::Listener,
   virtual void Navigate(const GURL& url) {}
   virtual void ClosePage() {}
   virtual void OrientationChangeEvent() {}
+  virtual void Resized() {}
 
   virtual void OnStop() {}
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
   // IPC::Sender implementation.
-  virtual bool Send(IPC::Message* message) OVERRIDE;
+  bool Send(IPC::Message* message) override;
 
   RenderView* render_view() const;
   int routing_id() const { return routing_id_; }
 
  protected:
   explicit RenderViewObserver(RenderView* render_view);
-  virtual ~RenderViewObserver();
+  ~RenderViewObserver() override;
 
   // Sets |render_view_| to track.
   // Removes itself of previous (if any) |render_view_| observer list and adds

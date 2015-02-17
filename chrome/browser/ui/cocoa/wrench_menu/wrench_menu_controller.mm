@@ -24,9 +24,8 @@
 #import "chrome/browser/ui/cocoa/wrench_menu/recent_tabs_menu_model_delegate.h"
 #include "chrome/browser/ui/toolbar/recent_tabs_sub_menu_model.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_model.h"
 
@@ -54,8 +53,8 @@ namespace WrenchMenuControllerInternal {
 // A C++ delegate that handles the accelerators in the wrench menu.
 class AcceleratorDelegate : public ui::AcceleratorProvider {
  public:
-  virtual bool GetAcceleratorForCommandId(int command_id,
-      ui::Accelerator* out_accelerator) OVERRIDE {
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* out_accelerator) override {
     AcceleratorsCocoa* keymap = AcceleratorsCocoa::GetInstance();
     const ui::Accelerator* accelerator =
         keymap->GetAcceleratorForCommand(command_id);
@@ -104,7 +103,8 @@ class ZoomLevelObserver {
   if ((self = [super init])) {
     browser_ = browser;
     observer_.reset(new WrenchMenuControllerInternal::ZoomLevelObserver(
-        self, content::HostZoomMap::GetForBrowserContext(browser->profile())));
+        self,
+        content::HostZoomMap::GetDefaultForBrowserContext(browser->profile())));
     acceleratorDelegate_.reset(
         new WrenchMenuControllerInternal::AcceleratorDelegate());
     [self createModel];

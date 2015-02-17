@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/containers/hash_tables.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/memory/singleton.h"
 #include "base/strings/string_piece.h"
 #include "net/http/http_response_headers.h"
@@ -44,7 +44,7 @@ class QuicInMemoryCache {
     ~Response();
 
     SpecialResponseType response_type() const { return response_type_; }
-    const HttpResponseHeaders& headers() const { return *headers_; }
+    const HttpResponseHeaders& headers() const { return *headers_.get(); }
     const base::StringPiece body() const { return base::StringPiece(body_); }
 
    private:
@@ -68,7 +68,7 @@ class QuicInMemoryCache {
   static QuicInMemoryCache* GetInstance();
 
   // Retrieve a response from this cache for a given request.
-  // If no appropriate response exists, NULL is returned.
+  // If no appropriate response exists, nullptr is returned.
   // Currently, responses are selected based on request URI only.
   const Response* GetResponse(const GURL& url) const;
 

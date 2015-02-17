@@ -35,20 +35,15 @@ const int kMaxCacheAgeDays = 30;
 
 }  // namespace
 
-// static
-ExtensionCacheImpl* ExtensionCacheImpl::GetInstance() {
-  return Singleton<ExtensionCacheImpl>::get();
-}
-
 ExtensionCacheImpl::ExtensionCacheImpl()
-  : weak_ptr_factory_(this),
-    cache_(new LocalExtensionCache(base::FilePath(kLocalCacheDir),
+  : cache_(new LocalExtensionCache(base::FilePath(kLocalCacheDir),
         kMaxCacheSize,
         base::TimeDelta::FromDays(kMaxCacheAgeDays),
         content::BrowserThread::GetBlockingPool()->
             GetSequencedTaskRunnerWithShutdownBehavior(
                 content::BrowserThread::GetBlockingPool()->GetSequenceToken(),
-                base::SequencedWorkerPool::SKIP_ON_SHUTDOWN))) {
+                base::SequencedWorkerPool::SKIP_ON_SHUTDOWN))),
+    weak_ptr_factory_(this) {
   notification_registrar_.Add(
       this,
       extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,

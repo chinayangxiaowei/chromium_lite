@@ -47,7 +47,7 @@ void RenderCursorOnVideoFrame(
     const scoped_refptr<media::VideoFrame>& target,
     const SkBitmap& cursor_bitmap,
     const gfx::Point& cursor_position) {
-  DCHECK(target);
+  DCHECK(target.get());
   DCHECK(!cursor_bitmap.isNull());
 
   gfx::Rect rect = gfx::IntersectRects(
@@ -96,30 +96,29 @@ class DesktopVideoCaptureMachine
       public base::SupportsWeakPtr<DesktopVideoCaptureMachine> {
  public:
   DesktopVideoCaptureMachine(const DesktopMediaID& source);
-  virtual ~DesktopVideoCaptureMachine();
+  ~DesktopVideoCaptureMachine() override;
 
   // VideoCaptureFrameSource overrides.
-  virtual bool Start(const scoped_refptr<ThreadSafeCaptureOracle>& oracle_proxy,
-                     const media::VideoCaptureParams& params) OVERRIDE;
-  virtual void Stop(const base::Closure& callback) OVERRIDE;
+  bool Start(const scoped_refptr<ThreadSafeCaptureOracle>& oracle_proxy,
+             const media::VideoCaptureParams& params) override;
+  void Stop(const base::Closure& callback) override;
 
   // Implements aura::WindowObserver.
-  virtual void OnWindowBoundsChanged(aura::Window* window,
-                                     const gfx::Rect& old_bounds,
-                                     const gfx::Rect& new_bounds) OVERRIDE;
-  virtual void OnWindowDestroyed(aura::Window* window) OVERRIDE;
-  virtual void OnWindowAddedToRootWindow(aura::Window* window) OVERRIDE;
-  virtual void OnWindowRemovingFromRootWindow(aura::Window* window,
-                                              aura::Window* new_root) OVERRIDE;
+  void OnWindowBoundsChanged(aura::Window* window,
+                             const gfx::Rect& old_bounds,
+                             const gfx::Rect& new_bounds) override;
+  void OnWindowDestroyed(aura::Window* window) override;
+  void OnWindowAddedToRootWindow(aura::Window* window) override;
+  void OnWindowRemovingFromRootWindow(aura::Window* window,
+                                      aura::Window* new_root) override;
 
   // Implements ui::CompositorObserver.
-  virtual void OnCompositingDidCommit(ui::Compositor* compositor) OVERRIDE {}
-  virtual void OnCompositingStarted(ui::Compositor* compositor,
-                                    base::TimeTicks start_time) OVERRIDE {}
-  virtual void OnCompositingEnded(ui::Compositor* compositor) OVERRIDE;
-  virtual void OnCompositingAborted(ui::Compositor* compositor) OVERRIDE {}
-  virtual void OnCompositingLockStateChanged(
-      ui::Compositor* compositor) OVERRIDE {}
+  void OnCompositingDidCommit(ui::Compositor* compositor) override {}
+  void OnCompositingStarted(ui::Compositor* compositor,
+                            base::TimeTicks start_time) override {}
+  void OnCompositingEnded(ui::Compositor* compositor) override;
+  void OnCompositingAborted(ui::Compositor* compositor) override {}
+  void OnCompositingLockStateChanged(ui::Compositor* compositor) override {}
 
  private:
   // Captures a frame.
@@ -227,7 +226,6 @@ bool DesktopVideoCaptureMachine::Start(
                base::Bind(&DesktopVideoCaptureMachine::Capture, AsWeakPtr(),
                           false));
 
-  started_ = true;
   return true;
 }
 
@@ -246,24 +244,15 @@ void DesktopVideoCaptureMachine::Stop(const base::Closure& callback) {
   // Stop timer.
   timer_.Stop();
 
-  started_ = false;
-
   callback.Run();
 }
 
 void DesktopVideoCaptureMachine::UpdateCaptureSize() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (oracle_proxy_ && desktop_window_) {
-    ui::Layer* layer = desktop_window_->layer();
-    gfx::Size capture_size =
-        ui::ConvertSizeToPixel(layer, layer->bounds().size());
-#if defined(OS_CHROMEOS)
-    // Pad desktop capture size to multiples of 16 pixels to accommodate HW
-    // encoder. TODO(hshi): remove this hack. See http://crbug.com/402151
-    capture_size.SetSize((capture_size.width() + 15) & ~15,
-                         (capture_size.height() + 15) & ~15);
-#endif
-    oracle_proxy_->UpdateCaptureSize(capture_size);
+  if (oracle_proxy_.get() && desktop_window_) {
+     ui::Layer* layer = desktop_window_->layer();
+     oracle_proxy_->UpdateCaptureSize(ui::ConvertSizeToPixel(
+         layer, layer->bounds().size()));
   }
   ClearCursorState();
 }
@@ -325,10 +314,14 @@ void DesktopVideoCaptureMachine::DidCopyOutput(
       video_frame, start_time, capture_frame_cb, result.Pass());
 
   base::TimeDelta capture_time = base::TimeTicks::Now() - start_time;
-  UMA_HISTOGRAM_TIMES(
-      window_id_.type == DesktopMediaID::TYPE_SCREEN ? kUmaScreenCaptureTime
-                                                     : kUmaWindowCaptureTime,
-      capture_time);
+
+  // The two UMA_ blocks must be put in its own scope since it creates a static
+  // variable which expected constant histogram name.
+  if (window_id_.type == DesktopMediaID::TYPE_SCREEN) {
+    UMA_HISTOGRAM_TIMES(kUmaScreenCaptureTime, capture_time);
+  } else {
+    UMA_HISTOGRAM_TIMES(kUmaWindowCaptureTime, capture_time);
+  }
 
   if (first_call) {
     first_call = false;
@@ -354,7 +347,7 @@ bool DesktopVideoCaptureMachine::ProcessCopyOutputResponse(
 
   if (capture_params_.requested_format.pixel_format ==
       media::PIXEL_FORMAT_TEXTURE) {
-    DCHECK(!video_frame);
+    DCHECK(!video_frame.get());
     cc::TextureMailbox texture_mailbox;
     scoped_ptr<cc::SingleReleaseCallback> release_callback;
     result->TakeTexture(&texture_mailbox, &release_callback);

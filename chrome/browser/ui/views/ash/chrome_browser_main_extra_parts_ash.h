@@ -7,18 +7,17 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 
 class ChromeBrowserMainExtraPartsAsh : public ChromeBrowserMainExtraParts {
  public:
   ChromeBrowserMainExtraPartsAsh();
-  virtual ~ChromeBrowserMainExtraPartsAsh();
+  ~ChromeBrowserMainExtraPartsAsh() override;
 
   // Overridden from ChromeBrowserMainExtraParts:
-  virtual void PreProfileInit() OVERRIDE;
-  virtual void PostProfileInit() OVERRIDE;
-  virtual void PostMainMessageLoopRun() OVERRIDE;
+  void PreProfileInit() override;
+  void PostProfileInit() override;
+  void PostMainMessageLoopRun() override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainExtraPartsAsh);

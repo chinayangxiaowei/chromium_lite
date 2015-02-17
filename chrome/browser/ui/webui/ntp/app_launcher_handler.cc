@@ -42,6 +42,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/web_application_info.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/favicon_base/favicon_types.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_ui.h"
@@ -57,8 +58,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_set.h"
-#include "grit/browser_resources.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "url/gurl.h"
@@ -109,6 +108,9 @@ void AppLauncherHandler::CreateAppInfo(
     const Extension* extension,
     ExtensionService* service,
     base::DictionaryValue* value) {
+  // The items which are to be written into |value| are also described in
+  // chrome/browser/resources/ntp4/page_list_view.js in @typedef for AppInfo.
+  // Please update it whenever you add or remove any keys here.
   value->Clear();
 
   // The Extension class 'helpfully' wraps bidi control characters that
@@ -161,14 +163,14 @@ void AppLauncherHandler::CreateAppInfo(
   value->SetBoolean("is_component",
                     extension->location() == extensions::Manifest::COMPONENT);
   value->SetBoolean("is_webstore",
-      extension->id() == extension_misc::kWebStoreAppId);
+      extension->id() == extensions::kWebStoreAppId);
 
   AppSorting* sorting = prefs->app_sorting();
   syncer::StringOrdinal page_ordinal = sorting->GetPageOrdinal(extension->id());
   if (!page_ordinal.IsValid()) {
     // Make sure every app has a page ordinal (some predate the page ordinal).
     // The webstore app should be on the first page.
-    page_ordinal = extension->id() == extension_misc::kWebStoreAppId ?
+    page_ordinal = extension->id() == extensions::kWebStoreAppId ?
         sorting->CreateFirstAppPageOrdinal() :
         sorting->GetNaturalAppPageOrdinal();
     sorting->SetPageOrdinal(extension->id(), page_ordinal);
@@ -182,7 +184,7 @@ void AppLauncherHandler::CreateAppInfo(
     // Make sure every app has a launch ordinal (some predate the launch
     // ordinal). The webstore's app launch ordinal is always set to the first
     // position.
-    app_launch_ordinal = extension->id() == extension_misc::kWebStoreAppId ?
+    app_launch_ordinal = extension->id() == extensions::kWebStoreAppId ?
         sorting->CreateFirstAppLaunchOrdinal(page_ordinal) :
         sorting->CreateNextAppLaunchOrdinal(page_ordinal);
     sorting->SetAppLaunchOrdinal(extension->id(), app_launch_ordinal);
@@ -507,7 +509,7 @@ void AppLauncherHandler::HandleLaunchApp(const base::ListValue* args) {
 
   WindowOpenDisposition disposition = args->GetSize() > 3 ?
         webui::GetDispositionFromClick(args, 3) : CURRENT_TAB;
-  if (extension_id != extension_misc::kWebStoreAppId) {
+  if (extension_id != extensions::kWebStoreAppId) {
     CHECK_NE(launch_bucket, extension_misc::APP_LAUNCH_BUCKET_INVALID);
     CoreAppLauncherHandler::RecordAppLaunchType(launch_bucket,
                                                 extension->GetType());
@@ -524,6 +526,7 @@ void AppLauncherHandler::HandleLaunchApp(const base::ListValue* args) {
                                extensions::LAUNCH_CONTAINER_TAB,
                            disposition);
     params.override_url = GURL(url);
+    params.source = extensions::SOURCE_NEW_TAB_PAGE;
     OpenApplication(params);
   } else {
     // To give a more "launchy" experience when using the NTP launcher, we close
@@ -537,6 +540,7 @@ void AppLauncherHandler::HandleLaunchApp(const base::ListValue* args) {
     AppLaunchParams params(profile, extension,
                            old_contents ? CURRENT_TAB : NEW_FOREGROUND_TAB);
     params.override_url = GURL(url);
+    params.source = extensions::SOURCE_NEW_TAB_PAGE;
     WebContents* new_contents = OpenApplication(params);
 
     // This will also destroy the handler, so do not perform any actions after.

@@ -5,9 +5,10 @@
 #include "chrome/service/cloud_print/print_system.h"
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/profiler/scoped_tracker.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/object_watcher.h"
 #include "base/win/scoped_bstr.h"
@@ -23,7 +24,9 @@
 #include "printing/backend/win_helper.h"
 #include "printing/emf_win.h"
 #include "printing/page_range.h"
+#include "printing/pdf_render_settings.h"
 #include "printing/printing_utils.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace cloud_print {
 
@@ -66,9 +69,9 @@ class PrintSystemWatcherWin : public base::win::ObjectWatcher::Delegate {
     bool ret = false;
     if (printer_.OpenPrinter(printer_name_to_use)) {
       printer_change_.Set(FindFirstPrinterChangeNotification(
-          printer_, PRINTER_CHANGE_PRINTER|PRINTER_CHANGE_JOB, 0, NULL));
+          printer_.Get(), PRINTER_CHANGE_PRINTER|PRINTER_CHANGE_JOB, 0, NULL));
       if (printer_change_.IsValid()) {
-        ret = watcher_.StartWatching(printer_change_, this);
+        ret = watcher_.StartWatching(printer_change_.Get(), this);
       }
     }
     if (!ret) {
@@ -86,6 +89,11 @@ class PrintSystemWatcherWin : public base::win::ObjectWatcher::Delegate {
 
   // base::ObjectWatcher::Delegate method
   virtual void OnObjectSignaled(HANDLE object) {
+    // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION(
+            "PrintSystemWatcherWin_OnObjectSignaled"));
+
     crash_keys::ScopedPrinterInfo crash_key(printer_info_);
     DWORD change = 0;
     FindNextPrinterChangeNotification(object, &change, NULL, NULL);
@@ -106,12 +114,12 @@ class PrintSystemWatcherWin : public base::win::ObjectWatcher::Delegate {
         delegate_->OnJobChanged();
       }
     }
-    watcher_.StartWatching(printer_change_, this);
+    watcher_.StartWatching(printer_change_.Get(), this);
   }
 
   bool GetCurrentPrinterInfo(printing::PrinterBasicInfo* printer_info) {
     DCHECK(printer_info);
-    return InitBasicPrinterInfo(printer_, printer_info);
+    return InitBasicPrinterInfo(printer_.Get(), printer_info);
   }
 
  private:
@@ -132,26 +140,26 @@ class PrintServerWatcherWin
 
   // PrintSystem::PrintServerWatcher implementation.
   virtual bool StartWatching(
-      PrintSystem::PrintServerWatcher::Delegate* delegate) OVERRIDE{
+      PrintSystem::PrintServerWatcher::Delegate* delegate) override{
     delegate_ = delegate;
     return watcher_.Start(std::string(), this);
   }
 
-  virtual bool StopWatching() OVERRIDE{
+  virtual bool StopWatching() override{
     bool ret = watcher_.Stop();
     delegate_ = NULL;
     return ret;
   }
 
   // PrintSystemWatcherWin::Delegate implementation.
-  virtual void OnPrinterAdded() OVERRIDE {
+  virtual void OnPrinterAdded() override {
     delegate_->OnPrinterAdded();
   }
-  virtual void OnPrinterDeleted() OVERRIDE {}
-  virtual void OnPrinterChanged() OVERRIDE {}
-  virtual void OnJobChanged() OVERRIDE {}
+  virtual void OnPrinterDeleted() override {}
+  virtual void OnPrinterChanged() override {}
+  virtual void OnJobChanged() override {}
 
-  protected:
+ protected:
   virtual ~PrintServerWatcherWin() {}
 
  private:
@@ -172,37 +180,37 @@ class PrinterWatcherWin
 
   // PrintSystem::PrinterWatcher implementation.
   virtual bool StartWatching(
-      PrintSystem::PrinterWatcher::Delegate* delegate) OVERRIDE {
+      PrintSystem::PrinterWatcher::Delegate* delegate) override {
     delegate_ = delegate;
     return watcher_.Start(printer_name_, this);
   }
 
-  virtual bool StopWatching() OVERRIDE {
+  virtual bool StopWatching() override {
     bool ret = watcher_.Stop();
     delegate_ = NULL;
     return ret;
   }
 
   virtual bool GetCurrentPrinterInfo(
-      printing::PrinterBasicInfo* printer_info) OVERRIDE {
+      printing::PrinterBasicInfo* printer_info) override {
     return watcher_.GetCurrentPrinterInfo(printer_info);
   }
 
   // PrintSystemWatcherWin::Delegate implementation.
-  virtual void OnPrinterAdded() OVERRIDE {
+  virtual void OnPrinterAdded() override {
     NOTREACHED();
   }
-  virtual void OnPrinterDeleted() OVERRIDE {
+  virtual void OnPrinterDeleted() override {
     delegate_->OnPrinterDeleted();
   }
-  virtual void OnPrinterChanged() OVERRIDE {
+  virtual void OnPrinterChanged() override {
     delegate_->OnPrinterChanged();
   }
-  virtual void OnJobChanged() OVERRIDE {
+  virtual void OnJobChanged() override {
     delegate_->OnJobChanged();
   }
 
-  protected:
+ protected:
   virtual ~PrinterWatcherWin() {}
 
  private:
@@ -225,7 +233,7 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
                      const std::string& printer_name,
                      const std::string& job_title,
                      const std::vector<std::string>& tags,
-                     JobSpooler::Delegate* delegate) OVERRIDE {
+                     JobSpooler::Delegate* delegate) override {
     // TODO(gene): add tags handling.
     scoped_refptr<printing::PrintBackend> print_backend(
         printing::PrintBackend::CreateInstance(NULL));
@@ -245,12 +253,7 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
   class Core : public ServiceUtilityProcessHost::Client,
                public base::win::ObjectWatcher::Delegate {
    public:
-    Core()
-        : last_page_printed_(-1),
-          job_id_(-1),
-          delegate_(NULL),
-          saved_dc_(0) {
-    }
+    Core() : job_id_(-1), delegate_(NULL), saved_dc_(0) {}
 
     ~Core() {}
 
@@ -267,7 +270,6 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
         return false;
       }
       base::string16 printer_wide = base::UTF8ToWide(printer_name);
-      last_page_printed_ = -1;
       // We only support PDF and XPS documents for now.
       if (print_data_mime_type == kContentTypePDF) {
         scoped_ptr<DEVMODE, base::FreeDeleter> dev_mode;
@@ -302,7 +304,7 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
         saved_dc_ = SaveDC(printer_dc_.Get());
         print_data_file_path_ = print_data_file_path;
         delegate_ = delegate;
-        RenderNextPDFPages();
+        RenderPDFPages();
       } else if (print_data_mime_type == kContentTypeXPS) {
         DCHECK(print_ticket_mime_type == kContentTypeXML);
         bool ret = PrintXPSDocument(printer_name,
@@ -319,7 +321,7 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
       return true;
     }
 
-    void PreparePageDCForPrinting(HDC, double scale_factor) {
+    void PreparePageDCForPrinting(HDC, float scale_factor) {
       SetGraphicsMode(printer_dc_.Get(), GM_ADVANCED);
       // Setup the matrix to translate and scale to the right place. Take in
       // account the scale factor.
@@ -330,28 +332,34 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
       XFORM xform = {0};
       xform.eDx = static_cast<float>(-offset_x);
       xform.eDy = static_cast<float>(-offset_y);
-      xform.eM11 = xform.eM22 = 1.0 / scale_factor;
+      xform.eM11 = xform.eM22 = 1.0f / scale_factor;
       SetWorldTransform(printer_dc_.Get(), &xform);
     }
 
     // ServiceUtilityProcessHost::Client implementation.
-    virtual void OnRenderPDFPagesToMetafileSucceeded(
-        const printing::Emf& metafile,
-        int highest_rendered_page_number,
-        double scale_factor) OVERRIDE {
+    virtual void OnRenderPDFPagesToMetafilePageDone(
+        float scale_factor,
+        const printing::MetafilePlayer& emf) override {
       PreparePageDCForPrinting(printer_dc_.Get(), scale_factor);
-      metafile.SafePlayback(printer_dc_.Get());
-      bool done_printing = (highest_rendered_page_number !=
-          last_page_printed_ + kPageCountPerBatch);
-      last_page_printed_ = highest_rendered_page_number;
-      if (done_printing)
-        PrintJobDone();
-      else
-        RenderNextPDFPages();
+      ::StartPage(printer_dc_.Get());
+      emf.SafePlayback(printer_dc_.Get());
+      ::EndPage(printer_dc_.Get());
     }
 
+    // ServiceUtilityProcessHost::Client implementation.
+    virtual void OnRenderPDFPagesToMetafileDone(bool success) override {
+      PrintJobDone(success);
+    }
+
+    virtual void OnChildDied() override { PrintJobDone(false); }
+
     // base::win::ObjectWatcher::Delegate implementation.
-    virtual void OnObjectSignaled(HANDLE object) OVERRIDE {
+    virtual void OnObjectSignaled(HANDLE object) override {
+      // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is
+      // fixed.
+      tracked_objects::ScopedTracker tracking_profile(
+          FROM_HERE_WITH_EXPLICIT_FUNCTION("Core_OnObjectSignaled"));
+
       DCHECK(xps_print_job_);
       DCHECK(object == job_progress_event_.Get());
       ResetEvent(job_progress_event_.Get());
@@ -372,14 +380,6 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
         job_progress_watcher_.StopWatching();
         job_progress_watcher_.StartWatching(job_progress_event_.Get(), this);
       }
-    }
-
-    virtual void OnRenderPDFPagesToMetafileFailed() OVERRIDE {
-      PrintJobDone();
-    }
-
-    virtual void OnChildDied() OVERRIDE {
-      PrintJobDone();
     }
 
    private:
@@ -405,45 +405,41 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
       DISALLOW_COPY_AND_ASSIGN(PrintJobCanceler);
     };
 
-    void PrintJobDone() {
+    void PrintJobDone(bool success) {
       // If there is no delegate, then there is nothing pending to process.
       if (!delegate_)
         return;
       RestoreDC(printer_dc_.Get(), saved_dc_);
       EndDoc(printer_dc_.Get());
-      if (-1 == last_page_printed_) {
-        delegate_->OnJobSpoolFailed();
-      } else {
+      if (success) {
         delegate_->OnJobSpoolSucceeded(job_id_);
+      } else {
+        delegate_->OnJobSpoolFailed();
       }
       delegate_ = NULL;
     }
 
-    void RenderNextPDFPages() {
-      printing::PageRange range;
-      // Render 10 pages at a time.
-      range.from = last_page_printed_ + 1;
-      range.to = last_page_printed_ + kPageCountPerBatch;
-      std::vector<printing::PageRange> page_ranges;
-      page_ranges.push_back(range);
-
+    void RenderPDFPages() {
       int printer_dpi = ::GetDeviceCaps(printer_dc_.Get(), LOGPIXELSX);
       int dc_width = GetDeviceCaps(printer_dc_.Get(), PHYSICALWIDTH);
       int dc_height = GetDeviceCaps(printer_dc_.Get(), PHYSICALHEIGHT);
       gfx::Rect render_area(0, 0, dc_width, dc_height);
       g_service_process->io_thread()->message_loop_proxy()->PostTask(
           FROM_HERE,
-          base::Bind(&JobSpoolerWin::Core::RenderPDFPagesInSandbox, this,
-                      print_data_file_path_, render_area, printer_dpi,
-                      page_ranges, base::MessageLoopProxy::current()));
+          base::Bind(&JobSpoolerWin::Core::RenderPDFPagesInSandbox,
+                     this,
+                     print_data_file_path_,
+                     render_area,
+                     printer_dpi,
+                     base::MessageLoopProxy::current()));
     }
 
     // Called on the service process IO thread.
-    void RenderPDFPagesInSandbox(
-        const base::FilePath& pdf_path, const gfx::Rect& render_area,
-        int render_dpi, const std::vector<printing::PageRange>& page_ranges,
-        const scoped_refptr<base::MessageLoopProxy>&
-            client_message_loop_proxy) {
+    void RenderPDFPagesInSandbox(const base::FilePath& pdf_path,
+                                 const gfx::Rect& render_area,
+                                 int render_dpi,
+                                 const scoped_refptr<base::MessageLoopProxy>&
+                                     client_message_loop_proxy) {
       DCHECK(g_service_process->io_thread()->message_loop_proxy()->
           BelongsToCurrentThread());
       scoped_ptr<ServiceUtilityProcessHost> utility_host(
@@ -455,10 +451,12 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
       // PDF that matches paper size and orientation.
       if (utility_host->StartRenderPDFPagesToMetafile(
               pdf_path,
-              printing::PdfRenderSettings(render_area, render_dpi, false),
-              page_ranges)) {
+              printing::PdfRenderSettings(render_area, render_dpi, false))) {
         // The object will self-destruct when the child process dies.
         utility_host.release();
+      } else {
+        client_message_loop_proxy->PostTask(
+            FROM_HERE, base::Bind(&Core::PrintJobDone, this, false));
       }
     }
 
@@ -509,14 +507,6 @@ class JobSpoolerWin : public PrintSystem::JobSpooler {
       return true;
     }
 
-    // Some Cairo-generated PDFs from Chrome OS result in huge metafiles.
-    // So the PageCountPerBatch is set to 1 for now.
-    // TODO(sanjeevr): Figure out a smarter way to determine the pages per
-    // batch. Filed a bug to track this at
-    // http://code.google.com/p/chromium/issues/detail?id=57350.
-    static const int kPageCountPerBatch = 1;
-
-    int last_page_printed_;
     PlatformJobId job_id_;
     PrintSystem::JobSpooler::Delegate* delegate_;
     int saved_dc_;
@@ -544,7 +534,7 @@ class PrinterCapsHandler : public ServiceUtilityProcessHost::Client {
   }
 
   // ServiceUtilityProcessHost::Client implementation.
-  virtual void OnChildDied() OVERRIDE {
+  virtual void OnChildDied() override {
     OnGetPrinterCapsAndDefaults(false, printer_name_,
                                 printing::PrinterCapsAndDefaults());
   }
@@ -552,7 +542,7 @@ class PrinterCapsHandler : public ServiceUtilityProcessHost::Client {
   virtual void OnGetPrinterCapsAndDefaults(
       bool succeeded,
       const std::string& printer_name,
-      const printing::PrinterCapsAndDefaults& caps_and_defaults) OVERRIDE {
+      const printing::PrinterCapsAndDefaults& caps_and_defaults) override {
     callback_.Run(succeeded, printer_name, caps_and_defaults);
     callback_.Reset();
     Release();
@@ -561,7 +551,7 @@ class PrinterCapsHandler : public ServiceUtilityProcessHost::Client {
   virtual void OnGetPrinterSemanticCapsAndDefaults(
       bool succeeded,
       const std::string& printer_name,
-      const printing::PrinterSemanticCapsAndDefaults& semantic_info) OVERRIDE {
+      const printing::PrinterSemanticCapsAndDefaults& semantic_info) override {
     printing::PrinterCapsAndDefaults printer_info;
     if (succeeded) {
       printer_info.caps_mime_type = kContentTypeJSON;
@@ -636,26 +626,26 @@ class PrintSystemWin : public PrintSystem {
   PrintSystemWin();
 
   // PrintSystem implementation.
-  virtual PrintSystemResult Init() OVERRIDE;
+  virtual PrintSystemResult Init() override;
   virtual PrintSystem::PrintSystemResult EnumeratePrinters(
-      printing::PrinterList* printer_list) OVERRIDE;
+      printing::PrinterList* printer_list) override;
   virtual void GetPrinterCapsAndDefaults(
       const std::string& printer_name,
-      const PrinterCapsAndDefaultsCallback& callback) OVERRIDE;
-  virtual bool IsValidPrinter(const std::string& printer_name) OVERRIDE;
+      const PrinterCapsAndDefaultsCallback& callback) override;
+  virtual bool IsValidPrinter(const std::string& printer_name) override;
   virtual bool ValidatePrintTicket(
       const std::string& printer_name,
       const std::string& print_ticket_data,
-      const std::string& print_ticket_data_mime_type) OVERRIDE;
+      const std::string& print_ticket_data_mime_type) override;
   virtual bool GetJobDetails(const std::string& printer_name,
                              PlatformJobId job_id,
-                             PrintJobDetails *job_details) OVERRIDE;
-  virtual PrintSystem::PrintServerWatcher* CreatePrintServerWatcher() OVERRIDE;
+                             PrintJobDetails *job_details) override;
+  virtual PrintSystem::PrintServerWatcher* CreatePrintServerWatcher() override;
   virtual PrintSystem::PrinterWatcher* CreatePrinterWatcher(
-      const std::string& printer_name) OVERRIDE;
-  virtual PrintSystem::JobSpooler* CreateJobSpooler() OVERRIDE;
-  virtual bool UseCddAndCjt() OVERRIDE;
-  virtual std::string GetSupportedMimeTypes() OVERRIDE;
+      const std::string& printer_name) override;
+  virtual PrintSystem::JobSpooler* CreateJobSpooler() override;
+  virtual bool UseCddAndCjt() override;
+  virtual std::string GetSupportedMimeTypes() override;
 
  private:
   std::string PrintSystemWin::GetPrinterDriverInfo(
@@ -773,14 +763,14 @@ bool PrintSystemWin::GetJobDetails(const std::string& printer_name,
   bool ret = false;
   if (printer_handle.IsValid()) {
     DWORD bytes_needed = 0;
-    GetJob(printer_handle, job_id, 1, NULL, 0, &bytes_needed);
+    GetJob(printer_handle.Get(), job_id, 1, NULL, 0, &bytes_needed);
     DWORD last_error = GetLastError();
     if (ERROR_INVALID_PARAMETER != last_error) {
       // ERROR_INVALID_PARAMETER normally means that the job id is not valid.
       DCHECK(last_error == ERROR_INSUFFICIENT_BUFFER);
       scoped_ptr<BYTE[]> job_info_buffer(new BYTE[bytes_needed]);
-      if (GetJob(printer_handle, job_id, 1, job_info_buffer.get(), bytes_needed,
-                &bytes_needed)) {
+      if (GetJob(printer_handle.Get(), job_id, 1, job_info_buffer.get(),
+                 bytes_needed, &bytes_needed)) {
         JOB_INFO_1 *job_info =
             reinterpret_cast<JOB_INFO_1 *>(job_info_buffer.get());
         if (job_info->pStatus) {

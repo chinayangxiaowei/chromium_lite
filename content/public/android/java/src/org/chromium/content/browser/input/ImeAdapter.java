@@ -17,12 +17,12 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 
-import com.google.common.annotations.VisibleForTesting;
-
-import java.lang.CharSequence;
-
 import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
+import org.chromium.base.VisibleForTesting;
+import org.chromium.ui.picker.InputDialogContainer;
+
+import java.lang.CharSequence;
 
 /**
  * Adapts and plumbs android IME service onto the chrome text input API.
@@ -74,15 +74,22 @@ public class ImeAdapter {
     }
 
     private class DelayedDismissInput implements Runnable {
-        private final long mNativeImeAdapter;
+        private long mNativeImeAdapter;
 
         DelayedDismissInput(long nativeImeAdapter) {
             mNativeImeAdapter = nativeImeAdapter;
         }
 
+        // http://crbug.com/413744
+        void detach() {
+            mNativeImeAdapter = 0;
+        }
+
         @Override
         public void run() {
-            attach(mNativeImeAdapter, sTextInputTypeNone, sTextInputFlagNone);
+            if (mNativeImeAdapter != 0) {
+                attach(mNativeImeAdapter, sTextInputTypeNone, sTextInputFlagNone);
+            }
             dismissInput(true);
         }
     }
@@ -331,7 +338,12 @@ public class ImeAdapter {
     }
 
     public boolean dispatchKeyEvent(KeyEvent event) {
-        return translateAndSendNativeEvents(event);
+        // Physical keyboards have their events come through here instead of
+        // AdapterInputConnection.
+        if (mInputConnection != null) {
+            return mInputConnection.sendKeyEvent(event);
+        }
+        return translateAndSendNativeEvents(event, 0);
     }
 
     private int shouldSendKeyEventWithKeyCode(String text) {
@@ -400,11 +412,11 @@ public class ImeAdapter {
         translateAndSendNativeEvents(new KeyEvent(eventTime, eventTime,
                 KeyEvent.ACTION_DOWN, keyCode, 0, 0,
                 KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
-                flags));
+                flags), 0);
         translateAndSendNativeEvents(new KeyEvent(SystemClock.uptimeMillis(), eventTime,
                 KeyEvent.ACTION_UP, keyCode, 0, 0,
                 KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
-                flags));
+                flags), 0);
     }
 
     // Calls from Java to C++
@@ -434,14 +446,25 @@ public class ImeAdapter {
                 keyCode = -1;
             }
 
-            // If this is a commit with no previous composition, then treat it as a native
-            // KeyDown/KeyUp pair with no composition rather than a synthetic pair with
+            // If this is a single-character commit with no previous composition, then treat it as
+            // a native KeyDown/KeyUp pair with no composition rather than a synthetic pair with
             // composition below.
-            if (keyCode > 0 && isCommit && mLastComposeText == null) {
+            if (keyCode > 0 && isCommit && mLastComposeText == null && textStr.length() == 1) {
                 mLastSyntheticKeyCode = keyCode;
-                return translateAndSendNativeEvents(keyEvent) &&
-                       translateAndSendNativeEvents(KeyEvent.changeAction(
-                               keyEvent, KeyEvent.ACTION_UP));
+                return translateAndSendNativeEvents(keyEvent, 0)
+                        && translateAndSendNativeEvents(
+                                KeyEvent.changeAction(keyEvent, KeyEvent.ACTION_UP), 0);
+            }
+
+            // FIXME: Use WebTextInputFlags.AutocompleteOff. We need this hack to enable merge into
+            // into Beta to fix http://crbug.com/422685 .
+            final int textInputFlagAutocompleteOff = 1 << 1;
+
+            // If we do not have autocomplete=off, then always send compose events rather than a
+            // guessed keyCode. This addresses http://crbug.com/422685 .
+            if ((mTextInputFlags & textInputFlagAutocompleteOff) == 0) {
+                keyCode = COMPOSITION_KEY_CODE;
+                modifiers = 0;
             }
 
             // When typing, there is no issue sending KeyDown and KeyUp events around the
@@ -492,12 +515,11 @@ public class ImeAdapter {
         nativeFinishComposingText(mNativeImeAdapterAndroid);
     }
 
-    boolean translateAndSendNativeEvents(KeyEvent event) {
+    boolean translateAndSendNativeEvents(KeyEvent event, int accentChar) {
         if (mNativeImeAdapterAndroid == 0) return false;
 
         int action = event.getAction();
-        if (action != KeyEvent.ACTION_DOWN &&
-            action != KeyEvent.ACTION_UP) {
+        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
             // action == KeyEvent.ACTION_MULTIPLE
             // TODO(bulach): confirm the actual behavior. Apparently:
             // If event.getKeyCode() == KEYCODE_UNKNOWN, we can send a
@@ -511,9 +533,11 @@ public class ImeAdapter {
             return false;
         }
         mViewEmbedder.onImeEvent();
+        int unicodeChar = AdapterInputConnection.maybeAddAccentToCharacter(
+                accentChar, event.getUnicodeChar());
         return nativeSendKeyEvent(mNativeImeAdapterAndroid, event, event.getAction(),
                 getModifiers(event.getMetaState()), event.getEventTime(), event.getKeyCode(),
-                             /*isSystemKey=*/false, event.getUnicodeChar());
+                             /*isSystemKey=*/false, unicodeChar);
     }
 
     boolean sendSyntheticKeyEvent(int eventType, long timestampMs, int keyCode, int modifiers,
@@ -692,8 +716,16 @@ public class ImeAdapter {
     }
 
     @CalledByNative
+    private void setCharacterBounds(float[] characterBounds) {
+        // TODO(yukawa): Implement this.
+    }
+
+    @CalledByNative
     void detach() {
-        if (mDismissInput != null) mHandler.removeCallbacks(mDismissInput);
+        if (mDismissInput != null) {
+            mHandler.removeCallbacks(mDismissInput);
+            mDismissInput.detach();
+        }
         mNativeImeAdapterAndroid = 0;
         mTextInputType = 0;
     }

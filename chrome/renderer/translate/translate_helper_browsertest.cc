@@ -3,11 +3,14 @@
 // found in the LICENSE file.
 
 #include "base/time/time.h"
-#include "chrome/renderer/translate/translate_helper.h"
+#include "chrome/renderer/isolated_world_ids.h"
 #include "chrome/test/base/chrome_render_view_test.h"
 #include "components/translate/content/common/translate_messages.h"
+#include "components/translate/content/renderer/translate_helper.h"
 #include "components/translate/core/common/translate_constants.h"
 #include "content/public/renderer/render_view.h"
+#include "extensions/common/constants.h"
+#include "extensions/renderer/extension_groups.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/public/web/WebLocalFrame.h"
@@ -16,13 +19,16 @@ using testing::AtLeast;
 using testing::Return;
 using testing::_;
 
-class TestTranslateHelper : public TranslateHelper {
+class TestTranslateHelper : public translate::TranslateHelper {
  public:
   explicit TestTranslateHelper(content::RenderView* render_view)
-      : TranslateHelper(render_view) {
-  }
+      : translate::TranslateHelper(
+            render_view,
+            chrome::ISOLATED_WORLD_ID_TRANSLATE,
+            extensions::EXTENSION_GROUP_INTERNAL_TRANSLATE_SCRIPTS,
+            extensions::kExtensionScheme) {}
 
-  virtual base::TimeDelta AdjustDelay(int delayInMs) OVERRIDE {
+  virtual base::TimeDelta AdjustDelay(int delayInMs) override {
     // Just returns base::TimeDelta() which has initial value 0.
     // Tasks doesn't need to be delayed in tests.
     return base::TimeDelta();
@@ -55,12 +61,12 @@ class TranslateHelperBrowserTest : public ChromeRenderViewTest {
   TranslateHelperBrowserTest() : translate_helper_(NULL) {}
 
  protected:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ChromeRenderViewTest::SetUp();
     translate_helper_ = new TestTranslateHelper(view_);
   }
 
-  virtual void TearDown() OVERRIDE {
+  void TearDown() override {
     delete translate_helper_;
     ChromeRenderViewTest::TearDown();
   }

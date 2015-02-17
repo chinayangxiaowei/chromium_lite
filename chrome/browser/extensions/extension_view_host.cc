@@ -40,10 +40,10 @@ class ExtensionViewHost::AssociatedWebContentsObserver
   AssociatedWebContentsObserver(ExtensionViewHost* host,
                                 WebContents* web_contents)
       : WebContentsObserver(web_contents), host_(host) {}
-  virtual ~AssociatedWebContentsObserver() {}
+  ~AssociatedWebContentsObserver() override {}
 
   // content::WebContentsObserver:
-  virtual void WebContentsDestroyed() OVERRIDE {
+  void WebContentsDestroyed() override {
     // Deleting |this| from here is safe.
     host_->SetAssociatedWebContents(NULL);
   }
@@ -127,6 +127,9 @@ void ExtensionViewHost::LoadInitialURL() {
     WebContentsModalDialogManager::CreateForWebContents(host_contents());
     WebContentsModalDialogManager::FromWebContents(
         host_contents())->SetDelegate(this);
+    if (!popup_manager_.get())
+      popup_manager_.reset(new web_modal::PopupManager(this));
+    popup_manager_->RegisterWith(host_contents());
   }
 
   ExtensionHost::LoadInitialURL();

@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * The overlay displaying the image.
  *
@@ -95,7 +93,8 @@ ImageView.prototype.draw = function() {
       this.displayedContentGeneration_ !== this.contentGeneration_) {
     this.displayedContentGeneration_ = this.contentGeneration_;
     ImageUtil.trace.resetTimer('paint');
-    this.paintDeviceRect(this.contentCanvas_, new Rect(this.contentCanvas_));
+    this.paintDeviceRect(
+        this.contentCanvas_, new ImageRect(this.contentCanvas_));
     ImageUtil.trace.reportTimer('paint');
   }
 };
@@ -158,7 +157,7 @@ ImageView.prototype.getContentRevision = function() {
  *
  * @param {HTMLCanvasElement} canvas Canvas containing whole image. The canvas
  *     may not be full resolution (scaled).
- * @param {Rect} imageRect Rectangle region of the canvas to be rendered.
+ * @param {ImageRect} imageRect Rectangle region of the canvas to be rendered.
  */
 ImageView.prototype.paintDeviceRect = function(canvas, imageRect) {
   // Map the rectangle in full resolution image to the rectangle in the device
@@ -166,13 +165,13 @@ ImageView.prototype.paintDeviceRect = function(canvas, imageRect) {
   var deviceBounds = this.viewport_.getDeviceBounds();
   var scaleX = deviceBounds.width / canvas.width;
   var scaleY = deviceBounds.height / canvas.height;
-  var deviceRect = new Rect(
+  var deviceRect = new ImageRect(
       imageRect.left * scaleX,
       imageRect.top * scaleY,
       imageRect.width * scaleX,
       imageRect.height * scaleY);
 
-  Rect.drawImage(
+  ImageRect.drawImage(
       this.screenImage_.getContext('2d'), canvas, deviceRect, imageRect);
 };
 
@@ -250,10 +249,10 @@ ImageView.prototype.cancelLoad = function() {
  *
  * @param {Gallery.Item} item Gallery item to be loaded.
  * @param {Object} effect Transition effect object.
- * @param {function(number} displayCallback Called when the image is displayed
- *   (possibly as a preview).
- * @param {function(number} loadCallback Called when the image is fully loaded.
- *   The parameter is the load type.
+ * @param {function(number)} displayCallback Called when the image is displayed
+ *     (possibly as a preview).
+ * @param {function(number, number, *=)} loadCallback Called when the image is
+ *     fully loaded. The first parameter is the load type.
  */
 ImageView.prototype.load =
     function(item, effect, displayCallback, loadCallback) {
@@ -264,7 +263,7 @@ ImageView.prototype.load =
     // Skip effects when reloading repeatedly very quickly.
     var time = Date.now();
     if (this.lastLoadTime_ &&
-       (time - this.lastLoadTime_) < ImageView.FAST_SCROLL_INTERVAL) {
+        (time - this.lastLoadTime_) < ImageView.FAST_SCROLL_INTERVAL) {
       effect = null;
     }
     this.lastLoadTime_ = time;
@@ -284,9 +283,9 @@ ImageView.prototype.load =
   } else {
     var cachedScreen = item.screenImage;
     var imageWidth = metadata.media && metadata.media.width ||
-                     metadata.drive && metadata.drive.imageWidth;
+                     metadata.external && metadata.external.imageWidth;
     var imageHeight = metadata.media && metadata.media.height ||
-                      metadata.drive && metadata.drive.imageHeight;
+                      metadata.external && metadata.external.imageHeight;
     if (cachedScreen) {
       // We have a cached screen-scale canvas, use it instead of a thumbnail.
       displayThumbnail(ImageView.LOAD_TYPE_CACHED_SCREEN, cachedScreen);
@@ -319,12 +318,12 @@ ImageView.prototype.load =
         width = metadata.media.width;
         height = metadata.media.height;
       }
-      // If metadata.drive.present is true, the image data is loaded directly
+      // If metadata.external.present is true, the image data is loaded directly
       // from local cache, whose size may be out of sync with the drive
       // metadata.
-      if (metadata.drive && !metadata.drive.present) {
-        width = metadata.drive.imageWidth;
-        height = metadata.drive.imageHeight;
+      if (metadata.external && !metadata.external.present) {
+        width = metadata.external.imageWidth;
+        height = metadata.external.imageHeight;
       }
       self.replace(
           canvas,
@@ -381,8 +380,7 @@ ImageView.prototype.load =
         loadType, ImageView.LOAD_TYPE_TOTAL);
 
     if (loadType === ImageView.LOAD_TYPE_ERROR &&
-        !navigator.onLine && metadata.streaming) {
-      // |streaming| is set only when the file is not locally cached.
+        !navigator.onLine && !metadata.external.present) {
       loadType = ImageView.LOAD_TYPE_OFFLINE;
     }
     if (loadCallback) loadCallback(loadType, animationDuration, opt_error);
@@ -405,7 +403,7 @@ ImageView.prototype.prefetch = function(item, delay) {
 
 /**
  * Unloads content.
- * @param {Rect} zoomToRect Target rectangle for zoom-out-effect.
+ * @param {ImageRect} zoomToRect Target rectangle for zoom-out-effect.
  */
 ImageView.prototype.unload = function(zoomToRect) {
   if (this.unloadTimer_) {
@@ -417,10 +415,9 @@ ImageView.prototype.unload = function(zoomToRect) {
     this.setTransform_(this.screenImage_, this.viewport_, effect);
     this.screenImage_.setAttribute('fade', true);
     this.unloadTimer_ = setTimeout(function() {
-        this.unloadTimer_ = null;
-        this.unload(null /* force unload */);
-      }.bind(this),
-      effect.getSafeInterval());
+      this.unloadTimer_ = null;
+      this.unload(null /* force unload */);
+    }.bind(this), effect.getSafeInterval());
     return;
   }
   this.container_.textContent = '';
@@ -481,7 +478,7 @@ ImageView.prototype.replaceContent_ = function(
 
 /**
  * Adds a listener for content changes.
- * @param {function} callback Callback.
+ * @param {function()} callback Callback.
  */
 ImageView.prototype.addContentCallback = function(callback) {
   this.contentCallbacks_.push(callback);
@@ -502,7 +499,7 @@ ImageView.prototype.updateThumbnail_ = function(canvas) {
   this.thumbnailCanvas_ = canvas.ownerDocument.createElement('canvas');
   this.thumbnailCanvas_.width = Math.round(canvas.width / downScale);
   this.thumbnailCanvas_.height = Math.round(canvas.height / downScale);
-  Rect.drawImage(this.thumbnailCanvas_.getContext('2d'), canvas);
+  ImageRect.drawImage(this.thumbnailCanvas_.getContext('2d'), canvas);
   ImageUtil.trace.reportTimer('thumb');
 };
 
@@ -575,7 +572,7 @@ ImageView.prototype.setTransform_ = function(
 };
 
 /**
- * @param {Rect} screenRect Target rectangle in screen coordinates.
+ * @param {ImageRect} screenRect Target rectangle in screen coordinates.
  * @return {ImageView.Effect.Zoom} Zoom effect object.
  */
 ImageView.prototype.createZoomEffect = function(screenRect) {
@@ -589,7 +586,7 @@ ImageView.prototype.createZoomEffect = function(screenRect) {
  * the new image to visualize the operation.
  *
  * @param {HTMLCanvasElement} canvas New content canvas.
- * @param {Rect} imageCropRect The crop rectangle in image coordinates.
+ * @param {ImageRect} imageCropRect The crop rectangle in image coordinates.
  *                             Null for rotation operations.
  * @param {number} rotate90 Rotation angle in 90 degree increments.
  * @return {number} Animation duration.
@@ -627,7 +624,7 @@ ImageView.prototype.replaceAndAnimate = function(
  * while fading in the new image.
  *
  * @param {HTMLCanvasElement} canvas New content canvas.
- * @param {Rect} imageCropRect The crop rectangle in image coordinates.
+ * @param {ImageRect} imageCropRect The crop rectangle in image coordinates.
  * @return {number} Animation duration.
  */
 ImageView.prototype.animateAndReplace = function(canvas, imageCropRect) {
@@ -697,12 +694,14 @@ ImageView.Effect.prototype.getTiming = function() { return this.timing_; };
 
 /**
  * Obtains the CSS transformation string of the effect.
- * @param {DOMCanvas} element Canvas element to be applied the transformation.
+ * @param {HTMLCanvasElement} element Canvas element to be applied the
+ *     transformation.
  * @param {Viewport} viewport Current viewport.
- * @return CSS transformation description.
+ * @return {string} CSS transformation description.
  */
 ImageView.Effect.prototype.transform = function(element, viewport) {
   throw new Error('Not implemented.');
+  return '';
 };
 
 /**
@@ -770,7 +769,7 @@ ImageView.Effect.Slide.prototype.transform = function(element, viewport) {
  *
  * @param {number} previousImageWidth Width of the full resolution image.
  * @param {number} previousImageHeight Height of the full resolution image.
- * @param {Rect} imageCropRect Crop rectangle in the full resolution image.
+ * @param {ImageRect} imageCropRect Crop rectangle in the full resolution image.
  * @param {number=} opt_duration Duration of the effect.
  * @constructor
  * @extends {ImageView.Effect}
@@ -797,7 +796,8 @@ ImageView.Effect.Zoom.prototype.transform = function(element, viewport) {
 /**
  * Effect to zoom to a screen rectangle.
  *
- * @param {Rect} screenRect Rectangle in the application window's coordinate.
+ * @param {ImageRect} screenRect Rectangle in the application window's
+ *     coordinate.
  * @param {number=} opt_duration Duration of effect.
  * @constructor
  * @extends {ImageView.Effect}

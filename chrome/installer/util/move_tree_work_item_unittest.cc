@@ -7,10 +7,9 @@
 #include <fstream>
 
 #include "base/base_paths.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/installer/util/installer_util_test_common.h"

@@ -10,7 +10,7 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
-#include "chrome/browser/sessions/session_id.h"
+#include "components/sessions/session_id.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -62,9 +62,9 @@ class PrintPreviewDialogController
       base::Callback<void(content::WebContents*)> callback);
 
   // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
 
   // Returns true if |contents| is a print preview dialog.
   static bool IsPrintPreviewDialog(content::WebContents* contents);
@@ -88,7 +88,7 @@ class PrintPreviewDialogController
   typedef std::map<content::WebContents*, content::WebContents*>
       PrintPreviewDialogMap;
 
-  virtual ~PrintPreviewDialogController();
+  ~PrintPreviewDialogController() override;
 
   // Handler for the RENDERER_PROCESS_CLOSED notification. This is observed when
   // the initiator renderer crashed.

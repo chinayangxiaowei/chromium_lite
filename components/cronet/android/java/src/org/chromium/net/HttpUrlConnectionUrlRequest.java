@@ -79,6 +79,8 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
 
     private int mHttpStatusCode;
 
+    private String mHttpStatusText;
+
     private boolean mStarted;
 
     private boolean mCanceled;
@@ -126,8 +128,8 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
                         @Override
                     public Thread newThread(Runnable r) {
                         Thread thread = new Thread(r,
-                                "HttpUrlConnection #" +
-                                mCount.getAndIncrement());
+                                "HttpUrlConnection #"
+                                + mCount.getAndIncrement());
                         // Note that this thread is not doing actual networking.
                         // It's only a controller.
                         thread.setPriority(Thread.NORM_PRIORITY);
@@ -172,7 +174,7 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
             throw new IllegalArgumentException(
                 "Upload contentLength is too big.");
         }
-        mUploadContentLength = (int)contentLength;
+        mUploadContentLength = (int) contentLength;
         mPostContentType = contentType;
         mPostDataChannel = channel;
         mPostData = null;
@@ -182,11 +184,13 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
     @Override
     public void setHttpMethod(String method) {
         validateNotStarted();
-        if (!("PUT".equals(method) || "POST".equals(method))) {
-            throw new IllegalArgumentException(
-                "Only PUT and POST are allowed.");
-        }
         mMethod = method;
+    }
+
+    @Override
+    public void disableRedirects() {
+        validateNotStarted();
+        mConnection.setFollowRedirects(false);
     }
 
     @Override
@@ -209,7 +213,7 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
             }
 
             URL url = new URL(mUrl);
-            mConnection = (HttpURLConnection)url.openConnection();
+            mConnection = (HttpURLConnection) url.openConnection();
             // If configured, use the provided http verb.
             if (mMethod != null) {
                 try {
@@ -254,6 +258,7 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
             }
 
             mHttpStatusCode = mConnection.getResponseCode();
+            mHttpStatusText = mConnection.getResponseMessage();
             mContentType = mConnection.getContentType();
             mContentLength = mConnection.getContentLength();
             if (mContentLengthLimit > 0 && mContentLength > mContentLengthLimit
@@ -385,13 +390,13 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
                     continue;
                 } else {
                     mSkippingToOffset = false;
-                    start = (int)(mOffset - (mSize - size));
+                    start = (int) (mOffset - (mSize - size));
                     count -= start;
                 }
             }
 
             if (mContentLengthLimit != 0 && mSize > mContentLengthLimit) {
-                count -= (int)(mSize - mContentLengthLimit);
+                count -= (int) (mSize - mContentLengthLimit);
                 if (count > 0) {
                     mSink.write(ByteBuffer.wrap(buffer, start, count));
                 }
@@ -422,6 +427,11 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
     }
 
     @Override
+    public String getNegotiatedProtocol() {
+        return "";
+    }
+
+    @Override
     public int getHttpStatusCode() {
         int httpStatusCode = mHttpStatusCode;
 
@@ -434,6 +444,11 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
             httpStatusCode = HttpStatus.SC_OK;
         }
         return httpStatusCode;
+    }
+
+    @Override
+    public String getHttpStatusText() {
+        return mHttpStatusText;
     }
 
     @Override
@@ -458,12 +473,12 @@ class HttpUrlConnectionUrlRequest implements HttpUrlRequest {
      */
     @Override
     public ByteBuffer getByteBuffer() {
-        return ((ChunkedWritableByteChannel)mSink).getByteBuffer();
+        return ((ChunkedWritableByteChannel) mSink).getByteBuffer();
     }
 
     @Override
     public byte[] getResponseAsBytes() {
-        return ((ChunkedWritableByteChannel)mSink).getBytes();
+        return ((ChunkedWritableByteChannel) mSink).getBytes();
     }
 
     @Override

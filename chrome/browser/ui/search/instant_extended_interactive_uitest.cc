@@ -16,7 +16,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/autocomplete/autocomplete_controller.h"
-#include "chrome/browser/autocomplete/search_provider.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
@@ -25,7 +24,6 @@
 #include "chrome/browser/history/history_db_task.h"
 #include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
@@ -46,18 +44,19 @@
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/instant_types.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
-#include "components/google/core/browser/google_url_tracker.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/common/thumbnail_score.h"
 #include "components/omnibox/autocomplete_match.h"
 #include "components/omnibox/autocomplete_provider.h"
 #include "components/omnibox/autocomplete_result.h"
+#include "components/omnibox/omnibox_field_trial.h"
+#include "components/omnibox/search_provider.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/sessions/serialized_navigation_entry.h"
 #include "content/public/browser/navigation_controller.h"
@@ -71,7 +70,6 @@
 #include "content/public/common/bindings_policy.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
-#include "grit/generated_resources.h"
 #include "net/base/network_change_notifier.h"
 #include "net/http/http_status_code.h"
 #include "net/url_request/test_url_fetcher_factory.h"
@@ -91,17 +89,15 @@ class QuittingHistoryDBTask : public history::HistoryDBTask {
  public:
   QuittingHistoryDBTask() {}
 
-  virtual bool RunOnDBThread(history::HistoryBackend* backend,
-                             history::HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(history::HistoryBackend* backend,
+                     history::HistoryDatabase* db) override {
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {
-    base::MessageLoop::current()->Quit();
-  }
+  void DoneRunOnMainThread() override { base::MessageLoop::current()->Quit(); }
 
  private:
-  virtual ~QuittingHistoryDBTask() {}
+  ~QuittingHistoryDBTask() override {}
 
   DISALLOW_COPY_AND_ASSIGN(QuittingHistoryDBTask);
 };
@@ -110,7 +106,7 @@ class FakeNetworkChangeNotifier : public net::NetworkChangeNotifier {
  public:
   FakeNetworkChangeNotifier() : connection_type_(CONNECTION_NONE) {}
 
-  virtual ConnectionType GetCurrentConnectionType() const OVERRIDE {
+  ConnectionType GetCurrentConnectionType() const override {
     return connection_type_;
   }
 
@@ -120,7 +116,7 @@ class FakeNetworkChangeNotifier : public net::NetworkChangeNotifier {
     base::RunLoop().RunUntilIdle();
   }
 
-  virtual ~FakeNetworkChangeNotifier() {}
+  ~FakeNetworkChangeNotifier() override {}
 
  private:
   ConnectionType connection_type_;
@@ -144,7 +140,7 @@ class InstantExtendedTest : public InProcessBrowserTest,
         on_toggle_voice_search_calls_(0) {
   }
  protected:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     chrome::EnableQueryExtractionForTesting();
     ASSERT_TRUE(https_test_server().Start());
     GURL instant_url = https_test_server().GetURL(
@@ -259,7 +255,7 @@ class InstantExtendedPrefetchTest : public InstantExtendedTest {
         fake_factory_(new net::FakeURLFetcherFactory(factory_.get())) {
   }
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     chrome::EnableQueryExtractionForTesting();
     ASSERT_TRUE(https_test_server().Start());
     GURL instant_url = https_test_server().GetURL(
@@ -269,7 +265,7 @@ class InstantExtendedPrefetchTest : public InstantExtendedTest {
     InstantTestBase::Init(instant_url, ntp_url, true);
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     command_line->AppendSwitchASCII(
         switches::kForceFieldTrials,
         "EmbeddedSearch/Group11 prefetch_results_srp:1/");
@@ -289,13 +285,13 @@ class InstantExtendedPrefetchTest : public InstantExtendedTest {
 
 class InstantExtendedNetworkTest : public InstantExtendedTest {
  protected:
-  virtual void SetUpOnMainThread() OVERRIDE {
+  void SetUpOnMainThread() override {
     disable_for_test_.reset(new net::NetworkChangeNotifier::DisableForTest);
     fake_network_change_notifier_.reset(new FakeNetworkChangeNotifier);
     InstantExtendedTest::SetUpOnMainThread();
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  void TearDownOnMainThread() override {
     InstantExtendedTest::TearDownOnMainThread();
     fake_network_change_notifier_.reset();
     disable_for_test_.reset();
@@ -318,7 +314,7 @@ class InstantPolicyTest : public ExtensionBrowserTest, public InstantTestBase {
   InstantPolicyTest() {}
 
  protected:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ASSERT_TRUE(https_test_server().Start());
     GURL instant_url = https_test_server().GetURL(
         "files/instant_extended.html?strk=1&");
@@ -594,16 +590,11 @@ IN_PROC_BROWSER_TEST_F(InstantPolicyTest,
   EXPECT_EQ(2, on_theme_changed_calls);
 }
 
-// Flaky on Mac and Linux Tests bots.
-#if defined(OS_MACOSX) || defined(OS_LINUX)
-#define MAYBE_UpdateSearchQueryOnBackNavigation DISABLED_UpdateSearchQueryOnBackNavigation
-#else
-#define MAYBE_UpdateSearchQueryOnBackNavigation UpdateSearchQueryOnBackNavigation
-#endif
+// Flaky on all bots.  http://crbug.com/253092
 // Test to verify that the omnibox search query is updated on browser
 // back button press event.
 IN_PROC_BROWSER_TEST_F(InstantExtendedTest,
-                       MAYBE_UpdateSearchQueryOnBackNavigation) {
+                       DISABLED_UpdateSearchQueryOnBackNavigation) {
   ASSERT_NO_FATAL_FAILURE(SetupInstant(browser()));
 
   // Focus omnibox and confirm overlay isn't shown.
@@ -822,8 +813,7 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedPrefetchTest, SetPrefetchQuery) {
       ui_test_utils::BROWSER_TEST_NONE);
   new_tab_observer.Wait();
 
-  omnibox()->model()->autocomplete_controller()->search_provider()->
-      kMinimumTimeBetweenSuggestQueriesMs = 0;
+  OmniboxFieldTrial::kDefaultMinimumTimeBetweenSuggestQueriesMs = 0;
 
   // Set the fake response for search query.
   fake_factory()->SetFakeResponse(instant_url().Resolve("#q=flowers"),
@@ -840,17 +830,19 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedPrefetchTest, SetPrefetchQuery) {
   observer.Wait();
 
   // Set the fake response for suggest request. Response has prefetch details.
-  // Ensure that the page received the prefetch query.
+  // Ensure that the page received the suggest response, then add another
+  // keystroke to allow the asynchronously-received inline autocomplete
+  // suggestion to actually be inlined (which in turn triggers it to prefetch).
   fake_factory()->SetFakeResponse(
-      instant_url().Resolve("#q=pupp"),
-      "[\"pupp\",[\"puppy\", \"puppies\"],[],[],"
+      instant_url().Resolve("#q=pup"),
+      "[\"pup\",[\"puppy\", \"puppies\"],[],[],"
       "{\"google:clientdata\":{\"phi\": 0},"
           "\"google:suggesttype\":[\"QUERY\", \"QUERY\"],"
           "\"google:suggestrelevance\":[1400, 9]}]",
       net::HTTP_OK,
       net::URLRequestStatus::SUCCESS);
 
-  SetOmniboxText("pupp");
+  SetOmniboxText("pup");
   while (!omnibox()->model()->autocomplete_controller()->done()) {
     content::WindowedNotificationObserver ready_observer(
         chrome::NOTIFICATION_AUTOCOMPLETE_CONTROLLER_RESULT_READY,
@@ -858,6 +850,7 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedPrefetchTest, SetPrefetchQuery) {
             omnibox()->model()->autocomplete_controller()));
     ready_observer.Wait();
   }
+  SetOmniboxText("pupp");
 
   ASSERT_EQ(3, CountSearchProviderSuggestions());
   content::WebContents* active_tab =
@@ -882,8 +875,7 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedPrefetchTest, ClearPrefetchedResults) {
       ui_test_utils::BROWSER_TEST_NONE);
   new_tab_observer.Wait();
 
-  omnibox()->model()->autocomplete_controller()->search_provider()->
-      kMinimumTimeBetweenSuggestQueriesMs = 0;
+  OmniboxFieldTrial::kDefaultMinimumTimeBetweenSuggestQueriesMs = 0;
 
   // Set the fake response for search query.
   fake_factory()->SetFakeResponse(instant_url().Resolve("#q=flowers"),

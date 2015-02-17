@@ -76,7 +76,7 @@ class MockWorkerListener : public IPC::Listener {
   MOCK_METHOD3(OnCrash, void(const std::string&, const std::string&, int));
 
   // IPC::Listener implementation
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  virtual bool OnMessageReceived(const IPC::Message& message) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockWorkerListener);
@@ -103,13 +103,13 @@ class WorkerProcessLauncherTest
   WorkerProcessLauncherTest();
   virtual ~WorkerProcessLauncherTest();
 
-  virtual void SetUp() OVERRIDE;
-  virtual void TearDown() OVERRIDE;
+  virtual void SetUp() override;
+  virtual void TearDown() override;
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  virtual bool OnMessageReceived(const IPC::Message& message) override;
+  virtual void OnChannelConnected(int32 peer_pid) override;
+  virtual void OnChannelError() override;
 
   // WorkerProcessLauncher::Delegate mocks
   void LaunchProcess(
@@ -262,14 +262,14 @@ void WorkerProcessLauncherTest::KillProcess() {
   event_handler_ = NULL;
 
   if (worker_process_.IsValid()) {
-    TerminateProcess(worker_process_, CONTROL_C_EXIT);
+    TerminateProcess(worker_process_.Get(), CONTROL_C_EXIT);
     worker_process_.Close();
   }
 }
 
 void WorkerProcessLauncherTest::TerminateWorker(DWORD exit_code) {
   if (worker_process_.IsValid())
-    TerminateProcess(worker_process_, exit_code);
+    TerminateProcess(worker_process_.Get(), exit_code);
 }
 
 void WorkerProcessLauncherTest::ConnectClient() {
@@ -312,7 +312,7 @@ void WorkerProcessLauncherTest::CrashWorker() {
 
 void WorkerProcessLauncherTest::StartWorker() {
   launcher_.reset(new WorkerProcessLauncher(
-      launcher_delegate_.PassAs<WorkerProcessLauncher::Delegate>(),
+      launcher_delegate_.Pass(),
       &server_listener_));
 
   launcher_->SetKillProcessTimeoutForTest(base::TimeDelta::FromMilliseconds(0));
@@ -362,11 +362,12 @@ void WorkerProcessLauncherTest::DoLaunchProcess() {
 
   // Wrap the pipe into an IPC channel.
   channel_server_ = IPC::ChannelProxy::Create(
-      IPC::ChannelHandle(pipe), IPC::Channel::MODE_SERVER, this, task_runner_);
+      IPC::ChannelHandle(pipe.Get()), IPC::Channel::MODE_SERVER, this,
+      task_runner_);
 
   HANDLE temp_handle;
   ASSERT_TRUE(DuplicateHandle(GetCurrentProcess(),
-                              worker_process_,
+                              worker_process_.Get(),
                               GetCurrentProcess(),
                               &temp_handle,
                               0,

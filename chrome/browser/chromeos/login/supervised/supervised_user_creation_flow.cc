@@ -18,8 +18,10 @@ namespace {
 SupervisedUserCreationScreen* GetScreen(LoginDisplayHost* host) {
   DCHECK(host);
   DCHECK(host->GetWizardController());
-  DCHECK(host->GetWizardController()->GetSupervisedUserCreationScreen());
-  return host->GetWizardController()->GetSupervisedUserCreationScreen();
+  SupervisedUserCreationScreen* result =
+      SupervisedUserCreationScreen::Get(host->GetWizardController());
+  DCHECK(result);
+  return result;
 }
 
 } // namespace
@@ -32,7 +34,9 @@ SupervisedUserCreationFlow::SupervisedUserCreationFlow(
         session_started_(false),
         manager_profile_(NULL) {}
 
-SupervisedUserCreationFlow::~SupervisedUserCreationFlow() {}
+SupervisedUserCreationFlow::~SupervisedUserCreationFlow() {
+  LOG(ERROR) << "Destroyed " << this;
+}
 
 bool SupervisedUserCreationFlow::CanLockScreen() {
   return false;
@@ -48,6 +52,10 @@ bool SupervisedUserCreationFlow::ShouldLaunchBrowser() {
 
 bool SupervisedUserCreationFlow::ShouldSkipPostLoginScreens() {
   return true;
+}
+
+bool SupervisedUserCreationFlow::SupportsEarlyRestartToApplyFlags() {
+  return false;
 }
 
 void SupervisedUserCreationFlow::HandleOAuthTokenStatusChange(
@@ -89,6 +97,8 @@ bool SupervisedUserCreationFlow::HandlePasswordChangeDetected() {
 
 void SupervisedUserCreationFlow::LaunchExtraSteps(
     Profile* profile) {
+  // TODO(antrim): remove this output once crash is found.
+  LOG(ERROR) << "LaunchExtraSteps for " << this << " host is " << host();
   logged_in_ = true;
   manager_profile_ = profile;
   ProfileHelper::Get()->ProfileStartup(profile, true);

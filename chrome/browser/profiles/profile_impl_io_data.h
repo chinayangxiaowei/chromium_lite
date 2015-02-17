@@ -14,6 +14,8 @@
 #include "chrome/browser/profiles/profile_io_data.h"
 #include "content/public/browser/cookie_store_factory.h"
 
+class ChromeSdchPolicy;
+
 namespace chrome_browser_net {
 class Predictor;
 }  // namespace chrome_browser_net
@@ -21,14 +23,6 @@ class Predictor;
 namespace content {
 class CookieCryptoDelegate;
 }  // namespace content
-
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-namespace data_reduction_proxy {
-class DataReductionProxyParams;
-class DataReductionProxyUsageStats;
-class DataReductionProxyAuthRequestHandler;
-}
-#endif
 
 namespace domain_reliability {
 class DomainReliabilityMonitor;
@@ -43,11 +37,9 @@ class ProxyConfig;
 class SDCHManager;
 }  // namespace net
 
-namespace quota {
+namespace storage {
 class SpecialStoragePolicy;
-}  // namespace quota
-
-class DataReductionProxyChromeConfigurator;
+}  // namespace storage
 
 class ProfileImplIOData : public ProfileIOData {
  public:
@@ -58,27 +50,28 @@ class ProfileImplIOData : public ProfileIOData {
 
     // Init() must be called before ~Handle(). It records most of the
     // parameters needed to construct a ChromeURLRequestContextGetter.
-    void Init(const base::FilePath& cookie_path,
-              const base::FilePath& channel_id_path,
-              const base::FilePath& cache_path,
-              int cache_max_size,
-              const base::FilePath& media_cache_path,
-              int media_cache_max_size,
-              const base::FilePath& extensions_cookie_path,
-              const base::FilePath& profile_path,
-              const base::FilePath& infinite_cache_path,
-              chrome_browser_net::Predictor* predictor,
-              content::CookieStoreConfig::SessionCookieMode
-                  session_cookie_mode,
-              quota::SpecialStoragePolicy* special_storage_policy,
-              scoped_ptr<domain_reliability::DomainReliabilityMonitor>
-                  domain_reliability_monitor,
-              const base::Callback<void(bool)>&
-                  data_reduction_proxy_unavailable,
-              scoped_ptr<DataReductionProxyChromeConfigurator>
-                  data_reduction_proxy_chrome_configurator,
-              scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
-                  data_reduction_proxy_params);
+    void Init(
+        const base::FilePath& cookie_path,
+        const base::FilePath& channel_id_path,
+        const base::FilePath& cache_path,
+        int cache_max_size,
+        const base::FilePath& media_cache_path,
+        int media_cache_max_size,
+        const base::FilePath& extensions_cookie_path,
+        const base::FilePath& profile_path,
+        const base::FilePath& infinite_cache_path,
+        chrome_browser_net::Predictor* predictor,
+        content::CookieStoreConfig::SessionCookieMode session_cookie_mode,
+        storage::SpecialStoragePolicy* special_storage_policy,
+        scoped_ptr<domain_reliability::DomainReliabilityMonitor>
+            domain_reliability_monitor,
+        const base::Callback<void(bool)>& data_reduction_proxy_unavailable,
+        scoped_ptr<DataReductionProxyChromeConfigurator>
+            data_reduction_proxy_chrome_configurator,
+        scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
+            data_reduction_proxy_params,
+        scoped_ptr<data_reduction_proxy::DataReductionProxyStatisticsPrefs>
+            data_reduction_proxy_statistics_prefs);
 
     // These Create*ContextGetter() functions are only exposed because the
     // circular relationship between Profile, ProfileIOData::Handle, and the
@@ -133,12 +126,13 @@ class ProfileImplIOData : public ProfileIOData {
     // on the UI thread from being unnecessarily initialized.
     void LazyInitialize() const;
 
-    // Ordering is important here. Do not reorder unless you know what you're
-    // doing. We need to release |io_data_| *before* the getters, because we
-    // want to make sure that the last reference for |io_data_| is on the IO
-    // thread. The getters will be deleted on the IO thread, so they will
-    // release their refs to their contexts, which will release the last refs to
-    // the ProfileIOData on the IO thread.
+    // Collect references to context getters in reverse order, i.e. last item
+    // will be main request getter. This list is passed to |io_data_|
+    // for invalidation on IO thread.
+    scoped_ptr<ChromeURLRequestContextGetterVector> GetAllContextGetters();
+
+    // The getters will be invalidated on the IO thread before
+    // ProfileIOData instance is deleted.
     mutable scoped_refptr<ChromeURLRequestContextGetter>
         main_request_context_getter_;
     mutable scoped_refptr<ChromeURLRequestContextGetter>
@@ -157,6 +151,12 @@ class ProfileImplIOData : public ProfileIOData {
     DISALLOW_COPY_AND_ASSIGN(Handle);
   };
 
+  bool IsDataReductionProxyEnabled() const override;
+
+  BooleanPrefMember* data_reduction_proxy_enabled() const {
+    return &data_reduction_proxy_enabled_;
+  }
+
  private:
   friend class base::RefCountedThreadSafe<ProfileImplIOData>;
 
@@ -174,45 +174,41 @@ class ProfileImplIOData : public ProfileIOData {
     base::FilePath extensions_cookie_path;
     base::FilePath infinite_cache_path;
     content::CookieStoreConfig::SessionCookieMode session_cookie_mode;
-    scoped_refptr<quota::SpecialStoragePolicy> special_storage_policy;
+    scoped_refptr<storage::SpecialStoragePolicy> special_storage_policy;
   };
 
   ProfileImplIOData();
-  virtual ~ProfileImplIOData();
+  ~ProfileImplIOData() override;
 
-  virtual void InitializeInternal(
-      ProfileParams* profile_params,
-      content::ProtocolHandlerMap* protocol_handlers,
-      content::URLRequestInterceptorScopedVector request_interceptors)
-          const OVERRIDE;
-  virtual void InitializeExtensionsRequestContext(
-      ProfileParams* profile_params) const OVERRIDE;
-  virtual net::URLRequestContext* InitializeAppRequestContext(
+  void InitializeInternal(ProfileParams* profile_params,
+                          content::ProtocolHandlerMap* protocol_handlers,
+                          content::URLRequestInterceptorScopedVector
+                              request_interceptors) const override;
+  void InitializeExtensionsRequestContext(
+      ProfileParams* profile_params) const override;
+  net::URLRequestContext* InitializeAppRequestContext(
       net::URLRequestContext* main_context,
       const StoragePartitionDescriptor& partition_descriptor,
       scoped_ptr<ProtocolHandlerRegistry::JobInterceptorFactory>
           protocol_handler_interceptor,
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors)
-          const OVERRIDE;
-  virtual net::URLRequestContext* InitializeMediaRequestContext(
+      const override;
+  net::URLRequestContext* InitializeMediaRequestContext(
       net::URLRequestContext* original_context,
-      const StoragePartitionDescriptor& partition_descriptor) const OVERRIDE;
-  virtual net::URLRequestContext*
-      AcquireMediaRequestContext() const OVERRIDE;
-  virtual net::URLRequestContext* AcquireIsolatedAppRequestContext(
+      const StoragePartitionDescriptor& partition_descriptor) const override;
+  net::URLRequestContext* AcquireMediaRequestContext() const override;
+  net::URLRequestContext* AcquireIsolatedAppRequestContext(
       net::URLRequestContext* main_context,
       const StoragePartitionDescriptor& partition_descriptor,
       scoped_ptr<ProtocolHandlerRegistry::JobInterceptorFactory>
           protocol_handler_interceptor,
       content::ProtocolHandlerMap* protocol_handlers,
       content::URLRequestInterceptorScopedVector request_interceptors)
-          const OVERRIDE;
-  virtual net::URLRequestContext*
-      AcquireIsolatedMediaRequestContext(
-          net::URLRequestContext* app_context,
-          const StoragePartitionDescriptor& partition_descriptor)
-              const OVERRIDE;
+      const override;
+  net::URLRequestContext* AcquireIsolatedMediaRequestContext(
+      net::URLRequestContext* app_context,
+      const StoragePartitionDescriptor& partition_descriptor) const override;
 
   // Deletes all network related data since |time|. It deletes transport
   // security state since |time| and also deletes HttpServerProperties data.
@@ -242,23 +238,14 @@ class ProfileImplIOData : public ProfileIOData {
       domain_reliability_monitor_;
 
   mutable scoped_ptr<net::SdchManager> sdch_manager_;
+  mutable scoped_ptr<ChromeSdchPolicy> sdch_policy_;
+
+  mutable BooleanPrefMember data_reduction_proxy_enabled_;
 
   // Parameters needed for isolated apps.
   base::FilePath profile_path_;
   int app_cache_max_size_;
   int app_media_cache_max_size_;
-
-#if defined(SPDY_PROXY_AUTH_ORIGIN)
-  mutable scoped_ptr<data_reduction_proxy::DataReductionProxyParams>
-      data_reduction_proxy_params_;
-  mutable scoped_ptr<data_reduction_proxy::DataReductionProxyUsageStats>
-      data_reduction_proxy_usage_stats_;
-  mutable base::Callback<void(bool)> data_reduction_proxy_unavailable_callback_;
-  mutable scoped_ptr<DataReductionProxyChromeConfigurator>
-      data_reduction_proxy_chrome_configurator_;
-  mutable scoped_ptr<data_reduction_proxy::DataReductionProxyAuthRequestHandler>
-      data_reduction_proxy_auth_request_handler_;
-#endif  // defined(SPDY_PROXY_AUTH_ORIGIN)
 
   DISALLOW_COPY_AND_ASSIGN(ProfileImplIOData);
 };

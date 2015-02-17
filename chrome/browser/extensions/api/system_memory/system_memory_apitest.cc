@@ -3,32 +3,32 @@
 // found in the LICENSE file.
 
 #include "base/message_loop/message_loop.h"
-#include "chrome/browser/extensions/api/system_memory/memory_info_provider.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "extensions/browser/api/system_memory/memory_info_provider.h"
 
 namespace extensions {
 
-using api::system_memory::MemoryInfo;
+using core_api::system_memory::MemoryInfo;
 
 class MockMemoryInfoProviderImpl : public MemoryInfoProvider {
  public:
   MockMemoryInfoProviderImpl() {}
 
-  virtual bool QueryInfo() OVERRIDE {
+  bool QueryInfo() override {
     info_.capacity = 4096;
     info_.available_capacity = 1024;
     return true;
   }
  private:
-  virtual ~MockMemoryInfoProviderImpl() {}
+  ~MockMemoryInfoProviderImpl() override {}
 };
 
 class SystemMemoryApiTest: public ExtensionApiTest {
  public:
   SystemMemoryApiTest() {}
-  virtual ~SystemMemoryApiTest() {}
+  ~SystemMemoryApiTest() override {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  void SetUpInProcessBrowserTestFixture() override {
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
     message_loop_.reset(new base::MessageLoopForUI);
   }

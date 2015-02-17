@@ -13,7 +13,6 @@ goog.require('cvox.BrailleBackground');
 goog.require('cvox.BrailleTable');
 goog.require('cvox.ChromeEarcons');
 goog.require('cvox.ChromeHost');
-goog.require('cvox.ChromeMsgs');
 goog.require('cvox.ChromeTts');
 goog.require('cvox.ChromeVox');
 goog.require('cvox.ChromeVoxPrefs');
@@ -22,6 +21,7 @@ goog.require('cvox.ExtensionBridge');
 goog.require('cvox.HostFactory');
 goog.require('cvox.KeyMap');
 goog.require('cvox.KeySequence');
+goog.require('cvox.Msgs');
 goog.require('cvox.PlatformFilter');
 goog.require('cvox.PlatformUtil');
 
@@ -67,7 +67,7 @@ cvox.OptionsPage.TEXT_TO_KEYCODE = {
  * @suppress {missingProperties} Property prefs never defined on Window
  */
 cvox.OptionsPage.init = function() {
-  cvox.ChromeVox.msgs = cvox.HostFactory.getMsgs();
+  cvox.ChromeVox.msgs = new cvox.Msgs();
 
   cvox.OptionsPage.prefs = chrome.extension.getBackgroundPage().prefs;
   cvox.OptionsPage.populateKeyMapSelect();
@@ -186,7 +186,7 @@ cvox.OptionsPage.addKeys = function() {
     } else {
       announce = cvox.ChromeVox.msgs.getMsg('key_conflict', [announce]);
     }
-    cvox.OptionsPage.speak(announce);
+    cvox.OptionsPage.speak(announce, cvox.QueueMode.QUEUE);
     this.prevTime = currentTime;
 
     evt.preventDefault();
@@ -289,7 +289,8 @@ cvox.OptionsPage.addKeys = function() {
         // Indicate error and instructions excluding tab.
         if (evt.keyCode != 9) {
           cvox.OptionsPage.speak(
-              cvox.ChromeVox.msgs.getMsg('modifier_entry_error'), 0, {});
+              cvox.ChromeVox.msgs.getMsg('modifier_entry_error'),
+              cvox.QueueMode.FLUSH, {});
         }
         this.modifierSeq_ = null;
       } else {
@@ -312,7 +313,8 @@ cvox.OptionsPage.addKeys = function() {
               cvox.KeyUtil.keySequenceToString(this.modifierSeq_, true, true);
           evt.target.value = modifierStr;
           cvox.OptionsPage.speak(
-              cvox.ChromeVox.msgs.getMsg('modifier_entry_set', [modifierStr]));
+              cvox.ChromeVox.msgs.getMsg('modifier_entry_set', [modifierStr]),
+              cvox.QueueMode.QUEUE);
           localStorage['cvoxKey'] = modifierStr;
           this.modifierSeq_ = null;
         }
@@ -365,32 +367,26 @@ cvox.OptionsPage.populateBrailleTablesSelect = function() {
     return;
   }
   var tables = cvox.OptionsPage.brailleTables;
-  var localeDict = JSON.parse(cvox.ChromeVox.msgs.getMsg('locale_dict'));
   var populateSelect = function(node, dots) {
-    var localeCount = [];
     var activeTable = localStorage[node.id] || localStorage['brailleTable'];
+    // Gather the display names and sort them according to locale.
+    var items = [];
     for (var i = 0, table; table = tables[i]; i++) {
       if (table.dots !== dots) {
         continue;
       }
-      var item = document.createElement('option');
-      item.id = table.id;
-      if (!localeCount[table.locale]) {
-        localeCount[table.locale] = 0;
+      items.push({id: table.id,
+                  name: cvox.BrailleTable.getDisplayName(table)});
+    }
+    items.sort(function(a, b) { return a.name.localeCompare(b.name);});
+    for (var i = 0, item; item = items[i]; ++i) {
+      var elem = document.createElement('option');
+      elem.id = item.id;
+      elem.textContent = item.name;
+      if (item.id == activeTable) {
+        elem.setAttribute('selected', '');
       }
-      localeCount[table.locale]++;
-      var grade = table.grade;
-      if (!grade) {
-        item.textContent = localeDict[table.locale];
-      } else {
-        item.textContent = cvox.ChromeVox.msgs.getMsg(
-            'options_braille_locale_grade',
-            [localeDict[table.locale], grade]);
-      }
-      if (table.id == activeTable) {
-        item.setAttribute('selected', '');
-      }
-      node.appendChild(item);
+      node.appendChild(elem);
     }
   };
   var select6 = $('brailleTable6');
@@ -561,7 +557,7 @@ cvox.OptionsPage.hidePlatformSpecifics = function() {
  * Calls a {@code cvox.TtsInterface.speak} method in the background page to
  * speak an utterance.  See that method for further details.
  * @param {string} textString The string of text to be spoken.
- * @param {number=} queueMode The queue mode to use.
+ * @param {cvox.QueueMode} queueMode The queue mode to use.
  * @param {Object=} properties Speech properties to use for this utterance.
  */
 cvox.OptionsPage.speak = function(textString, queueMode, properties) {

@@ -22,7 +22,7 @@ class ChromeContentBrowserClientExtensionsPart
     : public ChromeContentBrowserClientParts {
  public:
   ChromeContentBrowserClientExtensionsPart();
-  virtual ~ChromeContentBrowserClientExtensionsPart();
+  ~ChromeContentBrowserClientExtensionsPart() override;
 
   // Corresponds to the ChromeContentBrowserClient function of the same name.
   static GURL GetEffectiveURL(Profile* profile, const GURL& url);
@@ -43,8 +43,6 @@ class ChromeContentBrowserClientExtensionsPart
       content::ResourceContext* resource_context,
       const GURL& current_url,
       const GURL& new_url);
-  static std::string GetWorkerProcessTitle(const GURL& url,
-                                           content::ResourceContext* context);
 
   // Similiar to ChromeContentBrowserClient::ShouldAllowOpenURL(), but the
   // return value indicates whether to use |result| or not.
@@ -58,33 +56,25 @@ class ChromeContentBrowserClientExtensionsPart
 
  private:
   // ChromeContentBrowserClientParts:
-  virtual void RenderProcessWillLaunch(
-      content::RenderProcessHost* host) OVERRIDE;
-  virtual void SiteInstanceGotProcess(
-      content::SiteInstance* site_instance) OVERRIDE;
-  virtual void SiteInstanceDeleting(
-      content::SiteInstance* site_instance) OVERRIDE;
-  virtual void WorkerProcessCreated(content::SiteInstance* site_instance,
-                                    int worker_process_id) OVERRIDE;
-  virtual void WorkerProcessTerminated(content::SiteInstance* site_instance,
-                                       int worker_process_id) OVERRIDE;
-  virtual void OverrideWebkitPrefs(content::RenderViewHost* rvh,
-                                   const GURL& url,
-                                   content::WebPreferences* web_prefs) OVERRIDE;
-  virtual void BrowserURLHandlerCreated(
-      content::BrowserURLHandler* handler) OVERRIDE;
-  virtual void GetAdditionalAllowedSchemesForFileSystem(
-      std::vector<std::string>* additional_allowed_schemes) OVERRIDE;
-  virtual void GetURLRequestAutoMountHandlers(
-      std::vector<fileapi::URLRequestAutoMountHandler>* handlers) OVERRIDE;
-  virtual void GetAdditionalFileSystemBackends(
+  void RenderProcessWillLaunch(content::RenderProcessHost* host) override;
+  void SiteInstanceGotProcess(content::SiteInstance* site_instance) override;
+  void SiteInstanceDeleting(content::SiteInstance* site_instance) override;
+  void OverrideWebkitPrefs(content::RenderViewHost* rvh,
+                           const GURL& url,
+                           content::WebPreferences* web_prefs) override;
+  void BrowserURLHandlerCreated(content::BrowserURLHandler* handler) override;
+  void GetAdditionalAllowedSchemesForFileSystem(
+      std::vector<std::string>* additional_allowed_schemes) override;
+  void GetURLRequestAutoMountHandlers(
+      std::vector<storage::URLRequestAutoMountHandler>* handlers) override;
+  void GetAdditionalFileSystemBackends(
       content::BrowserContext* browser_context,
       const base::FilePath& storage_partition_path,
-      ScopedVector<fileapi::FileSystemBackend>* additional_backends) OVERRIDE;
-  virtual void AppendExtraRendererCommandLineSwitches(
+      ScopedVector<storage::FileSystemBackend>* additional_backends) override;
+  void AppendExtraRendererCommandLineSwitches(
       base::CommandLine* command_line,
       content::RenderProcessHost* process,
-      Profile* profile) OVERRIDE;
+      Profile* profile) override;
 
   scoped_ptr<BrowserPermissionsPolicyDelegate> permissions_policy_delegate_;
 

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "cc/test/begin_frame_args_test.h"
 #include "cc/test/fake_layer_tree_host_impl.h"
 #include "cc/test/test_shared_bitmap_manager.h"
 #include "cc/trees/layer_tree_impl.h"
@@ -15,6 +16,7 @@ FakeLayerTreeHostImpl::FakeLayerTreeHostImpl(Proxy* proxy,
                         proxy,
                         &stats_instrumentation_,
                         manager,
+                        NULL,
                         0) {
   // Explicitly clear all debug settings.
   SetDebugState(LayerTreeDebugState());
@@ -22,7 +24,7 @@ FakeLayerTreeHostImpl::FakeLayerTreeHostImpl(Proxy* proxy,
 
   // Avoid using Now() as the frame time in unit tests.
   base::TimeTicks time_ticks = base::TimeTicks::FromInternalValue(1);
-  SetCurrentFrameTimeTicks(time_ticks);
+  SetCurrentBeginFrameArgs(CreateBeginFrameArgsForTesting(time_ticks));
 }
 
 FakeLayerTreeHostImpl::FakeLayerTreeHostImpl(const LayerTreeSettings& settings,
@@ -33,13 +35,14 @@ FakeLayerTreeHostImpl::FakeLayerTreeHostImpl(const LayerTreeSettings& settings,
                         proxy,
                         &stats_instrumentation_,
                         manager,
+                        NULL,
                         0) {
   // Explicitly clear all debug settings.
   SetDebugState(LayerTreeDebugState());
 
   // Avoid using Now() as the frame time in unit tests.
   base::TimeTicks time_ticks = base::TimeTicks::FromInternalValue(1);
-  SetCurrentFrameTimeTicks(time_ticks);
+  SetCurrentBeginFrameArgs(CreateBeginFrameArgsForTesting(time_ticks));
 }
 
 FakeLayerTreeHostImpl::~FakeLayerTreeHostImpl() {}
@@ -51,15 +54,15 @@ void FakeLayerTreeHostImpl::CreatePendingTree() {
       1.f, 1.f / arbitrary_large_page_scale, arbitrary_large_page_scale);
 }
 
-base::TimeTicks FakeLayerTreeHostImpl::CurrentFrameTimeTicks() {
-  if (current_frame_time_ticks_.is_null())
-    return LayerTreeHostImpl::CurrentFrameTimeTicks();
-  return current_frame_time_ticks_;
+BeginFrameArgs FakeLayerTreeHostImpl::CurrentBeginFrameArgs() const {
+  if (!current_begin_frame_args_.IsValid())
+    return LayerTreeHostImpl::CurrentBeginFrameArgs();
+  return current_begin_frame_args_;
 }
 
-void FakeLayerTreeHostImpl::SetCurrentFrameTimeTicks(
-    base::TimeTicks current_frame_time_ticks) {
-  current_frame_time_ticks_ = current_frame_time_ticks;
+void FakeLayerTreeHostImpl::SetCurrentBeginFrameArgs(
+    const BeginFrameArgs& args) {
+  current_begin_frame_args_ = args;
 }
 
 int FakeLayerTreeHostImpl::RecursiveUpdateNumChildren(LayerImpl* layer) {

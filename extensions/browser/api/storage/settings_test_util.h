@@ -12,11 +12,11 @@
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/test/base/testing_profile.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
 #include "extensions/browser/api/storage/settings_storage_factory.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/mock_extension_system.h"
 #include "extensions/common/extension.h"
 
 class ValueStore;
@@ -27,6 +27,12 @@ class StorageFrontend;
 // Utilities for extension settings API tests.
 namespace settings_test_util {
 
+// Creates a kilobyte of data.
+scoped_ptr<base::Value> CreateKilobyte();
+
+// Creates a megabyte of data.
+scoped_ptr<base::Value> CreateMegabyte();
+
 // Synchronously gets the storage area for an extension from |frontend|.
 ValueStore* GetStorage(scoped_refptr<const Extension> extension,
                        settings_namespace::Namespace setting_namespace,
@@ -36,39 +42,36 @@ ValueStore* GetStorage(scoped_refptr<const Extension> extension,
 ValueStore* GetStorage(scoped_refptr<const Extension> extension,
                        StorageFrontend* frontend);
 
-// Creates an extension with |id| and adds it to the registry for |profile|.
-scoped_refptr<const Extension> AddExtensionWithId(Profile* profile,
-                                                  const std::string& id,
-                                                  Manifest::Type type);
+// Creates an extension with |id| and adds it to the registry for |context|.
+scoped_refptr<const Extension> AddExtensionWithId(
+    content::BrowserContext* context,
+    const std::string& id,
+    Manifest::Type type);
 
 // Creates an extension with |id| with a set of |permissions| and adds it to
-// the registry for |profile|.
+// the registry for |context|.
 scoped_refptr<const Extension> AddExtensionWithIdAndPermissions(
-    Profile* profile,
+    content::BrowserContext* context,
     const std::string& id,
     Manifest::Type type,
     const std::set<std::string>& permissions);
 
-// A mock ExtensionSystem to serve an EventRouter.
-class MockExtensionSystem : public TestExtensionSystem {
+// A MockExtensionSystem to serve an EventRouter.
+class MockExtensionSystemWithEventRouter : public MockExtensionSystem {
  public:
-  explicit MockExtensionSystem(Profile* profile);
-  virtual ~MockExtensionSystem();
+  explicit MockExtensionSystemWithEventRouter(content::BrowserContext* context);
+  ~MockExtensionSystemWithEventRouter() override;
 
-  virtual EventRouter* event_router() OVERRIDE;
+  // Factory method for SetTestingFactoryAndUse.
+  static KeyedService* Build(content::BrowserContext* context);
+
+  // MockExtensionSystem overrides:
+  EventRouter* event_router() override;
 
  private:
   scoped_ptr<EventRouter> event_router_;
 
-  DISALLOW_COPY_AND_ASSIGN(MockExtensionSystem);
-};
-
-// A Profile which returns an ExtensionSystem with enough functionality for
-// the tests.
-class MockProfile : public TestingProfile {
- public:
-  explicit MockProfile(const base::FilePath& file_path);
-  virtual ~MockProfile();
+  DISALLOW_COPY_AND_ASSIGN(MockExtensionSystemWithEventRouter);
 };
 
 // SettingsStorageFactory which acts as a wrapper for other factories.
@@ -83,15 +86,14 @@ class ScopedSettingsStorageFactory : public SettingsStorageFactory {
   void Reset(const scoped_refptr<SettingsStorageFactory>& delegate);
 
   // SettingsStorageFactory implementation.
-  virtual ValueStore* Create(const base::FilePath& base_path,
-                             const std::string& extension_id) OVERRIDE;
-  virtual void DeleteDatabaseIfExists(
-      const base::FilePath& base_path,
-      const std::string& extension_id) OVERRIDE;
+  ValueStore* Create(const base::FilePath& base_path,
+                     const std::string& extension_id) override;
+  void DeleteDatabaseIfExists(const base::FilePath& base_path,
+                              const std::string& extension_id) override;
 
  private:
   // SettingsStorageFactory is refcounted.
-  virtual ~ScopedSettingsStorageFactory();
+  ~ScopedSettingsStorageFactory() override;
 
   scoped_refptr<SettingsStorageFactory> delegate_;
 };

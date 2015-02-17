@@ -26,14 +26,15 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
-#include "chrome/browser/history/android/android_history_types.h"
 #include "chrome/browser/history/android/sqlite_cursor.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
+#include "components/history/core/android/android_history_types.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browser_thread.h"
@@ -270,7 +271,7 @@ class RemoveBookmarkTask : public BookmarkModelObserverTask {
       const BookmarkNode* parent,
       int old_index,
       const BookmarkNode* node,
-      const std::set<GURL>& removed_urls) OVERRIDE {
+      const std::set<GURL>& removed_urls) override {
     if (bookmark_model == model() && node->id() == id_to_delete_)
         ++deleted_;
   }
@@ -354,7 +355,7 @@ class UpdateBookmarkTask : public BookmarkModelObserverTask {
 
   // Verify that the bookmark was actually updated. Called synchronously.
   virtual void BookmarkNodeChanged(BookmarkModel* bookmark_model,
-                                   const BookmarkNode* node) OVERRIDE {
+                                   const BookmarkNode* node) override {
     if (bookmark_model == model() && node->id() == id_to_update_)
       ++updated_;
   }
@@ -649,10 +650,12 @@ class AsyncServiceRequest : protected BlockingUIThreadAsyncRequest {
 // Base class for all asynchronous blocking tasks that use the favicon service.
 class FaviconServiceTask : public AsyncServiceRequest<FaviconService> {
  public:
-  FaviconServiceTask(FaviconService* service,
-                     base::CancelableTaskTracker* cancelable_tracker,
+  FaviconServiceTask(base::CancelableTaskTracker* cancelable_tracker,
                      Profile* profile)
-      : AsyncServiceRequest<FaviconService>(service, cancelable_tracker),
+      : AsyncServiceRequest<FaviconService>(
+            FaviconServiceFactory::GetForProfile(profile,
+                                                 Profile::EXPLICIT_ACCESS),
+            cancelable_tracker),
         profile_(profile) {}
 
   Profile* profile() const { return profile_; }
@@ -666,15 +669,18 @@ class FaviconServiceTask : public AsyncServiceRequest<FaviconService> {
 // Retrieves the favicon or touch icon for a URL from the FaviconService.
 class BookmarkIconFetchTask : public FaviconServiceTask {
  public:
-  BookmarkIconFetchTask(FaviconService* favicon_service,
-                        base::CancelableTaskTracker* cancelable_tracker,
+  BookmarkIconFetchTask(base::CancelableTaskTracker* cancelable_tracker,
                         Profile* profile)
-      : FaviconServiceTask(favicon_service, cancelable_tracker, profile) {}
+      : FaviconServiceTask(cancelable_tracker, profile) {}
 
   favicon_base::FaviconRawBitmapResult Run(const GURL& url) {
     float max_scale = ui::GetScaleForScaleFactor(
         ResourceBundle::GetSharedInstance().GetMaxScaleFactor());
     int desired_size_in_pixel = std::ceil(gfx::kFaviconSize * max_scale);
+
+    if (service() == NULL)
+      return favicon_base::FaviconRawBitmapResult();
+
     RunAsyncRequestOnUIThreadBlocking(
         base::Bind(&FaviconService::GetRawFaviconForPageURL,
                    base::Unretained(service()),
@@ -1154,19 +1160,18 @@ bool ChromeBrowserProvider::RegisterChromeBrowserProvider(JNIEnv* env) {
 
 ChromeBrowserProvider::ChromeBrowserProvider(JNIEnv* env, jobject obj)
     : weak_java_provider_(env, obj),
+      history_service_observer_(this),
       handling_extensive_changes_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   profile_ = g_browser_process->profile_manager()->GetLastUsedProfile();
   bookmark_model_ = BookmarkModelFactory::GetForProfile(profile_);
   top_sites_ = profile_->GetTopSites();
   service_.reset(new AndroidHistoryProviderService(profile_));
-  favicon_service_.reset(FaviconServiceFactory::GetForProfile(profile_,
-      Profile::EXPLICIT_ACCESS));
 
   // Registers the notifications we are interested.
   bookmark_model_->AddObserver(this);
-  notification_registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URL_VISITED,
-                              content::NotificationService::AllSources());
+  history_service_observer_.Add(
+      HistoryServiceFactory::GetForProfile(profile_, Profile::EXPLICIT_ACCESS));
   notification_registrar_.Add(this, chrome::NOTIFICATION_HISTORY_URLS_DELETED,
                               content::NotificationService::AllSources());
   notification_registrar_.Add(this,
@@ -1301,7 +1306,7 @@ ScopedJavaLocalRef<jobject> ChromeBrowserProvider::QueryBookmarkFromAPI(
   // Creates and returns org.chromium.chrome.browser.database.SQLiteCursor
   // Java object.
   return SQLiteCursor::NewJavaSqliteCursor(env, columns_name, statement,
-             service_.get(), favicon_service_.get());
+             service_.get());
 }
 
 // Updates the bookmarks with the given column values. The value is not given if
@@ -1437,7 +1442,7 @@ ScopedJavaLocalRef<jobject> ChromeBrowserProvider::QuerySearchTermFromAPI(
   // Creates and returns org.chromium.chrome.browser.database.SQLiteCursor
   // Java object.
   return SQLiteCursor::NewJavaSqliteCursor(env, columns_name, statement,
-             service_.get(), favicon_service_.get());
+             service_.get());
 }
 
 // Updates the search terms with the given column values. The value is not
@@ -1548,8 +1553,7 @@ ScopedJavaLocalRef<jbyteArray> ChromeBrowserProvider::GetFaviconOrTouchIcon(
     return ScopedJavaLocalRef<jbyteArray>();
 
   GURL url = GURL(ConvertJavaStringToUTF16(env, jurl));
-  BookmarkIconFetchTask favicon_task(
-      favicon_service_.get(), &cancelable_task_tracker_, profile_);
+  BookmarkIconFetchTask favicon_task(&cancelable_task_tracker_, profile_);
   favicon_base::FaviconRawBitmapResult bitmap_result = favicon_task.Run(url);
 
   if (!bitmap_result.is_valid() || !bitmap_result.bitmap_data.get())
@@ -1603,17 +1607,28 @@ void ChromeBrowserProvider::BookmarkModelChanged() {
   Java_ChromeBrowserProvider_onBookmarkChanged(env, obj.obj());
 }
 
+void ChromeBrowserProvider::OnHistoryChanged() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = weak_java_provider_.get(env);
+  if (obj.is_null())
+    return;
+  Java_ChromeBrowserProvider_onHistoryChanged(env, obj.obj());
+}
+
+void ChromeBrowserProvider::OnURLVisited(HistoryService* history_service,
+                                         ui::PageTransition transition,
+                                         const history::URLRow& row,
+                                         const history::RedirectList& redirects,
+                                         base::Time visit_time) {
+  OnHistoryChanged();
+}
+
 void ChromeBrowserProvider::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_HISTORY_URL_VISITED ||
-      type == chrome::NOTIFICATION_HISTORY_URLS_DELETED) {
-    JNIEnv* env = AttachCurrentThread();
-    ScopedJavaLocalRef<jobject> obj = weak_java_provider_.get(env);
-    if (obj.is_null())
-      return;
-    Java_ChromeBrowserProvider_onBookmarkChanged(env, obj.obj());
+  if (type == chrome::NOTIFICATION_HISTORY_URLS_DELETED) {
+    OnHistoryChanged();
   } else if (type ==
       chrome::NOTIFICATION_HISTORY_KEYWORD_SEARCH_TERM_UPDATED) {
     JNIEnv* env = AttachCurrentThread();

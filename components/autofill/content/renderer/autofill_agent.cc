@@ -28,7 +28,6 @@
 #include "content/public/common/ssl_status.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_view.h"
-#include "grit/components_strings.h"
 #include "net/cert/cert_status_flags.h"
 #include "third_party/WebKit/public/platform/WebRect.h"
 #include "third_party/WebKit/public/platform/WebURLRequest.h"
@@ -246,6 +245,10 @@ void AutofillAgent::OrientationChangeEvent() {
   HidePopup();
 }
 
+void AutofillAgent::Resized() {
+  HidePopup();
+}
+
 void AutofillAgent::DidChangeScrollOffset(WebLocalFrame*) {
   HidePopup();
 }
@@ -315,13 +318,22 @@ void AutofillAgent::FormControlElementClicked(
 
   bool show_full_suggestion_list = element.isAutofilled() || was_focused;
   bool show_password_suggestions_only = !was_focused;
-  ShowSuggestions(element,
-                  true,
-                  false,
-                  true,
-                  false,
-                  show_full_suggestion_list,
-                  show_password_suggestions_only);
+
+  // TODO(gcasto): Remove after crbug.com/423464 has been fixed.
+  bool show_suggestions = true;
+#if defined(OS_ANDROID)
+  show_suggestions = was_focused;
+#endif
+
+  if (show_suggestions) {
+    ShowSuggestions(element,
+                    true,
+                    false,
+                    true,
+                    false,
+                    show_full_suggestion_list,
+                    show_password_suggestions_only);
+  }
 }
 
 void AutofillAgent::textFieldDidEndEditing(const WebInputElement& element) {
@@ -488,8 +500,10 @@ void AutofillAgent::OnClearPreviewedForm() {
 
 void AutofillAgent::OnFillFieldWithValue(const base::string16& value) {
   WebInputElement* input_element = toWebInputElement(&element_);
-  if (input_element)
+  if (input_element) {
     FillFieldWithValue(value, input_element);
+    input_element->setAutofilled(true);
+  }
 }
 
 void AutofillAgent::OnPreviewFieldWithValue(const base::string16& value) {
@@ -627,8 +641,14 @@ void AutofillAgent::QueryAutofillSuggestions(
   // warning.  Otherwise, we want to ignore fields that disable autocomplete, so
   // that the suggestions list does not include suggestions for these form
   // fields -- see comment 1 on http://crbug.com/69914
-  const RequirementsMask requirements =
+  RequirementsMask requirements =
       element.autoComplete() ? REQUIRE_AUTOCOMPLETE : REQUIRE_NONE;
+
+  // If we're ignoring autocomplete="off", always extract everything.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kIgnoreAutocompleteOffForAutofill)) {
+    requirements = REQUIRE_NONE;
+  }
 
   FormData form;
   FormFieldData field;
@@ -674,7 +694,6 @@ void AutofillAgent::FillFieldWithValue(const base::string16& value,
                                        WebInputElement* node) {
   did_set_node_text_ = true;
   node->setEditingValue(value.substr(0, node->maxLength()));
-  node->setAutofilled(true);
 }
 
 void AutofillAgent::PreviewFieldWithValue(const base::string16& value,
@@ -691,8 +710,7 @@ void AutofillAgent::ProcessForms(const WebLocalFrame& frame) {
   // measure the overhead of the Autofill feature.
   base::TimeTicks forms_seen_timestamp = base::TimeTicks::Now();
 
-  std::vector<FormData> forms;
-  form_cache_.ExtractNewForms(frame, &forms);
+  std::vector<FormData> forms = form_cache_.ExtractNewForms(frame);
 
   // Always communicate to browser process for topmost frame.
   if (!forms.empty() ||
@@ -726,6 +744,8 @@ void AutofillAgent::didAssociateFormControls(const WebVector<WebNode>& nodes) {
     if (frame && !frame->parent() && !frame->isLoading()) {
       ProcessForms(*frame);
       password_autofill_agent_->OnDynamicFormsSeen(frame);
+      if (password_generation_agent_)
+        password_generation_agent_->OnDynamicFormsSeen(frame);
       return;
     }
   }

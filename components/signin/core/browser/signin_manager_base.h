@@ -48,18 +48,20 @@ class SigninManagerBase : public KeyedService {
     virtual void GoogleSigninFailed(const GoogleServiceAuthError& error) {}
 
     // Called when a user signs into Google services such as sync.
-    virtual void GoogleSigninSucceeded(const std::string& username,
+    virtual void GoogleSigninSucceeded(const std::string& account_id,
+                                       const std::string& username,
                                        const std::string& password) {}
 
     // Called when the currently signed-in user for a user has been signed out.
-    virtual void GoogleSignedOut(const std::string& username) {}
+    virtual void GoogleSignedOut(const std::string& account_id,
+                                 const std::string& username) {}
 
    protected:
     virtual ~Observer() {}
   };
 
   SigninManagerBase(SigninClient* client);
-  virtual ~SigninManagerBase();
+  ~SigninManagerBase() override;
 
   // If user was signed in, load tokens from DB if available.
   virtual void Initialize(PrefService* local_state);
@@ -100,11 +102,14 @@ class SigninManagerBase : public KeyedService {
   // (by platform / depending on StartBehavior). Bug 88109.
   void SetAuthenticatedUsername(const std::string& username);
 
+  // Returns true if there is an authenticated user.
+  bool IsAuthenticated() const;
+
   // Returns true if there's a signin in progress.
   virtual bool AuthInProgress() const;
 
   // KeyedService implementation.
-  virtual void Shutdown() OVERRIDE;
+  void Shutdown() override;
 
   // Methods to register or remove observers of signin.
   void AddObserver(Observer* observer);
@@ -120,7 +125,7 @@ class SigninManagerBase : public KeyedService {
   // Used by subclass to clear authenticated_username_ instead of using
   // SetAuthenticatedUsername, which enforces special preconditions due
   // to the fact that it is part of the public API and called by clients.
-  void clear_authenticated_username();
+  void ClearAuthenticatedUsername();
 
   // List of observers to notify on signin events.
   // Makes sure list is empty on destruction.
@@ -141,8 +146,9 @@ class SigninManagerBase : public KeyedService {
   SigninClient* client_;
   bool initialized_;
 
-  // Actual username after successful authentication.
+  // Actual username and account_id after successful authentication.
   std::string authenticated_username_;
+  std::string authenticated_account_id_;
 
   // The list of SigninDiagnosticObservers.
   ObserverList<signin_internals_util::SigninDiagnosticsObserver, true>

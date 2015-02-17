@@ -29,6 +29,12 @@ class ChromiumApplication {
   // Opens the sync settings page.
   static void ShowSyncSettings();
 
+  // Opens the autofill settings page.
+  static void ShowAutofillSettings();
+
+  // Opens the password settings page.
+  static void ShowPasswordSettings();
+
   // Shows a dialog with the terms of service.
   static void ShowTermsOfServiceDialog();
 

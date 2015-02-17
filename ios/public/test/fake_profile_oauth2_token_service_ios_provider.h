@@ -22,27 +22,23 @@ class FakeProfileOAuth2TokenServiceIOSProvider
   virtual ~FakeProfileOAuth2TokenServiceIOSProvider();
 
   // ProfileOAuth2TokenServiceIOSProvider
-  virtual bool IsUsingSharedAuthentication() const OVERRIDE;
-  virtual void InitializeSharedAuthentication() OVERRIDE;
+  virtual void InitializeSharedAuthentication() override;
 
   virtual void GetAccessToken(const std::string& account_id,
                               const std::string& client_id,
                               const std::string& client_secret,
                               const std::set<std::string>& scopes,
-                              const AccessTokenCallback& callback) OVERRIDE;
+                              const AccessTokenCallback& callback) override;
 
-  virtual std::vector<std::string> GetAllAccountIds() OVERRIDE;
+  virtual std::vector<std::string> GetAllAccountIds() override;
 
   virtual AuthenticationErrorCategory GetAuthenticationErrorCategory(
-      NSError* error) const OVERRIDE;
+      NSError* error) const override;
 
   // Methods to configure this fake provider.
   void AddAccount(const std::string& account_id);
   void SetAccounts(const std::vector<std::string>& accounts);
   void ClearAccounts();
-  void set_using_shared_authentication(bool is_using_shared_authentication) {
-    is_using_shared_authentication_ = is_using_shared_authentication;
-  }
 
   // Issues access token responses.
   void IssueAccessTokenForAllRequests();
@@ -52,7 +48,6 @@ class FakeProfileOAuth2TokenServiceIOSProvider
   typedef std::pair<std::string, AccessTokenCallback> AccessTokenRequest;
 
   std::vector<std::string> accounts_;
-  bool is_using_shared_authentication_;
   std::vector<AccessTokenRequest> requests_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeProfileOAuth2TokenServiceIOSProvider);

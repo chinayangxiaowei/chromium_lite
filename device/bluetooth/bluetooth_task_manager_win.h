@@ -116,8 +116,8 @@ class BluetoothTaskManagerWin
 
   virtual ~BluetoothTaskManagerWin();
 
-  // Logs Win32 errors occuring during polling on the worker thread. The method
-  // may discards messages to avoid logging being too verbose.
+  // Logs Win32 errors occurring during polling on the worker thread. The method
+  // may discard messages to avoid logging being too verbose.
   void LogPollingError(const char* message, int win32_error);
 
   // Notify all Observers of updated AdapterState. Should only be called on the
@@ -174,6 +174,14 @@ class BluetoothTaskManagerWin
 
   // Discover Bluetooth Classic services for the given |device_address|.
   bool DiscoverClassicDeviceServices(
+      const std::string& device_address,
+      const GUID& protocol_uuid,
+      bool search_cached_services_only,
+      ScopedVector<ServiceRecordState>* service_record_states);
+
+  // Discover Bluetooth Classic services for the given |device_address|.
+  // Returns a Win32 error code.
+  int DiscoverClassicDeviceServicesWorker(
       const std::string& device_address,
       const GUID& protocol_uuid,
       bool search_cached_services_only,

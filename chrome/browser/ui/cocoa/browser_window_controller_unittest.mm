@@ -20,11 +20,14 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
+#import "chrome/browser/ui/cocoa/fast_resize_view.h"
 #include "chrome/browser/ui/cocoa/find_bar/find_bar_bridge.h"
 #include "chrome/browser/ui/cocoa/tabs/tab_strip_view.h"
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/signin/core/browser/fake_auth_status_provider.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
@@ -32,8 +35,6 @@
 #include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
@@ -123,7 +124,7 @@ TEST_F(BrowserWindowControllerTest, TestFullScreenWindow) {
 
 TEST_F(BrowserWindowControllerTest, TestNormal) {
   // Force the bookmark bar to be shown.
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
   [controller_ browserWindow]->BookmarkBarStateChanged(
       BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
 
@@ -210,7 +211,7 @@ TEST_F(BrowserWindowControllerTest, BookmarkBarControllerIndirection) {
 
   // Explicitly show the bar. Can't use chrome::ToggleBookmarkBarWhenVisible()
   // because of the notification issues.
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
 
   [controller_ browserWindow]->BookmarkBarStateChanged(
       BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
@@ -241,19 +242,63 @@ TEST_F(BrowserWindowControllerTest, TestIncognitoWidthSpace) {
 
 namespace {
 
+// Returns the frame of the view in window coordinates.
+NSRect FrameInWindowForView(NSView* view) {
+  return [[view superview] convertRect:[view frame] toView:nil];
+}
+
+// Whether the view's frame is within the bounds of the superview.
+BOOL ViewContainmentValid(NSView* view) {
+  if (NSIsEmptyRect([view frame]))
+    return YES;
+
+  return NSContainsRect([[view superview] bounds], [view frame]);
+}
+
+// Checks the view hierarchy rooted at |view| to ensure that each view is
+// properly contained.
+BOOL ViewHierarchyContainmentValid(NSView* view) {
+  // TODO(erikchen): Fix these views to have correct containment.
+  // http://crbug.com/397665.
+  if ([view isKindOfClass:NSClassFromString(@"DownloadShelfView")])
+    return YES;
+  if ([view isKindOfClass:NSClassFromString(@"BookmarkBarToolbarView")])
+    return YES;
+  if ([view isKindOfClass:NSClassFromString(@"BrowserActionsContainerView")])
+    return YES;
+
+  if (!ViewContainmentValid(view)) {
+    LOG(ERROR) << "View violates containment: " <<
+        [[view description] UTF8String];
+    return NO;
+  }
+
+  for (NSView* subview in [view subviews]) {
+    BOOL result = ViewHierarchyContainmentValid(subview);
+    if (!result)
+      return NO;
+  }
+
+  return YES;
+}
+
 // Verifies that the toolbar, infobar, tab content area, and download shelf
 // completely fill the area under the tabstrip.
 void CheckViewPositions(BrowserWindowController* controller) {
-  NSRect contentView = [[[controller window] contentView] bounds];
-  NSRect tabstrip = [[controller tabStripView] frame];
-  NSRect toolbar = [[controller toolbarView] frame];
-  NSRect infobar = [[controller infoBarContainerView] frame];
-  NSRect contentArea = [[controller tabContentArea] frame];
-  NSRect download = [[[controller downloadShelf] view] frame];
+  EXPECT_TRUE(ViewHierarchyContainmentValid([[controller window] contentView]));
+
+  NSRect contentView = FrameInWindowForView([[controller window] contentView]);
+  NSRect tabstrip = FrameInWindowForView([controller tabStripView]);
+  NSRect toolbar = FrameInWindowForView([controller toolbarView]);
+  NSRect infobar = FrameInWindowForView([controller infoBarContainerView]);
+  NSRect tabContent = FrameInWindowForView([controller tabContentArea]);
+  NSRect download = NSZeroRect;
+  if ([[[controller downloadShelf] view] superview])
+    download = [[[controller downloadShelf] view] frame];
 
   EXPECT_EQ(NSMinY(contentView), NSMinY(download));
-  EXPECT_EQ(NSMaxY(download), NSMinY(contentArea));
-  EXPECT_EQ(NSMaxY(contentArea), NSMinY(infobar));
+  EXPECT_EQ(NSMaxY(download), NSMinY(tabContent));
+  EXPECT_EQ(NSMaxY(tabContent), NSMinY(infobar));
 
   // Bookmark bar frame is random memory when hidden.
   if ([controller bookmarkBarVisible]) {
@@ -414,8 +459,8 @@ TEST_F(BrowserWindowControllerTest, TestResizeViews) {
   tabstripFrame.origin.y = NSMaxY([contentView frame]);
   [tabstrip setFrame:tabstripFrame];
 
-  // The download shelf is created lazily.  Force-create it and set its initial
-  // height to 0.
+  // Make the download shelf and set its initial height to 0.
+  [controller_ createAndAddDownloadShelf];
   NSView* download = [[controller_ downloadShelf] view];
   NSRect downloadFrame = [download frame];
   downloadFrame.size.height = 0;
@@ -445,7 +490,7 @@ TEST_F(BrowserWindowControllerTest, TestResizeViews) {
 
 TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
   // Force a display of the bookmark bar.
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
   [controller_ browserWindow]->BookmarkBarStateChanged(
       BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
 
@@ -465,6 +510,7 @@ TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
 
   // The download shelf is created lazily.  Force-create it and set its initial
   // height to 0.
+  [controller_ createAndAddDownloadShelf];
   NSView* download = [[controller_ downloadShelf] view];
   NSRect downloadFrame = [download frame];
   downloadFrame.size.height = 0;
@@ -491,7 +537,9 @@ TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
   CheckViewPositions(controller_);
 
   // Remove the bookmark bar and recheck
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, false);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, false);
+  [controller_ browserWindow]->BookmarkBarStateChanged(
+      BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
   [controller_ resizeView:bookmark newHeight:0];
   CheckViewPositions(controller_);
 
@@ -505,7 +553,7 @@ TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
 TEST_F(BrowserWindowControllerTest, BookmarkBarIsSameWidth) {
   // Set the pref to the bookmark bar is visible when the toolbar is
   // first created.
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
 
   // Make sure the bookmark bar is the same width as the toolbar
   NSView* bookmarkBarView = [controller_ bookmarkView];
@@ -517,13 +565,13 @@ TEST_F(BrowserWindowControllerTest, BookmarkBarIsSameWidth) {
 TEST_F(BrowserWindowControllerTest, TestTopRightForBubble) {
   // The bookmark bubble must be attached to a lit and visible star.
   [controller_ setStarredState:YES];
-  NSPoint p = [controller_ bookmarkBubblePoint];
-  NSRect all = [[controller_ window] frame];
+  NSPoint p = [controller_ bookmarkBubblePoint];  // Window coordinates.
+  NSRect all = [[controller_ window] frame];      // Screen coordinates.
 
   // As a sanity check make sure the point is vaguely in the top right
   // of the window.
-  EXPECT_GT(p.y, all.origin.y + (all.size.height/2));
-  EXPECT_GT(p.x, all.origin.x + (all.size.width/2));
+  EXPECT_GT(p.y, all.size.height / 2);
+  EXPECT_GT(p.x, all.size.width / 2);
 }
 
 // By the "zoom frame", we mean what Apple calls the "standard frame".
@@ -615,7 +663,7 @@ TEST_F(BrowserWindowControllerTest, TestFindBarOnTop) {
   [controller_ addFindBar:bridge.find_bar_cocoa_controller()];
 
   // Test that the Z-order of the find bar is on top of everything.
-  NSArray* subviews = [[[controller_ window] contentView] subviews];
+  NSArray* subviews = [controller_.chromeContentView subviews];
   NSUInteger findBar_index =
       [subviews indexOfObject:[controller_ findBarView]];
   EXPECT_NE(NSNotFound, findBar_index);
@@ -773,7 +821,7 @@ TEST_F(BrowserWindowControllerTest, TestSigninMenuItemWithNonSeparator) {
 // Verify that hit testing works correctly when the bookmark bar overlaps
 // web contents.
 TEST_F(BrowserWindowControllerTest, BookmarkBarHitTest) {
-  profile()->GetPrefs()->SetBoolean(prefs::kShowBookmarkBar, true);
+  profile()->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
   [controller_ browserWindow]->BookmarkBarStateChanged(
       BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
 
@@ -828,17 +876,18 @@ void WaitForFullScreenTransition() {
   observer.Wait();
 }
 
-TEST_F(BrowserWindowFullScreenControllerTest, TestFullscreen) {
+// http://crbug.com/53586
+TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestFullscreen) {
   [controller_ showWindow:nil];
-  EXPECT_FALSE([controller_ isFullscreen]);
+  EXPECT_FALSE([controller_ isInAnyFullscreenMode]);
 
-  [controller_ enterFullscreen];
+  [controller_ enterFullscreenWithChrome];
   WaitForFullScreenTransition();
-  EXPECT_TRUE([controller_ isFullscreen]);
+  EXPECT_TRUE([controller_ isInAnyFullscreenMode]);
 
-  [controller_ exitFullscreen];
+  [controller_ exitAnyFullscreen];
   WaitForFullScreenTransition();
-  EXPECT_FALSE([controller_ isFullscreen]);
+  EXPECT_FALSE([controller_ isInAnyFullscreenMode]);
 }
 
 // If this test fails, it is usually a sign that the bots have some sort of
@@ -849,12 +898,12 @@ TEST_F(BrowserWindowFullScreenControllerTest, TestFullscreen) {
 TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestActivate) {
   [controller_ showWindow:nil];
 
-  EXPECT_FALSE([controller_ isFullscreen]);
+  EXPECT_FALSE([controller_ isInAnyFullscreenMode]);
 
   [controller_ activate];
   EXPECT_TRUE(IsFrontWindow([controller_ window]));
 
-  [controller_ enterFullscreen];
+  [controller_ enterFullscreenWithChrome];
   WaitForFullScreenTransition();
   [controller_ activate];
 
@@ -863,7 +912,7 @@ TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestActivate) {
     EXPECT_TRUE(IsFrontWindow([controller_ createFullscreenWindow]));
 
   // We have to cleanup after ourselves by unfullscreening.
-  [controller_ exitFullscreen];
+  [controller_ exitAnyFullscreen];
   WaitForFullScreenTransition();
 }
 
@@ -882,6 +931,7 @@ TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestActivate) {
                                   styleMask:NSBorderlessWindowMask
                                     backing:NSBackingStoreBuffered
                                       defer:NO]);
+  [[testFullscreenWindow_ contentView] setWantsLayer:YES];
   return testFullscreenWindow_.get();
 }
 @end

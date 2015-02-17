@@ -19,9 +19,6 @@
 
 namespace {
 
-// Size of top separator between searchbox and grid view.
-const int kTopSeparatorSize = 1;
-
 // Size of bottom separator between contents view and contents switcher.
 const int kBottomSeparatorSize = 1;
 
@@ -53,25 +50,6 @@ void AppListBackground::Paint(gfx::Canvas* canvas,
   paint.setStyle(SkPaint::kFill_Style);
 
   int contents_top = bounds.y();
-  views::View* search_box_view = main_view_->search_box_view();
-  if (main_view_->visible() && search_box_view->visible()) {
-    const gfx::Rect search_box_view_bounds =
-        search_box_view->ConvertRectToWidget(search_box_view->GetLocalBounds());
-    gfx::Rect search_box_rect(bounds.x(),
-                              bounds.y(),
-                              bounds.width(),
-                              search_box_view_bounds.bottom() - bounds.y());
-
-    paint.setColor(kSearchBoxBackground);
-    canvas->DrawRect(search_box_rect, paint);
-
-    gfx::Rect separator_rect(search_box_rect);
-    separator_rect.set_y(separator_rect.bottom());
-    separator_rect.set_height(kTopSeparatorSize);
-    canvas->FillRect(separator_rect, kTopSeparatorColor);
-    contents_top = separator_rect.bottom();
-  }
-
   gfx::Rect contents_rect(bounds.x(),
                           contents_top,
                           bounds.width(),
@@ -86,19 +64,11 @@ void AppListBackground::Paint(gfx::Canvas* canvas,
       const gfx::Rect contents_view_view_bounds =
           contents_view->ConvertRectToWidget(contents_view->GetLocalBounds());
       gfx::Rect separator_rect(contents_rect);
-      // Extra kContentsSwitcherSeparatorHeight pixels so the launcher page
-      // indicator overlays the separator rect.
-      separator_rect.set_y(contents_view_view_bounds.bottom() +
-                           kContentsSwitcherSeparatorHeight);
+      separator_rect.Inset(
+          kExperimentalWindowPadding + main_view_->GetInsets().left(), 0);
+      separator_rect.set_y(contents_view_view_bounds.bottom() - 1);
       separator_rect.set_height(kBottomSeparatorSize);
       canvas->FillRect(separator_rect, kBottomSeparatorColor);
-      int contents_switcher_top = separator_rect.bottom();
-      gfx::Rect contents_switcher_rect(bounds.x(),
-                                       contents_switcher_top,
-                                       bounds.width(),
-                                       bounds.bottom() - contents_switcher_top);
-      paint.setColor(kContentsSwitcherBackgroundColor);
-      canvas->DrawRect(contents_switcher_rect, paint);
     }
   }
 

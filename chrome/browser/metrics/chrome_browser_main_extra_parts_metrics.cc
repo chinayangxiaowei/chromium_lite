@@ -17,7 +17,6 @@
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
-#include "chrome/browser/chrome_browser_metrics_service_observer.h"
 #include "chrome/browser/mac/bluetooth_utility.h"
 #include "chrome/browser/pref_service_flags_storage.h"
 #include "chrome/browser/shell_integration.h"
@@ -25,12 +24,15 @@
 #include "ui/base/touch/touch_device.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_switches.h"
+#include "ui/gfx/screen.h"
 
 #if defined(OS_LINUX) && !defined(OS_CHROMEOS)
 #include <gnu/libc-version.h>
 
 #include "base/version.h"
+#if defined(USE_X11)
 #include "ui/base/x/x11_util.h"
+#endif
 #endif  // defined(OS_LINUX) && !defined(OS_CHROMEOS)
 
 #if defined(OS_WIN)
@@ -52,7 +54,7 @@ enum UMALinuxGlibcVersion {
 enum UMALinuxWindowManager {
   UMA_LINUX_WINDOW_MANAGER_OTHER,
   UMA_LINUX_WINDOW_MANAGER_BLACKBOX,
-  UMA_LINUX_WINDOW_MANAGER_CHROME_OS,
+  UMA_LINUX_WINDOW_MANAGER_CHROME_OS,  // Deprecated.
   UMA_LINUX_WINDOW_MANAGER_COMPIZ,
   UMA_LINUX_WINDOW_MANAGER_ENLIGHTENMENT,
   UMA_LINUX_WINDOW_MANAGER_ICE_WM,
@@ -62,7 +64,18 @@ enum UMALinuxWindowManager {
   UMA_LINUX_WINDOW_MANAGER_MUTTER,
   UMA_LINUX_WINDOW_MANAGER_OPENBOX,
   UMA_LINUX_WINDOW_MANAGER_XFWM4,
-  // NOTE: Add new window managers above this line and update the enum list in
+  UMA_LINUX_WINDOW_MANAGER_AWESOME,
+  UMA_LINUX_WINDOW_MANAGER_I3,
+  UMA_LINUX_WINDOW_MANAGER_ION3,
+  UMA_LINUX_WINDOW_MANAGER_MATCHBOX,
+  UMA_LINUX_WINDOW_MANAGER_NOTION,
+  UMA_LINUX_WINDOW_MANAGER_QTILE,
+  UMA_LINUX_WINDOW_MANAGER_RATPOISON,
+  UMA_LINUX_WINDOW_MANAGER_STUMPWM,
+  UMA_LINUX_WINDOW_MANAGER_WMII,
+  UMA_LINUX_WINDOW_MANAGER_FLUXBOX,
+  // NOTE: Append new window managers to the list above this line (i.e. don't
+  // renumber) and update LinuxWindowManagerName in
   // tools/metrics/histograms/histograms.xml accordingly.
   UMA_LINUX_WINDOW_MANAGER_COUNT
 };
@@ -132,52 +145,55 @@ void RecordLinuxGlibcVersion() {
 #endif
 }
 
-void RecordLinuxWindowManager() {
-#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
-  ui::WindowManagerName name = ui::GuessWindowManager();
-  UMALinuxWindowManager uma_name = UMA_LINUX_WINDOW_MANAGER_OTHER;
-  switch (name) {
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+UMALinuxWindowManager GetLinuxWindowManager() {
+  switch (ui::GuessWindowManager()) {
     case ui::WM_UNKNOWN:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_OTHER;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_OTHER;
+    case ui::WM_AWESOME:
+      return UMA_LINUX_WINDOW_MANAGER_AWESOME;
     case ui::WM_BLACKBOX:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_BLACKBOX;
-      break;
-    case ui::WM_CHROME_OS:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_CHROME_OS;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_BLACKBOX;
     case ui::WM_COMPIZ:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_COMPIZ;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_COMPIZ;
     case ui::WM_ENLIGHTENMENT:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_ENLIGHTENMENT;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_ENLIGHTENMENT;
+    case ui::WM_FLUXBOX:
+      return UMA_LINUX_WINDOW_MANAGER_FLUXBOX;
+    case ui::WM_I3:
+      return UMA_LINUX_WINDOW_MANAGER_I3;
     case ui::WM_ICE_WM:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_ICE_WM;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_ICE_WM;
+    case ui::WM_ION3:
+      return UMA_LINUX_WINDOW_MANAGER_ION3;
     case ui::WM_KWIN:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_KWIN;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_KWIN;
+    case ui::WM_MATCHBOX:
+      return UMA_LINUX_WINDOW_MANAGER_MATCHBOX;
     case ui::WM_METACITY:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_METACITY;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_METACITY;
     case ui::WM_MUFFIN:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_MUFFIN;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_MUFFIN;
     case ui::WM_MUTTER:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_MUTTER;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_MUTTER;
+    case ui::WM_NOTION:
+      return UMA_LINUX_WINDOW_MANAGER_NOTION;
     case ui::WM_OPENBOX:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_OPENBOX;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_OPENBOX;
+    case ui::WM_QTILE:
+      return UMA_LINUX_WINDOW_MANAGER_QTILE;
+    case ui::WM_RATPOISON:
+      return UMA_LINUX_WINDOW_MANAGER_RATPOISON;
+    case ui::WM_STUMPWM:
+      return UMA_LINUX_WINDOW_MANAGER_STUMPWM;
+    case ui::WM_WMII:
+      return UMA_LINUX_WINDOW_MANAGER_WMII;
     case ui::WM_XFWM4:
-      uma_name = UMA_LINUX_WINDOW_MANAGER_XFWM4;
-      break;
+      return UMA_LINUX_WINDOW_MANAGER_XFWM4;
   }
-  UMA_HISTOGRAM_ENUMERATION("Linux.WindowManager", uma_name,
-                            UMA_LINUX_WINDOW_MANAGER_COUNT);
-#endif
+  return UMA_LINUX_WINDOW_MANAGER_OTHER;
 }
+#endif
 
 void RecordTouchEventState() {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
@@ -206,10 +222,13 @@ void RecordTouchEventState() {
 
 }  // namespace
 
-ChromeBrowserMainExtraPartsMetrics::ChromeBrowserMainExtraPartsMetrics() {
+ChromeBrowserMainExtraPartsMetrics::ChromeBrowserMainExtraPartsMetrics()
+    : display_count_(0), is_screen_observer_(false) {
 }
 
 ChromeBrowserMainExtraPartsMetrics::~ChromeBrowserMainExtraPartsMetrics() {
+  if (is_screen_observer_)
+    gfx::Screen::GetNativeScreen()->RemoveObserver(this);
 }
 
 void ChromeBrowserMainExtraPartsMetrics::PreProfileInit() {
@@ -224,8 +243,16 @@ void ChromeBrowserMainExtraPartsMetrics::PreBrowserStart() {
 
 void ChromeBrowserMainExtraPartsMetrics::PostBrowserStart() {
   RecordLinuxGlibcVersion();
-  RecordLinuxWindowManager();
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
+  UMA_HISTOGRAM_ENUMERATION("Linux.WindowManager",
+                            GetLinuxWindowManager(),
+                            UMA_LINUX_WINDOW_MANAGER_COUNT);
+#endif
   RecordTouchEventState();
+
+#if defined(OS_MACOSX) && !defined(OS_IOS)
+  RecordMacMetrics();
+#endif  // defined(OS_MACOSX) && !defined(OS_IOS)
 
   const int kStartupMetricsGatheringDelaySeconds = 45;
   content::BrowserThread::GetBlockingPool()->PostDelayedTask(
@@ -233,11 +260,33 @@ void ChromeBrowserMainExtraPartsMetrics::PostBrowserStart() {
       base::Bind(&RecordStartupMetricsOnBlockingPool),
       base::TimeDelta::FromSeconds(kStartupMetricsGatheringDelaySeconds));
 
-  // Create the metrics log observer.
-  // We only need this for Android for now.
-#if defined(ANDROID)
-  metrics_service_observer_.reset(new ChromeBrowserMetricsServiceObserver());
-#endif
+  display_count_ = gfx::Screen::GetNativeScreen()->GetNumDisplays();
+  UMA_HISTOGRAM_COUNTS_100("Hardware.Display.Count.OnStartup", display_count_);
+  gfx::Screen::GetNativeScreen()->AddObserver(this);
+  is_screen_observer_ = true;
+}
+
+void ChromeBrowserMainExtraPartsMetrics::OnDisplayAdded(
+    const gfx::Display& new_display) {
+  EmitDisplaysChangedMetric();
+}
+
+void ChromeBrowserMainExtraPartsMetrics::OnDisplayRemoved(
+    const gfx::Display& old_display) {
+  EmitDisplaysChangedMetric();
+}
+
+void ChromeBrowserMainExtraPartsMetrics::OnDisplayMetricsChanged(
+    const gfx::Display& display,
+    uint32_t changed_metrics) {
+}
+
+void ChromeBrowserMainExtraPartsMetrics::EmitDisplaysChangedMetric() {
+  int display_count = gfx::Screen::GetNativeScreen()->GetNumDisplays();
+  if (display_count != display_count_) {
+    display_count_ = display_count;
+    UMA_HISTOGRAM_COUNTS_100("Hardware.Display.Count.OnChange", display_count_);
+  }
 }
 
 namespace chrome {

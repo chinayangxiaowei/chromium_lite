@@ -9,12 +9,26 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "ui/aura/window_event_dispatcher.h"
 
+#if !defined(OS_CHROMEOS)
+#include "base/command_line.h"
+#include "chrome/common/chrome_switches.h"
+#endif
+
 namespace chrome {
+
+bool ShouldOpenAshOnStartup() {
+#if defined(OS_CHROMEOS)
+  return true;
+#else
+  // TODO(scottmg): http://crbug.com/133312, will need this for Win8 too.
+  return CommandLine::ForCurrentProcess()->HasSwitch(switches::kOpenAsh);
+#endif
+}
 
 bool IsNativeViewInAsh(gfx::NativeView native_view) {
 #if defined(OS_CHROMEOS)
-  // Optimization. There is only ash on ChromeOS.
-  return true;
+  // Optimization. There is only ash or only athena on ChromeOS.
+  return ash::Shell::HasInstance();
 #endif
 
   if (!ash::Shell::HasInstance())
@@ -34,16 +48,6 @@ bool IsNativeViewInAsh(gfx::NativeView native_view) {
 
 bool IsNativeWindowInAsh(gfx::NativeWindow native_window) {
   return IsNativeViewInAsh(native_window);
-}
-
-void ToggleAshDesktop() {
-  if (chrome::HOST_DESKTOP_TYPE_ASH == chrome::HOST_DESKTOP_TYPE_NATIVE)
-    return;
-
-  if (!ash::Shell::HasInstance())
-    OpenAsh(gfx::kNullAcceleratedWidget);
-  else
-    CloseAsh();
 }
 
 }  // namespace chrome

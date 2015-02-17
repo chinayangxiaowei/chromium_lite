@@ -13,12 +13,12 @@
 #include "chrome/browser/ui/ash/launcher/launcher_item_controller.h"
 #include "ui/aura/window_observer.h"
 
-namespace apps {
-class AppWindow;
-}
-
 namespace aura {
 class Window;
+}
+
+namespace extensions {
+class AppWindow;
 }
 
 namespace gfx {
@@ -41,9 +41,10 @@ class AppWindowLauncherItemController : public LauncherItemController,
                                   const std::string& app_id,
                                   ChromeLauncherController* controller);
 
-  virtual ~AppWindowLauncherItemController();
+  ~AppWindowLauncherItemController() override;
 
-  void AddAppWindow(apps::AppWindow* app_window, ash::ShelfItemStatus status);
+  void AddAppWindow(extensions::AppWindow* app_window,
+                    ash::ShelfItemStatus status);
 
   void RemoveAppWindowForWindow(aura::Window* window);
 
@@ -52,24 +53,23 @@ class AppWindowLauncherItemController : public LauncherItemController,
   const std::string& app_shelf_id() const { return app_shelf_id_; }
 
   // LauncherItemController overrides:
-  virtual bool IsOpen() const OVERRIDE;
-  virtual bool IsVisible() const OVERRIDE;
-  virtual void Launch(ash::LaunchSource source, int event_flags) OVERRIDE;
-  virtual bool Activate(ash::LaunchSource source) OVERRIDE;
-  virtual ChromeLauncherAppMenuItems GetApplicationList(int event_flags)
-      OVERRIDE;
-  virtual bool ItemSelected(const ui::Event& eent) OVERRIDE;
-  virtual base::string16 GetTitle() OVERRIDE;
-  virtual ui::MenuModel* CreateContextMenu(aura::Window* root_window) OVERRIDE;
-  virtual ash::ShelfMenuModel* CreateApplicationMenu(int event_flags) OVERRIDE;
-  virtual bool IsDraggable() OVERRIDE;
-  virtual bool ShouldShowTooltip() OVERRIDE;
-  virtual void Close() OVERRIDE;
+  bool IsOpen() const override;
+  bool IsVisible() const override;
+  void Launch(ash::LaunchSource source, int event_flags) override;
+  bool Activate(ash::LaunchSource source) override;
+  ChromeLauncherAppMenuItems GetApplicationList(int event_flags) override;
+  bool ItemSelected(const ui::Event& eent) override;
+  base::string16 GetTitle() override;
+  ui::MenuModel* CreateContextMenu(aura::Window* root_window) override;
+  ash::ShelfMenuModel* CreateApplicationMenu(int event_flags) override;
+  bool IsDraggable() override;
+  bool ShouldShowTooltip() override;
+  void Close() override;
 
   // aura::WindowObserver overrides:
-  virtual void OnWindowPropertyChanged(aura::Window* window,
-                                       const void* key,
-                                       intptr_t old) OVERRIDE;
+  void OnWindowPropertyChanged(aura::Window* window,
+                               const void* key,
+                               intptr_t old) override;
 
   // Get the number of running applications/incarnations of this.
   size_t app_window_count() const { return app_windows_.size(); }
@@ -82,19 +82,19 @@ class AppWindowLauncherItemController : public LauncherItemController,
   void InstallApp();
 
  private:
-  typedef std::list<apps::AppWindow*> AppWindowList;
+  typedef std::list<extensions::AppWindow*> AppWindowList;
 
-  void ShowAndActivateOrMinimize(apps::AppWindow* app_window);
+  void ShowAndActivateOrMinimize(extensions::AppWindow* app_window);
 
   // Activate the given |window_to_show|, or - if already selected - advance to
   // the next window of similar type.
-  void ActivateOrAdvanceToNextAppWindow(apps::AppWindow* window_to_show);
+  void ActivateOrAdvanceToNextAppWindow(extensions::AppWindow* window_to_show);
 
   // List of associated app windows
   AppWindowList app_windows_;
 
   // Pointer to the most recently active app window
-  apps::AppWindow* last_active_app_window_;
+  extensions::AppWindow* last_active_app_window_;
 
   // The launcher id associated with this set of windows. There is one
   // AppLauncherItemController for each |app_shelf_id_|.

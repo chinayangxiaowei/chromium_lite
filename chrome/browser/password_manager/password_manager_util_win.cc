@@ -4,8 +4,8 @@
 
 // windows.h must be first otherwise Win8 SDK breaks.
 #include <windows.h>
-#include <wincred.h>
 #include <LM.h>
+#include <wincred.h>
 
 // SECURITY_WIN32 must be defined in order to get
 // EXTENDED_NAME_FORMAT enumeration.
@@ -15,33 +15,22 @@
 
 #include "chrome/browser/password_manager/password_manager_util.h"
 
-#include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/grit/chromium_strings.h"
 #include "components/password_manager/core/browser/password_manager.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #endif
-
-// static
-void password_manager::PasswordManager::RegisterLocalPrefs(
-    PrefRegistrySimple* registry) {
-  registry->RegisterInt64Pref(password_manager::prefs::kOsPasswordLastChanged,
-                              0);
-  registry->RegisterBooleanPref(password_manager::prefs::kOsPasswordBlank,
-                                false);
-}
 
 namespace password_manager_util {
 

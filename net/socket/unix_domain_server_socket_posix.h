@@ -44,26 +44,38 @@ class NET_EXPORT UnixDomainServerSocket : public ServerSocket {
 
   UnixDomainServerSocket(const AuthCallback& auth_callack,
                          bool use_abstract_namespace);
-  virtual ~UnixDomainServerSocket();
+  ~UnixDomainServerSocket() override;
 
   // Gets credentials of peer to check permissions.
   static bool GetPeerCredentials(SocketDescriptor socket_fd,
                                  Credentials* credentials);
 
   // ServerSocket implementation.
-  virtual int Listen(const IPEndPoint& address, int backlog) OVERRIDE;
-  virtual int ListenWithAddressAndPort(const std::string& unix_domain_path,
-                                       int port_unused,
-                                       int backlog) OVERRIDE;
-  virtual int GetLocalAddress(IPEndPoint* address) const OVERRIDE;
-  virtual int Accept(scoped_ptr<StreamSocket>* socket,
-                     const CompletionCallback& callback) OVERRIDE;
+  int Listen(const IPEndPoint& address, int backlog) override;
+  int ListenWithAddressAndPort(const std::string& unix_domain_path,
+                               int port_unused,
+                               int backlog) override;
+  int GetLocalAddress(IPEndPoint* address) const override;
+  int Accept(scoped_ptr<StreamSocket>* socket,
+             const CompletionCallback& callback) override;
+
+  // Accepts an incoming connection on |listen_socket_|, but passes back
+  // a raw SocketDescriptor instead of a StreamSocket.
+  int AcceptSocketDescriptor(SocketDescriptor* socket_descriptor,
+                             const CompletionCallback& callback);
 
  private:
-  void AcceptCompleted(scoped_ptr<StreamSocket>* socket,
+  // A callback to wrap the setting of the out-parameter to Accept().
+  // This allows the internal machinery of that call to be implemented in
+  // a manner that's agnostic to the caller's desired output.
+  typedef base::Callback<void(scoped_ptr<SocketLibevent>)> SetterCallback;
+
+  int DoAccept(const SetterCallback& setter_callback,
+               const CompletionCallback& callback);
+  void AcceptCompleted(const SetterCallback& setter_callback,
                        const CompletionCallback& callback,
                        int rv);
-  bool AuthenticateAndGetStreamSocket(scoped_ptr<StreamSocket>* socket);
+  bool AuthenticateAndGetStreamSocket(const SetterCallback& setter_callback);
 
   scoped_ptr<SocketLibevent> listen_socket_;
   const AuthCallback auth_callback_;

@@ -19,6 +19,7 @@ void AppListItemList::AddObserver(AppListItemListObserver* observer) {
 }
 
 void AppListItemList::RemoveObserver(AppListItemListObserver* observer) {
+  DCHECK(observers_.HasObserver(observer));
   observers_.RemoveObserver(observer);
 }
 
@@ -123,6 +124,28 @@ void AppListItemList::SetItemPosition(AppListItem* item,
                     OnListItemMoved(from_index, to_index, item));
 }
 
+void AppListItemList::HighlightItemInstalledFromUI(const std::string& id) {
+  // Items within folders are not highlighted (apps are never installed to a
+  // folder initially). So just search the top-level list.
+  size_t index;
+  if (FindItemIndex(highlighted_id_, &index)) {
+    item_at(index)->set_highlighted(false);
+    FOR_EACH_OBSERVER(AppListItemListObserver,
+                      observers_,
+                      OnAppListItemHighlight(index, false));
+  }
+  highlighted_id_ = id;
+  if (!FindItemIndex(highlighted_id_, &index)) {
+    // If the item isin't in the app list yet, it will be highlighted later, in
+    // AddItem().
+    return;
+  }
+
+  item_at(index)->set_highlighted(true);
+  FOR_EACH_OBSERVER(
+      AppListItemListObserver, observers_, OnAppListItemHighlight(index, true));
+}
+
 // AppListItemList private
 
 syncer::StringOrdinal AppListItemList::CreatePositionBefore(
@@ -158,6 +181,14 @@ AppListItem* AppListItemList::AddItem(scoped_ptr<AppListItem> item_ptr) {
   FOR_EACH_OBSERVER(AppListItemListObserver,
                     observers_,
                     OnListItemAdded(index, item));
+
+  if (item->id() == highlighted_id_) {
+    // Item not present when highlight requested, so highlight it now.
+    item->set_highlighted(true);
+    FOR_EACH_OBSERVER(AppListItemListObserver,
+                      observers_,
+                      OnAppListItemHighlight(index, true));
+  }
   return item;
 }
 
@@ -166,17 +197,15 @@ void AppListItemList::DeleteItem(const std::string& id) {
   // |item| will be deleted on destruction.
 }
 
-scoped_ptr<AppListItem> AppListItemList::RemoveItem(
-    const std::string& id) {
+scoped_ptr<AppListItem> AppListItemList::RemoveItem(const std::string& id) {
   size_t index;
-  if (FindItemIndex(id, &index))
-    return RemoveItemAt(index);
-
-  return scoped_ptr<AppListItem>();
+  if (!FindItemIndex(id, &index))
+    LOG(FATAL) << "RemoveItem: Not found: " << id;
+  return RemoveItemAt(index);
 }
 
 scoped_ptr<AppListItem> AppListItemList::RemoveItemAt(size_t index) {
-  DCHECK_LT(index, item_count());
+  CHECK_LT(index, item_count());
   AppListItem* item = app_list_items_[index];
   app_list_items_.weak_erase(app_list_items_.begin() + index);
   FOR_EACH_OBSERVER(AppListItemListObserver,

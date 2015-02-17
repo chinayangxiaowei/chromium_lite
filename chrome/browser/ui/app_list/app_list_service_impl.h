@@ -17,41 +17,59 @@
 #include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/app_list/profile_loader.h"
 
+class AppListViewDelegate;
 class ProfileStore;
 
 namespace base {
 class FilePath;
 }
 
+namespace test {
+class AppListServiceImplTestApi;
+}
+
 // Parts of the AppListService implementation shared between platforms.
 class AppListServiceImpl : public AppListService,
                            public ProfileInfoCacheObserver {
  public:
-  virtual ~AppListServiceImpl();
+  ~AppListServiceImpl() override;
 
   // Constructor used for testing.
   AppListServiceImpl(const base::CommandLine& command_line,
                      PrefService* local_state,
                      scoped_ptr<ProfileStore> profile_store);
 
+  // Lazily create the Chrome AppListViewDelegate and ensure it is set to the
+  // given |profile|.
+  AppListViewDelegate* GetViewDelegate(Profile* profile);
+
   void RecordAppListLaunch();
   static void RecordAppListAppLaunch();
 
   // AppListService overrides:
-  virtual void SetAppListNextPaintCallback(void (*callback)()) OVERRIDE;
-  virtual void HandleFirstRun() OVERRIDE;
-  virtual void Init(Profile* initial_profile) OVERRIDE;
-  virtual base::FilePath GetProfilePath(
-      const base::FilePath& user_data_dir) OVERRIDE;
-  virtual void SetProfilePath(const base::FilePath& profile_path) OVERRIDE;
-  virtual void Show() OVERRIDE;
-  virtual void AutoShowForProfile(Profile* requested_profile) OVERRIDE;
-  virtual void EnableAppList(Profile* initial_profile,
-                             AppListEnableSource enable_source) OVERRIDE;
-  virtual void CreateShortcut() OVERRIDE;
+  void SetAppListNextPaintCallback(void (*callback)()) override;
+  void HandleFirstRun() override;
+  void Init(Profile* initial_profile) override;
+  base::FilePath GetProfilePath(const base::FilePath& user_data_dir) override;
+  void SetProfilePath(const base::FilePath& profile_path) override;
+  void Show() override;
+  void ShowForVoiceSearch(Profile* profile) override;
+  void ShowForAppInstall(Profile* profile,
+                         const std::string& extension_id,
+                         bool start_discovery_tracking) override;
+  void EnableAppList(Profile* initial_profile,
+                     AppListEnableSource enable_source) override;
+  void CreateShortcut() override;
 
  protected:
   AppListServiceImpl();
+
+  // Create the app list UI, and maintain its state, but do not show it.
+  virtual void CreateForProfile(Profile* requested_profile) = 0;
+
+  // Destroy the app list. Called when the profile that the app list is showing
+  // is being deleted.
+  virtual void DestroyAppList() = 0;
 
   void InvalidatePendingProfileLoads();
   ProfileLoader& profile_loader() { return *profile_loader_; }
@@ -63,6 +81,7 @@ class AppListServiceImpl : public AppListService,
   void PerformStartupChecks(Profile* initial_profile);
 
  private:
+  friend class test::AppListServiceImplTestApi;
   static void SendAppListStats();
 
   // Loads a profile asynchronously and calls OnProfileLoaded() when done.
@@ -74,14 +93,15 @@ class AppListServiceImpl : public AppListService,
                        Profile::CreateStatus status);
 
   // ProfileInfoCacheObserver overrides:
-  virtual void OnProfileWillBeRemoved(
-      const base::FilePath& profile_path) OVERRIDE;
+  void OnProfileWillBeRemoved(const base::FilePath& profile_path) override;
 
   scoped_ptr<ProfileStore> profile_store_;
-  base::WeakPtrFactory<AppListServiceImpl> weak_factory_;
   base::CommandLine command_line_;
   PrefService* local_state_;
   scoped_ptr<ProfileLoader> profile_loader_;
+  scoped_ptr<AppListViewDelegate> view_delegate_;
+
+  base::WeakPtrFactory<AppListServiceImpl> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(AppListServiceImpl);
 };

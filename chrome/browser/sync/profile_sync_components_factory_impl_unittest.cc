@@ -31,7 +31,7 @@ class ProfileSyncComponentsFactoryImplTest : public testing::Test {
   ProfileSyncComponentsFactoryImplTest()
       : thread_bundle_(content::TestBrowserThreadBundle::DEFAULT) {}
 
-  virtual void SetUp() {
+  void SetUp() override {
     profile_.reset(new TestingProfile());
     base::FilePath program_path(FILE_PATH_LITERAL("chrome.exe"));
     command_line_.reset(new CommandLine(program_path));
@@ -50,6 +50,7 @@ class ProfileSyncComponentsFactoryImplTest : public testing::Test {
     datatypes.push_back(syncer::AUTOFILL);
     datatypes.push_back(syncer::AUTOFILL_PROFILE);
     datatypes.push_back(syncer::BOOKMARKS);
+    datatypes.push_back(syncer::DEVICE_INFO);
 #if defined(OS_LINUX) || defined(OS_WIN) || defined(OS_CHROMEOS)
     datatypes.push_back(syncer::DICTIONARY);
 #endif

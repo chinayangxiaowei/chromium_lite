@@ -8,8 +8,8 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/linked_ptr.h"
 #include "base/memory/ref_counted.h"
@@ -45,7 +45,6 @@
 #include "chromeos/chromeos_paths.h"
 #include "chromeos/dbus/cryptohome_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/dbus/session_manager_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
@@ -104,27 +103,27 @@ class UserImageManagerTest : public LoginManagerTest,
   }
 
   // LoginManagerTest overrides:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
+  virtual void SetUpInProcessBrowserTestFixture() override {
     LoginManagerTest::SetUpInProcessBrowserTestFixture();
 
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir_));
     ASSERT_TRUE(PathService::Get(chrome::DIR_USER_DATA, &user_data_dir_));
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     LoginManagerTest::SetUpOnMainThread();
     local_state_ = g_browser_process->local_state();
     user_manager::UserManager::Get()->AddObserver(this);
   }
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     user_manager::UserManager::Get()->RemoveObserver(this);
     LoginManagerTest::TearDownOnMainThread();
   }
 
   // UserManager::Observer overrides:
   virtual void LocalStateChanged(
-      user_manager::UserManager* user_manager) OVERRIDE {
+      user_manager::UserManager* user_manager) override {
     if (run_loop_)
       run_loop_->Quit();
   }
@@ -237,8 +236,8 @@ class UserImageManagerTest : public LoginManagerTest,
                           std::string(),
                           base::Time::Now() + base::TimeDelta::FromDays(1));
 
-    net::TestURLFetcher* fetcher =
-        url_fetcher_factory->GetFetcherByID(0);
+    net::TestURLFetcher* fetcher = url_fetcher_factory->GetFetcherByID(
+        gaia::GaiaOAuthClient::kUrlFetcherId);
     ASSERT_TRUE(fetcher);
     fetcher->SetResponseString(
         "{ \"picture\": \"http://localhost/avatar.jpg\" }");
@@ -601,20 +600,17 @@ class UserImageManagerPolicyTest : public UserImageManagerTest,
                                    public policy::CloudPolicyStore::Observer {
  protected:
   UserImageManagerPolicyTest()
-      : fake_dbus_thread_manager_(new chromeos::FakeDBusThreadManager),
-        fake_session_manager_client_(new chromeos::FakeSessionManagerClient) {
-    fake_dbus_thread_manager_->SetFakeClients();
-    fake_dbus_thread_manager_->SetSessionManagerClient(
-        scoped_ptr<SessionManagerClient>(fake_session_manager_client_));
+      : fake_session_manager_client_(new chromeos::FakeSessionManagerClient) {
   }
 
   // UserImageManagerTest overrides:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
-    DBusThreadManager::SetInstanceForTesting(fake_dbus_thread_manager_);
+  virtual void SetUpInProcessBrowserTestFixture() override {
+    DBusThreadManager::GetSetterForTesting()->SetSessionManagerClient(
+        scoped_ptr<SessionManagerClient>(fake_session_manager_client_));
     UserImageManagerTest::SetUpInProcessBrowserTestFixture();
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     UserImageManagerTest::SetUpOnMainThread();
 
     base::FilePath user_keys_dir;
@@ -643,12 +639,12 @@ class UserImageManagerPolicyTest : public UserImageManagerTest,
   }
 
   // policy::CloudPolicyStore::Observer overrides:
-  virtual void OnStoreLoaded(policy::CloudPolicyStore* store) OVERRIDE {
+  virtual void OnStoreLoaded(policy::CloudPolicyStore* store) override {
     if (run_loop_)
       run_loop_->Quit();
   }
 
-  virtual void OnStoreError(policy::CloudPolicyStore* store) OVERRIDE {
+  virtual void OnStoreError(policy::CloudPolicyStore* store) override {
     if (run_loop_)
       run_loop_->Quit();
   }
@@ -668,7 +664,6 @@ class UserImageManagerPolicyTest : public UserImageManagerTest,
   }
 
   policy::UserPolicyBuilder user_policy_;
-  FakeDBusThreadManager* fake_dbus_thread_manager_;
   FakeSessionManagerClient* fake_session_manager_client_;
 
   scoped_ptr<gfx::ImageSkia> policy_image_;

@@ -15,6 +15,51 @@ from platform_util import PlatformToExtensionType
 import third_party.json_schema_compiler.model as model
 
 
+def CreateSamplesView(samples_list, request):
+  def get_sample_id(sample_name):
+    return sample_name.lower().replace(' ', '-')
+
+  def get_accepted_languages(request):
+    if request is None:
+      return []
+    accept_language = request.headers.get('Accept-Language', None)
+    if accept_language is None:
+      return []
+    return [lang_with_q.split(';')[0].strip()
+            for lang_with_q in accept_language.split(',')]
+
+  return_list = []
+  for dict_ in samples_list:
+    name = dict_['name']
+    description = dict_['description']
+    if description is None:
+      description = ''
+    if name.startswith('__MSG_') or description.startswith('__MSG_'):
+      try:
+        # Copy the sample dict so we don't change the dict in the cache.
+        sample_data = dict_.copy()
+        name_key = name[len('__MSG_'):-len('__')]
+        description_key = description[len('__MSG_'):-len('__')]
+        locale = sample_data['default_locale']
+        for lang in get_accepted_languages(request):
+          if lang in sample_data['locales']:
+            locale = lang
+            break
+        locale_data = sample_data['locales'][locale]
+        sample_data['name'] = locale_data[name_key]['message']
+        sample_data['description'] = locale_data[description_key]['message']
+        sample_data['id'] = get_sample_id(sample_data['name'])
+      except Exception:
+        logging.error(traceback.format_exc())
+        # Revert the sample to the original dict.
+        sample_data = dict_
+      return_list.append(sample_data)
+    else:
+      dict_['id'] = get_sample_id(name)
+      return_list.append(dict_)
+  return return_list
+
+
 def GetEventByNameFromEvents(events):
   '''Parses the dictionary |events| to find the definitions of members of the
   type Event.  Returns a dictionary mapping the name of a member to that
@@ -60,9 +105,9 @@ def _FormatValue(value):
   return ','.join([s[max(0, i - 3):i] for i in range(len(s), 0, -3)][::-1])
 
 
-class JSCView(object):
+class _JSCViewBuilder(object):
   '''Uses a Model from the JSON Schema Compiler and generates a dict that
-  a Handlebar template can use for a data source.
+  a Motemplate template can use for a data source.
   '''
 
   def __init__(self,
@@ -73,7 +118,8 @@ class JSCView(object):
                template_cache,
                features_bundle,
                event_byname_future,
-               platform):
+               platform,
+               samples):
     self._content_script_apis = content_script_apis
     self._availability = availability_finder.GetAPIAvailability(jsc_model.name)
     self._current_node = APINodeCursor(availability_finder, jsc_model.name)
@@ -86,36 +132,39 @@ class JSCView(object):
     self._event_byname_future = event_byname_future
     self._jsc_model = jsc_model
     self._platform = platform
+    self._samples = samples
 
   def _GetLink(self, link):
     ref = link if '.' in link else (self._jsc_model.name + '.' + link)
     return { 'ref': ref, 'text': link, 'name': link }
 
-  def ToDict(self):
+  def ToDict(self, request):
     '''Returns a dictionary representation of |self._jsc_model|, which
     is a Namespace object from JSON Schema Compiler.
     '''
     assert self._jsc_model is not None
     chrome_dot_name = 'chrome.%s' % self._jsc_model.name
     as_dict = {
+      'channelWarning': self._GetChannelWarning(),
+      'documentationOptions': self._jsc_model.documentation_options,
+      'domEvents': self._GenerateDomEvents(self._jsc_model.events),
+      'events': self._GenerateEvents(self._jsc_model.events),
+      'functions': self._GenerateFunctions(self._jsc_model.functions),
+      'introList': self._GetIntroTableList(),
       'name': self._jsc_model.name,
       'namespace': self._jsc_model.documentation_options.get('namespace',
                                                              chrome_dot_name),
+      'properties': self._GenerateProperties(self._jsc_model.properties),
+      'samples': CreateSamplesView(self._samples, request),
       'title': self._jsc_model.documentation_options.get('title',
                                                          chrome_dot_name),
-      'documentationOptions': self._jsc_model.documentation_options,
       'types': self._GenerateTypes(self._jsc_model.types.values()),
-      'functions': self._GenerateFunctions(self._jsc_model.functions),
-      'events': self._GenerateEvents(self._jsc_model.events),
-      'domEvents': self._GenerateDomEvents(self._jsc_model.events),
-      'properties': self._GenerateProperties(self._jsc_model.properties),
-      'introList': self._GetIntroTableList(),
-      'channelWarning': self._GetChannelWarning(),
     }
     if self._jsc_model.deprecated:
       as_dict['deprecated'] = self._jsc_model.deprecated
 
     as_dict['byName'] = _GetByNameDict(as_dict)
+
     return as_dict
 
   def _IsExperimental(self):
@@ -388,6 +437,9 @@ class JSCView(object):
     '''Returns an object suitable for use in templates to display availability
     information.
     '''
+    # TODO(rockot): Temporary hack. Remove this very soon.
+    if status == 'master':
+      status = 'trunk'
     return {
       'partial': self._template_cache.GetFromFile(
           '%sintro_tables/%s_message.html' % (PRIVATE_TEMPLATES, status)).Get(),
@@ -550,7 +602,7 @@ class JSCView(object):
         if ext_type not in node.get('extension_types', (ext_type,)):
           continue
         # If there is a 'partial' argument and it hasn't already been
-        # converted to a Handlebar object, transform it to a template.
+        # converted to a Motemplate object, transform it to a template.
         if 'partial' in node:
           # Note: it's enough to copy() not deepcopy() because only a single
           # top-level key is being modified.
@@ -560,3 +612,23 @@ class JSCView(object):
         content.append(node)
       misc_rows.append({ 'title': category, 'content': content })
     return misc_rows
+
+def CreateJSCView(content_script_apis,
+                  jsc_model,
+                  availability_finder,
+                  json_cache,
+                  template_cache,
+                  features_bundle,
+                  event_byname_future,
+                  platform,
+                  samples,
+                  request):
+  return _JSCViewBuilder(content_script_apis,
+                         jsc_model,
+                         availability_finder,
+                         json_cache,
+                         template_cache,
+                         features_bundle,
+                         event_byname_future,
+                         platform,
+                         samples).ToDict(request)

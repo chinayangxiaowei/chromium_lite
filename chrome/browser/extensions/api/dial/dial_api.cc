@@ -19,8 +19,6 @@ using content::BrowserThread;
 
 namespace {
 
-const char kDialServiceError[] = "Dial service error.";
-
 // How often to poll for devices.
 const int kDialRefreshIntervalSecs = 120;
 
@@ -37,7 +35,8 @@ namespace extensions {
 namespace dial = api::dial;
 
 DialAPI::DialAPI(Profile* profile)
-    : RefcountedBrowserContextKeyedService(BrowserThread::IO),
+    : RefcountedKeyedService(
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)),
       profile_(profile) {
   EventRouter::Get(profile)
       ->RegisterObserver(this, dial::OnDeviceList::kEventName);
@@ -163,9 +162,6 @@ void DialDiscoverNowFunction::Work() {
 
 bool DialDiscoverNowFunction::Respond() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!result_)
-    error_ = kDialServiceError;
-
   SetResult(new base::FundamentalValue(result_));
   return true;
 }

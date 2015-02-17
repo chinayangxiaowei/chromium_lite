@@ -14,9 +14,8 @@
 namespace mojo {
 
 template <>
-class TypeConverter<sample::BarPtr, int32_t> {
- public:
-  static int32_t ConvertTo(const sample::BarPtr& bar) {
+struct TypeConverter<int32_t, sample::BarPtr> {
+  static int32_t Convert(const sample::BarPtr& bar) {
     return static_cast<int32_t>(bar->alpha) << 16 |
            static_cast<int32_t>(bar->beta) << 8 |
            static_cast<int32_t>(bar->gamma);
@@ -75,7 +74,7 @@ FooPtr MakeFoo() {
     output_streams[i] = producer.Pass();
   }
 
-  mojo::Array<mojo::Array<bool> > array_of_array_of_bools(2);
+  mojo::Array<mojo::Array<bool>> array_of_array_of_bools(2);
   for (size_t i = 0; i < 2; ++i) {
     mojo::Array<bool> array_of_bools(2);
     for (size_t j = 0; j < 2; ++j)
@@ -176,7 +175,8 @@ void Print(int depth, const char* name, uint8_t value) {
 }
 
 template <typename H>
-void Print(int depth, const char* name,
+void Print(int depth,
+           const char* name,
            const mojo::ScopedHandleBase<H>& value) {
   PrintSpacer(depth);
   std::cout << name << ": 0x" << std::hex << value.get().value() << std::endl;
@@ -239,8 +239,8 @@ void Print(int depth, const char* name, const FooPtr& foo) {
 
 void DumpHex(const uint8_t* bytes, uint32_t num_bytes) {
   for (uint32_t i = 0; i < num_bytes; ++i) {
-    std::cout << std::setw(2) << std::setfill('0') << std::hex <<
-        uint32_t(bytes[i]);
+    std::cout << std::setw(2) << std::setfill('0') << std::hex
+              << uint32_t(bytes[i]);
 
     if (i % 16 == 15) {
       std::cout << std::endl;
@@ -256,8 +256,7 @@ void DumpHex(const uint8_t* bytes, uint32_t num_bytes) {
 
 class ServiceImpl : public Service {
  public:
-  virtual void Frobinate(FooPtr foo, BazOptions baz, PortPtr port)
-      MOJO_OVERRIDE {
+  void Frobinate(FooPtr foo, BazOptions baz, PortPtr port) override {
     // Users code goes here to handle the incoming Frobinate message.
 
     // We mainly check that we're given the expected arguments.
@@ -276,21 +275,18 @@ class ServiceImpl : public Service {
     }
   }
 
-  virtual void GetPort(mojo::InterfaceRequest<Port> port_request)
-      MOJO_OVERRIDE {
-  }
+  void GetPort(mojo::InterfaceRequest<Port> port_request) override {}
 };
 
 class ServiceProxyImpl : public ServiceProxy {
  public:
   explicit ServiceProxyImpl(mojo::MessageReceiverWithResponder* receiver)
-      : ServiceProxy(receiver) {
-  }
+      : ServiceProxy(receiver) {}
 };
 
 class SimpleMessageReceiver : public mojo::MessageReceiverWithResponder {
  public:
-  virtual bool Accept(mojo::Message* message) MOJO_OVERRIDE {
+  bool Accept(mojo::Message* message) override {
     // Imagine some IPC happened here.
 
     if (g_dump_message_as_hex) {
@@ -307,9 +303,8 @@ class SimpleMessageReceiver : public mojo::MessageReceiverWithResponder {
     return stub.Accept(message);
   }
 
-  virtual bool AcceptWithResponder(mojo::Message* message,
-                                   mojo::MessageReceiver* responder)
-                                       MOJO_OVERRIDE {
+  bool AcceptWithResponder(mojo::Message* message,
+                           mojo::MessageReceiver* responder) override {
     return false;
   }
 };
@@ -317,7 +312,7 @@ class SimpleMessageReceiver : public mojo::MessageReceiverWithResponder {
 class BindingsSampleTest : public testing::Test {
  public:
   BindingsSampleTest() {}
-  virtual ~BindingsSampleTest() {}
+  ~BindingsSampleTest() override {}
 
  private:
   mojo::Environment env_;

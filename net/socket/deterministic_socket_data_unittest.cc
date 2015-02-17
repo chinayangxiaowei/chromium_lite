@@ -29,7 +29,7 @@ class DeterministicSocketDataTest : public PlatformTest {
  public:
   DeterministicSocketDataTest();
 
-  virtual void TearDown();
+  void TearDown() override;
 
   void ReentrantReadCallback(int len, int rv);
   void ReentrantWriteCallback(const char* data, int len, int rv);
@@ -71,10 +71,12 @@ DeterministicSocketDataTest::DeterministicSocketDataTest()
       read_buf_(NULL),
       connect_data_(SYNCHRONOUS, OK),
       endpoint_("www.google.com", 443),
-      tcp_params_(new TransportSocketParams(endpoint_,
-                                            false,
-                                            false,
-                                            OnHostResolutionCallback())),
+      tcp_params_(new TransportSocketParams(
+              endpoint_,
+              false,
+              false,
+              OnHostResolutionCallback(),
+              TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT)),
       histograms_(std::string()),
       socket_pool_(10, 10, &histograms_, &socket_factory_) {}
 

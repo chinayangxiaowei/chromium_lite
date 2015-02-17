@@ -15,7 +15,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/resource_provider.h"
 #include "chrome/browser/task_manager/task_manager.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -33,21 +34,13 @@ class ResourceChangeObserver : public TaskManagerModelObserver {
         required_count_(required_count),
         title_pattern_(title_pattern) {}
 
-  virtual void OnModelChanged() OVERRIDE {
-    OnResourceChange();
-  }
+  void OnModelChanged() override { OnResourceChange(); }
 
-  virtual void OnItemsChanged(int start, int length) OVERRIDE {
-    OnResourceChange();
-  }
+  void OnItemsChanged(int start, int length) override { OnResourceChange(); }
 
-  virtual void OnItemsAdded(int start, int length) OVERRIDE {
-    OnResourceChange();
-  }
+  void OnItemsAdded(int start, int length) override { OnResourceChange(); }
 
-  virtual void OnItemsRemoved(int start, int length) OVERRIDE {
-    OnResourceChange();
-  }
+  void OnItemsRemoved(int start, int length) override { OnResourceChange(); }
 
   void RunUntilSatisfied() {
     // See if the condition is satisfied without having to run the loop. This
@@ -170,8 +163,9 @@ base::string16 MatchApp(const char* title) {
 base::string16 MatchAnyApp() { return MatchApp("*"); }
 
 base::string16 MatchWebView(const char* title) {
-  return l10n_util::GetStringFUTF16(IDS_TASK_MANAGER_WEBVIEW_TAG_PREFIX,
-                                    base::ASCIIToUTF16(title));
+  return l10n_util::GetStringFUTF16(
+      IDS_EXTENSION_TASK_MANAGER_WEBVIEW_TAG_PREFIX,
+      base::ASCIIToUTF16(title));
 }
 
 base::string16 MatchAnyWebView() { return MatchWebView("*"); }

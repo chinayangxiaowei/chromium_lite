@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
@@ -63,7 +63,7 @@ TEST(ChromePrefServiceTest, UpdateCommandLinePrefStore) {
 
 class ChromePrefServiceUserFilePrefsTest : public testing::Test {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
     ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &data_dir_));
@@ -91,7 +91,7 @@ class ChromePrefServiceUserFilePrefsTest : public testing::Test {
 
 class ChromePrefServiceWebKitPrefs : public ChromeRenderViewHostTestHarness {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 
     // Supply our own profile so we use the correct profile data. The test

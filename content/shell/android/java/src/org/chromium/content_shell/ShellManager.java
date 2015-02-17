@@ -12,7 +12,6 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 import org.chromium.base.CalledByNative;
-import org.chromium.base.CommandLine;
 import org.chromium.base.JNINamespace;
 import org.chromium.base.ThreadUtils;
 import org.chromium.content.browser.ActivityContentVideoViewClient;
@@ -20,7 +19,6 @@ import org.chromium.content.browser.ContentVideoViewClient;
 import org.chromium.content.browser.ContentViewClient;
 import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content.browser.ContentViewRenderView;
-import org.chromium.content.common.ContentSwitches;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
@@ -51,22 +49,15 @@ public class ShellManager extends FrameLayout {
             public ContentVideoViewClient getContentVideoViewClient() {
                 return new ActivityContentVideoViewClient((Activity) context) {
                     @Override
-                    public boolean onShowCustomView(View view) {
-                        boolean success = super.onShowCustomView(view);
-                        if (!CommandLine.getInstance().hasSwitch(
-                                ContentSwitches.DISABLE_OVERLAY_FULLSCREEN_VIDEO_SUBTITLE)) {
-                            setOverlayVideoMode(true);
-                        }
-                        return success;
+                    public void enterFullscreenVideo(View view) {
+                        super.enterFullscreenVideo(view);
+                        setOverlayVideoMode(true);
                     }
 
                     @Override
-                    public void onDestroyContentVideoView() {
-                        super.onDestroyContentVideoView();
-                        if (!CommandLine.getInstance().hasSwitch(
-                                ContentSwitches.DISABLE_OVERLAY_FULLSCREEN_VIDEO_SUBTITLE)) {
-                            setOverlayVideoMode(false);
-                        }
+                    public void exitFullscreenVideo() {
+                        super.exitFullscreenVideo();
+                        setOverlayVideoMode(false);
                     }
                 };
             }

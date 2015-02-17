@@ -9,13 +9,9 @@
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
-#include "third_party/WebKit/public/platform/WebNonCopyable.h"
-
-#if defined(OS_MACOSX)
-#include "content/shell/renderer/test_runner/mock_web_theme_engine_mac.h"
-#else
+#include "base/memory/weak_ptr.h"
 #include "content/shell/renderer/test_runner/mock_web_theme_engine.h"
-#endif
+#include "third_party/WebKit/public/platform/WebNonCopyable.h"
 
 namespace blink {
 class WebFrame;
@@ -62,18 +58,14 @@ class TestInterfaces {
  private:
   scoped_ptr<AccessibilityController> accessibility_controller_;
   scoped_ptr<EventSender> event_sender_;
-  scoped_ptr<GamepadController> gamepad_controller_;
+  base::WeakPtr<GamepadController> gamepad_controller_;
   scoped_ptr<TextInputController> text_input_controller_;
   scoped_ptr<TestRunner> test_runner_;
   WebTestDelegate* delegate_;
   WebTestProxyBase* proxy_;
 
   std::vector<WebTestProxyBase*> window_list_;
-#if defined(OS_MACOSX)
-  scoped_ptr<MockWebThemeEngineMac> theme_engine_;
-#else
   scoped_ptr<MockWebThemeEngine> theme_engine_;
-#endif
 
   DISALLOW_COPY_AND_ASSIGN(TestInterfaces);
 };

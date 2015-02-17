@@ -90,8 +90,9 @@ class MockInputHandler : public cc::InputHandler {
                ScrollStatus(const gfx::Point& viewport_point,
                             const gfx::Vector2dF& scroll_delta));
   MOCK_METHOD2(ScrollBy,
-               bool(const gfx::Point& viewport_point,
-                    const gfx::Vector2dF& scroll_delta));
+               cc::InputHandlerScrollResult(
+                   const gfx::Point& viewport_point,
+                   const gfx::Vector2dF& scroll_delta));
   MOCK_METHOD2(ScrollVerticallyByPage,
                bool(const gfx::Point& viewport_point,
                     cc::ScrollDirection direction));
@@ -99,18 +100,13 @@ class MockInputHandler : public cc::InputHandler {
   MOCK_METHOD0(FlingScrollBegin, cc::InputHandler::ScrollStatus());
 
   virtual scoped_ptr<cc::SwapPromiseMonitor>
-    CreateLatencyInfoSwapPromiseMonitor(ui::LatencyInfo* latency) OVERRIDE {
+    CreateLatencyInfoSwapPromiseMonitor(ui::LatencyInfo* latency) override {
       return scoped_ptr<cc::SwapPromiseMonitor>();
   }
 
-  virtual void BindToClient(cc::InputHandlerClient* client) OVERRIDE {}
+  virtual void BindToClient(cc::InputHandlerClient* client) override {}
 
-  virtual void StartPageScaleAnimation(const gfx::Vector2d& target_offset,
-                                       bool anchor_point,
-                                       float page_scale,
-                                       base::TimeDelta duration) OVERRIDE {}
-
-  virtual void MouseMoveAt(const gfx::Point& mouse_position) OVERRIDE {}
+  virtual void MouseMoveAt(const gfx::Point& mouse_position) override {}
 
   MOCK_METHOD2(IsCurrentlyScrollingLayerAt,
                bool(const gfx::Point& point,
@@ -120,9 +116,9 @@ class MockInputHandler : public cc::InputHandler {
 
   virtual void SetRootLayerScrollOffsetDelegate(
       cc::LayerScrollOffsetDelegate* root_layer_scroll_offset_delegate)
-      OVERRIDE {}
+      override {}
 
-  virtual void OnRootLayerDelegatedScrollOffsetChanged() OVERRIDE {}
+  virtual void OnRootLayerDelegatedScrollOffsetChanged() override {}
 
   DISALLOW_COPY_AND_ASSIGN(MockInputHandler);
 };
@@ -163,7 +159,7 @@ class MockInputHandlerProxyClient
   MockInputHandlerProxyClient() {}
   virtual ~MockInputHandlerProxyClient() {}
 
-  virtual void WillShutdown() OVERRIDE {}
+  virtual void WillShutdown() override {}
 
   MOCK_METHOD1(TransferActiveWheelFlingAnimation,
                void(const WebActiveWheelFlingParameters&));
@@ -171,17 +167,30 @@ class MockInputHandlerProxyClient
   virtual blink::WebGestureCurve* CreateFlingAnimationCurve(
       WebGestureDevice deviceSource,
       const WebFloatPoint& velocity,
-      const WebSize& cumulative_scroll) OVERRIDE {
+      const WebSize& cumulative_scroll) override {
     return new FakeWebGestureCurve(
         blink::WebFloatSize(velocity.x, velocity.y),
         blink::WebFloatSize(cumulative_scroll.width, cumulative_scroll.height));
   }
 
   MOCK_METHOD1(DidOverscroll, void(const DidOverscrollParams&));
-  virtual void DidStopFlinging() OVERRIDE {}
+  virtual void DidStopFlinging() override {}
+  virtual void DidReceiveInputEvent() override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockInputHandlerProxyClient);
+};
+
+class MockInputHandlerProxyClientWithDidReceiveInputEvent
+    : public MockInputHandlerProxyClient {
+ public:
+  MockInputHandlerProxyClientWithDidReceiveInputEvent() {}
+  virtual ~MockInputHandlerProxyClientWithDidReceiveInputEvent() {}
+
+  MOCK_METHOD0(DidReceiveInputEvent, void());
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(MockInputHandlerProxyClientWithDidReceiveInputEvent);
 };
 
 WebTouchPoint CreateWebTouchPoint(WebTouchPoint::State state, float x,
@@ -199,6 +208,8 @@ class InputHandlerProxyTest : public testing::Test {
       : expected_disposition_(InputHandlerProxy::DID_HANDLE) {
     input_handler_.reset(
         new content::InputHandlerProxy(&mock_input_handler_, &mock_client_));
+    scroll_result_did_scroll_.did_scroll = true;
+    scroll_result_did_not_scroll_.did_scroll = false;
   }
 
   ~InputHandlerProxyTest() {
@@ -256,8 +267,9 @@ class InputHandlerProxyTest : public testing::Test {
   scoped_ptr<content::InputHandlerProxy> input_handler_;
   testing::StrictMock<MockInputHandlerProxyClient> mock_client_;
   WebGestureEvent gesture_;
-
   InputHandlerProxy::EventDisposition expected_disposition_;
+  cc::InputHandlerScrollResult scroll_result_did_scroll_;
+  cc::InputHandlerScrollResult scroll_result_did_not_scroll_;
 };
 
 TEST_F(InputHandlerProxyTest, MouseWheelByPageMainThread) {
@@ -301,7 +313,7 @@ TEST_F(InputHandlerProxyTest, GestureScrollStarted) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Gt(0))))
-      .WillOnce(testing::Return(false));
+      .WillOnce(testing::Return(scroll_result_did_not_scroll_));
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   // Mark the event as handled if scroll happens.
@@ -314,7 +326,7 @@ TEST_F(InputHandlerProxyTest, GestureScrollStarted) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Gt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   VERIFY_AND_RESET_MOCKS();
@@ -448,7 +460,7 @@ TEST_F(InputHandlerProxyTest, GesturePinchAfterScrollOnMainThread) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Gt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   VERIFY_AND_RESET_MOCKS();
@@ -593,7 +605,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingAnimatesTouchpad) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
@@ -696,7 +708,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingTransferResetsTouchpad) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
@@ -797,7 +809,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingTransferResetsTouchpad) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Gt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
@@ -969,7 +981,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingAnimatesTouchscreen) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
 
@@ -1023,7 +1035,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingWithValidTimestamp) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += dt;
   input_handler_->Animate(time);
 
@@ -1086,7 +1098,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingWithInvalidTimestamp) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += base::TimeDelta::FromMilliseconds(10);
   input_handler_->Animate(time);
 
@@ -1153,7 +1165,7 @@ TEST_F(InputHandlerProxyTest,
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
 
@@ -1179,10 +1191,10 @@ TEST_F(InputHandlerProxyTest, GestureFlingStopsAtContentEdge) {
   WebFloatPoint fling_delta = WebFloatPoint(100, 100);
   gesture_.data.flingStart.velocityX = fling_delta.x;
   gesture_.data.flingStart.velocityY = fling_delta.y;
-  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
   EXPECT_CALL(mock_input_handler_, ScrollBegin(testing::_, testing::_))
       .WillOnce(testing::Return(cc::InputHandler::ScrollStarted));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
+  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
@@ -1193,35 +1205,48 @@ TEST_F(InputHandlerProxyTest, GestureFlingStopsAtContentEdge) {
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
   // The second animate starts scrolling in the positive X and Y directions.
-  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
   EXPECT_CALL(mock_input_handler_, ScrollBegin(testing::_, testing::_))
       .WillOnce(testing::Return(cc::InputHandler::ScrollStarted));
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
+  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
-  // Simulate hitting the bottom content edge.
-  gfx::Vector2dF accumulated_overscroll(0, 100);
-  gfx::Vector2dF latest_overscroll_delta(0, 10);
-  gfx::PointF scroll_point(10, 0);
+  // The third animate overscrolls in the positive Y direction but scrolls
+  // somewhat.
+  cc::InputHandlerScrollResult overscroll;
+  overscroll.did_scroll = true;
+  overscroll.did_overscroll_root = true;
+  overscroll.accumulated_root_overscroll = gfx::Vector2dF(0, 100);
+  overscroll.unused_scroll_delta = gfx::Vector2dF(0, 10);
+  EXPECT_CALL(mock_input_handler_, ScrollBegin(testing::_, testing::_))
+      .WillOnce(testing::Return(cc::InputHandler::ScrollStarted));
+  EXPECT_CALL(mock_input_handler_,
+              ScrollBy(testing::_,
+                       testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))
+      .WillOnce(testing::Return(overscroll));
   EXPECT_CALL(
       mock_client_,
       DidOverscroll(testing::AllOf(
-          testing::Field(&DidOverscrollParams::accumulated_overscroll,
-                         testing::Eq(accumulated_overscroll)),
-          testing::Field(&DidOverscrollParams::latest_overscroll_delta,
-                         testing::Eq(latest_overscroll_delta)),
-          testing::Field(&DidOverscrollParams::current_fling_velocity,
-                         testing::Property(&gfx::Vector2dF::y, testing::Lt(0))),
-          testing::Field(&DidOverscrollParams::causal_event_viewport_point,
-                         testing::Eq(scroll_point)))));
-  input_handler_->DidOverscroll(
-      scroll_point, accumulated_overscroll, latest_overscroll_delta);
+          testing::Field(
+              &DidOverscrollParams::accumulated_overscroll,
+              testing::Eq(overscroll.accumulated_root_overscroll)),
+          testing::Field(
+              &DidOverscrollParams::latest_overscroll_delta,
+              testing::Eq(overscroll.unused_scroll_delta)),
+          testing::Field(
+              &DidOverscrollParams::current_fling_velocity,
+              testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))));
+  EXPECT_CALL(mock_input_handler_, ScrollEnd());
+  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
+  time += base::TimeDelta::FromMilliseconds(100);
+  input_handler_->Animate(time);
+  testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
   // The next call to animate will no longer scroll vertically.
   EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
@@ -1230,7 +1255,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingStopsAtContentEdge) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Eq(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
@@ -1285,7 +1310,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingNotCancelledBySmallTimeDelta) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(false));
+      .WillOnce(testing::Return(scroll_result_did_not_scroll_));
   time += base::TimeDelta::FromMicroseconds(5);
   input_handler_->Animate(time);
 
@@ -1306,7 +1331,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingNotCancelledBySmallTimeDelta) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(1))))
-      .WillOnce(testing::Return(false));
+      .WillOnce(testing::Return(scroll_result_did_not_scroll_));
   time += base::TimeDelta::FromMilliseconds(100);
   input_handler_->Animate(time);
 
@@ -1315,6 +1340,10 @@ TEST_F(InputHandlerProxyTest, GestureFlingNotCancelledBySmallTimeDelta) {
 }
 
 TEST_F(InputHandlerProxyTest, GestureFlingCancelledAfterBothAxesStopScrolling) {
+  cc::InputHandlerScrollResult overscroll;
+  overscroll.did_scroll = true;
+  overscroll.did_overscroll_root = true;
+
   // We shouldn't send any events to the widget for this gesture.
   expected_disposition_ = InputHandlerProxy::DID_HANDLE;
   VERIFY_AND_RESET_MOCKS();
@@ -1349,61 +1378,73 @@ TEST_F(InputHandlerProxyTest, GestureFlingCancelledAfterBothAxesStopScrolling) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += base::TimeDelta::FromMilliseconds(10);
   input_handler_->Animate(time);
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
-  // Simulate hitting the bottom content edge.
-  gfx::Vector2dF accumulated_overscroll(0, 100);
-  gfx::Vector2dF latest_overscroll_delta(0, 100);
-  gfx::PointF scroll_point(10, -50);
+  // The third animate hits the bottom content edge.
+  overscroll.accumulated_root_overscroll = gfx::Vector2dF(0, 100);
+  overscroll.unused_scroll_delta = gfx::Vector2dF(0, 100);
+  EXPECT_CALL(mock_input_handler_,
+              ScrollBy(testing::_,
+                       testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))
+      .WillOnce(testing::Return(overscroll));
   EXPECT_CALL(
       mock_client_,
       DidOverscroll(testing::AllOf(
-          testing::Field(&DidOverscrollParams::accumulated_overscroll,
-                         testing::Eq(accumulated_overscroll)),
-          testing::Field(&DidOverscrollParams::latest_overscroll_delta,
-                         testing::Eq(latest_overscroll_delta)),
-          testing::Field(&DidOverscrollParams::current_fling_velocity,
-                         testing::Property(&gfx::Vector2dF::y, testing::Lt(0))),
-          testing::Field(&DidOverscrollParams::causal_event_viewport_point,
-                         testing::Eq(scroll_point)))));
-  input_handler_->DidOverscroll(
-      scroll_point, accumulated_overscroll, latest_overscroll_delta);
+          testing::Field(
+              &DidOverscrollParams::accumulated_overscroll,
+              testing::Eq(overscroll.accumulated_root_overscroll)),
+          testing::Field(
+              &DidOverscrollParams::latest_overscroll_delta,
+              testing::Eq(overscroll.unused_scroll_delta)),
+          testing::Field(
+              &DidOverscrollParams::current_fling_velocity,
+              testing::Property(&gfx::Vector2dF::y, testing::Lt(0))))));
+  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
+  time += base::TimeDelta::FromMilliseconds(10);
+  input_handler_->Animate(time);
+  testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
   // The next call to animate will no longer scroll vertically.
   EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::y, testing::Eq(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   time += base::TimeDelta::FromMilliseconds(10);
   input_handler_->Animate(time);
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
 
-  // Simulate hitting the right content edge.
-  accumulated_overscroll = gfx::Vector2dF(100, 100);
-  latest_overscroll_delta = gfx::Vector2dF(100, 0);
-  scroll_point = gfx::PointF(50, 0);
+  // The next call will hit the right edge.
+  overscroll.accumulated_root_overscroll = gfx::Vector2dF(100, 100);
+  overscroll.unused_scroll_delta = gfx::Vector2dF(100, 0);
+  EXPECT_CALL(mock_input_handler_,
+              ScrollBy(testing::_,
+                       testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
+      .WillOnce(testing::Return(overscroll));
   EXPECT_CALL(
       mock_client_,
       DidOverscroll(testing::AllOf(
-          testing::Field(&DidOverscrollParams::accumulated_overscroll,
-                         testing::Eq(accumulated_overscroll)),
-          testing::Field(&DidOverscrollParams::latest_overscroll_delta,
-                         testing::Eq(latest_overscroll_delta)),
-          testing::Field(&DidOverscrollParams::current_fling_velocity,
-                         testing::Property(&gfx::Vector2dF::x, testing::Lt(0))),
-          testing::Field(&DidOverscrollParams::causal_event_viewport_point,
-                         testing::Eq(scroll_point)))));
-  input_handler_->DidOverscroll(
-      scroll_point, accumulated_overscroll, latest_overscroll_delta);
+          testing::Field(
+              &DidOverscrollParams::accumulated_overscroll,
+              testing::Eq(overscroll.accumulated_root_overscroll)),
+          testing::Field(
+              &DidOverscrollParams::latest_overscroll_delta,
+              testing::Eq(overscroll.unused_scroll_delta)),
+          testing::Field(
+              &DidOverscrollParams::current_fling_velocity,
+              testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))));
+  EXPECT_CALL(mock_input_handler_, ScrollEnd());
+  time += base::TimeDelta::FromMilliseconds(10);
+  input_handler_->Animate(time);
+  testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
+
   // The next call to animate will no longer scroll horizontally or vertically,
   // and the fling should be cancelled.
   EXPECT_CALL(mock_input_handler_, SetNeedsAnimate()).Times(0);
   EXPECT_CALL(mock_input_handler_, ScrollBy(testing::_, testing::_)).Times(0);
-  EXPECT_CALL(mock_input_handler_, ScrollEnd());
   time += base::TimeDelta::FromMilliseconds(10);
   input_handler_->Animate(time);
   testing::Mock::VerifyAndClearExpectations(&mock_input_handler_);
@@ -1567,7 +1608,7 @@ TEST_F(InputHandlerProxyTest, GestureFlingWithNegativeTimeDelta) {
   EXPECT_CALL(mock_input_handler_,
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x, testing::Lt(0))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
 
   input_handler_->Animate(time + base::TimeDelta::FromMilliseconds(1));
 
@@ -1614,7 +1655,7 @@ TEST_F(InputHandlerProxyTest, FlingBoost) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   input_handler_->Animate(time);
   last_animate_time = time;
 
@@ -1638,7 +1679,7 @@ TEST_F(InputHandlerProxyTest, FlingBoost) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   input_handler_->Animate(time);
   last_animate_time = time;
 
@@ -1664,7 +1705,7 @@ TEST_F(InputHandlerProxyTest, FlingBoost) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   input_handler_->Animate(time);
   last_animate_time = time;
 
@@ -1690,7 +1731,7 @@ TEST_F(InputHandlerProxyTest, FlingBoost) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   input_handler_->Animate(time);
   last_animate_time = time;
 
@@ -1780,6 +1821,48 @@ TEST_F(InputHandlerProxyTest, NoFlingBoostIfScrollDelayed) {
   VERIFY_AND_RESET_MOCKS();
 }
 
+TEST_F(InputHandlerProxyTest, NoFlingBoostIfFlingInDifferentDirection) {
+  base::TimeDelta dt = base::TimeDelta::FromMilliseconds(10);
+  base::TimeTicks time = base::TimeTicks() + dt;
+  WebFloatPoint fling_delta = WebFloatPoint(1000, 0);
+  WebPoint fling_point = WebPoint(7, 13);
+  StartFling(
+      time, blink::WebGestureDeviceTouchscreen, fling_delta, fling_point);
+
+  // Cancel the fling.  The fling cancellation should be deferred to allow
+  // fling boosting events to arrive.
+  time += dt;
+  CancelFling(time);
+
+  // If the new fling is orthogonal to the existing fling, no boosting should
+  // take place, with the new fling replacing the old.
+  WebFloatPoint orthogonal_fling_delta =
+      WebFloatPoint(fling_delta.y, -fling_delta.x);
+  gesture_ = CreateFling(time,
+                         blink::WebGestureDeviceTouchscreen,
+                         orthogonal_fling_delta,
+                         fling_point,
+                         fling_point,
+                         0);
+  EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
+
+  VERIFY_AND_RESET_MOCKS();
+
+  // Note that the new fling delta uses the orthogonal, unboosted fling
+  // velocity.
+  time += dt;
+  float expected_delta = dt.InSecondsF() * -orthogonal_fling_delta.y;
+  EXPECT_CALL(mock_input_handler_, SetNeedsAnimate());
+  EXPECT_CALL(mock_input_handler_,
+              ScrollBy(testing::_,
+                       testing::Property(&gfx::Vector2dF::y,
+                                         testing::Eq(expected_delta))))
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
+  input_handler_->Animate(time);
+
+  VERIFY_AND_RESET_MOCKS();
+}
+
 TEST_F(InputHandlerProxyTest, NoFlingBoostIfScrollInDifferentDirection) {
   base::TimeDelta dt = base::TimeDelta::FromMilliseconds(10);
   base::TimeTicks time = base::TimeTicks() + dt;
@@ -1819,7 +1902,7 @@ TEST_F(InputHandlerProxyTest, NoFlingBoostIfScrollInDifferentDirection) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(fling_delta.x))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   VERIFY_AND_RESET_MOCKS();
@@ -1859,7 +1942,7 @@ TEST_F(InputHandlerProxyTest, NoFlingBoostIfFlingTooSlow) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   input_handler_->Animate(time);
 
   VERIFY_AND_RESET_MOCKS();
@@ -1901,7 +1984,7 @@ TEST_F(InputHandlerProxyTest, FlingBoostTerminatedDuringScrollSequence) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(false));
+      .WillOnce(testing::Return(scroll_result_did_not_scroll_));
   EXPECT_CALL(mock_input_handler_, ScrollEnd());
   EXPECT_CALL(mock_input_handler_, ScrollBegin(testing::_, testing::_))
       .WillOnce(testing::Return(cc::InputHandler::ScrollStarted));
@@ -1920,7 +2003,7 @@ TEST_F(InputHandlerProxyTest, FlingBoostTerminatedDuringScrollSequence) {
               ScrollBy(testing::_,
                        testing::Property(&gfx::Vector2dF::x,
                                          testing::Eq(expected_delta))))
-      .WillOnce(testing::Return(true));
+      .WillOnce(testing::Return(scroll_result_did_scroll_));
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   VERIFY_AND_RESET_MOCKS();
@@ -1933,6 +2016,23 @@ TEST_F(InputHandlerProxyTest, FlingBoostTerminatedDuringScrollSequence) {
   EXPECT_EQ(expected_disposition_, input_handler_->HandleInputEvent(gesture_));
 
   VERIFY_AND_RESET_MOCKS();
+}
+
+TEST_F(InputHandlerProxyTest, DidReceiveInputEvent) {
+  testing::StrictMock<
+      MockInputHandlerProxyClientWithDidReceiveInputEvent> mock_client;
+  input_handler_.reset(
+        new content::InputHandlerProxy(&mock_input_handler_, &mock_client));
+
+  // Note the type of input event isn't important.
+  WebMouseWheelEvent wheel;
+  wheel.type = WebInputEvent::MouseWheel;
+  wheel.scrollByPage = true;
+
+  EXPECT_CALL(mock_client, DidReceiveInputEvent());
+
+  input_handler_->HandleInputEvent(wheel);
+  testing::Mock::VerifyAndClearExpectations(&mock_client);
 }
 
 } // namespace

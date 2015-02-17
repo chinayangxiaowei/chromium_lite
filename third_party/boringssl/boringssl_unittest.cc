@@ -12,6 +12,7 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
+#include "base/strings/string_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -30,6 +31,8 @@ void TestProcess(const std::string& name,
 
   std::string output;
   EXPECT_TRUE(base::GetAppOutput(cmd, &output));
+  // Account for Windows line endings.
+  ReplaceSubstringsAfterOffset(&output, 0, "\r\n", "\n");
 
   const bool ok = output.size() >= 5 &&
                   memcmp("PASS\n", &output[output.size() - 5], 5) == 0 &&
@@ -208,10 +211,22 @@ TEST(BoringSSL, PKCS7) {
   TestSimple("pkcs7_test");
 }
 
+TEST(BoringSSL, PKCS12) {
+  TestSimple("pkcs12_test");
+}
+
 TEST(BoringSSL, ExampleMul) {
   TestSimple("example_mul");
 }
 
-TEST(BoringSSL, ExampleSign) {
-  TestSimple("example_sign");
+TEST(BoringSSL, EVP) {
+  TestSimple("evp_test");
+}
+
+TEST(BoringSSL, SSL) {
+  TestSimple("ssl_test");
+}
+
+TEST(BoringSSL, PQueue) {
+  TestSimple("pqueue_test");
 }

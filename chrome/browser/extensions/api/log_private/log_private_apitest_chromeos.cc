@@ -4,11 +4,11 @@
 
 #include <string>
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/common/chrome_switches.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_debug_daemon_client.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/common/extension_builder.h"
@@ -33,7 +33,7 @@ class TestDebugDaemonClient : public chromeos::FakeDebugDaemonClient {
   virtual void DumpDebugLogs(bool is_compressed,
                              base::File file,
                              scoped_refptr<base::TaskRunner> task_runner,
-                             const GetDebugLogsCallback& callback) OVERRIDE {
+                             const GetDebugLogsCallback& callback) override {
     base::File* file_param = new base::File(file.Pass());
     task_runner->PostTaskAndReply(
         FROM_HERE,
@@ -67,17 +67,12 @@ class LogPrivateApiTest : public ExtensionApiTest {
 
   virtual ~LogPrivateApiTest() {}
 
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
-    chromeos::FakeDBusThreadManager* fake_dbus_thread_manager =
-        new chromeos::FakeDBusThreadManager;
-    fake_dbus_thread_manager->SetFakeClients();
+  virtual void SetUpInProcessBrowserTestFixture() override {
     base::FilePath tar_file_path =
         test_data_dir_.Append("log_private/dump_logs/system_logs.tar");
-    fake_dbus_thread_manager->SetDebugDaemonClient(
+    chromeos::DBusThreadManager::GetSetterForTesting()->SetDebugDaemonClient(
         scoped_ptr<chromeos::DebugDaemonClient>(
             new TestDebugDaemonClient(tar_file_path)));
-    chromeos::DBusThreadManager::SetInstanceForTesting(
-        fake_dbus_thread_manager);
     ExtensionApiTest::SetUpInProcessBrowserTestFixture();
   }
 
@@ -87,7 +82,7 @@ class LogPrivateApiTest : public ExtensionApiTest {
     response->set_content(
         "<html><head><title>LogPrivateTest</title>"
         "</head><body>Hello!</body></html>");
-    return response.PassAs<HttpResponse>();
+    return response.Pass();
   }
 };
 

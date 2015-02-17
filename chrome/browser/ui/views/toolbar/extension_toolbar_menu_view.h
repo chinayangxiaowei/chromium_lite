@@ -23,15 +23,24 @@ class ExtensionToolbarMenuView : public views::View,
                                  public BrowserActionsContainerObserver {
  public:
   ExtensionToolbarMenuView(Browser* browser, WrenchMenu* wrench_menu);
-  virtual ~ExtensionToolbarMenuView();
+  ~ExtensionToolbarMenuView() override;
+
+  // Returns whether the wrench menu should show this view. This is true when
+  // either |container_| has icons to display or the menu was opened for a drag-
+  // and-drop operation.
+  bool ShouldShow();
 
   // views::View:
-  virtual gfx::Size GetPreferredSize() const OVERRIDE;
-  virtual void Layout() OVERRIDE;
+  gfx::Size GetPreferredSize() const override;
+  int GetHeightForWidth(int width) const override;
+  void Layout() override;
 
  private:
   // BrowserActionsContainerObserver:
-  virtual void OnBrowserActionDragDone() OVERRIDE;
+  void OnBrowserActionDragDone() override;
+
+  // Closes the |wrench_menu_|.
+  void CloseWrenchMenu();
 
   // The associated browser.
   Browser* browser_;
@@ -44,6 +53,8 @@ class ExtensionToolbarMenuView : public views::View,
 
   ScopedObserver<BrowserActionsContainer, BrowserActionsContainerObserver>
       browser_actions_container_observer_;
+
+  base::WeakPtrFactory<ExtensionToolbarMenuView> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionToolbarMenuView);
 };

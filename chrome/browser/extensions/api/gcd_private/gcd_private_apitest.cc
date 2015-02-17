@@ -173,11 +173,11 @@ class FakeGCDApiFlowFactory
     extensions::GcdPrivateAPI::SetGCDApiFlowFactoryForTests(this);
   }
 
-  virtual ~FakeGCDApiFlowFactory() {
+  ~FakeGCDApiFlowFactory() override {
     extensions::GcdPrivateAPI::SetGCDApiFlowFactoryForTests(NULL);
   }
 
-  virtual scoped_ptr<local_discovery::GCDApiFlow> CreateGCDApiFlow() OVERRIDE {
+  scoped_ptr<local_discovery::GCDApiFlow> CreateGCDApiFlow() override {
     return scoped_ptr<local_discovery::GCDApiFlow>(new FakeGCDApiFlow(this));
   }
 
@@ -191,9 +191,9 @@ class FakeGCDApiFlowFactory
     explicit FakeGCDApiFlow(FakeGCDApiFlowFactory* factory)
         : factory_(factory) {}
 
-    virtual ~FakeGCDApiFlow() {}
+    ~FakeGCDApiFlow() override {}
 
-    virtual void Start(scoped_ptr<Request> request) OVERRIDE {
+    void Start(scoped_ptr<Request> request) override {
       std::string response_str = factory_->responses_[request->GetURL()];
 
       if (response_str == kResponseValueFailure) {
@@ -228,7 +228,7 @@ class GcdPrivateAPITest : public ExtensionApiTest {
 #endif  // ENABLE_MDNS
   }
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(
         extensions::switches::kWhitelistedExtensionID,
@@ -341,7 +341,7 @@ IN_PROC_BROWSER_TEST_F(GcdPrivateAPITest, SendQuery) {
 // always return true without actually running the test. Remove when fixed.
 // See http://crbug.com/177163 for details.
 #if !defined(OS_WIN) || defined(NDEBUG)
-  EXPECT_CALL(*test_service_discovery_client_,
+  EXPECT_CALL(*test_service_discovery_client_.get(),
               OnSendTo(std::string(reinterpret_cast<const char*>(kQueryPacket),
                                    sizeof(kQueryPacket)))).Times(2);
 #endif

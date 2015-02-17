@@ -28,7 +28,8 @@ namespace nacl {
 
 class ManifestServiceChannel : public IPC::Listener {
  public:
-  typedef base::Callback<void(base::File)> OpenResourceCallback;
+  typedef base::Callback<void(base::File, uint64_t, uint64_t)>
+      OpenResourceCallback;
 
   class Delegate {
    public:
@@ -49,25 +50,27 @@ class ManifestServiceChannel : public IPC::Listener {
       const base::Callback<void(int32_t)>& connected_callback,
       scoped_ptr<Delegate> delegate,
       base::WaitableEvent* waitable_event);
-  virtual ~ManifestServiceChannel();
+  ~ManifestServiceChannel() override;
 
   void Send(IPC::Message* message);
 
   // Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelConnected(int32 peer_pid) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelConnected(int32 peer_pid) override;
+  void OnChannelError() override;
 
  private:
   void OnStartupInitializationComplete();
   void OnOpenResource(const std::string& key, IPC::Message* reply);
-#if !defined(OS_WIN)
-  void DidOpenResource(IPC::Message* reply, base::File file);
-#endif
-
+  void DidOpenResource(IPC::Message* reply,
+                       base::File file,
+                       uint64_t token_lo,
+                       uint64_t token_hi);
   base::Callback<void(int32_t)> connected_callback_;
   scoped_ptr<Delegate> delegate_;
   scoped_ptr<IPC::SyncChannel> channel_;
+
+  base::ProcessId peer_pid_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate the weak pointers before any other members are destroyed.

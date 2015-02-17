@@ -4,8 +4,8 @@
 
 #include "chrome/browser/extensions/api/messaging/native_messaging_host_manifest.h"
 
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/string_escape.h"
 #include "extensions/common/url_pattern_set.h"
@@ -25,7 +25,7 @@ const char kTestOrigin[] =
 
 class NativeMessagingHostManifestTest : public ::testing::Test {
  public:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     manifest_path_ = temp_dir_.path().AppendASCII("test.json");
   }

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/base_paths.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_apitest.h"
@@ -13,6 +13,7 @@
 #include "chrome/common/extensions/manifest_handlers/mime_types_handler.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/test/result_catcher.h"
 #include "grit/browser_resources.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
@@ -20,18 +21,18 @@ class PDFExtensionTest : public ExtensionApiTest {
  public:
   virtual ~PDFExtensionTest() {}
 
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+  virtual void SetUpCommandLine(CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kOutOfProcessPdf);
   }
 
-  virtual void SetUpOnMainThread() OVERRIDE {
+  virtual void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->InitializeAndWaitUntilReady());
   }
 
 
-  virtual void TearDownOnMainThread() OVERRIDE {
+  virtual void TearDownOnMainThread() override {
     ASSERT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
     ExtensionApiTest::TearDownOnMainThread();
   }
@@ -55,7 +56,7 @@ class PDFExtensionTest : public ExtensionApiTest {
     ASSERT_TRUE(MimeTypesHandler::GetHandler(
         extension)->CanHandleMIMEType("application/pdf"));
 
-    ResultCatcher catcher;
+    extensions::ResultCatcher catcher;
 
     GURL url(embedded_test_server()->GetURL("/pdf/test.pdf"));
     GURL extension_url(

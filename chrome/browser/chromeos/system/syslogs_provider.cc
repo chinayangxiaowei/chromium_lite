@@ -9,8 +9,8 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
@@ -186,7 +186,7 @@ class SyslogsProviderImpl : public SyslogsProvider {
       bool compress_logs,
       SyslogsContext context,
       const ReadCompleteCallback& callback,
-      base::CancelableTaskTracker* tracker) OVERRIDE;
+      base::CancelableTaskTracker* tracker) override;
 
   static SyslogsProviderImpl* GetInstance();
 
@@ -264,7 +264,7 @@ class SyslogsMemoryHandler : public MemoryDetails {
                        LogDictionaryType* logs,
                        std::string* zip_content);
 
-  virtual void OnDetailsAvailable() OVERRIDE;
+  virtual void OnDetailsAvailable() override;
 
  private:
   virtual ~SyslogsMemoryHandler();

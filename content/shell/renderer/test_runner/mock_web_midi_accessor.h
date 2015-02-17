@@ -6,7 +6,7 @@
 #define CONTENT_SHELL_RENDERER_TEST_RUNNER_MOCK_WEB_MIDI_ACCESSOR_H_
 
 #include "base/basictypes.h"
-#include "content/shell/renderer/test_runner/WebTask.h"
+#include "content/shell/renderer/test_runner/web_task.h"
 #include "third_party/WebKit/public/platform/WebMIDIAccessor.h"
 
 namespace blink {
@@ -24,11 +24,11 @@ class MockWebMIDIAccessor : public blink::WebMIDIAccessor {
   virtual ~MockWebMIDIAccessor();
 
   // blink::WebMIDIAccessor implementation.
-  virtual void startSession() OVERRIDE;
+  virtual void startSession() override;
   virtual void sendMIDIData(unsigned port_index,
                             const unsigned char* data,
                             size_t length,
-                            double timestamp) OVERRIDE {}
+                            double timestamp) override {}
 
   // WebTask related methods
   WebTaskList* mutable_task_list() { return &task_list_; }

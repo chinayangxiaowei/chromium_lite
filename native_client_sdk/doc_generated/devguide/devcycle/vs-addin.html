@@ -1,7 +1,7 @@
-{{+bindTo:partials.standard_nacl_api}}
+{{+bindTo:partials.standard_nacl_article}}
 
 <section id="debugging-with-visual-studio">
-<h1 id="debugging-with-visual-studio">Debugging With Visual Studio</h1>
+<span id="devcycle-vs-addin"></span><h1 id="debugging-with-visual-studio"><span id="devcycle-vs-addin"></span>Debugging with Visual Studio</h1>
 <div class="contents local" id="table-of-contents" style="display: none">
 <p class="topic-title first">Table Of Contents</p>
 <ul class="small-gap">
@@ -48,9 +48,9 @@ Client Visual Studio add-in makes it easier to set up, build, run and debug
 your Native Client app by integrating the Native Client SDK development tools
 into the Visual Studio environment.</p>
 <aside class="note">
-The Native Client add-in requires Visual Studio 2010 with Service Pack 1. No
-other versions of Visual Studio are currently supported. Visual Studio
-Express is also not supported.
+The Native Client add-in requires Visual Studio 2012 or Visual Studio 2010
+with Service Pack 1. No other versions of Visual Studio are currently
+supported. Visual Studio Express is also not supported.
 </aside>
 <h2 id="introduction">Introduction</h2>
 <p>The Native Client add-in for Visual Studio helps you develop your application
@@ -151,7 +151,7 @@ Note: The PNaCl platform currently supports the newlib toolchain only.
 environment should include:</p>
 <ul class="small-gap">
 <li>A 64-bit version of Windows Vista or Windows 7.</li>
-<li>Visual Studio 2010 with Service Pack 1.</li>
+<li>Visual Studio 2012 or Visual Service 2010 with Service Pack 1.</li>
 <li><a class="reference external" href="https://www.google.com/intl/en/chrome/browser/">Chrome</a> version 23 or
 greater. You can choose to develop using the latest <a class="reference external" href="https://www.google.com/intl/en/chrome/browser/canary.html">canary</a> build of
 Chrome, running the canary version side-by-side with (and separately from)
@@ -179,11 +179,11 @@ example):</p>
 </tr>
 </thead>
 <tbody valign="top">
-<tr class="row-even"><td>NACL_SDK_ROOT</td>
+<tr class="row-even"><td><code>NACL_SDK_ROOT</code></td>
 <td>The path to the pepper directory in the SDK.
 For example: <code>C:\nacl_sdk\pepper_23</code></td>
 </tr>
-<tr class="row-odd"><td>CHROME_PATH</td>
+<tr class="row-odd"><td><code>CHROME_PATH</code></td>
 <td>The path to the .exe file for the version of Chrome you
 are testing with.  For example:
 <code>C:\Users\fred\AppData\Local\Google\Chrome
@@ -219,8 +219,9 @@ need to use these command line arguments when you run <code>install.bat</code>:<
 <li>The MSBuild folder is assumed to be at <code>C:\Program Files (x86)\MSBuild</code>.
 You can specify an alternate path with the flag <code>--ms-build-path=&lt;path&gt;</code>.
 The installer assumes Visual Studio has created a user folder at</li>
-<li><code>%USERPROFILE%\My Documents\Visual Studio 2010</code>. You can specify an
-alternate path with the flag <code>--vsuser-path=path</code>.</li>
+<li>The addin itself is normally installed in <code>%USERPROFILE%\My Documents\Visual
+Studio 2012</code> (or 2010 for Visual Studio 2010). You can specify alternate
+paths with the <code>--vsuser-path=&lt;path&gt;</code> flag.</li>
 </ul>
 <p>From time to time an update to the Visual Studio add-in may become available.
 Updates are performed just like an installation. Download the new add-in using
@@ -513,4 +514,4 @@ than a Pepper plugin.</dd>
 </dl>
 </section>
 
-{{/partials.standard_nacl_api}}
+{{/partials.standard_nacl_article}}

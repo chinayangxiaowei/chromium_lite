@@ -30,7 +30,6 @@ namespace sync_driver {
 class DataTypeController;
 class DataTypeEncryptionHandler;
 class DataTypeManagerObserver;
-class FailedDataTypesHandler;
 
 // List of data types grouped by priority and ordered from high priority to
 // low priority.
@@ -46,31 +45,30 @@ class DataTypeManagerImpl : public DataTypeManager,
       const DataTypeController::TypeMap* controllers,
       const DataTypeEncryptionHandler* encryption_handler,
       BackendDataTypeConfigurer* configurer,
-      DataTypeManagerObserver* observer,
-      FailedDataTypesHandler* failed_data_types_handler);
-  virtual ~DataTypeManagerImpl();
+      DataTypeManagerObserver* observer);
+  ~DataTypeManagerImpl() override;
 
   // DataTypeManager interface.
-  virtual void Configure(syncer::ModelTypeSet desired_types,
-                         syncer::ConfigureReason reason) OVERRIDE;
+  void Configure(syncer::ModelTypeSet desired_types,
+                 syncer::ConfigureReason reason) override;
+  void ReenableType(syncer::ModelType type) override;
+  void ResetDataTypeErrors() override;
 
   // Needed only for backend migration.
-  virtual void PurgeForMigration(
-      syncer::ModelTypeSet undesired_types,
-      syncer::ConfigureReason reason) OVERRIDE;
+  void PurgeForMigration(syncer::ModelTypeSet undesired_types,
+                         syncer::ConfigureReason reason) override;
 
-  virtual void Stop() OVERRIDE;
-  virtual State state() const OVERRIDE;
+  void Stop() override;
+  State state() const override;
 
   // |ModelAssociationManagerDelegate| implementation.
-  virtual void OnSingleDataTypeAssociationDone(
+  void OnSingleDataTypeAssociationDone(
       syncer::ModelType type,
-      const syncer::DataTypeAssociationStats& association_stats) OVERRIDE;
-  virtual void OnModelAssociationDone(
-      const DataTypeManager::ConfigureResult& result) OVERRIDE;
-  virtual void OnSingleDataTypeWillStop(
-      syncer::ModelType type,
-      const syncer::SyncError& error) OVERRIDE;
+      const syncer::DataTypeAssociationStats& association_stats) override;
+  void OnModelAssociationDone(
+      const DataTypeManager::ConfigureResult& result) override;
+  void OnSingleDataTypeWillStop(syncer::ModelType type,
+                                const syncer::SyncError& error) override;
 
   // Used by unit tests. TODO(sync) : This would go away if we made
   // this class be able to do Dependency injection. crbug.com/129212.
@@ -162,7 +160,7 @@ class DataTypeManagerImpl : public DataTypeManager,
 
   // For querying failed data types (having unrecoverable error) when
   // configuring backend.
-  FailedDataTypesHandler* failed_data_types_handler_;
+  DataTypeStatusTable data_type_status_table_;
 
   // Types waiting to be downloaded.
   TypeSetPriorityList download_types_queue_;

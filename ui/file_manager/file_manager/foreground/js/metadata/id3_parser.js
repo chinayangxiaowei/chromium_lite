@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Protocol + host parts of extension URL.
  * @type {string}
@@ -26,9 +24,9 @@ Id3Parser.prototype = {__proto__: MetadataParser.prototype};
  * Reads synchsafe integer.
  * 'SynchSafe' term is taken from id3 documentation.
  *
- * @param {ByteReader} reader - reader to use.
- * @param {number} length - bytes to read.
- * @return {number}  // TODO(JSDOC).
+ * @param {ByteReader} reader Reader to use.
+ * @param {number} length Rytes to read.
+ * @return {number} Synchsafe value.
  * @private
  */
 Id3Parser.readSynchSafe_ = function(reader, length) {
@@ -51,8 +49,8 @@ Id3Parser.readSynchSafe_ = function(reader, length) {
 /**
  * Reads 3bytes integer.
  *
- * @param {ByteReader} reader - reader to use.
- * @return {number}  // TODO(JSDOC).
+ * @param {ByteReader} reader Reader to use.
+ * @return {number} Uint24 value.
  * @private
  */
 Id3Parser.readUInt24_ = function(reader) {
@@ -62,10 +60,10 @@ Id3Parser.readUInt24_ = function(reader) {
 /**
  * Reads string from reader with specified encoding
  *
- * @param {ByteReader} reader reader to use.
- * @param {number} encoding string encoding.
- * @param {number} size maximum string size. Actual result may be shorter.
- * @return {string}  // TODO(JSDOC).
+ * @param {ByteReader} reader Reader to use.
+ * @param {number} encoding String encoding.
+ * @param {number} size Maximum string size. Actual result may be shorter.
+ * @return {string} String value.
  * @private
  */
 Id3Parser.prototype.readString_ = function(reader, encoding, size) {
@@ -94,10 +92,10 @@ Id3Parser.prototype.readString_ = function(reader, encoding, size) {
 /**
  * Reads text frame from reader.
  *
- * @param {ByteReader} reader reader to use.
- * @param {number} majorVersion major id3 version to use.
- * @param {Object} frame frame so store data at.
- * @param {number} end frame end position in reader.
+ * @param {ByteReader} reader Reader to use.
+ * @param {number} majorVersion Major id3 version to use.
+ * @param {Object} frame Frame so store data at.
+ * @param {number} end Frame end position in reader.
  * @private
  */
 Id3Parser.prototype.readTextFrame_ = function(reader,
@@ -111,10 +109,10 @@ Id3Parser.prototype.readTextFrame_ = function(reader,
 /**
  * Reads user defined text frame from reader.
  *
- * @param {ByteReader} reader reader to use.
- * @param {number} majorVersion major id3 version to use.
- * @param {Object} frame frame so store data at.
- * @param {number} end frame end position in reader.
+ * @param {ByteReader} reader Reader to use.
+ * @param {number} majorVersion Major id3 version to use.
+ * @param {Object} frame Frame so store data at.
+ * @param {number} end Frame end position in reader.
  * @private
  */
 Id3Parser.prototype.readUserDefinedTextFrame_ = function(reader,
@@ -184,9 +182,9 @@ Id3Parser.prototype.readAPIC_ = function(reader, majorVersion, frame, end) {
 /**
  * Reads string from reader with specified encoding
  *
- * @param {ByteReader} reader  reader to use.
- * @param {number} majorVersion  // TODO(JSDOC).
- * @return {Object} frame read.
+ * @param {ByteReader} reader Reader to use.
+ * @param {number} majorVersion Major id3 version to use.
+ * @return {Object} Frame read.
  * @private
  */
 Id3Parser.prototype.readFrame_ = function(reader, majorVersion) {
@@ -249,10 +247,10 @@ Id3Parser.prototype.readFrame_ = function(reader, majorVersion) {
 };
 
 /**
- * @param {File} file  // TODO(JSDOC).
- * @param {Object} metadata  // TODO(JSDOC).
- * @param {function(Object)} callback  // TODO(JSDOC).
- * @param {function(etring)} onError  // TODO(JSDOC).
+ * @param {File} file File object to parse.
+ * @param {Object} metadata Metadata object of the file.
+ * @param {function(Object)} callback Success callback.
+ * @param {function(string)} onError Error callback.
  */
 Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
   var self = this;
@@ -270,7 +268,7 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
          */
         function readTail(file) {
           util.readFileBytes(file, file.size - 128, file.size,
-              this.nextStep, this.onError, this);
+              this.nextStep, this.onError);
         },
 
         /**
@@ -307,15 +305,13 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
           this.nextStep();
         }
       ],
-      this
-  );
+      this);
 
   var id3v2Parser = new FunctionSequence(
       'id3v2parser',
       [
         function readHead(file) {
-          util.readFileBytes(file, 0, 10, this.nextStep, this.onError,
-              this);
+          util.readFileBytes(file, 0, 10, this.nextStep, this.onError);
         },
 
         /**
@@ -334,7 +330,7 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
             id3v2.size = Id3Parser.readSynchSafe_(reader, 4);
 
             util.readFileBytes(file, 10, 10 + id3v2.size, this.nextStep,
-                this.onError, this);
+                this.onError);
           } else {
             this.finish();
           }
@@ -388,9 +384,9 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
             if (typeof(Id3Parser.v2.MAPPERS[key]) != 'undefined' &&
                 id3v2[key].value.trim().length > 0) {
               metadata.description.push({
-                    key: Id3Parser.v2.MAPPERS[key],
-                    value: id3v2[key].value.trim()
-                  });
+                key: Id3Parser.v2.MAPPERS[key],
+                value: id3v2[key].value.trim()
+              });
             }
           }
 
@@ -415,8 +411,7 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
           this.nextStep();
         }
       ],
-      this
-  );
+      this);
 
   var metadataParser = new FunctionParallel(
       'mp3metadataParser',
@@ -425,8 +420,7 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
       function() {
         callback.call(null, metadata);
       },
-      onError
-  );
+      onError);
 
   id3v1Parser.setCallback(metadataParser.nextStep);
   id3v2Parser.setCallback(metadataParser.nextStep);
@@ -442,6 +436,8 @@ Id3Parser.prototype.parse = function(file, metadata, callback, onError) {
 
 /**
  * Metadata order to use for metadata generation
+ * @type {Array.<string>}
+ * @const
  */
 Id3Parser.METADATA_ORDER = [
   'ID3_TITLE',
@@ -468,7 +464,8 @@ Id3Parser.METADATA_ORDER = [
 
 
 /**
- * id3v1 constants
+ * Id3v1 constants.
+ * @type {Object.<*>}
  */
 Id3Parser.v1 = {
   /**
@@ -630,7 +627,8 @@ Id3Parser.v1 = {
 };
 
 /**
- * id3v2 constants
+ * Id3v2 constants.
+ * @type {Object.<*>}
  */
 Id3Parser.v2 = {
   FLAG_EXTENDED_HEADER: 1 << 5,
@@ -673,22 +671,22 @@ Id3Parser.v2 = {
     UTF_8: 3
   },
   HANDLERS: {
-   //User defined text information frame
-   TXX: Id3Parser.prototype.readUserDefinedTextFrame_,
-   //User defined URL link frame
-   WXX: Id3Parser.prototype.readUserDefinedTextFrame_,
+    //User defined text information frame
+    TXX: Id3Parser.prototype.readUserDefinedTextFrame_,
+    //User defined URL link frame
+    WXX: Id3Parser.prototype.readUserDefinedTextFrame_,
 
-   //User defined text information frame
-   TXXX: Id3Parser.prototype.readUserDefinedTextFrame_,
+    //User defined text information frame
+    TXXX: Id3Parser.prototype.readUserDefinedTextFrame_,
 
-   //User defined URL link frame
-   WXXX: Id3Parser.prototype.readUserDefinedTextFrame_,
+    //User defined URL link frame
+    WXXX: Id3Parser.prototype.readUserDefinedTextFrame_,
 
-   //User attached image
-   PIC: Id3Parser.prototype.readPIC_,
+    //User attached image
+    PIC: Id3Parser.prototype.readPIC_,
 
-   //User attached image
-   APIC: Id3Parser.prototype.readAPIC_
+    //User attached image
+    APIC: Id3Parser.prototype.readAPIC_
   },
   MAPPERS: {
     TALB: 'ID3_ALBUM',

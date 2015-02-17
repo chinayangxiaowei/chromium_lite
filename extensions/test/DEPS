@@ -1,3 +1,5 @@
 include_rules = [
-  "+mojo/embedder",
+  "+content/public",
+  "+mojo/edk/embedder",
+  "+ui/gl",
 ]

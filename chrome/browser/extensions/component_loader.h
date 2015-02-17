@@ -132,6 +132,7 @@ class ComponentLoader {
       bool skip_session_components);
   void AddFileManagerExtension();
   void AddVideoPlayerExtension();
+  void AddAudioPlayerExtension();
   void AddGalleryExtension();
   void AddHangoutServicesExtension();
   void AddHotwordHelperExtension();
@@ -143,6 +144,7 @@ class ComponentLoader {
                                  int name_string_id,
                                  int description_string_id);
   void AddChromeApp();
+  void AddHotwordAudioVerificationApp();
   void AddKeyboardApp();
   void AddWebStoreApp();
 

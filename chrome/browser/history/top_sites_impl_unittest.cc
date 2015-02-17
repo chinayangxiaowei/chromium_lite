@@ -5,18 +5,21 @@
 #include "base/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_loop.h"
-#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/history_db_task.h"
+#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/history_unittest_base.h"
+#include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/history/top_sites_cache.h"
 #include "chrome/browser/history/top_sites_impl.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/history/core/browser/history_types.h"
+#include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -24,6 +27,44 @@
 #include "url/gurl.h"
 
 using content::BrowserThread;
+
+class TestTopSitesObserver : public history::TopSitesObserver {
+ public:
+  explicit TestTopSitesObserver(Profile* profile, history::TopSites* top_sites);
+  virtual ~TestTopSitesObserver();
+  // TopSitesObserver:
+  void TopSitesLoaded(history::TopSites* top_sites) override;
+  void TopSitesChanged(history::TopSites* top_sites) override;
+
+ private:
+  Profile* profile_;
+  history::TopSites* top_sites_;
+};
+
+TestTopSitesObserver::~TestTopSitesObserver() {
+  top_sites_->RemoveObserver(this);
+}
+
+TestTopSitesObserver::TestTopSitesObserver(Profile* profile,
+                                           history::TopSites* top_sites)
+    : profile_(profile), top_sites_(top_sites) {
+  DCHECK(top_sites_);
+  top_sites_->AddObserver(this);
+}
+
+void TestTopSitesObserver::TopSitesLoaded(history::TopSites* top_sites) {
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_TOP_SITES_LOADED,
+      content::Source<Profile>(profile_),
+      content::Details<history::TopSites>(top_sites));
+}
+
+void TestTopSitesObserver::TopSitesChanged(history::TopSites* top_sites) {
+  content::NotificationService::current()->Notify(
+      chrome::NOTIFICATION_TOP_SITES_CHANGED,
+      content::Source<Profile>(profile_),
+      content::NotificationService::NoDetails());
+}
 
 namespace history {
 
@@ -34,17 +75,14 @@ class WaitForHistoryTask : public HistoryDBTask {
  public:
   WaitForHistoryTask() {}
 
-  virtual bool RunOnDBThread(HistoryBackend* backend,
-                             HistoryDatabase* db) OVERRIDE {
+  bool RunOnDBThread(HistoryBackend* backend, HistoryDatabase* db) override {
     return true;
   }
 
-  virtual void DoneRunOnMainThread() OVERRIDE {
-    base::MessageLoop::current()->Quit();
-  }
+  void DoneRunOnMainThread() override { base::MessageLoop::current()->Quit(); }
 
  private:
-  virtual ~WaitForHistoryTask() {}
+  ~WaitForHistoryTask() override {}
 
   DISALLOW_COPY_AND_ASSIGN(WaitForHistoryTask);
 };
@@ -55,9 +93,9 @@ class WaitForHistoryTask : public HistoryDBTask {
 class TopSitesQuerier {
  public:
   TopSitesQuerier()
-      : weak_ptr_factory_(this),
-        number_of_callbacks_(0),
-        waiting_(false) {}
+      : number_of_callbacks_(0),
+        waiting_(false),
+        weak_ptr_factory_(this) {}
 
   // Queries top sites. If |wait| is true a nested message loop is run until the
   // callback is notified.
@@ -101,10 +139,10 @@ class TopSitesQuerier {
     }
   }
 
-  base::WeakPtrFactory<TopSitesQuerier> weak_ptr_factory_;
   MostVisitedURLList urls_;
   int number_of_callbacks_;
   bool waiting_;
+  base::WeakPtrFactory<TopSitesQuerier> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(TopSitesQuerier);
 };
@@ -136,16 +174,17 @@ class TopSitesImplTest : public HistoryUnitTestBase {
         db_thread_(BrowserThread::DB, &message_loop_) {
   }
 
-  virtual void SetUp() {
+  void SetUp() override {
     profile_.reset(new TestingProfile);
     if (CreateHistoryAndTopSites()) {
       ASSERT_TRUE(profile_->CreateHistoryService(false, false));
-      profile_->CreateTopSites();
+      CreateTopSitesAndObserver();
       profile_->BlockUntilTopSitesLoaded();
     }
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
+    top_sites_observer_.reset();
     profile_.reset();
   }
 
@@ -238,7 +277,7 @@ class TopSitesImplTest : public HistoryUnitTestBase {
     redirects.push_back(url);
     history_service()->AddPage(
         url, base::Time::Now(), reinterpret_cast<ContextID>(1), 0, GURL(),
-        redirects, content::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
+        redirects, ui::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
         false);
   }
 
@@ -248,7 +287,7 @@ class TopSitesImplTest : public HistoryUnitTestBase {
     redirects.push_back(url);
     history_service()->AddPage(
         url, base::Time::Now(), reinterpret_cast<ContextID>(1), 0, GURL(),
-        redirects, content::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
+        redirects, ui::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
         false);
     history_service()->SetPageTitle(url, title);
   }
@@ -260,7 +299,7 @@ class TopSitesImplTest : public HistoryUnitTestBase {
                         base::Time time) {
     history_service()->AddPage(
         url, time, reinterpret_cast<ContextID>(1), 0, GURL(),
-        redirects, content::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
+        redirects, ui::PAGE_TRANSITION_TYPED, history::SOURCE_BROWSED,
         false);
     history_service()->SetPageTitle(url, title);
   }
@@ -281,7 +320,7 @@ class TopSitesImplTest : public HistoryUnitTestBase {
   // Recreates top sites. This forces top sites to reread from the db.
   void RecreateTopSitesAndBlock() {
     // Recreate TopSites and wait for it to load.
-    profile()->CreateTopSites();
+    CreateTopSitesAndObserver();
     // As history already loaded we have to fake this call.
     profile()->BlockUntilTopSitesLoaded();
   }
@@ -326,12 +365,21 @@ class TopSitesImplTest : public HistoryUnitTestBase {
     top_sites()->thread_safe_cache_->SetTopSites(empty);
   }
 
+  void CreateTopSitesAndObserver() {
+    if (top_sites_observer_)
+      top_sites_observer_.reset();
+
+    profile_->CreateTopSites();
+    top_sites_observer_.reset(
+        new TestTopSitesObserver(profile_.get(), profile_->GetTopSites()));
+  }
+
  private:
   base::MessageLoopForUI message_loop_;
   content::TestBrowserThread ui_thread_;
   content::TestBrowserThread db_thread_;
   scoped_ptr<TestingProfile> profile_;
-
+  scoped_ptr<TestTopSitesObserver> top_sites_observer_;
   // To cancel HistoryService tasks.
   base::CancelableTaskTracker history_tracker_;
 
@@ -982,7 +1030,7 @@ TEST_F(TopSitesImplTest, GetUpdateDelay) {
 // has loaded.
 TEST_F(TopSitesImplTest, NotifyCallbacksWhenLoaded) {
   // Recreate top sites. It won't be loaded now.
-  profile()->CreateTopSites();
+  CreateTopSitesAndObserver();
 
   EXPECT_FALSE(IsTopSitesLoaded());
 
@@ -1023,7 +1071,7 @@ TEST_F(TopSitesImplTest, NotifyCallbacksWhenLoaded) {
   SetTopSites(pages);
 
   // Recreate top sites. It won't be loaded now.
-  profile()->CreateTopSites();
+  CreateTopSitesAndObserver();
 
   EXPECT_FALSE(IsTopSitesLoaded());
 
@@ -1068,7 +1116,7 @@ TEST_F(TopSitesImplTest, NotifyCallbacksWhenLoaded) {
 // Makes sure canceled requests are not notified.
 TEST_F(TopSitesImplTest, CancelingRequestsForTopSites) {
   // Recreate top sites. It won't be loaded now.
-  profile()->CreateTopSites();
+  CreateTopSitesAndObserver();
 
   EXPECT_FALSE(IsTopSitesLoaded());
 
@@ -1143,8 +1191,74 @@ TEST_F(TopSitesImplTest, AddTemporaryThumbnail) {
   EXPECT_TRUE(ThumbnailEqualsBytes(thumbnail, out.get()));
 }
 
-// Tests variations of blacklisting.
-TEST_F(TopSitesImplTest, Blacklisting) {
+// Tests variations of blacklisting without testing prepopulated page
+// blacklisting.
+TEST_F(TopSitesImplTest, BlacklistingWithoutPrepopulated) {
+  MostVisitedURLList pages;
+  MostVisitedURL url, url1;
+  url.url = GURL("http://bbc.com/");
+  url.redirects.push_back(url.url);
+  pages.push_back(url);
+  url1.url = GURL("http://google.com/");
+  url1.redirects.push_back(url1.url);
+  pages.push_back(url1);
+
+  SetTopSites(pages);
+  EXPECT_FALSE(top_sites()->IsBlacklisted(GURL("http://bbc.com/")));
+
+  // Blacklist google.com.
+  top_sites()->AddBlacklistedURL(GURL("http://google.com/"));
+
+  EXPECT_TRUE(top_sites()->HasBlacklistedItems());
+  EXPECT_TRUE(top_sites()->IsBlacklisted(GURL("http://google.com/")));
+  EXPECT_FALSE(top_sites()->IsBlacklisted(GURL("http://bbc.com/")));
+
+  // Make sure the blacklisted site isn't returned in the results.
+  {
+    TopSitesQuerier q;
+    q.QueryTopSites(top_sites(), true);
+    EXPECT_EQ("http://bbc.com/", q.urls()[0].url.spec());
+  }
+
+  // Recreate top sites and make sure blacklisted url was correctly read.
+  RecreateTopSitesAndBlock();
+  {
+    TopSitesQuerier q;
+    q.QueryTopSites(top_sites(), true);
+    EXPECT_EQ("http://bbc.com/", q.urls()[0].url.spec());
+  }
+
+  // Mark google as no longer blacklisted.
+  top_sites()->RemoveBlacklistedURL(GURL("http://google.com/"));
+  EXPECT_FALSE(top_sites()->HasBlacklistedItems());
+  EXPECT_FALSE(top_sites()->IsBlacklisted(GURL("http://google.com/")));
+
+  // Make sure google is returned now.
+  {
+    TopSitesQuerier q;
+    q.QueryTopSites(top_sites(), true);
+    EXPECT_EQ("http://bbc.com/", q.urls()[0].url.spec());
+    EXPECT_EQ("http://google.com/", q.urls()[1].url.spec());
+  }
+
+  // Remove all blacklisted sites.
+  top_sites()->ClearBlacklistedURLs();
+  EXPECT_FALSE(top_sites()->HasBlacklistedItems());
+
+  {
+    TopSitesQuerier q;
+    q.QueryTopSites(top_sites(), true);
+    EXPECT_EQ("http://bbc.com/", q.urls()[0].url.spec());
+    EXPECT_EQ("http://google.com/", q.urls()[1].url.spec());
+    ASSERT_NO_FATAL_FAILURE(ContainsPrepopulatePages(q, 2));
+  }
+}
+
+#if !defined(OS_ANDROID)
+// Tests variations of blacklisting including blacklisting prepopulated pages.
+// This test is disable for Android because Android does not have any
+// prepopulated pages.
+TEST_F(TopSitesImplTest, BlacklistingWithPrepopulated) {
   MostVisitedURLList pages;
   MostVisitedURL url, url1;
   url.url = GURL("http://bbc.com/");
@@ -1233,6 +1347,7 @@ TEST_F(TopSitesImplTest, Blacklisting) {
     ASSERT_NO_FATAL_FAILURE(ContainsPrepopulatePages(q, 2));
   }
 }
+#endif
 
 // Makes sure prepopulated pages exist.
 TEST_F(TopSitesImplTest, AddPrepopulatedPages) {

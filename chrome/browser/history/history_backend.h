@@ -15,24 +15,26 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/observer_list.h"
 #include "base/single_thread_task_runner.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/history/expire_history_backend.h"
 #include "chrome/browser/history/history_database.h"
-#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/thumbnail_database.h"
 #include "chrome/browser/history/visit_tracker.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/keyword_id.h"
 #include "components/visitedlink/browser/visitedlink_delegate.h"
 #include "sql/init_status.h"
 
 #if defined(OS_ANDROID)
-#include "chrome/browser/history/android/android_history_types.h"
+#include "components/history/core/android/android_history_types.h"
 #endif
 
 class HistoryURLProvider;
 struct HistoryURLProviderParams;
 struct ImportedFaviconUsage;
+class SkBitmap;
 class TestingProfile;
 struct ThumbnailScore;
 
@@ -48,7 +50,9 @@ class AndroidProviderBackend;
 
 class CommitLaterTask;
 struct DownloadRow;
+class HistoryBackendObserver;
 class HistoryClient;
+struct HistoryDetails;
 class HistoryDBTask;
 class InMemoryHistoryBackend;
 class TypedUrlSyncableService;
@@ -96,7 +100,7 @@ class QueuedHistoryDBTask {
 // functions in the history service. These functions are not documented
 // here, see the history service for behavior.
 class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
-                       public BroadcastNotificationDelegate {
+                       public ExpireHistoryBackendDelegate {
  public:
   // Interface implemented by the owner of the HistoryBackend object. Normally,
   // the history service implements this to send stuff back to the main thread.
@@ -119,6 +123,21 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
     virtual void SetInMemoryBackend(
         scoped_ptr<InMemoryHistoryBackend> backend) = 0;
 
+    // Notify HistoryService that VisitDatabase was changed. The event will be
+    // forwarded to the history::HistoryServiceObservers in the UI thread.
+    virtual void NotifyAddVisit(const BriefVisitInfo& info) = 0;
+
+    // Notify HistoryService that some URLs favicon changed that will forward
+    // the events to the FaviconChangedObservers in the correct thread.
+    virtual void NotifyFaviconChanged(const std::set<GURL>& urls) = 0;
+
+    // Notify HistoryService that the user is visiting an URL. The event will
+    // be forwarded to the HistoryServiceObservers in the correct thread.
+    virtual void NotifyURLVisited(ui::PageTransition transition,
+                                  const URLRow& row,
+                                  const RedirectList& redirects,
+                                  base::Time visit_time) = 0;
+
     // Broadcasts the specified notification to the notification service.
     // This is implemented here because notifications must only be sent from
     // the main thread. This is the only method that doesn't identify the
@@ -128,9 +147,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
     // Invoked when the backend has finished loading the db.
     virtual void DBLoaded() = 0;
-
-    virtual void NotifyVisitDBObserversOnAddVisit(
-        const history::BriefVisitInfo& info) = 0;
   };
 
   // Init must be called to complete object creation. This object can be
@@ -266,8 +282,8 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   void SetFavicons(const GURL& page_url,
                    favicon_base::IconType icon_type,
-                   const std::vector<favicon_base::FaviconRawBitmapData>&
-                       favicon_bitmap_data);
+                   const GURL& icon_url,
+                   const std::vector<SkBitmap>& bitmaps);
 
   void SetFaviconsOutOfDateForPage(const GURL& page_url);
 
@@ -296,6 +312,11 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   void DeleteMatchingURLsForKeyword(KeywordID keyword_id,
                                     const base::string16& term);
+
+  // Observers -----------------------------------------------------------------
+
+  void AddObserver(HistoryBackendObserver* observer);
+  void RemoveObserver(HistoryBackendObserver* observer);
 
 #if defined(OS_ANDROID)
   // Android Provider ---------------------------------------------------------
@@ -497,7 +518,14 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   }
 
  protected:
-  virtual ~HistoryBackend();
+  ~HistoryBackend() override;
+
+  // Notify HistoryBackendObserver that |transition| to |row| occurred at
+  // |visit_time| following |redirects| (empty if there is no redirects).
+  void NotifyURLVisited(ui::PageTransition transition,
+                        const URLRow& row,
+                        const RedirectList& redirects,
+                        base::Time visit_time);
 
  private:
   friend class base::RefCountedThreadSafe<HistoryBackend>;
@@ -546,7 +574,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                            GetFaviconsFromDBNoFaviconBitmaps);
   FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest,
                            GetFaviconsFromDBSelectClosestMatch);
-  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, GetFaviconsFromDBSingleIconURL);
   FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, GetFaviconsFromDBIconType);
   FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, GetFaviconsFromDBExpired);
   FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest,
@@ -609,7 +636,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   std::pair<URLID, VisitID> AddPageVisit(const GURL& url,
                                          base::Time time,
                                          VisitID referring_visit,
-                                         content::PageTransition transition,
+                                         ui::PageTransition transition,
                                          VisitSource visit_source);
 
   // Returns a redirect chain in |redirects| for the VisitID
@@ -668,7 +695,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   SegmentID UpdateSegments(const GURL& url,
                            VisitID from_visit,
                            VisitID visit_id,
-                           content::PageTransition transition_type,
+                           ui::PageTransition transition_type,
                            const base::Time ts);
 
   // Favicons ------------------------------------------------------------------
@@ -689,28 +716,15 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
       std::vector<favicon_base::FaviconRawBitmapResult>* results);
 
   // Set the favicon bitmaps for |icon_id|.
-  // For each entry in |favicon_bitmap_data|, if a favicon bitmap already
-  // exists at the entry's pixel size, replace the favicon bitmap's data with
-  // the entry's bitmap data. Otherwise add a new favicon bitmap.
-  // Any favicon bitmaps already mapped to |icon_id| whose pixel sizes are not
-  // in |favicon_bitmap_data| are deleted.
-  // If not NULL, |favicon_bitmaps_changed| is set to whether any of the bitmap
-  // data at |icon_id| is changed as a result of calling this method.
-  // Computing |favicon_bitmaps_changed| requires additional database queries
-  // so should be avoided if unnecessary.
-  void SetFaviconBitmaps(favicon_base::FaviconID icon_id,
-                         const std::vector<favicon_base::FaviconRawBitmapData>&
-                             favicon_bitmap_data,
-                         bool* favicon_bitmaps_changed);
-
-  // Returns true if |favicon_bitmap_data| passed to SetFavicons() is valid.
-  // Criteria:
-  // 1) |favicon_bitmap_data| contains no more than
-  //      kMaxFaviconsPerPage unique icon URLs.
-  //      kMaxFaviconBitmapsPerIconURL favicon bitmaps for each icon URL.
-  // 2) FaviconRawBitmapData::bitmap_data contains non NULL bitmap data.
-  bool ValidateSetFaviconsParams(const std::vector<
-      favicon_base::FaviconRawBitmapData>& favicon_bitmap_data) const;
+  // For each entry in |bitmaps|, if a favicon bitmap already exists at the
+  // entry's pixel size, replace the favicon bitmap's data with the entry's
+  // bitmap data. Otherwise add a new favicon bitmap.
+  // Any favicon bitmaps already mapped to |icon_id| whose pixel size does not
+  // match the pixel size of one of |bitmaps| is deleted.
+  // Returns true if any of the bitmap data at |icon_id| is changed as a result
+  // of calling this method.
+  bool SetFaviconBitmaps(favicon_base::FaviconID icon_id,
+                         const std::vector<SkBitmap>& bitmaps);
 
   // Returns true if the bitmap data at |bitmap_id| equals |new_bitmap_data|.
   bool IsFaviconBitmapDataEqual(
@@ -782,13 +796,17 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // to be invoked again if there are more tasks that need to run.
   void ProcessDBTaskImpl();
 
-  virtual void BroadcastNotifications(
-      int type,
-      scoped_ptr<HistoryDetails> details) OVERRIDE;
-  virtual void NotifySyncURLsModified(URLRows* rows) OVERRIDE;
-  virtual void NotifySyncURLsDeleted(bool all_history,
-                                     bool expired,
-                                     URLRows* rows) OVERRIDE;
+  // Broadcasts the specified notification to the notification service on both
+  // the main thread and the history thread if a notification service is
+  // running.
+  void BroadcastNotifications(int type, scoped_ptr<HistoryDetails> details);
+
+  // ExpireHistoryBackendDelegate:
+  void NotifyURLsModified(const URLRows& rows) override;
+  void NotifyURLsDeleted(bool all_history,
+                         bool expired,
+                         const URLRows& rows,
+                         const std::set<GURL>& favicon_urls) override;
 
   // Deleting all history ------------------------------------------------------
 
@@ -897,10 +915,16 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   // Used to manage syncing of the typed urls datatype. This will be NULL
   // before Init is called.
+  // TODO(sdefresne): turn TypedUrlSyncableService into a HistoryBackendObserver
+  // and remove this field since it is only used for forwarding notifications
+  // about URL visited, modified, deleted.
   scoped_ptr<TypedUrlSyncableService> typed_url_syncable_service_;
 
   // Listens for the system being under memory pressure.
   scoped_ptr<base::MemoryPressureListener> memory_pressure_listener_;
+
+  // List of observers
+  ObserverList<HistoryBackendObserver> observers_;
 
   DISALLOW_COPY_AND_ASSIGN(HistoryBackend);
 };

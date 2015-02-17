@@ -26,25 +26,27 @@ class AutocompleteHistoryManager : public WebDataServiceConsumer {
  public:
   AutocompleteHistoryManager(AutofillDriver* driver,
                              AutofillClient* autofill_client);
-  virtual ~AutocompleteHistoryManager();
+  ~AutocompleteHistoryManager() override;
 
   // WebDataServiceConsumer implementation.
-  virtual void OnWebDataServiceRequestDone(
-      WebDataServiceBase::Handle h,
-      const WDTypedResult* result) OVERRIDE;
+  void OnWebDataServiceRequestDone(WebDataServiceBase::Handle h,
+                                   const WDTypedResult* result) override;
 
   // Pass-through functions that are called by AutofillManager, after it has
   // dispatched a message.
-  void OnGetAutocompleteSuggestions(
+  virtual void OnGetAutocompleteSuggestions(
       int query_id,
       const base::string16& name,
       const base::string16& prefix,
-      const std::string form_control_type,
+      const std::string& form_control_type,
       const std::vector<base::string16>& autofill_values,
       const std::vector<base::string16>& autofill_labels,
       const std::vector<base::string16>& autofill_icons,
       const std::vector<int>& autofill_unique_ids);
   virtual void OnFormSubmitted(const FormData& form);
+
+  // Cancels the currently pending WebDataService query, if there is one.
+  void CancelPendingQuery();
 
   // Must be public for the external delegate to use.
   void OnRemoveAutocompleteEntry(const base::string16& name,
@@ -60,9 +62,6 @@ class AutocompleteHistoryManager : public WebDataServiceConsumer {
   void SendSuggestions(const std::vector<base::string16>* suggestions);
 
  private:
-  // Cancels the currently pending WebDataService query, if there is one.
-  void CancelPendingQuery();
-
   // Provides driver-level context. Must outlive this object.
   AutofillDriver* driver_;
   scoped_refptr<AutofillWebDataService> database_;

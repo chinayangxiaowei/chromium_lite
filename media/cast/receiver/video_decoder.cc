@@ -114,12 +114,12 @@ class VideoDecoder::Vp8Impl : public VideoDecoder::ImplBase {
   }
 
  private:
-  virtual ~Vp8Impl() {
+  ~Vp8Impl() override {
     if (ImplBase::cast_initialization_status_ == STATUS_VIDEO_INITIALIZED)
       CHECK_EQ(VPX_CODEC_OK, vpx_codec_destroy(&context_));
   }
 
-  virtual scoped_refptr<VideoFrame> Decode(uint8* data, int len) OVERRIDE {
+  scoped_refptr<VideoFrame> Decode(uint8* data, int len) override {
     if (len <= 0 || vpx_codec_decode(&context_,
                                      data,
                                      static_cast<unsigned int>(len),
@@ -150,15 +150,15 @@ class VideoDecoder::Vp8Impl : public VideoDecoder::ImplBase {
     CopyYPlane(image->planes[VPX_PLANE_Y],
                image->stride[VPX_PLANE_Y],
                image->d_h,
-               decoded_frame);
+               decoded_frame.get());
     CopyUPlane(image->planes[VPX_PLANE_U],
                image->stride[VPX_PLANE_U],
                (image->d_h + 1) / 2,
-               decoded_frame);
+               decoded_frame.get());
     CopyVPlane(image->planes[VPX_PLANE_V],
                image->stride[VPX_PLANE_V],
                (image->d_h + 1) / 2,
-               decoded_frame);
+               decoded_frame.get());
     return decoded_frame;
   }
 
@@ -181,9 +181,9 @@ class VideoDecoder::FakeImpl : public VideoDecoder::ImplBase {
   }
 
  private:
-  virtual ~FakeImpl() {}
+  ~FakeImpl() override {}
 
-  virtual scoped_refptr<VideoFrame> Decode(uint8* data, int len) OVERRIDE {
+  scoped_refptr<VideoFrame> Decode(uint8* data, int len) override {
     // Make sure this is a JSON string.
     if (!len || data[0] != '{')
       return NULL;
@@ -238,7 +238,7 @@ VideoDecoder::VideoDecoder(
 VideoDecoder::~VideoDecoder() {}
 
 CastInitializationStatus VideoDecoder::InitializationResult() const {
-  if (impl_)
+  if (impl_.get())
     return impl_->InitializationResult();
   return STATUS_UNSUPPORTED_VIDEO_CODEC;
 }
@@ -248,7 +248,8 @@ void VideoDecoder::DecodeFrame(
     const DecodeFrameCallback& callback) {
   DCHECK(encoded_frame.get());
   DCHECK(!callback.is_null());
-  if (!impl_ || impl_->InitializationResult() != STATUS_VIDEO_INITIALIZED) {
+  if (!impl_.get() ||
+      impl_->InitializationResult() != STATUS_VIDEO_INITIALIZED) {
     callback.Run(make_scoped_refptr<VideoFrame>(NULL), false);
     return;
   }

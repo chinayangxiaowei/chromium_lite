@@ -14,14 +14,16 @@
 #include "content/public/common/content_client.h"
 #include "content/public/common/renderer_preferences.h"
 #include "content/public/renderer/content_renderer_client.h"
+#include "content/public/test/frame_load_waiter.h"
 #include "content/renderer/history_controller.h"
 #include "content/renderer/history_serialization.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/render_view_impl.h"
+#include "content/renderer/renderer_blink_platform_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
-#include "content/renderer/renderer_webkitplatformsupport_impl.h"
-#include "content/test/frame_load_waiter.h"
+#include "content/renderer/scheduler/renderer_scheduler.h"
 #include "content/test/mock_render_process.h"
+#include "content/test/test_content_client.h"
 #include "third_party/WebKit/public/platform/WebScreenInfo.h"
 #include "third_party/WebKit/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/public/web/WebHistoryItem.h"
@@ -56,27 +58,30 @@ const int32 kSurfaceId = 42;
 
 namespace content {
 
-class RendererWebKitPlatformSupportImplNoSandboxImpl
-    : public RendererWebKitPlatformSupportImpl {
+class RendererBlinkPlatformImplNoSandboxImpl
+    : public RendererBlinkPlatformImpl {
  public:
+  RendererBlinkPlatformImplNoSandboxImpl(RendererScheduler* scheduler)
+      : RendererBlinkPlatformImpl(scheduler) {}
+
   virtual blink::WebSandboxSupport* sandboxSupport() {
     return NULL;
   }
 };
 
-RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox::
-    RendererWebKitPlatformSupportImplNoSandbox() {
-  webkit_platform_support_.reset(
-      new RendererWebKitPlatformSupportImplNoSandboxImpl());
+RenderViewTest::RendererBlinkPlatformImplNoSandbox::
+    RendererBlinkPlatformImplNoSandbox() {
+  renderer_scheduler_ = RendererScheduler::Create();
+  blink_platform_impl_.reset(
+      new RendererBlinkPlatformImplNoSandboxImpl(renderer_scheduler_.get()));
 }
 
-RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox::
-    ~RendererWebKitPlatformSupportImplNoSandbox() {
+RenderViewTest::RendererBlinkPlatformImplNoSandbox::
+    ~RendererBlinkPlatformImplNoSandbox() {
 }
 
-blink::Platform*
-    RenderViewTest::RendererWebKitPlatformSupportImplNoSandbox::Get() {
-  return webkit_platform_support_.get();
+blink::Platform* RenderViewTest::RendererBlinkPlatformImplNoSandbox::Get() {
+  return blink_platform_impl_.get();
 }
 
 RenderViewTest::RenderViewTest()
@@ -166,7 +171,7 @@ void RenderViewTest::SetUp() {
   // hacky, but this is the world we live in...
   std::string flags("--expose-gc");
   v8::V8::SetFlagsFromString(flags.c_str(), static_cast<int>(flags.size()));
-  blink::initialize(webkit_platform_support_.Get());
+  blink::initialize(blink_platform_impl_.Get());
 
   // Ensure that we register any necessary schemes when initializing WebKit,
   // since we are using a MockRenderThread.
@@ -199,7 +204,11 @@ void RenderViewTest::SetUp() {
                              false,  // hidden
                              false,  // never_visible
                              1,      // next_page_id
-                             blink::WebScreenInfo());
+                             *InitialSizeParams(),
+                             false, // enable_auto_resize
+                             gfx::Size(), // min_size
+                             gfx::Size() // max_size
+                            );
   view->AddRef();
   view_ = view;
 }
@@ -337,11 +346,11 @@ void RenderViewTest::ClearHistory() {
 
 void RenderViewTest::Reload(const GURL& url) {
   FrameMsg_Navigate_Params params;
-  params.url = url;
-  params.navigation_type = FrameMsg_Navigate_Type::RELOAD;
+  params.common_params.url = url;
+  params.common_params.navigation_type = FrameMsg_Navigate_Type::RELOAD;
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
-  impl->main_render_frame()->OnNavigate(params);
-  FrameLoadWaiter(impl->main_render_frame()).Wait();
+  impl->GetMainRenderFrame()->OnNavigate(params);
+  FrameLoadWaiter(impl->GetMainRenderFrame()).Wait();
 }
 
 uint32 RenderViewTest::GetNavigationIPCType() {
@@ -355,7 +364,7 @@ void RenderViewTest::Resize(gfx::Size new_size,
   params.screen_info = blink::WebScreenInfo();
   params.new_size = new_size;
   params.physical_backing_size = new_size;
-  params.overdraw_bottom_height = 0.f;
+  params.top_controls_layout_height = 0.f;
   params.resizer_rect = resizer_rect;
   params.is_fullscreen = is_fullscreen;
   scoped_ptr<IPC::Message> resize_message(new ViewMsg_Resize(0, params));
@@ -372,7 +381,7 @@ void RenderViewTest::DidNavigateWithinPage(blink::WebLocalFrame* frame,
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
   blink::WebHistoryItem item;
   item.initialize();
-  impl->main_render_frame()->didNavigateWithinPage(
+  impl->GetMainRenderFrame()->didNavigateWithinPage(
       frame,
       item,
       is_new_navigation ? blink::WebStandardCommit
@@ -391,7 +400,7 @@ blink::WebWidget* RenderViewTest::GetWebWidget() {
 
 
 ContentClient* RenderViewTest::CreateContentClient() {
-  return new ContentClient;
+  return new TestContentClient;
 }
 
 ContentBrowserClient* RenderViewTest::CreateContentBrowserClient() {
@@ -402,6 +411,10 @@ ContentRendererClient* RenderViewTest::CreateContentRendererClient() {
   return new ContentRendererClient;
 }
 
+scoped_ptr<ViewMsg_Resize_Params> RenderViewTest::InitialSizeParams() {
+  return make_scoped_ptr(new ViewMsg_Resize_Params());
+}
+
 void RenderViewTest::GoToOffset(int offset, const PageState& state) {
   RenderViewImpl* impl = static_cast<RenderViewImpl*>(view_);
 
@@ -410,18 +423,19 @@ void RenderViewTest::GoToOffset(int offset, const PageState& state) {
   int pending_offset = offset + impl->history_list_offset();
 
   FrameMsg_Navigate_Params navigate_params;
-  navigate_params.navigation_type = FrameMsg_Navigate_Type::NORMAL;
-  navigate_params.transition = PAGE_TRANSITION_FORWARD_BACK;
+  navigate_params.common_params.navigation_type =
+      FrameMsg_Navigate_Type::NORMAL;
+  navigate_params.common_params.transition = ui::PAGE_TRANSITION_FORWARD_BACK;
   navigate_params.current_history_list_length = history_list_length;
   navigate_params.current_history_list_offset = impl->history_list_offset();
   navigate_params.pending_history_list_offset = pending_offset;
   navigate_params.page_id = impl->page_id_ + offset;
-  navigate_params.page_state = state;
+  navigate_params.commit_params.page_state = state;
   navigate_params.request_time = base::Time::Now();
 
-  FrameMsg_Navigate navigate_message(impl->main_render_frame()->GetRoutingID(),
+  FrameMsg_Navigate navigate_message(impl->GetMainRenderFrame()->GetRoutingID(),
                                      navigate_params);
-  impl->main_render_frame()->OnMessageReceived(navigate_message);
+  impl->GetMainRenderFrame()->OnMessageReceived(navigate_message);
 
   // The load actually happens asynchronously, so we pump messages to process
   // the pending continuation.

@@ -53,12 +53,11 @@ class SslHmacChannelAuthenticator : public ChannelAuthenticator,
       scoped_refptr<RsaKeyPair> key_pair,
       const std::string& auth_key);
 
-  virtual ~SslHmacChannelAuthenticator();
+  ~SslHmacChannelAuthenticator() override;
 
   // ChannelAuthenticator interface.
-  virtual void SecureAndAuthenticate(
-      scoped_ptr<net::StreamSocket> socket,
-      const DoneCallback& done_callback) OVERRIDE;
+  void SecureAndAuthenticate(scoped_ptr<net::StreamSocket> socket,
+                             const DoneCallback& done_callback) override;
 
  private:
   SslHmacChannelAuthenticator(const std::string& auth_key);
@@ -78,6 +77,7 @@ class SslHmacChannelAuthenticator : public ChannelAuthenticator,
 
   void CheckDone(bool* callback_called);
   void NotifyError(int error);
+  void CallDoneCallback(int error, scoped_ptr<net::StreamSocket> socket);
 
   // The mutual secret used for authentication.
   std::string auth_key_;

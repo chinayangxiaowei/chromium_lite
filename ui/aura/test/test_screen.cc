@@ -76,6 +76,10 @@ void TestScreen::SetUIScale(float ui_scale) {
   host_->SetRootTransform(GetRotationTransform() * GetUIScaleTransform());
 }
 
+void TestScreen::SetWorkAreaInsets(const gfx::Insets& insets) {
+  display_.UpdateWorkAreaFromInsets(insets);
+}
+
 gfx::Transform TestScreen::GetRotationTransform() const {
   gfx::Transform rotate;
   switch (display_.rotation()) {
@@ -103,10 +107,6 @@ gfx::Transform TestScreen::GetUIScaleTransform() const {
   gfx::Transform ui_scale;
   ui_scale.Scale(1.0f / ui_scale_, 1.0f / ui_scale_);
   return ui_scale;
-}
-
-bool TestScreen::IsDIPEnabled() {
-  return true;
 }
 
 void TestScreen::OnWindowBoundsChanged(

@@ -10,11 +10,14 @@
     # the link of the actual chrome (or chromium) executable on
     # Linux or Mac, and into chrome.dll on Windows.
     # NOTE: Most new includes should go in the OS!="ios" condition below.
+    #
+    # GN version is the group //chrome:browser_dependencies
     'chromium_browser_dependencies': [
       'common',
       'browser',
       '../sync/sync.gyp:sync',
     ],
+    # GN version is the group //chrome:child_dependencies
     'chromium_child_dependencies': [
       'common',
       '../sync/sync.gyp:sync',
@@ -25,10 +28,10 @@
     'conditions': [
       ['OS!="ios"', {
         'chromium_browser_dependencies': [
+          'debugger',
           '../ppapi/ppapi_internal.gyp:ppapi_host',
         ],
         'chromium_child_dependencies': [
-          'debugger',
           'plugin',
           'renderer',
           'utility',
@@ -37,12 +40,12 @@
           '../third_party/WebKit/public/blink_devtools.gyp:blink_devtools_frontend_resources',
         ],
       }],
-      ['enable_printing!=0', {
+      ['enable_basic_printing==1 or enable_print_preview==1', {
         'chromium_browser_dependencies': [
           '../printing/printing.gyp:printing',
         ],
       }],
-      ['enable_printing==1', {
+      ['enable_print_preview==1', {
         'chromium_browser_dependencies': [
           'service',
         ],
@@ -100,6 +103,7 @@
     ['OS!="ios"', {
       'includes': [
         '../apps/apps.gypi',
+        'app_installer/app_installer.gypi',
         'chrome_debugger.gypi',
         'chrome_dll.gypi',
         'chrome_exe.gypi',
@@ -132,7 +136,8 @@
     }],  # OS!="ios"
     ['OS=="mac"', {
       'includes': [
-        '../apps/app_shim/app_shim.gypi',
+        'app_shim/app_shim.gypi',
+        'browser/apps/app_shim/browser_app_shim.gypi',
       ],
       'targets': [
         {
@@ -278,60 +283,6 @@
           ],
         },  # target app_mode_app_support
         {
-          # This produces the template for app mode loader bundles. It's a
-          # template in the sense that parts of it need to be "filled in" by
-          # Chrome before it can be executed.
-          'target_name': 'app_mode_app',
-          'type': 'executable',
-          'mac_bundle' : 1,
-          'variables': {
-            'enable_wexit_time_destructors': 1,
-            'mac_real_dsym': 1,
-          },
-          'product_name': 'app_mode_loader',
-          'dependencies': [
-            'app_mode_app_support',
-            'infoplist_strings_tool',
-          ],
-          'sources': [
-            'app/app_mode_loader_mac.mm',
-            'app/app_mode-Info.plist',
-          ],
-          'include_dirs': [
-            '..',
-          ],
-          'link_settings': {
-            'libraries': [
-              '$(SDKROOT)/System/Library/Frameworks/CoreFoundation.framework',
-              '$(SDKROOT)/System/Library/Frameworks/Foundation.framework',
-            ],
-          },
-          'mac_bundle_resources!': [
-            'app/app_mode-Info.plist',
-          ],
-          'mac_bundle_resources/': [
-            ['exclude', '.*'],
-          ],
-          'xcode_settings': {
-            'INFOPLIST_FILE': 'app/app_mode-Info.plist',
-            'APP_MODE_APP_BUNDLE_ID': '<(mac_bundle_id).app.@APP_MODE_SHORTCUT_ID@',
-          },
-          'postbuilds' : [
-            {
-              # Modify the Info.plist as needed.  The script explains why this
-              # is needed.  This is also done in the chrome and chrome_dll
-              # targets.  In this case, --breakpad=0, --keystone=0, and --scm=0
-              # are used because Breakpad, Keystone, and SCM keys are
-              # never placed into the app mode loader.
-              'postbuild_name': 'Tweak Info.plist',
-              'action': ['<(tweak_info_plist_path)',
-                         '--breakpad=0',
-                         '--keystone=0',
-                         '--scm=0'],
-            },
-          ],
-        },  # target app_mode_app
-        {
           # Convenience target to build a disk image.
           'target_name': 'build_app_dmg',
           # Don't place this in the 'all' list; most won't want it.
@@ -440,7 +391,8 @@
             '../content/content_shell_and_tests.gyp:content_shell',
             '../content/content_shell_and_tests.gyp:content_unittests',
             '../net/net.gyp:net_unittests',
-            '../ui/ui_unittests.gyp:ui_unittests',
+            '../ui/base/ui_base_tests.gyp:ui_base_unittests',
+            '../ui/base/ui_base_tests.gyp:ui_unittests',
           ],
         },
         {
@@ -477,6 +429,7 @@
           ],
         },
         {
+          # GN version: //chrome:version_header
           'target_name': 'chrome_version_header',
           'type': 'none',
           'hard_dependency': 1,
@@ -558,6 +511,7 @@
         },
       ],  # 'targets'
       'includes': [
+        'app_shim/app_shim_win.gypi',
         'chrome_process_finder.gypi',
         'metro_utils.gypi',
       ],
@@ -625,6 +579,7 @@
       {
       'targets': [
         {
+          # GN: //chrome/android:chrome_java
           'target_name': 'chrome_java',
           'type': 'none',
           'dependencies': [
@@ -632,6 +587,11 @@
             'app_banner_metrics_ids_java',
             'chrome_resources.gyp:chrome_strings',
             'chrome_strings_grd',
+            'chrome_version_java',
+            'profile_account_management_metrics_java',
+            'content_setting_java',
+            'content_settings_type_java',
+            'page_info_connection_type_java',
             'profile_sync_service_model_type_selection_java',
             'resource_id_java',
             'toolbar_model_security_levels_java',
@@ -639,10 +599,9 @@
             '../base/base.gyp:base',
             '../components/components.gyp:bookmarks_java',
             '../components/components.gyp:dom_distiller_core_java',
-            '../components/components.gyp:enhanced_bookmarks_java',
             '../components/components.gyp:gcm_driver_java',
+            '../components/components.gyp:invalidation_java',
             '../components/components.gyp:navigation_interception_java',
-            '../components/components.gyp:sessions',
             '../components/components.gyp:variations_java',
             '../components/components.gyp:web_contents_delegate_android_java',
             '../content/content.gyp:content_java',
@@ -650,7 +609,6 @@
             '../sync/sync.gyp:sync_java',
             '../third_party/android_tools/android_tools.gyp:android_support_v7_appcompat_javalib',
             '../third_party/android_tools/android_tools.gyp:android_support_v13_javalib',
-            '../third_party/guava/guava.gyp:guava_javalib',
             '../ui/android/ui_android.gyp:ui_java',
           ],
           'variables': {
@@ -667,6 +625,7 @@
           ],
         },
         {
+          # GN: //chrome/android:chrome_strings_grd
           'target_name': 'chrome_strings_grd',
           'type': 'none',
           'variables': {
@@ -675,6 +634,33 @@
           'includes': [
             '../build/java_strings_grd.gypi',
           ],
+        },
+        {
+          # GN: //chrome:content_setting_javagen
+          'target_name': 'content_setting_java',
+          'type': 'none',
+          'variables': {
+            'source_file': '../components/content_settings/core/common/content_settings.h',
+          },
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
+        },
+        {
+          # GN: //chrome:content_settings_type_javagen
+          'target_name': 'content_settings_type_java',
+          'type': 'none',
+          'variables': {
+            'source_file': '../components/content_settings/core/common/content_settings_types.h',
+          },
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
+        },
+        {
+          # GN: //chrome:page_info_connection_type_javagen
+          'target_name': 'page_info_connection_type_java',
+          'type': 'none',
+          'variables': {
+            'source_file': 'browser/ui/android/website_settings_popup_android.h',
+          },
+          'includes': [ '../build/android/java_cpp_enum.gypi' ],
         },
       ], # 'targets'
       'includes': [
@@ -689,7 +675,7 @@
         'chrome_browser_extensions.gypi',
       ],
     }],
-    ['enable_printing==1', {
+    ['enable_print_preview==1', {
       'targets': [
         {
           # GN version: //chrome/service
@@ -767,6 +753,12 @@
             ['OS!="win" and use_cups!=1', {
               'sources': [
                 'service/cloud_print/print_system_dummy.cc',
+              ],
+            }],
+            ['OS!="win"', {
+              'sources!': [
+                'service/service_utility_process_host.cc',
+                'service/service_utility_process_host.h',
               ],
             }],
           ],

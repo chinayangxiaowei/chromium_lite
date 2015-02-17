@@ -17,10 +17,12 @@ import org.chromium.base.CommandLine;
 import org.chromium.base.MemoryPressureListener;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.ProcessInitException;
+import org.chromium.content.app.ContentApplication;
 import org.chromium.content.browser.BrowserStartupController;
 import org.chromium.content.browser.ContentViewCore;
 import org.chromium.content.browser.DeviceUtils;
 import org.chromium.content.common.ContentSwitches;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_shell.Shell;
 import org.chromium.content_shell.ShellManager;
 import org.chromium.ui.base.ActivityWindowAndroid;
@@ -31,7 +33,6 @@ import org.chromium.ui.base.WindowAndroid;
  */
 public class ContentShellActivity extends Activity {
 
-    public static final String COMMAND_LINE_FILE = "/data/local/tmp/content-shell-command-line";
     private static final String TAG = "ContentShellActivity";
 
     private static final String ACTIVE_SHELL_URL_KEY = "activeUrl";
@@ -46,7 +47,7 @@ public class ContentShellActivity extends Activity {
 
         // Initializing the command line must occur before loading the library.
         if (!CommandLine.isInitialized()) {
-            CommandLine.initFromFile(COMMAND_LINE_FILE);
+            ContentApplication.initCommandLine(this);
             String[] commandLineParams = getCommandLineParamsFromIntent(getIntent());
             if (commandLineParams != null) {
                 CommandLine.getInstance().appendSwitchesAndArguments(commandLineParams);
@@ -126,7 +127,7 @@ public class ContentShellActivity extends Activity {
         super.onSaveInstanceState(outState);
         ContentViewCore contentViewCore = getActiveContentViewCore();
         if (contentViewCore != null) {
-            outState.putString(ACTIVE_SHELL_URL_KEY, contentViewCore.getUrl());
+            outState.putString(ACTIVE_SHELL_URL_KEY, contentViewCore.getWebContents().getUrl());
         }
 
         mWindowAndroid.saveInstanceState(outState);
@@ -144,8 +145,9 @@ public class ContentShellActivity extends Activity {
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             ContentViewCore contentViewCore = getActiveContentViewCore();
-            if (contentViewCore != null && contentViewCore.canGoBack()) {
-                contentViewCore.goBack();
+            if (contentViewCore != null && contentViewCore.getWebContents()
+                    .getNavigationController().canGoBack()) {
+                contentViewCore.getWebContents().getNavigationController().goBack();
                 return true;
             }
         }
@@ -223,4 +225,14 @@ public class ContentShellActivity extends Activity {
         Shell shell = getActiveShell();
         return shell != null ? shell.getContentViewCore() : null;
     }
+
+    /**
+     * @return The {@link WebContents} owned by the currently visible {@link Shell} or null if
+     *         one is not showing.
+     */
+    public WebContents getActiveWebContents() {
+        Shell shell = getActiveShell();
+        return shell != null ? shell.getWebContents() : null;
+    }
+
 }

@@ -18,10 +18,8 @@ class TestTable : public TableRowNSImageCache::Table {
   }
 
   // TableRowNSImageCache::Table overrides.
-  virtual int RowCount() const OVERRIDE {
-    return rows_.size();
-  }
-  virtual gfx::ImageSkia GetIcon(int index) const OVERRIDE {
+  int RowCount() const override { return rows_.size(); }
+  gfx::ImageSkia GetIcon(int index) const override {
     return gfx::ImageSkia::CreateFrom1xBitmap(rows_[index]);
   }
 
@@ -31,7 +29,7 @@ class TestTable : public TableRowNSImageCache::Table {
 
 SkBitmap MakeImage(int width, int height) {
   SkBitmap image;
-  EXPECT_TRUE(image.allocN32Pixels(width, height));
+  image.allocN32Pixels(width, height);
   image.eraseARGB(255, 255, 0, 0);
   return image;
 }

@@ -11,7 +11,6 @@
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/pref_proxy_config_tracker_impl.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/net_log.h"
 #include "net/proxy/dhcp_proxy_script_fetcher_factory.h"
@@ -54,8 +53,8 @@ net::ProxyConfigService* ProxyServiceFactory::CreateProxyConfigService(
   // that code be moved to chrome/browser instead of being in net, so that it
   // can use BrowserThread instead of raw MessageLoop pointers? See bug 25354.
   base_service.reset(net::ProxyService::CreateSystemProxyConfigService(
-      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO).get(),
-      BrowserThread::UnsafeGetMessageLoopForThread(BrowserThread::FILE)));
+      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO),
+      BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE)));
 #endif  // !defined(OS_CHROMEOS)
 
   return tracker->CreateTrackingProxyConfigService(base_service.Pass())

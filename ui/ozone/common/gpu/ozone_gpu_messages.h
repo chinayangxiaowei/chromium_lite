@@ -10,6 +10,7 @@
 #include "ipc/ipc_message_macros.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/ipc/gfx_param_traits.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/ozone/common/gpu/ozone_gpu_message_params.h"
@@ -31,7 +32,6 @@ IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(ui::DisplaySnapshot_Params)
   IPC_STRUCT_TRAITS_MEMBER(display_id)
-  IPC_STRUCT_TRAITS_MEMBER(has_proper_display_id)
   IPC_STRUCT_TRAITS_MEMBER(origin)
   IPC_STRUCT_TRAITS_MEMBER(physical_size)
   IPC_STRUCT_TRAITS_MEMBER(type)
@@ -51,20 +51,38 @@ IPC_STRUCT_TRAITS_END()
 // These are messages from the browser to the GPU process.
 
 // Update the HW cursor bitmap & move to specified location.
-IPC_MESSAGE_CONTROL3(OzoneGpuMsg_CursorSet,
-                     gfx::AcceleratedWidget, SkBitmap, gfx::Point)
+IPC_MESSAGE_CONTROL4(OzoneGpuMsg_CursorSet,
+                     gfx::AcceleratedWidget,
+                     std::vector<SkBitmap>,
+                     gfx::Point /* location */,
+                     int /* frame_delay_ms */)
 
 // Move the HW cursor to the specified location.
 IPC_MESSAGE_CONTROL2(OzoneGpuMsg_CursorMove,
                      gfx::AcceleratedWidget, gfx::Point)
 
-#if defined(OS_CHROMEOS)
+// Explicit creation of a WindowDelegate. We explicitly create the window
+// delegate such that any state change in the window is not lost while the
+// surface is created on the GPU side.
+IPC_MESSAGE_CONTROL1(OzoneGpuMsg_CreateWindowDelegate,
+                     gfx::AcceleratedWidget /* widget */)
+
+IPC_MESSAGE_CONTROL1(OzoneGpuMsg_DestroyWindowDelegate,
+                     gfx::AcceleratedWidget /* widget */)
+
+// Updates the location and size of the widget on the screen.
+IPC_MESSAGE_CONTROL2(OzoneGpuMsg_WindowBoundsChanged,
+                     gfx::AcceleratedWidget /* widget */,
+                     gfx::Rect /* bounds */)
+
 // Force the DPMS state of the display to on.
 IPC_MESSAGE_CONTROL0(OzoneGpuMsg_ForceDPMSOn)
 
 // Trigger a display reconfiguration. OzoneHostMsg_UpdateNativeDisplays will be
 // sent as a response.
-IPC_MESSAGE_CONTROL0(OzoneGpuMsg_RefreshNativeDisplays)
+// The |displays| parameter will hold a list of last known displays.
+IPC_MESSAGE_CONTROL1(OzoneGpuMsg_RefreshNativeDisplays,
+                     std::vector<ui::DisplaySnapshot_Params> /* displays */)
 
 // Configure a display with the specified mode at the specified location.
 IPC_MESSAGE_CONTROL3(OzoneGpuMsg_ConfigureNativeDisplay,
@@ -75,6 +93,12 @@ IPC_MESSAGE_CONTROL3(OzoneGpuMsg_ConfigureNativeDisplay,
 IPC_MESSAGE_CONTROL1(OzoneGpuMsg_DisableNativeDisplay,
                      int64_t)  // display ID
 
+// Take control of the display
+IPC_MESSAGE_CONTROL0(OzoneGpuMsg_TakeDisplayControl)
+
+// Let other entity control the display
+IPC_MESSAGE_CONTROL0(OzoneGpuMsg_RelinquishDisplayControl)
+
 //------------------------------------------------------------------------------
 // Browser Messages
 // These messages are from the GPU to the browser process.
@@ -82,4 +106,3 @@ IPC_MESSAGE_CONTROL1(OzoneGpuMsg_DisableNativeDisplay,
 // Updates the list of active displays.
 IPC_MESSAGE_CONTROL1(OzoneHostMsg_UpdateNativeDisplays,
                      std::vector<ui::DisplaySnapshot_Params>)
-#endif

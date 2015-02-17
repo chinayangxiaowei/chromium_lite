@@ -46,6 +46,7 @@
 /** @const */ var ACCELERATOR_APP_LAUNCH_BAILOUT = 'app_launch_bailout';
 /** @const */ var ACCELERATOR_APP_LAUNCH_NETWORK_CONFIG =
     'app_launch_network_config';
+/** @const */ var ACCELERATOR_EMBEDDED_SIGNIN = 'embedded_signin';
 
 /* Signin UI state constants. Used to control header bar UI. */
 /** @const */ var SIGNIN_UI_STATE = {
@@ -325,6 +326,9 @@ cr.define('cr.ui.login', function() {
      * @param {string} name Accelerator name.
      */
     handleAccelerator: function(name) {
+      if (this.currentScreen.ignoreAccelerators) {
+        return;
+      }
       var currentStepId = this.screens_[this.currentStep_];
       if (name == ACCELERATOR_CANCEL) {
         if (this.currentScreen.cancel) {
@@ -353,7 +357,9 @@ cr.define('cr.ui.login', function() {
         if (this.allowToggleVersion_)
           $('version-labels').hidden = !$('version-labels').hidden;
       } else if (name == ACCELERATOR_RESET) {
-        if (RESET_AVAILABLE_SCREEN_GROUP.indexOf(currentStepId) != -1)
+        if (currentStepId == SCREEN_OOBE_RESET)
+          chrome.send('toggleRollbackOnResetScreen');
+        else if (RESET_AVAILABLE_SCREEN_GROUP.indexOf(currentStepId) != -1)
           chrome.send('toggleResetScreen');
       } else if (name == ACCELERATOR_DEVICE_REQUISITION) {
         if (this.isOobeUI())
@@ -372,6 +378,9 @@ cr.define('cr.ui.login', function() {
       } else if (name == ACCELERATOR_APP_LAUNCH_NETWORK_CONFIG) {
         if (currentStepId == SCREEN_APP_LAUNCH_SPLASH)
           chrome.send('networkConfigRequest');
+      } else if (name == ACCELERATOR_EMBEDDED_SIGNIN) {
+        if (currentStepId == SCREEN_GAIA_SIGNIN)
+          chrome.send('switchToEmbeddedSignin');
       }
 
       if (!this.forceKeyboardFlow_)

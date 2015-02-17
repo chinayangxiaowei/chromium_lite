@@ -22,9 +22,6 @@
 #include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
-#include "chrome/browser/content_settings/content_settings_utils.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
-#include "chrome/browser/content_settings/local_shared_objects_container.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/chrome_ssl_host_state_delegate.h"
@@ -33,15 +30,18 @@
 #include "chrome/browser/ui/website_settings/website_settings_infobar_delegate.h"
 #include "chrome/browser/ui/website_settings/website_settings_ui.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/content_settings_pattern.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/local_shared_objects_counter.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/ssl_status.h"
 #include "content/public/common/url_constants.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
@@ -61,6 +61,13 @@ using content::BrowserThread;
 
 namespace {
 
+// Events for UMA. Do not reorder or change!
+enum SSLCertificateDecisionsDidRevoke {
+  USER_CERT_DECISIONS_NOT_REVOKED = 0,
+  USER_CERT_DECISIONS_REVOKED,
+  END_OF_SSL_CERTIFICATE_DECISIONS_DID_REVOKE_ENUM
+};
+
 // The list of content settings types to display on the Website Settings UI.
 ContentSettingsType kPermissionType[] = {
   CONTENT_SETTINGS_TYPE_IMAGES,
@@ -74,6 +81,9 @@ ContentSettingsType kPermissionType[] = {
   CONTENT_SETTINGS_TYPE_MEDIASTREAM,
   CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS,
   CONTENT_SETTINGS_TYPE_MIDI_SYSEX,
+#if defined(OS_ANDROID)
+  CONTENT_SETTINGS_TYPE_PUSH_MESSAGING,
+#endif
 };
 
 bool CertificateTransparencyStatusMatch(
@@ -174,7 +184,8 @@ WebsiteSettings::WebsiteSettings(
       cert_store_(cert_store),
       content_settings_(profile->GetHostContentSettingsMap()),
       chrome_ssl_host_state_delegate_(
-          ChromeSSLHostStateDelegateFactory::GetForProfile(profile)) {
+          ChromeSSLHostStateDelegateFactory::GetForProfile(profile)),
+      did_revoke_user_ssl_decisions_(false) {
   Init(profile, url, ssl);
 
   HistoryService* history_service = HistoryServiceFactory::GetForProfile(
@@ -194,17 +205,38 @@ WebsiteSettings::WebsiteSettings(
 
   // Every time the Website Settings UI is opened a |WebsiteSettings| object is
   // created. So this counts how ofter the Website Settings UI is opened.
-  content::RecordAction(base::UserMetricsAction("WebsiteSettings_Opened"));
+  RecordWebsiteSettingsAction(WEBSITE_SETTINGS_OPENED);
 }
 
 WebsiteSettings::~WebsiteSettings() {
 }
+
+void WebsiteSettings::RecordWebsiteSettingsAction(
+    WebsiteSettingsAction action) {
+  UMA_HISTOGRAM_ENUMERATION("WebsiteSettings.Action",
+                            action,
+                            WEBSITE_SETTINGS_COUNT);
+
+  // Use a separate histogram to record actions if they are done on a page with
+  // an HTTPS URL. Note that this *disregards* security status.
+  if (site_url_.SchemeIs(url::kHttpsScheme)) {
+    UMA_HISTOGRAM_ENUMERATION("WebsiteSettings.Action.HttpsUrl",
+                              action,
+                              WEBSITE_SETTINGS_COUNT);
+  }
+}
+
 
 void WebsiteSettings::OnSitePermissionChanged(ContentSettingsType type,
                                               ContentSetting setting) {
   // Count how often a permission for a specific content type is changed using
   // the Website Settings UI.
   UMA_HISTOGRAM_COUNTS("WebsiteSettings.PermissionChanged", type);
+
+  // This is technically redundant given the histogram above, but putting the
+  // total count of permission changes in another histogram makes it easier to
+  // compare it against other kinds of actions in WebsiteSettings[PopupView].
+  RecordWebsiteSettingsAction(WEBSITE_SETTINGS_CHANGED_PERMISSION);
 
   ContentSettingsPattern primary_pattern;
   ContentSettingsPattern secondary_pattern;
@@ -227,6 +259,7 @@ void WebsiteSettings::OnSitePermissionChanged(ContentSettingsType type,
     case CONTENT_SETTINGS_TYPE_FULLSCREEN:
     case CONTENT_SETTINGS_TYPE_MOUSELOCK:
     case CONTENT_SETTINGS_TYPE_AUTOMATIC_DOWNLOADS:
+    case CONTENT_SETTINGS_TYPE_PUSH_MESSAGING:
       primary_pattern = ContentSettingsPattern::FromURL(site_url_);
       secondary_pattern = ContentSettingsPattern::Wildcard();
       break;
@@ -266,24 +299,12 @@ void WebsiteSettings::OnSitePermissionChanged(ContentSettingsType type,
     // This is not a concern for CONTENT_SETTINGS_TYPE_MEDIASTREAM since users
     // can not create media settings exceptions by hand.
     content_settings::SettingInfo info;
-    scoped_ptr<base::Value> v(content_settings_->GetWebsiteSetting(
-        site_url_, site_url_, type, std::string(), &info));
-    DCHECK(info.source == content_settings::SETTING_SOURCE_USER);
-    ContentSettingsPattern::Relation r1 =
-        info.primary_pattern.Compare(primary_pattern);
-    DCHECK(r1 != ContentSettingsPattern::DISJOINT_ORDER_POST &&
-           r1 != ContentSettingsPattern::DISJOINT_ORDER_PRE);
-    if (r1 == ContentSettingsPattern::PREDECESSOR) {
-      primary_pattern = info.primary_pattern;
-    } else if (r1 == ContentSettingsPattern::IDENTITY) {
-      ContentSettingsPattern::Relation r2 =
-          info.secondary_pattern.Compare(secondary_pattern);
-      DCHECK(r2 != ContentSettingsPattern::DISJOINT_ORDER_POST &&
-             r2 != ContentSettingsPattern::DISJOINT_ORDER_PRE);
-      if (r2 == ContentSettingsPattern::PREDECESSOR)
-        secondary_pattern = info.secondary_pattern;
-    }
-
+    scoped_ptr<base::Value> v =
+        content_settings_->GetWebsiteSettingWithoutOverride(
+            site_url_, site_url_, type, std::string(), &info);
+    content_settings_->SetNarrowestWebsiteSetting(
+        primary_pattern, secondary_pattern, type, std::string(), setting, info);
+  } else {
     base::Value* value = NULL;
     if (setting != CONTENT_SETTING_DEFAULT)
       value = new base::FundamentalValue(setting);
@@ -321,12 +342,33 @@ void WebsiteSettings::OnSiteDataAccessed() {
 void WebsiteSettings::OnUIClosing() {
   if (show_info_bar_)
     WebsiteSettingsInfoBarDelegate::Create(infobar_service_);
+
+  SSLCertificateDecisionsDidRevoke user_decision =
+      did_revoke_user_ssl_decisions_ ? USER_CERT_DECISIONS_REVOKED
+                                     : USER_CERT_DECISIONS_NOT_REVOKED;
+
+  UMA_HISTOGRAM_ENUMERATION("interstitial.ssl.did_user_revoke_decisions",
+                            user_decision,
+                            END_OF_SSL_CERTIFICATE_DECISIONS_DID_REVOKE_ENUM);
+}
+
+void WebsiteSettings::OnRevokeSSLErrorBypassButtonPressed() {
+  DCHECK(chrome_ssl_host_state_delegate_);
+  chrome_ssl_host_state_delegate_->RevokeUserAllowExceptionsHard(
+      site_url().host());
+  did_revoke_user_ssl_decisions_ = true;
 }
 
 void WebsiteSettings::Init(Profile* profile,
                            const GURL& url,
                            const content::SSLStatus& ssl) {
-  if (url.SchemeIs(content::kChromeUIScheme)) {
+  bool isChromeUINativeScheme = false;
+#if defined(OS_ANDROID)
+  isChromeUINativeScheme = url.SchemeIs(chrome::kChromeUINativeScheme);
+#endif
+
+  if (url.SchemeIs(content::kChromeUIScheme) ||
+      url.SchemeIs(url::kAboutScheme) || isChromeUINativeScheme) {
     site_identity_status_ = SITE_IDENTITY_STATUS_INTERNAL_PAGE;
     site_identity_details_ =
         l10n_util::GetStringUTF16(IDS_PAGE_INFO_INTERNAL_PAGE);
@@ -390,50 +432,68 @@ void WebsiteSettings::Init(Profile* profile,
       } else {
         NOTREACHED() << "Need to specify string for this warning";
       }
-    } else if (ssl.cert_status & net::CERT_STATUS_IS_EV) {
-      // EV HTTPS page.
-      site_identity_status_ = GetSiteIdentityStatusByCTInfo(
-          ssl.signed_certificate_timestamp_ids, true);
-      DCHECK(!cert->subject().organization_names.empty());
-      organization_name_ = UTF8ToUTF16(cert->subject().organization_names[0]);
-      // An EV Cert is required to have a city (localityName) and country but
-      // state is "if any".
-      DCHECK(!cert->subject().locality_name.empty());
-      DCHECK(!cert->subject().country_name.empty());
-      base::string16 locality;
-      if (!cert->subject().state_or_province_name.empty()) {
-        locality = l10n_util::GetStringFUTF16(
-            IDS_PAGEINFO_ADDRESS,
-            UTF8ToUTF16(cert->subject().locality_name),
-            UTF8ToUTF16(cert->subject().state_or_province_name),
-            UTF8ToUTF16(cert->subject().country_name));
-      } else {
-        locality = l10n_util::GetStringFUTF16(
-            IDS_PAGEINFO_PARTIAL_ADDRESS,
-            UTF8ToUTF16(cert->subject().locality_name),
-            UTF8ToUTF16(cert->subject().country_name));
-      }
-      DCHECK(!cert->subject().organization_names.empty());
-      site_identity_details_.assign(l10n_util::GetStringFUTF16(
-          GetSiteIdentityDetailsMessageByCTInfo(
-              ssl.signed_certificate_timestamp_ids, true /* is EV */),
-          UTF8ToUTF16(cert->subject().organization_names[0]),
-          locality,
-          UTF8ToUTF16(cert->issuer().GetDisplayName())));
     } else {
-      // Non-EV OK HTTPS page.
-      site_identity_status_ = GetSiteIdentityStatusByCTInfo(
-          ssl.signed_certificate_timestamp_ids, false);
-      base::string16 issuer_name(UTF8ToUTF16(cert->issuer().GetDisplayName()));
-      if (issuer_name.empty()) {
-        issuer_name.assign(l10n_util::GetStringUTF16(
-            IDS_PAGE_INFO_SECURITY_TAB_UNKNOWN_PARTY));
-      }
+      if (ssl.cert_status & net::CERT_STATUS_IS_EV) {
+        // EV HTTPS page.
+        site_identity_status_ = GetSiteIdentityStatusByCTInfo(
+            ssl.signed_certificate_timestamp_ids, true);
+        DCHECK(!cert->subject().organization_names.empty());
+        organization_name_ = UTF8ToUTF16(cert->subject().organization_names[0]);
+        // An EV Cert is required to have a city (localityName) and country but
+        // state is "if any".
+        DCHECK(!cert->subject().locality_name.empty());
+        DCHECK(!cert->subject().country_name.empty());
+        base::string16 locality;
+        if (!cert->subject().state_or_province_name.empty()) {
+          locality = l10n_util::GetStringFUTF16(
+              IDS_PAGEINFO_ADDRESS,
+              UTF8ToUTF16(cert->subject().locality_name),
+              UTF8ToUTF16(cert->subject().state_or_province_name),
+              UTF8ToUTF16(cert->subject().country_name));
+        } else {
+          locality = l10n_util::GetStringFUTF16(
+              IDS_PAGEINFO_PARTIAL_ADDRESS,
+              UTF8ToUTF16(cert->subject().locality_name),
+              UTF8ToUTF16(cert->subject().country_name));
+        }
+        DCHECK(!cert->subject().organization_names.empty());
+        site_identity_details_.assign(l10n_util::GetStringFUTF16(
+            GetSiteIdentityDetailsMessageByCTInfo(
+                ssl.signed_certificate_timestamp_ids, true /* is EV */),
+            UTF8ToUTF16(cert->subject().organization_names[0]),
+            locality,
+            UTF8ToUTF16(cert->issuer().GetDisplayName())));
+      } else {
+        // Non-EV OK HTTPS page.
+        site_identity_status_ = GetSiteIdentityStatusByCTInfo(
+            ssl.signed_certificate_timestamp_ids, false);
+        base::string16 issuer_name(
+            UTF8ToUTF16(cert->issuer().GetDisplayName()));
+        if (issuer_name.empty()) {
+          issuer_name.assign(l10n_util::GetStringUTF16(
+              IDS_PAGE_INFO_SECURITY_TAB_UNKNOWN_PARTY));
+        }
 
-      site_identity_details_.assign(l10n_util::GetStringFUTF16(
-          GetSiteIdentityDetailsMessageByCTInfo(
-              ssl.signed_certificate_timestamp_ids, false /* not EV */),
-          issuer_name));
+        site_identity_details_.assign(l10n_util::GetStringFUTF16(
+            GetSiteIdentityDetailsMessageByCTInfo(
+                ssl.signed_certificate_timestamp_ids, false /* not EV */),
+            issuer_name));
+      }
+      // The date after which no new SHA-1 certificates may be issued.
+      // 2016-01-01 00:00:00 UTC
+      static const int64_t kSHA1LastIssuanceDate = INT64_C(13096080000000000);
+      if ((ssl.cert_status & net::CERT_STATUS_SHA1_SIGNATURE_PRESENT) &&
+          cert->valid_expiry() >
+              base::Time::FromInternalValue(kSHA1LastIssuanceDate) &&
+          base::FieldTrialList::FindFullName("SHA1IdentityUIWarning") ==
+              "Enabled") {
+        site_identity_status_ =
+            SITE_IDENTITY_STATUS_DEPRECATED_SIGNATURE_ALGORITHM;
+        site_identity_details_ +=
+            UTF8ToUTF16("\n\n") +
+            l10n_util::GetStringUTF16(
+                IDS_PAGE_INFO_SECURITY_TAB_DEPRECATED_SIGNATURE_ALGORITHM);
+      }
     }
   } else {
     // HTTP or HTTPS with errors (not warnings).
@@ -529,8 +589,6 @@ void WebsiteSettings::Init(Profile* profile,
         IDS_PAGE_INFO_SECURITY_TAB_SSL_VERSION,
         ASCIIToUTF16(ssl_version_str));
 
-    bool did_fallback = (ssl.connection_status &
-                         net::SSL_CONNECTION_VERSION_FALLBACK) != 0;
     bool no_renegotiation =
         (ssl.connection_status &
         net::SSL_CONNECTION_NO_RENEGOTIATION_EXTENSION) != 0;
@@ -550,14 +608,19 @@ void WebsiteSettings::Init(Profile* profile,
           ASCIIToUTF16(cipher), ASCIIToUTF16(mac), ASCIIToUTF16(key_exchange));
     }
 
+    if (ssl_version == net::SSL_CONNECTION_VERSION_SSL3 &&
+        site_connection_status_ < SITE_CONNECTION_STATUS_MIXED_CONTENT) {
+      site_connection_status_ = SITE_CONNECTION_STATUS_ENCRYPTED_ERROR;
+    }
+
+    const bool did_fallback =
+        (ssl.connection_status & net::SSL_CONNECTION_VERSION_FALLBACK) != 0;
     if (did_fallback) {
-      // For now, only SSLv3 fallback will trigger a warning icon.
-      if (site_connection_status_ < SITE_CONNECTION_STATUS_MIXED_CONTENT)
-        site_connection_status_ = SITE_CONNECTION_STATUS_MIXED_CONTENT;
       site_connection_details_ += ASCIIToUTF16("\n\n");
       site_connection_details_ += l10n_util::GetStringUTF16(
           IDS_PAGE_INFO_SECURITY_TAB_FALLBACK_MESSAGE);
     }
+
     if (no_renegotiation) {
       site_connection_details_ += ASCIIToUTF16("\n\n");
       site_connection_details_ += l10n_util::GetStringUTF16(
@@ -573,8 +636,8 @@ void WebsiteSettings::Init(Profile* profile,
   // Only show an SSL decision revoke button if both the user has chosen to
   // bypass SSL host errors for this host in the past and the user is not using
   // the traditional "forget-at-session-restart" error decision memory.
-  show_ssl_decision_revoke_button_ = delegate->HasUserDecision(url.host()) &&
-      InRememberCertificateErrorDecisionsGroup();
+  show_ssl_decision_revoke_button_ = delegate->HasAllowException(url.host()) &&
+                                     InRememberCertificateErrorDecisionsGroup();
 
   // By default select the permissions tab that displays all the site
   // permissions. In case of a connection error or an issue with the
@@ -587,8 +650,13 @@ void WebsiteSettings::Init(Profile* profile,
       site_connection_status_ == SITE_CONNECTION_STATUS_MIXED_CONTENT ||
       site_identity_status_ == SITE_IDENTITY_STATUS_ERROR ||
       site_identity_status_ == SITE_IDENTITY_STATUS_CERT_REVOCATION_UNKNOWN ||
-      site_identity_status_ == SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT)
+      site_identity_status_ == SITE_IDENTITY_STATUS_ADMIN_PROVIDED_CERT ||
+      site_identity_status_ ==
+          SITE_IDENTITY_STATUS_DEPRECATED_SIGNATURE_ALGORITHM) {
     tab_id = WebsiteSettingsUI::TAB_ID_CONNECTION;
+    RecordWebsiteSettingsAction(
+      WEBSITE_SETTINGS_CONNECTION_TAB_SHOWN_IMMEDIATELY);
+  }
   ui_->SetSelectedTab(tab_id);
 }
 
@@ -606,21 +674,23 @@ void WebsiteSettings::PresentSitePermissions() {
 
     content_settings::SettingInfo info;
     if (permission_info.type == CONTENT_SETTINGS_TYPE_MEDIASTREAM) {
-      scoped_ptr<base::Value> mic_value(content_settings_->GetWebsiteSetting(
-          site_url_,
-          site_url_,
-          CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
-          std::string(),
-          &info));
+      scoped_ptr<base::Value> mic_value =
+          content_settings_->GetWebsiteSettingWithoutOverride(
+              site_url_,
+              site_url_,
+              CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC,
+              std::string(),
+              &info);
       ContentSetting mic_setting =
           content_settings::ValueToContentSetting(mic_value.get());
 
-      scoped_ptr<base::Value> camera_value(content_settings_->GetWebsiteSetting(
-          site_url_,
-          site_url_,
-          CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA,
-          std::string(),
-          &info));
+      scoped_ptr<base::Value> camera_value =
+          content_settings_->GetWebsiteSettingWithoutOverride(
+              site_url_,
+              site_url_,
+              CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA,
+              std::string(),
+              &info);
       ContentSetting camera_setting =
           content_settings::ValueToContentSetting(camera_value.get());
 
@@ -629,8 +699,9 @@ void WebsiteSettings::PresentSitePermissions() {
       else
         permission_info.setting = mic_setting;
     } else {
-      scoped_ptr<base::Value> value(content_settings_->GetWebsiteSetting(
-          site_url_, site_url_, permission_info.type, std::string(), &info));
+      scoped_ptr<base::Value> value =
+          content_settings_->GetWebsiteSettingWithoutOverride(
+              site_url_, site_url_, permission_info.type, std::string(), &info);
       DCHECK(value.get());
       if (value->GetType() == base::Value::TYPE_INTEGER) {
         permission_info.setting =
@@ -660,9 +731,9 @@ void WebsiteSettings::PresentSitePermissions() {
 
 void WebsiteSettings::PresentSiteData() {
   CookieInfoList cookie_info_list;
-  const LocalSharedObjectsContainer& allowed_objects =
+  const LocalSharedObjectsCounter& allowed_objects =
       tab_specific_content_settings()->allowed_local_shared_objects();
-  const LocalSharedObjectsContainer& blocked_objects =
+  const LocalSharedObjectsCounter& blocked_objects =
       tab_specific_content_settings()->blocked_local_shared_objects();
 
   // Add first party cookie and site data counts.

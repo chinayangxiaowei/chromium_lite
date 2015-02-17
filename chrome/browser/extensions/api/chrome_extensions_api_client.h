@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_EXTENSIONS_API_CHROME_EXTENSIONS_API_CLIENT_H_
 
 #include "base/compiler_specific.h"
-#include "base/memory/scoped_ptr.h"
 #include "extensions/browser/api/extensions_api_client.h"
 
 namespace extensions {
@@ -15,30 +14,36 @@ namespace extensions {
 class ChromeExtensionsAPIClient : public ExtensionsAPIClient {
  public:
   ChromeExtensionsAPIClient();
-  virtual ~ChromeExtensionsAPIClient();
+  ~ChromeExtensionsAPIClient() override;
 
   // ExtensionsApiClient implementation.
-  virtual void AddAdditionalValueStoreCaches(
+  void AddAdditionalValueStoreCaches(
       content::BrowserContext* context,
       const scoped_refptr<SettingsStorageFactory>& factory,
-      const scoped_refptr<ObserverListThreadSafe<SettingsObserver> >& observers,
+      const scoped_refptr<ObserverListThreadSafe<SettingsObserver>>& observers,
       std::map<settings_namespace::Namespace, ValueStoreCache*>* caches)
-      OVERRIDE;
-  virtual bool AppViewInternalAttachFrame(
+      override;
+  AppViewGuestDelegate* CreateAppViewGuestDelegate() const override;
+  ExtensionOptionsGuestDelegate* CreateExtensionOptionsGuestDelegate(
+      ExtensionOptionsGuest* guest) const override;
+  scoped_ptr<MimeHandlerViewGuestDelegate> CreateMimeHandlerViewGuestDelegate(
+      MimeHandlerViewGuest* guest) const override;
+  WebViewGuestDelegate* CreateWebViewGuestDelegate(
+      WebViewGuest* web_view_guest) const override;
+  WebViewPermissionHelperDelegate* CreateWebViewPermissionHelperDelegate(
+      WebViewPermissionHelper* web_view_permission_helper) const override;
+  WebRequestEventRouterDelegate* CreateWebRequestEventRouterDelegate()
+      const override;
+  scoped_refptr<ContentRulesRegistry> CreateContentRulesRegistry(
       content::BrowserContext* browser_context,
-      const GURL& url,
-      int guest_instance_id,
-      const std::string& guest_extension_id) OVERRIDE;
-  virtual bool AppViewInternalDenyRequest(
-      content::BrowserContext* browser_context,
-      int guest_instance_id,
-      const std::string& guest_extension_id) OVERRIDE;
-  virtual device::HidService* GetHidService() OVERRIDE;
-  virtual void RegisterGuestViewTypes() OVERRIDE;
+      RulesCacheDelegate* cache_delegate) const override;
+  scoped_ptr<DevicePermissionsPrompt> CreateDevicePermissionsPrompt(
+      content::WebContents* web_contents) const override;
+  scoped_ptr<VirtualKeyboardDelegate> CreateVirtualKeyboardDelegate()
+      const override;
+  ManagementAPIDelegate* CreateManagementAPIDelegate() const override;
 
  private:
-  scoped_ptr<device::HidService> hid_service_;
-
   DISALLOW_COPY_AND_ASSIGN(ChromeExtensionsAPIClient);
 };
 

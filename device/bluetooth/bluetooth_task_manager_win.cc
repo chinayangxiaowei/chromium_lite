@@ -291,7 +291,7 @@ void BluetoothTaskManagerWin::PollAdapter() {
   if (!discovering_) {
     const BLUETOOTH_FIND_RADIO_PARAMS adapter_param =
         { sizeof(BLUETOOTH_FIND_RADIO_PARAMS) };
-    if (adapter_handle_)
+    if (adapter_handle_.IsValid())
       adapter_handle_.Close();
     HANDLE temp_adapter_handle;
     HBLUETOOTH_RADIO_FIND handle = BluetoothFindFirstRadio(
@@ -317,7 +317,7 @@ void BluetoothTaskManagerWin::PollAdapter() {
 void BluetoothTaskManagerWin::PostAdapterStateToUi() {
   DCHECK(bluetooth_task_runner_->RunsTasksOnCurrentThread());
   AdapterState* state = new AdapterState();
-  GetAdapterState(adapter_handle_, state);
+  GetAdapterState(adapter_handle_.Get(), state);
   ui_task_runner_->PostTask(
       FROM_HERE,
       base::Bind(&BluetoothTaskManagerWin::OnAdapterStateChanged,
@@ -331,10 +331,11 @@ void BluetoothTaskManagerWin::SetPowered(
     const BluetoothAdapter::ErrorCallback& error_callback) {
   DCHECK(bluetooth_task_runner_->RunsTasksOnCurrentThread());
   bool success = false;
-  if (adapter_handle_) {
+  if (adapter_handle_.IsValid()) {
     if (!powered)
-      BluetoothEnableDiscovery(adapter_handle_, false);
-    success = !!BluetoothEnableIncomingConnections(adapter_handle_, powered);
+      BluetoothEnableDiscovery(adapter_handle_.Get(), false);
+    success =
+        !!BluetoothEnableIncomingConnections(adapter_handle_.Get(), powered);
   }
 
   if (success) {
@@ -351,8 +352,8 @@ void BluetoothTaskManagerWin::StartDiscovery() {
       FROM_HERE,
       base::Bind(&BluetoothTaskManagerWin::OnDiscoveryStarted,
                  this,
-                 !!adapter_handle_));
-  if (!adapter_handle_)
+                 adapter_handle_.IsValid()));
+  if (!adapter_handle_.IsValid())
     return;
   discovering_ = true;
 
@@ -369,7 +370,7 @@ void BluetoothTaskManagerWin::StopDiscovery() {
 
 void BluetoothTaskManagerWin::DiscoverDevices(int timeout_multiplier) {
   DCHECK(bluetooth_task_runner_->RunsTasksOnCurrentThread());
-  if (!discovering_ || !adapter_handle_) {
+  if (!discovering_ || !adapter_handle_.IsValid()) {
     ui_task_runner_->PostTask(
         FROM_HERE,
         base::Bind(&BluetoothTaskManagerWin::OnDiscoveryStopped, this));
@@ -537,6 +538,28 @@ bool BluetoothTaskManagerWin::DiscoverClassicDeviceServices(
     const GUID& protocol_uuid,
     bool search_cached_services_only,
     ScopedVector<ServiceRecordState>* service_record_states) {
+  int error_code =
+      DiscoverClassicDeviceServicesWorker(device_address,
+                                          protocol_uuid,
+                                          search_cached_services_only,
+                                          service_record_states);
+  // If the device is "offline", no services are returned when specifying
+  // "LUP_FLUSHCACHE". Try again without flushing the cache so that the list
+  // of previously known services is returned.
+  if (!search_cached_services_only &&
+      (error_code == WSASERVICE_NOT_FOUND || error_code == WSANO_DATA)) {
+    error_code = DiscoverClassicDeviceServicesWorker(
+        device_address, protocol_uuid, true, service_record_states);
+  }
+
+  return (error_code == ERROR_SUCCESS);
+}
+
+int BluetoothTaskManagerWin::DiscoverClassicDeviceServicesWorker(
+    const std::string& device_address,
+    const GUID& protocol_uuid,
+    bool search_cached_services_only,
+    ScopedVector<ServiceRecordState>* service_record_states) {
   // Bluetooth and WSAQUERYSET for Service Inquiry. See http://goo.gl/2v9pyt.
   WSAQUERYSET sdp_query;
   ZeroMemory(&sdp_query, sizeof(sdp_query));
@@ -562,8 +585,15 @@ bool BluetoothTaskManagerWin::DiscoverClassicDeviceServices(
   HANDLE sdp_handle;
   if (ERROR_SUCCESS !=
       WSALookupServiceBegin(&sdp_query, control_flags, &sdp_handle)) {
-    LogPollingError("Error calling WSALookupServiceBegin", WSAGetLastError());
-    return false;
+    int last_error = WSAGetLastError();
+    // If the device is "offline", no services are returned when specifying
+    // "LUP_FLUSHCACHE". Don't log error in that case.
+    if (!search_cached_services_only &&
+        (last_error == WSASERVICE_NOT_FOUND || last_error == WSANO_DATA)) {
+      return last_error;
+    }
+    LogPollingError("Error calling WSALookupServiceBegin", last_error);
+    return last_error;
   }
   char sdp_buffer[kServiceDiscoveryResultBufferSize];
   LPWSAQUERYSET sdp_result_data = reinterpret_cast<LPWSAQUERYSET>(sdp_buffer);
@@ -578,7 +608,7 @@ bool BluetoothTaskManagerWin::DiscoverClassicDeviceServices(
       }
       LogPollingError("Error calling WSALookupServiceNext", last_error);
       WSALookupServiceEnd(sdp_handle);
-      return false;
+      return last_error;
     }
     ServiceRecordState* service_record_state = new ServiceRecordState();
     service_record_state->name =
@@ -590,11 +620,12 @@ bool BluetoothTaskManagerWin::DiscoverClassicDeviceServices(
     service_record_states->push_back(service_record_state);
   }
   if (ERROR_SUCCESS != WSALookupServiceEnd(sdp_handle)) {
-    LogPollingError("Error calling WSALookupServiceEnd", WSAGetLastError());
-    return false;
+    int last_error = WSAGetLastError();
+    LogPollingError("Error calling WSALookupServiceEnd", last_error);
+    return last_error;
   }
 
-  return true;
+  return ERROR_SUCCESS;
 }
 
 bool BluetoothTaskManagerWin::DiscoverLowEnergyDeviceServices(

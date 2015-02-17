@@ -58,7 +58,7 @@ class GpuChannel : public IPC::Listener, public IPC::Sender {
              int client_id,
              bool software,
              bool allow_future_sync_points);
-  virtual ~GpuChannel();
+  ~GpuChannel() override;
 
   void Init(base::MessageLoopProxy* io_message_loop,
             base::WaitableEvent* shutdown_event);
@@ -72,7 +72,7 @@ class GpuChannel : public IPC::Listener, public IPC::Sender {
   std::string GetChannelName();
 
 #if defined(OS_POSIX)
-  int TakeRendererFileDescriptor();
+  base::ScopedFD TakeRendererFileDescriptor();
 #endif  // defined(OS_POSIX)
 
   base::ProcessId renderer_pid() const { return channel_->GetPeerPID(); }
@@ -84,11 +84,11 @@ class GpuChannel : public IPC::Listener, public IPC::Sender {
   }
 
   // IPC::Listener implementation:
-  virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& msg) override;
+  void OnChannelError() override;
 
   // IPC::Sender implementation:
-  virtual bool Send(IPC::Message* msg) OVERRIDE;
+  bool Send(IPC::Message* msg) override;
 
   // Requeue the message that is currently being processed to the beginning of
   // the queue. Used when the processing of a message gets aborted because of
@@ -211,8 +211,6 @@ class GpuChannel : public IPC::Listener, public IPC::Sender {
   bool handle_messages_scheduled_;
   IPC::Message* currently_processing_message_;
 
-  base::WeakPtrFactory<GpuChannel> weak_factory_;
-
   scoped_refptr<GpuChannelMessageFilter> filter_;
   scoped_refptr<base::MessageLoopProxy> io_message_loop_;
   scoped_ptr<DevToolsGpuAgent> devtools_gpu_agent_;
@@ -220,6 +218,11 @@ class GpuChannel : public IPC::Listener, public IPC::Sender {
   size_t num_stubs_descheduled_;
 
   bool allow_future_sync_points_;
+
+  // Member variables should appear before the WeakPtrFactory, to ensure
+  // that any WeakPtrs to Controller are invalidated before its members
+  // variable's destructors are executed, rendering them invalid.
+  base::WeakPtrFactory<GpuChannel> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuChannel);
 };

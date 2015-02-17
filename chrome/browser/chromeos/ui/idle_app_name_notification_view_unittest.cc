@@ -30,7 +30,7 @@ class IdleAppNameNotificationViewTest : public BrowserWithTestWindowTest {
   virtual ~IdleAppNameNotificationViewTest() {
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     // Add the application switch.
     CommandLine::ForCurrentProcess()->AppendSwitchASCII(::switches::kAppId,
                                                         kTestAppName);
@@ -65,14 +65,18 @@ class IdleAppNameNotificationViewTest : public BrowserWithTestWindowTest {
                                       &error);
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     // The destruction of the widget might be a delayed task.
     base::MessageLoop::current()->RunUntilIdle();
     BrowserWithTestWindowTest::TearDown();
   }
 
-  extensions::Extension* correct_extension() { return correct_extension_; }
-  extensions::Extension* incorrect_extension() { return incorrect_extension_; }
+  extensions::Extension* correct_extension() {
+    return correct_extension_.get();
+  }
+  extensions::Extension* incorrect_extension() {
+    return incorrect_extension_.get();
+  }
 
  private:
   // Extensions to test with.

@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
@@ -43,16 +43,16 @@ class EnterpriseInstallAttributesTest : public testing::Test {
  protected:
   EnterpriseInstallAttributesTest() {}
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(PathService::OverrideAndCreateIfNeeded(
         chromeos::FILE_INSTALL_ATTRIBUTES, GetTempPath(), true, false));
-    chromeos::DBusThreadManager::InitializeWithStub();
+    chromeos::DBusThreadManager::Initialize();
     install_attributes_.reset(new EnterpriseInstallAttributes(
         chromeos::DBusThreadManager::Get()->GetCryptohomeClient()));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     chromeos::DBusThreadManager::Shutdown();
   }
 
@@ -110,7 +110,7 @@ TEST_F(EnterpriseInstallAttributesTest, Lock) {
                 DEVICE_MODE_ENTERPRISE,
                 kTestDeviceId));
   // But another domain should fail.
-  EXPECT_EQ(EnterpriseInstallAttributes::LOCK_WRONG_USER,
+  EXPECT_EQ(EnterpriseInstallAttributes::LOCK_WRONG_DOMAIN,
             LockDeviceAndWaitForResult(
                 "test@bluebears.com",
                 DEVICE_MODE_ENTERPRISE,

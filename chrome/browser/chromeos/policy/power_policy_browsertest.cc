@@ -10,8 +10,8 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
@@ -33,7 +33,7 @@
 #include "chromeos/chromeos_paths.h"
 #include "chromeos/chromeos_switches.h"
 #include "chromeos/dbus/cryptohome_client.h"
-#include "chromeos/dbus/fake_dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_power_manager_client.h"
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/dbus/power_manager/policy.pb.h"
@@ -123,8 +123,8 @@ class PowerPolicyBrowserTestBase : public DevicePolicyCrosBrowserTest {
   PowerPolicyBrowserTestBase();
 
   // DevicePolicyCrosBrowserTest:
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE;
-  virtual void SetUpOnMainThread() OVERRIDE;
+  virtual void SetUpInProcessBrowserTestFixture() override;
+  virtual void SetUpOnMainThread() override;
 
   void InstallUserKey();
   void StoreAndReloadUserPolicy();
@@ -155,9 +155,9 @@ class PowerPolicyLoginScreenBrowserTest : public PowerPolicyBrowserTestBase {
   PowerPolicyLoginScreenBrowserTest();
 
   // PowerPolicyBrowserTestBase:
-  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE;
-  virtual void SetUpOnMainThread() OVERRIDE;
-  virtual void TearDownOnMainThread() OVERRIDE;
+  virtual void SetUpCommandLine(CommandLine* command_line) override;
+  virtual void SetUpOnMainThread() override;
+  virtual void TearDownOnMainThread() override;
 
   DISALLOW_COPY_AND_ASSIGN(PowerPolicyLoginScreenBrowserTest);
 };
@@ -167,7 +167,7 @@ class PowerPolicyInSessionBrowserTest : public PowerPolicyBrowserTestBase {
   PowerPolicyInSessionBrowserTest();
 
   // PowerPolicyBrowserTestBase:
-  virtual void SetUpOnMainThread() OVERRIDE;
+  virtual void SetUpOnMainThread() override;
 
   DISALLOW_COPY_AND_ASSIGN(PowerPolicyInSessionBrowserTest);
 };
@@ -177,11 +177,10 @@ PowerPolicyBrowserTestBase::PowerPolicyBrowserTestBase()
 }
 
 void PowerPolicyBrowserTestBase::SetUpInProcessBrowserTestFixture() {
-  power_manager_client_ = new chromeos::FakePowerManagerClient;
-  fake_dbus_thread_manager()->SetPowerManagerClient(
-      scoped_ptr<chromeos::PowerManagerClient>(power_manager_client_));
-
   DevicePolicyCrosBrowserTest::SetUpInProcessBrowserTestFixture();
+  power_manager_client_ = new chromeos::FakePowerManagerClient;
+  dbus_setter()->SetPowerManagerClient(
+      scoped_ptr<chromeos::PowerManagerClient>(power_manager_client_));
 
   // Initialize device policy.
   InstallOwnerKey();

@@ -6,7 +6,7 @@
 
 #include "chrome/browser/content_settings/permission_context_base.h"
 #include "chrome/browser/content_settings/permission_context_uma_util.h"
-#include "grit/generated_resources.h"
+#include "chrome/grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -31,12 +31,15 @@ PermissionBubbleRequestImpl::PermissionBubbleRequestImpl(
 PermissionBubbleRequestImpl::~PermissionBubbleRequestImpl() {
   DCHECK(is_finished_);
   if (!action_taken_)
-    PermissionContextUmaUtil::PermissionIgnored(type_);
+    PermissionContextUmaUtil::PermissionIgnored(type_, request_origin_);
 }
 
 int PermissionBubbleRequestImpl::GetIconID() const {
   int icon_id;
   switch (type_) {
+    case CONTENT_SETTINGS_TYPE_GEOLOCATION:
+      icon_id = IDR_INFOBAR_GEOLOCATION;
+      break;
 #if defined(ENABLE_NOTIFICATIONS)
     case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
       icon_id = IDR_INFOBAR_DESKTOP_NOTIFICATIONS;
@@ -58,21 +61,24 @@ int PermissionBubbleRequestImpl::GetIconID() const {
 base::string16 PermissionBubbleRequestImpl::GetMessageText() const {
   int message_id;
   switch (type_) {
+    case CONTENT_SETTINGS_TYPE_GEOLOCATION:
+      message_id = IDS_GEOLOCATION_INFOBAR_QUESTION;
+      break;
 #if defined(ENABLE_NOTIFICATIONS)
-      case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
-        message_id = IDS_NOTIFICATION_PERMISSIONS;
-        break;
+    case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
+      message_id = IDS_NOTIFICATION_PERMISSIONS;
+      break;
 #endif
-      case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
-        message_id = IDS_MIDI_SYSEX_INFOBAR_QUESTION;
-        break;
-      case CONTENT_SETTINGS_TYPE_PUSH_MESSAGING:
-        message_id = IDS_PUSH_MESSAGES_PERMISSION_QUESTION;
-        break;
-      default:
-        NOTREACHED();
-        return base::string16();
-    }
+    case CONTENT_SETTINGS_TYPE_MIDI_SYSEX:
+      message_id = IDS_MIDI_SYSEX_INFOBAR_QUESTION;
+      break;
+    case CONTENT_SETTINGS_TYPE_PUSH_MESSAGING:
+      message_id = IDS_PUSH_MESSAGES_PERMISSION_QUESTION;
+      break;
+    default:
+      NOTREACHED();
+      return base::string16();
+  }
   return l10n_util::GetStringFUTF16(
       message_id,
       net::FormatUrl(request_origin_, display_languages_,
@@ -84,6 +90,9 @@ base::string16 PermissionBubbleRequestImpl::GetMessageText() const {
 base::string16 PermissionBubbleRequestImpl::GetMessageTextFragment() const {
   int message_id;
   switch (type_) {
+    case CONTENT_SETTINGS_TYPE_GEOLOCATION:
+      message_id = IDS_GEOLOCATION_INFOBAR_PERMISSION_FRAGMENT;
+      break;
 #if defined(ENABLE_NOTIFICATIONS)
     case CONTENT_SETTINGS_TYPE_NOTIFICATIONS:
       message_id = IDS_NOTIFICATION_PERMISSIONS_FRAGMENT;

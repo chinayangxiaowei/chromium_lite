@@ -6,7 +6,7 @@
 #define UI_DISPLAY_CHROMEOS_X11_DISPLAY_SNAPSHOT_X11_H_
 
 #include "ui/display/display_export.h"
-#include "ui/display/types/chromeos/display_snapshot.h"
+#include "ui/display/types/display_snapshot.h"
 
 // Forward declare from Xlib and Xrandr.
 typedef unsigned long XID;
@@ -18,7 +18,6 @@ namespace ui {
 class DISPLAY_EXPORT DisplaySnapshotX11 : public DisplaySnapshot {
  public:
   DisplaySnapshotX11(int64_t display_id,
-                     bool has_proper_display_id,
                      const gfx::Point& origin,
                      const gfx::Size& physical_size,
                      DisplayConnectionType type,
@@ -38,7 +37,7 @@ class DISPLAY_EXPORT DisplaySnapshotX11 : public DisplaySnapshot {
   int index() const { return index_; }
 
   // DisplaySnapshot overrides:
-  virtual std::string ToString() const OVERRIDE;
+  virtual std::string ToString() const override;
 
  private:
   RROutput output_;

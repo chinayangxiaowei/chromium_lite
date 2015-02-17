@@ -10,6 +10,7 @@
 #include "third_party/WebKit/public/web/WebElement.h"
 #include "third_party/WebKit/public/web/WebFrame.h"
 #include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/WebKit/public/web/WebSettings.h"
 #include "third_party/WebKit/public/web/WebView.h"
 
 namespace content {
@@ -25,11 +26,11 @@ class AccessibilityControllerBindings
  private:
   explicit AccessibilityControllerBindings(
       base::WeakPtr<AccessibilityController> controller);
-  virtual ~AccessibilityControllerBindings();
+  ~AccessibilityControllerBindings() override;
 
   // gin::Wrappable:
-  virtual gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) OVERRIDE;
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) override;
 
   void LogAccessibilityEvents();
   void SetNotificationListener(v8::Handle<v8::Function> callback);
@@ -146,8 +147,9 @@ void AccessibilityController::Reset() {
 }
 
 void AccessibilityController::Install(blink::WebFrame* frame) {
-  blink::WebAXObject::enableAccessibility();
-  blink::WebAXObject::enableInlineTextBoxAccessibility();
+  frame->view()->settings()->setAccessibilityEnabled(true);
+  frame->view()->settings()->setInlineTextBoxAccessibilityEnabled(true);
+
   AccessibilityControllerBindings::Install(weak_factory_.GetWeakPtr(), frame);
 }
 
@@ -241,7 +243,7 @@ AccessibilityController::AccessibleElementById(const std::string& id) {
   if (root_element_.isNull())
     root_element_ = web_view_->accessibilityObject();
 
-  if (!root_element_.updateBackingStoreAndCheckValidity())
+  if (!root_element_.updateLayoutAndCheckValidity())
     return v8::Handle<v8::Object>();
 
   return FindAccessibleElementByIdRecursive(

@@ -10,6 +10,10 @@
 
 namespace views {
 
+namespace internal {
+class RootView;
+}  // namespace internal
+
 class View;
 class ViewTargeterDelegate;
 
@@ -18,7 +22,7 @@ class ViewTargeterDelegate;
 class VIEWS_EXPORT ViewTargeter : public ui::EventTargeter {
  public:
   explicit ViewTargeter(ViewTargeterDelegate* delegate);
-  virtual ~ViewTargeter();
+  ~ViewTargeter() override;
 
   // A call-through to DoesIntersectRect() on |delegate_|.
   bool DoesIntersectRect(const View* target, const gfx::Rect& rect) const;
@@ -28,20 +32,28 @@ class VIEWS_EXPORT ViewTargeter : public ui::EventTargeter {
 
  protected:
   // ui::EventTargeter:
-  virtual ui::EventTarget* FindTargetForEvent(ui::EventTarget* root,
-                                              ui::Event* event) OVERRIDE;
-  virtual ui::EventTarget* FindNextBestTarget(ui::EventTarget* previous_target,
-                                              ui::Event* event) OVERRIDE;
-  virtual bool SubtreeCanAcceptEvent(
-      ui::EventTarget* target,
-      const ui::LocatedEvent& event) const OVERRIDE;
-  virtual bool EventLocationInsideBounds(
-      ui::EventTarget* target,
-      const ui::LocatedEvent& event) const OVERRIDE;
+  ui::EventTarget* FindTargetForEvent(ui::EventTarget* root,
+                                      ui::Event* event) override;
+  ui::EventTarget* FindNextBestTarget(ui::EventTarget* previous_target,
+                                      ui::Event* event) override;
+  bool SubtreeCanAcceptEvent(ui::EventTarget* target,
+                             const ui::LocatedEvent& event) const override;
+  bool EventLocationInsideBounds(ui::EventTarget* target,
+                                 const ui::LocatedEvent& event) const override;
 
  private:
+  // TODO(tdanderson): Un-friend RootView once RootView::DispatchGestureEvent()
+  //                   has been removed.
+  friend class internal::RootView;
+
   View* FindTargetForKeyEvent(View* root, const ui::KeyEvent& key);
   View* FindTargetForScrollEvent(View* root, const ui::ScrollEvent& scroll);
+
+  virtual View* FindTargetForGestureEvent(View* root,
+                                          const ui::GestureEvent& gesture);
+  virtual ui::EventTarget* FindNextBestTargetForGestureEvent(
+      ui::EventTarget* previous_target,
+      const ui::GestureEvent& gesture);
 
   // ViewTargeter does not own the |delegate_|, but |delegate_| must
   // outlive the targeter.

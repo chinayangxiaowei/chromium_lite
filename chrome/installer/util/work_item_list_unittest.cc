@@ -5,10 +5,9 @@
 #include <windows.h>
 
 #include "base/base_paths.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/registry.h"
@@ -29,7 +28,7 @@ class WorkItemListTest : public testing::Test {
  protected:
   virtual void SetUp() {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER, L"root_pit");
+    registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER);
   }
 
   virtual void TearDown() {

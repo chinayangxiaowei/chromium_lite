@@ -7,7 +7,7 @@
 #include <set>
 
 #include "base/bind.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/prefs/testing_pref_service.h"
 #include "base/run_loop.h"
@@ -71,15 +71,15 @@ class JobListLogger : public JobListObserver {
   }
 
   // JobListObserver overrides.
-  virtual void OnJobAdded(const JobInfo& info) OVERRIDE {
+  virtual void OnJobAdded(const JobInfo& info) override {
     events.push_back(EventLog(ADDED, info));
   }
 
-  virtual void OnJobUpdated(const JobInfo& info) OVERRIDE {
+  virtual void OnJobUpdated(const JobInfo& info) override {
     events.push_back(EventLog(UPDATED, info));
   }
 
-  virtual void OnJobDone(const JobInfo& info, FileError error) OVERRIDE {
+  virtual void OnJobDone(const JobInfo& info, FileError error) override {
     events.push_back(EventLog(DONE, info));
   }
 
@@ -107,7 +107,7 @@ class CancelTestableFakeDriveService : public FakeDriveService {
       const std::string& parent_resource_id,
       const std::string& title,
       const InitiateUploadNewFileOptions& options,
-      const google_apis::InitiateUploadCallback& callback) OVERRIDE {
+      const google_apis::InitiateUploadCallback& callback) override {
     if (upload_new_file_cancelable_)
       return base::Bind(callback, google_apis::GDATA_CANCELLED, GURL());
 
@@ -132,7 +132,7 @@ class JobSchedulerTest : public testing::Test {
     test_util::RegisterDrivePrefs(pref_service_->registry());
   }
 
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     fake_network_change_notifier_.reset(
         new test_util::FakeNetworkChangeNotifier);
 

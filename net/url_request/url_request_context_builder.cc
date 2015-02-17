@@ -51,81 +51,79 @@ namespace {
 class BasicNetworkDelegate : public NetworkDelegate {
  public:
   BasicNetworkDelegate() {}
-  virtual ~BasicNetworkDelegate() {}
+  ~BasicNetworkDelegate() override {}
 
  private:
-  virtual int OnBeforeURLRequest(URLRequest* request,
-                                 const CompletionCallback& callback,
-                                 GURL* new_url) OVERRIDE {
+  int OnBeforeURLRequest(URLRequest* request,
+                         const CompletionCallback& callback,
+                         GURL* new_url) override {
     return OK;
   }
 
-  virtual int OnBeforeSendHeaders(URLRequest* request,
-                                  const CompletionCallback& callback,
-                                  HttpRequestHeaders* headers) OVERRIDE {
+  int OnBeforeSendHeaders(URLRequest* request,
+                          const CompletionCallback& callback,
+                          HttpRequestHeaders* headers) override {
     return OK;
   }
 
-  virtual void OnSendHeaders(URLRequest* request,
-                             const HttpRequestHeaders& headers) OVERRIDE {}
+  void OnSendHeaders(URLRequest* request,
+                     const HttpRequestHeaders& headers) override {}
 
-  virtual int OnHeadersReceived(
+  int OnHeadersReceived(
       URLRequest* request,
       const CompletionCallback& callback,
       const HttpResponseHeaders* original_response_headers,
       scoped_refptr<HttpResponseHeaders>* override_response_headers,
-      GURL* allowed_unsafe_redirect_url) OVERRIDE {
+      GURL* allowed_unsafe_redirect_url) override {
     return OK;
   }
 
-  virtual void OnBeforeRedirect(URLRequest* request,
-                                const GURL& new_location) OVERRIDE {}
+  void OnBeforeRedirect(URLRequest* request,
+                        const GURL& new_location) override {}
 
-  virtual void OnResponseStarted(URLRequest* request) OVERRIDE {}
+  void OnResponseStarted(URLRequest* request) override {}
 
-  virtual void OnRawBytesRead(const URLRequest& request,
-                              int bytes_read) OVERRIDE {}
+  void OnRawBytesRead(const URLRequest& request, int bytes_read) override {}
 
-  virtual void OnCompleted(URLRequest* request, bool started) OVERRIDE {}
+  void OnCompleted(URLRequest* request, bool started) override {}
 
-  virtual void OnURLRequestDestroyed(URLRequest* request) OVERRIDE {}
+  void OnURLRequestDestroyed(URLRequest* request) override {}
 
-  virtual void OnPACScriptError(int line_number,
-                                const base::string16& error) OVERRIDE {}
+  void OnPACScriptError(int line_number, const base::string16& error) override {
+  }
 
-  virtual NetworkDelegate::AuthRequiredResponse OnAuthRequired(
+  NetworkDelegate::AuthRequiredResponse OnAuthRequired(
       URLRequest* request,
       const AuthChallengeInfo& auth_info,
       const AuthCallback& callback,
-      AuthCredentials* credentials) OVERRIDE {
+      AuthCredentials* credentials) override {
     return NetworkDelegate::AUTH_REQUIRED_RESPONSE_NO_ACTION;
   }
 
-  virtual bool OnCanGetCookies(const URLRequest& request,
-                               const CookieList& cookie_list) OVERRIDE {
+  bool OnCanGetCookies(const URLRequest& request,
+                       const CookieList& cookie_list) override {
     return true;
   }
 
-  virtual bool OnCanSetCookie(const URLRequest& request,
-                              const std::string& cookie_line,
-                              CookieOptions* options) OVERRIDE {
+  bool OnCanSetCookie(const URLRequest& request,
+                      const std::string& cookie_line,
+                      CookieOptions* options) override {
     return true;
   }
 
-  virtual bool OnCanAccessFile(const net::URLRequest& request,
-                               const base::FilePath& path) const OVERRIDE {
+  bool OnCanAccessFile(const net::URLRequest& request,
+                       const base::FilePath& path) const override {
     return true;
   }
 
-  virtual bool OnCanThrottleRequest(const URLRequest& request) const OVERRIDE {
+  bool OnCanThrottleRequest(const URLRequest& request) const override {
     // Returning true will only enable throttling if there's also a
     // URLRequestThrottlerManager, which there isn't, by default.
     return true;
   }
 
-  virtual int OnBeforeSocketStreamConnect(
-      SocketStream* stream,
-      const CompletionCallback& callback) OVERRIDE {
+  int OnBeforeSocketStreamConnect(SocketStream* stream,
+                                  const CompletionCallback& callback) override {
     return OK;
   }
 
@@ -165,9 +163,7 @@ class BasicURLRequestContext : public URLRequestContext {
   }
 
  protected:
-  virtual ~BasicURLRequestContext() {
-    AssertNoURLRequests();
-  }
+  ~BasicURLRequestContext() override { AssertNoURLRequests(); }
 
  private:
   // Threads should be torn down last.
@@ -193,7 +189,8 @@ URLRequestContextBuilder::HttpNetworkSessionParams::HttpNetworkSessionParams()
       testing_fixed_http_port(0),
       testing_fixed_https_port(0),
       next_protos(NextProtosDefaults()),
-      use_alternate_protocols(true) {
+      use_alternate_protocols(true),
+      enable_quic(false) {
 }
 
 URLRequestContextBuilder::HttpNetworkSessionParams::~HttpNetworkSessionParams()
@@ -217,7 +214,8 @@ URLRequestContextBuilder::URLRequestContextBuilder()
       ftp_enabled_(false),
 #endif
       http_cache_enabled_(true),
-      throttling_enabled_(false) {
+      throttling_enabled_(false),
+      channel_id_enabled_(true) {
 }
 
 URLRequestContextBuilder::~URLRequestContextBuilder() {}
@@ -236,6 +234,7 @@ void URLRequestContextBuilder::SetSpdyAndQuicEnabled(bool spdy_enabled,
                                                      bool quic_enabled) {
   http_network_session_params_.next_protos =
       NextProtosWithSpdyAndQuic(spdy_enabled, quic_enabled);
+  http_network_session_params_.enable_quic = quic_enabled;
 }
 
 URLRequestContext* URLRequestContextBuilder::Build() {
@@ -275,7 +274,7 @@ URLRequestContext* URLRequestContextBuilder::Build() {
       proxy_config_service =
           ProxyService::CreateSystemProxyConfigService(
               base::ThreadTaskRunnerHandle::Get().get(),
-              context->GetFileThread()->message_loop());
+              context->GetFileThread()->task_runner());
     }
   #endif  // defined(OS_LINUX) || defined(OS_ANDROID)
     proxy_service_.reset(
@@ -298,12 +297,14 @@ URLRequestContext* URLRequestContextBuilder::Build() {
   storage->set_http_auth_handler_factory(http_auth_handler_registry_factory);
   storage->set_cookie_store(new CookieMonster(NULL, NULL));
 
-  // TODO(mmenke):  This always creates a file thread, even when it ends up
-  // not being used.  Consider lazily creating the thread.
-  storage->set_channel_id_service(
-      new ChannelIDService(
-          new DefaultChannelIDStore(NULL),
-          context->GetFileThread()->message_loop_proxy()));
+  if (channel_id_enabled_) {
+    // TODO(mmenke):  This always creates a file thread, even when it ends up
+    // not being used.  Consider lazily creating the thread.
+    storage->set_channel_id_service(
+        new ChannelIDService(
+            new DefaultChannelIDStore(NULL),
+            context->GetFileThread()->message_loop_proxy()));
+  }
 
   storage->set_transport_security_state(new net::TransportSecurityState());
   if (!transport_security_persister_path_.empty()) {
@@ -352,6 +353,7 @@ URLRequestContext* URLRequestContextBuilder::Build() {
   network_session_params.trusted_spdy_proxy =
       http_network_session_params_.trusted_spdy_proxy;
   network_session_params.next_protos = http_network_session_params_.next_protos;
+  network_session_params.enable_quic = http_network_session_params_.enable_quic;
 
   HttpTransactionFactory* http_transaction_factory = NULL;
   if (http_cache_enabled_) {
@@ -364,7 +366,7 @@ URLRequestContext* URLRequestContextBuilder::Build() {
           net::CACHE_BACKEND_DEFAULT,
           http_cache_params_.path,
           http_cache_params_.max_size,
-          context->GetCacheThread()->message_loop_proxy().get());
+          context->GetCacheThread()->task_runner());
     } else {
       http_cache_backend =
           HttpCache::DefaultBackend::InMemory(http_cache_params_.max_size);

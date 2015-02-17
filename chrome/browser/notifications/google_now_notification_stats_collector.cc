@@ -8,16 +8,18 @@
 
 #include "base/metrics/sparse_histogram.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/notifications/extension_welcome_notification.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "content/public/browser/user_metrics.h"
 #include "ui/message_center/notification.h"
 
 namespace {
-const char kChromeNowExtensionID[] = "pafkbggdmjlpgkdkcbjmhmfcdpncadgh";
 const int kNotificationsMaxCount = 20;
 }
 
+// TODO(dewittj) remove the dependency on the MessageCenter because this
+// violates layering.
 GoogleNowNotificationStatsCollector::GoogleNowNotificationStatsCollector(
     message_center::MessageCenter* message_center)
     : message_center_(message_center) {
@@ -32,7 +34,7 @@ void GoogleNowNotificationStatsCollector::OnNotificationDisplayed(
     const std::string& notification_id,
     const message_center::DisplaySource source) {
   if ((source == message_center::DISPLAY_SOURCE_POPUP) &&
-      IsNotificationIdForGoogleNow(notification_id)) {
+      IsVisibleNotificationIdForGoogleNow(notification_id)) {
     content::RecordAction(
         base::UserMetricsAction(
             "GoogleNow.MessageCenter.NotificationPoppedUp"));
@@ -48,16 +50,18 @@ void GoogleNowNotificationStatsCollector::OnCenterVisibilityChanged(
   }
 }
 
-bool GoogleNowNotificationStatsCollector::IsNotificationIdForGoogleNow(
-  const std::string& notification_id) {
+bool GoogleNowNotificationStatsCollector::IsVisibleNotificationIdForGoogleNow(
+    const std::string& notification_id) {
   bool isGoogleNowNotification = false;
-  const Notification* const notification =
-      g_browser_process->notification_ui_manager()->FindById(notification_id);
+  const message_center::Notification* const notification =
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          notification_id);
   if (notification) {
     isGoogleNowNotification =
         ((notification->notifier_id().type ==
               message_center::NotifierId::APPLICATION) &&
-        (notification->notifier_id().id == kChromeNowExtensionID));
+        (notification->notifier_id().id ==
+              ExtensionWelcomeNotification::kChromeNowExtensionID));
   }
   return isGoogleNowNotification;
 }
@@ -70,7 +74,8 @@ int GoogleNowNotificationStatsCollector::CountVisibleGoogleNowNotifications() {
   for (Notifications::iterator iter = visible_notifications.begin();
       iter != visible_notifications.end();
       ++iter) {
-    if ((*iter)->notifier_id().id == kChromeNowExtensionID)
+    if ((*iter)->notifier_id().id ==
+            ExtensionWelcomeNotification::kChromeNowExtensionID)
       google_now_notification_count++;
   }
   return google_now_notification_count;

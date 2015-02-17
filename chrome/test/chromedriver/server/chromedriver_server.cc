@@ -33,11 +33,12 @@
 #include "net/server/http_server.h"
 #include "net/server/http_server_request_info.h"
 #include "net/server/http_server_response_info.h"
-#include "net/socket/tcp_listen_socket.h"
+#include "net/socket/tcp_server_socket.h"
 
 namespace {
 
-const char* kLocalHostAddress = "127.0.0.1";
+const char kLocalHostAddress[] = "127.0.0.1";
+const int kBufferSize = 100 * 1024 * 1024;  // 100 MB
 
 typedef base::Callback<
     void(const net::HttpServerRequestInfo&, const HttpResponseSenderFunc&)>
@@ -55,27 +56,32 @@ class HttpServer : public net::HttpServer::Delegate {
     std::string binding_ip = kLocalHostAddress;
     if (allow_remote)
       binding_ip = "0.0.0.0";
-    server_ = new net::HttpServer(
-        net::TCPListenSocketFactory(binding_ip, port), this);
+    scoped_ptr<net::ServerSocket> server_socket(
+        new net::TCPServerSocket(NULL, net::NetLog::Source()));
+    server_socket->ListenWithAddressAndPort(binding_ip, port, 1);
+    server_.reset(new net::HttpServer(server_socket.Pass(), this));
     net::IPEndPoint address;
     return server_->GetLocalAddress(&address) == net::OK;
   }
 
   // Overridden from net::HttpServer::Delegate:
-  virtual void OnHttpRequest(int connection_id,
-                             const net::HttpServerRequestInfo& info) OVERRIDE {
+  void OnConnect(int connection_id) override {
+    server_->SetSendBufferSize(connection_id, kBufferSize);
+    server_->SetReceiveBufferSize(connection_id, kBufferSize);
+  }
+  void OnHttpRequest(int connection_id,
+                     const net::HttpServerRequestInfo& info) override {
     handle_request_func_.Run(
         info,
         base::Bind(&HttpServer::OnResponse,
                    weak_factory_.GetWeakPtr(),
                    connection_id));
   }
-  virtual void OnWebSocketRequest(
-      int connection_id,
-      const net::HttpServerRequestInfo& info) OVERRIDE {}
-  virtual void OnWebSocketMessage(int connection_id,
-                                  const std::string& data) OVERRIDE {}
-  virtual void OnClose(int connection_id) OVERRIDE {}
+  void OnWebSocketRequest(int connection_id,
+                          const net::HttpServerRequestInfo& info) override {}
+  void OnWebSocketMessage(int connection_id, const std::string& data) override {
+  }
+  void OnClose(int connection_id) override {}
 
  private:
   void OnResponse(int connection_id,
@@ -85,11 +91,12 @@ class HttpServer : public net::HttpServer::Delegate {
     // the connection to close (e.g., python 2.7 urllib).
     response->AddHeader("Connection", "close");
     server_->SendResponse(connection_id, *response);
-    server_->Close(connection_id);
+    // Don't need to call server_->Close(), since SendResponse() will handle
+    // this for us.
   }
 
   HttpRequestHandlerFunc handle_request_func_;
-  scoped_refptr<net::HttpServer> server_;
+  scoped_ptr<net::HttpServer> server_;
   base::WeakPtrFactory<HttpServer> weak_factory_;  // Should be last.
 };
 
@@ -220,7 +227,7 @@ int main(int argc, char *argv[]) {
   scoped_ptr<PortServer> port_server;
   if (cmd_line->HasSwitch("h") || cmd_line->HasSwitch("help")) {
     std::string options;
-    const char* kOptionAndDescriptions[] = {
+    const char* const kOptionAndDescriptions[] = {
         "port=PORT", "port to listen on",
         "adb-port=PORT", "adb server port",
         "log-path=FILE", "write server log to file instead of stderr, "
@@ -286,8 +293,7 @@ int main(int argc, char *argv[]) {
     base::SplitString(whitelist, ',', &whitelisted_ips);
   }
   if (!cmd_line->HasSwitch("silent")) {
-    printf(
-        "Starting ChromeDriver (v%s) on port %d\n", kChromeDriverVersion, port);
+    printf("Starting ChromeDriver %s on port %d\n", kChromeDriverVersion, port);
     if (!allow_remote) {
       printf("Only local connections are allowed.\n");
     } else if (!whitelisted_ips.empty()) {

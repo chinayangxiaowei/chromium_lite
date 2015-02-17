@@ -6,8 +6,8 @@
 
 #include "ash/ash_switches.h"
 #include "base/command_line.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
@@ -37,9 +37,9 @@ class TestWallpaperObserverPendingListEmpty
   }
 
   virtual void OnWallpaperAnimationFinished(
-      const std::string& user_id) OVERRIDE {}
+      const std::string& user_id) override {}
 
-  virtual void OnPendingListEmptyForTesting() OVERRIDE {
+  virtual void OnPendingListEmptyForTesting() override {
     empty_ = true;
     base::MessageLoop::current()->Quit();
   }

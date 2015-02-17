@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "chrome/browser/component_updater/component_updater_service.h"
+#include "base/callback.h"
+#include "base/files/file_path.h"
 #include "chrome/common/chrome_utility_messages.h"
+#include "components/component_updater/component_updater_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/utility_process_host.h"
 #include "content/public/browser/utility_process_host_client.h"
@@ -26,14 +28,14 @@ class PatchHost : public content::UtilityProcessHostClient {
   void StartProcess(scoped_ptr<IPC::Message> message);
 
  private:
-  virtual ~PatchHost();
+  ~PatchHost() override;
 
   void OnPatchFinished(int result);
 
   // Overrides of content::UtilityProcessHostClient.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
 
-  virtual void OnProcessCrashed(int exit_code) OVERRIDE;
+  void OnProcessCrashed(int exit_code) override;
 
   base::Callback<void(int result)> callback_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
@@ -66,13 +68,17 @@ bool PatchHost::OnMessageReceived(const IPC::Message& message) {
 }
 
 void PatchHost::OnPatchFinished(int result) {
-  task_runner_->PostTask(FROM_HERE, base::Bind(callback_, result));
-  task_runner_ = NULL;
+  if (task_runner_.get()) {
+    task_runner_->PostTask(FROM_HERE, base::Bind(callback_, result));
+    task_runner_ = NULL;
+  }
 }
 
 void PatchHost::OnProcessCrashed(int exit_code) {
-  task_runner_->PostTask(FROM_HERE, base::Bind(callback_, -1));
-  task_runner_ = NULL;
+  if (task_runner_.get()) {
+    task_runner_->PostTask(FROM_HERE, base::Bind(callback_, -1));
+    task_runner_ = NULL;
+  }
 }
 
 ChromeOutOfProcessPatcher::ChromeOutOfProcessPatcher() {
@@ -84,9 +90,9 @@ ChromeOutOfProcessPatcher::~ChromeOutOfProcessPatcher() {
 void ChromeOutOfProcessPatcher::Patch(
     const std::string& operation,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
-    base::FilePath& input_abs_path,
-    base::FilePath& patch_abs_path,
-    base::FilePath& output_abs_path,
+    const base::FilePath& input_abs_path,
+    const base::FilePath& patch_abs_path,
+    const base::FilePath& output_abs_path,
     base::Callback<void(int result)> callback) {
   host_ = new PatchHost(callback, task_runner);
   scoped_ptr<IPC::Message> patch_message;

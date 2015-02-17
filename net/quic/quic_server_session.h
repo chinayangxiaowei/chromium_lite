@@ -20,15 +20,15 @@
 
 namespace net {
 
+namespace test {
+class QuicServerSessionPeer;
+}  // namespace test
+
 class QuicBlockedWriterInterface;
 class QuicConfig;
 class QuicConnection;
 class QuicCryptoServerConfig;
 class ReliableQuicStream;
-
-namespace test {
-class QuicServerSessionPeer;
-}  // namespace test
 
 // An interface from the session to the entity owning the session.
 // This lets the session notify its owner (the Dispatcher) when the connection
@@ -44,17 +44,20 @@ class QuicServerSessionVisitor {
 
 class QuicServerSession : public QuicSession {
  public:
-  // Takes ownership of connection_packet_writer
   QuicServerSession(const QuicConfig& config,
                     QuicConnection* connection,
-                    QuicPerConnectionPacketWriter* connection_packet_writer,
-                    QuicServerSessionVisitor* visitor);
+                    QuicServerSessionVisitor* visitor,
+                    bool is_secure);
 
   // Override the base class to notify the owner of the connection close.
-  virtual void OnConnectionClosed(QuicErrorCode error, bool from_peer) OVERRIDE;
-  virtual void OnWriteBlocked() OVERRIDE;
+  void OnConnectionClosed(QuicErrorCode error, bool from_peer) override;
+  void OnWriteBlocked() override;
 
-  virtual ~QuicServerSession();
+  // Sends a server config update to the client, containing new bandwidth
+  // estimate.
+  void OnCongestionWindowChange(QuicTime now) override;
+
+  ~QuicServerSession() override;
 
   virtual void InitializeSession(const QuicCryptoServerConfig& crypto_config);
 
@@ -63,13 +66,17 @@ class QuicServerSession : public QuicSession {
   }
 
   // Override base class to process FEC config received from client.
-  virtual void OnConfigNegotiated() OVERRIDE;
+  void OnConfigNegotiated() override;
+
+  void set_serving_region(string serving_region) {
+    serving_region_ = serving_region;
+  }
 
  protected:
   // QuicSession methods:
-  virtual QuicDataStream* CreateIncomingDataStream(QuicStreamId id) OVERRIDE;
-  virtual QuicDataStream* CreateOutgoingDataStream() OVERRIDE;
-  virtual QuicCryptoServerStream* GetCryptoStream() OVERRIDE;
+  QuicDataStream* CreateIncomingDataStream(QuicStreamId id) override;
+  QuicDataStream* CreateOutgoingDataStream() override;
+  QuicCryptoServerStream* GetCryptoStream() override;
 
   // If we should create an incoming stream, returns true. Otherwise
   // does error handling, including communicating the error to the client and
@@ -83,8 +90,20 @@ class QuicServerSession : public QuicSession {
   friend class test::QuicServerSessionPeer;
 
   scoped_ptr<QuicCryptoServerStream> crypto_stream_;
-  scoped_ptr<QuicPerConnectionPacketWriter> connection_packet_writer_;
   QuicServerSessionVisitor* visitor_;
+
+  // The most recent bandwidth estimate sent to the client.
+  QuicBandwidth bandwidth_estimate_sent_to_client_;
+
+  // Text describing server location. Sent to the client as part of the bandwith
+  // estimate in the source-address token. Optional, can be left empty.
+  string serving_region_;
+
+  // Time at which we send the last SCUP to the client.
+  QuicTime last_scup_time_;
+
+  // Number of packets sent to the peer, at the time we last sent a SCUP.
+  int64 last_scup_sequence_number_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicServerSession);
 };

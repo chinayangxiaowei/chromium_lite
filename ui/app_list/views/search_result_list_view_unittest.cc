@@ -8,8 +8,9 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "ui/app_list/app_list_model.h"
-#include "ui/app_list/search_result.h"
 #include "ui/app_list/test/app_list_test_view_delegate.h"
+#include "ui/app_list/test/test_search_result.h"
+#include "ui/app_list/views/progress_bar_view.h"
 #include "ui/app_list/views/search_result_list_view_delegate.h"
 #include "ui/app_list/views/search_result_view.h"
 #include "ui/views/test/views_test_base.h"
@@ -25,10 +26,10 @@ class SearchResultListViewTest : public views::ViewsTestBase,
                                  public SearchResultListViewDelegate {
  public:
   SearchResultListViewTest() {}
-  virtual ~SearchResultListViewTest() {}
+  ~SearchResultListViewTest() override {}
 
   // Overridden from testing::Test:
-  virtual void SetUp() OVERRIDE {
+  void SetUp() override {
     views::ViewsTestBase::SetUp();
     view_.reset(new SearchResultListView(this, &view_delegate_));
     view_->SetResults(view_delegate_.GetModel()->results());
@@ -37,6 +38,10 @@ class SearchResultListViewTest : public views::ViewsTestBase,
 
  protected:
   SearchResultListView* view() { return view_.get(); }
+
+  AppListModel::SearchResults* GetResults() {
+    return view_delegate_.GetModel()->results();
+  }
 
   void SetLongAutoLaunchTimeout() {
     // Sets a long timeout that lasts longer than the test run.
@@ -48,9 +53,9 @@ class SearchResultListViewTest : public views::ViewsTestBase,
   }
 
   void SetUpSearchResults() {
-    AppListModel::SearchResults* results = view_delegate_.GetModel()->results();
+    AppListModel::SearchResults* results = GetResults();
     for (int i = 0; i < kDefaultSearchItems; ++i)
-      results->Add(new SearchResult());
+      results->Add(new TestSearchResult());
 
     // Adding results will schedule Update().
     RunPendingMessages();
@@ -62,9 +67,7 @@ class SearchResultListViewTest : public views::ViewsTestBase,
     return result;
   }
 
-  int GetSearchResults() {
-    return view_->last_visible_index_ + 1;
-  }
+  int GetResultCount() { return view_->last_visible_index_ + 1; }
 
   int GetSelectedIndex() {
     return view_->selected_index_;
@@ -75,12 +78,10 @@ class SearchResultListViewTest : public views::ViewsTestBase,
   }
 
   void AddTestResultAtIndex(int index) {
-    view_delegate_.GetModel()->results()->Add(new SearchResult());
+    GetResults()->Add(new TestSearchResult());
   }
 
-  void DeleteResultAt(int index) {
-    view_delegate_.GetModel()->results()->DeleteAt(index);
-  }
+  void DeleteResultAt(int index) { GetResults()->DeleteAt(index); }
 
   bool KeyPress(ui::KeyboardCode key_code) {
     ui::KeyEvent event(ui::ET_KEY_PRESSED, key_code, ui::EF_NONE);
@@ -99,15 +100,19 @@ class SearchResultListViewTest : public views::ViewsTestBase,
     // Adding results will schedule Update().
     RunPendingMessages();
 
-    AppListModel::SearchResults* results = view_delegate_.GetModel()->results();
+    AppListModel::SearchResults* results = GetResults();
     for (size_t i = 0; i < results->item_count(); ++i) {
       EXPECT_EQ(results->GetItemAt(i), view_->GetResultViewAt(i)->result());
     }
   }
 
+  ProgressBarView* GetProgressBarAt(size_t index) {
+    return view()->GetResultViewAt(index)->progress_bar_;
+  }
+
  private:
-  virtual void OnResultInstalled(SearchResult* result) OVERRIDE {}
-  virtual void OnResultUninstalled(SearchResult* result) OVERRIDE {}
+  void OnResultInstalled(SearchResult* result) override {}
+  void OnResultUninstalled(SearchResult* result) override {}
 
   AppListTestViewDelegate view_delegate_;
   scoped_ptr<SearchResultListView> view_;
@@ -118,7 +123,7 @@ class SearchResultListViewTest : public views::ViewsTestBase,
 TEST_F(SearchResultListViewTest, Basic) {
   SetUpSearchResults();
 
-  const int results = GetSearchResults();
+  const int results = GetResultCount();
   EXPECT_EQ(kDefaultSearchItems, results);
   EXPECT_EQ(0, GetSelectedIndex());
   EXPECT_FALSE(IsAutoLaunching());
@@ -207,6 +212,20 @@ TEST_F(SearchResultListViewTest, ModelObservers) {
   // Delete from start.
   DeleteResultAt(0);
   ExpectConsistent();
+}
+
+// Regression test for http://crbug.com/402859 to ensure ProgressBar is
+// initialized properly in SearchResultListView::SetResult().
+TEST_F(SearchResultListViewTest, ProgressBar) {
+  SetUpSearchResults();
+
+  GetResults()->GetItemAt(0)->SetIsInstalling(true);
+  EXPECT_EQ(0.0f, GetProgressBarAt(0)->current_value());
+  GetResults()->GetItemAt(0)->SetPercentDownloaded(10);
+
+  DeleteResultAt(0);
+  RunPendingMessages();
+  EXPECT_EQ(0.0f, GetProgressBarAt(0)->current_value());
 }
 
 }  // namespace test

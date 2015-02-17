@@ -18,7 +18,6 @@
 #import "chrome/browser/ui/cocoa/browser_window_utils.h"
 #import "chrome/browser/ui/cocoa/constrained_window/constrained_window_button.h"
 #import "chrome/browser/ui/cocoa/hover_close_button.h"
-#import "chrome/browser/ui/cocoa/hyperlink_text_view.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
 #import "chrome/browser/ui/cocoa/info_bubble_window.h"
 #include "chrome/browser/ui/cocoa/website_settings/permission_bubble_cocoa.h"
@@ -28,13 +27,13 @@
 #include "chrome/browser/ui/website_settings/permission_bubble_request.h"
 #include "chrome/browser/ui/website_settings/permission_bubble_view.h"
 #include "chrome/browser/ui/website_settings/permission_menu_model.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/user_metrics.h"
-#include "grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
+#import "ui/base/cocoa/controls/hyperlink_text_view.h"
 #import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/cocoa/window_size_constants.h"
-#import "ui/base/cocoa/menu_controller.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/models/simple_menu_model.h"
 
@@ -54,18 +53,13 @@ class MenuDelegate : public ui::SimpleMenuModel::Delegate {
  public:
   explicit MenuDelegate(PermissionBubbleController* bubble)
       : bubble_controller_(bubble) {}
-  virtual bool IsCommandIdChecked(int command_id) const OVERRIDE {
+  bool IsCommandIdChecked(int command_id) const override { return false; }
+  bool IsCommandIdEnabled(int command_id) const override { return true; }
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* accelerator) override {
     return false;
   }
-  virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE {
-    return true;
-  }
-  virtual bool GetAcceleratorForCommandId(
-      int command_id,
-      ui::Accelerator* accelerator) OVERRIDE {
-    return false;
-  }
-  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE {
+  void ExecuteCommand(int command_id, int event_flags) override {
     [bubble_controller_ onMenuItemClicked:command_id];
   }
  private:

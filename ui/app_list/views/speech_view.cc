@@ -5,8 +5,6 @@
 #include "ui/app_list/views/speech_view.h"
 
 #include "base/strings/utf_string_conversions.h"
-#include "grit/ui_resources.h"
-#include "grit/ui_strings.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/app_list/app_list_model.h"
 #include "ui/app_list/app_list_view_delegate.h"
@@ -15,6 +13,8 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/path.h"
+#include "ui/resources/grit/ui_resources.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/image_button.h"
@@ -49,11 +49,11 @@ const SkColor kSoundLevelIndicatorColor = SkColorSetRGB(219, 219, 219);
 class SoundLevelIndicator : public views::View {
  public:
   SoundLevelIndicator();
-  virtual ~SoundLevelIndicator();
+  ~SoundLevelIndicator() override;
 
  private:
   // Overridden from views::View:
-  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  void OnPaint(gfx::Canvas* canvas) override;
 
   DISALLOW_COPY_AND_ASSIGN(SoundLevelIndicator);
 };
@@ -75,11 +75,11 @@ class MicButton : public views::ImageButton,
                   public views::MaskedTargeterDelegate {
  public:
   explicit MicButton(views::ButtonListener* listener);
-  virtual ~MicButton();
+  ~MicButton() override;
 
  private:
   // views::MaskedTargeterDelegate:
-  virtual bool GetHitTestMask(gfx::Path* mask) const OVERRIDE;
+  bool GetHitTestMask(gfx::Path* mask) const override;
 
   DISALLOW_COPY_AND_ASSIGN(MicButton);
 };

@@ -20,16 +20,14 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/locale_settings.h"
 #include "components/signin/core/browser/profile_oauth2_token_service.h"
 #include "components/signin/core/browser/signin_error_controller.h"
 #include "components/signin/core/browser/signin_manager_base.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "grit/browser_resources.h"
-#include "grit/chromium_strings.h"
-#include "grit/generated_resources.h"
-#include "grit/locale_settings.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/sessions/sync_session_snapshot.h"
 #include "sync/protocol/proto_enum_conversions.h"
@@ -77,7 +75,7 @@ base::string16 GetSyncedStateStatusLabel(ProfileSyncService* service,
     }
   }
 
-  if (!service || !service->sync_initialized()) {
+  if (!service || !service->SyncActive()) {
     // User is not signed in, or sync is still initializing.
     return base::string16();
   }
@@ -140,7 +138,7 @@ MessageType GetStatusInfo(ProfileSyncService* service,
 
   MessageType result_type(SYNCED);
 
-  if (signin.GetAuthenticatedUsername().empty())
+  if (!signin.IsAuthenticated())
     return PRE_SYNCED;
 
   if (!service || service->IsManaged() || service->HasSyncSetupCompleted() ||
@@ -265,7 +263,7 @@ MessageType GetStatusInfo(ProfileSyncService* service,
       } else if (status_label) {
         status_label->assign(l10n_util::GetStringUTF16(IDS_SYNC_SETUP_ERROR));
       }
-    } else if (!signin.GetAuthenticatedUsername().empty()) {
+    } else if (signin.IsAuthenticated()) {
       // The user is signed in, but sync has been stopped.
       if (status_label) {
         base::string16 label = l10n_util::GetStringFUTF16(

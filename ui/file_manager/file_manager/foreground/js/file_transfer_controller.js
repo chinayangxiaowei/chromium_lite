@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
-
 /**
  * Global (placed in the window object) variable name to hold internal
  * file dragging information. Needed to show visual feedback while dragging
@@ -11,6 +9,11 @@
  * file manager instances.
  */
 var DRAG_AND_DROP_GLOBAL_DATA = '__drag_and_drop_global_data';
+
+/**
+ * @typedef {{file:File, externalFileUrl:string}}
+ */
+var FileAsyncData;
 
 /**
  * @param {HTMLDocument} doc Owning document.
@@ -21,30 +24,41 @@ var DRAG_AND_DROP_GLOBAL_DATA = '__drag_and_drop_global_data';
  * @param {VolumeManagerWrapper} volumeManager Volume manager instance.
  * @param {MultiProfileShareDialog} multiProfileShareDialog Share dialog to be
  *     used to share files from another profile.
+ * @param {ProgressCenter} progressCenter To notify starting copy operation.
  * @constructor
+ * @extends {cr.EventTarget}
  */
 function FileTransferController(doc,
                                 fileOperationManager,
                                 metadataCache,
                                 directoryModel,
                                 volumeManager,
-                                multiProfileShareDialog) {
+                                multiProfileShareDialog,
+                                progressCenter) {
   this.document_ = doc;
   this.fileOperationManager_ = fileOperationManager;
   this.metadataCache_ = metadataCache;
   this.directoryModel_ = directoryModel;
   this.volumeManager_ = volumeManager;
   this.multiProfileShareDialog_ = multiProfileShareDialog;
+  this.progressCenter_ = progressCenter;
 
   this.directoryModel_.getFileList().addEventListener(
-      'change', function(event) {
-    if (this.directoryModel_.getFileListSelection().
-        getIndexSelected(event.index)) {
-      this.onSelectionChanged_();
-    }
-  }.bind(this));
+      'change',
+      function(event) {
+        if (this.directoryModel_.getFileListSelection().
+            getIndexSelected(event.index)) {
+          this.onSelectionChanged_();
+        }
+      }.bind(this));
   this.directoryModel_.getFileListSelection().addEventListener('change',
       this.onSelectionChanged_.bind(this));
+
+  /**
+   * The array of pending task ID.
+   * @type {Array.<string>}
+   */
+  this.pendingTaskIds = [];
 
   /**
    * Promise to be fulfilled with the thumbnail image of selected file in drag
@@ -57,10 +71,10 @@ function FileTransferController(doc,
   /**
    * File objects for selected files.
    *
-   * @type {Array.<File>}
+   * @type {Object.<string, FileAsyncData>}
    * @private
    */
-  this.selectedFileObjects_ = [];
+  this.selectedAsyncData_ = {};
 
   /**
    * Drag selector.
@@ -75,6 +89,13 @@ function FileTransferController(doc,
    * @private
    */
   this.touching_ = false;
+
+  /**
+   * Task ID counter.
+   * @type {number}
+   * @private
+   */
+  this.taskIdCounter_ = 0;
 }
 
 /**
@@ -134,20 +155,6 @@ FileTransferController.prototype = {
   },
 
   /**
-   * @this {FileTransferController}
-   * @param {NavigationList} tree Its sub items will could be drop target.
-   */
-  attachNavigationListDropTarget: function(list) {
-    list.addEventListener('dragover',
-        this.onDragOver_.bind(this, true /* onlyIntoDirectories */, list));
-    list.addEventListener('dragenter',
-        this.onDragEnterVolumesList_.bind(this, list));
-    list.addEventListener('dragleave', this.onDragLeave_.bind(this, list));
-    list.addEventListener('drop',
-        this.onDrop_.bind(this, true /* onlyIntoDirectories */));
-  },
-
-  /**
    * Attach handlers of copy, cut and paste operations to the document.
    *
    * @this {FileTransferController}
@@ -189,11 +196,18 @@ FileTransferController.prototype = {
     dataTransfer.effectAllowed = effectAllowed;
     dataTransfer.setData('fs/effectallowed', effectAllowed);
     dataTransfer.setData('fs/missingFileContents',
-                         !this.isAllSelectedFilesAvailable_());
-
-    for (var i = 0; i < this.selectedFileObjects_.length; i++) {
-      dataTransfer.items.add(this.selectedFileObjects_[i]);
+                         (!this.isAllSelectedFilesAvailable_()).toString());
+    var externalFileUrl;
+    for (var i = 0; i < this.selectedEntries_.length; i++) {
+      var url = this.selectedEntries_[i].toURL();
+      if (!this.selectedAsyncData_[url])
+        continue;
+      if (this.selectedAsyncData_[url].file)
+        dataTransfer.items.add(this.selectedAsyncData_[url].file);
+      if (!externalFileUrl)
+        externalFileUrl = this.selectedAsyncData_[url].externalFileUrl;
     }
+    dataTransfer.setData('text/uri-list', externalFileUrl);
   },
 
   /**
@@ -253,7 +267,7 @@ FileTransferController.prototype = {
   /**
    * Obtains entries that need to share with me.
    * The method also observers child entries of the given entries.
-   * @param {Array.<Entries>} entries Entries.
+   * @param {Array.<Entry>} entries Entries.
    * @return {Promise} Promise to be fulfilled with the entries that need to
    *     share.
    */
@@ -276,10 +290,11 @@ FileTransferController.prototype = {
     // Check all file entries and keeps only those need sharing operation.
     var processFileEntries = function(entries) {
       return new Promise(function(callback) {
+        // TODO(mtomasz): Move conversion from entry to url to custom bindings.
+        // crbug.com/345527.
         var urls = util.entriesToURLs(entries);
-        chrome.fileBrowserPrivate.getDriveEntryProperties(urls, callback);
-      }).
-      then(function(metadatas) {
+        chrome.fileManagerPrivate.getEntryProperties(urls, callback);
+      }).then(function(metadatas) {
         return entries.filter(function(entry, i) {
           var metadata = metadatas[i];
           return metadata && metadata.isHosted && !metadata.sharedWithMe;
@@ -343,17 +358,39 @@ FileTransferController.prototype = {
          opt_effect === 'move');
     var destinationEntry =
         opt_destinationEntry || this.currentDirectoryContentEntry;
-    var entries;
+    var entries = [];
     var failureUrls;
+    var taskId = this.fileOperationManager_.generateTaskId();
 
-    util.URLsToEntries(sourceURLs).
-    then(function(result) {
-      entries = result.entries;
+    util.URLsToEntries(sourceURLs).then(function(result) {
       failureUrls = result.failureUrls;
+      return this.fileOperationManager_.filterSameDirectoryEntry(
+          result.entries, destinationEntry, toMove);
+    }.bind(this)).then(function(filteredEntries) {
+      entries = filteredEntries;
+      if (entries.length === 0)
+        return Promise.reject('ABORT');
+
+      this.pendingTaskIds.push(taskId);
+      var item = new ProgressCenterItem();
+      item.id = taskId;
+      if (toMove) {
+        item.type = ProgressItemType.MOVE;
+        if (entries.length === 1)
+          item.message = strf('MOVE_FILE_NAME', entries[0].name);
+        else
+          item.message = strf('MOVE_ITEMS_REMAINING', entries.length);
+      } else {
+        item.type = ProgressItemType.COPY;
+        if (entries.length === 1)
+          item.message = strf('COPY_FILE_NAME', entries[0].name);
+        else
+          item.message = strf('COPY_ITEMS_REMAINING', entries.length);
+      }
+      this.progressCenter_.updateItem(item);
       // Check if cross share is needed or not.
       return this.getMultiProfileShareEntries_(entries);
-    }.bind(this)).
-    then(function(shareEntries) {
+    }.bind(this)).then(function(shareEntries) {
       if (shareEntries.length === 0)
         return;
       return this.multiProfileShareDialog_.show(shareEntries.length > 1).
@@ -366,22 +403,22 @@ FileTransferController.prototype = {
               if (index >= shareEntries.length)
                 return;
               return new Promise(function(fulfill) {
-                chrome.fileBrowserPrivate.requestDriveShare(
+                chrome.fileManagerPrivate.requestDriveShare(
                     shareEntries[index].toURL(),
                     dialogResult,
                     function() {
                       // TODO(hirono): Check chrome.runtime.lastError here.
-                      fulfill();
+                      fulfill(null);
                     });
               }).then(requestDriveShare.bind(null, index + 1));
             };
             return requestDriveShare(0);
           });
-    }.bind(this)).
-    then(function() {
+    }.bind(this)).then(function() {
       // Start the pasting operation.
       this.fileOperationManager_.paste(
-          entries, destinationEntry, toMove);
+          entries, destinationEntry, toMove, taskId);
+      this.pendingTaskIds.splice(this.pendingTaskIds.indexOf(taskId), 1);
 
       // Publish events for failureUrls.
       for (var i = 0; i < failureUrls.length; i++) {
@@ -393,8 +430,7 @@ FileTransferController.prototype = {
             toMove ? ProgressItemType.MOVE : ProgressItemType.COPY;
         this.dispatchEvent(event);
       }
-    }.bind(this)).
-    catch(function(error) {
+    }.bind(this)).catch(function(error) {
       if (error !== 'ABORT')
         console.error(error.stack ? error.stack : error);
     });
@@ -409,20 +445,21 @@ FileTransferController.prototype = {
    */
   preloadThumbnailImage_: function(entry) {
     var metadataPromise = new Promise(function(fulfill, reject) {
-      this.metadataCache_.getOne(entry,
-                                 'thumbnail|filesystem',
-                                 function(metadata) {
-        if (metadata)
-          fulfill(metadata);
-        else
-          reject('Failed to fetch metadata.');
-      });
+      this.metadataCache_.getOne(
+          entry,
+          'thumbnail|filesystem',
+          function(metadata) {
+            if (metadata)
+              fulfill(metadata);
+            else
+              reject('Failed to fetch metadata.');
+          });
     }.bind(this));
 
     var imagePromise = metadataPromise.then(function(metadata) {
       return new Promise(function(fulfill, reject) {
         var loader = new ThumbnailLoader(
-            entry, ThumbnailLoader.LoaderType.Image, metadata);
+            entry, ThumbnailLoader.LoaderType.IMAGE, metadata);
         loader.loadDetachedImage(function(result) {
           if (result)
             fulfill(loader.getImage());
@@ -444,7 +481,7 @@ FileTransferController.prototype = {
    * Renders a drag-and-drop thumbnail.
    *
    * @this {FileTransferController}
-   * @return {HTMLElement} Element containing the thumbnail.
+   * @return {Element} Element containing the thumbnail.
    */
   renderThumbnail_: function() {
     var length = this.selectedEntries_.length;
@@ -530,8 +567,8 @@ FileTransferController.prototype = {
     }
 
     var dt = event.dataTransfer;
-    var canCopy = this.canCopyOrDrag_(dt);
-    var canCut = this.canCutOrDrag_(dt);
+    var canCopy = this.canCopyOrDrag_();
+    var canCut = this.canCutOrDrag_();
     if (canCopy || canCut) {
       if (canCopy && canCut) {
         this.cutOrCopy_(dt, 'all');
@@ -550,7 +587,7 @@ FileTransferController.prototype = {
 
     window[DRAG_AND_DROP_GLOBAL_DATA] = {
       sourceRootURL: dt.getData('fs/sourceRootURL'),
-      missingFileContents: dt.getData('fs/missingFileContents'),
+      missingFileContents: dt.getData('fs/missingFileContents')
     };
   },
 
@@ -574,7 +611,7 @@ FileTransferController.prototype = {
    * @this {FileTransferController}
    * @param {boolean} onlyIntoDirectories True if the drag is only into
    *     directories.
-   * @param {cr.ui.List} list Drop target list.
+   * @param {(cr.ui.List|DirectoryTree)} list Drop target list.
    * @param {Event} event A dragover event of DOM.
    */
   onDragOver_: function(onlyIntoDirectories, list, event) {
@@ -587,13 +624,14 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
-   * @param {cr.ui.List} list Drop target list.
+   * @param {(cr.ui.List|DirectoryTree)} list Drop target list.
    * @param {Event} event A dragenter event of DOM.
    */
   onDragEnterFileList_: function(list, event) {
     event.preventDefault();  // Required to prevent the cursor flicker.
     this.lastEnteredTarget_ = event.target;
-    var item = list.getListItemAncestor(event.target);
+    var item = list.getListItemAncestor(
+        /** @type {HTMLElement} */ (event.target));
     item = item && list.isItem(item) ? item : null;
     if (item === this.dropTarget_)
       return;
@@ -631,35 +669,7 @@ FileTransferController.prototype = {
 
   /**
    * @this {FileTransferController}
-   * @param {NavigationList} list Drop target list.
-   * @param {Event} event A dragenter event of DOM.
-   */
-  onDragEnterVolumesList_: function(list, event) {
-    event.preventDefault();  // Required to prevent the cursor flicker.
-
-    this.lastEnteredTarget_ = event.target;
-    var item = list.getListItemAncestor(event.target);
-    item = item && list.isItem(item) ? item : null;
-    if (item === this.dropTarget_)
-      return;
-
-    var modelItem = item && list.dataModel.item(item.listIndex);
-    if (modelItem && modelItem.isShortcut) {
-      this.setDropTarget_(item, event.dataTransfer, modelItem.entry);
-      return;
-    }
-    if (modelItem && modelItem.isVolume && modelItem.volumeInfo.displayRoot) {
-      this.setDropTarget_(
-          item, event.dataTransfer, modelItem.volumeInfo.displayRoot);
-      return;
-    }
-
-    this.clearDropTarget_();
-  },
-
-  /**
-   * @this {FileTransferController}
-   * @param {cr.ui.List} list Drop target list.
+   * @param {*} list Drop target list.
    * @param {Event} event A dragleave event of DOM.
    */
   onDragLeave_: function(list, event) {
@@ -724,9 +734,10 @@ FileTransferController.prototype = {
 
     // Start timer changing the directory.
     this.navigateTimer_ = setTimeout(function() {
-      if (domElement instanceof DirectoryItem)
+      if (domElement instanceof DirectoryItem) {
         // Do custom action.
-        (/** @type {DirectoryItem} */ domElement).doDropTargetAction();
+        /** @type {DirectoryItem} */ (domElement).doDropTargetAction();
+      }
       this.directoryModel_.changeDirectoryEntry(destinationEntry);
     }.bind(this), 2000);
   },
@@ -952,7 +963,7 @@ FileTransferController.prototype = {
    *
    * @this {FileTransferController}
    * @param {string} command 'copy', 'cut' or 'paste'.
-   * @param {function} handler Event handler.
+   * @param {function(Event)} handler Event handler.
    */
   simulateCommand_: function(command, handler) {
     var iframe = this.document_.querySelector('#command-dispatcher');
@@ -967,7 +978,7 @@ FileTransferController.prototype = {
    */
   onSelectionChanged_: function(event) {
     var entries = this.selectedEntries_;
-    var files = this.selectedFileObjects_ = [];
+    var asyncData = this.selectedAsyncData_ = {};
     this.preloadedThumbnailImagePromise_ = null;
 
     var fileEntries = [];
@@ -983,7 +994,10 @@ FileTransferController.prototype = {
     // asynchronous operations.
     if (!containsDirectory) {
       for (var i = 0; i < fileEntries.length; i++) {
-        fileEntries[i].file(function(file) { files.push(file); });
+        asyncData[fileEntries[i].toURL()] = {};
+        fileEntries[i].file(function(data, file) {
+          data.file = file;
+        }.bind(null, asyncData[fileEntries[i].toURL()]));
       }
     }
 
@@ -994,21 +1008,26 @@ FileTransferController.prototype = {
       this.preloadThumbnailImage_(entries[0]);
     }
 
-    if (this.isOnDrive) {
-      this.allDriveFilesAvailable = false;
-      this.metadataCache_.get(entries, 'drive', function(props) {
-        // We consider directories not available offline for the purposes of
-        // file transfer since we cannot afford to recursive traversal.
-        this.allDriveFilesAvailable =
-            !containsDirectory &&
-            props.filter(function(p) {
-              return !p.availableOffline;
-            }).length === 0;
-        // |Copy| is the only menu item affected by allDriveFilesAvailable.
-        // It could be open right now, update its UI.
-        this.copyCommand_.disabled = !this.canCopyOrDrag_();
-      }.bind(this));
-    }
+    this.allDriveFilesAvailable = false;
+    this.metadataCache_.get(entries, 'external', function(metadataList) {
+      // We consider directories not available offline for the purposes of
+      // file transfer since we cannot afford to recursive traversal.
+      this.allDriveFilesAvailable =
+          !containsDirectory &&
+          metadataList.every(function(metadata) {
+            return metadata && metadata.availableOffline;
+          });
+      // |Copy| is the only menu item affected by allDriveFilesAvailable.
+      // It could be open right now, update its UI.
+      this.copyCommand_.disabled = !this.canCopyOrDrag_();
+
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isFile) {
+          asyncData[entries[i].toURL()].externalFileUrl =
+              metadataList[i] ? metadataList[i].externalFileUrl : null;
+        }
+      }
+    }.bind(this));
   },
 
   /**

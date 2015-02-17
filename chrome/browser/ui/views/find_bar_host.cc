@@ -46,11 +46,6 @@ FindBarHost::~FindBarHost() {
 
 bool FindBarHost::MaybeForwardKeyEventToWebpage(
     const ui::KeyEvent& key_event) {
-  if (!ShouldForwardKeyEventToWebpageNative(key_event)) {
-    // Native implementation says not to forward these events.
-    return false;
-  }
-
   switch (key_event.key_code()) {
     case ui::VKEY_DOWN:
     case ui::VKEY_UP:
@@ -159,6 +154,12 @@ void FindBarHost::UpdateUIForFindResult(const FindNotificationDetails& result,
   // focus. EndFindSession will then set the focus to the page content.
   if (result.number_of_matches() > 0)
     ResetFocusTracker();
+}
+
+void FindBarHost::AudibleAlert() {
+#if defined(OS_WIN)
+  MessageBeep(MB_OK);
+#endif
 }
 
 bool FindBarHost::IsFindBarVisible() {
@@ -310,11 +311,6 @@ gfx::Rect FindBarHost::GetDialogPosition(gfx::Rect avoid_overlapping_rect) {
 void FindBarHost::SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw) {
   if (new_pos.IsEmpty())
     return;
-
-  // Make sure the window edges are clipped to just the visible region. We need
-  // to do this before changing position, so that when we animate the closure
-  // of it it doesn't look like the window crumbles into the toolbar.
-  UpdateWindowEdges(new_pos);
 
   SetWidgetPositionNative(new_pos, no_redraw);
 

@@ -10,7 +10,7 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/prefs/pref_service.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/strings/utf_string_conversions.h"
@@ -64,8 +64,8 @@ class PepperFlashSettingsManager::Core
                      uint64 max_age);
 
   // IPC::Listener implementation.
-  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
-  virtual void OnChannelError() OVERRIDE;
+  bool OnMessageReceived(const IPC::Message& message) override;
+  void OnChannelError() override;
 
  private:
   friend struct BrowserThread::DeleteOnThread<BrowserThread::IO>;
@@ -119,7 +119,7 @@ class PepperFlashSettingsManager::Core
     uint64 max_age;
   };
 
-  virtual ~Core();
+  ~Core() override;
 
   void ConnectToChannel(bool success, const IPC::ChannelHandle& handle);
 

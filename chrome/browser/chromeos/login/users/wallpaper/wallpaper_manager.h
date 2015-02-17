@@ -258,7 +258,7 @@ class WallpaperManager: public content::NotificationObserver {
   // NotificationObserver overrides:
   virtual void Observe(int type,
                        const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+                       const content::NotificationDetails& details) override;
 
   // Removes all |user_id| related wallpaper info and saved wallpapers.
   void RemoveUserWallpaperInfo(const std::string& user_id);
@@ -591,8 +591,6 @@ class WallpaperManager: public content::NotificationObserver {
   scoped_ptr<CrosSettings::ObserverSubscription>
       show_user_name_on_signin_subscription_;
 
-  base::WeakPtrFactory<WallpaperManager> weak_factory_;
-
   content::NotificationRegistrar registrar_;
 
   ObserverList<Observer> observers_;
@@ -623,6 +621,8 @@ class WallpaperManager: public content::NotificationObserver {
 
   // Current decoded default image is stored in cache.
   scoped_ptr<user_manager::UserImage> default_wallpaper_image_;
+
+  base::WeakPtrFactory<WallpaperManager> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(WallpaperManager);
 };

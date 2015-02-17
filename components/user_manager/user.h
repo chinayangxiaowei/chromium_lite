@@ -85,11 +85,15 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   base::string16 display_name() const { return display_name_; }
 
   // UserInfo
-  virtual std::string GetEmail() const OVERRIDE;
-  virtual base::string16 GetDisplayName() const OVERRIDE;
-  virtual base::string16 GetGivenName() const OVERRIDE;
-  virtual const gfx::ImageSkia& GetImage() const OVERRIDE;
-  virtual std::string GetUserID() const OVERRIDE;
+  std::string GetEmail() const override;
+  base::string16 GetDisplayName() const override;
+  base::string16 GetGivenName() const override;
+  const gfx::ImageSkia& GetImage() const override;
+  std::string GetUserID() const override;
+
+  // Is user supervised.
+  virtual bool IsSupervised() const;
+  virtual void SetIsSupervised(bool is_supervised);
 
   // Returns the account name part of the email. Use the display form of the
   // email if available and use_display_name == true. Otherwise use canonical.
@@ -170,7 +174,7 @@ class USER_MANAGER_EXPORT User : public UserInfo {
   static User* CreatePublicAccountUser(const std::string& email);
 
   explicit User(const std::string& email);
-  virtual ~User();
+  ~User() override;
 
   const std::string* GetAccountLocale() const { return account_locale_.get(); }
 

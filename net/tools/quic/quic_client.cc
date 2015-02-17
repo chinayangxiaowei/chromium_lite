@@ -49,7 +49,6 @@ QuicClient::QuicClient(IPEndPoint server_address,
       overflow_supported_(false),
       supported_versions_(supported_versions),
       print_response_(print_response) {
-  config_.SetDefaults();
 }
 
 QuicClient::QuicClient(IPEndPoint server_address,
@@ -86,7 +85,6 @@ bool QuicClient::Initialize() {
   DCHECK(!initialized_);
 
   epoll_server_->set_timeout_in_us(50 * 1000);
-  crypto_config_.SetDefaults();
 
   if (!CreateUDPSocket()) {
     return false;
@@ -96,6 +94,18 @@ bool QuicClient::Initialize() {
   initialized_ = true;
   return true;
 }
+
+QuicClient::DummyPacketWriterFactory::DummyPacketWriterFactory(
+    QuicPacketWriter* writer)
+    : writer_(writer) {}
+
+QuicClient::DummyPacketWriterFactory::~DummyPacketWriterFactory() {}
+
+QuicPacketWriter* QuicClient::DummyPacketWriterFactory::Create(
+    QuicConnection* /*connection*/) const {
+  return writer_;
+}
+
 
 bool QuicClient::CreateUDPSocket() {
   int address_family = server_address_.GetSockAddrFamily();
@@ -179,15 +189,19 @@ bool QuicClient::StartConnect() {
 
   QuicPacketWriter* writer = CreateQuicPacketWriter();
 
+  DummyPacketWriterFactory factory(writer);
+
   session_.reset(new QuicClientSession(
       config_,
       new QuicConnection(GenerateConnectionId(),
                          server_address_,
                          helper_.get(),
-                         writer,
-                         false  /* owns_writer */,
-                         false  /* is_server */,
-                         supported_versions_)));
+                         factory,
+                         /* owns_writer= */ false,
+                         /* is_server= */ false,
+                         supported_versions_),
+      server_id_.is_https()));
+
   // Reset |writer_| after |session_| so that the old writer outlives the old
   // session.
   if (writer_.get() != writer) {
@@ -220,7 +234,7 @@ void QuicClient::SendRequestsAndWaitForResponse(
     BalsaHeaders headers;
     headers.SetRequestFirstlineFromStringPieces("GET", args[i], "HTTP/1.1");
     QuicSpdyClientStream* stream = CreateReliableClientStream();
-    DCHECK(stream != NULL);
+    DCHECK(stream != nullptr);
     stream->SendRequest(headers, "", true);
     stream->set_visitor(this);
   }
@@ -230,7 +244,7 @@ void QuicClient::SendRequestsAndWaitForResponse(
 
 QuicSpdyClientStream* QuicClient::CreateReliableClientStream() {
   if (!connected()) {
-    return NULL;
+    return nullptr;
   }
 
   return session_->CreateOutgoingDataStream();
@@ -278,7 +292,7 @@ void QuicClient::OnEvent(int fd, EpollEvent* event) {
 void QuicClient::OnClose(QuicDataStream* stream) {
   QuicSpdyClientStream* client_stream =
       static_cast<QuicSpdyClientStream*>(stream);
-  if (response_listener_.get() != NULL) {
+  if (response_listener_.get() != nullptr) {
     response_listener_->OnCompleteResponse(
         stream->id(), client_stream->headers(), client_stream->data());
   }
@@ -320,8 +334,9 @@ int QuicClient::ReadPacket(char* buffer,
                            IPEndPoint* server_address,
                            IPAddressNumber* client_ip) {
   return QuicSocketUtils::ReadPacket(
-      fd_, buffer, buffer_len, overflow_supported_ ? &packets_dropped_ : NULL,
-      client_ip, server_address);
+      fd_, buffer, buffer_len,
+      overflow_supported_ ? &packets_dropped_ : nullptr, client_ip,
+      server_address);
 }
 
 bool QuicClient::ReadAndProcessPacket() {

@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/autofill/password_generation_popup_controller.h"
 #include "chrome/browser/ui/autofill/popup_constants.h"
 #include "grit/theme_resources.h"
+#include "ui/accessibility/ax_view_state.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/background.h"
@@ -31,7 +32,7 @@ const int kHelpVerticalOffset = 5;
 class PasswordTextBox : public views::View {
  public:
   PasswordTextBox() {}
-  virtual ~PasswordTextBox() {}
+  ~PasswordTextBox() override {}
 
   // |suggestion_text| prompts the user to select the password,
   // |generated_password| is the generated password, and |font_list| is the font
@@ -40,7 +41,7 @@ class PasswordTextBox : public views::View {
             const base::string16& generated_password,
             const gfx::FontList& font_list) {
     views::BoxLayout* box_layout = new views::BoxLayout(
-        views::BoxLayout::kVertical, 0, 10, 5);
+        views::BoxLayout::kVertical, 0, 12, 5);
     box_layout->set_main_axis_alignment(
         views::BoxLayout::MAIN_AXIS_ALIGNMENT_START);
     SetLayoutManager(box_layout);
@@ -49,19 +50,19 @@ class PasswordTextBox : public views::View {
         suggestion_text, font_list.DeriveWithStyle(gfx::Font::BOLD));
     suggestion_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     suggestion_label->SetEnabledColor(
-        PasswordGenerationPopupViewViews::kItemTextColor);
+        PasswordGenerationPopupView::kPasswordTextColor);
     AddChildView(suggestion_label);
 
     views::Label* password_label =
         new views::Label(generated_password, font_list);
     password_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     password_label->SetEnabledColor(
-        PasswordGenerationPopupViewViews::kItemTextColor);
+        PasswordGenerationPopupView::kPasswordTextColor);
     AddChildView(password_label);
   }
 
   // views::View:
-  virtual bool CanProcessEventsWithinSubtree() const OVERRIDE {
+  bool CanProcessEventsWithinSubtree() const override {
     // Send events to the parent view for handling.
     return false;
   }
@@ -77,7 +78,7 @@ class PasswordTextBox : public views::View {
 class PasswordGenerationPopupViewViews::PasswordBox : public views::View {
  public:
   PasswordBox() {}
-  virtual ~PasswordBox() {}
+  ~PasswordBox() override {}
 
   // |password| is the generated password, |suggestion| is the text prompting
   // the user to select the password, and |font_list| is the font used for all
@@ -106,12 +107,13 @@ class PasswordGenerationPopupViewViews::PasswordBox : public views::View {
   }
 
   // views::View:
-  virtual bool CanProcessEventsWithinSubtree() const OVERRIDE {
+  bool CanProcessEventsWithinSubtree() const override {
     // Send events to the parent view for handling.
     return false;
   }
 
  private:
+
   DISALLOW_COPY_AND_ASSIGN(PasswordBox);
 };
 
@@ -133,9 +135,10 @@ PasswordGenerationPopupViewViews::PasswordGenerationPopupViewViews(
   default_style.color = kExplanatoryTextColor;
   help_label_->SetDefaultStyle(default_style);
 
-  help_label_->AddStyleRange(
-      controller_->HelpTextLinkRange(),
-      views::StyledLabel::RangeStyleInfo::CreateForLink());
+  views::StyledLabel::RangeStyleInfo link_style =
+      views::StyledLabel::RangeStyleInfo::CreateForLink();
+  link_style.disable_line_wrapping = false;
+  help_label_->AddStyleRange(controller_->HelpTextLinkRange(), link_style);
 
   help_label_->set_background(
       views::Background::CreateSolidBackground(
@@ -199,6 +202,9 @@ void PasswordGenerationPopupViewViews::UpdateBoundsAndRedrawPopup() {
 void PasswordGenerationPopupViewViews::PasswordSelectionUpdated() {
   if (!password_view_)
     return;
+
+  if (controller_->password_selected())
+    NotifyAccessibilityEvent(ui::AX_EVENT_FOCUS, true);
 
   password_view_->set_background(
       views::Background::CreateSolidBackground(
@@ -268,6 +274,12 @@ PasswordGenerationPopupView* PasswordGenerationPopupView::Create(
     return NULL;
 
   return new PasswordGenerationPopupViewViews(controller, observing_widget);
+}
+
+void PasswordGenerationPopupViewViews::GetAccessibleState(
+    ui::AXViewState* state) {
+  state->name = controller_->SuggestedText();
+  state->role = ui::AX_ROLE_MENU_ITEM;
 }
 
 }  // namespace autofill

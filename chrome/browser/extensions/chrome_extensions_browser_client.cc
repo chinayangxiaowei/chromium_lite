@@ -5,13 +5,13 @@
 #include "chrome/browser/extensions/chrome_extensions_browser_client.h"
 
 #include "base/command_line.h"
-#include "base/path_service.h"
 #include "base/version.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "chrome/browser/extensions/api/chrome_extensions_api_client.h"
 #include "chrome/browser/extensions/api/content_settings/content_settings_service.h"
+#include "chrome/browser/extensions/api/generated_api_registration.h"
 #include "chrome/browser/extensions/api/preference/chrome_direct_setting.h"
 #include "chrome/browser/extensions/api/preference/preference_api.h"
 #include "chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.h"
@@ -19,9 +19,10 @@
 #include "chrome/browser/extensions/chrome_component_extension_resource_manager.h"
 #include "chrome/browser/extensions/chrome_extension_host_delegate.h"
 #include "chrome/browser/extensions/chrome_process_manager_delegate.h"
+#include "chrome/browser/extensions/chrome_url_request_util.h"
+#include "chrome/browser/extensions/event_router_forwarder.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/extensions/extension_util.h"
-#include "chrome/browser/extensions/url_request_util.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "chrome/browser/profiles/profile.h"
@@ -29,16 +30,19 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
-#include "chrome/common/extensions/api/generated_api.h"
 #include "chrome/common/extensions/features/feature_channel.h"
 #include "chrome/common/pref_names.h"
+#include "extensions/browser/api/generated_api_registration.h"
 #include "extensions/browser/extension_function_registry.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/pref_names.h"
-#include "extensions/common/api/generated_api.h"
+#include "extensions/browser/url_request_util.h"
 
 #if defined(OS_CHROMEOS)
+#include "chrome/browser/extensions/updater/extension_cache_impl.h"
 #include "chromeos/chromeos_switches.h"
+#else
+#include "extensions/browser/updater/null_extension_cache.h"
 #endif
 
 namespace extensions {
@@ -112,11 +116,6 @@ bool ChromeExtensionsBrowserClient::CanExtensionCrossIncognito(
       || util::CanCrossIncognito(extension, context);
 }
 
-bool ChromeExtensionsBrowserClient::IsWebViewRequest(
-    net::URLRequest* request) const {
-  return url_request_util::IsWebViewRequest(request);
-}
-
 net::URLRequestJob*
 ChromeExtensionsBrowserClient::MaybeCreateResourceBundleRequestJob(
     net::URLRequest* request,
@@ -124,7 +123,7 @@ ChromeExtensionsBrowserClient::MaybeCreateResourceBundleRequestJob(
     const base::FilePath& directory_path,
     const std::string& content_security_policy,
     bool send_cors_header) {
-  return url_request_util::MaybeCreateURLRequestResourceBundleJob(
+  return chrome_url_request_util::MaybeCreateURLRequestResourceBundleJob(
       request,
       network_delegate,
       directory_path,
@@ -137,8 +136,13 @@ bool ChromeExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     bool is_incognito,
     const Extension* extension,
     InfoMap* extension_info_map) {
-  return url_request_util::AllowCrossRendererResourceLoad(
-      request, is_incognito, extension, extension_info_map);
+  bool allowed = false;
+  if (chrome_url_request_util::AllowCrossRendererResourceLoad(
+          request, is_incognito, extension, extension_info_map, &allowed))
+    return allowed;
+
+  // Couldn't determine if resource is allowed. Block the load.
+  return false;
 }
 
 PrefService* ChromeExtensionsBrowserClient::GetPrefServiceForContext(
@@ -240,6 +244,13 @@ void ChromeExtensionsBrowserClient::RegisterExtensionFunctions(
   extensions::api::GeneratedFunctionRegistry::RegisterAll(registry);
 }
 
+scoped_ptr<extensions::RuntimeAPIDelegate>
+ChromeExtensionsBrowserClient::CreateRuntimeAPIDelegate(
+    content::BrowserContext* context) const {
+  return scoped_ptr<extensions::RuntimeAPIDelegate>(
+      new ChromeRuntimeAPIDelegate(context));
+}
+
 ComponentExtensionResourceManager*
 ChromeExtensionsBrowserClient::GetComponentExtensionResourceManager() {
   if (!resource_manager_)
@@ -247,15 +258,43 @@ ChromeExtensionsBrowserClient::GetComponentExtensionResourceManager() {
   return resource_manager_.get();
 }
 
+void ChromeExtensionsBrowserClient::BroadcastEventToRenderers(
+    const std::string& event_name,
+    scoped_ptr<base::ListValue> args) {
+  g_browser_process->extension_event_router_forwarder()
+      ->BroadcastEventToRenderers(event_name, args.Pass(), GURL());
+}
+
 net::NetLog* ChromeExtensionsBrowserClient::GetNetLog() {
   return g_browser_process->net_log();
 }
 
-scoped_ptr<extensions::RuntimeAPIDelegate>
-ChromeExtensionsBrowserClient::CreateRuntimeAPIDelegate(
-    content::BrowserContext* context) const {
-  return scoped_ptr<extensions::RuntimeAPIDelegate>(
-      new ChromeRuntimeAPIDelegate(context));
+ExtensionCache* ChromeExtensionsBrowserClient::GetExtensionCache() {
+  if (!extension_cache_.get()) {
+#if defined(OS_CHROMEOS)
+    extension_cache_.reset(new ExtensionCacheImpl());
+#else
+    extension_cache_.reset(new NullExtensionCache());
+#endif
+  }
+  return extension_cache_.get();
+}
+
+bool ChromeExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
+  return !CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableBackgroundNetworking);
+}
+
+bool ChromeExtensionsBrowserClient::IsMinBrowserVersionSupported(
+    const std::string& min_version) {
+  chrome::VersionInfo version_info;
+  base::Version browser_version = base::Version(version_info.Version());
+  Version browser_min_version(min_version);
+  if (browser_version.IsValid() && browser_min_version.IsValid() &&
+      browser_min_version.CompareTo(browser_version) > 0) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace extensions

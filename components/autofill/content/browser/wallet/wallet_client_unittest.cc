@@ -281,6 +281,30 @@ const char kErrorResponse[] =
     "  }"
     "}";
 
+const char kErrorResponseSpendingLimitExceeded[] =
+    "{"
+    "  \"error_type\":\"APPLICATION_ERROR\","
+    "  \"error_detail\":\"error_detail\","
+    "  \"application_error\":\"application_error\","
+    "  \"debug_data\":"
+    "  {"
+    "    \"debug_message\":\"debug_message\","
+    "    \"stack_trace\":\"stack_trace\""
+    "  },"
+    "  \"application_error_data\":\"application_error_data\","
+    "  \"wallet_error\":"
+    "  {"
+    "    \"error_type\":\"SPENDING_LIMIT_EXCEEDED\","
+    "    \"error_detail\":\"error_detail\","
+    "    \"message_for_user\":"
+    "    {"
+    "      \"text\":\"text\","
+    "      \"subtext\":\"subtext\","
+    "      \"details\":\"details\""
+    "    }"
+    "  }"
+    "}";
+
 const char kErrorTypeMissingInResponse[] =
     "{"
     "  \"error_type\":\"Not APPLICATION_ERROR\","
@@ -633,19 +657,19 @@ class MockWalletClientDelegate : public WalletClientDelegate {
         is_shipping_required_(true) {}
   ~MockWalletClientDelegate() {}
 
-  virtual const AutofillMetrics& GetMetricLogger() const OVERRIDE {
+  virtual const AutofillMetrics& GetMetricLogger() const override {
     return metric_logger_;
   }
 
-  virtual std::string GetRiskData() const OVERRIDE {
+  virtual std::string GetRiskData() const override {
     return "risky business";
   }
 
-  virtual std::string GetWalletCookieValue() const OVERRIDE {
+  virtual std::string GetWalletCookieValue() const override {
     return "gdToken";
   }
 
-  virtual bool IsShippingAddressRequired() const OVERRIDE {
+  virtual bool IsShippingAddressRequired() const override {
     return is_shipping_required_;
   }
 
@@ -699,12 +723,12 @@ class MockWalletClientDelegate : public WalletClientDelegate {
                     const std::vector<FormFieldError>& form_field_errors));
   MOCK_METHOD1(OnWalletError, void(WalletClient::ErrorType error_type));
 
-  virtual void OnDidGetFullWallet(scoped_ptr<FullWallet> full_wallet) OVERRIDE {
+  virtual void OnDidGetFullWallet(scoped_ptr<FullWallet> full_wallet) override {
     EXPECT_TRUE(full_wallet);
     ++full_wallets_received_;
   }
   virtual void OnDidGetWalletItems(scoped_ptr<WalletItems> wallet_items)
-      OVERRIDE {
+      override {
     EXPECT_TRUE(wallet_items);
     ++wallet_items_received_;
   }
@@ -726,18 +750,14 @@ class WalletClientTest : public testing::Test {
   WalletClientTest()
       : request_context_(new net::TestURLRequestContextGetter(
             base::MessageLoopProxy::current())) {}
-  virtual ~WalletClientTest() {}
+  ~WalletClientTest() override {}
 
-  virtual void SetUp() OVERRIDE {
-    wallet_client_.reset(
-        new WalletClient(request_context_,
-                         &delegate_,
-                         GURL(kMerchantUrl)));
+  void SetUp() override {
+    wallet_client_.reset(new WalletClient(
+        request_context_.get(), &delegate_, GURL(kMerchantUrl)));
   }
 
-  virtual void TearDown() OVERRIDE {
-    wallet_client_.reset();
-  }
+  void TearDown() override { wallet_client_.reset(); }
 
   void VerifyAndFinishRequest(net::HttpStatusCode response_code,
                               const std::string& request_body,
@@ -780,14 +800,16 @@ class WalletClientTest : public testing::Test {
     EXPECT_EQ("GoogleLogin auth=gdToken", auth_header_value);
 
     const std::string& upload_data = fetcher->upload_data();
-    std::vector<std::pair<std::string, std::string> > tokens;
+    base::StringPairs tokens;
     base::SplitStringIntoKeyValuePairs(upload_data, '=', '&', &tokens);
     EXPECT_EQ(tokens.size(), expected_parameter_number);
 
     size_t num_params = 0U;
-    for (size_t i = 0; i < tokens.size(); ++i) {
-      const std::string& key = tokens[i].first;
-      const std::string& value = tokens[i].second;
+    for (base::StringPairs::const_iterator iter = tokens.begin();
+         iter != tokens.end();
+         ++iter) {
+      const std::string& key = iter->first;
+      const std::string& value = iter->second;
 
       if (key == "request_content_type") {
         EXPECT_EQ("application/json", value);
@@ -983,7 +1005,7 @@ TEST_F(WalletClientTest, WalletErrorCodes) {
       },
   };
 
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_cases); ++i) {
+  for (size_t i = 0; i < arraysize(test_cases); ++i) {
     SCOPED_TRACE(
         base::StringPrintf(
             "%s - %s",
@@ -1757,7 +1779,8 @@ TEST_F(WalletClientTest, HasRequestInProgress) {
   EXPECT_FALSE(wallet_client_->HasRequestInProgress());
 }
 
-TEST_F(WalletClientTest, ErrorResponse) {
+// 500 (INTERNAL_SERVER_ERROR) - response json is parsed.
+TEST_F(WalletClientTest, ErrorResponse500) {
   EXPECT_FALSE(wallet_client_->HasRequestInProgress());
   delegate_.ExpectBaselineMetrics();
   wallet_client_->GetWalletItems(base::string16(), base::string16());
@@ -1774,6 +1797,60 @@ TEST_F(WalletClientTest, ErrorResponse) {
   VerifyAndFinishRequest(net::HTTP_INTERNAL_SERVER_ERROR,
                          kGetWalletItemsValidRequest,
                          kErrorResponse);
+}
+
+// 403 (FORBIDDEN) - response json is parsed.
+TEST_F(WalletClientTest, ErrorResponse403) {
+  EXPECT_FALSE(wallet_client_->HasRequestInProgress());
+  delegate_.ExpectBaselineMetrics();
+  wallet_client_->GetWalletItems(base::string16(), base::string16());
+  EXPECT_TRUE(wallet_client_->HasRequestInProgress());
+  testing::Mock::VerifyAndClear(delegate_.metric_logger());
+
+  EXPECT_CALL(delegate_, OnWalletError(WalletClient::SPENDING_LIMIT_EXCEEDED))
+      .Times(1);
+  delegate_.ExpectLogWalletApiCallDuration(AutofillMetrics::GET_WALLET_ITEMS,
+                                           1);
+  delegate_.ExpectWalletErrorMetric(
+      AutofillMetrics::WALLET_SPENDING_LIMIT_EXCEEDED);
+
+  VerifyAndFinishRequest(net::HTTP_FORBIDDEN,
+                         kGetWalletItemsValidRequest,
+                         kErrorResponseSpendingLimitExceeded);
+}
+
+// 400 (BAD_REQUEST) - response json is ignored.
+TEST_F(WalletClientTest, ErrorResponse400) {
+  EXPECT_FALSE(wallet_client_->HasRequestInProgress());
+  delegate_.ExpectBaselineMetrics();
+  wallet_client_->GetWalletItems(base::string16(), base::string16());
+  EXPECT_TRUE(wallet_client_->HasRequestInProgress());
+  testing::Mock::VerifyAndClear(delegate_.metric_logger());
+
+  EXPECT_CALL(delegate_, OnWalletError(WalletClient::BAD_REQUEST)).Times(1);
+  delegate_.ExpectLogWalletApiCallDuration(AutofillMetrics::GET_WALLET_ITEMS,
+                                           1);
+  delegate_.ExpectWalletErrorMetric(AutofillMetrics::WALLET_BAD_REQUEST);
+
+  VerifyAndFinishRequest(
+      net::HTTP_BAD_REQUEST, kGetWalletItemsValidRequest, kErrorResponse);
+}
+
+// Anything else - response json is ignored.
+TEST_F(WalletClientTest, ErrorResponseOther) {
+  EXPECT_FALSE(wallet_client_->HasRequestInProgress());
+  delegate_.ExpectBaselineMetrics();
+  wallet_client_->GetWalletItems(base::string16(), base::string16());
+  EXPECT_TRUE(wallet_client_->HasRequestInProgress());
+  testing::Mock::VerifyAndClear(delegate_.metric_logger());
+
+  EXPECT_CALL(delegate_, OnWalletError(WalletClient::NETWORK_ERROR)).Times(1);
+  delegate_.ExpectLogWalletApiCallDuration(AutofillMetrics::GET_WALLET_ITEMS,
+                                           1);
+  delegate_.ExpectWalletErrorMetric(AutofillMetrics::WALLET_NETWORK_ERROR);
+
+  VerifyAndFinishRequest(
+      net::HTTP_NOT_FOUND, kGetWalletItemsValidRequest, kErrorResponse);
 }
 
 TEST_F(WalletClientTest, CancelRequest) {

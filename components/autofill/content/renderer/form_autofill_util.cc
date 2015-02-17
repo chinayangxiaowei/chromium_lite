@@ -56,14 +56,21 @@ namespace {
 
 // A bit field mask for FillForm functions to not fill some fields.
 enum FieldFilterMask {
-  FILTER_NONE                       = 0,
-  FILTER_DISABLED_ELEMENTS          = 1 << 0,
-  FILTER_READONLY_ELEMENTS          = 1 << 1,
-  FILTER_NON_FOCUSABLE_ELEMENTS     = 1 << 2,
-  FILTER_ALL_NON_EDITIABLE_ELEMENTS = FILTER_DISABLED_ELEMENTS |
-                                      FILTER_READONLY_ELEMENTS |
-                                      FILTER_NON_FOCUSABLE_ELEMENTS,
+  FILTER_NONE                      = 0,
+  FILTER_DISABLED_ELEMENTS         = 1 << 0,
+  FILTER_READONLY_ELEMENTS         = 1 << 1,
+  FILTER_NON_FOCUSABLE_ELEMENTS    = 1 << 2,
+  FILTER_ALL_NON_EDITABLE_ELEMENTS = FILTER_DISABLED_ELEMENTS |
+                                     FILTER_READONLY_ELEMENTS |
+                                     FILTER_NON_FOCUSABLE_ELEMENTS,
 };
+
+RequirementsMask ExtractionRequirements() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+             switches::kIgnoreAutocompleteOffForAutofill)
+             ? REQUIRE_NONE
+             : REQUIRE_AUTOCOMPLETE;
+}
 
 bool IsOptionElement(const WebElement& element) {
   CR_DEFINE_STATIC_LOCAL(WebString, kOption, ("option"));
@@ -267,6 +274,16 @@ base::string16 InferLabelFromPrevious(const WebFormControlElement& element) {
 }
 
 // Helper for |InferLabelForElement()| that infers a label, if possible, from
+// placeholder text,
+base::string16 InferLabelFromPlaceholder(const WebFormControlElement& element) {
+  CR_DEFINE_STATIC_LOCAL(WebString, kPlaceholder, ("placeholder"));
+  if (element.hasAttribute(kPlaceholder))
+    return element.getAttribute(kPlaceholder);
+
+  return base::string16();
+}
+
+// Helper for |InferLabelForElement()| that infers a label, if possible, from
 // enclosing list item,
 // e.g. <li>Some Text<input ...><input ...><input ...></tr>
 base::string16 InferLabelFromListItem(const WebFormControlElement& element) {
@@ -414,6 +431,11 @@ base::string16 InferLabelForElement(const WebFormControlElement& element) {
   if (!inferred_label.empty())
     return inferred_label;
 
+  // If we didn't find a label, check for placeholder text.
+  inferred_label = InferLabelFromPlaceholder(element);
+  if (!inferred_label.empty())
+    return inferred_label;
+
   // If we didn't find a label, check for list item case.
   inferred_label = InferLabelFromListItem(element);
   if (!inferred_label.empty())
@@ -480,8 +502,8 @@ void ForEachMatchingFormField(const WebFormElement& form_element,
                               bool force_override,
                               Callback callback) {
   std::vector<WebFormControlElement> control_elements;
-  ExtractAutofillableElements(form_element, REQUIRE_AUTOCOMPLETE,
-                              &control_elements);
+  ExtractAutofillableElements(
+      form_element, ExtractionRequirements(), &control_elements);
 
   if (control_elements.size() != data.fields.size()) {
     // This case should be reachable only for pathological websites and tests,
@@ -540,8 +562,6 @@ void FillFormField(const FormFieldData& data,
   if (!data.is_autofilled)
     return;
 
-  field->setAutofilled(true);
-
   WebInputElement* input_element = toWebInputElement(field);
   if (IsCheckableElement(input_element)) {
     input_element->setChecked(data.is_checked, true);
@@ -554,6 +574,8 @@ void FillFormField(const FormFieldData& data,
     }
     field->setValue(value, true);
   }
+
+  field->setAutofilled(true);
 
   if (is_initiating_node &&
       ((IsTextInput(input_element) || IsMonthInput(input_element)) ||
@@ -642,28 +664,28 @@ const size_t kMaxParseableFields = 200;
 
 bool IsMonthInput(const WebInputElement* element) {
   CR_DEFINE_STATIC_LOCAL(WebString, kMonth, ("month"));
-  return element && element->formControlType() == kMonth;
+  return element && !element->isNull() && element->formControlType() == kMonth;
 }
 
 // All text fields, including password fields, should be extracted.
 bool IsTextInput(const WebInputElement* element) {
-  return element && element->isTextField();
+  return element && !element->isNull() && element->isTextField();
 }
 
 bool IsSelectElement(const WebFormControlElement& element) {
   // Static for improved performance.
   CR_DEFINE_STATIC_LOCAL(WebString, kSelectOne, ("select-one"));
-  return element.formControlType() == kSelectOne;
+  return !element.isNull() && element.formControlType() == kSelectOne;
 }
 
 bool IsTextAreaElement(const WebFormControlElement& element) {
   // Static for improved performance.
   CR_DEFINE_STATIC_LOCAL(WebString, kTextArea, ("textarea"));
-  return element.formControlType() == kTextArea;
+  return !element.isNull() && element.formControlType() == kTextArea;
 }
 
 bool IsCheckableElement(const WebInputElement* element) {
-  if (!element)
+  if (!element || element->isNull())
     return false;
 
   return element->isCheckbox() || element->isRadioButton();
@@ -1001,7 +1023,7 @@ void FillForm(const FormData& form, const WebFormControlElement& element) {
   ForEachMatchingFormField(form_element,
                            element,
                            form,
-                           FILTER_ALL_NON_EDITIABLE_ELEMENTS,
+                           FILTER_ALL_NON_EDITABLE_ELEMENTS,
                            false, /* dont force override */
                            &FillFormField);
 }
@@ -1042,7 +1064,7 @@ void PreviewForm(const FormData& form, const WebFormControlElement& element) {
   ForEachMatchingFormField(form_element,
                            element,
                            form,
-                           FILTER_ALL_NON_EDITIABLE_ELEMENTS,
+                           FILTER_ALL_NON_EDITABLE_ELEMENTS,
                            false, /* dont force override */
                            &PreviewFormField);
 }
@@ -1054,8 +1076,8 @@ bool ClearPreviewedFormWithElement(const WebFormControlElement& element,
     return false;
 
   std::vector<WebFormControlElement> control_elements;
-  ExtractAutofillableElements(form_element, REQUIRE_AUTOCOMPLETE,
-                              &control_elements);
+  ExtractAutofillableElements(
+      form_element, ExtractionRequirements(), &control_elements);
   for (size_t i = 0; i < control_elements.size(); ++i) {
     // There might be unrelated elements in this form which have already been
     // auto-filled.  For example, the user might have already filled the address
@@ -1114,8 +1136,8 @@ bool FormWithElementIsAutofilled(const WebInputElement& element) {
     return false;
 
   std::vector<WebFormControlElement> control_elements;
-  ExtractAutofillableElements(form_element, REQUIRE_AUTOCOMPLETE,
-                              &control_elements);
+  ExtractAutofillableElements(
+      form_element, ExtractionRequirements(), &control_elements);
   for (size_t i = 0; i < control_elements.size(); ++i) {
     WebInputElement* input_element = toWebInputElement(&control_elements[i]);
     if (!IsAutofillableInputElement(input_element))

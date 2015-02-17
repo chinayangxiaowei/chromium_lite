@@ -4,7 +4,7 @@
 
 #include "components/metrics/serialization/serialization_utils.h"
 
-#include "base/file_util.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
@@ -25,9 +25,7 @@ class SerializationUtilsTest : public testing::Test {
     }
   }
 
-  virtual void SetUp() OVERRIDE {
-    base::DeleteFile(filepath, false);
-  }
+  void SetUp() override { base::DeleteFile(filepath, false); }
 
   void TestSerialization(MetricSample* sample) {
     std::string serialized(sample->ToString());

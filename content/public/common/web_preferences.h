@@ -24,9 +24,6 @@ namespace content {
 // "Arab" to "My Arabic Font".
 typedef std::map<std::string, base::string16> ScriptFontFamilyMap;
 
-typedef std::vector<std::pair<std::string, std::string> >
-    WebInspectorPreferences;
-
 enum EditingBehavior {
   EDITING_BEHAVIOR_MAC,
   EDITING_BEHAVIOR_WIN,
@@ -40,6 +37,14 @@ enum V8CacheOptions {
   V8_CACHE_OPTIONS_PARSE,
   V8_CACHE_OPTIONS_CODE,
   V8_CACHE_OPTIONS_LAST = V8_CACHE_OPTIONS_CODE
+};
+
+enum V8ScriptStreamingMode {
+  V8_SCRIPT_STREAMING_MODE_ALL,
+  V8_SCRIPT_STREAMING_MODE_ONLY_ASYNC_AND_DEFER,
+  V8_SCRIPT_STREAMING_MODE_ALL_PLUS_BLOCK_PARSER_BLOCKING,
+  V8_SCRIPT_STREAMING_MODE_LAST =
+      V8_SCRIPT_STREAMING_MODE_ALL_PLUS_BLOCK_PARSER_BLOCKING
 };
 
 // The ISO 15924 script code for undetermined script aka Common. It's the
@@ -72,7 +77,6 @@ struct CONTENT_EXPORT WebPreferences {
   bool images_enabled;
   bool plugins_enabled;
   bool dom_paste_enabled;
-  WebInspectorPreferences inspector_settings;
   bool shrinks_standalone_images_to_fit;
   bool uses_universal_detector;
   bool text_areas_are_resizable;
@@ -112,10 +116,12 @@ struct CONTENT_EXPORT WebPreferences {
   bool accelerated_2d_canvas_enabled;
   int minimum_accelerated_2d_canvas_size;
   bool antialiased_2d_canvas_disabled;
+  bool antialiased_clips_2d_canvas_enabled;
   int accelerated_2d_canvas_msaa_sample_count;
   bool accelerated_filters_enabled;
   bool deferred_filters_enabled;
   bool container_culling_enabled;
+  bool text_blobs_enabled;
   bool allow_displaying_insecure_content;
   bool allow_running_insecure_content;
   bool password_echo_enabled;
@@ -131,13 +137,13 @@ struct CONTENT_EXPORT WebPreferences {
   int pointer_events_max_touch_points;
   bool sync_xhr_in_documents_enabled;
   bool deferred_image_decoding_enabled;
+  bool image_color_profiles_enabled;
   bool should_respect_image_orientation;
   int number_of_cpu_cores;
   EditingBehavior editing_behavior;
   bool supports_multiple_windows;
   bool viewport_enabled;
   bool viewport_meta_enabled;
-  bool use_expanded_heuristics_for_gpu_rasterization;
   bool main_frame_resizes_are_orientation_changes;
   bool initialize_at_minimum_page_scale;
   bool smart_insert_delete_enabled;
@@ -147,6 +153,9 @@ struct CONTENT_EXPORT WebPreferences {
   bool use_solid_color_scrollbars;
   bool navigate_on_drag_drop;
   V8CacheOptions v8_cache_options;
+  bool v8_script_streaming_enabled;
+  V8ScriptStreamingMode v8_script_streaming_mode;
+  bool slimming_paint_enabled;
 
   // This flags corresponds to a Page's Settings' setCookieEnabled state. It
   // only controls whether or not the "document.cookie" field is properly
@@ -164,7 +173,6 @@ struct CONTENT_EXPORT WebPreferences {
   float font_scale_factor;
   float device_scale_adjustment;
   bool force_enable_zoom;
-  bool disallow_fullscreen_for_non_media_elements;
   bool fullscreen_supported;
   bool double_tap_to_zoom_enabled;
   bool user_gesture_required_for_media_playback;

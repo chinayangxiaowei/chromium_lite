@@ -11,6 +11,7 @@
 #import "chrome/browser/ui/cocoa/extensions/extension_install_view_controller.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/test/test_utils.h"
 #include "extensions/common/extension.h"
 
 namespace {
@@ -19,7 +20,7 @@ namespace {
 // dialog controller to be captured and manipulated for tests.
 void TestingShowAppListInstallDialogController(
     WindowedInstallDialogController** controller,
-    const ExtensionInstallPrompt::ShowParams& show_params,
+    ExtensionInstallPromptShowParams* show_params,
     ExtensionInstallPrompt::Delegate* delegate,
     scoped_refptr<ExtensionInstallPrompt::Prompt> prompt) {
   *controller =
@@ -36,7 +37,7 @@ IN_PROC_BROWSER_TEST_F(WindowedInstallDialogControllerBrowserTest,
   // Construct a prompt with a NULL parent window, the way ExtensionEnableFlow
   // will for the Mac app list. For testing, sets a NULL PageNavigator as well.
   scoped_ptr<ExtensionInstallPrompt> prompt(
-      new ExtensionInstallPrompt(browser()->profile(), NULL, NULL));
+      new ExtensionInstallPrompt(browser()->profile(), NULL));
 
   WindowedInstallDialogController* controller = NULL;
   chrome::MockExtensionInstallPromptDelegate delegate;
@@ -48,8 +49,7 @@ IN_PROC_BROWSER_TEST_F(WindowedInstallDialogControllerBrowserTest,
       base::Bind(&TestingShowAppListInstallDialogController, &controller));
 
   // The prompt needs to load the image, which happens on the blocking pool.
-  content::BrowserThread::GetBlockingPool()->FlushForTesting();
-  base::RunLoop().RunUntilIdle();
+  content::RunAllBlockingPoolTasksUntilIdle();
   ASSERT_TRUE(controller);
 
   base::scoped_nsobject<NSWindow> window(

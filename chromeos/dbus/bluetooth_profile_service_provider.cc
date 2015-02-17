@@ -195,17 +195,13 @@ class BluetoothProfileServiceProviderImpl
         break;
       }
       case Delegate::REJECTED: {
-        response_sender.Run(
-            dbus::ErrorResponse::FromMethodCall(
-                method_call, bluetooth_profile::kErrorRejected, "rejected")
-            .PassAs<dbus::Response>());
+        response_sender.Run(dbus::ErrorResponse::FromMethodCall(
+            method_call, bluetooth_profile::kErrorRejected, "rejected"));
         break;
       }
       case Delegate::CANCELLED: {
-        response_sender.Run(
-            dbus::ErrorResponse::FromMethodCall(
-                method_call, bluetooth_profile::kErrorCanceled, "canceled")
-            .PassAs<dbus::Response>());
+        response_sender.Run(dbus::ErrorResponse::FromMethodCall(
+            method_call, bluetooth_profile::kErrorCanceled, "canceled"));
         break;
       }
       default:
@@ -252,7 +248,7 @@ BluetoothProfileServiceProvider* BluetoothProfileServiceProvider::Create(
     dbus::Bus* bus,
     const dbus::ObjectPath& object_path,
     Delegate* delegate) {
-  if (!DBusThreadManager::IsUsingStub(DBusClientBundle::BLUETOOTH)) {
+  if (!DBusThreadManager::Get()->IsUsingStub(DBusClientBundle::BLUETOOTH)) {
     return new BluetoothProfileServiceProviderImpl(bus, object_path, delegate);
   } else {
     return new FakeBluetoothProfileServiceProvider(object_path, delegate);

@@ -44,11 +44,10 @@ scoped_refptr<Tile> FakePictureLayerTilingClient::CreateTile(
     const gfx::Rect& rect) {
   if (!allow_create_tile_)
     return scoped_refptr<Tile>();
-  return tile_manager_->CreateTile(
-      pile_.get(), tile_size_, rect, gfx::Rect(), 1, 0, 0, 0);
+  return tile_manager_->CreateTile(pile_.get(), tile_size_, rect, 1, 0, 0, 0);
 }
 
-PicturePileImpl* FakePictureLayerTilingClient::GetPile() {
+RasterSource* FakePictureLayerTilingClient::GetRasterSource() {
   return pile_.get();
 }
 
@@ -74,12 +73,13 @@ int FakePictureLayerTilingClient::GetSkewportExtrapolationLimitInContentPixels()
   return skewport_extrapolation_limit_in_content_pixels_;
 }
 
-const Region* FakePictureLayerTilingClient::GetInvalidation() {
+const Region* FakePictureLayerTilingClient::GetPendingInvalidation() {
   return &invalidation_;
 }
 
-const PictureLayerTiling* FakePictureLayerTilingClient::GetTwinTiling(
-      const PictureLayerTiling* tiling) const {
+const PictureLayerTiling*
+FakePictureLayerTilingClient::GetPendingOrActiveTwinTiling(
+    const PictureLayerTiling* tiling) const {
   return twin_tiling_;
 }
 
@@ -90,6 +90,10 @@ PictureLayerTiling* FakePictureLayerTilingClient::GetRecycledTwinTiling(
 
 WhichTree FakePictureLayerTilingClient::GetTree() const {
   return tree_;
+}
+
+bool FakePictureLayerTilingClient::RequiresHighResToDraw() const {
+  return false;
 }
 
 }  // namespace cc

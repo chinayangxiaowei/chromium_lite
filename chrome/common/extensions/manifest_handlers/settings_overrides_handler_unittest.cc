@@ -6,10 +6,10 @@
 
 #include "base/json/json_string_value_serializer.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/common/extensions/manifest_url_handler.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_url_handlers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -85,7 +85,7 @@ TEST_F(OverrideSettingsTest, ParseManifest) {
       *static_cast<base::DictionaryValue*>(root.get()),
       Extension::NO_FLAGS,
       &error);
-  ASSERT_TRUE(extension);
+  ASSERT_TRUE(extension.get());
 #if defined(OS_WIN)
   ASSERT_TRUE(extension->manifest()->HasPath(manifest_keys::kSettingsOverride));
 
@@ -128,7 +128,7 @@ TEST_F(OverrideSettingsTest, ParsePrepopulatedId) {
                         *static_cast<base::DictionaryValue*>(root.get()),
                         Extension::NO_FLAGS,
                         &error);
-  ASSERT_TRUE(extension);
+  ASSERT_TRUE(extension.get());
 #if defined(OS_WIN)
   ASSERT_TRUE(extension->manifest()->HasPath(manifest_keys::kSettingsOverride));
 
@@ -169,7 +169,7 @@ TEST_F(OverrideSettingsTest, ParseBrokenManifest) {
           extensions::manifest_keys::kSettingsOverride),
       error);
 #else
-  EXPECT_TRUE(extension);
+  EXPECT_TRUE(extension.get());
   EXPECT_FALSE(
       extension->manifest()->HasPath(manifest_keys::kSettingsOverride));
 #endif

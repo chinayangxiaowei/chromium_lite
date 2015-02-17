@@ -5,6 +5,7 @@
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "chrome/browser/download/download_danger_prompt.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -14,11 +15,13 @@
 #include "content/public/test/mock_download_item.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 using ::testing::_;
 using ::testing::ByRef;
 using ::testing::Eq;
 using ::testing::Return;
+using ::testing::ReturnRef;
 using ::testing::SaveArg;
 
 class DownloadDangerPromptTest : public InProcessBrowserTest {
@@ -29,8 +32,7 @@ class DownloadDangerPromptTest : public InProcessBrowserTest {
       did_receive_callback_(false) {
   }
 
-  virtual ~DownloadDangerPromptTest() {
-  }
+  ~DownloadDangerPromptTest() override {}
 
   // Opens a new tab and waits for navigations to finish. If there are pending
   // navigations, the constrained prompt might be dismissed when the navigation
@@ -100,6 +102,13 @@ class DownloadDangerPromptTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(DownloadDangerPromptTest, TestAll) {
+  // ExperienceSampling: Set default actions for DownloadItem methods we need.
+  ON_CALL(download(), GetURL()).WillByDefault(ReturnRef(GURL::EmptyGURL()));
+  ON_CALL(download(), GetReferrerUrl())
+      .WillByDefault(ReturnRef(GURL::EmptyGURL()));
+  ON_CALL(download(), GetBrowserContext())
+      .WillByDefault(Return(browser()->profile()));
+
   OpenNewTab();
 
   // Clicking the Accept button should invoke the ACCEPT action.

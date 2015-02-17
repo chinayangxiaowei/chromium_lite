@@ -5,8 +5,8 @@
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
 
 #include "base/bind.h"
-#include "base/file_util.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/test/sequenced_worker_pool_owner.h"
@@ -37,14 +37,14 @@ class LocalExtensionCacheTest : public testing::Test {
   }
 
   // testing::Test overrides:
-  virtual void SetUp() OVERRIDE {
+  virtual void SetUp() override {
     pool_owner_.reset(
         new base::SequencedWorkerPoolOwner(3, "Background Pool"));
     background_task_runner_ = pool_owner_->pool()->GetSequencedTaskRunner(
         pool_owner_->pool()->GetNamedSequenceToken("background"));
   }
 
-  virtual void TearDown() OVERRIDE {
+  virtual void TearDown() override {
     pool_owner_->pool()->Shutdown();
     base::RunLoop().RunUntilIdle();
   }
