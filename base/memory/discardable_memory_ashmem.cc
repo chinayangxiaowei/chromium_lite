@@ -60,6 +60,8 @@ bool DiscardableMemoryAshmem::AllocateAndAcquireLock() {
     return ashmem_chunk_->Lock();
 
   ashmem_chunk_ = allocator_->Allocate(bytes_);
+  // Allocate should only fail if OOM.
+  CHECK(ashmem_chunk_);
   return false;
 }
 
@@ -69,10 +71,6 @@ void DiscardableMemoryAshmem::ReleaseLock() {
 
 void DiscardableMemoryAshmem::Purge() {
   ashmem_chunk_.reset();
-}
-
-bool DiscardableMemoryAshmem::IsMemoryResident() const {
-  return true;
 }
 
 }  // namespace internal

@@ -15,9 +15,9 @@
 # accordingly.
 #
 ifneq ($(ENABLE_BIONIC),)
-ALL_TOOLCHAINS ?= pnacl newlib glibc bionic
+ALL_TOOLCHAINS ?= pnacl newlib glibc clang-newlib bionic
 else
-ALL_TOOLCHAINS ?= pnacl newlib glibc
+ALL_TOOLCHAINS ?= pnacl newlib glibc clang-newlib
 endif
 
 VALID_TOOLCHAINS ?= $(ALL_TOOLCHAINS)
@@ -326,11 +326,11 @@ endif
 # so that calls to assert(3) are not included in the build.
 #
 ifeq ($(CONFIG),Release)
-POSIX_FLAGS ?= -g -O2 -pthread -MMD -DNDEBUG
+POSIX_CFLAGS ?= -g -O2 -pthread -MMD -DNDEBUG
 NACL_LDFLAGS ?= -O2
 PNACL_LDFLAGS ?= -O2
 else
-POSIX_FLAGS ?= -g -O0 -pthread -MMD -DNACL_SDK_DEBUG
+POSIX_CFLAGS ?= -g -O0 -pthread -MMD -DNACL_SDK_DEBUG
 endif
 
 NACL_CFLAGS ?= -Wno-long-long -Werror
@@ -418,7 +418,7 @@ ifneq (,$(findstring $(TOOLCHAIN),win))
 include $(NACL_SDK_ROOT)/tools/host_vc.mk
 endif
 
-ifneq (,$(findstring $(TOOLCHAIN),glibc newlib bionic))
+ifneq (,$(findstring $(TOOLCHAIN),glibc newlib bionic clang-newlib))
 include $(NACL_SDK_ROOT)/tools/nacl_gcc.mk
 endif
 

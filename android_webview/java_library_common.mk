@@ -22,8 +22,8 @@ LOCAL_SRC_FILES += \
     $(call all-java-files-under, ../device/battery/android/java/src) \
     $(call all-java-files-under, ../media/base/android/java/src) \
     $(call all-java-files-under, ../mojo/android/system/src) \
-    $(call all-java-files-under, ../mojo/public/java/bindings/src) \
-    $(call all-java-files-under, ../mojo/public/java/system/src) \
+    $(call all-java-files-under, ../third_party/mojo/src/mojo/public/java/bindings/src) \
+    $(call all-java-files-under, ../third_party/mojo/src/mojo/public/java/system/src) \
     $(call all-java-files-under, ../net/android/java/src) \
     $(call all-java-files-under, ../ui/android/java/src) \
     $(call all-java-files-under, ../third_party/eyesfree/src/android/java/src) \
@@ -51,9 +51,13 @@ $(call intermediates-dir-for,GYP,shared)/enums/cert_verify_status_android_java/o
 $(call intermediates-dir-for,GYP,shared)/enums/certificate_mime_types_java/org/chromium/net/CertificateMimeType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/network_change_notifier_types_java/org/chromium/net/ConnectionSubtype.java \
 $(call intermediates-dir-for,GYP,shared)/enums/network_change_notifier_types_java/org/chromium/net/ConnectionType.java \
+$(call intermediates-dir-for,GYP,shared)/enums/console_message_level_java/org/chromium/content_public/common/ConsoleMessageLevel.java \
 $(call intermediates-dir-for,GYP,shared)/enums/content_gamepad_mapping/org/chromium/content/browser/input/CanonicalAxisIndex.java \
 $(call intermediates-dir-for,GYP,shared)/enums/content_gamepad_mapping/org/chromium/content/browser/input/CanonicalButtonIndex.java \
 $(call intermediates-dir-for,GYP,shared)/enums/gesture_event_type_java/org/chromium/content/browser/GestureEventType.java \
+$(call intermediates-dir-for,GYP,shared)/enums/invalidate_types_java/org/chromium/content_public/browser/InvalidateTypes.java \
+$(call intermediates-dir-for,GYP,shared)/enums/navigation_controller_java/org/chromium/content_public/browser/navigation_controller/LoadURLType.java \
+$(call intermediates-dir-for,GYP,shared)/enums/navigation_controller_java/org/chromium/content_public/browser/navigation_controller/UserAgentOverrideOption.java \
 $(call intermediates-dir-for,GYP,shared)/enums/popup_item_type_java/org/chromium/content/browser/input/PopupItemType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/private_key_types_java/org/chromium/net/PrivateKeyType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/result_codes_java/org/chromium/content_public/common/ResultCode.java \
@@ -64,6 +68,7 @@ $(call intermediates-dir-for,GYP,shared)/enums/top_controls_state_java/org/chrom
 $(call intermediates-dir-for,GYP,shared)/enums/window_open_disposition_java/org/chromium/ui/WindowOpenDisposition.java \
 $(call intermediates-dir-for,GYP,shared)/enums/base_java_application_state/org/chromium/base/ApplicationState.java \
 $(call intermediates-dir-for,GYP,shared)/enums/base_java_library_load_from_apk_status_codes/org/chromium/base/library_loader/LibraryLoadFromApkStatusCodes.java \
+$(call intermediates-dir-for,GYP,shared)/enums/base_java_library_process_type/org/chromium/base/library_loader/LibraryProcessType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/base_java_memory_pressure_level/org/chromium/base/MemoryPressureLevel.java \
 $(call intermediates-dir-for,GYP,shared)/enums/media_android_imageformat/org/chromium/media/AndroidImageFormat.java \
 $(call intermediates-dir-for,GYP,shared)/enums/page_transition_types_java/org/chromium/ui/base/PageTransition.java \
@@ -71,6 +76,9 @@ $(call intermediates-dir-for,GYP,shared)/enums/system_ui_resource_type_java/org/
 $(call intermediates-dir-for,GYP,shared)/enums/text_input_type_java/org/chromium/ui/base/ime/TextInputType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/touch_device_types_java/org/chromium/ui/base/HoverType.java \
 $(call intermediates-dir-for,GYP,shared)/enums/touch_device_types_java/org/chromium/ui/base/PointerType.java \
+$(call intermediates-dir-for,GYP,shared)/enums/web_input_event_java/org/chromium/blink_public/web/WebInputEventModifier.java \
+$(call intermediates-dir-for,GYP,shared)/enums/web_input_event_java/org/chromium/blink_public/web/WebInputEventType.java \
+$(call intermediates-dir-for,GYP,shared)/enums/web_text_input_type/org/chromium/blink_public/web/WebTextInputFlags.java \
 $(call intermediates-dir-for,GYP,shared)/templates/net_errors_java/org/chromium/net/NetError.java \
 $(call intermediates-dir-for,GYP,shared)/java_mojo/device_battery_mojo_bindings/src/org/chromium/mojom/device/BatteryMonitor.java \
 $(call intermediates-dir-for,GYP,shared)/java_mojo/device_battery_mojo_bindings/src/org/chromium/mojom/device/BatteryMonitor_Internal.java \

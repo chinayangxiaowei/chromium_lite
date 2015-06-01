@@ -104,7 +104,9 @@ static leveldb::Status OpenDB(
   options.paranoid_checks = true;
   options.filter_policy = filter_policy->get();
 #if defined(OS_CHROMEOS)
-  // Disabled on CrOS until crbug.com/460568 is fixed.
+  // Reusing logs on Chrome OS resulted in an unacceptably high leveldb
+  // corruption rate (at least for Indexed DB). More info at
+  // https://crbug.com/460568
   options.reuse_logs = false;
 #else
   options.reuse_logs = true;
@@ -175,7 +177,7 @@ static int CheckFreeSpace(const char* const type,
                                        ? INT_MAX
                                        : free_disk_space_in_k_bytes;
   const uint64 histogram_max = static_cast<uint64>(1e9);
-  COMPILE_ASSERT(histogram_max <= INT_MAX, histogram_max_too_big);
+  static_assert(histogram_max <= INT_MAX, "histogram_max too big");
   base::Histogram::FactoryGet(name,
                               1,
                               histogram_max,
@@ -188,7 +190,7 @@ static int CheckFreeSpace(const char* const type,
 static void ParseAndHistogramIOErrorDetails(const std::string& histogram_name,
                                             const leveldb::Status& s) {
   leveldb_env::MethodID method;
-  int error = -1;
+  base::File::Error error = base::File::FILE_OK;
   leveldb_env::ErrorParsingResult result =
       leveldb_env::ParseMethodAndError(s, &method, &error);
   if (result == leveldb_env::NONE)
@@ -214,15 +216,6 @@ static void ParseAndHistogramIOErrorDetails(const std::string& histogram_name,
         -base::File::FILE_ERROR_MAX,
         -base::File::FILE_ERROR_MAX + 1,
         base::HistogramBase::kUmaTargetedHistogramFlag)->Add(-error);
-  } else if (result == leveldb_env::METHOD_AND_ERRNO) {
-    error_histogram_name.append(std::string(".Errno.") +
-                                leveldb_env::MethodIDToString(method));
-    base::LinearHistogram::FactoryGet(
-        error_histogram_name,
-        1,
-        ERANGE + 1,
-        ERANGE + 2,
-        base::HistogramBase::kUmaTargetedHistogramFlag)->Add(error);
   }
 }
 

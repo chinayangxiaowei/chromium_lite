@@ -8,14 +8,19 @@ import org.chromium.content.browser.WebContentsObserver;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.NetError;
 
+import java.lang.ref.WeakReference;
+
 /**
  * Routes notifications from WebContents to AwContentsClient and other listeners.
  */
 public class AwWebContentsObserver extends WebContentsObserver {
+    private final WeakReference<AwContents> mAwContents;
     private final AwContentsClient mAwContentsClient;
 
-    public AwWebContentsObserver(WebContents webContents, AwContentsClient awContentsClient) {
+    public AwWebContentsObserver(
+            WebContents webContents, AwContents awContents,  AwContentsClient awContentsClient) {
         super(webContents);
+        mAwContents = new WeakReference<AwContents>(awContents);
         mAwContentsClient = awContentsClient;
     }
 

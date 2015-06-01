@@ -18,7 +18,6 @@ import org.chromium.android_webview.AwContentsClient;
 import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.test.util.JSUtils;
 import org.chromium.base.test.util.InMemorySharedPreferences;
-import org.chromium.content.browser.ContentSettings;
 import org.chromium.content.browser.test.util.CallbackHelper;
 import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
@@ -273,6 +272,18 @@ public class AwTestBase
     }
 
     /**
+     * Stops loading on the UI thread.
+     */
+    public void stopLoading(final AwContents awContents) {
+        getInstrumentation().runOnMainSync(new Runnable() {
+            @Override
+            public void run() {
+                awContents.stopLoading();
+            }
+        });
+    }
+
+    /**
      * Checks the current test has |clazz| annotation. Note this swallows NoSuchMethodException
      * and returns false in that case.
      */
@@ -326,6 +337,10 @@ public class AwTestBase
     // The browser context needs to be a process-wide singleton.
     private AwBrowserContext mBrowserContext =
             new AwBrowserContext(new InMemorySharedPreferences());
+
+    public AwBrowserContext getAwBrowserContext() {
+        return mBrowserContext;
+    }
 
     public AwTestContainerView createDetachedAwTestContainerView(
             final AwContentsClient awContentsClient) {
@@ -388,16 +403,6 @@ public class AwTestBase
             @Override
             public String call() throws Exception {
                 return awContents.getTitle();
-            }
-        });
-    }
-
-    public ContentSettings getContentSettingsOnUiThread(
-            final AwContents awContents) throws Exception {
-        return runTestOnUiThreadAndGetResult(new Callable<ContentSettings>() {
-            @Override
-            public ContentSettings call() throws Exception {
-                return awContents.getContentViewCore().getContentSettings();
             }
         });
     }

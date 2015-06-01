@@ -22,8 +22,8 @@ NSString* const kTranslationWithDelta =
 
 namespace {
 const CGFloat kAnimationDuration = 0.2;
-const CGFloat kGrippyWidth = 4.0;
-const CGFloat kMinimumContainerWidth = 10.0;
+const CGFloat kGrippyWidth = 3.0;
+const CGFloat kMinimumContainerWidth = 3.0;
 }  // namespace
 
 @interface BrowserActionsContainerView(Private)
@@ -75,7 +75,6 @@ const CGFloat kMinimumContainerWidth = 10.0;
 }
 
 - (void)resetCursorRects {
-  [self discardCursorRects];
   [self addCursorRect:grippyRect_ cursor:[self appropriateCursorForGrippy]];
 }
 

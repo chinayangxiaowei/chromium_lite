@@ -95,6 +95,42 @@ base::string16 GetUpgradeDialogMenuItemName() {
   }
 }
 
+#if defined(OS_WIN)
+bool GetRestartMenuItemIfRequired(const chrome::HostDesktopType& desktop_type,
+                                  int* command_id,
+                                  int* string_id) {
+  if (base::win::GetVersion() == base::win::VERSION_WIN8 ||
+      base::win::GetVersion() == base::win::VERSION_WIN8_1) {
+    if (desktop_type != chrome::HOST_DESKTOP_TYPE_ASH) {
+      *command_id = IDC_WIN8_METRO_RESTART;
+      *string_id = IDS_WIN8_METRO_RESTART;
+    } else {
+      *command_id = IDC_WIN_DESKTOP_RESTART;
+      *string_id = IDS_WIN_DESKTOP_RESTART;
+    }
+    return true;
+  }
+
+  // Windows 7 ASH mode is only supported in DEBUG for now.
+#if !defined(NDEBUG)
+  // Windows 8 can support ASH mode using WARP, but Windows 7 requires a working
+  // GPU compositor.
+  if (base::win::GetVersion() == base::win::VERSION_WIN7 &&
+      content::GpuDataManager::GetInstance()->CanUseGpuBrowserCompositor()) {
+    if (desktop_type != chrome::HOST_DESKTOP_TYPE_ASH) {
+      *command_id = IDC_WIN_CHROMEOS_RESTART;
+      *string_id = IDS_WIN_CHROMEOS_RESTART;
+    } else {
+      *command_id = IDC_WIN_DESKTOP_RESTART;
+      *string_id = IDS_WIN_DESKTOP_RESTART;
+    }
+    return true;
+  }
+#endif
+  return false;
+}
+#endif
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -239,8 +275,19 @@ void ToolsMenuModel::Build(Browser* browser) {
     show_create_shortcuts = false;
 #endif
 
-  if (extensions::util::IsStreamlinedHostedAppsEnabled()) {
-    AddItemWithStringId(IDC_CREATE_HOSTED_APP, IDS_CREATE_HOSTED_APP);
+  if (extensions::util::IsNewBookmarkAppsEnabled()) {
+#if defined(OS_MACOSX)
+    int string_id = IDS_ADD_TO_APPLICATIONS;
+#elif defined(OS_WIN)
+    int string_id = IDS_ADD_TO_TASKBAR;
+#else
+    int string_id = IDS_ADD_TO_DESKTOP;
+#endif
+#if defined(USE_ASH)
+    if (browser->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH)
+      string_id = IDS_ADD_TO_SHELF;
+#endif
+    AddItemWithStringId(IDC_CREATE_HOSTED_APP, string_id);
     AddSeparator(ui::NORMAL_SEPARATOR);
   } else if (show_create_shortcuts) {
     AddItemWithStringId(IDC_CREATE_SHORTCUTS, IDS_CREATE_SHORTCUTS);
@@ -253,6 +300,10 @@ void ToolsMenuModel::Build(Browser* browser) {
     AddItemWithStringId(IDC_TASK_MANAGER, IDS_TASK_MANAGER);
 
   AddItemWithStringId(IDC_CLEAR_BROWSING_DATA, IDS_CLEAR_BROWSING_DATA);
+
+#if defined(OS_CHROMEOS)
+  AddItemWithStringId(IDC_TAKE_SCREENSHOT, IDS_TAKE_SCREENSHOT);
+#endif
 
   AddSeparator(ui::NORMAL_SEPARATOR);
 
@@ -843,30 +894,13 @@ void WrenchMenuModel::Build() {
   }
 
 #if defined(OS_WIN)
-  base::win::Version min_version_for_ash_mode = base::win::VERSION_WIN8;
-  // Windows 7 ASH mode is only supported in DEBUG for now.
-#if !defined(NDEBUG)
-  min_version_for_ash_mode = base::win::VERSION_WIN7;
-#endif
-  // Windows 8 can support ASH mode using WARP, but Windows 7 requires a working
-  // GPU compositor.
-  if ((base::win::GetVersion() >= min_version_for_ash_mode &&
-      content::GpuDataManager::GetInstance()->CanUseGpuBrowserCompositor()) ||
-      (base::win::GetVersion() >= base::win::VERSION_WIN8)) {
-    if (browser_->host_desktop_type() == chrome::HOST_DESKTOP_TYPE_ASH) {
-      // ASH/Metro mode, add the 'Relaunch Chrome in desktop mode'.
-      AddSeparator(ui::NORMAL_SEPARATOR);
-      AddItemWithStringId(IDC_WIN_DESKTOP_RESTART, IDS_WIN_DESKTOP_RESTART);
-    } else {
-      // In Windows 8 desktop, add the 'Relaunch Chrome in Windows 8 mode'.
-      // In Windows 7 desktop, add the 'Relaunch Chrome in Windows ASH mode'
-      AddSeparator(ui::NORMAL_SEPARATOR);
-      if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
-        AddItemWithStringId(IDC_WIN8_METRO_RESTART, IDS_WIN8_METRO_RESTART);
-      } else {
-        AddItemWithStringId(IDC_WIN_CHROMEOS_RESTART, IDS_WIN_CHROMEOS_RESTART);
-      }
-    }
+  int command_id = IDC_WIN_DESKTOP_RESTART;
+  int string_id = IDS_WIN_DESKTOP_RESTART;
+  if (GetRestartMenuItemIfRequired(browser_->host_desktop_type(),
+                                   &command_id,
+                                   &string_id)) {
+    AddSeparator(ui::NORMAL_SEPARATOR);
+    AddItemWithStringId(command_id, string_id);
   }
 #endif
 

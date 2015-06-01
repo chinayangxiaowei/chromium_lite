@@ -6,13 +6,13 @@ cr.exportPath('options');
 
 /**
  * @typedef {{
- *   availableColorProfiles: Array.<{profileId: number, name: string}>,
+ *   availableColorProfiles: Array<{profileId: number, name: string}>,
  *   colorProfile: number,
  *   height: number,
  *   id: string,
  *   isInternal: boolean,
  *   isPrimary: boolean,
- *   resolutions: Array.<{width: number, height: number, originalWidth: number,
+ *   resolutions: Array<{width: number, height: number, originalWidth: number,
  *       originalHeight: number, deviceScaleFactor: number, scale: number,
  *       refreshRate: number, isBest: boolean, selected: boolean}>,
  *   name: string,
@@ -125,7 +125,7 @@ cr.define('options', function() {
     /**
      * The array of current output displays.  It also contains the display
      * rectangles currently rendered on screen.
-     * @type {Array.<options.DisplayInfo>}
+     * @type {Array<options.DisplayInfo>}
      * @private
      */
     displays_: [],
@@ -169,6 +169,12 @@ cr.define('options', function() {
      * @private
      */
     lastTouchLocation_: null,
+
+    /**
+     * Whether the display settings can be shown.
+     * @private
+     */
+    enabled_: true,
 
     /** @override */
     initializePage: function() {
@@ -222,6 +228,24 @@ cr.define('options', function() {
       for (var i = 0; i < optionTitles.length; i++)
         optionTitles[i].style.width = maxSize + 'px';
       chrome.send('getDisplayInfo');
+    },
+
+    /** @override */
+    canShowPage: function() {
+      return this.enabled_;
+    },
+
+    /**
+     * Enables or disables the page. When disabled, the page will not be able to
+     * open, and will close if currently opened.
+     * @param {boolean} enabled Whether the page should be enabled.
+     */
+    setEnabled: function(enabled) {
+      if (this.enabled_ == enabled)
+        return;
+      this.enabled_ = enabled;
+      if (!enabled && this.visible)
+        PageManager.closeOverlay();
     },
 
     /**
@@ -906,7 +930,7 @@ cr.define('options', function() {
     /**
      * Called when the display arrangement has changed.
      * @param {boolean} mirroring Whether current mode is mirroring or not.
-     * @param {Array.<options.DisplayInfo>} displays The list of the display
+     * @param {Array<options.DisplayInfo>} displays The list of the display
      *     information.
      * @param {options.SecondaryDisplayLayout} layout The layout strategy.
      * @param {number} offset The offset of the secondary display.

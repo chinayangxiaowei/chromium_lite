@@ -26,7 +26,11 @@ X86_64_STRIP := $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) -a x86_64 --tool=strip)
 X86_64_NM := $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) -a x86_64 --tool=nm)
 endif
 
-ifeq (,$(findstring $(TOOLCHAIN),glibc))
+ifneq (,$(findstring $(TOOLCHAIN),newlib bionic clang-newlib))
+ARM_SUPPORT=1
+endif
+
+ifeq ($(ARM_SUPPORT),1)
 ARM_CC := $(NACL_COMPILER_PREFIX) $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) -a arm --tool=cc)
 ARM_CXX := $(NACL_COMPILER_PREFIX) $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) -a arm --tool=c++)
 ARM_LINK := $(shell $(NACL_CONFIG) -t $(TOOLCHAIN) -a arm --tool=c++)
@@ -96,64 +100,64 @@ LDFLAGS_SHARED = -shared
 define C_COMPILER_RULE
 -include $(call SRC_TO_DEP,$(1),_x86_32)
 $(call SRC_TO_OBJ,$(1),_x86_32): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(X86_32_CC) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(X86_32_CFLAGS))
+	$(call LOG,CC  ,$$@,$(X86_32_CC) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(X86_32_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_32)
 
 -include $(call SRC_TO_DEP,$(1),_x86_64)
 $(call SRC_TO_OBJ,$(1),_x86_64): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(X86_64_CC) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(X86_64_CFLAGS))
+	$(call LOG,CC  ,$$@,$(X86_64_CC) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(X86_64_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_64)
 
 -include $(call SRC_TO_DEP,$(1),_arm)
 $(call SRC_TO_OBJ,$(1),_arm): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(ARM_CC) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(ARM_CFLAGS))
+	$(call LOG,CC  ,$$@,$(ARM_CC) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(ARM_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_arm)
 
 -include $(call SRC_TO_DEP,$(1),_x86_32_pic)
 $(call SRC_TO_OBJ,$(1),_x86_32_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(X86_32_CC) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(X86_32_CFLAGS))
+	$(call LOG,CC  ,$$@,$(X86_32_CC) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(X86_32_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_32_pic)
 
 -include $(call SRC_TO_DEP,$(1),_x86_64_pic)
 $(call SRC_TO_OBJ,$(1),_x86_64_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(X86_64_CC) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(X86_64_CFLAGS))
+	$(call LOG,CC  ,$$@,$(X86_64_CC) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(X86_64_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_64_pic)
 
 -include $(call SRC_TO_DEP,$(1),_arm_pic)
 $(call SRC_TO_OBJ,$(1),_arm_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CC  ,$$@,$(ARM_CC) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CFLAGS) $(ARM_CFLAGS))
+	$(call LOG,CC  ,$$@,$(ARM_CC) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CFLAGS) $(ARM_CFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_arm_pic)
 endef
 
 define CXX_COMPILER_RULE
 -include $(call SRC_TO_DEP,$(1),_x86_32)
 $(call SRC_TO_OBJ,$(1),_x86_32): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(X86_32_CXX) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(X86_32_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(X86_32_CXX) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(X86_32_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_32)
 
 -include $(call SRC_TO_DEP,$(1),_x86_64)
 $(call SRC_TO_OBJ,$(1),_x86_64): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(X86_64_CXX) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(X86_64_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(X86_64_CXX) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(X86_64_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_64)
 
 -include $(call SRC_TO_DEP,$(1),_arm)
 $(call SRC_TO_OBJ,$(1),_arm): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(ARM_CXX) -o $$@ -c $$< $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(ARM_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(ARM_CXX) -o $$@ -c $$< $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(ARM_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_arm)
 
 -include $(call SRC_TO_DEP,$(1),_x86_32_pic)
 $(call SRC_TO_OBJ,$(1),_x86_32_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(X86_32_CXX) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(X86_32_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(X86_32_CXX) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(X86_32_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_32_pic)
 
 -include $(call SRC_TO_DEP,$(1),_x86_64_pic)
 $(call SRC_TO_OBJ,$(1),_x86_64_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(X86_64_CXX) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(X86_64_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(X86_64_CXX) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(X86_64_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_x86_64_pic)
 
 -include $(call SRC_TO_DEP,$(1),_arm_pic)
 $(call SRC_TO_OBJ,$(1),_arm_pic): $(1) $(TOP_MAKE) | $(dir $(call SRC_TO_OBJ,$(1)))dir.stamp
-	$(call LOG,CXX ,$$@,$(ARM_CXX) -o $$@ -c $$< -fPIC $(POSIX_FLAGS) $(2) $(NACL_CXXFLAGS) $(ARM_CXXFLAGS))
+	$(call LOG,CXX ,$$@,$(ARM_CXX) -o $$@ -c $$< -fPIC $(POSIX_CFLAGS) $(2) $(NACL_CXXFLAGS) $(ARM_CXXFLAGS))
 	@$(FIXDEPS) $(call SRC_TO_DEP_PRE_FIXUP,$(1),_arm_pic)
 endef
 
@@ -179,7 +183,7 @@ endef
 ifneq ($(TOOLCHAIN),bionic)
 VALID_ARCHES := x86_32 x86_64
 endif
-ifneq (glibc,$(TOOLCHAIN))
+ifeq ($(ARM_SUPPORT),1)
 VALID_ARCHES += arm
 endif
 
@@ -319,7 +323,7 @@ $(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).a: $(X86_64_OUTDIR)/lib$(1)_x86_
 endif
 
 ifneq (,$(findstring arm,$(ARCHES)))
-ifneq ($(TOOLCHAIN),glibc)
+ifeq ($(ARM_SUPPORT),1)
 all: $(ARM_OUTDIR)/lib$(1)_arm.a
 $(ARM_OUTDIR)/lib$(1)_arm.a: $(foreach src,$(2),$(call SRC_TO_OBJ,$(src),_arm))
 	$(MKDIR) -p $$(dir $$@)
