@@ -263,10 +263,8 @@ bool AppWindowCreateFunction::RunAsync() {
         "0F585FB1D0FDFBEBCE1FEB5E9DFFB6DA476B8C9B"
       };
       if (AppWindowClient::Get()->IsCurrentChannelOlderThanDev() &&
-          !SimpleFeature::IsIdInList(
-              extension_id(),
-              std::set<std::string>(kWhitelist,
-                                    kWhitelist + arraysize(kWhitelist)))) {
+          !SimpleFeature::IsIdInArray(
+              extension_id(), kWhitelist, arraysize(kWhitelist))) {
         error_ = app_window_constants::kAlphaEnabledWrongChannel;
         return false;
       }
@@ -337,8 +335,10 @@ bool AppWindowCreateFunction::RunAsync() {
       AppWindowClient::Get()->CreateAppWindow(browser_context(), extension());
   app_window->Init(url, new AppWindowContentsImpl(app_window), create_params);
 
-  if (ExtensionsBrowserClient::Get()->IsRunningInForcedAppMode())
+  if (ExtensionsBrowserClient::Get()->IsRunningInForcedAppMode() &&
+      !app_window->is_ime_window()) {
     app_window->ForcedFullscreen();
+  }
 
   content::RenderViewHost* created_view =
       app_window->web_contents()->GetRenderViewHost();

@@ -14,6 +14,7 @@
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -74,12 +75,12 @@ class DefaultBrowserInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   // ConfirmInfoBarDelegate:
   int GetIconID() const override;
+  bool ShouldExpireInternal(const NavigationDetails& details) const override;
   base::string16 GetMessageText() const override;
   base::string16 GetButtonLabel(InfoBarButton button) const override;
   bool OKButtonTriggersUACPrompt() const override;
   bool Accept() override;
   bool Cancel() override;
-  bool ShouldExpireInternal(const NavigationDetails& details) const override;
 
   // The prefs to use.
   PrefService* prefs_;
@@ -136,6 +137,11 @@ int DefaultBrowserInfoBarDelegate::GetIconID() const {
   return IDR_PRODUCT_LOGO_32;
 }
 
+bool DefaultBrowserInfoBarDelegate::ShouldExpireInternal(
+    const NavigationDetails& details) const {
+  return should_expire_;
+}
+
 base::string16 DefaultBrowserInfoBarDelegate::GetMessageText() const {
   return l10n_util::GetStringUTF16(IDS_DEFAULT_BROWSER_INFOBAR_SHORT_TEXT);
 }
@@ -169,11 +175,6 @@ bool DefaultBrowserInfoBarDelegate::Cancel() {
   return true;
 }
 
-bool DefaultBrowserInfoBarDelegate::ShouldExpireInternal(
-    const NavigationDetails& details) const {
-  return should_expire_;
-}
-
 void NotifyNotDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
   Browser* browser = chrome::FindLastActiveWithHostDesktopType(desktop_type);
   if (!browser)
@@ -194,8 +195,28 @@ void NotifyNotDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
           ShellIntegration::SET_DEFAULT_INTERACTIVE));
 }
 
-void CheckDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
-  if (ShellIntegration::GetDefaultBrowser() == ShellIntegration::NOT_DEFAULT) {
+void ResetCheckDefaultBrowserPrefOnUIThread(
+    const base::FilePath& profile_path) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  Profile* profile =
+      g_browser_process->profile_manager()->GetProfileByPath(profile_path);
+  if (profile)
+    profile->GetPrefs()->SetBoolean(prefs::kCheckDefaultBrowser, true);
+}
+
+void CheckDefaultBrowserOnFileThread(const base::FilePath& profile_path,
+                                     bool show_prompt,
+                                     chrome::HostDesktopType desktop_type) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::FILE);
+  ShellIntegration::DefaultWebClientState state =
+      ShellIntegration::GetDefaultBrowser();
+  if (state == ShellIntegration::IS_DEFAULT) {
+    // Notify the user in the future if Chrome ceases to be the user's chosen
+    // default browser.
+    content::BrowserThread::PostTask(
+        content::BrowserThread::UI, FROM_HERE,
+        base::Bind(&ResetCheckDefaultBrowserPrefOnUIThread, profile_path));
+  } else if (show_prompt && state == ShellIntegration::NOT_DEFAULT) {
     ShellIntegration::DefaultWebClientSetPermission default_change_mode =
         ShellIntegration::CanSetAsDefaultBrowser();
 
@@ -218,12 +239,13 @@ void RegisterDefaultBrowserPromptPrefs(PrefRegistrySimple* registry) {
 
 void ShowDefaultBrowserPrompt(Profile* profile, HostDesktopType desktop_type) {
   // We do not check if we are the default browser if:
-  // - The user said "don't ask me again" on the infobar earlier.
   // - There is a policy in control of this setting.
+  // We check if we are the default browser but do not prompt if:
+  // - The user said "don't ask me again" on the infobar earlier.
   // - The "suppress_default_browser_prompt_for_version" master preference is
   //     set to the current version.
-  if (!profile->GetPrefs()->GetBoolean(prefs::kCheckDefaultBrowser))
-    return;
+  bool show_prompt =
+      profile->GetPrefs()->GetBoolean(prefs::kCheckDefaultBrowser);
 
   if (g_browser_process->local_state()->IsManagedPreference(
       prefs::kDefaultBrowserSettingEnabled)) {
@@ -240,20 +262,23 @@ void ShowDefaultBrowserPrompt(Profile* profile, HostDesktopType desktop_type) {
     return;
   }
 
-  const std::string disable_version_string =
-      g_browser_process->local_state()->GetString(
-          prefs::kBrowserSuppressDefaultBrowserPrompt);
-  const Version disable_version(disable_version_string);
-  DCHECK(disable_version_string.empty() || disable_version.IsValid());
-  if (disable_version.IsValid()) {
-    const chrome::VersionInfo version_info;
-    if (disable_version.Equals(Version(version_info.Version())))
-      return;
+  if (show_prompt) {
+    const std::string disable_version_string =
+        g_browser_process->local_state()->GetString(
+            prefs::kBrowserSuppressDefaultBrowserPrompt);
+    const Version disable_version(disable_version_string);
+    DCHECK(disable_version_string.empty() || disable_version.IsValid());
+    if (disable_version.IsValid()) {
+      const chrome::VersionInfo version_info;
+      if (disable_version.Equals(Version(version_info.Version())))
+        show_prompt = false;
+    }
   }
 
   content::BrowserThread::PostTask(
       content::BrowserThread::FILE, FROM_HERE,
-      base::Bind(&CheckDefaultBrowserCallback, desktop_type));
+      base::Bind(&CheckDefaultBrowserOnFileThread, profile->GetPath(),
+                 show_prompt, desktop_type));
 }
 
 #if !defined(OS_WIN)

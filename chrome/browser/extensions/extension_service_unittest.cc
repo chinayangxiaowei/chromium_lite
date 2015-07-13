@@ -134,6 +134,8 @@
 #include "url/gurl.h"
 
 #if defined(ENABLE_SUPERVISED_USERS)
+#include "chrome/browser/supervised_user/permission_request_creator.h"
+#include "chrome/browser/supervised_user/supervised_user_constants.h"
 #include "chrome/browser/supervised_user/supervised_user_service.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #endif
@@ -160,6 +162,7 @@ using content::PluginService;
 using extensions::APIPermission;
 using extensions::APIPermissionSet;
 using extensions::AppSorting;
+using extensions::AppSyncData;
 using extensions::Blacklist;
 using extensions::CrxInstaller;
 using extensions::Extension;
@@ -193,7 +196,6 @@ const char page_action[] = "obcimlgaoabeegjmmpldobjndiealpln";
 const char theme_crx[] = "iamefpfkojoapidjnbafmgkgncegbkad";
 const char theme2_crx[] = "pjpgmfcmabopnnfonnhmdjglfpjjfkbf";
 const char permissions_crx[] = "eagpmdpfmaekmmcejjbmjoecnejeiiin";
-const char unpacked[] = "cbcdidchbppangcjoddlpdjlenngjldk";
 const char updates_from_webstore[] = "akjooamlhcgeopfifcmlggaebeocgokj";
 const char permissions_blocklist[] = "noffkehfcaggllbcojjbopcmlhcnhcdn";
 
@@ -352,8 +354,8 @@ class MockProviderVisitor
 
     // We also parse the file into a dictionary to compare what we get back
     // from the provider.
-    JSONStringValueSerializer serializer(json_data);
-    base::Value* json_value = serializer.Deserialize(NULL, NULL);
+    JSONStringValueDeserializer deserializer(json_data);
+    base::Value* json_value = deserializer.Deserialize(NULL, NULL);
 
     if (!json_value || !json_value->IsType(base::Value::TYPE_DICTIONARY)) {
       NOTREACHED() << "Unable to deserialize json data";
@@ -2320,49 +2322,6 @@ TEST_F(ExtensionServiceTest, LoadLocalizedTheme) {
   base::FilePath theme_file = extension_path.Append(chrome::kThemePackFilename);
   ASSERT_TRUE(base::PathExists(theme_file));
   ASSERT_TRUE(base::DeleteFile(theme_file, false));  // Not recursive.
-}
-
-// Tests that we can change the ID of an unpacked extension by adding a key
-// to its manifest.
-TEST_F(ExtensionServiceTest, UnpackedExtensionCanChangeID) {
-  InitializeEmptyExtensionService();
-
-  base::ScopedTempDir temp;
-  ASSERT_TRUE(temp.CreateUniqueTempDir());
-
-  base::FilePath extension_path = temp.path();
-  base::FilePath manifest_path =
-      extension_path.Append(extensions::kManifestFilename);
-  base::FilePath manifest_no_key =
-      data_dir().AppendASCII("unpacked").AppendASCII("manifest_no_key.json");
-
-  base::FilePath manifest_with_key =
-      data_dir().AppendASCII("unpacked").AppendASCII("manifest_with_key.json");
-
-  ASSERT_TRUE(base::PathExists(manifest_no_key));
-  ASSERT_TRUE(base::PathExists(manifest_with_key));
-
-  // Load the unpacked extension with no key.
-  base::CopyFile(manifest_no_key, manifest_path);
-  extensions::UnpackedInstaller::Create(service())->Load(extension_path);
-
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(0u, GetErrors().size());
-  ASSERT_EQ(1u, loaded_.size());
-  EXPECT_EQ(1u, registry()->enabled_extensions().size());
-
-  // Add the key to the manifest.
-  base::CopyFile(manifest_with_key, manifest_path);
-  loaded_.clear();
-
-  // Reload the extensions.
-  service()->ReloadExtensionsForTest();
-  const Extension* extension = service()->GetExtensionById(unpacked, false);
-  EXPECT_EQ(unpacked, extension->id());
-  ASSERT_EQ(1u, loaded_.size());
-
-  // TODO(jstritar): Right now this just makes sure we don't crash and burn, but
-  // we should also test that preferences are preserved.
 }
 
 #if defined(OS_POSIX)
@@ -5871,8 +5830,8 @@ TEST_F(ExtensionServiceTest, DisableExtensionFromSync) {
   const Extension* extension = service()->GetExtensionById(good0, true);
   ASSERT_TRUE(extension);
   ASSERT_TRUE(service()->IsExtensionEnabled(good0));
-  extensions::ExtensionSyncData disable_good_crx(
-      *extension, false, false, false, ExtensionSyncData::BOOLEAN_UNSET);
+  ExtensionSyncData disable_good_crx(*extension, false, false, false,
+                                     ExtensionSyncData::BOOLEAN_UNSET);
 
   // Then sync data arrives telling us to disable |good0|.
   syncer::SyncDataList sync_data;
@@ -5918,8 +5877,8 @@ TEST_F(ExtensionServiceTest, DontDisableExtensionWithPendingEnableFromSync) {
 
   // Now sync data comes in that says to disable good0. This should be
   // ignored.
-  extensions::ExtensionSyncData disable_good_crx(
-      *extension, false, false, false, ExtensionSyncData::BOOLEAN_FALSE);
+  ExtensionSyncData disable_good_crx(*extension, false, false, false,
+                                     ExtensionSyncData::BOOLEAN_FALSE);
   syncer::SyncDataList sync_data;
   sync_data.push_back(disable_good_crx.GetSyncData());
   extension_sync_service()->MergeDataAndStartSyncing(
@@ -5951,17 +5910,19 @@ TEST_F(ExtensionServiceTest, GetSyncData) {
   syncer::SyncDataList list =
       extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
   ASSERT_EQ(list.size(), 1U);
-  extensions::ExtensionSyncData data(list[0]);
-  EXPECT_EQ(extension->id(), data.id());
-  EXPECT_FALSE(data.uninstalled());
-  EXPECT_EQ(service()->IsExtensionEnabled(good_crx), data.enabled());
+  scoped_ptr<ExtensionSyncData> data =
+      ExtensionSyncData::CreateFromSyncData(list[0]);
+  ASSERT_TRUE(data.get());
+  EXPECT_EQ(extension->id(), data->id());
+  EXPECT_FALSE(data->uninstalled());
+  EXPECT_EQ(service()->IsExtensionEnabled(good_crx), data->enabled());
   EXPECT_EQ(extensions::util::IsIncognitoEnabled(good_crx, profile()),
-            data.incognito_enabled());
-  EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data.all_urls_enabled());
-  EXPECT_TRUE(data.version().Equals(*extension->version()));
+            data->incognito_enabled());
+  EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data->all_urls_enabled());
+  EXPECT_TRUE(data->version().Equals(*extension->version()));
   EXPECT_EQ(extensions::ManifestURL::GetUpdateURL(extension),
-            data.update_url());
-  EXPECT_EQ(extension->name(), data.name());
+            data->update_url());
+  EXPECT_EQ(extension->name(), data->name());
 }
 
 TEST_F(ExtensionServiceTest, GetSyncDataTerminated) {
@@ -5983,17 +5944,19 @@ TEST_F(ExtensionServiceTest, GetSyncDataTerminated) {
   syncer::SyncDataList list =
       extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
   ASSERT_EQ(list.size(), 1U);
-  extensions::ExtensionSyncData data(list[0]);
-  EXPECT_EQ(extension->id(), data.id());
-  EXPECT_FALSE(data.uninstalled());
-  EXPECT_EQ(service()->IsExtensionEnabled(good_crx), data.enabled());
+  scoped_ptr<ExtensionSyncData> data =
+      ExtensionSyncData::CreateFromSyncData(list[0]);
+  ASSERT_TRUE(data.get());
+  EXPECT_EQ(extension->id(), data->id());
+  EXPECT_FALSE(data->uninstalled());
+  EXPECT_EQ(service()->IsExtensionEnabled(good_crx), data->enabled());
   EXPECT_EQ(extensions::util::IsIncognitoEnabled(good_crx, profile()),
-            data.incognito_enabled());
-  EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data.all_urls_enabled());
-  EXPECT_TRUE(data.version().Equals(*extension->version()));
+            data->incognito_enabled());
+  EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data->all_urls_enabled());
+  EXPECT_TRUE(data->version().Equals(*extension->version()));
   EXPECT_EQ(extensions::ManifestURL::GetUpdateURL(extension),
-            data.update_url());
-  EXPECT_EQ(extension->name(), data.name());
+            data->update_url());
+  EXPECT_EQ(extension->name(), data->name());
 }
 
 TEST_F(ExtensionServiceTest, GetSyncDataFilter) {
@@ -6035,10 +5998,12 @@ TEST_F(ExtensionServiceTest, GetSyncExtensionDataUserSettings) {
     syncer::SyncDataList list =
         extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
     ASSERT_EQ(list.size(), 1U);
-    extensions::ExtensionSyncData data(list[0]);
-    EXPECT_TRUE(data.enabled());
-    EXPECT_FALSE(data.incognito_enabled());
-    EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data.all_urls_enabled());
+    scoped_ptr<ExtensionSyncData> data =
+        ExtensionSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(data.get());
+    EXPECT_TRUE(data->enabled());
+    EXPECT_FALSE(data->incognito_enabled());
+    EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data->all_urls_enabled());
   }
 
   service()->DisableExtension(good_crx, Extension::DISABLE_USER_ACTION);
@@ -6046,10 +6011,12 @@ TEST_F(ExtensionServiceTest, GetSyncExtensionDataUserSettings) {
     syncer::SyncDataList list =
         extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
     ASSERT_EQ(list.size(), 1U);
-    extensions::ExtensionSyncData data(list[0]);
-    EXPECT_FALSE(data.enabled());
-    EXPECT_FALSE(data.incognito_enabled());
-    EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data.all_urls_enabled());
+    scoped_ptr<ExtensionSyncData> data =
+        ExtensionSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(data.get());
+    EXPECT_FALSE(data->enabled());
+    EXPECT_FALSE(data->incognito_enabled());
+    EXPECT_EQ(ExtensionSyncData::BOOLEAN_UNSET, data->all_urls_enabled());
   }
 
   extensions::util::SetIsIncognitoEnabled(good_crx, profile(), true);
@@ -6059,10 +6026,12 @@ TEST_F(ExtensionServiceTest, GetSyncExtensionDataUserSettings) {
     syncer::SyncDataList list =
         extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
     ASSERT_EQ(list.size(), 1U);
-    extensions::ExtensionSyncData data(list[0]);
-    EXPECT_FALSE(data.enabled());
-    EXPECT_TRUE(data.incognito_enabled());
-    EXPECT_EQ(ExtensionSyncData::BOOLEAN_FALSE, data.all_urls_enabled());
+    scoped_ptr<ExtensionSyncData> data =
+        ExtensionSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(data.get());
+    EXPECT_FALSE(data->enabled());
+    EXPECT_TRUE(data->incognito_enabled());
+    EXPECT_EQ(ExtensionSyncData::BOOLEAN_FALSE, data->all_urls_enabled());
   }
 
   service()->EnableExtension(good_crx);
@@ -6072,10 +6041,12 @@ TEST_F(ExtensionServiceTest, GetSyncExtensionDataUserSettings) {
     syncer::SyncDataList list =
         extension_sync_service()->GetAllSyncData(syncer::EXTENSIONS);
     ASSERT_EQ(list.size(), 1U);
-    extensions::ExtensionSyncData data(list[0]);
-    EXPECT_TRUE(data.enabled());
-    EXPECT_TRUE(data.incognito_enabled());
-    EXPECT_EQ(ExtensionSyncData::BOOLEAN_TRUE, data.all_urls_enabled());
+    scoped_ptr<ExtensionSyncData> data =
+        ExtensionSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(data.get());
+    EXPECT_TRUE(data->enabled());
+    EXPECT_TRUE(data->incognito_enabled());
+    EXPECT_EQ(ExtensionSyncData::BOOLEAN_TRUE, data->all_urls_enabled());
   }
 }
 
@@ -6143,9 +6114,10 @@ TEST_F(ExtensionServiceTest, GetSyncAppDataUserSettings) {
         extension_sync_service()->GetAllSyncData(syncer::APPS);
     ASSERT_EQ(list.size(), 1U);
 
-    extensions::AppSyncData app_sync_data(list[0]);
-    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data.app_launch_ordinal()));
-    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data.page_ordinal()));
+    scoped_ptr<AppSyncData> app_sync_data =
+        AppSyncData::CreateFromSyncData(list[0]);
+    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data->app_launch_ordinal()));
+    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data->page_ordinal()));
   }
 
   AppSorting* sorting = ExtensionPrefs::Get(profile())->app_sorting();
@@ -6155,9 +6127,11 @@ TEST_F(ExtensionServiceTest, GetSyncAppDataUserSettings) {
         extension_sync_service()->GetAllSyncData(syncer::APPS);
     ASSERT_EQ(list.size(), 1U);
 
-    extensions::AppSyncData app_sync_data(list[0]);
-    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data.app_launch_ordinal()));
-    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data.page_ordinal()));
+    scoped_ptr<AppSyncData> app_sync_data =
+        AppSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(app_sync_data.get());
+    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data->app_launch_ordinal()));
+    EXPECT_TRUE(initial_ordinal.Equals(app_sync_data->page_ordinal()));
   }
 
   sorting->SetPageOrdinal(app->id(), initial_ordinal.CreateAfter());
@@ -6166,9 +6140,11 @@ TEST_F(ExtensionServiceTest, GetSyncAppDataUserSettings) {
         extension_sync_service()->GetAllSyncData(syncer::APPS);
     ASSERT_EQ(list.size(), 1U);
 
-    extensions::AppSyncData app_sync_data(list[0]);
-    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data.app_launch_ordinal()));
-    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data.page_ordinal()));
+    scoped_ptr<AppSyncData> app_sync_data =
+        AppSyncData::CreateFromSyncData(list[0]);
+    ASSERT_TRUE(app_sync_data.get());
+    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data->app_launch_ordinal()));
+    EXPECT_TRUE(initial_ordinal.LessThan(app_sync_data->page_ordinal()));
   }
 }
 
@@ -6205,9 +6181,10 @@ TEST_F(ExtensionServiceTest, GetSyncAppDataUserSettingsOnExtensionMoved) {
         extension_sync_service()->GetAllSyncData(syncer::APPS);
     ASSERT_EQ(list.size(), 3U);
 
-    extensions::AppSyncData data[kAppCount];
+    scoped_ptr<AppSyncData> data[kAppCount];
     for (size_t i = 0; i < kAppCount; ++i) {
-      data[i] = extensions::AppSyncData(list[i]);
+      data[i] = AppSyncData::CreateFromSyncData(list[i]);
+      ASSERT_TRUE(data[i].get());
     }
 
     // The sync data is not always in the same order our apps were installed in,
@@ -6216,8 +6193,8 @@ TEST_F(ExtensionServiceTest, GetSyncAppDataUserSettingsOnExtensionMoved) {
     syncer::StringOrdinal app_launch_ordinals[kAppCount];
     for (size_t i = 0; i < kAppCount; ++i) {
       for (size_t j = 0; j < kAppCount; ++j) {
-        if (apps[i]->id() == data[j].id())
-          app_launch_ordinals[i] = data[j].app_launch_ordinal();
+        if (apps[i]->id() == data[j]->id())
+          app_launch_ordinals[i] = data[j]->app_launch_ordinal();
       }
     }
 
@@ -6609,6 +6586,44 @@ TEST_F(ExtensionServiceTest, ProcessSyncDataNotInstalled) {
 }
 
 #if defined(ENABLE_SUPERVISED_USERS)
+class ScopedSupervisedUserServiceDelegate
+    : public SupervisedUserService::Delegate {
+ public:
+  explicit ScopedSupervisedUserServiceDelegate(SupervisedUserService* service)
+      : service_(service) {
+    service_->SetDelegate(this);
+  }
+  ~ScopedSupervisedUserServiceDelegate() override {
+    service_->SetDelegate(nullptr);
+  }
+
+  // This prevents the legacy supervised user init code from running.
+  bool SetActive(bool active) override { return true; }
+
+ private:
+  SupervisedUserService* service_;
+};
+
+class MockPermissionRequestCreator : public PermissionRequestCreator {
+ public:
+  MockPermissionRequestCreator() {}
+  ~MockPermissionRequestCreator() override {}
+
+  bool IsEnabled() const override { return true; }
+
+  void CreateURLAccessRequest(const GURL& url_requested,
+                              const SuccessCallback& callback) override {
+    FAIL();
+  }
+
+  MOCK_METHOD2(CreateExtensionUpdateRequest,
+               void(const std::string& id,
+                    const SupervisedUserService::SuccessCallback& callback));
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(MockPermissionRequestCreator);
+};
+
 TEST_F(ExtensionServiceTest, SupervisedUser_InstallOnlyAllowedByCustodian) {
   ExtensionServiceInitParams params = CreateDefaultInitParams();
   params.profile_is_supervised = true;
@@ -6616,7 +6631,8 @@ TEST_F(ExtensionServiceTest, SupervisedUser_InstallOnlyAllowedByCustodian) {
 
   SupervisedUserService* supervised_user_service =
       SupervisedUserServiceFactory::GetForProfile(profile());
-  GetManagementPolicy()->RegisterProvider(supervised_user_service);
+  ScopedSupervisedUserServiceDelegate delegate(supervised_user_service);
+  supervised_user_service->Init();
 
   base::FilePath path1 = data_dir().AppendASCII("good.crx");
   base::FilePath path2 = data_dir().AppendASCII("good2048.crx");
@@ -6632,6 +6648,29 @@ TEST_F(ExtensionServiceTest, SupervisedUser_InstallOnlyAllowedByCustodian) {
   EXPECT_TRUE(registry()->enabled_extensions().Contains(extensions[1]->id()));
 }
 
+TEST_F(ExtensionServiceTest, SupervisedUser_PreinstalledExtension) {
+  ExtensionServiceInitParams params = CreateDefaultInitParams();
+  // Do *not* set the profile to supervised here!
+  InitializeExtensionService(params);
+
+  SupervisedUserService* supervised_user_service =
+      SupervisedUserServiceFactory::GetForProfile(profile());
+  ScopedSupervisedUserServiceDelegate delegate(supervised_user_service);
+  supervised_user_service->Init();
+
+  // Install an extension.
+  base::FilePath path = data_dir().AppendASCII("good.crx");
+  const Extension* extension = InstallCRX(path, INSTALL_NEW);
+  std::string id = extension->id();
+
+  // Now make the profile supervised.
+  profile()->AsTestingProfile()->SetSupervisedUserId(
+      supervised_users::kChildAccountSUID);
+
+  // The extension should not be enabled anymore.
+  EXPECT_FALSE(registry()->enabled_extensions().Contains(id));
+}
+
 TEST_F(ExtensionServiceTest, SupervisedUser_UpdateWithoutPermissionIncrease) {
   ExtensionServiceInitParams params = CreateDefaultInitParams();
   params.profile_is_supervised = true;
@@ -6639,7 +6678,8 @@ TEST_F(ExtensionServiceTest, SupervisedUser_UpdateWithoutPermissionIncrease) {
 
   SupervisedUserService* supervised_user_service =
       SupervisedUserServiceFactory::GetForProfile(profile());
-  GetManagementPolicy()->RegisterProvider(supervised_user_service);
+  ScopedSupervisedUserServiceDelegate delegate(supervised_user_service);
+  supervised_user_service->Init();
 
   base::FilePath base_path = data_dir().AppendASCII("autoupdate");
   base::FilePath pem_path = base_path.AppendASCII("key.pem");
@@ -6675,7 +6715,11 @@ TEST_F(ExtensionServiceTest, SupervisedUser_UpdateWithPermissionIncrease) {
 
   SupervisedUserService* supervised_user_service =
       SupervisedUserServiceFactory::GetForProfile(profile());
-  GetManagementPolicy()->RegisterProvider(supervised_user_service);
+  ScopedSupervisedUserServiceDelegate delegate(supervised_user_service);
+  supervised_user_service->Init();
+  MockPermissionRequestCreator* creator = new MockPermissionRequestCreator;
+  supervised_user_service->AddPermissionRequestCreator(
+      make_scoped_ptr(creator));
 
   base::FilePath base_path = data_dir().AppendASCII("permissions_increase");
   base::FilePath pem_path = base_path.AppendASCII("permissions.pem");
@@ -6694,6 +6738,8 @@ TEST_F(ExtensionServiceTest, SupervisedUser_UpdateWithPermissionIncrease) {
   std::string old_version = extension->VersionString();
 
   // Update to a new version with increased permissions.
+  EXPECT_CALL(*creator,
+              CreateExtensionUpdateRequest(id + ":2", testing::_));
   path = base_path.AppendASCII("v2");
   PackCRXAndUpdateExtension(id, path, pem_path, DISABLED);
 

@@ -553,11 +553,6 @@ void BrowserOptionsHandler::GetLocalizedValues(base::DictionaryValue* values) {
 
   values->SetString("privacyLearnMoreURL", chrome::kPrivacyLearnMoreURL);
 
-  values->SetBoolean("hasRapporOption", HasRapporOption());
-
-  base::string16 rappor_url = base::ASCIIToUTF16(chrome::kRapporLearnMoreURL);
-  values->SetString("enableRappor",
-      l10n_util::GetStringFUTF16(IDS_OPTIONS_ENABLE_RAPPOR, rappor_url));
   values->SetString("doNotTrackLearnMoreURL", chrome::kDoNotTrackLearnMoreURL);
 
 #if !defined(OS_CHROMEOS)
@@ -816,6 +811,8 @@ void BrowserOptionsHandler::RegisterMessages() {
 
 void BrowserOptionsHandler::Uninitialize() {
   registrar_.RemoveAll();
+  g_browser_process->profile_manager()->
+      GetProfileInfoCache().RemoveObserver(this);
 #if defined(OS_WIN)
   ExtensionRegistry::Get(Profile::FromWebUI(web_ui()))->RemoveObserver(this);
 #endif
@@ -866,6 +863,8 @@ void BrowserOptionsHandler::InitializeHandler() {
   g_browser_process->policy_service()->AddObserver(
       policy::POLICY_DOMAIN_CHROME, this);
 
+  g_browser_process->profile_manager()->GetProfileInfoCache().AddObserver(this);
+
   ProfileSyncService* sync_service(
       ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile));
   // TODO(blundell): Use a ScopedObserver to observe the PSS so that cleanup on
@@ -888,8 +887,6 @@ void BrowserOptionsHandler::InitializeHandler() {
       base::Bind(&BrowserOptionsHandler::UpdateDefaultBrowserState,
                  base::Unretained(this)));
 
-  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_CACHED_INFO_CHANGED,
-                 content::NotificationService::AllSources());
 #if defined(OS_CHROMEOS)
   registrar_.Add(this, chrome::NOTIFICATION_LOGIN_USER_IMAGE_CHANGED,
                  content::NotificationService::AllSources());
@@ -1150,6 +1147,10 @@ void BrowserOptionsHandler::SetDefaultWebClientUIState(
 
   if (state == ShellIntegration::STATE_IS_DEFAULT) {
     status_string_id = IDS_OPTIONS_DEFAULTBROWSER_DEFAULT;
+    // Notify the user in the future if Chrome ceases to be the user's chosen
+    // default browser.
+    PrefService* prefs = Profile::FromWebUI(web_ui())->GetPrefs();
+    prefs->SetBoolean(prefs::kCheckDefaultBrowser, true);
   } else if (state == ShellIntegration::STATE_NOT_DEFAULT) {
     if (ShellIntegration::CanSetAsDefaultBrowser() ==
             ShellIntegration::SET_DEFAULT_NOT_ALLOWED) {
@@ -1286,9 +1287,6 @@ void BrowserOptionsHandler::Observe(
       UpdateAccountPicture();
       break;
 #endif
-    case chrome::NOTIFICATION_PROFILE_CACHED_INFO_CHANGED:
-    SendProfilesInfo();
-      break;
     case chrome::NOTIFICATION_GLOBAL_ERRORS_CHANGED:
       // Update our sync/signin status display.
       OnStateChanged();
@@ -1296,6 +1294,27 @@ void BrowserOptionsHandler::Observe(
     default:
       NOTREACHED();
   }
+}
+
+void BrowserOptionsHandler::OnProfileAdded(const base::FilePath& profile_path) {
+  SendProfilesInfo();
+}
+
+void BrowserOptionsHandler::OnProfileWasRemoved(
+    const base::FilePath& profile_path,
+    const base::string16& profile_name) {
+  SendProfilesInfo();
+}
+
+void BrowserOptionsHandler::OnProfileNameChanged(
+    const base::FilePath& profile_path,
+    const base::string16& old_profile_name) {
+  SendProfilesInfo();
+}
+
+void BrowserOptionsHandler::OnProfileAvatarChanged(
+    const base::FilePath& profile_path) {
+  SendProfilesInfo();
 }
 
 void BrowserOptionsHandler::ToggleAutoLaunch(const base::ListValue* args) {
@@ -1752,9 +1771,9 @@ void BrowserOptionsHandler::HandleRequestHotwordAvailable(
     return;
   }
 
-  std::string group = base::FieldTrialList::FindFullName("VoiceTrigger");
-  if (!group.empty() && group != "Disabled" &&
-      HotwordServiceFactory::IsHotwordAllowed(profile)) {
+  // Don't need to check the field trial here since |IsHotwordAllowed| also
+  // checks it.
+  if (HotwordServiceFactory::IsHotwordAllowed(profile)) {
     // Update the current error value.
     HotwordServiceFactory::IsServiceAvailable(profile);
     int error = HotwordServiceFactory::GetCurrentError(profile);
@@ -1763,31 +1782,25 @@ void BrowserOptionsHandler::HandleRequestHotwordAvailable(
     bool always_on = false;
     SigninManagerBase* signin = SigninManagerFactory::GetForProfile(profile);
     bool authenticated = signin && signin->IsAuthenticated();
-    if (HotwordService::IsExperimentalHotwordingEnabled()) {
-      if (HotwordServiceFactory::IsHotwordHardwareAvailable() &&
-          authenticated) {
-        function_name = "BrowserOptions.showHotwordAlwaysOnSection";
-        always_on = true;
-        // Show the retrain link if always-on is enabled.
-        if (profile->GetPrefs()->GetBoolean(
-                prefs::kHotwordAlwaysOnSearchEnabled)) {
-          web_ui()->CallJavascriptFunction(
-              "BrowserOptions.setHotwordRetrainLinkVisible",
-              base::FundamentalValue(true));
-        }
-      } else {
-        function_name = "BrowserOptions.showHotwordNoDspSection";
+    if (HotwordServiceFactory::IsAlwaysOnAvailable() && authenticated) {
+      function_name = "BrowserOptions.showHotwordAlwaysOnSection";
+      always_on = true;
+      // Show the retrain link if always-on is enabled.
+      if (profile->GetPrefs()->GetBoolean(
+              prefs::kHotwordAlwaysOnSearchEnabled)) {
+        web_ui()->CallJavascriptFunction(
+            "BrowserOptions.setHotwordRetrainLinkVisible",
+            base::FundamentalValue(true));
       }
     } else {
-      function_name = "BrowserOptions.showHotwordSection";
+      function_name = "BrowserOptions.showHotwordNoDspSection";
     }
 
     // Audio history should be displayed if it's enabled regardless of the
     // hotword error state if the user is signed in. If the user is not signed
     // in, audio history is meaningless. This is only displayed if always-on
     // hotwording is available.
-    if (HotwordService::IsExperimentalHotwordingEnabled() &&
-        authenticated && always_on) {
+    if (authenticated && always_on) {
       std::string user_display_name = signin->GetAuthenticatedUsername();
       DCHECK(!user_display_name.empty());
       base::string16 audio_history_state =
@@ -1851,7 +1864,7 @@ void BrowserOptionsHandler::HandleLaunchHotwordAudioVerificationApp(
   if (!hotword_service)
     return;
 
-  hotword_service->LaunchHotwordAudioVerificationApp(launch_mode);
+  hotword_service->OptIntoHotwording(launch_mode);
 }
 
 void BrowserOptionsHandler::HandleLaunchEasyUnlockSetup(

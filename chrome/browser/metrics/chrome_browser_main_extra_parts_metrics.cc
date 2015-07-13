@@ -45,10 +45,7 @@ enum UMALinuxGlibcVersion {
   UMA_LINUX_GLIBC_NOT_PARSEABLE,
   UMA_LINUX_GLIBC_UNKNOWN,
   UMA_LINUX_GLIBC_2_11,
-  UMA_LINUX_GLIBC_2_19 = UMA_LINUX_GLIBC_2_11 + 8,
-  // NOTE: Add new version above this line and update the enum list in
-  // tools/metrics/histograms/histograms.xml accordingly.
-  UMA_LINUX_GLIBC_VERSION_COUNT
+  // To log newer versions, just update tools/metrics/histograms/histograms.xml.
 };
 
 enum UMALinuxWindowManager {
@@ -116,6 +113,12 @@ void RecordStartupMetricsOnBlockingPool() {
                             availability,
                             bluetooth_utility::BLUETOOTH_AVAILABILITY_COUNT);
 #endif  // defined(OS_MACOSX) && !defined(OS_IOS)
+
+  // Record whether Chrome is the default browser or not.
+  ShellIntegration::DefaultWebClientState default_state =
+      ShellIntegration::GetDefaultBrowser();
+  UMA_HISTOGRAM_ENUMERATION("DefaultBrowser.State", default_state,
+                            ShellIntegration::NUM_DEFAULT_STATES);
 }
 
 void RecordLinuxGlibcVersion() {
@@ -133,15 +136,13 @@ void RecordLinuxGlibcVersion() {
       const int kGlibcMinorVersionTranslationOffset = 11 - UMA_LINUX_GLIBC_2_11;
       uint32_t translated_glibc_minor_version =
           glibc_minor_version - kGlibcMinorVersionTranslationOffset;
-      if (translated_glibc_minor_version >= UMA_LINUX_GLIBC_2_11 &&
-          translated_glibc_minor_version <= UMA_LINUX_GLIBC_2_19) {
+      if (translated_glibc_minor_version >= UMA_LINUX_GLIBC_2_11) {
         glibc_version_result =
             static_cast<UMALinuxGlibcVersion>(translated_glibc_minor_version);
       }
     }
   }
-  UMA_HISTOGRAM_ENUMERATION("Linux.GlibcVersion", glibc_version_result,
-                            UMA_LINUX_GLIBC_VERSION_COUNT);
+  UMA_HISTOGRAM_SPARSE_SLOWLY("Linux.GlibcVersion", glibc_version_result);
 #endif
 }
 

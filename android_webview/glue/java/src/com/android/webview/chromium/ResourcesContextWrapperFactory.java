@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.view.LayoutInflater;
 
+import org.chromium.base.annotations.SuppressFBWarnings;
+
 /**
  * This class allows us to wrap the application context so that the WebView implementation can
  * correctly reference both org.chromium.* and application classes which is necessary to properly
@@ -32,6 +34,7 @@ public class ResourcesContextWrapperFactory {
             super(base);
         }
 
+        @SuppressFBWarnings("DP_CREATE_CLASSLOADER_INSIDE_DO_PRIVILEGED")
         @Override
         public ClassLoader getClassLoader() {
             final ClassLoader appCl = getBaseContext().getClassLoader();

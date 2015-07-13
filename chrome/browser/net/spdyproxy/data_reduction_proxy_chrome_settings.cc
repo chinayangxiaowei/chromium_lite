@@ -9,6 +9,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/prefs/pref_service.h"
 #include "base/prefs/scoped_user_pref_update.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
@@ -16,17 +17,48 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/pref_names.h"
-#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_configurator.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_compression_stats.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_io_data.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_service.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
-#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_statistics_prefs.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
+#include "net/base/host_port_pair.h"
+#include "net/proxy/proxy_config.h"
+#include "net/proxy/proxy_list.h"
+#include "net/proxy/proxy_server.h"
 #include "net/url_request/url_request_context_getter.h"
 
-using data_reduction_proxy::Client;
-using data_reduction_proxy::DataReductionProxyParams;
-using data_reduction_proxy::DataReductionProxySettings;
+namespace {
+
+// Assume that any proxy host ending with this suffix is a Data Reduction Proxy.
+const char kDataReductionProxyDefaultHostSuffix[] = ".googlezip.net";
+
+// Searches |proxy_list| for any Data Reduction Proxies, even if they don't
+// match a currently configured Data Reduction Proxy.
+bool ContainsDataReductionProxyDefaultHostSuffix(
+    const net::ProxyList& proxy_list) {
+  for (const net::ProxyServer& proxy : proxy_list.GetAll()) {
+    if (proxy.is_valid() && !proxy.is_direct() &&
+        EndsWith(proxy.host_port_pair().host(),
+                 kDataReductionProxyDefaultHostSuffix, true)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Searches |proxy_rules| for any Data Reduction Proxies, even if they don't
+// match a currently configured Data Reduction Proxy.
+bool ContainsDataReductionProxyDefaultHostSuffix(
+    const net::ProxyConfig::ProxyRules& proxy_rules) {
+  return ContainsDataReductionProxyDefaultHostSuffix(
+             proxy_rules.proxies_for_http) ||
+         ContainsDataReductionProxyDefaultHostSuffix(
+             proxy_rules.proxies_for_https);
+}
+
+}  // namespace
 
 // The Data Reduction Proxy has been turned into a "best effort" proxy,
 // meaning it is used only if the effective proxy configuration resolves to
@@ -62,15 +94,19 @@ void DataReductionProxyChromeSettings::MigrateDataReductionProxyOffProxyPrefs(
     return;
   net::ProxyConfig::ProxyRules proxy_rules;
   proxy_rules.ParseFromString(proxy_server);
-  if (!data_reduction_proxy::DataReductionProxyConfigurator::
-          ContainsDataReductionProxy(proxy_rules)) {
+  // Clear the proxy pref if it matches a currently configured Data Reduction
+  // Proxy, or if the proxy host ends with ".googlezip.net", in order to ensure
+  // that any DRP in the pref is cleared even if the DRP configuration was
+  // changed. See http://crbug.com/476610.
+  if (!Config()->ContainsDataReductionProxy(proxy_rules) &&
+      !ContainsDataReductionProxyDefaultHostSuffix(proxy_rules)) {
     return;
   }
   prefs->ClearPref(prefs::kProxy);
 }
 
 DataReductionProxyChromeSettings::DataReductionProxyChromeSettings()
-    : DataReductionProxySettings() {
+    : data_reduction_proxy::DataReductionProxySettings() {
 }
 
 DataReductionProxyChromeSettings::~DataReductionProxyChromeSettings() {
@@ -96,58 +132,52 @@ void DataReductionProxyChromeSettings::InitDataReductionProxySettings(
   base::TimeDelta commit_delay = base::TimeDelta::FromMinutes(60);
 #endif
 
-  scoped_ptr<data_reduction_proxy::DataReductionProxyStatisticsPrefs>
-      statistics_prefs = make_scoped_ptr(
-          new data_reduction_proxy::DataReductionProxyStatisticsPrefs(
+  scoped_ptr<data_reduction_proxy::DataReductionProxyCompressionStats>
+      compression_stats = make_scoped_ptr(
+          new data_reduction_proxy::DataReductionProxyCompressionStats(
               profile_prefs, ui_task_runner, commit_delay));
-  scoped_ptr<data_reduction_proxy::DataReductionProxyService>
-      service = make_scoped_ptr(
-          new data_reduction_proxy::DataReductionProxyService(
-              statistics_prefs.Pass(), this, request_context_getter));
-  DataReductionProxySettings::InitDataReductionProxySettings(
-      profile_prefs, io_data, service.Pass());
+  scoped_ptr<data_reduction_proxy::DataReductionProxyService> service =
+      make_scoped_ptr(new data_reduction_proxy::DataReductionProxyService(
+          compression_stats.Pass(), this, request_context_getter));
+  data_reduction_proxy::DataReductionProxySettings::
+      InitDataReductionProxySettings(profile_prefs, io_data, service.Pass());
   io_data->SetDataReductionProxyService(
       data_reduction_proxy_service()->GetWeakPtr());
 
-  DataReductionProxySettings::SetOnDataReductionEnabledCallback(
-      base::Bind(&DataReductionProxyChromeSettings::RegisterSyntheticFieldTrial,
-                 base::Unretained(this)));
+  data_reduction_proxy::DataReductionProxySettings::
+      SetCallbackToRegisterSyntheticFieldTrial(
+          base::Bind(
+              &ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial));
   SetDataReductionProxyAlternativeEnabled(
-      DataReductionProxyParams::IsIncludedInAlternativeFieldTrial());
+      data_reduction_proxy::DataReductionProxyParams::
+          IsIncludedInAlternativeFieldTrial());
   // TODO(bengr): Remove after M46. See http://crbug.com/445599.
   MigrateDataReductionProxyOffProxyPrefs(profile_prefs);
 }
 
-void DataReductionProxyChromeSettings::RegisterSyntheticFieldTrial(
-    bool data_reduction_proxy_enabled) {
-  ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
-      "DataReductionProxyEnabled",
-      data_reduction_proxy_enabled ? "true" : "false");
-}
-
 // static
-Client DataReductionProxyChromeSettings::GetClient() {
+data_reduction_proxy::Client DataReductionProxyChromeSettings::GetClient() {
 #if defined(OS_ANDROID)
-  return Client::CHROME_ANDROID;
+  return data_reduction_proxy::Client::CHROME_ANDROID;
 #elif defined(OS_IOS)
-  return Client::CHROME_IOS;
+  return data_reduction_proxy::Client::CHROME_IOS;
 #elif defined(OS_MACOSX)
-  return Client::CHROME_MAC;
+  return data_reduction_proxy::Client::CHROME_MAC;
 #elif defined(OS_CHROMEOS)
-  return Client::CHROME_CHROMEOS;
+  return data_reduction_proxy::Client::CHROME_CHROMEOS;
 #elif defined(OS_LINUX)
-  return Client::CHROME_LINUX;
+  return data_reduction_proxy::Client::CHROME_LINUX;
 #elif defined(OS_WIN)
-  return Client::CHROME_WINDOWS;
+  return data_reduction_proxy::Client::CHROME_WINDOWS;
 #elif defined(OS_FREEBSD)
-  return Client::CHROME_FREEBSD;
+  return data_reduction_proxy::Client::CHROME_FREEBSD;
 #elif defined(OS_OPENBSD)
-  return Client::CHROME_OPENBSD;
+  return data_reduction_proxy::Client::CHROME_OPENBSD;
 #elif defined(OS_SOLARIS)
-  return Client::CHROME_SOLARIS;
+  return data_reduction_proxy::Client::CHROME_SOLARIS;
 #elif defined(OS_QNX)
-  return Client::CHROME_QNX;
+  return data_reduction_proxy::Client::CHROME_QNX;
 #else
-  return Client::UNKNOWN;
+  return data_reduction_proxy::Client::UNKNOWN;
 #endif
 }

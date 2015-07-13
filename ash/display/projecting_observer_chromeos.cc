@@ -17,6 +17,9 @@ ProjectingObserver::ProjectingObserver(
       casting_session_count_(0),
       power_manager_client_(power_manager_client) {
   DCHECK(power_manager_client);
+#if defined(USE_OZONE)
+  is_initial_configuration_ = true;
+#endif
 }
 
 ProjectingObserver::~ProjectingObserver() {}
@@ -27,12 +30,18 @@ void ProjectingObserver::OnDisplayModeChanged(
   output_count_ = display_states.size();
 
   for (size_t i = 0; i < display_states.size(); ++i) {
-    if (display_states[i].display->type() ==
-        ui::DISPLAY_CONNECTION_TYPE_INTERNAL) {
+    if (display_states[i]->type() == ui::DISPLAY_CONNECTION_TYPE_INTERNAL) {
       has_internal_output_ = true;
       break;
     }
   }
+
+#if defined(USE_OZONE)
+  if (is_initial_configuration_) {
+    is_initial_configuration_ = false;
+    return;
+  }
+#endif
 
   SetIsProjecting();
 }

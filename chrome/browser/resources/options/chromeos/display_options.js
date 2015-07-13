@@ -216,6 +216,10 @@ cr.define('options', function() {
         chrome.send('coreOptionsUserMetricsAction',
                     ['Options_DisplaySetOverscan']);
       }).bind(this);
+
+      $('display-options-done').onclick = function() {
+        PageManager.closeOverlay();
+      };
     },
 
     /** @override */
@@ -767,8 +771,6 @@ cr.define('options', function() {
       var totalHeight = height + numDisplays * MIRRORING_OFFSET_PIXELS;
 
       this.displaysView_.style.height = totalHeight + 'px';
-      this.displaysView_.classList.add(
-          'display-options-displays-view-mirroring');
 
       // The displays should be centered.
       var offsetX =

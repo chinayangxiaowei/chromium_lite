@@ -42,6 +42,7 @@
 #include "base/win/windows_version.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/installer/util/beacons.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/l10n_string_util.h"
@@ -1378,7 +1379,7 @@ typedef base::Callback<bool(const base::FilePath& /*shortcut_path*/)>
 
 bool ShortcutOpUnpin(const base::FilePath& shortcut_path) {
   VLOG(1) << "Trying to unpin " << shortcut_path.value();
-  if (!base::win::TaskbarUnpinShortcutLink(shortcut_path.value().c_str())) {
+  if (!base::win::TaskbarUnpinShortcutLink(shortcut_path)) {
     VLOG(1) << shortcut_path.value() << " wasn't pinned (or the unpin failed).";
     // No error, since shortcut might not be pinned.
   }
@@ -1737,10 +1738,8 @@ bool ShellUtil::CreateOrUpdateShortcut(
   if (ret && shortcut_operation == base::win::SHORTCUT_CREATE_ALWAYS &&
       properties.pin_to_taskbar &&
       base::win::GetVersion() >= base::win::VERSION_WIN7) {
-    ret = base::win::TaskbarPinShortcutLink(chosen_path->value().c_str());
-    if (!ret) {
-      LOG(ERROR) << "Failed to pin " << chosen_path->value();
-    }
+    ret = base::win::TaskbarPinShortcutLink(*chosen_path);
+    LOG_IF(ERROR, !ret) << "Failed to pin " << chosen_path->value();
   }
 
   return ret;
@@ -1933,9 +1932,10 @@ ShellUtil::DefaultState ShellUtil::GetChromeDefaultStateFromPath(
   // flag. There is doubtless some other key we can hook into to cause "Repair"
   // to show up in Add/Remove programs for us.
   static const wchar_t* const kChromeProtocols[] = { L"http", L"https" };
-  return ProbeProtocolHandlers(chrome_exe,
-                               kChromeProtocols,
-                               arraysize(kChromeProtocols));
+  DefaultState default_state = ProbeProtocolHandlers(
+      chrome_exe, kChromeProtocols, arraysize(kChromeProtocols));
+  UpdateDefaultBrowserBeaconWithState(chrome_exe, distribution, default_state);
+  return default_state;
 }
 
 ShellUtil::DefaultState ShellUtil::GetChromeDefaultProtocolClientState(
