@@ -77,7 +77,7 @@ Misspelling BuildFeedback(const SpellCheckResult& result,
                           const base::string16& text) {
   size_t start = result.location;
   base::string16 context = TrimWords(&start,
-                               result.length,
+                               start + result.length,
                                text,
                                chrome::spellcheck_common::kContextWordCount);
   return Misspelling(context,
@@ -407,8 +407,9 @@ void FeedbackSender::SendFeedback(const std::vector<Misspelling>& feedback_data,
 
   // The tests use this identifier to mock the URL fetcher.
   static const int kUrlFetcherId = 0;
-  net::URLFetcher* sender = net::URLFetcher::Create(
-      kUrlFetcherId, feedback_service_url_, net::URLFetcher::POST, this);
+  net::URLFetcher* sender =
+      net::URLFetcher::Create(kUrlFetcherId, feedback_service_url_,
+                              net::URLFetcher::POST, this).release();
   sender->SetLoadFlags(net::LOAD_DO_NOT_SEND_COOKIES |
                        net::LOAD_DO_NOT_SAVE_COOKIES);
   sender->SetUploadData("application/json", feedback);

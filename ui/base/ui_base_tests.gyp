@@ -114,6 +114,11 @@
             },
           ],
         }],
+        ['OS == "linux" and use_aura==1 and chromeos==0', {
+          'sources': [
+            'ime/input_method_auralinux_unittest.cc',
+          ]
+        }],
         ['OS == "win"', {
           'sources': [
             'dragdrop/os_exchange_data_win_unittest.cc',
@@ -215,7 +220,6 @@
         }],
         ['use_x11==0', {
           'sources!': [
-            'ime/chromeos/character_composer_unittest.cc',
             'ime/composition_text_util_pango_unittest.cc',
             'ime/input_method_chromeos_unittest.cc',
           ],

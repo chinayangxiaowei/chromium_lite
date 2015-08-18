@@ -43,9 +43,8 @@ class MultiPartResponseClient : public blink::WebURLLoaderClient {
       : byte_range_lower_bound_(0), plugin_stream_(plugin_stream) {}
 
   // blink::WebURLLoaderClient implementation:
-  virtual void didReceiveResponse(
-      blink::WebURLLoader* loader,
-      const blink::WebURLResponse& response) override {
+  void didReceiveResponse(blink::WebURLLoader* loader,
+                          const blink::WebURLResponse& response) override {
     int64 byte_range_upper_bound, instance_size;
     if (!MultipartResponseDelegate::ReadContentRanges(response,
                                                       &byte_range_lower_bound_,
@@ -54,10 +53,10 @@ class MultiPartResponseClient : public blink::WebURLLoaderClient {
       NOTREACHED();
     }
   }
-  virtual void didReceiveData(blink::WebURLLoader* loader,
-                              const char* data,
-                              int data_length,
-                              int encoded_data_length) override {
+  void didReceiveData(blink::WebURLLoader* loader,
+                      const char* data,
+                      int data_length,
+                      int encoded_data_length) override {
     // TODO(ananta)
     // We should defer further loads on multipart resources on the same lines
     // as regular resources requested by plugins to prevent reentrancy.
@@ -104,7 +103,8 @@ PluginURLFetcher::PluginURLFetcher(PluginStreamUrl* plugin_stream,
       copy_stream_data_(copy_stream_data),
       data_offset_(0),
       pending_failure_notification_(false),
-      request_id_(-1) {
+      request_id_(-1),
+      weak_factory_(this) {
   RequestInfo request_info;
   request_info.method = method;
   request_info.url = url;
@@ -376,4 +376,30 @@ void PluginURLFetcher::OnCompletedRequest(
   }
 }
 
+void PluginURLFetcher::OnReceivedCompletedResponse(
+    const content::ResourceResponseInfo& info,
+    const char* data,
+    int data_length,
+    int encoded_data_length,
+    int error_code,
+    bool was_ignored_by_handler,
+    bool stale_copy_in_cache,
+    const std::string& security_info,
+    const base::TimeTicks& completion_time,
+    int64 total_transfer_size) {
+  // |this| can be deleted on each callback. |weak_this| is placed here to
+  // detect the deletion.
+  base::WeakPtr<PluginURLFetcher> weak_this = weak_factory_.GetWeakPtr();
+  OnReceivedResponse(info);
+
+  if (!weak_this)
+    return;
+  if (data_length)
+    OnReceivedData(data, data_length, encoded_data_length);
+
+  if (!weak_this)
+    return;
+  OnCompletedRequest(error_code, was_ignored_by_handler, stale_copy_in_cache,
+                     security_info, completion_time, total_transfer_size);
+}
 }  // namespace content

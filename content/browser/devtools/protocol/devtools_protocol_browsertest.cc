@@ -6,10 +6,12 @@
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/values.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/compositor/compositor_switches.h"
@@ -27,10 +29,14 @@ const char kParamsParam[] = "params";
 
 class DevToolsProtocolTest : public ContentBrowserTest,
                              public DevToolsAgentHostClient {
+ public:
+  DevToolsProtocolTest() : has_dispatched_command(false) {}
+
  protected:
   void SendCommand(const std::string& method,
                    scoped_ptr<base::DictionaryValue> params) {
     base::DictionaryValue command;
+    has_dispatched_command = false;
     command.SetInteger(kIdParam, 1);
     command.SetString(kMethodParam, method);
     if (params)
@@ -39,7 +45,10 @@ class DevToolsProtocolTest : public ContentBrowserTest,
     std::string json_command;
     base::JSONWriter::Write(&command, &json_command);
     agent_host_->DispatchProtocolMessage(json_command);
-    base::MessageLoop::current()->Run();
+    // Some messages are dispatched synchronously.
+    // Only run loop if we are not finished yet.
+    if (!has_dispatched_command)
+      base::MessageLoop::current()->Run();
   }
 
   bool HasValue(const std::string& path) {
@@ -67,10 +76,6 @@ class DevToolsProtocolTest : public ContentBrowserTest,
     return false;
   }
 
-  scoped_ptr<base::DictionaryValue> result_;
-  scoped_refptr<DevToolsAgentHost> agent_host_;
-
- private:
   void SetUpOnMainThread() override {
     agent_host_ = DevToolsAgentHost::GetOrCreateFor(shell()->web_contents());
     agent_host_->AttachClient(this);
@@ -81,6 +86,10 @@ class DevToolsProtocolTest : public ContentBrowserTest,
     agent_host_ = NULL;
   }
 
+  scoped_ptr<base::DictionaryValue> result_;
+  scoped_refptr<DevToolsAgentHost> agent_host_;
+
+ private:
   void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
                                const std::string& message) override {
     scoped_ptr<base::DictionaryValue> root(
@@ -88,13 +97,65 @@ class DevToolsProtocolTest : public ContentBrowserTest,
     base::DictionaryValue* result;
     EXPECT_TRUE(root->GetDictionary("result", &result));
     result_.reset(result->DeepCopy());
-    base::MessageLoop::current()->QuitNow();
+    if (base::MessageLoop::current()->is_running())
+      base::MessageLoop::current()->QuitNow();
+    has_dispatched_command = true;
   }
 
   void AgentHostClosed(DevToolsAgentHost* agent_host, bool replaced) override {
     EXPECT_TRUE(false);
   }
+
+  bool has_dispatched_command;
 };
+
+class SyntheticKeyEventTest : public DevToolsProtocolTest {
+ protected:
+  void SendKeyEvent(const std::string& type,
+                    int modifier,
+                    int windowsKeyCode,
+                    int nativeKeyCode) {
+    scoped_ptr<base::DictionaryValue> params(new base::DictionaryValue());
+    params->SetString("type", type);
+    params->SetInteger("modifiers", modifier);
+    params->SetInteger("windowsVirtualKeyCode", windowsKeyCode);
+    params->SetInteger("nativeVirtualKeyCode", nativeKeyCode);
+    SendCommand("Input.dispatchKeyEvent", params.Pass());
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(SyntheticKeyEventTest, KeyEventSynthesizeKeyIdentifier) {
+  NavigateToURLBlockUntilNavigationsComplete(shell(), GURL("about:blank"), 1);
+  ASSERT_TRUE(content::ExecuteScript(
+      shell()->web_contents()->GetRenderViewHost(),
+      "function handleKeyEvent(event) {"
+        "domAutomationController.setAutomationId(0);"
+        "domAutomationController.send(event.keyIdentifier);"
+      "}"
+      "document.body.addEventListener('keydown', handleKeyEvent);"
+      "document.body.addEventListener('keyup', handleKeyEvent);"));
+
+  DOMMessageQueue dom_message_queue;
+
+  // Send enter (keycode 13).
+  SendKeyEvent("rawKeyDown", 0, 13, 13);
+  SendKeyEvent("keyUp", 0, 13, 13);
+
+  std::string key_identifier;
+  ASSERT_TRUE(dom_message_queue.WaitForMessage(&key_identifier));
+  EXPECT_EQ("\"Enter\"", key_identifier);
+  ASSERT_TRUE(dom_message_queue.WaitForMessage(&key_identifier));
+  EXPECT_EQ("\"Enter\"", key_identifier);
+
+  // Send escape (keycode 27).
+  SendKeyEvent("rawKeyDown", 0, 27, 27);
+  SendKeyEvent("keyUp", 0, 27, 27);
+
+  ASSERT_TRUE(dom_message_queue.WaitForMessage(&key_identifier));
+  EXPECT_EQ("\"U+001B\"", key_identifier);
+  ASSERT_TRUE(dom_message_queue.WaitForMessage(&key_identifier));
+  EXPECT_EQ("\"U+001B\"", key_identifier);
+}
 
 class CaptureScreenshotTest : public DevToolsProtocolTest {
  private:
@@ -133,6 +194,130 @@ IN_PROC_BROWSER_TEST_F(CaptureScreenshotTest, MAYBE_CaptureScreenshot) {
   EXPECT_TRUE(std::abs(0x12-(int)SkColorGetR(color)) <= 1);
   EXPECT_TRUE(std::abs(0x34-(int)SkColorGetG(color)) <= 1);
   EXPECT_TRUE(std::abs(0x56-(int)SkColorGetB(color)) <= 1);
+}
+
+class SyntheticGestureTest : public DevToolsProtocolTest {
+#if !defined(OS_ANDROID)
+ protected:
+  void SetUpOnMainThread() override {
+    DevToolsProtocolTest::SetUpOnMainThread();
+
+    scoped_ptr<base::DictionaryValue> params(new base::DictionaryValue());
+    params->SetInteger("width", 384);
+    params->SetInteger("height", 640);
+    params->SetDouble("deviceScaleFactor", 2.0);
+    params->SetBoolean("mobile", true);
+    params->SetBoolean("fitWindow", false);
+    params->SetBoolean("textAutosizing", true);
+    SendCommand("Page.setDeviceMetricsOverride", params.Pass());
+
+    params.reset(new base::DictionaryValue());
+    params->SetBoolean("enabled", true);
+    params->SetString("configuration", "mobile");
+    SendCommand("Page.setTouchEmulationEnabled", params.Pass());
+  }
+#endif
+};
+
+#if defined(OS_ANDROID)
+// crbug.com/469947
+#define MAYBE_SynthesizePinchGesture DISABLED_SynthesizePinchGesture
+#else
+// crbug.com/460128
+#define MAYBE_SynthesizePinchGesture DISABLED_SynthesizePinchGesture
+#endif
+IN_PROC_BROWSER_TEST_F(SyntheticGestureTest, MAYBE_SynthesizePinchGesture) {
+  GURL test_url = GetTestUrl("devtools", "synthetic_gesture_tests.html");
+  NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 1);
+
+  int old_width;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(window.innerWidth)", &old_width));
+
+  int old_height;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(window.innerHeight)", &old_height));
+
+  scoped_ptr<base::DictionaryValue> params(new base::DictionaryValue());
+  params->SetInteger("x", old_width / 2);
+  params->SetInteger("y", old_height / 2);
+  params->SetDouble("scaleFactor", 2.0);
+  SendCommand("Input.synthesizePinchGesture", params.Pass());
+
+  int new_width;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(window.innerWidth)", &new_width));
+  ASSERT_DOUBLE_EQ(2.0, static_cast<double>(old_width) / new_width);
+
+  int new_height;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(window.innerHeight)", &new_height));
+  ASSERT_DOUBLE_EQ(2.0, static_cast<double>(old_height) / new_height);
+}
+
+#if defined(OS_ANDROID)
+#define MAYBE_SynthesizeScrollGesture SynthesizeScrollGesture
+#else
+// crbug.com/460128
+#define MAYBE_SynthesizeScrollGesture DISABLED_SynthesizeScrollGesture
+#endif
+IN_PROC_BROWSER_TEST_F(SyntheticGestureTest, MAYBE_SynthesizeScrollGesture) {
+  GURL test_url = GetTestUrl("devtools", "synthetic_gesture_tests.html");
+  NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 1);
+
+  int scroll_top;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(document.body.scrollTop)", &scroll_top));
+  ASSERT_EQ(0, scroll_top);
+
+  scoped_ptr<base::DictionaryValue> params(new base::DictionaryValue());
+  params->SetInteger("x", 0);
+  params->SetInteger("y", 0);
+  params->SetInteger("xDistance", 0);
+  params->SetInteger("yDistance", -100);
+  SendCommand("Input.synthesizeScrollGesture", params.Pass());
+
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(document.body.scrollTop)", &scroll_top));
+  ASSERT_EQ(100, scroll_top);
+}
+
+#if defined(OS_ANDROID)
+#define MAYBE_SynthesizeTapGesture SynthesizeTapGesture
+#else
+// crbug.com/460128
+#define MAYBE_SynthesizeTapGesture DISABLED_SynthesizeTapGesture
+#endif
+IN_PROC_BROWSER_TEST_F(SyntheticGestureTest, MAYBE_SynthesizeTapGesture) {
+  GURL test_url = GetTestUrl("devtools", "synthetic_gesture_tests.html");
+  NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 1);
+
+  int scroll_top;
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(document.body.scrollTop)", &scroll_top));
+  ASSERT_EQ(0, scroll_top);
+
+  scoped_ptr<base::DictionaryValue> params(new base::DictionaryValue());
+  params->SetInteger("x", 16);
+  params->SetInteger("y", 16);
+  params->SetString("gestureSourceType", "touch");
+  SendCommand("Input.synthesizeTapGesture", params.Pass());
+
+  // The link that we just tapped should take us to the bottom of the page. The
+  // new value of |document.body.scrollTop| will depend on the screen dimensions
+  // of the device that we're testing on, but in any case it should be greater
+  // than 0.
+  ASSERT_TRUE(content::ExecuteScriptAndExtractInt(
+      shell()->web_contents(),
+      "domAutomationController.send(document.body.scrollTop)", &scroll_top));
+  ASSERT_GT(scroll_top, 0);
 }
 
 }  // namespace content

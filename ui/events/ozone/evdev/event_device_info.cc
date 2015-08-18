@@ -414,6 +414,10 @@ EventDeviceInfo::ProbeLegacyAbsoluteDevice() const {
   if (HasKeyEvent(BTN_TOUCH))
     return LegacyAbsoluteDeviceType::LADT_TOUCHSCREEN;
 
+  // ABS_Z mitigation for extra device on some Elo devices.
+  if (HasKeyEvent(BTN_LEFT) && !HasAbsEvent(ABS_Z))
+    return LegacyAbsoluteDeviceType::LADT_TOUCHSCREEN;
+
   return LegacyAbsoluteDeviceType::LADT_NONE;
 }
 

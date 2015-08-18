@@ -32,6 +32,10 @@ class Version;
 // independently.
 class InstallUtil {
  public:
+  // Returns true if properties that enable Metro mode on Win8+ should be
+  // installed.
+  static bool ShouldInstallMetroProperties();
+
   // Get the path to this distribution's Active Setup registry entries.
   // e.g. Software\Microsoft\Active Setup\Installed Components\<dist_guid>
   static base::string16 GetActiveSetupPath(BrowserDistribution* dist);
@@ -165,7 +169,7 @@ class InstallUtil {
    public:
     explicit ValueEquals(const base::string16& value_to_match)
         : value_to_match_(value_to_match) { }
-    virtual bool Evaluate(const base::string16& value) const override;
+    bool Evaluate(const base::string16& value) const override;
    protected:
     base::string16 value_to_match_;
    private:
@@ -190,8 +194,8 @@ class InstallUtil {
   class ProgramCompare : public RegistryValuePredicate {
    public:
     explicit ProgramCompare(const base::FilePath& path_to_match);
-    virtual ~ProgramCompare();
-    virtual bool Evaluate(const base::string16& value) const override;
+    ~ProgramCompare() override;
+    bool Evaluate(const base::string16& value) const override;
     bool EvaluatePath(const base::FilePath& path) const;
 
    protected:

@@ -115,10 +115,10 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
         did_receive_response_(false),
         did_finish_(false) {}
 
-  virtual ~TestWebURLLoaderClient() {}
+  ~TestWebURLLoaderClient() override {}
 
   // blink::WebURLLoaderClient implementation:
-  virtual void willSendRequest(
+  void willSendRequest(
       blink::WebURLLoader* loader,
       blink::WebURLRequest& newRequest,
       const blink::WebURLResponse& redirectResponse) override {
@@ -132,14 +132,14 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  virtual void didSendData(blink::WebURLLoader* loader,
-                           unsigned long long bytesSent,
-                           unsigned long long totalBytesToBeSent) override {
+  void didSendData(blink::WebURLLoader* loader,
+                   unsigned long long bytesSent,
+                   unsigned long long totalBytesToBeSent) override {
     EXPECT_TRUE(loader_);
     EXPECT_EQ(loader_.get(), loader);
   }
 
-  virtual void didReceiveResponse(
+  void didReceiveResponse(
       blink::WebURLLoader* loader,
       const blink::WebURLResponse& response) override {
     EXPECT_TRUE(loader_);
@@ -154,17 +154,17 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  virtual void didDownloadData(blink::WebURLLoader* loader,
-                               int dataLength,
-                               int encodedDataLength) override {
+  void didDownloadData(blink::WebURLLoader* loader,
+                       int dataLength,
+                       int encodedDataLength) override {
     EXPECT_TRUE(loader_);
     EXPECT_EQ(loader_.get(), loader);
   }
 
-  virtual void didReceiveData(blink::WebURLLoader* loader,
-                              const char* data,
-                              int dataLength,
-                              int encodedDataLength) override {
+  void didReceiveData(blink::WebURLLoader* loader,
+                      const char* data,
+                      int dataLength,
+                      int encodedDataLength) override {
     EXPECT_TRUE(loader_);
     EXPECT_EQ(loader_.get(), loader);
     // The response should have started, but must not have finished, or failed.
@@ -179,15 +179,15 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  virtual void didReceiveCachedMetadata(blink::WebURLLoader* loader,
-                                        const char* data,
-                                        int dataLength) override {
+  void didReceiveCachedMetadata(blink::WebURLLoader* loader,
+                                const char* data,
+                                int dataLength) override {
     EXPECT_EQ(loader_.get(), loader);
   }
 
-  virtual void didFinishLoading(blink::WebURLLoader* loader,
-                                double finishTime,
-                                int64_t totalEncodedDataLength) override {
+  void didFinishLoading(blink::WebURLLoader* loader,
+                        double finishTime,
+                        int64_t totalEncodedDataLength) override {
     EXPECT_TRUE(loader_);
     EXPECT_EQ(loader_.get(), loader);
     EXPECT_TRUE(did_receive_response_);
@@ -198,8 +198,8 @@ class TestWebURLLoaderClient : public blink::WebURLLoaderClient {
       loader_.reset();
   }
 
-  virtual void didFail(blink::WebURLLoader* loader,
-                       const blink::WebURLError& error) override {
+  void didFail(blink::WebURLLoader* loader,
+               const blink::WebURLError& error) override {
     EXPECT_TRUE(loader_);
     EXPECT_EQ(loader_.get(), loader);
     EXPECT_FALSE(did_finish_);
@@ -299,6 +299,22 @@ class WebURLLoaderImplTest : public testing::Test {
     EXPECT_EQ("", client()->error().domain.utf8());
   }
 
+  void DoReceiveCompletedResponse() {
+    EXPECT_FALSE(client()->did_receive_response());
+    EXPECT_EQ("", client()->received_data());
+    EXPECT_FALSE(client()->did_finish());
+
+    peer()->OnReceivedCompletedResponse(
+        content::ResourceResponseInfo(), kTestData, strlen(kTestData),
+        strlen(kTestData), net::OK, false, false, "", base::TimeTicks(),
+        strlen(kTestData));
+
+    EXPECT_TRUE(client()->did_receive_response());
+    EXPECT_EQ(kTestData, client()->received_data());
+    EXPECT_EQ(net::OK, client()->error().reason);
+    EXPECT_EQ("", client()->error().domain.utf8());
+  }
+
   void DoFailRequest() {
     EXPECT_FALSE(client()->did_finish());
     peer()->OnCompletedRequest(net::ERR_FAILED, false, false, "",
@@ -377,6 +393,13 @@ TEST_F(WebURLLoaderImplTest, Failure) {
   DoReceiveData();
   DoFailRequest();
   EXPECT_FALSE(dispatcher()->canceled());
+}
+
+TEST_F(WebURLLoaderImplTest, ReceiveCompletedResponse) {
+  DoStartAsyncRequest();
+  DoReceiveCompletedResponse();
+  EXPECT_FALSE(dispatcher()->canceled());
+  EXPECT_EQ(kTestData, client()->received_data());
 }
 
 // The client may delete the WebURLLoader during any callback from the loader.

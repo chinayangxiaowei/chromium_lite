@@ -12,7 +12,7 @@
 #include "base/timer/timer.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
-#include "ui/events/keycodes/dom4/keycode_converter.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/ozone/evdev/cursor_delegate_evdev.h"
 #include "ui/events/ozone/evdev/device_event_dispatcher_evdev.h"
 #include "ui/events/ozone/evdev/event_device_info.h"
@@ -398,7 +398,8 @@ void GestureInterpreterLibevdevCros::OnGestureMetrics(
                                  metrics->data[0],
                                  metrics->data[1],
                                  metrics->type);
-  NOTIMPLEMENTED();
+
+  // TODO(spang): Hook up metrics.
 }
 
 void GestureInterpreterLibevdevCros::DispatchChangedMouseButtons(
