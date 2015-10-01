@@ -11,7 +11,6 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -21,6 +20,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
 
+import org.chromium.base.Log;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.VisibleForTesting;
 
@@ -31,7 +31,7 @@ import org.chromium.base.VisibleForTesting;
 public class ContentView extends FrameLayout
         implements ContentViewCore.InternalAccessDelegate, SmartClipProvider {
 
-    private static final String TAG = "ContentView";
+    private static final String TAG = "cr.ContentView";
 
     protected final ContentViewCore mContentViewCore;
 
