@@ -13,21 +13,21 @@ function test()
     InspectorTest.runTestSuite([
         function initFormattedStyle(next)
         {
-            function callback(styles)
+            function callback(matchedResult)
             {
-                if (!styles) {
+                if (!matchedResult) {
                     InspectorTest.addResult("empty styles");
                     InspectorTest.completeTest();
                     return;
                 }
 
-                formattedStyle = styles.matchedCSSRules[1].style;
+                formattedStyle = matchedResult.nodeStyles()[1];
                 next();
             }
 
             function nodeCallback(node)
             {
-                InspectorTest.cssModel.matchedStylesPromise(node.id, false, false).then(callback);
+                InspectorTest.cssModel.matchedStylesPromise(node.id).then(callback);
             }
             InspectorTest.selectNodeWithId("formatted", nodeCallback);
         },
@@ -39,7 +39,8 @@ function test()
 
         function testFormattedRemoveStart(next)
         {
-            formattedStyle.allProperties[0].setText("", true, true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[0].setText("", true, true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedInsertMiddle(next)
@@ -49,7 +50,8 @@ function test()
 
         function testFormattedRemoveMiddle(next)
         {
-            formattedStyle.allProperties[1].setText("", true, true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[1].setText("", true, true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedInsertEnd(next)
@@ -59,22 +61,26 @@ function test()
 
         function testFormattedRemoveEnd(next)
         {
-            formattedStyle.allProperties[3].setText("", true, true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[3].setText("", true, true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedDisableStart(next)
         {
-            formattedStyle.allProperties[0].setDisabled(true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[0].setDisabled(true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedDisableEnd(next)
         {
-            formattedStyle.allProperties[2].setDisabled(true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[2].setDisabled(true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedDisableMiddle(next)
         {
-            formattedStyle.allProperties[1].setDisabled(true, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[1].setDisabled(true)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedInsert1(next)
@@ -94,22 +100,30 @@ function test()
 
         function testFormattedEnableStart(next)
         {
-            formattedStyle.allProperties[1].setDisabled(false, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[1].setDisabled(false)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedEnableEnd(next)
         {
-            formattedStyle.allProperties[4].setDisabled(false, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[4].setDisabled(false)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedEnableMiddle(next)
         {
-            formattedStyle.allProperties[3].setDisabled(false, dumpFormattedAndCallNext.bind(null, next));
+            formattedStyle.allProperties[3].setDisabled(false)
+                .then(dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedWithMeta(next)
         {
             formattedStyle.insertPropertyAt(0, "-webkit-animation", "linear", dumpFormattedAndCallNext.bind(null, next));
+        },
+
+        function testFormattedWithMetaValue(next)
+        {
+            formattedStyle.insertPropertyAt(1, "unicode-bidi", "webkit-isolate", dumpFormattedAndCallNext.bind(null, next));
         },
 
         function testFormattedWithAtoms(next)
@@ -119,20 +133,21 @@ function test()
 
         function initUnformattedStyle(next)
         {
-            function callback(styles)
+            function callback(matchedResult)
             {
-                if (!styles) {
+                if (!matchedResult) {
                     InspectorTest.addResult("empty styles");
+                    InspectorTest.completeTest();
                     return;
                 }
 
-                unformattedStyle = styles.matchedCSSRules[1].style;
+                unformattedStyle = matchedResult.nodeStyles()[1];
                 next();
             }
 
             function nodeCallback(node)
             {
-                InspectorTest.cssModel.matchedStylesPromise(node.id, false, false).then(callback);
+                InspectorTest.cssModel.matchedStylesPromise(node.id).then(callback);
             }
             InspectorTest.selectNodeWithId("unformatted", nodeCallback);
         },
@@ -144,7 +159,8 @@ function test()
 
         function testUnformattedRemoveStart(next)
         {
-            unformattedStyle.allProperties[0].setText("", true, true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[0].setText("", true, true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedInsertMiddle(next)
@@ -154,7 +170,8 @@ function test()
 
         function testUnformattedRemoveMiddle(next)
         {
-            unformattedStyle.allProperties[1].setText("", true, true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[1].setText("", true, true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedInsertEnd(next)
@@ -164,64 +181,71 @@ function test()
 
         function testUnformattedRemoveEnd(next)
         {
-            unformattedStyle.allProperties[3].setText("", true, true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[3].setText("", true, true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedDisableStart(next)
         {
-            unformattedStyle.allProperties[0].setDisabled(true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[0].setDisabled(true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedDisableEnd(next)
         {
-            unformattedStyle.allProperties[2].setDisabled(true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[2].setDisabled(true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedDisableMiddle(next)
         {
-            unformattedStyle.allProperties[1].setDisabled(true, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[1].setDisabled(true)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedEnableStart(next)
         {
-            unformattedStyle.allProperties[0].setDisabled(false, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[0].setDisabled(false)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedEnableEnd(next)
         {
-            unformattedStyle.allProperties[2].setDisabled(false, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[2].setDisabled(false)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         },
 
         function testUnformattedEnableMiddle(next)
         {
-            unformattedStyle.allProperties[1].setDisabled(false, dumpUnformattedAndCallNext.bind(null, next));
+            unformattedStyle.allProperties[1].setDisabled(false)
+                .then(dumpUnformattedAndCallNext.bind(null, next));
         }
     ]);
 
     // Data dumping
 
-    function dumpFormattedAndCallNext(next, style)
+    function dumpFormattedAndCallNext(next, success)
     {
-        if (!style) {
-            InspectorTest.addResult("error: empty style");
+        if (!success) {
+            InspectorTest.addResult("error: operation failed.");
             InspectorTest.completeTest();
+            return;
         }
 
-        formattedStyle = style;
-        dumpStyle(style);
+        dumpStyle(formattedStyle);
         if (next)
             next();
     }
 
-    function dumpUnformattedAndCallNext(next, style)
+    function dumpUnformattedAndCallNext(next, success)
     {
-        if (!style) {
-            InspectorTest.addResult("error: empty style");
+        if (!success) {
+            InspectorTest.addResult("error: operation failed.");
             InspectorTest.completeTest();
+            return;
         }
 
-        unformattedStyle = style;
-        dumpStyle(style);
+        dumpStyle(unformattedStyle);
         if (next)
             next();
     }
@@ -241,7 +265,7 @@ function test()
 #formatted { 
     property1: value1;
     property2: value2;
-    property3: value3;
+    property3: value3
 }
 
 #unformatted {property1:value1;property2:value2;property3:value3;}

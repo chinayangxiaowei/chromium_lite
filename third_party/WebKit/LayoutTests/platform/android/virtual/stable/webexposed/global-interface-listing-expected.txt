@@ -297,6 +297,10 @@ interface CSSKeyframesRule
 interface CSSMediaRule
     getter media
     method constructor
+interface CSSNamespaceRule
+    getter namespaceURI
+    getter prefix
+    method constructor
 interface CSSPageRule
     getter selectorText
     getter style
@@ -309,6 +313,7 @@ interface CSSRule
     attribute KEYFRAMES_RULE
     attribute KEYFRAME_RULE
     attribute MEDIA_RULE
+    attribute NAMESPACE_RULE
     attribute PAGE_RULE
     attribute STYLE_RULE
     attribute SUPPORTS_RULE
@@ -2554,7 +2559,6 @@ interface HashChangeEvent
     getter newURL
     getter oldURL
     method constructor
-    method initHashChangeEvent
 interface Headers
     method append
     method constructor
@@ -2569,6 +2573,7 @@ interface Headers
     method values
 interface History
     getter length
+    getter scrollRestoration
     getter state
     method back
     method constructor
@@ -2576,6 +2581,7 @@ interface History
     method go
     method pushState
     method replaceState
+    setter scrollRestoration
 interface IDBCursor
     getter direction
     getter key
@@ -3242,10 +3248,12 @@ interface Path2D
 interface Performance
     getter memory
     getter navigation
+    getter onresourcetimingbufferfull
     getter onwebkitresourcetimingbufferfull
     getter timing
     method clearMarks
     method clearMeasures
+    method clearResourceTimings
     method constructor
     method getEntries
     method getEntriesByName
@@ -3253,8 +3261,10 @@ interface Performance
     method mark
     method measure
     method now
+    method setResourceTimingBufferSize
     method webkitClearResourceTimings
     method webkitSetResourceTimingBufferSize
+    setter onresourcetimingbufferfull
     setter onwebkitresourcetimingbufferfull
 interface PerformanceEntry
     getter duration
@@ -3455,6 +3465,7 @@ interface Request
     getter headers
     getter method
     getter mode
+    getter redirect
     getter referrer
     getter url
     method arrayBuffer
@@ -3573,7 +3584,6 @@ interface SVGAnimationElement
     method getCurrentTime
     method getSimpleDuration
     method getStartTime
-    method hasExtension
     setter onbegin
     setter onend
     setter onrepeat
@@ -3608,7 +3618,6 @@ interface SVGCursorElement
     getter x
     getter y
     method constructor
-    method hasExtension
 interface SVGDefsElement
     method constructor
 interface SVGDescElement
@@ -4041,7 +4050,6 @@ interface SVGGraphicsElement
     method getCTM
     method getScreenCTM
     method getTransformToElement
-    method hasExtension
 interface SVGImageElement
     getter height
     getter href
@@ -4128,7 +4136,6 @@ interface SVGMaskElement
     getter x
     getter y
     method constructor
-    method hasExtension
 interface SVGMatrix
     getter a
     getter b
@@ -4404,7 +4411,6 @@ interface SVGPatternElement
     getter x
     getter y
     method constructor
-    method hasExtension
 interface SVGPoint
     getter x
     getter y
@@ -4485,11 +4491,7 @@ interface SVGSVGElement
     getter currentTranslate
     getter currentView
     getter height
-    getter pixelUnitToMillimeterX
-    getter pixelUnitToMillimeterY
     getter preserveAspectRatio
-    getter screenPixelToMillimeterX
-    getter screenPixelToMillimeterY
     getter useCurrentView
     getter viewBox
     getter viewport
@@ -5005,10 +5007,6 @@ interface Touch
     getter screenX
     getter screenY
     getter target
-    getter webkitForce
-    getter webkitRadiusX
-    getter webkitRadiusY
-    getter webkitRotationAngle
     method constructor
 interface TouchEvent
     getter altKey

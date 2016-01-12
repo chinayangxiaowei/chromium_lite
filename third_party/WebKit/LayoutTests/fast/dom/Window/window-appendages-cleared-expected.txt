@@ -2,9 +2,9 @@ PASS history.back == "LEFTOVER" is false
 PASS history.forward == "LEFTOVER" is false
 PASS history.go == "LEFTOVER" is false
 PASS history.length == "LEFTOVER" is false
-PASS history.options == "LEFTOVER" is false
 PASS history.pushState == "LEFTOVER" is false
 PASS history.replaceState == "LEFTOVER" is false
+PASS history.scrollRestoration == "LEFTOVER" is false
 PASS history.state == "LEFTOVER" is false
 PASS location.ancestorOrigins == "LEFTOVER" is false
 PASS location.assign == "LEFTOVER" is false
@@ -28,6 +28,7 @@ PASS screen.availTop == "LEFTOVER" is false
 PASS screen.availWidth == "LEFTOVER" is false
 PASS screen.colorDepth == "LEFTOVER" is false
 PASS screen.height == "LEFTOVER" is false
+PASS screen.keepAwake == "LEFTOVER" is false
 PASS screen.orientation == "LEFTOVER" is false
 PASS screen.pixelDepth == "LEFTOVER" is false
 PASS screen.width == "LEFTOVER" is false

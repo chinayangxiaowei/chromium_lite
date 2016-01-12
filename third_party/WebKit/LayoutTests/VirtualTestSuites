@@ -47,6 +47,13 @@
              "--enable-prefer-compositing-to-lcd-text"]
   },
   {
+    "prefix": "threaded_animation_timelines",
+    "base": "fast/scroll-behavior",
+    "args": ["--enable-threaded-compositing",
+             "--enable-prefer-compositing-to-lcd-text",
+             "--enable-compositor-animation-timelines"]
+  },
+  {
     "prefix": "stable",
     "base": "webexposed",
     "args": ["--stable-release-mode"]
@@ -72,7 +79,7 @@
     "args": ["--enable-threaded-compositing",
              "--enable-fixed-position-compositing", "--enable-prefer-compositing-to-lcd-text",
              "--enable-composited-scrolling-for-frames", "--enable-gesture-tap-highlight", "--enable-pinch",
-             "--enable-overlay-fullscreen-video", "--enable-overlay-scrollbars", "--enable-overscroll-notifications",
+             "--force-overlay-fullscreen-video", "--enable-overlay-scrollbars", "--enable-overscroll-notifications",
              "--enable-fixed-layout", "--enable-viewport", "--disable-canvas-aa",
              "--disable-composited-antialiasing"]
   },
@@ -87,15 +94,14 @@
     "args": ["--stable-release-mode"]
   },
   {
+    "prefix": "without-smil",
+    "base": "svg/animations/exposed",
+    "args": ["--disable-blink-features=smil"]
+  },
+  {
     "prefix": "linux-subpixel",
     "base": "platform/linux/fast/text/subpixel",
     "args": ["--enable-webkit-text-subpixel-positioning"]
-  },
-  {
-    "prefix": "antialiasedtext",
-    "base": "fast/text",
-    "args": ["--enable-direct-write",
-             "--enable-font-antialiasing"]
   },
   {
     "prefix": "threaded",
@@ -105,6 +111,11 @@
   {
     "prefix": "rootlayerscrolls",
     "base": "fast/scrolling",
+    "args": ["--root-layer-scrolls"]
+  },
+  {
+    "prefix": "rootlayerscrolls",
+    "base": "fast/history/scroll-restoration",
     "args": ["--root-layer-scrolls"]
   },
   {
@@ -141,5 +152,31 @@
     "prefix": "mediasession",
     "base": "media/mediasession",
     "args": ["--enable-blink-features=MediaSession"]
+  },
+  {
+    "prefix": "sharedarraybuffer",
+    "base": "fast/workers",
+    "args": ["--js-flags=--harmony-sharedarraybuffer",
+             "--enable-blink-features=SharedArrayBuffer"]
+  },
+  {
+    "prefix": "trustedeventsdefaultaction",
+    "base": "fast/events",
+    "args": ["--enable-blink-features=TrustedEventsDefaultAction"]
+  },
+  {
+    "prefix": "threaded",
+    "base": "fast/idle-callback",
+    "args": ["--enable-threaded-compositing"]
+  },
+  {
+    "prefix": "threaded",
+    "base": "inspector/tracing",
+    "args": ["--enable-threaded-compositing"]
+  },
+  {
+    "prefix": "spv2",
+    "base": "paint",
+    "args": ["--enable-slimming-paint-v2"]
   }
 ]

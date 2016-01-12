@@ -15,25 +15,42 @@ InspectorTest.computedStyleWidget = function()
 InspectorTest.dumpComputedStyle = function()
 {
     var computed = InspectorTest.computedStyleWidget();
-    var items = computed.element.querySelectorAll(".computed-style-property");
-    for (var i = 0; i < items.length; ++i) {
-        var item = items[i];
-        var property = item[WebInspector.ComputedStyleWidget._propertySymbol];
+    var treeOutline = computed._propertiesOutline;
+    var children = treeOutline.rootElement().children();
+    for (var treeElement of children) {
+        var property = treeElement[WebInspector.ComputedStyleWidget._propertySymbol];
         if (property.name === "width" || property.name === "height")
             continue;
-        InspectorTest.addResult(item.textContent);
+        var dumpText = "";
+        dumpText += treeElement.title.querySelector(".property-name").textContent;
+        dumpText += ": ";
+        dumpText += treeElement.title.querySelector(".property-value").textContent;
+        InspectorTest.addResult(dumpText);
+        for (var trace of treeElement.children()) {
+            var title = trace.title;
+            var dumpText = "";
+            if (trace.title.classList.contains("property-trace-inactive"))
+                dumpText += "OVERLOADED ";
+            dumpText += title.querySelector(".property-trace-value").textContent;
+            dumpText += " - ";
+            dumpText += title.querySelector(".property-trace-selector").textContent;
+            var link = title.querySelector(".trace-link");
+            if (link)
+                dumpText += " " + extractText(link);
+            InspectorTest.addResult("    " + dumpText);
+        }
     }
 }
 
 InspectorTest.findComputedPropertyWithName = function(name)
 {
     var computed = InspectorTest.computedStyleWidget();
-    var items = computed.element.querySelectorAll(".computed-style-property");
-    for (var i = 0; i < items.length; ++i) {
-        var item = items[i];
-        var property = item[WebInspector.ComputedStyleWidget._propertySymbol];
+    var treeOutline = computed._propertiesOutline;
+    var children = treeOutline.rootElement().children();
+    for (var treeElement of children) {
+        var property = treeElement[WebInspector.ComputedStyleWidget._propertySymbol];
         if (property.name === name)
-            return item;
+            return treeElement.title;
     }
     return null;
 }
@@ -267,7 +284,7 @@ InspectorTest.selectNodeAndWaitForStylesWithComputed = function(idValue, callbac
 
     function onSidebarRendered()
     {
-        InspectorTest.computedStyleWidget().doUpdate(callback);
+        InspectorTest.computedStyleWidget().doUpdate().then(callback);
     }
 }
 
@@ -420,48 +437,7 @@ InspectorTest.eventListenersWidget = function()
 
 InspectorTest.expandAndDumpSelectedElementEventListeners = function(callback)
 {
-    InspectorTest.addSniffer(WebInspector.EventListenersView.prototype, "_eventListenersArrivedForTest", listenersArrived);
-
-    var eventListenersWidget = InspectorTest.eventListenersWidget();
-
-    function listenersArrived()
-    {
-        var listenerTypes = eventListenersWidget._eventListenersView._treeOutline.rootElement().children();
-        for (var i = 0; i < listenerTypes.length; ++i) {
-            listenerTypes[i].expand();
-            var listenerItems = listenerTypes[i].children();
-            for (var j = 0; j < listenerItems.length; ++j)
-                listenerItems[j].expand();
-        }
-        InspectorTest.runAfterPendingDispatches(objectsExpanded);
-    }
-
-    function objectsExpanded()
-    {
-        var listenerTypes = eventListenersWidget._eventListenersView._treeOutline.rootElement().children();
-        for (var i = 0; i < listenerTypes.length; ++i) {
-            var eventType = listenerTypes[i]._title;
-            InspectorTest.addResult("");
-            InspectorTest.addResult("======== " + eventType + " ========");
-            var listenerItems = listenerTypes[i].children();
-            for (var j = 0; j < listenerItems.length; ++j)
-                InspectorTest.dumpObjectPropertyTreeElement(listenerItems[j]);
-        }
-        callback();
-    }
-}
-
-InspectorTest.dumpObjectPropertyTreeElement = function(treeElement)
-{
-    var expandedSubstring = treeElement.expanded ? "[expanded]" : "[collapsed]";
-    InspectorTest.addResult(expandedSubstring + " " + treeElement.listItemElement.deepTextContent());
-
-    for (var i = 0; i < treeElement.childCount(); ++i) {
-        var property = treeElement.childAt(i).property;
-        var key = property.name;
-        var value = property.value._description;
-        InspectorTest.addResult("    " + key + ": " + value);
-    }
+    InspectorTest.expandAndDumpEventListeners(InspectorTest.eventListenersWidget()._eventListenersView, null, callback);
 }
 
 InspectorTest.dumpObjectPropertySectionDeep = function(section)
@@ -572,25 +548,25 @@ InspectorTest.dumpElementsTree = function(rootNode, depth, resultsArray)
         return name + ":[" + result.join(",") + "]";
     }
 
-    function userPropertyDataDump(treeItem)
+    function markersDataDump(treeItem)
     {
         if (treeItem._elementCloseTag)
             return "";
 
-        var userProperties = "";
+        var markers = "";
         var node = treeItem._node;
         if (node) {
-            userProperties += dumpMap("userProperties", node._userProperties);
-            var dump = dumpMap("descendantUserAttributeCounters", node._descendantUserPropertyCounters);
+            markers += dumpMap("markers", node._markers);
+            var dump = node._subtreeMarkerCount ? "subtreeMarkerCount:" + node._subtreeMarkerCount : "";
             if (dump) {
-                if (userProperties)
-                    userProperties += ", ";
-                userProperties += dump;
+                if (markers)
+                    markers += ", ";
+                markers += dump;
             }
-            if (userProperties)
-                userProperties = " [" + userProperties + "]";
+            if (markers)
+                markers = " [" + markers + "]";
         }
-        return userProperties;
+        return markers;
     }
 
     function print(treeItem, prefix, depth)
@@ -605,8 +581,8 @@ InspectorTest.dumpElementsTree = function(rootNode, depth, resultsArray)
             } else
                 expander = "  ";
 
-            var userProperties = userPropertyDataDump(treeItem);
-            var value = prefix + expander + beautify(treeItem.listItemElement) + userProperties;
+            var markers = markersDataDump(treeItem);
+            var value = prefix + expander + beautify(treeItem.listItemElement) + markers;
             if (treeItem.shadowHostToolbar) {
                 value = prefix + expander + "shadow-root ";
                 for (var i = 0; i < treeItem.shadowHostToolbar.children.length; ++i) {
@@ -984,7 +960,7 @@ InspectorTest.dumpInspectorHighlightJSON = function(idValue, callback)
 
 InspectorTest.waitForAnimationAdded = function(callback)
 {
-    InspectorTest.addSniffer(WebInspector.AnimationTimeline.prototype, "_addAnimation", callback);
+    InspectorTest.addSniffer(WebInspector.AnimationTimeline.prototype, "_addAnimationGroup", callback);
 }
 
 InspectorTest.dumpAnimationTimeline = function(timeline)

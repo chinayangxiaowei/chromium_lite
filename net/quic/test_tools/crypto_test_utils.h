@@ -31,6 +31,7 @@ class QuicCryptoServerConfig;
 class QuicCryptoServerStream;
 class QuicCryptoStream;
 class QuicRandom;
+class QuicServerId;
 
 namespace test {
 
@@ -77,6 +78,7 @@ class CryptoTestUtils {
   // returns: the number of client hellos that the client sent.
   static int HandshakeWithFakeClient(PacketSavingConnection* server_conn,
                                      QuicCryptoServerStream* server,
+                                     const QuicServerId& server_id,
                                      const FakeClientOptions& options);
 
   // SetupCryptoServerConfigForTest configures |config| and |crypto_config|
@@ -145,6 +147,12 @@ class CryptoTestUtils {
                                             uint64 hash,
                                             uint32 index);
 
+  // Creates a minimal dummy reject message that will pass the client-config
+  // validation tests. This will include a server config, but no certs, proof
+  // source address token, or server nonce.
+  static void FillInDummyReject(CryptoHandshakeMessage* rej,
+                                bool reject_is_stateless);
+
   // ParseTag returns a QuicTag from parsing |tagstr|. |tagstr| may either be
   // in the format "EXMP" (i.e. ASCII format), or "#11223344" (an explicit hex
   // format). It CHECK fails if there's a parse error.
@@ -163,13 +171,6 @@ class CryptoTestUtils {
   //       "SNI", "www.example.com",
   //       nullptr);
   static CryptoHandshakeMessage Message(const char* message_tag, ...);
-
-  // BuildMessage is the same as |Message|, but takes the variable arguments
-  // explicitly. TODO(rtenneti): Investigate whether it'd be better for
-  // Message() and BuildMessage() to return a CryptoHandshakeMessage* pointer
-  // instead, to avoid copying the return value.
-  static CryptoHandshakeMessage BuildMessage(const char* message_tag,
-                                             va_list ap);
 
   // ChannelIDSourceForTesting returns a ChannelIDSource that generates keys
   // deterministically based on the hostname given in the GetChannelIDKey call.

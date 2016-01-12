@@ -40,11 +40,11 @@ link to level 1 of the CSS Flexbox spec is:
 http://www.w3.org/TR/css-flexbox-1/#RELEVANT_SECTION
 
 When testing features not yet available in an official draft, link to the appropriate
-Editor’s Draft found at http://dev.w3.org/csswg/. Be sure to include the level of the
+Editor’s Draft found at https://drafts.csswg.org/. Be sure to include the level of the
 specification in the link. For example, the proper link to the CSS Flexbox Level 1
 Editor’s Draft is:
 
-http://dev.w3.org/csswg/css-flexbox-1/#RELEVANT_SECTION
+https://drafts.csswg.org/css-flexbox-1/#RELEVANT_SECTION
 
 Contributing
 -------------
@@ -54,6 +54,16 @@ development, so long as you fulfill the contribution requirements detailed
 in the [Contributing Guidelines][contributing]. No test is too small or too
 simple, especially if it corresponds to something for which you've noted an
 interoperability bug in a browser.
+
+Getting Involved
+----------------
+
+If you wish to contribute actively, you're very welcome to join the
+public-css-testsuite@w3.org mailing list by
+[signing up to our mailing list](mailto:public-css-testsuite-request@w3.org?subject=subscribe).
+The mailing list is [archived][mailarchive].
+
+[mailarchive]: https://lists.w3.org/Archives/Public/public-css-testsuite/
 
 Write Access
 ------------
@@ -76,6 +86,6 @@ reviewers to use its built-in review tools. Direct submissions to Mercurial
 should be limited to administrative or housekeeping tasks, very minor changes
 that don't require a review, or from advanced users of the system.
 
-[contributing]: https://github.com/rhauck/csswg-test/blob/master/CONTRIBUTING.md
+[contributing]: https://github.com/w3c/csswg-test/blob/master/CONTRIBUTING.md
 [github101]: http://testthewebforward.org/docs/github-101.html
 [speclinks]: http://testthewebforward.org/docs/test-templates.html#specification-links

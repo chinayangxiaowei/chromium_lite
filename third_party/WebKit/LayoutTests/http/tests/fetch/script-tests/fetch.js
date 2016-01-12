@@ -2,7 +2,7 @@ if (self.importScripts) {
   importScripts('../resources/fetch-test-helpers.js');
 }
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('http://')
       .then(
         t.unreached_func('fetch of invalid URL must fail'),
@@ -13,7 +13,7 @@ sequential_promise_test(function(t) {
 // Step 4:
 // request's url's scheme is not one of "http" and "https"
 //   A network error.
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('ftp://localhost/')
       .then(
         t.unreached_func('fetch of non-HTTP(S) CORS must fail'),
@@ -24,14 +24,14 @@ sequential_promise_test(function(t) {
 // The last statement:
 // Otherwise
 //   Return a network error.
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('foobar://localhost/', {mode: 'no-cors'})
       .then(
         t.unreached_func('scheme not listed in basic fetch spec must fail'),
         function() {});
   }, 'fetch of scheme not listed in basic fetch spec');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('/fetch/resources/fetch-status.php?status=200')
       .then(function(response) {
           assert_equals(response.status, 200);
@@ -39,7 +39,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch result of 200 response');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('/fetch/resources/fetch-status.php?status=404')
       .then(function(response) {
           assert_equals(response.status, 404);
@@ -47,7 +47,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch result of 404 response');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var request = new Request(
       '/fetch/resources/fetch-status.php?status=200#fragment');
 
@@ -55,7 +55,6 @@ sequential_promise_test(function(t) {
     // serialized with the exclude fragment flag set.
     assert_equals(request.url,
       BASE_ORIGIN + '/fetch/resources/fetch-status.php?status=200');
-    assert_equals(request.context, '');
 
     return fetch(request)
       .then(function(response) {
@@ -67,11 +66,10 @@ sequential_promise_test(function(t) {
           assert_equals(response.url,
             BASE_ORIGIN +
             '/fetch/resources/fetch-status.php?status=200');
-          assert_equals(request.context, '');
         });
   }, 'Request/response url attribute getter with fragment');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var redirect_target_url =
       BASE_ORIGIN + '/fetch/resources/fetch-status.php?status=200';
     var redirect_original_url =
@@ -81,7 +79,7 @@ sequential_promise_test(function(t) {
     var request = new Request(redirect_original_url);
     assert_equals(request.url, redirect_original_url,
       'Request\'s url is the original URL');
-    assert_equals(request.context, '');
+    assert_equals(request.redirect, 'follow');
 
     return fetch(request)
       .then(function(response) {
@@ -91,9 +89,92 @@ sequential_promise_test(function(t) {
             'Response\'s url is locationURL');
           assert_equals(request.url, redirect_original_url,
             'Request\'s url remains the original URL');
-          assert_equals(request.context, '');
         });
   }, 'Request/response url attribute getter with redirect');
+
+promise_test(function(t) {
+    var redirect_target_url =
+      BASE_ORIGIN + '/fetch/resources/fetch-status.php?status=200';
+    var redirect_original_url =
+      BASE_ORIGIN + '/serviceworker/resources/redirect.php?Redirect=' +
+      redirect_target_url;
+
+    var request = new Request(redirect_original_url, {redirect: 'manual'});
+    assert_equals(request.url, redirect_original_url,
+      'Request\'s url is the original URL');
+    assert_equals(request.redirect, 'manual');
+
+    return fetch(request)
+      .then(function(response) {
+          assert_equals(response.status, 0);
+          assert_equals(response.type, 'opaqueredirect');
+          assert_equals(response.url, '');
+        });
+  }, 'Manual redirect fetch returns opaque redirect response');
+
+promise_test(function(t) {
+    var redirect_target_url =
+      OTHER_ORIGIN + '/fetch/resources/fetch-status.php?status=200';
+    var redirect_original_url =
+      OTHER_ORIGIN + '/serviceworker/resources/redirect.php?Redirect=' +
+      redirect_target_url;
+
+    var request = new Request(redirect_original_url,
+                              {headers: [['X-Fetch-Test', 'A']],
+                               redirect: 'manual'});
+
+    // Cross-origin request with non-simple header initiates CORS preflight
+    // request.
+    return fetch(request)
+      .then(
+        t.unreached_func('Even in manual redirect mode, fetch with preflight' +
+                         ' must fail when redirect response is received'),
+        function() {});
+  }, 'Even in manual redirect mode, fetch with preflight must fail when' +
+     ' redirect response is received');
+
+promise_test(function(t) {
+    var redirect_target_url =
+      BASE_ORIGIN + '/fetch/resources/fetch-status.php?status=200';
+    var redirect_original_url =
+      BASE_ORIGIN + '/serviceworker/resources/redirect.php?Redirect=' +
+      redirect_target_url;
+
+    var request = new Request(redirect_original_url, {redirect: 'error'});
+    assert_equals(request.url, redirect_original_url,
+      'Request\'s url is the original URL');
+    assert_equals(request.redirect, 'error');
+
+    return fetch(request)
+      .then(
+        t.unreached_func('Redirect response must cause an error when redirect' +
+                         ' mode is error.'),
+        function() {});
+  }, 'Redirect response must cause an error when redirect mode is error.');
+
+promise_test(function(test) {
+    var url = BASE_ORIGIN + '/fetch/resources/doctype.html';
+    return fetch(new Request(url, {redirect: 'manual'}))
+      .then(function(response) {
+          assert_equals(response.status, 200);
+          assert_equals(response.statusText, 'OK');
+          assert_equals(response.url, url);
+          return response.text();
+        })
+      .then(function(text) { assert_equals(text, '<!DOCTYPE html>\n'); })
+    }, 'No-redirect fetch completes normally even if redirect mode is manual');
+
+promise_test(function(test) {
+    var url = BASE_ORIGIN + '/fetch/resources/doctype.html';
+    return fetch(new Request(url, {redirect: 'error'}))
+      .then(function(response) {
+          assert_equals(response.status, 200);
+          assert_equals(response.statusText, 'OK');
+          assert_equals(response.url, url);
+          return response.text();
+        })
+      .then(function(text) { assert_equals(text, '<!DOCTYPE html>\n'); })
+    }, 'No-redirect fetch completes normally even if redirect mode is error');
 
 function evalJsonp(text) {
   return new Promise(function(resolve) {
@@ -103,25 +184,23 @@ function evalJsonp(text) {
     });
 }
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var request =
       new Request('/serviceworker/resources/fetch-access-control.php',
                   {
                     method: 'POST',
                     body: new Blob(['Test Blob'], {type: 'test/type'})
                   });
-    assert_equals(request.context, '');
     return fetch(request)
       .then(function(response) { return response.text(); })
       .then(evalJsonp)
       .then(function(result) {
           assert_equals(result.method, 'POST');
           assert_equals(result.body, 'Test Blob');
-          assert_equals(request.context, '');
         });
   }, 'Fetch with Blob body test');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var request = new Request(
       '/serviceworker/resources/fetch-access-control.php',
       {method: 'POST', body: 'Test String'});
@@ -134,7 +213,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch with string body test');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var text = 'Test ArrayBuffer';
     var array = new Uint8Array(text.length);
     for (var i = 0; i < text.length; ++i)
@@ -151,7 +230,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch with ArrayBuffer body test');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var text = 'Test ArrayBufferView';
     var array = new Uint8Array(text.length);
     for (var i = 0; i < text.length; ++i)
@@ -168,7 +247,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch with ArrayBufferView body test');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     var formData = new FormData();
     formData.append('StringKey1', '1234567890');
     formData.append('StringKey2', 'ABCDEFGHIJ');
@@ -198,7 +277,7 @@ sequential_promise_test(function(t) {
         });
   }, 'Fetch with FormData body test');
 
-sequential_promise_test(function(t) {
+promise_test(function(t) {
     return fetch('../resources/fetch-test-helpers.js')
       .then(function(res) { return res.text(); })
       .then(function(text) { assert_not_equals(text, ''); });

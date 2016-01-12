@@ -13,14 +13,14 @@ layer at (0,0) size 800x600
               LayoutText {#text} at (2,2) size 108x18
                 text run at (2,2) width 108: "   InspectionText"
       LayoutBlockFlow {FORM} at (0,28) size 784x19
-        LayoutButton {INPUT} at (0,1) size 87.36x18 [bgcolor=#C0C0C0]
-          LayoutBlockFlow (anonymous) at (8,2) size 71.36x13
-            LayoutText {#text} at (0,0) size 72x13
-              text run at (0,0) width 72: "change width"
-        LayoutText {#text} at (87,0) size 5x18
-          text run at (87,0) width 5: " "
-        LayoutButton {INPUT} at (91.36,1) size 179.91x18 [bgcolor=#C0C0C0]
-          LayoutBlockFlow (anonymous) at (8,2) size 163.91x13
-            LayoutText {#text} at (0,0) size 164x13
-              text run at (0,0) width 164: "change width with table reflow"
+        LayoutButton {INPUT} at (0,1) size 83.30x18 [bgcolor=#C0C0C0]
+          LayoutBlockFlow (anonymous) at (8,2) size 67.30x13
+            LayoutText {#text} at (0,0) size 68x13
+              text run at (0,0) width 68: "change width"
+        LayoutText {#text} at (83,0) size 5x18
+          text run at (83,0) width 5: " "
+        LayoutButton {INPUT} at (87.30,1) size 168.36x18 [bgcolor=#C0C0C0]
+          LayoutBlockFlow (anonymous) at (8,2) size 152.36x13
+            LayoutText {#text} at (0,0) size 153x13
+              text run at (0,0) width 153: "change width with table reflow"
         LayoutText {#text} at (0,0) size 0x0

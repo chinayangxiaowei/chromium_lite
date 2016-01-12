@@ -1,5 +1,6 @@
 CONSOLE WARNING: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
 CONSOLE WARNING: 'webkitIndexedDB' is deprecated. Please use 'indexedDB' instead.
+CONSOLE WARNING: 'Performance.onwebkitresourcetimingbufferfull' is deprecated. Please use 'Performance.onresourcetimingbufferfull' instead.
 Tests property access on a cached DOMWindow after the associated frame is no longer in a web page. Test should not crash and properties should be set to sane defaults.
 
 On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
@@ -20,11 +21,12 @@ PASS childWindow.defaultstatus is ''
 PASS childWindow.devicePixelRatio is 0
 PASS childWindow.frameElement is null
 PASS childWindow.history.length is 0
-PASS childWindow.history.options.scrollRestoration is 'auto'
+PASS childWindow.history.scrollRestoration is 'auto'
 PASS childWindow.history.state is null
 PASS childWindow.innerHeight is 0
 PASS childWindow.innerWidth is 0
 FAIL childWindow.isJsTest should be false (of type boolean). Was undefined (of type undefined).
+PASS childWindow.isSecureContext is false
 PASS childWindow.length is 0
 FAIL childWindow.location.ancestorOrigins.length should be 0. Threw exception TypeError: Cannot read property 'length' of undefined
 FAIL childWindow.location.hash should be  (of type string). Was undefined (of type undefined).
@@ -42,6 +44,7 @@ PASS childWindow.name is ''
 PASS childWindow.navigator.appCodeName is window.navigator.appCodeName
 PASS childWindow.navigator.appName is window.navigator.appName
 PASS childWindow.navigator.appVersion is ''
+FAIL childWindow.navigator.connection.onchange should be null. Threw exception TypeError: Cannot read property 'onchange' of null
 FAIL childWindow.navigator.connection.ontypechange should be null. Threw exception TypeError: Cannot read property 'ontypechange' of null
 PASS childWindow.navigator.cookieEnabled is false
 PASS childWindow.navigator.doNotTrack is null
@@ -50,8 +53,7 @@ PASS childWindow.navigator.language is window.navigator.language
 PASS childWindow.navigator.maxTouchPoints is 0
 PASS childWindow.navigator.onLine is window.navigator.onLine
 PASS childWindow.navigator.platform is window.navigator.platform
-FAIL childWindow.navigator.presentation.ondefaultsessionstart should be null. Threw exception TypeError: Cannot read property 'ondefaultsessionstart' of null
-FAIL childWindow.navigator.presentation.session should be null. Threw exception TypeError: Cannot read property 'session' of null
+FAIL childWindow.navigator.presentation.defaultRequest should be null. Threw exception TypeError: Cannot read property 'defaultRequest' of null
 PASS childWindow.navigator.product is window.navigator.product
 PASS childWindow.navigator.productSub is window.navigator.productSub
 FAIL childWindow.navigator.serviceWorker.controller should be null. Threw exception TypeError: Cannot read property 'controller' of null
@@ -59,6 +61,8 @@ FAIL childWindow.navigator.serviceWorker.oncontrollerchange should be null. Thre
 FAIL childWindow.navigator.serviceWorker.onmessage should be null. Threw exception TypeError: Cannot read property 'onmessage' of null
 PASS childWindow.navigator.services.onclose is null
 PASS childWindow.navigator.services.onmessage is null
+FAIL childWindow.navigator.usb.onconnect should be null. Threw exception TypeError: Cannot read property 'onconnect' of null
+FAIL childWindow.navigator.usb.ondisconnect should be null. Threw exception TypeError: Cannot read property 'ondisconnect' of null
 PASS childWindow.navigator.userAgent is ''
 PASS childWindow.navigator.vendor is window.navigator.vendor
 PASS childWindow.navigator.vendorSub is ''
@@ -160,6 +164,7 @@ PASS childWindow.pageYOffset is 0
 PASS childWindow.performance.navigation.redirectCount is 0
 PASS childWindow.performance.navigation.type is 0
 PASS childWindow.performance.onframetimingbufferfull is null
+PASS childWindow.performance.onresourcetimingbufferfull is null
 PASS childWindow.performance.onwebkitresourcetimingbufferfull is null
 PASS childWindow.performance.timing.connectEnd is 0
 PASS childWindow.performance.timing.connectStart is 0
@@ -189,6 +194,7 @@ PASS childWindow.screen.availTop is 0
 PASS childWindow.screen.availWidth is 0
 PASS childWindow.screen.colorDepth is 0
 PASS childWindow.screen.height is 0
+PASS childWindow.screen.keepAwake is false
 FAIL childWindow.screen.orientation.angle should be 0. Threw exception TypeError: Cannot read property 'angle' of null
 FAIL childWindow.screen.orientation.onchange should be null. Threw exception TypeError: Cannot read property 'onchange' of null
 FAIL childWindow.screen.orientation.type should be . Threw exception TypeError: Cannot read property 'type' of null

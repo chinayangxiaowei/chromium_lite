@@ -15,6 +15,25 @@ InspectorTest.postToServiceWorker = function(scope, message)
     return InspectorTest.invokePageFunctionPromise("postToServiceWorker", [scope, message]);
 }
 
+InspectorTest.waitForServiceWorker = function(callback)
+{
+    function isRightTarget(target)
+    {
+        return target.isDedicatedWorker() && target.parentTarget() && target.parentTarget().isServiceWorker();
+    }
+
+    WebInspector.targetManager.observeTargets({
+        targetAdded: function(target)
+        {
+            if (isRightTarget(target) && callback) {
+                setTimeout(callback.bind(null, target), 0);
+                callback = null;
+            }
+        },
+        targetRemoved: function(target) {}
+    });
+}
+
 function replaceInnerTextAll(rootElement, selectors, replacementString)
 {
     var elements = rootElement.querySelectorAll(selectors);
@@ -44,7 +63,7 @@ InspectorTest.dumpServiceWorkersView = function(scopes)
         if (!expectedTitles.some(function(expectedTitle) { return title.indexOf(expectedTitle) != -1; }))
             continue;
         results.push(title);
-        var versionElements = registrationElement.querySelectorAll(".service-workers-version-row");
+        var versionElements = registrationElement.querySelectorAll(".service-workers-versions-panel");
         for (var j = 0; j < versionElements.length; j++) {
             if (versionElements[j].innerText.length)
                 results.push(versionElements[j].innerText);

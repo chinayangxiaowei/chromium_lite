@@ -12,16 +12,12 @@
           "drawsContent": true,
           "children": [
             {
-              "bounds": [300, 300],
+              "bounds": [285, 285],
               "children": [
                 {
                   "bounds": [1000, 1000],
-                  "drawsContent": true,
-                  "children": [
-                    {
-
-                    }
-                  ]
+                  "shouldFlattenTransform": false,
+                  "drawsContent": true
                 }
               ]
             },

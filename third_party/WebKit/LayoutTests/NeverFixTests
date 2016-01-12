@@ -18,7 +18,6 @@ fast/harness/sample-fail-mismatch-reftest.html [ WontFix ]
 
 # Platform specific virtual test suites.
 [ Win Mac Android ] virtual/linux-subpixel [ WontFix ]
-[ Linux XP Android ] virtual/antialiasedtext [ WontFix ]
 
 # Chrome Win/Linux doesn't support emacs key-bindings.
 [ Win Linux ] editing/pasteboard/emacs-cntl-y-001.html [ WontFix ]
@@ -34,6 +33,7 @@ fast/harness/sample-fail-mismatch-reftest.html [ WontFix ]
 # this test will always fail.
 [ Linux Win ] fast/events/option-tab.html [ WontFix ]
 [ Linux Win ] virtual/pointerevent/fast/events/option-tab.html [ WontFix ]
+[ Linux Win ] virtual/trustedeventsdefaultaction/fast/events/option-tab.html [ WontFix ]
 
 # This test only applies to overlay scrollbar platforms.
 [ SnowLeopard Win Linux ] fast/dom/partial-layout-overlay-scrollbars.html [ WontFix ]
@@ -79,6 +79,14 @@ fast/harness/sample-fail-mismatch-reftest.html [ WontFix ]
 [ Linux Mac ] virtual/pointerevent/fast/events/panScroll-nested-divs.html [ WontFix ]
 [ Linux Mac ] virtual/pointerevent/fast/events/panScroll-panIcon.html [ WontFix ]
 [ Linux Mac ] virtual/pointerevent/fast/events/panScroll-nested-divs-forbidden.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-click.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-click-hyperlink.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-drag.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-event-fired.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-in-iframe.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-nested-divs.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-panIcon.html [ WontFix ]
+[ Linux Mac ] virtual/trustedeventsdefaultaction/fast/events/panScroll-nested-divs-forbidden.html [ WontFix ]
 
 # These tests are specific to Windows and Linux.
 [ Mac ] fast/forms/calendar-picker/date-open-picker-with-f4-key.html [ WontFix ]
@@ -94,6 +102,9 @@ fast/harness/sample-fail-mismatch-reftest.html [ WontFix ]
 [ Mac ] virtual/pointerevent/fast/events/menu-key-context-menu-document.html [ WontFix ]
 [ Mac ] virtual/pointerevent/fast/events/menu-key-context-menu.html [ WontFix ]
 [ Mac ] virtual/pointerevent/fast/events/menu-key-context-menu-position.html [ WontFix ]
+[ Mac ] virtual/trustedeventsdefaultaction/fast/events/menu-key-context-menu-document.html [ WontFix ]
+[ Mac ] virtual/trustedeventsdefaultaction/fast/events/menu-key-context-menu.html [ WontFix ]
+[ Mac ] virtual/trustedeventsdefaultaction/fast/events/menu-key-context-menu-position.html [ WontFix ]
 
 # Link Highlighting is only supported on Windows and Linux
 [ Mac ] compositing/gestures [ WontFix ]
@@ -108,15 +119,14 @@ fast/harness/sample-fail-mismatch-reftest.html [ WontFix ]
 
 # Mac has different fallback behavior so that this test won't work there
 [ Mac ] fast/text/font-cachekey.html [ WontFix ]
-[ Mac ] virtual/antialiasedtext/fast/text/font-cachekey.html [ WontFix ]
 
-# This test is specific to Android. Because long pressing on disabled/readonly input/textarea
+# These tests are specific to Android. Because long pressing on disabled/readonly input/textarea
 # won't trigger text selection on Linux/Mac/Windows platforms, hence we need to skip it.
 [ Linux Mac Win ] editing/selection/readonly-disabled-text-selection.html [ WontFix ]
+[ Linux Mac Win ] editing/selection/android-longtap-not-select-empty.html [ WontFix ]
 
 # AAT/mortx shaping not supported on platforms other than Mac
 [ Linux Win Android ] fast/text/aat-morx.html [ WontFix ]
-[ Linux Win Android ] virtual/antialiasedtext/fast/text/aat-morx.html [ WontFix ]
 
 # This test crashes occasionally on Windows and we can't seem to repro locally.
 # See comments in crbug.com/239077
@@ -147,7 +157,6 @@ fast/canvas/canvas-lost-gpu-context.html [ WontFix ]
 [ Snowleopard Debug ] inspector/elements/styles-2/pseudo-elements.html [ WontFix ]
 [ Snowleopard Debug ] inspector/sources/debugger-breakpoints/dom-breakpoints.html [ WontFix ]
 [ Snowleopard Debug ] inspector/sources/debugger-breakpoints/event-listener-breakpoints.html [ WontFix ]
-[ SnowLeopard Debug ] virtual/antialiasedtext/fast/text/trailing_whitespace_wrapping.html [ WontFix ]
 [ SnowLeopard Debug ] fast/text/trailing_whitespace_wrapping.html [ WontFix ]
 
 
@@ -162,7 +171,6 @@ fast/canvas/canvas-lost-gpu-context.html [ WontFix ]
 
 # Mac 10.6 only due to slight changes in text rendering
 [ SnowLeopard ] fast/text/international/text-shaping-arabic.html [ WontFix ]
-[ SnowLeopard ] virtual/antialiasedtext/fast/text/international/text-shaping-arabic.html [ WontFix ]
 
 # Mac 10.6 debug only, and the tests are very artificial to test orientation of all code points.
 [ SnowLeopard Debug ] imported/csswg-test/css-writing-modes-3/text-orientation-script-001k.html [ WontFix ]
@@ -188,3 +196,6 @@ virtual/threaded/printing/width-overflow.html [ WontFix ]
 
 # This test only fails with an ASSERT in Debug build.
 [ Release ] editing/input/orphan-set-selection-range.html [ WontFix ]
+
+# See crbug.com/522326
+imported/web-platform-tests/html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-events.html [ WontFix ]

@@ -47,6 +47,8 @@ function emitExpectedResult(path, expected)
     // Connection type depends on the host, skip.
     if (propertyPath == 'navigator.connection.type')
       return;
+    if (propertyPath == 'navigator.connection.downlinkMax')
+      return;
 
     switch (propertyPath) {
     case "location.href":
@@ -75,7 +77,7 @@ function emitExpectedResult(path, expected)
     case "screen.orientation":
         expected = "'portrait-primary'";
         break;
-    case "history.options.scrollRestoration":
+    case "history.scrollRestoration":
         expected = "'auto'";
         break;
     }

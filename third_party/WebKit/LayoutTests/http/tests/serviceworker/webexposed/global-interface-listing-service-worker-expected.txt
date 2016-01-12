@@ -1,47 +1,9 @@
-interface Array
-    attribute length
-    method concat
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method pop
-    method push
-    method reduce
-    method reduceRight
-    method reverse
-    method shift
-    method slice
-    method some
-    method sort
-    method splice
-    method toLocaleString
-    method toString
-    method unshift
-interface ArrayBuffer
-    getter byteLength
-    method constructor
-    method slice
 interface Blob
     getter size
     getter type
     method close
     method constructor
     method slice
-interface Boolean
-    method constructor
-    method toString
-    method valueOf
 interface Cache
     method add
     method addAll
@@ -49,6 +11,7 @@ interface Cache
     method delete
     method keys
     method match
+    method matchAll
     method put
 interface CacheStorage
     method constructor
@@ -79,10 +42,6 @@ interface CloseEvent
     getter code
     getter reason
     getter wasClean
-    method constructor
-interface CrossOriginConnectEvent
-    getter client
-    method acceptConnection
     method constructor
 interface CrossOriginServiceWorkerClient
     getter origin
@@ -155,62 +114,6 @@ interface DataView
     method setUint16
     method setUint32
     method setUint8
-interface Date
-    method constructor
-    method getDate
-    method getDay
-    method getFullYear
-    method getHours
-    method getMilliseconds
-    method getMinutes
-    method getMonth
-    method getSeconds
-    method getTime
-    method getTimezoneOffset
-    method getUTCDate
-    method getUTCDay
-    method getUTCFullYear
-    method getUTCHours
-    method getUTCMilliseconds
-    method getUTCMinutes
-    method getUTCMonth
-    method getUTCSeconds
-    method getYear
-    method setDate
-    method setFullYear
-    method setHours
-    method setMilliseconds
-    method setMinutes
-    method setMonth
-    method setSeconds
-    method setTime
-    method setUTCDate
-    method setUTCFullYear
-    method setUTCHours
-    method setUTCMilliseconds
-    method setUTCMinutes
-    method setUTCMonth
-    method setUTCSeconds
-    method setYear
-    method toDateString
-    method toGMTString
-    method toISOString
-    method toJSON
-    method toLocaleDateString
-    method toLocaleString
-    method toLocaleTimeString
-    method toString
-    method toTimeString
-    method toUTCString
-    method valueOf
-interface Error
-    attribute message
-    attribute name
-    method constructor
-    method toString
-interface EvalError
-    attribute name
-    method constructor
 interface Event
     attribute AT_TARGET
     attribute BLUR
@@ -335,68 +238,6 @@ interface FileReaderSync
     method readAsBinaryString
     method readAsDataURL
     method readAsText
-interface Float32Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Float64Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
 interface FormData
     method append
     method constructor
@@ -409,18 +250,6 @@ interface FormData
     method keys
     method set
     method values
-interface Function
-    attribute length
-    attribute name
-    getter arguments
-    getter caller
-    method apply
-    method bind
-    method call
-    method constructor
-    method toString
-    setter arguments
-    setter caller
 interface GeofencingEvent
     getter id
     getter region
@@ -555,111 +384,6 @@ interface ImageData
     getter height
     getter width
     method constructor
-interface Int16Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Int32Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Int8Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Map
-    getter size
-    method clear
-    method constructor
-    method delete
-    method entries
-    method forEach
-    method get
-    method has
-    method keys
-    method set
-    method values
 interface MessageChannel
     getter port1
     getter port2
@@ -680,11 +404,15 @@ interface MessagePort
     method start
     setter onmessage
 interface NetworkInformation
+    getter downlinkMax
+    getter onchange
     getter ontypechange
     getter type
     method constructor
+    setter onchange
     setter ontypechange
 interface Notification
+    getter actions
     getter body
     getter data
     getter dir
@@ -694,6 +422,7 @@ interface Notification
     getter onclose
     getter onerror
     getter onshow
+    getter requireInteraction
     getter silent
     getter tag
     getter title
@@ -705,30 +434,14 @@ interface Notification
     setter onerror
     setter onshow
 interface NotificationEvent
+    getter action
     getter notification
     method constructor
-interface Number
+interface PerformanceObserverEntryList
     method constructor
-    method toExponential
-    method toFixed
-    method toLocaleString
-    method toPrecision
-    method toString
-    method valueOf
-interface Object
-    getter __proto__
-    method __defineGetter__
-    method __defineSetter__
-    method __lookupGetter__
-    method __lookupSetter__
-    method constructor
-    method hasOwnProperty
-    method isPrototypeOf
-    method propertyIsEnumerable
-    method toLocaleString
-    method toString
-    method valueOf
-    setter __proto__
+    method getEntries
+    method getEntriesByName
+    method getEntriesByType
 interface PeriodicSyncEvent
     getter registration
     method constructor
@@ -749,17 +462,13 @@ interface PeriodicSyncRegistration
 interface PermissionStatus
     getter onchange
     getter state
-    getter status
     method constructor
     setter onchange
 interface Permissions
     method constructor
     method query
-interface Promise
-    method catch
-    method chain
-    method constructor
-    method then
+    method request
+    method revoke
 interface PromiseRejectionEvent
     getter promise
     getter reason
@@ -781,11 +490,9 @@ interface PushMessageData
 interface PushSubscription
     getter endpoint
     method constructor
+    method getKey
     method toJSON
     method unsubscribe
-interface RangeError
-    attribute name
-    method constructor
 interface ReadableByteStream
     method cancel
     method constructor
@@ -794,27 +501,14 @@ interface ReadableStream
     method cancel
     method constructor
     method getReader
-interface ReferenceError
-    attribute name
-    method constructor
-interface RegExp
-    attribute global
-    attribute ignoreCase
-    attribute lastIndex
-    attribute multiline
-    attribute source
-    method compile
-    method constructor
-    method exec
-    method test
-    method toString
 interface Request
     getter bodyUsed
-    getter context
     getter credentials
     getter headers
+    getter integrity
     getter method
     getter mode
+    getter redirect
     getter referrer
     getter url
     method arrayBuffer
@@ -862,39 +556,7 @@ interface ServicePortConnectEvent
     method constructor
     method respondWith
 interface ServiceWorkerGlobalScope
-    getter clients
-    getter onactivate
-    getter oncrossoriginconnect
-    getter oncrossoriginmessage
-    getter onfetch
-    getter ongeofenceenter
-    getter ongeofenceleave
-    getter oninstall
-    getter onmessage
-    getter onnotificationclick
-    getter onnotificationerror
-    getter onperiodicsync
-    getter onpush
-    getter onsync
-    getter ports
-    getter registration
-    method close
     method constructor
-    method fetch
-    method skipWaiting
-    setter onactivate
-    setter oncrossoriginconnect
-    setter oncrossoriginmessage
-    setter onfetch
-    setter ongeofenceenter
-    setter ongeofenceleave
-    setter oninstall
-    setter onmessage
-    setter onnotificationclick
-    setter onnotificationerror
-    setter onperiodicsync
-    setter onpush
-    setter onsync
 interface ServiceWorkerRegistration
     getter geofencing
     getter onupdatefound
@@ -908,69 +570,9 @@ interface ServiceWorkerRegistration
     method unregister
     method update
     setter onupdatefound
-interface Set
-    getter size
-    method add
-    method clear
+interface StorageManager
     method constructor
-    method delete
-    method entries
-    method forEach
-    method has
-    method keys
-    method values
-interface StashedMessagePort
-    getter name
-    method constructor
-interface StashedPortCollection
-    getter onmessage
-    method add
-    method constructor
-    setter onmessage
-interface String
-    attribute length
-    method anchor
-    method big
-    method blink
-    method bold
-    method charAt
-    method charCodeAt
-    method codePointAt
-    method concat
-    method constructor
-    method endsWith
-    method fixed
-    method fontcolor
-    method fontsize
-    method includes
-    method indexOf
-    method italics
-    method lastIndexOf
-    method link
-    method localeCompare
-    method match
-    method normalize
-    method repeat
-    method replace
-    method search
-    method slice
-    method small
-    method split
-    method startsWith
-    method strike
-    method sub
-    method substr
-    method substring
-    method sup
-    method toLocaleLowerCase
-    method toLocaleUpperCase
-    method toLowerCase
-    method toString
-    method toUpperCase
-    method trim
-    method trimLeft
-    method trimRight
-    method valueOf
+    method persistentPermission
 interface SubtleCrypto
     method constructor
     method decrypt
@@ -985,10 +587,6 @@ interface SubtleCrypto
     method unwrapKey
     method verify
     method wrapKey
-interface Symbol
-    method constructor
-    method toString
-    method valueOf
 interface SyncEvent
     getter registration
     method constructor
@@ -999,12 +597,10 @@ interface SyncManager
     method permissionState
     method register
 interface SyncRegistration
+    getter done
     getter tag
     method constructor
     method unregister
-interface SyntaxError
-    attribute name
-    method constructor
 interface TextDecoder
     getter encoding
     getter fatal
@@ -1015,12 +611,6 @@ interface TextEncoder
     getter encoding
     method constructor
     method encode
-interface TypeError
-    attribute name
-    method constructor
-interface URIError
-    attribute name
-    method constructor
 interface URL
     getter hash
     getter host
@@ -1045,141 +635,6 @@ interface URL
     setter protocol
     setter search
     setter username
-interface Uint16Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Uint32Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Uint8Array
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface Uint8ClampedArray
-    attribute BYTES_PER_ELEMENT
-    getter buffer
-    getter byteLength
-    getter byteOffset
-    getter length
-    method constructor
-    method copyWithin
-    method entries
-    method every
-    method fill
-    method filter
-    method find
-    method findIndex
-    method forEach
-    method indexOf
-    method join
-    method keys
-    method lastIndexOf
-    method map
-    method reduce
-    method reduceRight
-    method reverse
-    method set
-    method slice
-    method some
-    method sort
-    method subarray
-    method toLocaleString
-    method toString
-    method values
-interface WeakMap
-    method constructor
-    method delete
-    method get
-    method has
-    method set
-interface WeakSet
-    method add
-    method constructor
-    method delete
-    method has
 interface WebSocket
     attribute CLOSED
     attribute CLOSING
@@ -1208,6 +663,7 @@ interface WindowClient
     getter visibilityState
     method constructor
     method focus
+    method navigate
 interface WorkerGlobalScope
     attribute PERSISTENT
     attribute TEMPORARY
@@ -1265,6 +721,7 @@ interface WorkerNavigator
     getter platform
     getter product
     getter services
+    getter storage
     getter userAgent
     getter webkitPersistentStorage
     getter webkitTemporaryStorage
@@ -1368,6 +825,36 @@ interface webkitIDBTransaction
     setter onabort
     setter oncomplete
     setter onerror
+global object
+    getter caches
+    getter clients
+    getter onactivate
+    getter oncrossoriginmessage
+    getter onfetch
+    getter ongeofenceenter
+    getter ongeofenceleave
+    getter oninstall
+    getter onmessage
+    getter onnotificationclick
+    getter onperiodicsync
+    getter onpush
+    getter onsync
+    getter registration
+    method close
+    method fetch
+    method gc
+    method skipWaiting
+    setter onactivate
+    setter oncrossoriginmessage
+    setter onfetch
+    setter ongeofenceenter
+    setter ongeofenceleave
+    setter oninstall
+    setter onmessage
+    setter onnotificationclick
+    setter onperiodicsync
+    setter onpush
+    setter onsync
 This is a testharness.js-based test.
 PASS Verify the interface of ServiceWorkerGlobalScope 
 Harness: the test ran to completion.

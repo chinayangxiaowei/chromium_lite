@@ -8,12 +8,10 @@ package org.chromium.sync.signin;
 import android.Manifest;
 import android.accounts.Account;
 import android.accounts.AccountManager;
-import android.accounts.AccountManagerCallback;
 import android.accounts.AccountManagerFuture;
 import android.accounts.AuthenticatorDescription;
 import android.accounts.AuthenticatorException;
 import android.accounts.OperationCanceledException;
-import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.AsyncTask;
@@ -34,16 +32,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
-import javax.annotation.Nullable;
-
 /**
  * AccountManagerHelper wraps our access of AccountManager in Android.
  *
  * Use the AccountManagerHelper.get(someContext) to instantiate it
  */
 public class AccountManagerHelper {
-
-    private static final String TAG = "AccountManagerHelper";
+    private static final String TAG = "cr.Sync.Signin";
 
     private static final Pattern AT_SYMBOL = Pattern.compile("@");
 
@@ -63,8 +58,6 @@ public class AccountManagerHelper {
 
     private static final int MAX_TRIES = 3;
 
-    private static AccountManagerDelegate sDefaultAccountManagerDelegate;
-
     private static AccountManagerHelper sAccountManagerHelper;
 
     private final AccountManagerDelegate mAccountManager;
@@ -72,28 +65,23 @@ public class AccountManagerHelper {
     private Context mApplicationContext;
 
     /**
-     * Provides functionality to set the default {@link AccountManagerDelegate} to be used when
-     * the AccountManagerHelper is created. This may be set during application startup to ensure
-     * all callers get the correct implementation.
-     * @param delegate the default AccountManagerDelegate to use when constructing the instance.
-     */
-    public static void setDefaultAccountManagerDelegate(AccountManagerDelegate delegate) {
-        sDefaultAccountManagerDelegate = delegate;
-    }
-
-    /**
      * A simple callback for getAuthToken.
      */
     public interface GetAuthTokenCallback {
         /**
-         * Invoked on the UI thread once a token has been provided by the AccountManager.
-         * @param token Auth token, or null if no token is available (bad credentials,
-         *      permission denied, etc).
-         * @param isTransientError If the token is null, then this parameter indicates
-         *      if the error is transient or persistent.  If token is non-null, this
-         *      parameter is not used.
+         * Invoked on the UI thread if a token is provided by the AccountManager.
+         *
+         * @param token Auth token, guaranteed not to be null.
          */
-        void tokenAvailable(String token, boolean isTransientError);
+        void tokenAvailable(String token);
+
+        /**
+         * Invoked on the UI thread if no token is available.
+         *
+         * @param isTransientError Indicates if the error is transient (network timeout or
+         * unavailable, etc) or persistent (bad credentials, permission denied, etc).
+         */
+        void tokenUnavailable(boolean isTransientError);
     }
 
     /**
@@ -106,11 +94,24 @@ public class AccountManagerHelper {
     }
 
     /**
-     * A factory method for the AccountManagerHelper.
+     * Initialize AccountManagerHelper with a custom AccountManagerDelegate.
+     * Ensures that the singleton AccountManagerHelper hasn't been created yet.
+     * This can be overriden in tests using the overrideAccountManagerHelperForTests method.
      *
-     * It is possible to override the AccountManager to use in tests for the instance of the
-     * AccountManagerHelper by calling overrideAccountManagerHelperForTests(...) with
-     * your MockAccountManager.
+     * @param context the applicationContext is retrieved from the context used as an argument.
+     * @param delegate the custom AccountManagerDelegate to use.
+     */
+    public static void initializeAccountManagerHelper(
+            Context context, AccountManagerDelegate delegate) {
+        synchronized (sLock) {
+            assert sAccountManagerHelper == null;
+            sAccountManagerHelper = new AccountManagerHelper(context, delegate);
+        }
+    }
+
+    /**
+     * A getter method for AccountManagerHelper singleton which also initializes it if not wasn't
+     * already initialized.
      *
      * @param context the applicationContext is retrieved from the context used as an argument.
      * @return a singleton instance of the AccountManagerHelper
@@ -118,23 +119,26 @@ public class AccountManagerHelper {
     public static AccountManagerHelper get(Context context) {
         synchronized (sLock) {
             if (sAccountManagerHelper == null) {
-                if (sDefaultAccountManagerDelegate == null) {
-                    sAccountManagerHelper = new AccountManagerHelper(context,
-                            new SystemAccountManagerDelegate(context));
-                } else {
-                    sAccountManagerHelper = new AccountManagerHelper(context,
-                            sDefaultAccountManagerDelegate);
-                }
+                sAccountManagerHelper = new AccountManagerHelper(
+                        context, new SystemAccountManagerDelegate(context));
             }
         }
         return sAccountManagerHelper;
     }
 
+    /**
+     * Override AccountManagerHelper with a custom AccountManagerDelegate in tests.
+     * Unlike initializeAccountManagerHelper, this will override the existing instance of
+     * AccountManagerHelper if any. Only for use in Tests.
+     *
+     * @param context the applicationContext is retrieved from the context used as an argument.
+     * @param delegate the custom AccountManagerDelegate to use.
+     */
     @VisibleForTesting
-    public static void overrideAccountManagerHelperForTests(Context context,
-            AccountManagerDelegate accountManager) {
+    public static void overrideAccountManagerHelperForTests(
+            Context context, AccountManagerDelegate delegate) {
         synchronized (sLock) {
-            sAccountManagerHelper = new AccountManagerHelper(context, accountManager);
+            sAccountManagerHelper = new AccountManagerHelper(context, delegate);
         }
     }
 
@@ -161,16 +165,8 @@ public class AccountManagerHelper {
         return mAccountManager.getAccountsByType(GOOGLE_ACCOUNT_TYPE);
     }
 
-    /**
-     * Convenience method to get the single Google account on the device. Should only be
-     * called if it has been determined that there is exactly one account.
-     *
-     * @return The single account to sign into.
-     */
-    public Account getSingleGoogleAccount() {
-        Account[] googleAccounts = getGoogleAccounts();
-        assert googleAccounts.length == 1;
-        return googleAccounts[0];
+    public void getGoogleAccounts(AccountManagerDelegate.Callback<Account[]> callback) {
+        mAccountManager.getAccountsByType(GOOGLE_ACCOUNT_TYPE, callback);
     }
 
     public boolean hasGoogleAccounts() {
@@ -223,32 +219,17 @@ public class AccountManagerHelper {
     }
 
     /**
-     * Gets the auth token synchronously.
-     *
-     * - Assumes that the account is a valid account.
-     * - Should not be called on the main thread.
-     */
-    @Deprecated
-    public String getAuthTokenFromBackground(Account account, String authTokenType) {
-        AccountManagerFuture<Bundle> future = mAccountManager.getAuthToken(
-                account, authTokenType, true, null, null);
-        AtomicBoolean isTransientError = new AtomicBoolean(false);
-        return getAuthTokenInner(future, isTransientError);
-    }
-
-    /**
      * Gets the auth token and returns the response asynchronously.
      * This should be called when we have a foreground activity that needs an auth token.
      * If encountered an IO error, it will attempt to retry when the network is back.
      *
      * - Assumes that the account is a valid account.
      */
-    public void getAuthTokenFromForeground(Activity activity, Account account, String authTokenType,
-                GetAuthTokenCallback callback) {
+    public void getAuthToken(Account account, String authTokenType, GetAuthTokenCallback callback) {
         AtomicInteger numTries = new AtomicInteger(0);
         AtomicBoolean isTransientError = new AtomicBoolean(false);
-        getAuthTokenAsynchronously(activity, account, authTokenType, callback, numTries,
-                isTransientError, null);
+        getAuthTokenAsynchronously(
+                account, authTokenType, callback, numTries, isTransientError, null);
     }
 
     private class ConnectionRetry implements NetworkChangeNotifier.ConnectionTypeObserver {
@@ -276,8 +257,8 @@ public class AccountManagerHelper {
             }
             if (NetworkChangeNotifier.isOnline()) {
                 NetworkChangeNotifier.removeConnectionTypeObserver(this);
-                getAuthTokenAsynchronously(null, mAccount, mAuthTokenType, mCallback, mNumTries,
-                        mIsTransientError, this);
+                getAuthTokenAsynchronously(
+                        mAccount, mAuthTokenType, mCallback, mNumTries, mIsTransientError, this);
             }
         }
     }
@@ -314,16 +295,15 @@ public class AccountManagerHelper {
         return null;
     }
 
-    private void getAuthTokenAsynchronously(@Nullable Activity activity, final Account account,
-            final String authTokenType, final GetAuthTokenCallback callback,
-            final AtomicInteger numTries, final AtomicBoolean isTransientError,
-            final ConnectionRetry retry) {
+    private void getAuthTokenAsynchronously(final Account account, final String authTokenType,
+            final GetAuthTokenCallback callback, final AtomicInteger numTries,
+            final AtomicBoolean isTransientError, final ConnectionRetry retry) {
         // Return null token for no USE_CREDENTIALS permission.
         if (!hasUseCredentialsPermission()) {
             ThreadUtils.runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    callback.tokenAvailable(null, false);
+                    callback.tokenUnavailable(false);
                 }
             });
             return;
@@ -348,10 +328,13 @@ public class AccountManagerHelper {
     private void onGotAuthTokenResult(Account account, String authTokenType, String authToken,
             GetAuthTokenCallback callback, AtomicInteger numTries, AtomicBoolean isTransientError,
             ConnectionRetry retry) {
-        if (authToken != null || !isTransientError.get()
+        if (authToken != null) {
+            callback.tokenAvailable(authToken);
+            return;
+        } else if (!isTransientError.get()
                 || numTries.incrementAndGet() == MAX_TRIES
                 || !NetworkChangeNotifier.isInitialized()) {
-            callback.tokenAvailable(authToken, isTransientError.get());
+            callback.tokenUnavailable(isTransientError.get());
             return;
         }
         if (retry == null) {
@@ -368,13 +351,13 @@ public class AccountManagerHelper {
      *
      * - Assumes that the account is a valid account.
      */
-    public void getNewAuthTokenFromForeground(Account account, String authToken,
-                String authTokenType, GetAuthTokenCallback callback) {
+    public void getNewAuthToken(Account account, String authToken, String authTokenType,
+            GetAuthTokenCallback callback) {
         invalidateAuthToken(authToken);
         AtomicInteger numTries = new AtomicInteger(0);
         AtomicBoolean isTransientError = new AtomicBoolean(false);
         getAuthTokenAsynchronously(
-                null, account, authTokenType, callback, numTries, isTransientError, null);
+                account, authTokenType, callback, numTries, isTransientError, null);
     }
 
     /**
@@ -390,9 +373,9 @@ public class AccountManagerHelper {
         }
     }
 
-    public AccountManagerFuture<Boolean> checkChildAccount(
-            Account account, AccountManagerCallback<Boolean> callback) {
+    public void checkChildAccount(
+            Account account, AccountManagerDelegate.Callback<Boolean> callback) {
         String[] features = {FEATURE_IS_CHILD_ACCOUNT_KEY};
-        return mAccountManager.hasFeatures(account, features, callback, null /* handler */);
+        mAccountManager.hasFeatures(account, features, callback);
     }
 }

@@ -79,6 +79,7 @@ colorRendering
 content
 counterIncrement
 counterReset
+cssFloat
 cssText
 cursor
 cx
@@ -87,7 +88,6 @@ direction
 display
 dominantBaseline
 emptyCells
-enableBackground
 fill
 fillOpacity
 fillRule
@@ -147,6 +147,10 @@ minHeight
 minWidth
 minZoom
 mixBlendMode
+motion
+motionOffset
+motionPath
+motionRotation
 objectFit
 objectPosition
 opacity
@@ -205,6 +209,7 @@ strokeWidth
 tabSize
 tableLayout
 textAlign
+textAlignLast
 textAnchor
 textDecoration
 textIndent
@@ -281,7 +286,6 @@ webkitFontSizeDelta
 webkitFontSmoothing
 webkitHighlight
 webkitHyphenateCharacter
-webkitLineBoxContain
 webkitLineBreak
 webkitLineClamp
 webkitLocale

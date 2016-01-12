@@ -7,25 +7,29 @@
 
 test(function() {
     assert_true('presentation' in navigator);
-    assert_true('session' in navigator.presentation);
-    assert_true('startSession' in navigator.presentation);
-    assert_true('joinSession' in navigator.presentation);
-    assert_true('ondefaultsessionstart' in navigator.presentation);
-    assert_true('getAvailability' in navigator.presentation);
+    assert_true('defaultRequest' in navigator.presentation);
+
+    assert_true('PresentationRequest' in window);
 }, "Test that the Presentation API is present.")
 
 test(function() {
   assert_equals(typeof(navigator.presentation), "object");
-  assert_equals(typeof(navigator.presentation.session), "object");
-  assert_equals(typeof(navigator.presentation.startSession), "function");
-  assert_equals(typeof(navigator.presentation.joinSession), "function");
-  assert_equals(typeof(navigator.presentation.ondefaultsessionstart), "object");
-  assert_equals(typeof(navigator.presentation.getAvailability), "function");
+  assert_equals(typeof(navigator.presentation.defaultRequest), "object");
 }, "Test the Presentation API property types.");
 
 test(function() {
-  assert_true(navigator.presentation instanceof EventTarget);
-}, "Test that navigator.presentation is an EventTarget.");
+  assert_false(navigator.presentation instanceof EventTarget);
+}, "Test that navigator.presentation is not an EventTarget.");
+
+test(function() {
+  var request = new PresentationRequest('foo.html');
+  assert_equals(typeof(request.start), "function");
+  assert_equals(typeof(request.reconnect), "function");
+  assert_equals(typeof(request.getAvailability), "function");
+  assert_equals(typeof(request.onconnectionavailable), "object");
+
+  assert_true(request instanceof EventTarget);
+}, "Test PresentationRequest API types.");
 
 </script>
 </body>

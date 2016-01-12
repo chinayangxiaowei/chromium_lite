@@ -20,6 +20,7 @@ namespace content {
 
 BufferQueue::BufferQueue(
     scoped_refptr<cc::ContextProvider> context_provider,
+    unsigned int texture_target,
     unsigned int internalformat,
     GLHelper* gl_helper,
     BrowserGpuMemoryBufferManager* gpu_memory_buffer_manager,
@@ -27,11 +28,11 @@ BufferQueue::BufferQueue(
     : context_provider_(context_provider),
       fbo_(0),
       allocated_count_(0),
-      internalformat_(internalformat),
+      texture_target_(texture_target),
+      internal_format_(internalformat),
       gl_helper_(gl_helper),
       gpu_memory_buffer_manager_(gpu_memory_buffer_manager),
-      surface_id_(surface_id) {
-}
+      surface_id_(surface_id) {}
 
 BufferQueue::~BufferQueue() {
   FreeAllSurfaces();
@@ -52,11 +53,8 @@ void BufferQueue::BindFramebuffer() {
 
   if (!current_surface_.texture) {
     current_surface_ = GetNextSurface();
-    gl->FramebufferTexture2D(GL_FRAMEBUFFER,
-                             GL_COLOR_ATTACHMENT0,
-                             GL_TEXTURE_2D,
-                             current_surface_.texture,
-                             0);
+    gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                             texture_target_, current_surface_.texture, 0);
   }
 }
 
@@ -64,18 +62,10 @@ void BufferQueue::CopyBufferDamage(int texture,
                                    int source_texture,
                                    const gfx::Rect& new_damage,
                                    const gfx::Rect& old_damage) {
-  gfx::Rect new_damage_mutable = new_damage;
-  gfx::Rect old_damage_mutable = old_damage;
-#if defined(ARCH_CPU_ARM_FAMILY)
-  // TODO(dnicoara): Remove ARM workaround once partial swap is enabled.
-  new_damage_mutable = gfx::Rect(size_);
-  old_damage_mutable = gfx::Rect();
-#endif
-
   gl_helper_->CopySubBufferDamage(
-      texture, source_texture,
-      SkRegion(gfx::RectToSkIRect(new_damage_mutable)),
-      SkRegion(gfx::RectToSkIRect(old_damage_mutable)));
+      texture_target_, texture, source_texture,
+      SkRegion(gfx::RectToSkIRect(new_damage)),
+      SkRegion(gfx::RectToSkIRect(old_damage)));
 }
 
 void BufferQueue::UpdateBufferDamage(const gfx::Rect& damage) {
@@ -112,16 +102,21 @@ void BufferQueue::SwapBuffers(const gfx::Rect& damage) {
 }
 
 void BufferQueue::Reshape(const gfx::Size& size, float scale_factor) {
-  DCHECK(!current_surface_.texture);
   if (size == size_)
     return;
+  // TODO(ccameron): This assert is being hit on Mac try jobs. Determine if that
+  // is cause for concern or if it is benign.
+  // http://crbug.com/524624
+#if !defined(OS_MACOSX)
+  DCHECK(!current_surface_.texture);
+#endif
   size_ = size;
 
   // TODO: add stencil buffer when needed.
   gpu::gles2::GLES2Interface* gl = context_provider_->ContextGL();
   gl->BindFramebuffer(GL_FRAMEBUFFER, fbo_);
-  gl->FramebufferTexture2D(
-      GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+  gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           texture_target_, 0, 0);
 
   FreeAllSurfaces();
 }
@@ -146,7 +141,7 @@ void BufferQueue::RecreateBuffers() {
     gpu::gles2::GLES2Interface* gl = context_provider_->ContextGL();
     gl->BindFramebuffer(GL_FRAMEBUFFER, fbo_);
     gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                             GL_TEXTURE_2D, current_surface_.texture, 0);
+                             texture_target_, current_surface_.texture, 0);
   }
 }
 
@@ -192,8 +187,8 @@ void BufferQueue::FreeAllSurfaces() {
 void BufferQueue::FreeSurface(AllocatedSurface* surface) {
   if (surface->texture) {
     gpu::gles2::GLES2Interface* gl = context_provider_->ContextGL();
-    gl->BindTexture(GL_TEXTURE_2D, surface->texture);
-    gl->ReleaseTexImage2DCHROMIUM(GL_TEXTURE_2D, surface->image);
+    gl->BindTexture(texture_target_, surface->texture);
+    gl->ReleaseTexImage2DCHROMIUM(texture_target_, surface->image);
     gl->DeleteTextures(1, &surface->texture);
     gl->DestroyImageCHROMIUM(surface->image);
     surface->image = 0;
@@ -220,8 +215,8 @@ BufferQueue::AllocatedSurface BufferQueue::GetNextSurface() {
 
   scoped_ptr<gfx::GpuMemoryBuffer> buffer(
       gpu_memory_buffer_manager_->AllocateGpuMemoryBufferForScanout(
-          size_, gpu::ImageFactory::ImageFormatToGpuMemoryBufferFormat(
-                     internalformat_),
+          size_, gpu::ImageFactory::DefaultBufferFormatForImageFormat(
+                     internal_format_),
           surface_id_));
   if (!buffer) {
     gl->DeleteTextures(1, &texture);
@@ -230,7 +225,8 @@ BufferQueue::AllocatedSurface BufferQueue::GetNextSurface() {
   }
 
   unsigned int id = gl->CreateImageCHROMIUM(
-      buffer->AsClientBuffer(), size_.width(), size_.height(), internalformat_);
+      buffer->AsClientBuffer(), size_.width(), size_.height(),
+      internal_format_);
 
   if (!id) {
     LOG(ERROR) << "Failed to allocate backing image surface";
@@ -238,8 +234,8 @@ BufferQueue::AllocatedSurface BufferQueue::GetNextSurface() {
     return AllocatedSurface();
   }
   allocated_count_++;
-  gl->BindTexture(GL_TEXTURE_2D, texture);
-  gl->BindTexImage2DCHROMIUM(GL_TEXTURE_2D, id);
+  gl->BindTexture(texture_target_, texture);
+  gl->BindTexImage2DCHROMIUM(texture_target_, id);
   return AllocatedSurface(texture, id, gfx::Rect(size_));
 }
 

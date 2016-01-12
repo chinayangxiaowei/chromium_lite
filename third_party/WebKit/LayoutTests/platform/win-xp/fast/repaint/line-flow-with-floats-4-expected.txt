@@ -6,9 +6,9 @@
       "contentsOpaque": true,
       "drawsContent": true,
       "repaintRects": [
-        [372, 447, 48, 16],
+        [372, 447, 48, 17],
         [368, 440, 53, 59],
-        [8, 380, 418, 119]
+        [8, 380, 418, 219]
       ],
       "paintInvalidationClients": [
         "InlineTextBox 'The players all played at once without waiting\n'",
@@ -28,6 +28,19 @@
         "InlineTextBox 'her head!\u2019 about'",
         "RootInlineBox",
         "InlineTextBox 'once in a minute.\n'",
+        "RootInlineBox",
+        "InlineTextBox 'Alice began to feel very uneasy: to be sure, she had not as\n'",
+        "InlineTextBox 'yet had'",
+        "RootInlineBox",
+        "InlineTextBox 'any dispute with the Queen, but she knew that it might\n'",
+        "InlineTextBox 'happen any'",
+        "RootInlineBox",
+        "InlineTextBox 'minute, \u2018and then,\u2019 thought she, \u2018what would become of\n'",
+        "InlineTextBox 'me?'",
+        "RootInlineBox",
+        "InlineTextBox 'They\u2019re dreadfully fond of beheading people here; the great'",
+        "RootInlineBox",
+        "InlineTextBox 'wonder is, that there\u2018s any one left alive!\u2019'",
         "RootInlineBox",
         "LayoutBlockFlow P",
         "LayoutBlockFlow (floating) SPAN id='greenFloat'",

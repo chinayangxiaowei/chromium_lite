@@ -20,13 +20,16 @@ namespace content {
 GpuSurfacelessBrowserCompositorOutputSurface::
     GpuSurfacelessBrowserCompositorOutputSurface(
         const scoped_refptr<ContextProviderCommandBuffer>& context,
+        const scoped_refptr<ContextProviderCommandBuffer>& worker_context,
         int surface_id,
         const scoped_refptr<ui::CompositorVSyncManager>& vsync_manager,
         scoped_ptr<BrowserCompositorOverlayCandidateValidator>
             overlay_candidate_validator,
-        unsigned internalformat,
+        unsigned int target,
+        unsigned int internalformat,
         BrowserGpuMemoryBufferManager* gpu_memory_buffer_manager)
     : GpuBrowserCompositorOutputSurface(context,
+                                        worker_context,
                                         vsync_manager,
                                         overlay_candidate_validator.Pass()),
       internalformat_(internalformat),
@@ -44,9 +47,9 @@ GpuSurfacelessBrowserCompositorOutputSurface::
 
   gl_helper_.reset(new GLHelper(context_provider_->ContextGL(),
                                 context_provider_->ContextSupport()));
-  output_surface_.reset(
-      new BufferQueue(context_provider_, internalformat_, gl_helper_.get(),
-                      gpu_memory_buffer_manager_, surface_id));
+  output_surface_.reset(new BufferQueue(
+      context_provider_, target, internalformat_, gl_helper_.get(),
+      gpu_memory_buffer_manager_, surface_id));
   output_surface_->Initialize();
 }
 
@@ -54,25 +57,20 @@ GpuSurfacelessBrowserCompositorOutputSurface::
     ~GpuSurfacelessBrowserCompositorOutputSurface() {
 }
 
+bool GpuSurfacelessBrowserCompositorOutputSurface::IsDisplayedAsOverlayPlane()
+    const {
+  return true;
+}
+
+unsigned GpuSurfacelessBrowserCompositorOutputSurface::GetOverlayTextureId()
+    const {
+  return output_surface_->current_texture_id();
+}
+
 void GpuSurfacelessBrowserCompositorOutputSurface::SwapBuffers(
     cc::CompositorFrame* frame) {
   DCHECK(output_surface_);
-
-  GLuint texture = output_surface_->current_texture_id();
   output_surface_->SwapBuffers(frame->gl_frame_data->sub_buffer_rect);
-  const gfx::Size& size = frame->gl_frame_data->size;
-  context_provider_->ContextGL()->ScheduleOverlayPlaneCHROMIUM(
-      0,
-      GL_OVERLAY_TRANSFORM_NONE_CHROMIUM,
-      texture,
-      0,
-      0,
-      size.width(),
-      size.height(),
-      0,
-      0,
-      1.0f,
-      1.0f);
   GpuBrowserCompositorOutputSurface::SwapBuffers(frame);
 }
 
@@ -98,6 +96,9 @@ void GpuSurfacelessBrowserCompositorOutputSurface::Reshape(
 void GpuSurfacelessBrowserCompositorOutputSurface::OnSwapBuffersCompleted(
     const std::vector<ui::LatencyInfo>& latency_info,
     gfx::SwapResult result) {
+#if defined(OS_MACOSX)
+  NOTREACHED();
+#else
   bool force_swap = false;
   if (result == gfx::SwapResult::SWAP_NAK_RECREATE_BUFFERS) {
     // Even through the swap failed, this is a fixable error so we can pretend
@@ -110,6 +111,13 @@ void GpuSurfacelessBrowserCompositorOutputSurface::OnSwapBuffersCompleted(
                                                             result);
   if (force_swap)
     client_->SetNeedsRedrawRect(gfx::Rect(SurfaceSize()));
+#endif
 }
+
+#if defined(OS_MACOSX)
+void GpuSurfacelessBrowserCompositorOutputSurface::OnSurfaceDisplayed() {
+  OnSwapBuffersComplete();
+}
+#endif
 
 }  // namespace content

@@ -3,7 +3,7 @@ importScripts('/resources/testharness-helpers.js');
 
 test(function() {
     assert_own_property(self, 'SyncManager', 'SyncManager needs to be exposed as a global.');
-    assert_will_be_idl_attribute(registration, 'sync', 'One-shot SyncManager needs to be exposed on the registration.');
+    assert_idl_attribute(registration, 'sync', 'One-shot SyncManager needs to be exposed on the registration.');
 
     assert_inherits(registration.sync, 'register');
     assert_inherits(registration.sync, 'getRegistration');
@@ -14,7 +14,7 @@ test(function() {
 
 test(function() {
     assert_own_property(self, 'PeriodicSyncManager', 'PeriodicSyncManager needs to be exposed as a global.');
-    assert_will_be_idl_attribute(registration, 'periodicSync', 'Periodic SyncManager needs to be exposed on the registration.');
+    assert_idl_attribute(registration, 'periodicSync', 'Periodic SyncManager needs to be exposed on the registration.');
 
     assert_inherits(registration.periodicSync, 'register');
     assert_inherits(registration.periodicSync, 'getRegistration');
@@ -28,8 +28,9 @@ test(function() {
 
     // FIXME: Assert existence of the attributes when they are properly
     // exposed in the prototype chain. https://crbug.com/43394
-
+    assert_own_property(SyncRegistration.prototype, 'done');
     assert_own_property(SyncRegistration.prototype, 'unregister');
+    assert_own_property(SyncRegistration.prototype, 'tag');
 
 }, 'SyncRegistration should be exposed and have the expected interface.');
 
@@ -40,11 +41,14 @@ test(function() {
     // exposed in the prototype chain. https://crbug.com/43394
 
     assert_own_property(PeriodicSyncRegistration.prototype, 'unregister');
+    assert_own_property(PeriodicSyncRegistration.prototype, 'tag');
 
 }, 'PeriodicSyncRegistration should be exposed and have the expected interface.');
 
 test(function() {
     assert_own_property(self, 'SyncEvent');
+
+    assert_will_be_idl_attribute(SyncEvent.prototype, 'registration');
 
     // SyncEvent should be extending ExtendableEvent.
     assert_inherits(SyncEvent.prototype, 'waitUntil');
@@ -53,6 +57,8 @@ test(function() {
 
 test(function() {
     assert_own_property(self, 'PeriodicSyncEvent');
+
+    assert_will_be_idl_attribute(PeriodicSyncEvent.prototype, 'registration');
 
     // PeriodicSyncEvent should be extending ExtendableEvent.
     assert_inherits(PeriodicSyncEvent.prototype, 'waitUntil');

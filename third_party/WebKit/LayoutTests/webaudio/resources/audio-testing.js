@@ -290,6 +290,10 @@ function isValidNumber(x) {
 //
 //   // Queue tasks by readable task names.
 //   audit.runTasks('foo', 'bar');
+//
+//   // Alternatively, if you want to run all of the defined tasks in the order in which they were
+//   // defined, use no arguments:
+//   audit.runTasks();
  var Audit = (function () {
 
     'use strict';
@@ -301,27 +305,59 @@ function isValidNumber(x) {
     }
 
     Tasks.prototype.defineTask = function (taskName, taskFunc) {
-        this.tasks[taskName] = taskFunc;
-    };
-
-    Tasks.prototype.runTasks = function () {
-        for (var i = 0; i < arguments.length; i++) {
-          this.queue[i] = arguments[i];
+        // Check if there is a task defined with the same name.  If found, do
+        // not add the task to the roster.
+        if (this.tasks.hasOwnProperty(taskName)) {
+            debug('>> Audit.defineTask:: Duplicate task definition. ("' + taskName + '")');
+            return;
         }
 
-        // done() callback from tasks. Increase the task index and call the
-        // next task.
+        this.tasks[taskName] = taskFunc;
+
+        // Push the task name in the order of definition.
+        this.queue.push(taskName);
+    };
+
+    // If arguments are given, only run the requested tasks.  Check for any
+    // undefined or duplicate task in the requested task arguments.  If there
+    // is no argument, run all the defined tasks.
+    Tasks.prototype.runTasks = function () {
+
+        if (arguments.length > 0) {
+
+            // Reset task queue and refill it with the with the given arguments,
+            // in argument order.
+            this.queue = [];
+
+            for (var i = 0; i < arguments.length; i++) {
+                if (!this.tasks.hasOwnProperty(arguments[i]))
+                    debug('>> Audit.runTasks:: Ignoring undefined task. ("' + arguments[i] + '")');
+                else if (this.queue.indexOf(arguments[i]) > -1)
+                    debug('>> Audit.runTasks:: Ignoring duplicate task request. ("' + arguments[i] + '")');
+                else
+                    this.queue.push(arguments[i]);
+            }
+        }
+
+        if (this.queue.length === 0) {
+            debug('>> Audit.runTasks:: No task to run.');
+            return;
+        }
+
+        // done() callback from each task.  Increase the task index and call the
+        // next task.  Note that explicit signaling by done() in each task
+        // is needed because some of tests run asynchronously.
         var done = function () {
             if (this.currentTask !== this.queue.length - 1) {
                 ++this.currentTask;
-                // debug('>> TASK: ' + this.queue[this.currentTask]);
+                // debug('>> Audit.runTasks: ' + this.queue[this.currentTask]);
                 this.tasks[this.queue[this.currentTask]](done);
             }
             return;
         }.bind(this);
 
-        // Start task 0.
-        // debug('>> TASK: ' + this.queue[this.currentTask]);
+        // Start the first task.
+        // debug('>> Audit.runTasks: ' + this.queue[this.currentTask]);
         this.tasks[this.queue[this.currentTask]](done);
     };
 
@@ -350,6 +386,23 @@ function createTestingAudioBuffer(context, numChannels, length) {
     return buffer;
 }
 
+// Compute the (linear) signal-to-noise ratio between |actual| and |expected|.  The result is NOT in
+// dB!  If the |actual| and |expected| have different lengths, the shorter length is used.
+function computeSNR(actual, expected)
+{
+    var signalPower = 0;
+    var noisePower = 0;
+
+    var length = Math.min(actual.length, expected.length);
+
+    for (var k = 0; k < length; ++k) {
+        var diff = actual[k] - expected[k];
+        signalPower += expected[k] * expected[k];
+        noisePower += diff * diff;
+    }
+
+    return signalPower / noisePower;
+}
 
 // |Should| JS layout test utility.
 // Dependency: ../resources/js-test.js
@@ -362,6 +415,8 @@ var Should = (function () {
     function ShouldModel(desc, target, opts) {
         this.desc = desc;
         this.target = target;
+        // |_testPassed| and |_testFailed| set this appropriately.
+        this.success = false;
 
         // If the number of errors is greater than this, the rest of error
         // messages are suppressed. the value is fairly arbitrary, but shouldn't
@@ -376,10 +431,12 @@ var Should = (function () {
     // Internal methods starting with a underscore.
     ShouldModel.prototype._testPassed = function (msg) {
         testPassed(this.desc + ' ' + msg + '.');
+        this._success = true;
     };
 
     ShouldModel.prototype._testFailed = function (msg) {
         testFailed(this.desc + ' ' + msg + '.');
+        this._success = false;
     };
 
     ShouldModel.prototype._isArray = function (arg) {
@@ -410,6 +467,7 @@ var Should = (function () {
             this._testPassed('is equal to ' + value);
         else
             this._testFailed('was ' + value + ' instead of ' + this.target);
+        return this._success;
     };
 
     // Check if |target| is not equal to |value|.
@@ -427,7 +485,76 @@ var Should = (function () {
             this._testFailed('should not be equal to ' + value);
         else
             this._testPassed('is not equal to ' + value);
+        return this._success;
     };
+
+    // Check if |target| is greater than or equal to |value|.
+    //
+    // Example:
+    // Should("SNR", snr).beGreaterThanOrEqualTo(100);
+    // Result:
+    // "PASS SNR exceeds 100"
+    // "FAIL SNR (n) is not greater than or equal to 100"
+    ShouldModel.prototype.beGreaterThanOrEqualTo = function (value) {
+        var type = typeof value;
+        this._assert(type === 'number' || type === 'string',
+            'value should be number or string for');
+
+        if (this.target >= value)
+            this._testPassed("is greater than or equal to " + value);
+        else
+            this._testFailed("(" + this.target + ") is not greater than or equal to " + value);
+        return this._success;
+    }
+
+    // Check if |target| is lest than or equal to |value|.
+    //
+    // Example:
+    // maxError = 1e-6;
+    // Should("max error", maxError).beLessThanOrEqualTo(1e-5);
+    // Should("max error", maxError).beLessThanOrEqualTo(-1);
+    // Result:
+    // "PASS max error is less than or equal to 1e-5"
+    // "FAIL max error (1e-6) is not less than or equal to -1"
+    ShouldModel.prototype.beLessThanOrEqualTo = function (value) {
+        var type = typeof value;
+        this._assert(type === 'number', 'value should be number or string for');
+
+        if (this.target <= value)
+            this._testPassed("is less than or equal to " + value);
+        else
+            this._testFailed("(" + this.target + ") is not less than or equal to " + value);
+        return this._success;
+    }
+
+    // Check if |target| is close to |value| using the given relative error |threshold|.  |value|
+    // should not be zero, but no check is made for that.  The |target| value is printed to
+    // precision |precision|, with |precision| defaulting to 7.
+    //
+    // Example:
+    // Should("One", 1.001).beCloseTo(1, .1);
+    // Should("One", 2).beCloseTo(1, .1);
+    // Result:
+    // "PASS One is 1 within a relative error of 0.1."
+    // "FAIL One is not 1 within a relative error of 0.1: 2"
+    ShouldModel.prototype.beCloseTo = function (value, relativeErrorThreshold, precision) {
+        var type = typeof value;
+        this._assert(type === 'number', 'value should be number for');
+
+        var relativeError = Math.abs(this.target - value) / Math.abs(value);
+        if (relativeError <= relativeErrorThreshold) {
+            this._testPassed("is " + value.toPrecision(precision) +
+                " within a relative error of " + relativeErrorThreshold);
+        } else {
+            // Include actual relative error so the failed test case can be updated with the actual
+            // relative error, if appropriate.
+            this._testFailed("is not " + value.toPrecision(precision) +
+                " within a relative error of " + relativeErrorThreshold +
+                ": " + this.target + " with relative error " + relativeError
+            );
+        }
+        return this._success;
+    }
 
     // Check if |func| throws an exception with a certain |errorType| correctly.
     // |errorType| is optional.
@@ -456,6 +583,7 @@ var Should = (function () {
             else
                 this._testFailed('threw ' + error.name + ' instead of ' + exception);
         }
+        return this._success;
     };
 
     // Check if |func| does not throw an exception.
@@ -471,6 +599,7 @@ var Should = (function () {
         } catch (error) {
             this._testFailed('threw ' + error.name + ': ' + error.message);
         }
+        return this._success;
     };
 
     // Check if |target| array is filled with constant values.
@@ -504,6 +633,7 @@ var Should = (function () {
             }
             this._testFailed(failureMessage);
         }
+        return this._success;
     };
 
     // Check if |target| array is identical to |expected| array element-wise.
@@ -542,6 +672,7 @@ var Should = (function () {
 
             this._testFailed(failureMessage);
         }
+        return this._success;
     };
 
     // Check if |target| array is close to |expected| array element-wise within
@@ -586,6 +717,7 @@ var Should = (function () {
 
             this._testFailed(failureMessage);
         }
+        return this._success;
     };
 
     // Check if |target| array contains a set of values in a certain order.
@@ -611,6 +743,7 @@ var Should = (function () {
             this._testPassed('contains all the expected values in the correct order: [' +
             expected + ']');
         }
+        return this._success;
     };
 
     // Check if |target| array does not have any glitches. Note that |threshold|
@@ -625,10 +758,11 @@ var Should = (function () {
             var diff = Math.abs(this.target[i-1] - this.target[i]);
             if (diff >= threshold) {
                 this._testFailed('has a glitch at index ' + i + ' of size ' + diff);
-                return;
+                return this._success;
             }
         }
         this._testPassed('has no glitch above the threshold of ' + threshold);
+        return this._success;
     };
 
     // Should() method.

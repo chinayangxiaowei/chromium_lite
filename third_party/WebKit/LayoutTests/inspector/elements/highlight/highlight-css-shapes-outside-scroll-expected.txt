@@ -115,7 +115,8 @@ circle{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -133,7 +134,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -151,7 +153,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -169,7 +172,8 @@ circle{
         168,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -180,7 +184,8 @@ circle{
     "className": ".float.circle",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 circle{
   "paths": [
@@ -299,7 +304,8 @@ circle{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -317,7 +323,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -335,7 +342,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -353,7 +361,8 @@ circle{
         168,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -364,6 +373,7 @@ circle{
     "className": ".float.circle",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 

@@ -1,5 +1,6 @@
 CONSOLE WARNING: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
 CONSOLE WARNING: 'webkitIndexedDB' is deprecated. Please use 'indexedDB' instead.
+CONSOLE WARNING: 'Performance.onwebkitresourcetimingbufferfull' is deprecated. Please use 'Performance.onresourcetimingbufferfull' instead.
 Tests access of cached DOMWindow properties after the associated frame is removed from a web page and garbage collected. Test should not crash and properties should be set to sane defaults.
 
 On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
@@ -15,8 +16,8 @@ PASS window.cached_applicationCache.onprogress is null
 PASS window.cached_applicationCache.onupdateready is null
 PASS window.cached_applicationCache.status is 0
 PASS window.cached_history.length is 0
+PASS window.cached_history.scrollRestoration is 'auto'
 PASS window.cached_history.state is null
-PASS window.cached_history_options.scrollRestoration is 'auto'
 FAIL window.cached_location.hash should be  (of type string). Was undefined (of type undefined).
 FAIL window.cached_location.host should be  (of type string). Was undefined (of type undefined).
 FAIL window.cached_location.hostname should be  (of type string). Was undefined (of type undefined).
@@ -44,15 +45,18 @@ PASS window.cached_navigator.productSub is window.navigator.productSub
 PASS window.cached_navigator.userAgent is ''
 PASS window.cached_navigator.vendor is window.navigator.vendor
 PASS window.cached_navigator.vendorSub is ''
+PASS window.cached_navigator_connection.onchange is null
 PASS window.cached_navigator_connection.ontypechange is null
-PASS window.cached_navigator_presentation.ondefaultsessionstart is null
-PASS window.cached_navigator_presentation.session is null
+PASS window.cached_navigator_presentation.defaultRequest is null
 PASS window.cached_navigator_serviceWorker.controller is null
 PASS window.cached_navigator_serviceWorker.oncontrollerchange is null
 PASS window.cached_navigator_serviceWorker.onmessage is null
 PASS window.cached_navigator_services.onclose is null
 PASS window.cached_navigator_services.onmessage is null
+PASS window.cached_navigator_usb.onconnect is null
+PASS window.cached_navigator_usb.ondisconnect is null
 PASS window.cached_performance.onframetimingbufferfull is null
+PASS window.cached_performance.onresourcetimingbufferfull is null
 PASS window.cached_performance.onwebkitresourcetimingbufferfull is null
 PASS window.cached_performance_navigation.redirectCount is 0
 PASS window.cached_performance_navigation.type is 0
@@ -84,6 +88,7 @@ PASS window.cached_screen.availTop is 0
 PASS window.cached_screen.availWidth is 0
 PASS window.cached_screen.colorDepth is 0
 PASS window.cached_screen.height is 0
+PASS window.cached_screen.keepAwake is false
 PASS window.cached_screen.pixelDepth is 0
 PASS window.cached_screen.width is 0
 PASS window.cached_screen_orientation.angle is 0

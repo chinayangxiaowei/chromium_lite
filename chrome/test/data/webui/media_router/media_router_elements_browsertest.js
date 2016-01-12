@@ -31,14 +31,26 @@ MediaRouterElementsBrowserTest.prototype = {
   // List tests for individual elements.
   extraLibraries: PolymerTest.getLibraries(ROOT_PATH).concat([
     'issue_banner_tests.js',
+    'media_router_container_tests.js',
     'route_details_tests.js',
   ]),
+
+  /** @override */
+  setUp: function() {
+    PolymerTest.prototype.setUp.call(this);
+
+    // TODO(apacible): Enable when false positive AX_FOCUS_01 bug is fixed.
+    // https://github.com/GoogleChrome/accessibility-developer-tools/issues/171
+    this.accessibilityAuditConfig.auditRulesToIgnore.push(
+        'focusableElementNotVisibleAndNotAriaHidden');
+  },
 };
 
 // Runs all tests.
 TEST_F('MediaRouterElementsBrowserTest', 'MediaRouterElementsTest', function() {
   // Register mocha tests for each element.
   issue_banner.registerTests();
+  media_router_container.registerTests();
   route_details.registerTests();
 
   // Run all registered tests.

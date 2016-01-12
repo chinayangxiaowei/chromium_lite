@@ -114,25 +114,35 @@ InspectorTest.didInvokePageFunctionPromise = function(callId, value, didResolve)
     callback(value);
 }
 
-InspectorTest.invokePageFunctionAsync = function(functionName, callback)
+/**
+ * @param {string} functionName
+ * @param {...} varArgs
+ * @param {function()} callback
+ */
+InspectorTest.invokePageFunctionAsync = function(functionName, varArgs)
 {
     var id = ++lastEvalId;
+    var args = Array.prototype.slice.call(arguments, 1);
+    var callback = args.pop();
     pendingEvalRequests[id] = InspectorTest.safeWrap(callback);
-    var asyncEvalWrapper = function(callId, functionName)
+    var asyncEvalWrapper = function(callId, functionName, argsString)
     {
         function evalCallback(result)
         {
             testRunner.evaluateInWebInspector(evalCallbackCallId, "InspectorTest.didInvokePageFunctionAsync(" + callId + ", " + JSON.stringify(result) + ");");
         }
-
+        var argsArray = argsString.replace(/^\[(.*)\]$/, "$1");
+        if (argsArray.length)
+            argsArray += ",";
         try {
-            eval(functionName + "(" + evalCallback + ")");
+            eval(functionName + "(" + argsArray + evalCallback + ")");
         } catch(e) {
             InspectorTest.addResult("Error: " + e);
             evalCallback(String(e));
         }
     }
-    InspectorTest.evaluateInPage("(" + asyncEvalWrapper.toString() + ")(" + id + ", unescape('" + escape(functionName) + "'))");
+    var escapedJSONArgs = JSON.stringify(JSON.stringify(args));
+    InspectorTest.evaluateInPage("(" + asyncEvalWrapper.toString() + ")(" + id + ", unescape('" + escape(functionName) + "')," + escapedJSONArgs + ")");
 }
 
 InspectorTest.didInvokePageFunctionAsync = function(callId, value)
@@ -333,6 +343,57 @@ InspectorTest.dumpDataGridIntoString = function(dataGrid)
         output.push(line);
     }
     return output.join("\n");
+}
+
+InspectorTest.dumpObjectPropertyTreeElement = function(treeElement)
+{
+    var expandedSubstring = treeElement.expanded ? "[expanded]" : "[collapsed]";
+    InspectorTest.addResult(expandedSubstring + " " + treeElement.listItemElement.deepTextContent());
+
+    for (var i = 0; i < treeElement.childCount(); ++i) {
+        var property = treeElement.childAt(i).property;
+        var key = property.name;
+        var value = property.value._description;
+        InspectorTest.addResult("    " + key + ": " + value);
+    }
+}
+
+InspectorTest.expandAndDumpEventListeners = function(eventListenersView, updateCallback, callback)
+{
+    InspectorTest.addSniffer(WebInspector.EventListenersView.prototype, "_eventListenersArrivedForTest", listenersArrived);
+
+    if (updateCallback)
+        updateCallback();
+
+    function listenersArrived()
+    {
+        var listenerTypes = eventListenersView._treeOutline.rootElement().children();
+        for (var i = 0; i < listenerTypes.length; ++i) {
+            listenerTypes[i].expand();
+            var listenerItems = listenerTypes[i].children();
+            for (var j = 0; j < listenerItems.length; ++j)
+                listenerItems[j].expand();
+        }
+        InspectorTest.runAfterPendingDispatches(objectsExpanded);
+    }
+
+    function objectsExpanded()
+    {
+        var listenerTypes = eventListenersView._treeOutline.rootElement().children();
+        for (var i = 0; i < listenerTypes.length; ++i) {
+            if (!listenerTypes[i].children().length)
+                continue;
+            var eventType = listenerTypes[i]._title;
+            InspectorTest.addResult("");
+            InspectorTest.addResult("======== " + eventType + " ========");
+            var listenerItems = listenerTypes[i].children();
+            for (var j = 0; j < listenerItems.length; ++j) {
+                InspectorTest.addResult("== " + listenerItems[j].eventListener().listenerType());
+                InspectorTest.dumpObjectPropertyTreeElement(listenerItems[j]);
+            }
+        }
+        callback();
+    }
 }
 
 InspectorTest.assertGreaterOrEqual = function(a, b, message)
@@ -837,6 +898,7 @@ WebInspector.targetManager.observeTargets({
         InspectorTest.serviceWorkerManager = target.serviceWorkerManager;
         InspectorTest.tracingManager = target.tracingManager;
         InspectorTest.mainTarget = target;
+        InspectorTest.connection = target._connection;
     },
 
     targetRemoved: function(target) { }
@@ -959,6 +1021,7 @@ function runTest(enableWatchDogWhileDebugging)
             "profiler": "profiles",
             "resource-tree": "resources",
             "search": "sources",
+            "security": "security",
             "service-workers": "resources",
             "sources": "sources",
             "timeline": "timeline",
@@ -972,9 +1035,6 @@ function runTest(enableWatchDogWhileDebugging)
                 break;
             }
         }
-
-        if (testPath.startsWith("LayoutTests/inspector/elements/styles"))
-            InspectorTest.startDumpingProtocolMessages();
 
         // 3. Run test function.
         Promise.all(promises).then(function() {

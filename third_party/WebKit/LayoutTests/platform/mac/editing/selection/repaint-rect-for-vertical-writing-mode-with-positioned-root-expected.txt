@@ -6,7 +6,13 @@
       "contentsOpaque": true,
       "drawsContent": true,
       "repaintRects": [
-        [185, 201, 18, 172]
+        [185, 201, 18, 173]
+      ],
+      "paintInvalidationClients": [
+        "LayoutBlockFlow (positioned) DIV id='test'",
+        "LayoutBlockFlow DIV",
+        "LayoutText #text",
+        "InlineTextBox 'Some text in vertical mode'"
       ]
     }
   ]

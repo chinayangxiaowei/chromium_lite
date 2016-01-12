@@ -7,7 +7,12 @@
       "drawsContent": true,
       "repaintRects": [
         [0, 200, 200, 200],
+        [0, 200, 200, 200],
         [0, 0, 200, 200]
+      ],
+      "paintInvalidationClients": [
+        "LayoutBlockFlow DIV id='overflow1'",
+        "LayoutBlockFlow DIV id='overflow2'"
       ],
       "children": [
         {

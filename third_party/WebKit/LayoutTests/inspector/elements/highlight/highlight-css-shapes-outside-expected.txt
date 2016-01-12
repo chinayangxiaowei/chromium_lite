@@ -115,7 +115,8 @@ circle{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -133,7 +134,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -151,7 +153,8 @@ circle{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -169,7 +172,8 @@ circle{
         168,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -180,7 +184,8 @@ circle{
     "className": ".float.circle",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 insetSimpleRound{
   "paths": [
@@ -299,7 +304,8 @@ insetSimpleRound{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -317,7 +323,8 @@ insetSimpleRound{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -335,7 +342,8 @@ insetSimpleRound{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -353,7 +361,8 @@ insetSimpleRound{
         168,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -364,7 +373,8 @@ insetSimpleRound{
     "className": ".float.insetSimpleRound",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 insetComplexRound{
   "paths": [
@@ -483,7 +493,8 @@ insetComplexRound{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -501,7 +512,8 @@ insetComplexRound{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -519,7 +531,8 @@ insetComplexRound{
         152,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -537,7 +550,8 @@ insetComplexRound{
         168,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -548,7 +562,8 @@ insetComplexRound{
     "className": ".float.insetComplexRound",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 ellipse{
   "paths": [
@@ -667,7 +682,8 @@ ellipse{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -685,7 +701,8 @@ ellipse{
         104,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -703,7 +720,8 @@ ellipse{
         104,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -721,7 +739,8 @@ ellipse{
         120,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -732,7 +751,8 @@ ellipse{
     "className": ".float.ellipse",
     "nodeWidth": "128",
     "nodeHeight": "80"
-  }
+  },
+  "displayAsMaterial": false
 }
 contentBox{
   "paths": [
@@ -851,7 +871,8 @@ contentBox{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -869,7 +890,8 @@ contentBox{
         312,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -887,7 +909,8 @@ contentBox{
         312,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -905,7 +928,8 @@ contentBox{
         328,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -916,7 +940,8 @@ contentBox{
     "className": ".float.contentBox",
     "nodeWidth": "176",
     "nodeHeight": "160"
-  }
+  },
+  "displayAsMaterial": false
 }
 polygon{
   "paths": [
@@ -952,7 +977,8 @@ polygon{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -970,7 +996,8 @@ polygon{
         472,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -988,7 +1015,8 @@ polygon{
         472,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -1006,7 +1034,8 @@ polygon{
         488,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -1017,7 +1046,8 @@ polygon{
     "className": ".float.polygon",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 raster{
   "paths": [
@@ -1386,7 +1416,8 @@ raster{
         "Z"
       ],
       "fillColor": "rgba(255, 0, 0, 0)",
-      "outlineColor": "rgba(128, 0, 0, 0)"
+      "outlineColor": "rgba(128, 0, 0, 0)",
+      "name": "content"
     },
     {
       "path": [
@@ -1404,7 +1435,8 @@ raster{
         472,
         "Z"
       ],
-      "fillColor": "rgba(0, 255, 0, 0)"
+      "fillColor": "rgba(0, 255, 0, 0)",
+      "name": "padding"
     },
     {
       "path": [
@@ -1422,7 +1454,8 @@ raster{
         472,
         "Z"
       ],
-      "fillColor": "rgba(0, 0, 255, 0)"
+      "fillColor": "rgba(0, 0, 255, 0)",
+      "name": "border"
     },
     {
       "path": [
@@ -1440,7 +1473,8 @@ raster{
         488,
         "Z"
       ],
-      "fillColor": "rgba(255, 255, 255, 0)"
+      "fillColor": "rgba(255, 255, 255, 0)",
+      "name": "margin"
     }
   ],
   "showRulers": true,
@@ -1451,6 +1485,7 @@ raster{
     "className": ".float.raster",
     "nodeWidth": "128",
     "nodeHeight": "128"
-  }
+  },
+  "displayAsMaterial": false
 }
 

@@ -222,6 +222,56 @@ test(function() {
   }, 'Request credentials test');
 
 test(function() {
+    var request1 = {};
+    var request2 = {};
+    var REDIRECTS = ['follow', 'error', 'manual', '', undefined];
+    REDIRECTS.forEach(function(redirect1) {
+        var init1 = {};
+        if (redirect1 != undefined) { init1['redirect'] = redirect1; }
+        request1 = new Request(URL, init1);
+        assert_equals(request1.redirect, redirect1 || 'follow',
+                      'Request.redirect should match');
+        request1 = new Request(request1);
+        assert_equals(request1.redirect, redirect1 || 'follow',
+                      'Request.redirect should match');
+        REDIRECTS.forEach(function(redirect2) {
+            request1 = new Request(URL, init1);
+            var init2 = {};
+            if (redirect2 != undefined) {
+              init2['redirect'] = redirect2;
+            }
+            request2 = new Request(request1, init2);
+            assert_equals(request2.redirect,
+                          redirect2 ? redirect2 : request1.redirect,
+                          'Request.redirect should be overridden');
+          });
+      });
+  }, 'Request redirect test');
+
+test(function() {
+    var request1 = {};
+    var request2 = {};
+    var init = {};
+    request1 = new Request(URL, init);
+    assert_equals(request1.integrity, '',
+                  'Request.integrity should be empty on init');
+    init['integrity'] = 'sha256-deadbeef';
+    request1 = new Request(URL, init);
+    assert_equals(request1.integrity, 'sha256-deadbeef',
+                  'Request.integrity match the integrity of init');
+    request2 = new Request(request1);
+    assert_equals(request2.integrity, 'sha256-deadbeef',
+                  'Request.integrity should match');
+    init['mode'] = 'no-cors';
+    assert_throws(
+        {name: 'TypeError'},
+        function() {
+            var request = new Request(URL, init);
+        },
+        'new Request with a non-empty integrity and mode of \'no-cors\' should throw');
+}, 'Request integrity test');
+
+test(function() {
     ['same-origin', 'cors', 'no-cors'].forEach(function(mode) {
         FORBIDDEN_METHODS.forEach(function(method) {
             assert_throws(
@@ -323,6 +373,79 @@ test(function() {
     assert_true(req.bodyUsed,
                 'Request should be flagged as used if it has been consumed.');
   }, 'Request construction failure should not set "bodyUsed"');
+
+test(function() {
+    assert_equals(new Request(URL).referrer, 'about:client');
+  }, 'Request without RequestInit.');
+
+test(function() {
+    var req = new Request(URL, {referrer: 'about:client'});
+
+    assert_equals(req.referrer, 'about:client',
+                  'constructed with referrer=about:client');
+    assert_equals(new Request(req.clone()).referrer, 'about:client',
+                 'cloned from a request with referrer=about:client');
+    assert_equals(new Request(req.clone(), {foo: null}).referrer,
+                  'about:client',
+                  'constructed from a request with referrer=about:client');
+    assert_equals(new Request(req.clone(), {method: 'GET'}).referrer,
+                  'about:client',
+                  'constructed with method from a request with ' +
+                  'referrer=about:client');
+  }, 'Request with referrer=about:client.');
+
+test(function() {
+    var req = new Request(URL, {referrer: ''});
+
+    assert_equals(req.referrer, '', 'constructed with no-referrer');
+    assert_equals(new Request(req.clone()).referrer, '',
+                  'cloned from a request with no-referrer');
+    assert_equals(new Request(req.clone(), {foo: null}).referrer, '',
+                  'constructed from a request with no-referrer');
+    assert_equals(new Request(req.clone(), {method: 'GET'}).referrer,
+                  'about:client',
+                  'constructed with method from a request with no-referrer');
+  }, 'Request with no-referrer.');
+
+test(function() {
+    var referrer = BASE_ORIGIN + '/path?query';
+    var req = new Request(URL, {referrer: referrer});
+
+    assert_equals(req.referrer, referrer, 'constructed with a url referrer');
+    assert_equals(req.clone().referrer, referrer,
+                  'cloned from a request with a url referrer');
+    assert_equals(new Request(req.clone(), {foo: null}).referrer, referrer,
+                  'constructed from a request with a url referrer');
+    assert_equals(new Request(req.clone(), {method: 'GET'}).referrer,
+                  'about:client',
+                  'constructed with method from a request with a url referrer');
+  }, 'Request with a url referrer');
+
+test(function() {
+    var referrer =
+        (BASE_ORIGIN + '/path/?query#hash').replace('//', '//user:pass@');
+    var req = new Request(URL, {referrer: referrer});
+    assert_equals(req.referrer, referrer, 'constructed with a url referrer');
+  }, 'Request with a url referrer containing user, pass, and so on');
+
+test(function() {
+    var referrer = OTHER_ORIGIN + '/path?query';
+    assert_throws({name: 'TypeError'},
+        () => new Request(URL, {referrer: referrer}));
+  }, 'Request with a url with another origin');
+
+test(function() {
+    var referrer = 'invali\0d';
+    assert_throws({name: 'TypeError'},
+        () => new Request(URL, {referrer: referrer}));
+  }, 'Request with an invalid referrer');
+
+test(function() {
+    var referrer = '/path?query';
+    var expected = BASE_ORIGIN + '/path?query';
+
+    assert_equals(new Request(URL, {referrer: referrer}).referrer, expected);
+  }, 'Request with a relative referrer');
 
 // Spec: https://fetch.spec.whatwg.org/#dom-request
 // Step 21:
@@ -608,13 +731,5 @@ promise_test(function(t) {
         assert_equals(text, '');
       });
   }, 'Consume and pass');
-
-// Tests for requests context.
-test(function() {
-    var request = new Request('http://localhost/', {method: 'POST', body: ''});
-    assert_equals(request.context, '',
-                  'Request.context should be empty string ' +
-                  'for synthetic Request object');
-  }, 'RequestContext of a synthetic Request object');
 
 done();

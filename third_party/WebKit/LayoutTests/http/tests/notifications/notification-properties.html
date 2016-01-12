@@ -11,6 +11,8 @@
       // semantics defined by the specification. When the test is being ran
       // manually, grant Notification permission first.
       test(function () {
+          assert_greater_than_equal(Notification.maxActions, 0);
+
           var options = {
                 dir: "rtl",
                 lang: "nl-NL",
@@ -18,8 +20,17 @@
                 tag: "notification",
                 icon: "http://localhost/my_icon.png",
                 silent: true,
-                data: "my data"
+                requireInteraction: true,
+                data: "my data",
+                actions: []
             };
+            // Deliberately add more actions than are supported.
+            for (var i = 0; i < 2 * Notification.maxActions; i++) {
+                options.actions.push({
+                    action: "" + i,
+                    title: "Action " + i
+                });
+            }
 
             var notification = new Notification("My Notification", options);
 
@@ -30,7 +41,19 @@
             assert_equals(notification.tag, options.tag);
             assert_equals(notification.icon, options.icon);
             assert_true(notification.silent);
+            assert_true(notification.requireInteraction);
             assert_equals(notification.data, options.data);
+            // Only the first maxActions actions should be reflected.
+            assert_object_equals(notification.actions, options.actions.slice(0, Notification.maxActions));
+
+            // Notification.actions should be immutable.
+            notification.actions.push({ title: "Foo" });
+            notification.actions.foo = "bar";
+            if (notification.actions.length) {
+                notification.actions[0].title = "Changed";
+                notification.actions[0].foo = "bar";
+            }
+            assert_object_equals(notification.actions, options.actions.slice(0, Notification.maxActions));
 
             var emptyNotification = new Notification("My Notification");
 
@@ -42,14 +65,27 @@
             assert_equals(emptyNotification.icon, "");
             assert_equals(notification.vibrate, null);
             assert_false(emptyNotification.silent);
+            assert_false(emptyNotification.requireInteraction);
             assert_equals(emptyNotification.data, null);
+            assert_array_equals(emptyNotification.actions, []);
 
-            var invalidIconNotification = new Notification("My Notification", {
-                icon: "http://test:test/"
+            var equalNotification = new Notification("My Notification", {
+                vibrate: [50, 10, 50, 10, 50],
+                data: { hello: "World!" },
+                actions: [
+                  { action: "foo", title: "Foo" },
+                  { action: "bar", title: "Bar" }
+                ]
             });
 
-            // Invalid icon URLs should be reset to an empty string.
-            assert_equals(invalidIconNotification.icon, "");
+            // Test equality of the object attributes.
+            assert_true(equalNotification.data === equalNotification.data, '`data` object equality');
+
+            // TODO(peter): This should pass before shipping Notification.vibrate.
+            //assert_true(equalNotification.vibrate === equalNotification.vibrate, '`vibrate` object equality');
+
+            // TODO(johnme): This should pass before shipping Notification.actions.
+            //assert_true(equalNotification.actions === equalNotification.actions, '`actions` object equality');
 
             var serializedUrlNotification = new Notification("My Notification", {
                 icon: "http://example.com"
@@ -83,24 +119,6 @@
                 vibrate: [100, 200, "invalid"]
             });
             assert_array_equals(invalidVibrateNotification.vibrate, [100, 200, 0]);
-
-            // Invalid vibrate pattern should be sanitized.
-            // 1. If the vibration pattern is longer than 100 then truncate it.
-            // 2. If the last item in the vibration pattern is a pause then discard it.
-            // 3. If any pattern entry is longer than 10000 then truncate it.
-            var sanitizedVibrateNotification = new Notification("My Notification", {
-                vibrate: Array.apply(null, new Array(101)).map(Number.prototype.valueOf, 20000)
-            });
-            assert_array_equals(sanitizedVibrateNotification.vibrate,
-                    Array.apply(null, new Array(99)).map(Number.prototype.valueOf, 10000));
-
-            // Verifying the exception throwing behavior, when silent set true and vibrate is presented.
-            assert_throws(new TypeError(), function() {
-                var notification = new Notification("My Notification", {
-                    silent: true,
-                    vibrate: 1000
-                });
-            }, 'Set vibrate, when silent is true.');
 
       }, 'Checks the properties exposed on the Notification object.');
     </script>

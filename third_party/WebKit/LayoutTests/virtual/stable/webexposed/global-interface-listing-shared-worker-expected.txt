@@ -12,10 +12,12 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     method slice
 [Worker] interface Cache
 [Worker]     method add
+[Worker]     method addAll
 [Worker]     method constructor
 [Worker]     method delete
 [Worker]     method keys
 [Worker]     method match
+[Worker]     method matchAll
 [Worker]     method put
 [Worker] interface CacheStorage
 [Worker]     method constructor
@@ -366,6 +368,7 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     getter onclose
 [Worker]     getter onerror
 [Worker]     getter onshow
+[Worker]     getter requireInteraction
 [Worker]     getter silent
 [Worker]     getter tag
 [Worker]     getter title
@@ -378,12 +381,16 @@ Starting worker: resources/global-interface-listing.js
 [Worker] interface PermissionStatus
 [Worker]     getter onchange
 [Worker]     getter state
-[Worker]     getter status
 [Worker]     method constructor
 [Worker]     setter onchange
 [Worker] interface Permissions
 [Worker]     method constructor
 [Worker]     method query
+[Worker] interface ProgressEvent
+[Worker]     getter lengthComputable
+[Worker]     getter loaded
+[Worker]     getter total
+[Worker]     method constructor
 [Worker] interface ReadableByteStream
 [Worker]     method cancel
 [Worker]     method constructor
@@ -394,11 +401,12 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     method getReader
 [Worker] interface Request
 [Worker]     getter bodyUsed
-[Worker]     getter context
 [Worker]     getter credentials
 [Worker]     getter headers
+[Worker]     getter integrity
 [Worker]     getter method
 [Worker]     getter mode
+[Worker]     getter redirect
 [Worker]     getter referrer
 [Worker]     getter url
 [Worker]     method arrayBuffer
@@ -433,10 +441,7 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     method update
 [Worker]     setter onupdatefound
 [Worker] interface SharedWorkerGlobalScope
-[Worker]     getter name
-[Worker]     getter onconnect
 [Worker]     method constructor
-[Worker]     setter onconnect
 [Worker] interface SubtleCrypto
 [Worker]     method constructor
 [Worker]     method decrypt
@@ -605,6 +610,8 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     setter onloadstart
 [Worker]     setter onprogress
 [Worker]     setter ontimeout
+[Worker] interface XMLHttpRequestUpload
+[Worker]     method constructor
 [Worker] interface webkitIDBCursor
 [Worker]     getter direction
 [Worker]     getter key
@@ -697,6 +704,12 @@ Starting worker: resources/global-interface-listing.js
 [Worker]     setter onabort
 [Worker]     setter oncomplete
 [Worker]     setter onerror
+[Worker] [GLOBAL OBJECT]
+[Worker]     getter caches
+[Worker]     getter name
+[Worker]     getter onconnect
+[Worker]     method gc
+[Worker]     setter onconnect
 PASS successfullyParsed is true
 
 TEST COMPLETE

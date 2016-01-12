@@ -172,6 +172,11 @@ function createHTMLTableRowElement()
     return row;
 }
 
+function createCanvasElement()
+{
+    return document.createElement("canvas");
+}
+
 // CharacterData
 
 shouldBe("nonNumericPolicy('document.createTextNode(\"a\").substringData(x, 0)')", "'any type allowed'");
@@ -218,7 +223,7 @@ shouldBe("nonNumericPolicy('document.body.scrollTop = x')", "'any type allowed'"
 
 // HTMLCollection
 
-shouldBe("nonNumericPolicy('document.images.item(x)')", "'any type allowed'");
+shouldBe("nonNumericPolicy('document.images.item(x)')", "'any type allowed (but not omitted)'");
 
 // HTMLInputElement
 
@@ -255,6 +260,10 @@ shouldBe("nonNumericPolicy('createHTMLTableSectionElement().deleteRow(x)')", "'a
 shouldBe("nonNumericPolicy('document.createElement(\"textarea\").setSelectionRange(x, 0)')", "'any type allowed'");
 shouldBe("nonNumericPolicy('document.createElement(\"textarea\").setSelectionRange(0, x)')", "'any type allowed'");
 
+// HTMLCanvasElement
+
+shouldBe("nonNumericPolicy('createCanvasElement().getContext(x)')", "'any type allowed (but not omitted)'");
+
 // KeyboardEvent
 
 shouldBe("nonNumericPolicy('document.createEvent(\"KeyboardEvent\").initKeyboardEvent(\"a\", false, false, null, \"b\", x, false, false, false, false, false)')", "'any type allowed'");
@@ -282,7 +291,7 @@ shouldBe("nonNumericPolicy('document.createNodeIterator(document, x, null, false
 
 // NodeList
 
-shouldBe("nonNumericPolicy('document.getElementsByTagName(\"div\").item(x)')", "'any type allowed'");
+shouldBe("nonNumericPolicy('document.getElementsByTagName(\"div\").item(x)')", "'any type allowed (but not omitted)'");
 
 // Range
 
@@ -371,8 +380,6 @@ Here are other examples of numeric types in function parameters and settable att
 ../../../../WebCore/html/CanvasRenderingContext2D.idl:        void setMiterLimit(in float limit);
 
 ../../../../WebCore/html/HTMLAnchorElement.idl:        attribute long tabIndex;
-../../../../WebCore/html/HTMLAppletElement.idl:                 attribute [ConvertFromString] long hspace;
-../../../../WebCore/html/HTMLAppletElement.idl:                 attribute [ConvertFromString] long vspace;
 ../../../../WebCore/html/HTMLAreaElement.idl:        attribute long tabIndex;
 ../../../../WebCore/html/HTMLBodyElement.idl:                 attribute long scrollLeft;
 ../../../../WebCore/html/HTMLBodyElement.idl:                 attribute long scrollTop;
