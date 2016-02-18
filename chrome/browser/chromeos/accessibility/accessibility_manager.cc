@@ -9,6 +9,7 @@
 #include "ash/high_contrast/high_contrast_controller.h"
 #include "ash/metrics/user_metrics_recorder.h"
 #include "ash/session/session_state_delegate.h"
+#include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
 #include "ash/sticky_keys/sticky_keys_controller.h"
 #include "ash/system/tray/system_tray_notifier.h"
@@ -225,6 +226,11 @@ void InjectChromeVoxContentScript(
       RenderViewHost::FromID(render_process_id, render_view_id);
   if (!render_view_host)
     return;
+  const content::WebContents* web_contents =
+      content::WebContents::FromRenderViewHost(render_view_host);
+  GURL content_url;
+  if (web_contents)
+    content_url = web_contents->GetLastCommittedURL();
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(extension_service->profile())
           ->enabled_extensions()
@@ -244,6 +250,8 @@ void InjectChromeVoxContentScript(
       extensions::ContentScriptsInfo::GetContentScripts(extension);
   for (size_t i = 0; i < content_scripts.size(); i++) {
     const extensions::UserScript& script = content_scripts[i];
+    if (web_contents && !script.MatchesURL(content_url))
+      continue;
     for (size_t j = 0; j < script.js_scripts().size(); ++j) {
       const extensions::UserScript::File& file = script.js_scripts()[j];
       extensions::ExtensionResource resource = extension->GetResource(
@@ -262,6 +270,33 @@ void UnloadChromeVoxExtension(Profile* profile) {
 }
 
 }  // namespace
+
+class ChromeVoxPanelWidgetObserver : public views::WidgetObserver {
+ public:
+  ChromeVoxPanelWidgetObserver(views::Widget* widget,
+                               AccessibilityManager* manager)
+      : widget_(widget), manager_(manager) {
+    widget_->AddObserver(this);
+  }
+
+  void OnWidgetClosing(views::Widget* widget) override {
+    CHECK_EQ(widget_, widget);
+    widget->RemoveObserver(this);
+    manager_->OnChromeVoxPanelClosing();
+  }
+
+  void OnWidgetDestroying(views::Widget* widget) override {
+    CHECK_EQ(widget_, widget);
+    widget->RemoveObserver(this);
+    manager_->OnChromeVoxPanelDestroying();
+  }
+
+ private:
+  views::Widget* widget_;
+  AccessibilityManager* manager_;
+
+  DISALLOW_COPY_AND_ASSIGN(ChromeVoxPanelWidgetObserver);
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 // AccessibilityStatusEventDetails
@@ -370,6 +405,8 @@ AccessibilityManager::AccessibilityManager()
       braille_display_connected_(false),
       scoped_braille_observer_(this),
       braille_ime_current_(false),
+      chromevox_panel_(nullptr),
+      extension_registry_observer_(this),
       weak_ptr_factory_(this) {
   notification_registrar_.Add(this,
                               chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
@@ -412,6 +449,11 @@ AccessibilityManager::~AccessibilityManager() {
       ui::A11Y_NOTIFICATION_NONE);
   NotifyAccessibilityStatusChanged(details);
   input_method::InputMethodManager::Get()->RemoveObserver(this);
+
+  if (chromevox_panel_) {
+    chromevox_panel_->Close();
+    chromevox_panel_ = nullptr;
+  }
 }
 
 bool AccessibilityManager::ShouldShowAccessibilityMenu() {
@@ -629,6 +671,11 @@ void AccessibilityManager::LoadChromeVoxToLockScreen(
 }
 
 void AccessibilityManager::UnloadChromeVox() {
+  if (chromevox_panel_) {
+    chromevox_panel_->Close();
+    chromevox_panel_ = nullptr;
+  }
+
   if (chrome_vox_loaded_on_lock_screen_)
     UnloadChromeVoxFromLockScreen();
 
@@ -948,7 +995,7 @@ void AccessibilityManager::SetProfile(Profile* profile) {
   UpdateVirtualKeyboardFromPref();
 }
 
-void AccessibilityManager::ActiveUserChanged(const std::string& user_id) {
+void AccessibilityManager::ActiveUserChanged(const AccountId& account_id) {
   SetProfile(ProfileManager::GetActiveUserProfile());
 }
 
@@ -1109,6 +1156,22 @@ void AccessibilityManager::OnBrailleKeyEvent(const KeyEvent& event) {
   }
 }
 
+void AccessibilityManager::OnExtensionUnloaded(
+    content::BrowserContext* browser_context,
+    const extensions::Extension* extension,
+    extensions::UnloadedExtensionInfo::Reason reason) {
+  if (extension->id() == keyboard_listener_extension_id_) {
+    keyboard_listener_extension_id_ = std::string();
+    keyboard_listener_capture_ = false;
+    extension_registry_observer_.Remove(
+        extensions::ExtensionRegistry::Get(browser_context));
+  }
+}
+
+void AccessibilityManager::OnShutdown(extensions::ExtensionRegistry* registry) {
+  extension_registry_observer_.Remove(registry);
+}
+
 void AccessibilityManager::PostLoadChromeVox(Profile* profile) {
   // Do any setup work needed immediately after ChromeVox actually loads.
   ash::PlaySystemSoundAlways(SOUND_SPOKEN_FEEDBACK_ENABLED);
@@ -1131,6 +1194,12 @@ void AccessibilityManager::PostLoadChromeVox(Profile* profile) {
 
   should_speak_chrome_vox_announcements_on_user_screen_ =
       chrome_vox_loaded_on_lock_screen_;
+
+  if (!chromevox_panel_) {
+    chromevox_panel_ = new ChromeVoxPanel(profile_);
+    chromevox_panel_widget_observer_.reset(
+        new ChromeVoxPanelWidgetObserver(chromevox_panel_->GetWidget(), this));
+  }
 }
 
 void AccessibilityManager::PostUnloadChromeVox(Profile* profile) {
@@ -1139,6 +1208,29 @@ void AccessibilityManager::PostUnloadChromeVox(Profile* profile) {
   // Clear the accessibility focus ring.
   AccessibilityFocusRingController::GetInstance()->SetFocusRing(
       std::vector<gfx::Rect>());
+}
+
+void AccessibilityManager::OnChromeVoxPanelClosing() {
+  aura::Window* root_window = chromevox_panel_->GetRootWindow();
+  chromevox_panel_widget_observer_.reset(nullptr);
+  chromevox_panel_ = nullptr;
+  ash::ShelfLayoutManager::ForShelf(root_window)->SetChromeVoxPanelHeight(0);
+}
+
+void AccessibilityManager::OnChromeVoxPanelDestroying() {
+  chromevox_panel_widget_observer_.reset(nullptr);
+  chromevox_panel_ = nullptr;
+}
+
+void AccessibilityManager::SetKeyboardListenerExtensionId(
+    const std::string& id,
+    content::BrowserContext* context) {
+  keyboard_listener_extension_id_ = id;
+
+  extensions::ExtensionRegistry* registry =
+      extensions::ExtensionRegistry::Get(context);
+  if (!extension_registry_observer_.IsObserving(registry) && !id.empty())
+    extension_registry_observer_.Add(registry);
 }
 
 }  // namespace chromeos

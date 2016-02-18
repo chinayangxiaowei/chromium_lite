@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "content/public/browser/web_contents_delegate.h"
 #include "ui/events/event_rewriter.h"
 
 namespace ui {
@@ -14,21 +15,25 @@ class KeyEvent;
 }
 
 // Receives requests for spoken feedback enabled state and command dispatch.
-class SpokenFeedbackEventRewriterDelegate {
+class SpokenFeedbackEventRewriterDelegate
+    : public content::WebContentsDelegate {
  public:
   SpokenFeedbackEventRewriterDelegate();
-  virtual ~SpokenFeedbackEventRewriterDelegate() {}
+  ~SpokenFeedbackEventRewriterDelegate() override {}
 
   // Returns true when ChromeVox is enabled.
   virtual bool IsSpokenFeedbackEnabled() const;
 
   // Returns true when |key_event| is dispatched to ChromeVox.
-  virtual bool DispatchKeyEventToChromeVox(const ui::KeyEvent& key_event);
+  virtual bool DispatchKeyEventToChromeVox(const ui::KeyEvent& key_event,
+                                           bool capture);
+
+  // WebContentsDelegate:
+  void HandleKeyboardEvent(
+      content::WebContents* source,
+      const content::NativeWebKeyboardEvent& event) override;
 
  private:
-  // Whether the user previously hit a sequencing prefix command.
-  bool is_sequencing_;
-
   DISALLOW_COPY_AND_ASSIGN(SpokenFeedbackEventRewriterDelegate);
 };
 
@@ -55,9 +60,6 @@ class SpokenFeedbackEventRewriter : public ui::EventRewriter {
 
   // Active delegate (used for testing).
   scoped_ptr<SpokenFeedbackEventRewriterDelegate> delegate_;
-
-  // Stores all key codes we've captured.
-  std::vector<int> captured_key_codes_;
 
   DISALLOW_COPY_AND_ASSIGN(SpokenFeedbackEventRewriter);
 };

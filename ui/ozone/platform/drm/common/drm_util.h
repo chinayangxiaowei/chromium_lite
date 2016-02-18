@@ -55,8 +55,12 @@ DisplayMode_Params CreateDisplayModeParams(const drmModeModeInfo& mode);
 DisplaySnapshot_Params CreateDisplaySnapshotParams(
     HardwareDisplayControllerInfo* info,
     int fd,
+    const base::FilePath& sys_path,
     size_t device_index,
     const gfx::Point& origin);
+
+int GetFourCCFormatFromBufferFormat(gfx::BufferFormat format);
+gfx::BufferFormat GetBufferFormatFromFourCCFormat(int format);
 
 }  // namespace ui
 

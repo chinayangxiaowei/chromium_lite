@@ -29,6 +29,10 @@ class QuicPacketCreatorPeer {
   static QuicPacketNumberLength NextPacketNumberLength(
       QuicPacketCreator* creator);
   static void SetPacketNumber(QuicPacketCreator* creator, QuicPacketNumber s);
+  static void FillPacketHeader(QuicPacketCreator* creator,
+                               QuicFecGroupNumber fec_group,
+                               bool fec_flag,
+                               QuicPacketHeader* header);
   static EncryptionLevel GetEncryptionLevel(QuicPacketCreator* creator);
 
  private:

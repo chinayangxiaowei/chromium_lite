@@ -5,6 +5,7 @@
 #include "chrome/browser/extensions/bookmark_app_helper.h"
 
 #include <cctype>
+#include <string>
 
 #include "base/prefs/pref_service.h"
 #include "base/strings/utf_string_conversions.h"
@@ -62,6 +63,10 @@
 #include "chrome/browser/web_applications/web_app_mac.h"
 #include "chrome/common/chrome_switches.h"
 #endif
+
+#if defined(OS_WIN)
+#include "base/win/shortcut.h"
+#endif  // defined(OS_WIN)
 
 #if defined(USE_ASH)
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
@@ -694,21 +699,15 @@ void BookmarkAppHelper::FinishInstallation(const Extension* extension) {
     web_app::ShortcutLocations creation_locations;
 #if defined(OS_LINUX)
     creation_locations.on_desktop = true;
+#elif defined(OS_WIN)
+    // Create the shortcut on the desktop if it's not possible to pin to the
+    // taskbar.
+    creation_locations.on_desktop = !base::win::CanPinShortcutToTaskbar();
 #else
     creation_locations.on_desktop = false;
 #endif
     creation_locations.applications_menu_location =
         web_app::APP_MENU_LOCATION_SUBDIR_CHROMEAPPS;
-    web_app::CreateShortcuts(web_app::SHORTCUT_CREATION_BY_USER,
-                             creation_locations, current_profile, extension);
-    // Creating shortcuts in the start menu fails when the language is set
-    // to certain languages (e.g. Hindi). To work around this, the taskbar /
-    // quick launch icon is created separately to ensure it doesn't fail
-    // due to the start menu shortcut creation failing.
-    // See http://crbug.com/477297 and http://crbug.com/484577.
-    creation_locations.on_desktop = false;
-    creation_locations.applications_menu_location =
-        web_app::APP_MENU_LOCATION_NONE;
     creation_locations.in_quick_launch_bar = true;
     web_app::CreateShortcuts(web_app::SHORTCUT_CREATION_BY_USER,
                              creation_locations, current_profile, extension);
@@ -717,7 +716,7 @@ void BookmarkAppHelper::FinishInstallation(const Extension* extension) {
     ChromeLauncherController::instance()->PinAppWithID(extension->id());
 #endif
   }
-#endif
+#endif  // !defined(OS_MACOSX)
 
 #if defined(OS_MACOSX)
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(

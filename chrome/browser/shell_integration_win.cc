@@ -305,6 +305,18 @@ bool ShouldResetDefaultBrowser() {
       base::CompareCase::SENSITIVE);
 }
 
+bool RegisterBrowser() {
+  base::FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    return false;
+  }
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+
+  return ShellUtil::RegisterChromeBrowser(dist, chrome_exe, base::string16(),
+                                          true);
+}
+
 }  // namespace
 
 // static
@@ -655,19 +667,6 @@ base::FilePath ShellIntegration::GetStartMenuShortcut(
     shortcut = programs_folder.Append(shortcut_name);
     if (base::PathExists(shortcut))
       return shortcut;
-
-    // Check in "Start Menu\Programs\<BROWSER>" if the shortcut was not found in
-    // "Start Menu\Programs". This fallback check is here to handle running
-    // instances that are updated past the change that migrates Chrome's start
-    // menu shortcut from the "Google Chrome" folder up into the main "Programs"
-    // folder. This code will become obsolete when the migration change lands,
-    // and is to be removed in that change.
-    shortcut =
-        programs_folder.Append(dist->GetStartMenuShortcutSubfolder(
-                                   BrowserDistribution::SUBFOLDER_CHROME))
-            .Append(shortcut_name);
-    if (base::PathExists(shortcut))
-      return shortcut;
   }
 
   return base::FilePath();
@@ -689,7 +688,7 @@ bool ShellIntegration::DefaultBrowserWorker::InitializeSetAsDefault() {
   // default browser. This is the workaround:
   // 1. Unregister the default browser.
   // 2. Open "How to make Chrome my default browser" link with openwith.exe.
-  // 3. Windows will prompt the user with "How would you link to open this?".
+  // 3. Windows will prompt the user with "How would you like to open this?".
   // 4. If Chrome is selected, we intercept the attempt to open the URL and
   //    instead call OnSetAsDefaultAttemptComplete(), passing true to indicate
   //    success.
@@ -738,6 +737,11 @@ void ShellIntegration::DefaultBrowserWorker::FinalizeSetAsDefault() {
 // static
 bool ShellIntegration::DefaultBrowserWorker::SetAsDefaultBrowserAsynchronous() {
   DCHECK(IsSetAsDefaultAsynchronous());
+
+  // Registers chrome.exe as a browser on Windows to make sure it will be shown
+  // in the "How would you like to open this?" prompt.
+  if (!RegisterBrowser())
+    return false;
 
   if (ShouldResetDefaultBrowser())
     ResetDefaultBrowser();

@@ -4,6 +4,7 @@
 
 #include "ui/ozone/platform/drm/common/drm_util.h"
 
+#include <drm_fourcc.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -214,12 +215,14 @@ DisplayMode_Params CreateDisplayModeParams(const drmModeModeInfo& mode) {
 DisplaySnapshot_Params CreateDisplaySnapshotParams(
     HardwareDisplayControllerInfo* info,
     int fd,
+    const base::FilePath& sys_path,
     size_t device_index,
     const gfx::Point& origin) {
   DisplaySnapshot_Params params;
   int64 connector_index = ConnectorIndex(device_index, info->index());
   params.display_id = connector_index;
   params.origin = origin;
+  params.sys_path = sys_path;
   params.physical_size =
       gfx::Size(info->connector()->mmWidth, info->connector()->mmHeight);
   params.type = GetDisplayType(info->connector());
@@ -270,4 +273,31 @@ DisplaySnapshot_Params CreateDisplaySnapshotParams(
   return params;
 }
 
+int GetFourCCFormatFromBufferFormat(gfx::BufferFormat format) {
+  switch (format) {
+    case gfx::BufferFormat::BGRA_8888:
+      return DRM_FORMAT_ARGB8888;
+    case gfx::BufferFormat::BGRX_8888:
+      return DRM_FORMAT_XRGB8888;
+    case gfx::BufferFormat::UYVY_422:
+      return DRM_FORMAT_UYVY;
+    default:
+      NOTREACHED();
+      return 0;
+  }
+}
+
+gfx::BufferFormat GetBufferFormatFromFourCCFormat(int format) {
+  switch (format) {
+    case DRM_FORMAT_ARGB8888:
+      return gfx::BufferFormat::BGRA_8888;
+    case DRM_FORMAT_XRGB8888:
+      return gfx::BufferFormat::BGRX_8888;
+    case DRM_FORMAT_UYVY:
+      return gfx::BufferFormat::UYVY_422;
+    default:
+      NOTREACHED();
+      return gfx::BufferFormat::LAST;
+  }
+}
 }  // namespace ui

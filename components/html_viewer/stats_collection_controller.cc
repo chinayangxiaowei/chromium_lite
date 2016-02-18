@@ -9,7 +9,7 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/time/time.h"
-#include "components/startup_metric_utils/startup_metric_utils.h"
+#include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "mojo/application/public/cpp/application_impl.h"
@@ -22,7 +22,6 @@ namespace html_viewer {
 namespace {
 
 // Initialize the histogram data using the given startup performance times.
-// TODO(msw): Use TimeTicks to avoid system clock changes: crbug.com/521164
 void GetStartupPerformanceTimesCallbackImpl(
     tracing::StartupPerformanceTimesPtr times) {
   base::StatisticsRecorder::Initialize();
@@ -34,24 +33,26 @@ void GetStartupPerformanceTimesCallbackImpl(
   startup_metric_utils::RecordMainEntryPointTime(
       base::Time::FromInternalValue(times->shell_main_entry_point_time));
 
-  // TODO(msw): Determine if this is the first run.
+  // TODO(msw): Determine if this is the first run and provide a PrefService
+  // to generate stats that span multiple startups.
   startup_metric_utils::RecordBrowserMainMessageLoopStart(
-      base::Time::FromInternalValue(times->browser_message_loop_start_time),
-      false);
+      base::TimeTicks::FromInternalValue(
+          times->browser_message_loop_start_ticks),
+      false, nullptr);
 
   startup_metric_utils::RecordBrowserWindowDisplay(
-      base::Time::FromInternalValue(times->browser_window_display_time));
+      base::TimeTicks::FromInternalValue(times->browser_window_display_ticks));
 
   startup_metric_utils::RecordBrowserOpenTabsDelta(
       base::TimeDelta::FromInternalValue(times->browser_open_tabs_time_delta));
 
   startup_metric_utils::RecordFirstWebContentsMainFrameLoad(
-      base::Time::FromInternalValue(
-          times->first_web_contents_main_frame_load_time));
+      base::TimeTicks::FromInternalValue(
+          times->first_web_contents_main_frame_load_ticks));
 
   startup_metric_utils::RecordFirstWebContentsNonEmptyPaint(
-      base::Time::FromInternalValue(
-          times->first_visually_non_empty_layout_time));
+      base::TimeTicks::FromInternalValue(
+          times->first_visually_non_empty_layout_ticks));
 }
 
 }  // namespace

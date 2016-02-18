@@ -22,6 +22,7 @@ using net::test::ConstructMisFramedEncryptedPacket;
 using net::test::CryptoTestUtils;
 using net::test::DefaultQuicConfig;
 using net::test::MockConnection;
+using net::test::MockConnectionHelper;
 using net::test::PacketSavingConnection;
 using net::test::QuicConnectionPeer;
 using net::test::QuicPacketCreatorPeer;
@@ -40,13 +41,14 @@ namespace tools {
 namespace test {
 namespace {
 
-const char kServerHostname[] = "www.example.org";
+const char kServerHostname[] = "test.example.com";
 const uint16 kPort = 80;
 
 class ToolsQuicClientSessionTest
     : public ::testing::TestWithParam<QuicVersion> {
  protected:
-  ToolsQuicClientSessionTest() {
+  ToolsQuicClientSessionTest()
+      : crypto_config_(CryptoTestUtils::ProofVerifierForTesting()) {
     Initialize();
     // Advance the time, because timers do not like uninitialized times.
     connection_->AdvanceTime(QuicTime::Delta::FromSeconds(1));
@@ -54,24 +56,28 @@ class ToolsQuicClientSessionTest
 
   void Initialize() {
     session_.reset();
-    connection_ = new PacketSavingConnection(Perspective::IS_CLIENT,
+    connection_ = new PacketSavingConnection(&helper_, Perspective::IS_CLIENT,
                                              SupportedVersions(GetParam()));
     session_.reset(new QuicClientSession(
         DefaultQuicConfig(), connection_,
-        QuicServerId(kServerHostname, kPort, false, PRIVACY_MODE_DISABLED),
+        QuicServerId(kServerHostname, kPort, PRIVACY_MODE_DISABLED),
         &crypto_config_));
     session_->Initialize();
   }
 
   void CompleteCryptoHandshake() {
     session_->CryptoConnect();
-    CryptoTestUtils::HandshakeWithFakeServer(
-        connection_, session_->GetCryptoStream());
+    QuicCryptoClientStream* stream =
+        static_cast<QuicCryptoClientStream*>(session_->GetCryptoStream());
+    CryptoTestUtils::FakeServerOptions options;
+    CryptoTestUtils::HandshakeWithFakeServer(&helper_, connection_, stream,
+                                             options);
   }
 
+  QuicCryptoClientConfig crypto_config_;
+  MockConnectionHelper helper_;
   PacketSavingConnection* connection_;
   scoped_ptr<QuicClientSession> session_;
-  QuicCryptoClientConfig crypto_config_;
 };
 
 INSTANTIATE_TEST_CASE_P(Tests, ToolsQuicClientSessionTest,
@@ -120,7 +126,7 @@ TEST_P(ToolsQuicClientSessionTest, NoEncryptionAfterInitialEncryption) {
   EXPECT_EQ(0u, consumed.bytes_consumed);
 }
 
-TEST_P(ToolsQuicClientSessionTest, MaxNumStreams) {
+TEST_P(ToolsQuicClientSessionTest, MaxNumStreamsWithNoFinOrRst) {
   EXPECT_CALL(*connection_, SendRstStream(_, _, _)).Times(AnyNumber());
 
   session_->config()->SetMaxStreamsPerConnection(1, 1);
@@ -132,8 +138,41 @@ TEST_P(ToolsQuicClientSessionTest, MaxNumStreams) {
   ASSERT_TRUE(stream);
   EXPECT_FALSE(session_->CreateOutgoingDynamicStream());
 
-  // Close a stream and ensure I can now open a new one.
+  // Close the stream, but without having received a FIN or a RST_STREAM
+  // and check that a new one can not be created.
   session_->CloseStream(stream->id());
+  if (FLAGS_quic_count_unfinished_as_open_streams) {
+    EXPECT_EQ(1u, session_->GetNumOpenStreams());
+  } else {
+    EXPECT_EQ(0u, session_->GetNumOpenStreams());
+  }
+  stream = session_->CreateOutgoingDynamicStream();
+  if (FLAGS_quic_count_unfinished_as_open_streams) {
+    EXPECT_FALSE(stream);
+  } else {
+    EXPECT_TRUE(stream);
+  }
+}
+
+TEST_P(ToolsQuicClientSessionTest, MaxNumStreamsWithRst) {
+  EXPECT_CALL(*connection_, SendRstStream(_, _, _)).Times(AnyNumber());
+
+  session_->config()->SetMaxStreamsPerConnection(1, 1);
+
+  // Initialize crypto before the client session will create a stream.
+  CompleteCryptoHandshake();
+
+  QuicSpdyClientStream* stream = session_->CreateOutgoingDynamicStream();
+  ASSERT_TRUE(stream);
+  EXPECT_FALSE(session_->CreateOutgoingDynamicStream());
+
+  // Close the stream and receive an RST frame to remove the unfinished stream
+  session_->CloseStream(stream->id());
+  session_->OnRstStream(QuicRstStreamFrame(
+      stream->id(), AdjustErrorForVersion(QUIC_RST_ACKNOWLEDGEMENT, GetParam()),
+      0));
+  // Check that a new one can be created.
+  EXPECT_EQ(0u, session_->GetNumOpenStreams());
   stream = session_->CreateOutgoingDynamicStream();
   EXPECT_TRUE(stream);
 }

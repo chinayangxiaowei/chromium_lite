@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 
@@ -262,6 +261,11 @@ enum SBClientDownloadExtensions {
   EXTENSION_XXE,
   EXTENSION_ZIPX,
   EXTENSION_ZPAQ,
+  EXTENSION_RELS,
+  EXTENSION_MSG,
+  EXTENSION_EML,
+  EXTENSION_RTF,
+  EXTENSION_VHDX,
 
   // New values go above this one.
   EXTENSION_MAX
@@ -489,6 +493,7 @@ const SafeBrowsingFiletype kSafeBrowsingFileTypes[] = {
     {FILE_PATH_LITERAL(".vbs"), EXTENSION_VBS, true, false},
     {FILE_PATH_LITERAL(".vbscript"), EXTENSION_VBSCRIPT, false, false},  // UMA.
     {FILE_PATH_LITERAL(".vhd"), EXTENSION_VHD, true, true},
+    {FILE_PATH_LITERAL(".vhdx"), EXTENSION_VHDX, true, true},
     {FILE_PATH_LITERAL(".vmdk"), EXTENSION_VMDK, true, true},
     {FILE_PATH_LITERAL(".vsd"), EXTENSION_VSD, true, false},
     {FILE_PATH_LITERAL(".vsmacros"), EXTENSION_VSMACROS, true, false},
@@ -522,11 +527,7 @@ const SafeBrowsingFiletype& GetFileType(const base::FilePath& file) {
     nullptr, EXTENSION_OTHER, false, false
   };
 
-  base::FilePath::StringType file_basename = file.BaseName().value();
-  base::FilePath::StringPieceType trimmed_filename = base::TrimString(
-      file_basename, FILE_PATH_LITERAL(". "), base::TRIM_TRAILING);
-  base::FilePath::StringType extension =
-      base::FilePath(trimmed_filename).FinalExtension();
+  base::FilePath::StringType extension = GetFileExtension(file);
   SafeBrowsingFiletype needle = {extension.c_str()};
 
   const auto begin = kSafeBrowsingFileTypes;
@@ -547,6 +548,14 @@ const SafeBrowsingFiletype& GetFileType(const base::FilePath& file) {
 } // namespace
 
 const int kSBClientDownloadExtensionsMax = EXTENSION_MAX;
+
+const base::FilePath::StringType GetFileExtension(const base::FilePath& file) {
+  // Remove trailing space and period characters from the extension.
+  base::FilePath::StringType file_basename = file.BaseName().value();
+  base::FilePath::StringPieceType trimmed_filename = base::TrimString(
+      file_basename, FILE_PATH_LITERAL(". "), base::TRIM_TRAILING);
+  return base::FilePath(trimmed_filename).FinalExtension();
+}
 
 bool IsArchiveFile(const base::FilePath& file) {
   // List of interesting archive file formats in kSafeBrowsingFileTypes is by no

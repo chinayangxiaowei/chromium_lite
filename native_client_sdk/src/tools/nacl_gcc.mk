@@ -383,6 +383,70 @@ endef
 
 
 #
+# Macro to generate linker scripts
+#
+# $1 = Target Name
+# $2 = Static Linker Script
+# $3 = Shared Linker Script
+#
+define LINKER_SCRIPT_RULE
+$(STAMPDIR)/$(1).stamp:
+	@echo "  STAMP $$@"
+	@echo "TOUCHED $$@" > $(STAMPDIR)/$(1).stamp
+
+ifneq (,$(findstring x86_32,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).a
+install: $(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).a
+$(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).a: $(2)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+
+ifneq (,$(findstring x86_64,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).a
+install: $(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).a
+$(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).a: $(2)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+
+ifneq (,$(findstring arm,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).a
+install: $(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).a
+$(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).a: $(2)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+
+ifeq ($(TOOLCHAIN),glibc)
+ifneq (,$(findstring x86_32,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).so
+install: $(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).so
+$(LIBDIR)/$(TOOLCHAIN)_x86_32/$(CONFIG)/lib$(1).so: $(3)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+
+ifneq (,$(findstring x86_64,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).so
+install: $(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).so
+$(LIBDIR)/$(TOOLCHAIN)_x86_64/$(CONFIG)/lib$(1).so: $(3)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+
+ifneq (,$(findstring arm,$(ARCHES)))
+$(STAMPDIR)/$(1).stamp: $(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).so
+install: $(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).so
+$(LIBDIR)/$(TOOLCHAIN)_arm/$(CONFIG)/lib$(1).so: $(3)
+	$(MKDIR) -p $$(dir $$@)
+	$(call LOG,CP  ,$$@,$(OSHELPERS) cp $$^ $$@)
+endif
+endif
+endef
+
+
+#
 # Strip Macro for each arch (e.g., each arch supported by LINKER_RULE).
 #
 # $1 = Target Name
@@ -526,9 +590,9 @@ endef
 
 
 #
-# Determine which executable to pass into the debugger.  For newlib
-# this is the NEXE which will actually be used.  For glibc, runnable-ld.so
-# is the "app", and the "app" is actual an .so we load.
+# Determine which executable to pass into the debugger.
+# For glibc, runnable-ld.so is the executable, and the "app" is an .so that
+# it loads.
 #
 ifeq (x86_32,$(SYSARCH))
 LIB_NAME = lib32
@@ -540,11 +604,7 @@ endif
 endif
 
 
-ifeq (newlib,$(TOOLCHAIN))
-GDB_DEBUG_TARGET = $(abspath $(OUTDIR))/$(TARGET)_$(SYSARCH).nexe
-else
 GDB_DEBUG_TARGET = $(abspath $(OUTDIR))/$(LIB_NAME)/runnable-ld.so
-endif
 
 ifdef STANDALONE
 run: all
