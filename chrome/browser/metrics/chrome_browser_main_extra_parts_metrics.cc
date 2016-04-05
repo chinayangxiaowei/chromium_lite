@@ -9,11 +9,13 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/cpu.h"
+#include "base/macros.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/sys_info.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
@@ -25,6 +27,10 @@
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_switches.h"
 #include "ui/gfx/screen.h"
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/metrics/first_web_contents_profiler.h"
+#endif  // !defined(OS_ANDROID)
 
 #if defined(OS_ANDROID) && defined(__arm__)
 #include <cpu-features.h>
@@ -45,6 +51,7 @@
 #endif  // defined(USE_OZONE) || defined(USE_X11)
 
 #if defined(OS_WIN)
+#include "base/win/windows_version.h"
 #include "chrome/installer/util/google_update_settings.h"
 #endif  // defined(OS_WIN)
 
@@ -134,6 +141,15 @@ void RecordMicroArchitectureStats() {
 void RecordStartupMetricsOnBlockingPool() {
 #if defined(OS_WIN)
   GoogleUpdateSettings::RecordChromeUpdatePolicyHistograms();
+
+  const base::win::OSInfo& os_info = *base::win::OSInfo::GetInstance();
+  UMA_HISTOGRAM_ENUMERATION("Windows.GetVersionExVersion", os_info.version(),
+                            base::win::VERSION_WIN_LAST);
+  UMA_HISTOGRAM_ENUMERATION("Windows.Kernel32Version",
+                            os_info.Kernel32Version(),
+                            base::win::VERSION_WIN_LAST);
+  UMA_HISTOGRAM_BOOLEAN("Windows.InCompatibilityMode",
+                        os_info.version() != os_info.Kernel32Version());
 #endif  // defined(OS_WIN)
 
 #if defined(OS_MACOSX)
@@ -345,8 +361,7 @@ void ChromeBrowserMainExtraPartsMetrics::PostBrowserStart() {
   is_screen_observer_ = true;
 
 #if !defined(OS_ANDROID)
-  first_web_contents_profiler_ =
-      FirstWebContentsProfiler::CreateProfilerForFirstWebContents(this).Pass();
+  FirstWebContentsProfiler::Start();
 #endif  // !defined(OS_ANDROID)
 }
 
@@ -364,12 +379,6 @@ void ChromeBrowserMainExtraPartsMetrics::OnDisplayMetricsChanged(
     const gfx::Display& display,
     uint32_t changed_metrics) {
 }
-
-#if !defined(OS_ANDROID)
-void ChromeBrowserMainExtraPartsMetrics::ProfilerFinishedCollectingMetrics() {
-  first_web_contents_profiler_.reset();
-}
-#endif  // !defined(OS_ANDROID)
 
 void ChromeBrowserMainExtraPartsMetrics::EmitDisplaysChangedMetric() {
   int display_count = gfx::Screen::GetNativeScreen()->GetNumDisplays();

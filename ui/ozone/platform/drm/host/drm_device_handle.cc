@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <utility>
 
 #include "base/files/file_path.h"
 #include "base/posix/eintr_wrapper.h"
@@ -71,7 +72,7 @@ bool DrmDeviceHandle::IsValid() const {
 }
 
 base::ScopedFD DrmDeviceHandle::PassFD() {
-  return file_.Pass();
+  return std::move(file_);
 }
 
 }  // namespace ui

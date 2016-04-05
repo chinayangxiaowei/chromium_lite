@@ -63,6 +63,7 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/signin/core/account_id/account_id.h"
 #include "components/signin/core/browser/signin_client.h"
+#include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_type.h"
 #include "content/public/browser/browser_thread.h"
@@ -125,8 +126,7 @@ void RecordPasswordLoginEvent(const UserContext& user_context) {
   if (user_context.GetUserType() == user_manager::USER_TYPE_REGULAR &&
       user_context.GetAuthFlow() == UserContext::AUTH_FLOW_OFFLINE &&
       easy_unlock_service) {
-    easy_unlock_service->RecordPasswordLoginEvent(
-        user_context.GetAccountId().GetUserEmail());
+    easy_unlock_service->RecordPasswordLoginEvent(user_context.GetAccountId());
   }
 }
 
@@ -322,11 +322,15 @@ void ExistingUserController::CancelPasswordChangedFlow() {
 }
 
 void ExistingUserController::CompleteLogin(const UserContext& user_context) {
-  login_display_->set_signin_completed(true);
   if (!host_) {
     // Complete login event was generated already from UI. Ignore notification.
     return;
   }
+
+  if (is_login_in_progress_)
+    return;
+
+  is_login_in_progress_ = true;
 
   ContinueLoginIfDeviceNotDisabled(base::Bind(
       &ExistingUserController::DoCompleteLogin,
@@ -344,6 +348,24 @@ bool ExistingUserController::IsSigninInProgress() const {
 
 void ExistingUserController::Login(const UserContext& user_context,
                                    const SigninSpecifics& specifics) {
+  if (is_login_in_progress_) {
+    // If there is another login in progress, bail out. Do not re-enable
+    // clicking on other windows and the status area. Do not start the
+    // auto-login timer.
+    return;
+  }
+
+  is_login_in_progress_ = true;
+
+  if (user_context.GetUserType() != user_manager::USER_TYPE_REGULAR &&
+      user_manager::UserManager::Get()->IsUserLoggedIn()) {
+    // Multi-login is only allowed for regular users. If we are attempting to
+    // do multi-login as another type of user somehow, bail out. Do not
+    // re-enable clicking on other windows and the status area. Do not start the
+    // auto-login timer.
+    return;
+  }
+
   ContinueLoginIfDeviceNotDisabled(base::Bind(
       &ExistingUserController::DoLogin,
       weak_factory_.GetWeakPtr(),
@@ -438,12 +460,13 @@ void ExistingUserController::Signout() {
   NOTREACHED();
 }
 
-bool ExistingUserController::IsUserWhitelisted(const std::string& user_id) {
+bool ExistingUserController::IsUserWhitelisted(const AccountId& account_id) {
   bool wildcard_match = false;
   if (login_performer_.get())
-    return login_performer_->IsUserWhitelisted(user_id, &wildcard_match);
+    return login_performer_->IsUserWhitelisted(account_id, &wildcard_match);
 
-  return chromeos::CrosSettings::IsWhitelisted(user_id, &wildcard_match);
+  return chromeos::CrosSettings::IsWhitelisted(account_id.GetUserEmail(),
+                                               &wildcard_match);
 }
 
 void ExistingUserController::OnConsumerKioskAutoLaunchCheckCompleted(
@@ -989,14 +1012,7 @@ void ExistingUserController::PerformPreLoginActions(
     last_login_attempt_account_id_ = user_context.GetAccountId();
     num_login_attempts_ = 0;
   }
-
-  // Guard in cases when we're called twice but login process is still active.
-  // This might happen when login process is paused till signed settings status
-  // is verified which results in Login* method called again as a callback.
-  if (!is_login_in_progress_)
-    num_login_attempts_++;
-
-  is_login_in_progress_ = true;
+  num_login_attempts_++;
 
   // Stop the auto-login timer when attempting login.
   StopPublicSessionAutoLoginTimer();
@@ -1065,8 +1081,7 @@ void ExistingUserController::DoCompleteLogin(
     const UserContext& user_context_wo_device_id) {
   UserContext user_context = user_context_wo_device_id;
   std::string device_id =
-      user_manager::UserManager::Get()->GetKnownUserDeviceId(
-          user_context.GetAccountId());
+      user_manager::known_user::GetDeviceId(user_context.GetAccountId());
   if (device_id.empty()) {
     bool is_ephemeral = ChromeUserManager::Get()->AreEphemeralUsersEnabled() &&
                         user_context.GetAccountId() !=
@@ -1077,8 +1092,8 @@ void ExistingUserController::DoCompleteLogin(
 
   const std::string& gaps_cookie = user_context.GetGAPSCookie();
   if (!gaps_cookie.empty()) {
-    user_manager::UserManager::Get()->SetKnownUserGAPSCookie(
-        user_context.GetAccountId(), gaps_cookie);
+    user_manager::known_user::SetGAPSCookie(user_context.GetAccountId(),
+                                            gaps_cookie);
   }
 
   PerformPreLoginActions(user_context);
@@ -1117,22 +1132,6 @@ void ExistingUserController::DoCompleteLogin(
 
 void ExistingUserController::DoLogin(const UserContext& user_context,
                                      const SigninSpecifics& specifics) {
-  if (is_login_in_progress_) {
-    // If there is another login in progress, bail out. Do not re-enable
-    // clicking on other windows and the status area. Do not start the
-    // auto-login timer.
-    return;
-  }
-
-  if (user_context.GetUserType() != user_manager::USER_TYPE_REGULAR &&
-      user_manager::UserManager::Get()->IsUserLoggedIn()) {
-    // Multi-login is only allowed for regular users. If we are attempting to
-    // do multi-login as another type of user somehow, bail out. Do not
-    // re-enable clicking on other windows and the status area. Do not start the
-    // auto-login timer.
-    return;
-  }
-
   if (user_context.GetUserType() == user_manager::USER_TYPE_GUEST) {
     if (!specifics.guest_mode_url.empty()) {
       guest_mode_url_ = GURL(specifics.guest_mode_url);

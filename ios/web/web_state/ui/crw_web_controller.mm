@@ -5,7 +5,10 @@
 #import "ios/web/web_state/ui/crw_web_controller.h"
 
 #import <objc/runtime.h>
+#include <stddef.h>
+
 #include <cmath>
+#include <utility>
 
 #include "base/ios/block_types.h"
 #import "base/ios/ns_error_util.h"
@@ -46,7 +49,7 @@
 #include "ios/web/public/referrer.h"
 #include "ios/web/public/referrer_util.h"
 #include "ios/web/public/ssl_status.h"
-#include "ios/web/public/url_scheme_util.h"
+#import "ios/web/public/url_scheme_util.h"
 #include "ios/web/public/url_util.h"
 #include "ios/web/public/user_metrics.h"
 #include "ios/web/public/web_client.h"
@@ -54,6 +57,7 @@
 #include "ios/web/public/web_state/credential.h"
 #import "ios/web/public/web_state/crw_web_controller_observer.h"
 #import "ios/web/public/web_state/crw_web_view_scroll_view_proxy.h"
+#import "ios/web/public/web_state/js/credential_util.h"
 #import "ios/web/public/web_state/js/crw_js_injection_manager.h"
 #import "ios/web/public/web_state/js/crw_js_injection_receiver.h"
 #import "ios/web/public/web_state/ui/crw_content_view.h"
@@ -66,7 +70,6 @@
 #import "ios/web/web_state/crw_web_view_proxy_impl.h"
 #import "ios/web/web_state/error_translation_util.h"
 #include "ios/web/web_state/frame_info.h"
-#import "ios/web/web_state/js/credential_util.h"
 #import "ios/web/web_state/js/crw_js_early_script_manager.h"
 #import "ios/web/web_state/js/crw_js_plugin_placeholder_manager.h"
 #import "ios/web/web_state/js/crw_js_window_id_manager.h"
@@ -584,7 +587,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
 - (instancetype)initWithWebState:(scoped_ptr<WebStateImpl>)webState {
   self = [super init];
   if (self) {
-    _webStateImpl = webState.Pass();
+    _webStateImpl = std::move(webState);
     DCHECK(_webStateImpl);
     _webStateImpl->SetWebController(self);
     _webStateImpl->InitializeRequestTracker(self);
@@ -893,7 +896,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
 }
 
 - (void)setDOMElementForLastTouch:(scoped_ptr<base::DictionaryValue>)element {
-  _DOMElementForLastTouch = element.Pass();
+  _DOMElementForLastTouch = std::move(element);
 }
 
 - (void)showContextMenu:(UIGestureRecognizer*)gestureRecognizer {
@@ -1191,12 +1194,8 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
   [self.containerView displayWebViewContentView:webViewContentView];
 }
 
-- (CRWWebController*)createChildWebControllerWithReferrerURL:
-    (const GURL&)referrerURL {
-  web::Referrer referrer(referrerURL, web::ReferrerPolicyDefault);
-  CRWWebController* result =
-      [self.delegate webPageOrderedOpenBlankWithReferrer:referrer
-                                            inBackground:NO];
+- (CRWWebController*)createChildWebController {
+  CRWWebController* result = [self.delegate webPageOrderedOpen];
   DCHECK(!result || result.sessionController.openedByDOM);
   return result;
 }
@@ -1323,10 +1322,6 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
 // Load the current URL in a web view, first ensuring the web view is visible.
 - (void)loadCurrentURLInWebView {
   [self willLoadCurrentURLInWebView];
-
-  // Re-register the user agent, because UIWebView sometimes loses it.
-  // See crbug.com/228397.
-  [self registerUserAgent];
 
   // Clear the set of URLs opened in external applications.
   _openedApplicationURL.reset([[NSMutableSet alloc] init]);
@@ -1564,7 +1559,17 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
     // processed.
     _containerView.reset(
         [[CRWWebControllerContainerView alloc] initWithDelegate:self]);
-    self.containerView.frame = [[UIScreen mainScreen] bounds];
+
+    // Compute and set the frame of the containerView.
+    CGFloat statusBarHeight =
+        [[UIApplication sharedApplication] statusBarFrame].size.height;
+    CGRect containerViewFrame =
+        [UIApplication sharedApplication].keyWindow.bounds;
+    containerViewFrame.origin.y += statusBarHeight;
+    containerViewFrame.size.height -= statusBarHeight;
+    self.containerView.frame = containerViewFrame;
+    DCHECK(!CGRectIsEmpty(self.containerView.frame));
+
     [self.containerView addGestureRecognizer:[self touchTrackingRecognizer]];
     [self.containerView setAccessibilityIdentifier:web::kContainerViewID];
     // Is |currentUrl| a web scheme or native chrome scheme.
@@ -1877,7 +1882,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
          if (handler) {
            scoped_ptr<base::Value> result(
                base::JSONReader::Read(base::SysNSStringToUTF8(stringResult)));
-           handler(result.Pass(), error);
+           handler(std::move(result), error);
          }
        }];
 }
@@ -1927,7 +1932,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
   BOOL rendererInitiatedWithoutInteraction =
       self.sessionController.openedByDOM && !_userInteractedWithWebController;
   BOOL noNavigationItems =
-      !_webStateImpl->GetNavigationManagerImpl().GetEntryCount();
+      !_webStateImpl->GetNavigationManagerImpl().GetItemCount();
   return rendererInitiatedWithoutInteraction || noNavigationItems;
 }
 
@@ -2421,6 +2426,11 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
                               context:(NSDictionary*)context {
   [self checkForUnexpectedURLChange];
 
+  // Because hash changes don't trigger |-didFinishNavigation|, fetch favicons
+  // for the new page manually.
+  [self evaluateJavaScript:@"__gCrWeb.sendFaviconsToHost();"
+       stringResultHandler:nil];
+
   // Notify the observers.
   _webStateImpl->OnUrlHashChanged();
   return YES;
@@ -2565,7 +2575,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
   // ReplaceState happened before first navigation entry or called right
   // after window.open when the url is empty/not valid.
   if (!navItem ||
-      (navigationManager.GetEntryCount() <= 1 && navItem->GetURL().is_empty()))
+      (navigationManager.GetItemCount() <= 1 && navItem->GetURL().is_empty()))
     return YES;
   if (!web::history_state_util::IsHistoryStateChangeValid(navItem->GetURL(),
                                                           replaceURL)) {
@@ -2839,11 +2849,6 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
 - (void)restoreStateAfterURLRejection {
   [[self sessionController] discardNonCommittedEntries];
 
-  // Re-register the user agent, because UIWebView will sometimes try to read
-  // the agent again from a saved search result page in which no other page has
-  // yet been loaded. See crbug.com/260370.
-  [self registerUserAgent];
-
   // Reset |_lastRegisteredRequestURL| so that it reflects the URL from before
   // the load was rejected. This value may be out of sync because
   // |_lastRegisteredRequestURL| may have already been updated before the load
@@ -2997,7 +3002,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
   base::WeakNSObject<CRWWebController> weakSelf(self);
   [self fetchDOMElementAtPoint:[touch locationInView:self.webView]
              completionHandler:^(scoped_ptr<base::DictionaryValue> element) {
-               [weakSelf setDOMElementForLastTouch:element.Pass()];
+               [weakSelf setDOMElementForLastTouch:std::move(element)];
              }];
   return YES;
 }
@@ -3147,7 +3152,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
     const web::NavigationManagerImpl& navigationManager =
         self.webStateImpl->GetNavigationManagerImpl();
     GURL mainDocumentURL =
-        navigationManager.GetEntryCount()
+        navigationManager.GetItemCount()
             ? navigationManager.GetLastCommittedItem()->GetURL()
             : [self currentURL];
     _lastUserInteraction.reset(new web::UserInteractionEvent(mainDocumentURL));
@@ -3587,7 +3592,7 @@ const NSTimeInterval kSnapshotOverlayTransition = 0.5;
                    // |element| scoped_ptr.
                    elementAsDict.reset(elementAsDictPtr);
                  }
-                 handler(elementAsDict.Pass());
+                 handler(std::move(elementAsDict));
                }];
   }];
 }

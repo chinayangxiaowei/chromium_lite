@@ -4,9 +4,13 @@
 
 #include "chrome/browser/accessibility/accessibility_extension_api.h"
 
+#include <stddef.h>
+
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "build/build_config.h"
+#include "chrome/browser/accessibility/accessibility_extension_api.h"
 #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/extension_service.h"

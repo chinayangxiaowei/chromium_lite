@@ -28,14 +28,14 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
 #include "platform/weborigin/OriginAccessEntry.h"
 
+#include "platform/testing/TestingPlatformSupport.h"
 #include "platform/weborigin/KURL.h"
 #include "platform/weborigin/SecurityOrigin.h"
 #include "public/platform/Platform.h"
 #include "public/platform/WebPublicSuffixList.h"
-#include <gtest/gtest.h>
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace blink {
 
@@ -55,17 +55,11 @@ private:
     size_t m_length;
 };
 
-class OriginAccessEntryTestPlatform : public blink::Platform {
+class OriginAccessEntryTestPlatform : public TestingPlatformSupport {
 public:
     blink::WebPublicSuffixList* publicSuffixList() override
     {
         return &m_suffixList;
-    }
-
-    // Stub for pure virtual method.
-    void cryptographicallyRandomValues(unsigned char*, size_t) override
-    {
-        RELEASE_ASSERT_NOT_REACHED();
     }
 
     void setPublicSuffix(const blink::WebString& suffix)
@@ -81,7 +75,6 @@ TEST(OriginAccessEntryTest, PublicSuffixListTest)
 {
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     RefPtr<SecurityOrigin> origin = SecurityOrigin::createFromString("http://www.google.com");
     OriginAccessEntry entry1("http", "google.com", OriginAccessEntry::AllowSubdomains);
@@ -90,8 +83,6 @@ TEST(OriginAccessEntryTest, PublicSuffixListTest)
     EXPECT_EQ(OriginAccessEntry::MatchesOrigin, entry1.matchesOrigin(*origin));
     EXPECT_EQ(OriginAccessEntry::DoesNotMatchOrigin, entry2.matchesOrigin(*origin));
     EXPECT_EQ(OriginAccessEntry::MatchesOriginButIsPublicSuffix, entry3.matchesOrigin(*origin));
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, AllowSubdomainsTest)
@@ -124,7 +115,6 @@ TEST(OriginAccessEntryTest, AllowSubdomainsTest)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         SCOPED_TRACE(testing::Message() << "Host: " << test.host << ", Origin: " << test.origin);
@@ -133,8 +123,6 @@ TEST(OriginAccessEntryTest, AllowSubdomainsTest)
         EXPECT_EQ(test.expectedOrigin, entry1.matchesOrigin(*originToTest));
         EXPECT_EQ(test.expectedDomain, entry1.matchesDomain(*originToTest));
     }
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, AllowRegisterableDomainsTest)
@@ -165,7 +153,6 @@ TEST(OriginAccessEntryTest, AllowRegisterableDomainsTest)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         RefPtr<SecurityOrigin> originToTest = SecurityOrigin::createFromString(test.origin);
@@ -174,8 +161,6 @@ TEST(OriginAccessEntryTest, AllowRegisterableDomainsTest)
         SCOPED_TRACE(testing::Message() << "Host: " << test.host << ", Origin: " << test.origin << ", Domain: " << entry1.registerable().utf8().data());
         EXPECT_EQ(test.expected, entry1.matchesOrigin(*originToTest));
     }
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, AllowRegisterableDomainsTestWithDottedSuffix)
@@ -206,7 +191,6 @@ TEST(OriginAccessEntryTest, AllowRegisterableDomainsTestWithDottedSuffix)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("appspot.com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         RefPtr<SecurityOrigin> originToTest = SecurityOrigin::createFromString(test.origin);
@@ -215,8 +199,6 @@ TEST(OriginAccessEntryTest, AllowRegisterableDomainsTestWithDottedSuffix)
         SCOPED_TRACE(testing::Message() << "Host: " << test.host << ", Origin: " << test.origin << ", Domain: " << entry1.registerable().utf8().data());
         EXPECT_EQ(test.expected, entry1.matchesOrigin(*originToTest));
     }
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, DisallowSubdomainsTest)
@@ -244,7 +226,6 @@ TEST(OriginAccessEntryTest, DisallowSubdomainsTest)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         SCOPED_TRACE(testing::Message() << "Host: " << test.host << ", Origin: " << test.origin);
@@ -252,8 +233,6 @@ TEST(OriginAccessEntryTest, DisallowSubdomainsTest)
         OriginAccessEntry entry1(test.protocol, test.host, OriginAccessEntry::DisallowSubdomains);
         EXPECT_EQ(test.expected, entry1.matchesOrigin(*originToTest));
     }
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, IPAddressTest)
@@ -276,15 +255,12 @@ TEST(OriginAccessEntryTest, IPAddressTest)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         SCOPED_TRACE(testing::Message() << "Host: " << test.host);
         OriginAccessEntry entry(test.protocol, test.host, OriginAccessEntry::DisallowSubdomains);
         EXPECT_EQ(test.isIPAddress, entry.hostIsIPAddress()) << test.host;
     }
-
-    Platform::shutdown();
 }
 
 TEST(OriginAccessEntryTest, IPAddressMatchingTest)
@@ -303,7 +279,6 @@ TEST(OriginAccessEntryTest, IPAddressMatchingTest)
 
     OriginAccessEntryTestPlatform platform;
     platform.setPublicSuffix("com");
-    Platform::initialize(&platform);
 
     for (const auto& test : inputs) {
         SCOPED_TRACE(testing::Message() << "Host: " << test.host << ", Origin: " << test.origin);
@@ -314,9 +289,6 @@ TEST(OriginAccessEntryTest, IPAddressMatchingTest)
         OriginAccessEntry entry2(test.protocol, test.host, OriginAccessEntry::DisallowSubdomains);
         EXPECT_EQ(test.expected, entry2.matchesOrigin(*originToTest));
     }
-
-    Platform::shutdown();
 }
 
 } // namespace blink
-

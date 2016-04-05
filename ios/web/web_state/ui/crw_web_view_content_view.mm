@@ -38,6 +38,7 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
 @implementation CRWWebViewContentView
 
 @synthesize webViewType = _webViewType;
+@synthesize shouldUseInsetForTopPadding = _shouldUseInsetForTopPadding;
 
 - (instancetype)initWithWebView:(UIView*)webView
                      scrollView:(UIScrollView*)scrollView {
@@ -79,18 +80,21 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
                                            green:kBackgroundRGBComponents[1]
                                             blue:kBackgroundRGBComponents[2]
                                            alpha:1.0];
-    // The frame needs to be set immediately after the web view is added
-    // as a subview. The change in the frame triggers drawing operations and
-    // if not done after it's added as a subview, the web view exhibits
-    // strange behavior where clicks from certain web sites are not triggered.
-    // The actual value of the frame doesn't matter as long as it's not
-    // CGRectZero.  The CRWWebViewContentView's frame will be reset to a correct
-    // value in a subsequent layout pass.
-    // TODO(crbug.com/577793): This is an undocumented and not-well-understood
-    // workaround for this issue.
-    const CGRect kDummyRect = CGRectMake(10, 20, 30, 50);
-    self.frame = kDummyRect;
   }
+}
+
+- (void)setFrame:(CGRect)frame {
+  if (CGRectEqualToRect(self.frame, frame))
+    return;
+  [super setFrame:frame];
+  [self updateWebViewFrame];
+}
+
+- (void)setBounds:(CGRect)bounds {
+  if (CGRectEqualToRect(self.bounds, bounds))
+    return;
+  [super setBounds:bounds];
+  [self updateWebViewFrame];
 }
 
 #pragma mark Accessors
@@ -115,14 +119,22 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
 }
 
 - (CGFloat)topContentPadding {
-  return self.webViewType == web::WK_WEB_VIEW_TYPE
-             ? _topContentPadding
-             : [_scrollView contentInset].top;
+  BOOL isSettingWebViewFrame = self.webViewType == web::WK_WEB_VIEW_TYPE &&
+                               !self.shouldUseInsetForTopPadding;
+  return isSettingWebViewFrame ? _topContentPadding
+                               : [_scrollView contentInset].top;
 }
 
 - (void)setTopContentPadding:(CGFloat)newTopPadding {
-  if (self.webViewType == web::WK_WEB_VIEW_TYPE) {
+  if (self.webViewType == web::WK_WEB_VIEW_TYPE &&
+      !self.shouldUseInsetForTopPadding) {
     if (_topContentPadding != newTopPadding) {
+      // Update the content offset of the scroll view to match the padding
+      // that will be included in the frame.
+      CGFloat paddingChange = newTopPadding - _topContentPadding;
+      CGPoint contentOffset = [_scrollView contentOffset];
+      contentOffset.y += paddingChange;
+      [_scrollView setContentOffset:contentOffset];
       _topContentPadding = newTopPadding;
       // Update web view frame immediately to make |topContentPadding|
       // animatable.
@@ -132,6 +144,15 @@ const CGFloat kBackgroundRGBComponents[] = {0.75f, 0.74f, 0.76f};
     UIEdgeInsets inset = [_scrollView contentInset];
     inset.top = newTopPadding;
     [_scrollView setContentInset:inset];
+  }
+}
+
+- (void)setShouldUseInsetForTopPadding:(BOOL)shouldUseInsetForTopPadding {
+  if (_shouldUseInsetForTopPadding != shouldUseInsetForTopPadding) {
+    CGFloat oldTopContentPadding = self.topContentPadding;
+    self.topContentPadding = 0.0f;
+    _shouldUseInsetForTopPadding = shouldUseInsetForTopPadding;
+    self.topContentPadding = oldTopContentPadding;
   }
 }
 

@@ -30,7 +30,6 @@
 class MockInstantServiceObserver : public InstantServiceObserver {
  public:
   MOCK_METHOD1(DefaultSearchProviderChanged, void(bool));
-  MOCK_METHOD1(OmniboxStartMarginChanged, void(int));
 };
 
 class InstantServiceTest : public InstantUnitTestBase {
@@ -49,10 +48,6 @@ class InstantServiceTest : public InstantUnitTestBase {
 
   InstantSearchPrerenderer* GetInstantSearchPrerenderer() {
     return instant_service_->instant_search_prerenderer();
-  }
-
-  void UpdateOmniboxStartMargin(int start_margin) {
-    instant_service_->OnOmniboxStartMarginChanged(start_margin);
   }
 
   std::vector<InstantMostVisitedItem>& most_visited_items() {
@@ -167,11 +162,26 @@ TEST_F(InstantServiceEnabledTest,
   EXPECT_NE(old_prerenderer, GetInstantSearchPrerenderer());
 }
 
-TEST_F(InstantServiceTest, OmniboxStartMarginChanged) {
-  int new_start_margin = 92;
-  EXPECT_CALL(*instant_service_observer_.get(),
-              OmniboxStartMarginChanged(new_start_margin)).Times(1);
-  UpdateOmniboxStartMargin(new_start_margin);
+TEST_F(InstantServiceTest, GetSuggestionFromServiceSide) {
+  auto profile = suggestions::SuggestionsProfile();
+  profile.add_suggestions();
+
+  instant_service_->OnSuggestionsAvailable(profile);
+
+  auto items = instant_service_->suggestions_items_;
+  ASSERT_EQ(1, (int)items.size());
+  ASSERT_TRUE(items[0].is_server_side_suggestion);
+}
+
+TEST_F(InstantServiceTest, GetSuggestionFromClientSide) {
+  history::MostVisitedURLList url_list;
+  url_list.push_back(history::MostVisitedURL());
+
+  instant_service_->OnMostVisitedItemsReceived(url_list);
+
+  auto items = instant_service_->most_visited_items_;
+  ASSERT_EQ(1, (int)items.size());
+  ASSERT_FALSE(items[0].is_server_side_suggestion);
 }
 
 TEST_F(InstantServiceTest, IsValidURLForNavigation) {
