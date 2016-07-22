@@ -12,6 +12,7 @@
 
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "base/callback.h"
@@ -110,6 +111,12 @@ class DownloadProtectionService {
   virtual bool IsSupportedDownload(const content::DownloadItem& item,
                                    const base::FilePath& target_path) const;
 
+  virtual void CheckPPAPIDownloadRequest(
+      const GURL& requestor_url,
+      const base::FilePath& default_file_path,
+      const std::vector<base::FilePath::StringType>& alternate_extensions,
+      const CheckDownloadCallback& callback);
+
   // Display more information to the user regarding the download specified by
   // |info|. This method is invoked when the user requests more information
   // about a download that was marked as malicious.
@@ -139,10 +146,6 @@ class DownloadProtectionService {
   // been formed.
   ClientDownloadRequestSubscription RegisterClientDownloadRequestCallback(
       const ClientDownloadRequestCallback& callback);
-
-  double whitelist_sample_rate() const {
-    return whitelist_sample_rate_;
-  }
 
  protected:
   // Enum to keep track why a particular download verdict was chosen.
@@ -176,13 +179,12 @@ class DownloadProtectionService {
   };
 
  private:
-  class CheckClientDownloadRequest;  // Per-request state
+  class CheckClientDownloadRequest;
+  class PPAPIDownloadRequest;
   friend class DownloadProtectionServiceTest;
 
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
-                           CheckClientDownloadWhitelistedUrlWithoutSampling);
-  FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
-                           CheckClientDownloadWhitelistedUrlWithSampling);
+                           CheckClientDownloadWhitelistedUrl);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
                            CheckClientDownloadValidateRequest);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
@@ -201,6 +203,10 @@ class DownloadProtectionService {
                            TestDownloadRequestTimeout);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
                            CheckClientCrxDownloadSuccess);
+  FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
+                           PPAPIDownloadRequest_InvalidResponse);
+  FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
+                           PPAPIDownloadRequest_Timeout);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceFlagTest,
                            CheckClientDownloadOverridenByFlag);
 
@@ -213,6 +219,8 @@ class DownloadProtectionService {
   // Called by a CheckClientDownloadRequest instance when it finishes, to
   // remove it from |download_requests_|.
   void RequestFinished(CheckClientDownloadRequest* request);
+
+  void PPAPIDownloadCheckRequestFinished(PPAPIDownloadRequest* request);
 
   // Given a certificate and its immediate issuer certificate, generates the
   // list of strings that need to be checked against the download whitelist to
@@ -232,10 +240,14 @@ class DownloadProtectionService {
   // The context we use to issue network requests.
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
 
-  // Map of client download request to the corresponding callback that
-  // has to be invoked when the request is done.  This map contains all
-  // pending server requests.
-  std::set<scoped_refptr<CheckClientDownloadRequest> > download_requests_;
+  // Set of pending server requests for DownloadManager mediated downloads.
+  std::set<scoped_refptr<CheckClientDownloadRequest>> download_requests_;
+
+  // Set of pending server requests for PPAPI mediated downloads. Using a map
+  // because heterogeneous lookups aren't available yet in std::unordered_map.
+  std::unordered_map<PPAPIDownloadRequest*,
+                     std::unique_ptr<PPAPIDownloadRequest>>
+      ppapi_download_requests_;
 
   // Keeps track of the state of the service.
   bool enabled_;
@@ -254,9 +266,6 @@ class DownloadProtectionService {
   // List of 8-byte hashes that are blacklisted manually by flag.
   // Normally empty.
   std::set<std::string> manual_blacklist_hashes_;
-
-  // Rate of whitelisted downloads we sample to send out download ping.
-  double whitelist_sample_rate_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadProtectionService);
 };

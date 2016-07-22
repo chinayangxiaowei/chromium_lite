@@ -42,12 +42,11 @@ namespace blink {
 class ExecutionContext;
 class ExecutionContextTask;
 
-class CORE_EXPORT MainThreadTaskRunner final : public NoBaseWillBeGarbageCollectedFinalized<MainThreadTaskRunner> {
+class CORE_EXPORT MainThreadTaskRunner final {
+    USING_FAST_MALLOC(MainThreadTaskRunner);
     WTF_MAKE_NONCOPYABLE(MainThreadTaskRunner);
-    USING_FAST_MALLOC_WILL_BE_REMOVED(MainThreadTaskRunner);
-
 public:
-    static PassOwnPtrWillBeRawPtr<MainThreadTaskRunner> create(ExecutionContext*);
+    static PassOwnPtr<MainThreadTaskRunner> create(ExecutionContext*);
 
     ~MainThreadTaskRunner();
 
@@ -67,18 +66,18 @@ private:
 
     void postTaskInternal(const WebTraceLocation&, PassOwnPtr<ExecutionContextTask>, bool isInspectorTask);
 
-    RawPtrWillBeMember<ExecutionContext> m_context;
-#if !ENABLE(OILPAN)
-    WeakPtrFactory<MainThreadTaskRunner> m_weakFactory;
-#endif
+    // Untraced back reference to the owner Document;
+    // this object has identical lifetime to it.
+    UntracedMember<ExecutionContext> m_context;
     Timer<MainThreadTaskRunner> m_pendingTasksTimer;
     Vector<OwnPtr<ExecutionContextTask>> m_pendingTasks;
     bool m_suspended;
+    WeakPtrFactory<MainThreadTaskRunner> m_weakFactory;
 };
 
-inline PassOwnPtrWillBeRawPtr<MainThreadTaskRunner> MainThreadTaskRunner::create(ExecutionContext* context)
+inline PassOwnPtr<MainThreadTaskRunner> MainThreadTaskRunner::create(ExecutionContext* context)
 {
-    return adoptPtrWillBeNoop(new MainThreadTaskRunner(context));
+    return adoptPtr(new MainThreadTaskRunner(context));
 }
 
 } // namespace blink

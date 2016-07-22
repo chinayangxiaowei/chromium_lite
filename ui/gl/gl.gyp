@@ -26,6 +26,7 @@
         'GL_IMPLEMENTATION',
       ],
       'include_dirs': [
+        '<(DEPTH)/third_party/swiftshader/include',
         '<(DEPTH)/third_party/khronos',
       ],
       'export_dependent_settings': [
@@ -230,9 +231,6 @@
             '<(DEPTH)/third_party/angle/src/angle.gyp:libEGL',
             '<(DEPTH)/third_party/angle/src/angle.gyp:libGLESv2',
           ],
-          'include_dirs': [
-            '<(DEPTH)/third_party/swiftshader/include',
-          ],
         }],
         ['OS=="mac"', {
           'sources': [
@@ -244,6 +242,8 @@
             'gl_image_io_surface.h',
             'scoped_cgl.cc',
             'scoped_cgl.h',
+            'yuv_to_rgb_converter.cc',
+            'yuv_to_rgb_converter.h',
           ],
           'link_settings': {
             'libraries': [

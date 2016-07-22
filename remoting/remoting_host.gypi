@@ -68,10 +68,6 @@
                     '../build/linux/system.gyp:xrandr',
                     '../build/linux/system.gyp:xtst',
                   ],
-                }, {
-                'sources!' : [
-                  'host/linux/unicode_to_keysym.cc',
-                ],
                 }],
                 ['chromeos==0 and use_ozone==0', {
                   'dependencies': [
@@ -186,9 +182,6 @@
             ['enable_webrtc==1', {
               'dependencies': [
                 '../third_party/webrtc/modules/modules.gyp:desktop_capture',
-              ],
-              'sources': [
-                '<@(remoting_cast_sources)',
               ],
             }],
             ['remoting_use_gcd==1', {

@@ -42,7 +42,7 @@ namespace {
 class CacheStorageCacheDataHandle
     : public storage::BlobDataBuilder::DataHandle {
  public:
-  CacheStorageCacheDataHandle(const scoped_refptr<CacheStorageCache>& cache,
+  CacheStorageCacheDataHandle(scoped_refptr<CacheStorageCache> cache,
                               disk_cache::ScopedEntryPtr entry)
       : cache_(cache), entry_(std::move(entry)) {}
 
@@ -106,11 +106,10 @@ CacheResponse::ResponseType WebResponseTypeToProtoResponseType(
 // Copy headers out of a cache entry and into a protobuf. The callback is
 // guaranteed to be run.
 void ReadMetadata(disk_cache::Entry* entry, const MetadataCallback& callback);
-void ReadMetadataDidReadMetadata(
-    disk_cache::Entry* entry,
-    const MetadataCallback& callback,
-    const scoped_refptr<net::IOBufferWithSize>& buffer,
-    int rv);
+void ReadMetadataDidReadMetadata(disk_cache::Entry* entry,
+                                 const MetadataCallback& callback,
+                                 scoped_refptr<net::IOBufferWithSize> buffer,
+                                 int rv);
 
 bool VaryMatches(const ServiceWorkerHeaderMap& request,
                  const ServiceWorkerHeaderMap& cached_request,
@@ -166,11 +165,10 @@ void ReadMetadata(disk_cache::Entry* entry, const MetadataCallback& callback) {
     read_header_callback.Run(read_rv);
 }
 
-void ReadMetadataDidReadMetadata(
-    disk_cache::Entry* entry,
-    const MetadataCallback& callback,
-    const scoped_refptr<net::IOBufferWithSize>& buffer,
-    int rv) {
+void ReadMetadataDidReadMetadata(disk_cache::Entry* entry,
+                                 const MetadataCallback& callback,
+                                 scoped_refptr<net::IOBufferWithSize> buffer,
+                                 int rv) {
   if (rv != buffer->size()) {
     callback.Run(scoped_ptr<CacheMetadata>());
     return;
@@ -277,7 +275,6 @@ struct CacheStorageCache::PutContext {
   scoped_ptr<storage::BlobDataHandle> blob_data_handle;
   CacheStorageCache::ErrorCallback callback;
   disk_cache::ScopedEntryPtr cache_entry;
-  int64_t available_bytes = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(PutContext);
@@ -286,26 +283,30 @@ struct CacheStorageCache::PutContext {
 // static
 scoped_refptr<CacheStorageCache> CacheStorageCache::CreateMemoryCache(
     const GURL& origin,
-    const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
-    const scoped_refptr<storage::QuotaManagerProxy>& quota_manager_proxy,
+    const std::string& cache_name,
+    scoped_refptr<net::URLRequestContextGetter> request_context_getter,
+    scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
     base::WeakPtr<storage::BlobStorageContext> blob_context) {
-  return make_scoped_refptr(
-      new CacheStorageCache(origin, base::FilePath(), request_context_getter,
-                            quota_manager_proxy, blob_context));
+  return make_scoped_refptr(new CacheStorageCache(
+      origin, cache_name, base::FilePath(), std::move(request_context_getter),
+      std::move(quota_manager_proxy), blob_context));
 }
 
 // static
 scoped_refptr<CacheStorageCache> CacheStorageCache::CreatePersistentCache(
     const GURL& origin,
+    const std::string& cache_name,
     const base::FilePath& path,
-    const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
-    const scoped_refptr<storage::QuotaManagerProxy>& quota_manager_proxy,
+    scoped_refptr<net::URLRequestContextGetter> request_context_getter,
+    scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
     base::WeakPtr<storage::BlobStorageContext> blob_context) {
   return make_scoped_refptr(new CacheStorageCache(
-      origin, path, request_context_getter, quota_manager_proxy, blob_context));
+      origin, cache_name, path, std::move(request_context_getter),
+      std::move(quota_manager_proxy), blob_context));
 }
 
 CacheStorageCache::~CacheStorageCache() {
+  quota_manager_proxy_->NotifyOriginNoLongerInUse(origin_);
 }
 
 base::WeakPtr<CacheStorageCache> CacheStorageCache::AsWeakPtr() {
@@ -354,7 +355,51 @@ void CacheStorageCache::BatchOperation(
     const std::vector<CacheStorageBatchOperation>& operations,
     const ErrorCallback& callback) {
   if (!LazyInitialize()) {
-    callback.Run(CACHE_STORAGE_ERROR_STORAGE);
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(callback, CACHE_STORAGE_ERROR_STORAGE));
+    return;
+  }
+
+  // Estimate the required size of the put operations. The size of the deletes
+  // is unknown and not considered.
+  int64_t space_required = 0;
+  for (const auto& operation : operations) {
+    if (operation.operation_type == CACHE_STORAGE_CACHE_OPERATION_TYPE_PUT) {
+      space_required +=
+          operation.request.blob_size + operation.response.blob_size;
+    }
+  }
+  if (space_required > 0) {
+    // GetUsageAndQuota is called before entering a scheduled operation since it
+    // can call Size, another scheduled operation. This is racy. The decision
+    // to commit is made before the scheduled Put operation runs. By the time
+    // Put runs, the cache might already be full and the origin will be larger
+    // than it's supposed to be.
+    quota_manager_proxy_->GetUsageAndQuota(
+        base::ThreadTaskRunnerHandle::Get().get(), origin_,
+        storage::kStorageTypeTemporary,
+        base::Bind(&CacheStorageCache::BatchDidGetUsageAndQuota,
+                   weak_ptr_factory_.GetWeakPtr(), operations, callback,
+                   space_required));
+    return;
+  }
+
+  BatchDidGetUsageAndQuota(operations, callback, 0 /* space_required */,
+                           storage::kQuotaStatusOk, 0 /* usage */,
+                           0 /* quota */);
+}
+
+void CacheStorageCache::BatchDidGetUsageAndQuota(
+    const std::vector<CacheStorageBatchOperation>& operations,
+    const ErrorCallback& callback,
+    int64_t space_required,
+    storage::QuotaStatusCode status_code,
+    int64_t usage,
+    int64_t quota) {
+  if (status_code != storage::kQuotaStatusOk ||
+      space_required > quota - usage) {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::Bind(callback, CACHE_STORAGE_ERROR_QUOTA_EXCEEDED));
     return;
   }
 
@@ -443,16 +488,13 @@ void CacheStorageCache::Size(const SizeCallback& callback) {
     return;
   }
 
-  if (initializing_) {
-    // Note that Size doesn't use the scheduler, see header comments for why.
-    pending_size_callbacks_.push_back(callback);
-    return;
-  }
+  SizeCallback pending_callback =
+      base::Bind(&CacheStorageCache::PendingSizeCallback,
+                 weak_ptr_factory_.GetWeakPtr(), callback);
 
-  // Run immediately so that we don't deadlock on
-  // CacheStorageCache::PutDidDelete's call to
-  // quota_manager_proxy_->GetUsageAndQuota.
-  SizeImpl(callback);
+  scheduler_->ScheduleOperation(base::Bind(&CacheStorageCache::SizeImpl,
+                                           weak_ptr_factory_.GetWeakPtr(),
+                                           pending_callback));
 }
 
 void CacheStorageCache::GetSizeThenClose(const SizeCallback& callback) {
@@ -474,18 +516,24 @@ void CacheStorageCache::GetSizeThenClose(const SizeCallback& callback) {
 
 CacheStorageCache::CacheStorageCache(
     const GURL& origin,
+    const std::string& cache_name,
     const base::FilePath& path,
-    const scoped_refptr<net::URLRequestContextGetter>& request_context_getter,
-    const scoped_refptr<storage::QuotaManagerProxy>& quota_manager_proxy,
+    scoped_refptr<net::URLRequestContextGetter> request_context_getter,
+    scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
     base::WeakPtr<storage::BlobStorageContext> blob_context)
     : origin_(origin),
+      cache_name_(cache_name),
       path_(path),
-      request_context_getter_(request_context_getter),
-      quota_manager_proxy_(quota_manager_proxy),
+      request_context_getter_(std::move(request_context_getter)),
+      quota_manager_proxy_(std::move(quota_manager_proxy)),
       blob_storage_context_(blob_context),
       scheduler_(new CacheStorageScheduler()),
       memory_only_(path.empty()),
       weak_ptr_factory_(this) {
+  DCHECK(!origin_.is_empty());
+  DCHECK(quota_manager_proxy_.get());
+
+  quota_manager_proxy_->NotifyOriginInUse(origin_);
 }
 
 bool CacheStorageCache::LazyInitialize() {
@@ -768,7 +816,9 @@ void CacheStorageCache::Put(const CacheStorageBatchOperation& operation,
       operation.response.status_text, operation.response.response_type,
       operation.response.headers, operation.response.blob_uuid,
       operation.response.blob_size, operation.response.stream_url,
-      operation.response.error));
+      operation.response.error, operation.response.response_time,
+      false /* is_in_cache_storage */,
+      std::string() /* cache_storage_cache_name */));
 
   scoped_ptr<storage::BlobDataHandle> blob_data_handle;
 
@@ -820,33 +870,8 @@ void CacheStorageCache::PutDidDelete(scoped_ptr<PutContext> put_context,
     put_context->callback.Run(CACHE_STORAGE_ERROR_STORAGE);
     return;
   }
-
-  quota_manager_proxy_->GetUsageAndQuota(
-      base::ThreadTaskRunnerHandle::Get().get(), origin_,
-      storage::kStorageTypeTemporary,
-      base::Bind(&CacheStorageCache::PutDidGetUsageAndQuota,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 base::Passed(std::move(put_context))));
-}
-
-void CacheStorageCache::PutDidGetUsageAndQuota(
-    scoped_ptr<PutContext> put_context,
-    storage::QuotaStatusCode status_code,
-    int64_t usage,
-    int64_t quota) {
-  if (backend_state_ != BACKEND_OPEN) {
-    put_context->callback.Run(CACHE_STORAGE_ERROR_STORAGE);
-    return;
-  }
-
-  if (status_code != storage::kQuotaStatusOk) {
-    put_context->callback.Run(CACHE_STORAGE_ERROR_QUOTA_EXCEEDED);
-    return;
-  }
-
-  put_context->available_bytes = quota - usage;
-
-  scoped_ptr<disk_cache::Entry*> scoped_entry_ptr(new disk_cache::Entry*());
+  std::unique_ptr<disk_cache::Entry*> scoped_entry_ptr(
+      new disk_cache::Entry*());
   disk_cache::Entry** entry_ptr = scoped_entry_ptr.get();
   ServiceWorkerFetchRequest* request_ptr = put_context->request.get();
   disk_cache::Backend* backend_ptr = backend_.get();
@@ -893,6 +918,8 @@ void CacheStorageCache::PutDidCreateEntry(
   response_metadata->set_response_type(
       WebResponseTypeToProtoResponseType(put_context->response->response_type));
   response_metadata->set_url(put_context->response->url.spec());
+  response_metadata->set_response_time(
+      put_context->response->response_time.ToInternalValue());
   for (ServiceWorkerHeaderMap::const_iterator it =
            put_context->response->headers.begin();
        it != put_context->response->headers.end(); ++it) {
@@ -911,12 +938,6 @@ void CacheStorageCache::PutDidCreateEntry(
 
   scoped_refptr<net::StringIOBuffer> buffer(
       new net::StringIOBuffer(std::move(serialized)));
-
-  int64_t bytes_to_write = buffer->size() + put_context->response->blob_size;
-  if (put_context->available_bytes < bytes_to_write) {
-    put_context->callback.Run(CACHE_STORAGE_ERROR_QUOTA_EXCEEDED);
-    return;
-  }
 
   // Get a temporary copy of the entry pointer before passing it in base::Bind.
   disk_cache::Entry* temp_entry_ptr = put_context->cache_entry.get();
@@ -965,7 +986,7 @@ void CacheStorageCache::PutDidWriteHeaders(scoped_ptr<PutContext> put_context,
       std::move(put_context->blob_data_handle);
 
   blob_to_cache->StreamBlobToCache(
-      std::move(entry), INDEX_RESPONSE_BODY, request_context_getter_,
+      std::move(entry), INDEX_RESPONSE_BODY, request_context_getter_.get(),
       std::move(blob_data_handle),
       base::Bind(&CacheStorageCache::PutDidWriteBlobToCache,
                  weak_ptr_factory_.GetWeakPtr(),
@@ -1291,10 +1312,6 @@ void CacheStorageCache::InitGotCacheSize(CacheStorageError cache_create_error,
                        ? BACKEND_OPEN
                        : BACKEND_CLOSED;
 
-  for (const SizeCallback& callback : pending_size_callbacks_)
-    SizeImpl(callback);
-  pending_size_callbacks_.clear();
-
   UMA_HISTOGRAM_ENUMERATION("ServiceWorkerCache.InitBackendResult",
                             cache_create_error, CACHE_STORAGE_ERROR_LAST + 1);
 
@@ -1370,7 +1387,9 @@ void CacheStorageCache::PopulateResponseMetadata(
       metadata.response().status_text(),
       ProtoResponseTypeToWebResponseType(metadata.response().response_type()),
       ServiceWorkerHeaderMap(), "", 0, GURL(),
-      blink::WebServiceWorkerResponseErrorUnknown);
+      blink::WebServiceWorkerResponseErrorUnknown,
+      base::Time::FromInternalValue(metadata.response().response_time()),
+      true /* is_in_cache_storage */, cache_name_);
 
   for (int i = 0; i < metadata.response().headers_size(); ++i) {
     const CacheHeaderMap header = metadata.response().headers(i);
