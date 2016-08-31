@@ -6,17 +6,19 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/macros.h"
-#include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/sparse_histogram.h"
+#include "base/rand_util.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -42,6 +44,7 @@
 #include "chrome/common/safe_browsing/binary_feature_extractor.h"
 #include "chrome/common/safe_browsing/csd.pb.h"
 #include "chrome/common/safe_browsing/download_protection_util.h"
+#include "chrome/common/safe_browsing/file_type_policies.h"
 #include "chrome/common/safe_browsing/zip_analyzer_results.h"
 #include "chrome/common/url_constants.h"
 #include "components/google/core/browser/google_util.h"
@@ -70,6 +73,8 @@ using content::BrowserThread;
 
 namespace {
 static const int64_t kDownloadRequestTimeoutMs = 7000;
+// We sample 1% of whitelisted downloads to still send out download pings.
+static const double kWhitelistDownloadSampleRate = 0.01;
 }  // namespace
 
 namespace safe_browsing {
@@ -81,14 +86,13 @@ namespace {
 void RecordFileExtensionType(const base::FilePath& file) {
   UMA_HISTOGRAM_SPARSE_SLOWLY(
       "SBClientDownload.DownloadExtensions",
-      download_protection_util::GetSBClientDownloadExtensionValueForUMA(file));
+      FileTypePolicies::GetInstance()->UmaValueForFile(file));
 }
 
-void RecordArchivedArchiveFileExtensionType(const base::FilePath& file_name) {
+void RecordArchivedArchiveFileExtensionType(const base::FilePath& file) {
   UMA_HISTOGRAM_SPARSE_SLOWLY(
       "SBClientDownload.ArchivedArchiveExtensions",
-      download_protection_util::GetSBClientDownloadExtensionValueForUMA(
-          file_name));
+      FileTypePolicies::GetInstance()->UmaValueForFile(file));
 }
 
 // Enumerate for histogramming purposes.
@@ -294,6 +298,10 @@ class DownloadProtectionService::CheckClientDownloadRequest
         finished_(false),
         type_(ClientDownloadRequest::WIN_EXECUTABLE),
         start_time_(base::TimeTicks::Now()),
+        skipped_url_whitelist_(false),
+        skipped_certificate_whitelist_(false),
+        is_extended_reporting_(false),
+        is_incognito_(false),
         weakptr_factory_(this) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
     item_->AddObserver(this);
@@ -303,6 +311,14 @@ class DownloadProtectionService::CheckClientDownloadRequest
     DVLOG(2) << "Starting SafeBrowsing download check for: "
              << item_->DebugString(true);
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    if (item_->GetBrowserContext()) {
+      Profile* profile =
+          Profile::FromBrowserContext(item_->GetBrowserContext());
+      is_extended_reporting_ = profile &&
+             profile->GetPrefs()->GetBoolean(
+                 prefs::kSafeBrowsingExtendedReportingEnabled);
+      is_incognito_ = item_->GetBrowserContext()->IsOffTheRecord();
+    }
     // TODO(noelutz): implement some cache to make sure we don't issue the same
     // request over and over again if a user downloads the same binary multiple
     // times.
@@ -342,7 +358,31 @@ class DownloadProtectionService::CheckClientDownloadRequest
                item_->GetTargetFilePath().MatchesExtension(
                    FILE_PATH_LITERAL(".iso")) ||
                item_->GetTargetFilePath().MatchesExtension(
-                   FILE_PATH_LITERAL(".smi"))) {
+                   FILE_PATH_LITERAL(".smi")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".cdr")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".dart")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".dc42")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".diskcopy42")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".dmgpart")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".dvdr")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".imgpart")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".ndif")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".sparsebundle")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".sparseimage")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".toast")) ||
+               item_->GetTargetFilePath().MatchesExtension(
+                   FILE_PATH_LITERAL(".udif"))) {
       StartExtractDmgFeatures();
 #endif
     } else {
@@ -477,7 +517,7 @@ class DownloadProtectionService::CheckClientDownloadRequest
       *reason = REASON_INVALID_URL;
       return false;
     }
-    if (!download_protection_util::IsSupportedBinaryFile(target_path)) {
+    if (!FileTypePolicies::GetInstance()->IsCheckedBinaryFile(target_path)) {
       *reason = REASON_NOT_BINARY_FILE;
       return false;
     }
@@ -660,9 +700,8 @@ class DownloadProtectionService::CheckClientDownloadRequest
              << ", has_executable=" << results.has_executable
              << ", success=" << results.success;
 
-    int uma_file_type =
-        download_protection_util::GetSBClientDownloadExtensionValueForUMA(
-            item_->GetTargetFilePath());
+    int64_t uma_file_type = FileTypePolicies::GetInstance()->UmaValueForFile(
+        item_->GetTargetFilePath());
 
     if (results.success) {
       UMA_HISTOGRAM_SPARSE_SLOWLY("SBClientDownload.DmgFileSuccessByType",
@@ -709,6 +748,13 @@ class DownloadProtectionService::CheckClientDownloadRequest
                               WHITELIST_TYPE_MAX);
   }
 
+  virtual bool ShouldSampleWhitelistedDownload() {
+    // We currently sample 1% whitelisted downloads from users who opted
+    // in extended reporting and are not in incognito mode.
+    return service_ && is_extended_reporting_ && !is_incognito_ &&
+        base::RandDouble() < service_->whitelist_sample_rate();
+  }
+
   void CheckWhitelists() {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
@@ -722,23 +768,33 @@ class DownloadProtectionService::CheckClientDownloadRequest
     if (url.is_valid() && database_manager_->MatchDownloadWhitelistUrl(url)) {
       DVLOG(2) << url << " is on the download whitelist.";
       RecordCountOfWhitelistedDownload(URL_WHITELIST);
-      // TODO(grt): Continue processing without uploading so that
-      // ClientDownloadRequest callbacks can be run even for this type of safe
-      // download.
-      PostFinishTask(SAFE, REASON_WHITELISTED_URL);
-      return;
+      if (ShouldSampleWhitelistedDownload()) {
+        skipped_url_whitelist_ = true;
+      } else {
+        // TODO(grt): Continue processing without uploading so that
+        // ClientDownloadRequest callbacks can be run even for this type of safe
+        // download.
+        PostFinishTask(SAFE, REASON_WHITELISTED_URL);
+        return;
+      }
     }
 
+    bool should_sample_for_certificate = ShouldSampleWhitelistedDownload();
     if (signature_info_.trusted()) {
       for (int i = 0; i < signature_info_.certificate_chain_size(); ++i) {
         if (CertificateChainIsWhitelisted(
                 signature_info_.certificate_chain(i))) {
           RecordCountOfWhitelistedDownload(SIGNATURE_WHITELIST);
-          // TODO(grt): Continue processing without uploading so that
-          // ClientDownloadRequest callbacks can be run even for this type of
-          // safe download.
-          PostFinishTask(SAFE, REASON_TRUSTED_EXECUTABLE);
-          return;
+          if (should_sample_for_certificate) {
+            skipped_certificate_whitelist_ = true;
+            break;
+          } else {
+            // TODO(grt): Continue processing without uploading so that
+            // ClientDownloadRequest callbacks can be run even for this type of
+            // safe download.
+            PostFinishTask(SAFE, REASON_TRUSTED_EXECUTABLE);
+            return;
+          }
         }
       }
     }
@@ -819,17 +875,9 @@ class DownloadProtectionService::CheckClientDownloadRequest
     // before sending it.
     if (!service_)
       return;
-    bool is_extended_reporting = false;
-    if (item_->GetBrowserContext()) {
-      Profile* profile =
-          Profile::FromBrowserContext(item_->GetBrowserContext());
-      is_extended_reporting = profile &&
-                              profile->GetPrefs()->GetBoolean(
-                                  prefs::kSafeBrowsingExtendedReportingEnabled);
-    }
 
     ClientDownloadRequest request;
-    if (is_extended_reporting) {
+    if (is_extended_reporting_) {
       request.mutable_population()->set_user_population(
           ChromeUserPopulation::EXTENDED_REPORTING);
     } else {
@@ -839,6 +887,8 @@ class DownloadProtectionService::CheckClientDownloadRequest
     request.set_url(SanitizeUrl(item_->GetUrlChain().back()));
     request.mutable_digests()->set_sha256(item_->GetHash());
     request.set_length(item_->GetReceivedBytes());
+    request.set_skipped_url_whitelist(skipped_url_whitelist_);
+    request.set_skipped_certificate_whitelist(skipped_certificate_whitelist_);
     for (size_t i = 0; i < item_->GetUrlChain().size(); ++i) {
       ClientDownloadRequest::Resource* resource = request.add_resources();
       resource->set_url(SanitizeUrl(item_->GetUrlChain()[i]));
@@ -1034,7 +1084,7 @@ class DownloadProtectionService::CheckClientDownloadRequest
   ArchiveValid archive_is_valid_;
 
   ClientDownloadRequest_SignatureInfo signature_info_;
-  scoped_ptr<ClientDownloadRequest_ImageHeaders> image_headers_;
+  std::unique_ptr<ClientDownloadRequest_ImageHeaders> image_headers_;
   google::protobuf::RepeatedPtrField<ClientDownloadRequest_ArchivedBinary>
       archived_binary_;
   CheckDownloadCallback callback_;
@@ -1043,7 +1093,7 @@ class DownloadProtectionService::CheckClientDownloadRequest
   scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor_;
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
   const bool pingback_enabled_;
-  scoped_ptr<net::URLFetcher> fetcher_;
+  std::unique_ptr<net::URLFetcher> fetcher_;
   scoped_refptr<SandboxedZipAnalyzer> analyzer_;
   base::TimeTicks zip_analysis_start_time_;
 #if defined(OS_MACOSX)
@@ -1057,6 +1107,10 @@ class DownloadProtectionService::CheckClientDownloadRequest
   base::TimeTicks start_time_;  // Used for stats.
   base::TimeTicks timeout_start_time_;
   base::TimeTicks request_start_time_;
+  bool skipped_url_whitelist_;
+  bool skipped_certificate_whitelist_;
+  bool is_extended_reporting_;
+  bool is_incognito_;
   base::WeakPtrFactory<CheckClientDownloadRequest> weakptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(CheckClientDownloadRequest);
@@ -1352,15 +1406,16 @@ class DownloadProtectionService::PPAPIDownloadRequest
 };
 
 DownloadProtectionService::DownloadProtectionService(
-    SafeBrowsingService* sb_service,
-    net::URLRequestContextGetter* request_context_getter)
-    : request_context_getter_(request_context_getter),
+    SafeBrowsingService* sb_service)
+    : request_context_getter_(sb_service ? sb_service->url_request_context()
+                                         : nullptr),
       enabled_(false),
       binary_feature_extractor_(new BinaryFeatureExtractor()),
       download_request_timeout_ms_(kDownloadRequestTimeoutMs),
-      feedback_service_(new DownloadFeedbackService(
-          request_context_getter, BrowserThread::GetBlockingPool())) {
-
+      feedback_service_(
+          new DownloadFeedbackService(request_context_getter_.get(),
+                                      BrowserThread::GetBlockingPool())),
+      whitelist_sample_rate_(kWhitelistDownloadSampleRate) {
   if (sb_service) {
     ui_manager_ = sb_service->ui_manager();
     database_manager_ = sb_service->database_manager();

@@ -24,6 +24,8 @@ class CHROMEOS_EXPORT SystemSaltGetter {
   typedef base::Callback<void(const std::string& system_salt)>
       GetSystemSaltCallback;
 
+  using RawSalt = std::vector<uint8_t>;
+
   // Manage an explicitly initialized global instance.
   static void Initialize();
   static bool IsInitialized();
@@ -31,12 +33,22 @@ class CHROMEOS_EXPORT SystemSaltGetter {
   static SystemSaltGetter* Get();
 
   // Converts |salt| to a hex encoded string.
-  static std::string ConvertRawSaltToHexString(
-      const std::vector<uint8_t>& salt);
+  static std::string ConvertRawSaltToHexString(const RawSalt& salt);
 
   // Returns system hash in hex encoded ascii format. Note: this may return
   // an empty string (e.g. errors in D-Bus layer)
   void GetSystemSalt(const GetSystemSaltCallback& callback);
+
+  // Adds another callback to be called when system salt is received.
+  // (If system salt is available, closure will be called immediately).
+  void AddOnSystemSaltReady(const base::Closure& closure);
+
+  // Returns pointer to binary system salt if it is already known.
+  // Returns nullptr if system salt is not known.
+  const RawSalt* GetRawSalt() const;
+
+  // This is for browser tests API.
+  void SetRawSaltForTesting(const RawSalt& raw_salt);
 
  protected:
   SystemSaltGetter();
@@ -48,9 +60,13 @@ class CHROMEOS_EXPORT SystemSaltGetter {
                                       bool service_is_available);
   void DidGetSystemSalt(const GetSystemSaltCallback& callback,
                         DBusMethodCallStatus call_status,
-                        const std::vector<uint8_t>& system_salt);
+                        const RawSalt& system_salt);
 
+  RawSalt raw_salt_;
   std::string system_salt_;
+
+  // List of callbacks waiting for system salt ready event.
+  std::vector<base::Closure> on_system_salt_ready_;
 
   base::WeakPtrFactory<SystemSaltGetter> weak_ptr_factory_;
 

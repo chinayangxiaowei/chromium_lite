@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -21,7 +22,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "components/safe_browsing_db/database_manager.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -71,15 +71,12 @@ class DownloadProtectionService {
       ClientDownloadRequestCallbackList;
 
   // A subscription to a registered ClientDownloadRequest callback.
-  typedef scoped_ptr<ClientDownloadRequestCallbackList::Subscription>
+  typedef std::unique_ptr<ClientDownloadRequestCallbackList::Subscription>
       ClientDownloadRequestSubscription;
 
   // Creates a download service.  The service is initially disabled.  You need
-  // to call SetEnabled() to start it.  |sb_service| owns this object; we
-  // keep a reference to |request_context_getter|.
-  DownloadProtectionService(
-      SafeBrowsingService* sb_service,
-      net::URLRequestContextGetter* request_context_getter);
+  // to call SetEnabled() to start it.  |sb_service| owns this object.
+  explicit DownloadProtectionService(SafeBrowsingService* sb_service);
 
   virtual ~DownloadProtectionService();
 
@@ -147,6 +144,10 @@ class DownloadProtectionService {
   ClientDownloadRequestSubscription RegisterClientDownloadRequestCallback(
       const ClientDownloadRequestCallback& callback);
 
+  double whitelist_sample_rate() const {
+    return whitelist_sample_rate_;
+  }
+
  protected:
   // Enum to keep track why a particular download verdict was chosen.
   // This is used to keep some stats around.
@@ -184,7 +185,9 @@ class DownloadProtectionService {
   friend class DownloadProtectionServiceTest;
 
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
-                           CheckClientDownloadWhitelistedUrl);
+                           CheckClientDownloadWhitelistedUrlWithoutSampling);
+  FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
+                           CheckClientDownloadWhitelistedUrlWithSampling);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
                            CheckClientDownloadValidateRequest);
   FRIEND_TEST_ALL_PREFIXES(DownloadProtectionServiceTest,
@@ -257,7 +260,7 @@ class DownloadProtectionService {
 
   int64_t download_request_timeout_ms_;
 
-  scoped_ptr<DownloadFeedbackService> feedback_service_;
+  std::unique_ptr<DownloadFeedbackService> feedback_service_;
 
   // A list of callbacks to be run on the main thread when a
   // ClientDownloadRequest has been formed.
@@ -266,6 +269,9 @@ class DownloadProtectionService {
   // List of 8-byte hashes that are blacklisted manually by flag.
   // Normally empty.
   std::set<std::string> manual_blacklist_hashes_;
+
+  // Rate of whitelisted downloads we sample to send out download ping.
+  double whitelist_sample_rate_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadProtectionService);
 };
