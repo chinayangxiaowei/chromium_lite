@@ -16,6 +16,7 @@ to the classpath for downstream development. See "additional_entries" below.
 
 {% endblock %} -->
 <classpath>
+    <classpathentry kind="src" path="android_webview/glue/java/src"/>
     <classpathentry kind="src" path="android_webview/java/generated_src"/>
     <classpathentry kind="src" path="android_webview/java/src"/>
     <classpathentry kind="src" path="android_webview/javatests/src"/>
@@ -26,6 +27,9 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="src" path="base/test/android/javatests/src"/>
     <classpathentry kind="src" path="blimp/client/app/android/java/src"/>
     <classpathentry kind="src" path="blimp/client/app/android/javatests/src"/>
+    <classpathentry kind="src" path="blimp/client/core/android/java/src"/>
+    <classpathentry kind="src" path="blimp/client/core/contents/android/java/src"/>
+    <classpathentry kind="src" path="blimp/client/public/android/java/src"/>
     <classpathentry kind="src" path="chrome/android/java/src"/>
     <classpathentry kind="src" path="chrome/android/javatests/src"/>
     <classpathentry kind="src" path="chrome/android/sync_shell/javatests/src"/>
@@ -55,6 +59,8 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="src" path="components/precache/android/javatests/src"/>
     <classpathentry kind="src" path="components/safe_json/android/java/src"/>
     <classpathentry kind="src" path="components/service_tab_launcher/android/java/src"/>
+    <classpathentry kind="src" path="components/sync/android/java/src"/>
+    <classpathentry kind="src" path="components/sync/android/javatests/src"/>
     <classpathentry kind="src" path="components/variations/android/java/src"/>
     <classpathentry kind="src" path="components/web_contents_delegate_android/android/java/src"/>
     <classpathentry kind="src" path="content/public/android/java/src"/>
@@ -69,6 +75,8 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="src" path="content/shell/android/shell_apk/src"/>
     <classpathentry kind="src" path="device/battery/android/java/src"/>
     <classpathentry kind="src" path="device/bluetooth/android/java/src"/>
+    <classpathentry kind="src" path="device/gamepad/android/java/src"/>
+    <classpathentry kind="src" path="device/nfc/android/java/src"/>
     <classpathentry kind="src" path="device/usb/android/java/src"/>
     <classpathentry kind="src" path="device/vibration/android/java/src"/>
     <classpathentry kind="src" path="media/base/android/java/src"/>
@@ -94,10 +102,12 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="src" path="third_party/android_protobuf/src/java/src/main/java" including="com/google/protobuf/nano/*"/>
     <classpathentry kind="src" path="third_party/android_swipe_refresh/java/src"/>
     <classpathentry kind="src" path="third_party/cacheinvalidation/src/java"/>
+    <classpathentry kind="src" path="third_party/custom_tabs_client/src/customtabs/src"/>
+    <classpathentry kind="src" path="third_party/custom_tabs_client/src/Application/src/main/java"/>
+    <classpathentry kind="src" path="third_party/custom_tabs_client/src/shared/src/main/java"/>
     <classpathentry kind="src" path="third_party/gif_player/src"/>
     <classpathentry kind="src" path="third_party/jmake/src"/>
     <classpathentry kind="src" path="third_party/junit/src/src/main/java"/>
-    <classpathentry kind="src" path="third_party/mockito/src/cglib-and-asm/src"/>
     <classpathentry kind="src" path="third_party/mockito/src/src"/>
     <classpathentry kind="src" path="tools/android/findbugs_plugin/src"/>
     <classpathentry kind="src" path="tools/android/findbugs_plugin/test/java/src"/>
@@ -119,8 +129,7 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="src" path="out/Debug/gen/enums/base_java_memory_pressure_level"/>
     <classpathentry kind="src" path="out/Debug/gen/enums/bitmap_format_java"/>
     <classpathentry kind="src" path="out/Debug/gen/enums/bookmark_type_java"/>
-    <classpathentry kind="src" path="out/Debug/gen/enums/browsing_data_time_period_java"/>
-    <classpathentry kind="src" path="out/Debug/gen/enums/browsing_data_type_java"/>
+    <classpathentry kind="src" path="out/Debug/gen/enums/browsing_data_utils_java"/>
     <classpathentry kind="src" path="out/Debug/gen/enums/certificate_mime_types_java"/>
     <classpathentry kind="src" path="out/Debug/gen/enums/cert_verify_status_android_java"/>
     <classpathentry kind="src" path="out/Debug/gen/enums/chromium_url_request_java"/>
@@ -207,6 +216,7 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="lib" path="third_party/android_tools/sdk/extras/android/support/v7/appcompat/libs/android-support-v7-appcompat.jar" sourcepath="third_party/android_tools/sdk/sources"/>
     <classpathentry kind="lib" path="third_party/findbugs/lib/findbugs.jar"/>
     <classpathentry kind="lib" path="third_party/junit/src/lib/hamcrest-core-1.1.jar"/>
+    <classpathentry kind="lib" path="third_party/mockito/src/lib/repackaged/cglib-and-asm-1.0.jar" sourcepath="third_party/mockito/src/lib/sources/cglib-and-asm-1.0-sources.jar"/>
     <classpathentry kind="lib" path="third_party/robolectric/lib/robolectric-2.4-jar-with-dependencies.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/cacheinvalidation_proto_java.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/content_java.jar"/>
@@ -241,6 +251,7 @@ to the classpath for downstream development. See "additional_entries" below.
     <classpathentry kind="lib" path="out/Debug/lib.java/device/battery/android/battery_monitor_android.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/device/battery/mojo_bindings_java.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/device/bluetooth/java.jar"/>
+    <classpathentry kind="lib" path="out/Debug/lib.java/device/nfc/mojo_bindings_java.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/device/vibration/android/vibration_manager_android.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/device/vibration/mojo_bindings_java.jar"/>
     <classpathentry kind="lib" path="out/Debug/lib.java/media/base/android/media_java.jar"/>
