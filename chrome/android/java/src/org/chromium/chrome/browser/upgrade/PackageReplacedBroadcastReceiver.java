@@ -9,6 +9,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
+import org.chromium.base.BuildInfo;
+
 /**
  * Triggered when Chrome's package is replaced (e.g. when it is upgraded).
  *
@@ -28,6 +30,7 @@ import android.content.Intent;
 public final class PackageReplacedBroadcastReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        if (BuildInfo.isAtLeastO()) return;
         UpgradeIntentService.startMigrationIfNecessary(context);
     }
 }

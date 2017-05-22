@@ -11,6 +11,9 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/dbus/cryptohome_client.h"
 
+using RetrievePolicyResponseType =
+    chromeos::FakeSessionManagerClient::RetrievePolicyResponseType;
+
 namespace chromeos {
 
 FakeSessionManagerClient::FakeSessionManagerClient()
@@ -95,36 +98,47 @@ void FakeSessionManagerClient::RetrieveActiveSessions(
 void FakeSessionManagerClient::RetrieveDevicePolicy(
     const RetrievePolicyCallback& callback) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(callback, device_policy_));
+      FROM_HERE, base::Bind(callback, device_policy_,
+                            RetrievePolicyResponseType::SUCCESS));
 }
 
-std::string FakeSessionManagerClient::BlockingRetrieveDevicePolicy() {
-  return device_policy_;
+RetrievePolicyResponseType
+FakeSessionManagerClient::BlockingRetrieveDevicePolicy(
+    std::string* policy_out) {
+  *policy_out = device_policy_;
+  return RetrievePolicyResponseType::SUCCESS;
 }
 
 void FakeSessionManagerClient::RetrievePolicyForUser(
     const cryptohome::Identification& cryptohome_id,
     const RetrievePolicyCallback& callback) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(callback, user_policies_[cryptohome_id]));
+      FROM_HERE, base::Bind(callback, user_policies_[cryptohome_id],
+                            RetrievePolicyResponseType::SUCCESS));
 }
 
-std::string FakeSessionManagerClient::BlockingRetrievePolicyForUser(
-    const cryptohome::Identification& cryptohome_id) {
-  return user_policies_[cryptohome_id];
+RetrievePolicyResponseType
+FakeSessionManagerClient::BlockingRetrievePolicyForUser(
+    const cryptohome::Identification& cryptohome_id,
+    std::string* policy_out) {
+  *policy_out = user_policies_[cryptohome_id];
+  return RetrievePolicyResponseType::SUCCESS;
 }
 
 void FakeSessionManagerClient::RetrieveDeviceLocalAccountPolicy(
     const std::string& account_id,
     const RetrievePolicyCallback& callback) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::Bind(callback, device_local_account_policy_[account_id]));
+      FROM_HERE, base::Bind(callback, device_local_account_policy_[account_id],
+                            RetrievePolicyResponseType::SUCCESS));
 }
 
-std::string FakeSessionManagerClient::BlockingRetrieveDeviceLocalAccountPolicy(
-    const std::string& account_id) {
-  return device_local_account_policy_[account_id];
+RetrievePolicyResponseType
+FakeSessionManagerClient::BlockingRetrieveDeviceLocalAccountPolicy(
+    const std::string& account_id,
+    std::string* policy_out) {
+  *policy_out = device_local_account_policy_[account_id];
+  return RetrievePolicyResponseType::SUCCESS;
 }
 
 void FakeSessionManagerClient::StoreDevicePolicy(
@@ -153,6 +167,10 @@ void FakeSessionManagerClient::StoreDeviceLocalAccountPolicy(
   device_local_account_policy_[account_id] = policy_blob;
   base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
                                                 base::Bind(callback, true));
+}
+
+bool FakeSessionManagerClient::SupportsRestartToApplyUserFlags() const {
+  return false;
 }
 
 void FakeSessionManagerClient::SetFlagsForUser(
@@ -187,12 +205,6 @@ void FakeSessionManagerClient::StopArcInstance(const ArcCallback& callback) {
       FROM_HERE, base::Bind(callback, arc_available_));
 }
 
-void FakeSessionManagerClient::PrioritizeArcInstance(
-    const ArcCallback& callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(callback, arc_available_));
-}
-
 void FakeSessionManagerClient::SetArcCpuRestriction(
     login_manager::ContainerCpuRestrictionState restriction_state,
     const ArcCallback& callback) {
@@ -200,7 +212,12 @@ void FakeSessionManagerClient::SetArcCpuRestriction(
       FROM_HERE, base::Bind(callback, arc_available_));
 }
 
-void FakeSessionManagerClient::EmitArcBooted() {}
+void FakeSessionManagerClient::EmitArcBooted(
+    const cryptohome::Identification& cryptohome_id,
+    const ArcCallback& callback) {
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::Bind(callback, arc_available_));
+}
 
 void FakeSessionManagerClient::GetArcStartTime(
     const GetArcStartTimeCallback& callback) {

@@ -40,9 +40,7 @@
 #include "ui/gfx/canvas.h"
 
 #if defined(OS_ANDROID)
-#include "content/browser/renderer_host/context_provider_factory_impl_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
-#include "content/test/mock_gpu_channel_establish_factory.h"
 #include "ui/android/screen_android.h"
 #endif
 
@@ -513,9 +511,6 @@ class RenderWidgetHostTest : public testing::Test {
             new NoTransportImageTransportFactory));
 #endif
 #if defined(OS_ANDROID)
-    ContextProviderFactoryImpl::Initialize(&gpu_channel_factory_);
-    ui::ContextProviderFactory::SetInstance(
-        ContextProviderFactoryImpl::GetInstance());
     ui::SetScreenAndroid();  // calls display::Screen::SetScreenInstance().
 #endif
 #if defined(USE_AURA)
@@ -548,8 +543,6 @@ class RenderWidgetHostTest : public testing::Test {
 #endif
 #if defined(OS_ANDROID)
     display::Screen::SetScreenInstance(nullptr);
-    ui::ContextProviderFactory::SetInstance(nullptr);
-    ContextProviderFactoryImpl::Terminate();
 #endif
 
     // Process all pending tasks to avoid leaks.
@@ -700,10 +693,6 @@ class RenderWidgetHostTest : public testing::Test {
   double last_simulated_event_time_seconds_;
   double simulated_event_time_delta_seconds_;
 
-#if defined(OS_ANDROID)
-  MockGpuChannelEstablishFactory gpu_channel_factory_;
-#endif
-
  private:
   SyntheticWebTouchEvent touch_event_;
 
@@ -851,7 +840,7 @@ TEST_F(RenderWidgetHostTest, ResizeScreenInfo) {
   screen_info.orientation_angle = 0;
   screen_info.orientation_type = SCREEN_ORIENTATION_VALUES_PORTRAIT_PRIMARY;
 
-  auto host_delegate =
+  auto* host_delegate =
       static_cast<MockRenderWidgetHostDelegate*>(host_->delegate());
 
   host_delegate->SetScreenInfo(screen_info);
@@ -1290,7 +1279,7 @@ TEST_F(RenderWidgetHostTest, NewContentRenderingTimeout) {
       base::TimeDelta::FromMicroseconds(10));
 
   // Test immediate start and stop, ensuring that the timeout doesn't fire.
-  host_->StartNewContentRenderingTimeout();
+  host_->StartNewContentRenderingTimeout(0);
   host_->OnFirstPaintAfterLoad();
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
@@ -1302,7 +1291,7 @@ TEST_F(RenderWidgetHostTest, NewContentRenderingTimeout) {
   // Test that the timer doesn't fire if it receives a stop before
   // a start.
   host_->OnFirstPaintAfterLoad();
-  host_->StartNewContentRenderingTimeout();
+  host_->StartNewContentRenderingTimeout(0);
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
       TimeDelta::FromMicroseconds(20));
@@ -1311,12 +1300,45 @@ TEST_F(RenderWidgetHostTest, NewContentRenderingTimeout) {
   EXPECT_FALSE(host_->new_content_rendering_timeout_fired());
 
   // Test with a long delay to ensure that it does fire this time.
-  host_->StartNewContentRenderingTimeout();
+  host_->StartNewContentRenderingTimeout(0);
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
       FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
       TimeDelta::FromMicroseconds(20));
   base::RunLoop().Run();
   EXPECT_TRUE(host_->new_content_rendering_timeout_fired());
+}
+
+// This tests that a compositor frame received with a stale content source ID
+// in its metadata is properly discarded.
+TEST_F(RenderWidgetHostTest, SwapCompositorFrameWithBadSourceId) {
+  host_->StartNewContentRenderingTimeout(100);
+  host_->OnFirstPaintAfterLoad();
+
+  // First swap a frame with an invalid ID.
+  cc::CompositorFrame frame;
+  frame.metadata.content_source_id = 99;
+  host_->OnMessageReceived(ViewHostMsg_SwapCompositorFrame(
+      0, 0, frame, std::vector<IPC::Message>()));
+  EXPECT_FALSE(
+      static_cast<TestView*>(host_->GetView())->did_swap_compositor_frame());
+  static_cast<TestView*>(host_->GetView())->reset_did_swap_compositor_frame();
+
+  // Test with a valid content ID as a control.
+  frame.metadata.content_source_id = 100;
+  host_->OnMessageReceived(ViewHostMsg_SwapCompositorFrame(
+      0, 0, frame, std::vector<IPC::Message>()));
+  EXPECT_TRUE(
+      static_cast<TestView*>(host_->GetView())->did_swap_compositor_frame());
+  static_cast<TestView*>(host_->GetView())->reset_did_swap_compositor_frame();
+
+  // We also accept frames with higher content IDs, to cover the case where
+  // the browser process receives a compositor frame for a new page before
+  // the corresponding DidCommitProvisionalLoad (it's a race).
+  frame.metadata.content_source_id = 101;
+  host_->OnMessageReceived(ViewHostMsg_SwapCompositorFrame(
+      0, 0, frame, std::vector<IPC::Message>()));
+  EXPECT_TRUE(
+      static_cast<TestView*>(host_->GetView())->did_swap_compositor_frame());
 }
 
 TEST_F(RenderWidgetHostTest, TouchEmulator) {
@@ -1498,7 +1520,7 @@ TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_Paste);
 TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_PasteAndMatchStyle);
 TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_Delete);
 TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_SelectAll);
-TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_Unselect);
+TEST_InputRouterRoutes_NOARGS_FromRFH(InputMsg_CollapseSelection);
 
 #undef TEST_InputRouterRoutes_NOARGS_FromRFH
 
@@ -1640,7 +1662,7 @@ void CheckLatencyInfoComponentInMessage(RenderWidgetHostProcess* process,
   EXPECT_TRUE(InputMsg_HandleInputEvent::Read(message, &params));
 
   const WebInputEvent* event = std::get<0>(params);
-  ui::LatencyInfo latency_info = std::get<1>(params);
+  ui::LatencyInfo latency_info = std::get<2>(params);
 
   EXPECT_TRUE(event->type() == expected_type);
   EXPECT_TRUE(latency_info.FindLatency(
