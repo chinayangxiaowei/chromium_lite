@@ -126,13 +126,14 @@ class UserCloudPolicyStoreChromeOSTest : public testing::Test {
     const PolicyMap::Entry* entry =
         store_->policy_map().Get(key::kHomepageLocation);
     ASSERT_TRUE(entry);
-    EXPECT_TRUE(base::StringValue(expected_value).Equals(entry->value.get()));
+    EXPECT_TRUE(base::Value(expected_value).Equals(entry->value.get()));
   }
 
   void StoreUserPolicyKey(const std::string& public_key) {
     ASSERT_TRUE(base::CreateDirectory(user_policy_key_file().DirName()));
-    ASSERT_TRUE(base::WriteFile(user_policy_key_file(), public_key.data(),
-                                public_key.size()));
+    ASSERT_EQ(static_cast<int>(public_key.size()),
+              base::WriteFile(user_policy_key_file(), public_key.data(),
+                              public_key.size()));
   }
 
   // Stores the current |policy_| and verifies that it is published.
@@ -162,7 +163,7 @@ class UserCloudPolicyStoreChromeOSTest : public testing::Test {
     if (previous_value) {
       previous_policy.Set(key::kHomepageLocation, POLICY_LEVEL_MANDATORY,
                           POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-                          base::MakeUnique<base::StringValue>(previous_value),
+                          base::MakeUnique<base::Value>(previous_value),
                           nullptr);
     }
     EXPECT_TRUE(previous_policy.Equals(store_->policy_map()));

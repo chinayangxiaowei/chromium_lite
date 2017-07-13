@@ -15,6 +15,7 @@
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/macros.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -51,6 +52,7 @@ using RetrievePolicyResponseType =
 
 constexpr char kStubPolicyFile[] = "stub_policy";
 constexpr char kStubDevicePolicyFile[] = "stub_device_policy";
+constexpr char kStubStateKeysFile[] = "stub_state_keys";
 
 // Returns a location for |file| that is specific to the given |cryptohome_id|.
 // These paths will be relative to DIR_USER_POLICY_KEYS, and can be used only
@@ -83,6 +85,34 @@ void StoreFile(const base::FilePath& path, const std::string& data) {
   }
 }
 
+// Helper to asynchronously read (or if missing create) state key stubs.
+std::vector<std::string> ReadCreateStateKeysStub(const base::FilePath& path) {
+  std::string contents;
+  if (base::PathExists(path)) {
+    contents = GetFileContent(path);
+  } else {
+    // Create stub state keys on the fly.
+    for (int i = 0; i < 5; ++i) {
+      contents += crypto::SHA256HashString(
+          base::IntToString(i) +
+          base::Int64ToString(base::Time::Now().ToJavaTime()));
+    }
+    StoreFile(path, contents);
+  }
+
+  std::vector<std::string> state_keys;
+  for (size_t i = 0; i < contents.size() / 32; ++i) {
+    state_keys.push_back(contents.substr(i * 32, 32));
+  }
+  return state_keys;
+}
+
+// Turn pass-by-value into pass-by-reference as expected by StateKeysCallback.
+void RunStateKeysCallbackStub(SessionManagerClient::StateKeysCallback callback,
+                              std::vector<std::string> state_keys) {
+  callback.Run(state_keys);
+}
+
 // Helper to notify the callback with SUCCESS, to be used by the stub.
 void NotifyOnRetrievePolicySuccess(
     const SessionManagerClient::RetrievePolicyCallback& callback,
@@ -102,6 +132,27 @@ RetrievePolicyResponseType GetResponseTypeBasedOnError(
     return RetrievePolicyResponseType::POLICY_ENCODE_ERROR;
   }
   return RetrievePolicyResponseType::OTHER_ERROR;
+}
+
+// Logs UMA stat for retrieve policy request, corresponding to D-Bus method name
+// used.
+void LogPolicyResponseUma(base::StringPiece method_name,
+                          RetrievePolicyResponseType response) {
+  if (method_name == login_manager::kSessionManagerRetrievePolicy) {
+    UMA_HISTOGRAM_ENUMERATION("Enterprise.RetrievePolicyResponse.Device",
+                              response, RetrievePolicyResponseType::COUNT);
+  } else if (method_name ==
+             login_manager::kSessionManagerRetrieveDeviceLocalAccountPolicy) {
+    UMA_HISTOGRAM_ENUMERATION(
+        "Enterprise.RetrievePolicyResponse.DeviceLocalAccount", response,
+        RetrievePolicyResponseType::COUNT);
+  } else if (method_name ==
+             login_manager::kSessionManagerRetrievePolicyForUser) {
+    UMA_HISTOGRAM_ENUMERATION("Enterprise.RetrievePolicyResponse.User",
+                              response, RetrievePolicyResponseType::COUNT);
+  } else {
+    LOG(ERROR) << "Invalid method_name: " << method_name;
+  }
 }
 
 }  // namespace
@@ -260,6 +311,7 @@ class SessionManagerClientImpl : public SessionManagerClient {
     } else {
       *policy_out = "";
     }
+    LogPolicyResponseUma(login_manager::kSessionManagerRetrievePolicy, result);
     return result;
   }
 
@@ -550,6 +602,7 @@ class SessionManagerClientImpl : public SessionManagerClient {
     } else {
       *policy_out = "";
     }
+    LogPolicyResponseUma(method_name, result);
     return result;
   }
 
@@ -669,6 +722,8 @@ class SessionManagerClientImpl : public SessionManagerClient {
     std::string serialized_proto;
     ExtractString(method_name, response, &serialized_proto);
     callback.Run(serialized_proto, RetrievePolicyResponseType::SUCCESS);
+
+    LogPolicyResponseUma(method_name, RetrievePolicyResponseType::SUCCESS);
   }
 
   // Called when kSessionManagerRetrievePolicy or
@@ -679,6 +734,8 @@ class SessionManagerClientImpl : public SessionManagerClient {
     RetrievePolicyResponseType response_type =
         GetResponseTypeBasedOnError(response->GetErrorName());
     callback.Run(std::string(), response_type);
+
+    LogPolicyResponseUma(method_name, response_type);
   }
 
   // Called when kSessionManagerStorePolicy or kSessionManagerStorePolicyForUser
@@ -850,7 +907,8 @@ class SessionManagerClientImpl : public SessionManagerClient {
     LOG(ERROR) << "Failed to call StartArcInstance: "
                << (response ? response->ToString() : "(null)");
     if (!callback.is_null()) {
-      callback.Run(response && response->GetErrorName() == kLowFreeDisk
+      callback.Run(response && response->GetErrorName() ==
+                                   kLowFreeDisk
                        ? StartArcInstanceResult::LOW_FREE_DISK_SPACE
                        : StartArcInstanceResult::UNKNOWN_ERROR);
     }
@@ -1059,12 +1117,18 @@ class SessionManagerClientStubImpl : public SessionManagerClient {
                        const std::vector<std::string>& flags) override {}
 
   void GetServerBackedStateKeys(const StateKeysCallback& callback) override {
-    std::vector<std::string> state_keys;
-    for (int i = 0; i < 5; ++i)
-      state_keys.push_back(crypto::SHA256HashString(base::IntToString(i)));
-
-    if (!callback.is_null())
-      callback.Run(state_keys);
+    base::FilePath owner_key_path;
+    CHECK(PathService::Get(chromeos::FILE_OWNER_KEY, &owner_key_path));
+    const base::FilePath state_keys_path =
+        owner_key_path.DirName().AppendASCII(kStubStateKeysFile);
+    base::PostTaskWithTraitsAndReplyWithResult(
+        FROM_HERE,
+        base::TaskTraits()
+            .WithShutdownBehavior(
+                base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN)
+            .MayBlock(),
+        base::Bind(&ReadCreateStateKeysStub, state_keys_path),
+        base::Bind(&RunStateKeysCallbackStub, callback));
   }
 
   void CheckArcAvailability(const ArcCallback& callback) override {
